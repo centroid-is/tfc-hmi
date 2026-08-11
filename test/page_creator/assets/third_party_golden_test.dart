@@ -8,12 +8,20 @@ const _key = Key('third_party_golden');
 
 /// Golden canvas size for a kind, at that machine's true plan aspect ratio.
 ///
-/// Every kind gets the same 720 px length so the goldens sit side by side in a
-/// review; the height follows the real footprint. The Multivac is 5.4:1, so it
-/// comes out as a long strip — that is the machine, not a bug.
-Size _canvasFor(ThirdPartyEquipmentKind kind) {
-  const length = 720.0;
-  return Size(length, length / kind.aspectRatio);
+/// Fitted into a 720 x 820 box rather than fixed-width, because the kinds run
+/// from a 5.4:1 Multivac strip to a PORTRAIT SpeedBatcher — pinning the width
+/// would run the SpeedBatcher off the bottom of the golden.
+Size _canvasFor(ThirdPartyEquipmentKind kind, {int strapHeads = 3}) {
+  const maxW = 720.0;
+  const maxH = 820.0;
+  final aspect = kind.aspectRatio(strapHeads: strapHeads);
+  double w = maxW;
+  double h = maxW / aspect;
+  if (h > maxH) {
+    h = maxH;
+    w = maxH * aspect;
+  }
+  return Size(w, h);
 }
 
 /// Wraps the painted body in a minimal tree for golden capture.
@@ -26,8 +34,9 @@ Widget buildBody({
   Color? ledColor = Colors.green,
   Color outlineColor = const Color(0xFF37474F),
   double strokeWidth = 2.5,
+  int strapHeads = 3,
 }) {
-  final size = _canvasFor(kind);
+  final size = _canvasFor(kind, strapHeads: strapHeads);
   return MaterialApp(
     home: Scaffold(
       backgroundColor: Colors.white,
@@ -39,6 +48,7 @@ Widget buildBody({
               kind,
               color: outlineColor,
               strokeWidth: strokeWidth,
+              strapHeads: strapHeads,
             ),
             paintSize: size,
             ledColor: ledColor,
@@ -66,6 +76,26 @@ void main() {
         await expectLater(
           find.byKey(_key),
           matchesGoldenFile('goldens/third_party_${kind.name}_running.png'),
+        );
+      });
+    }
+
+    // The strapping line ships as SL-15-1, -2 and -3. Head count changes both
+    // the number of arches and the machine's proportions, so each variant
+    // gets its own golden. (-3 is covered by the per-kind loop above.)
+    for (final heads in const [1, 2]) {
+      testWidgets('strappingLine — $heads head(s)', (tester) async {
+        tester.view.physicalSize = const Size(1400, 1400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        await tester.pumpWidget(buildBody(
+          kind: ThirdPartyEquipmentKind.strappingLine,
+          strapHeads: heads,
+        ));
+        await expectLater(
+          find.byKey(_key),
+          matchesGoldenFile('goldens/third_party_strappingLine_${heads}head.png'),
         );
       });
     }

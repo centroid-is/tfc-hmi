@@ -14,9 +14,10 @@ import 'package:flutter/material.dart';
 //   Multivac      R 245 spec sheet + machine photo — 5437 x 1002 mm,
 //                 320 mm nominal web width, 280 mm max forming width,
 //                 ~330 mm cross-cut zone, 800 mm discharge belt.
-//   SpeedBatcher  Marel SBM3000 — 2311 x 1270 mm, 508 mm infeed belt,
-//                 4 static scales, 2 selection bins, 610 mm takeaway belt
-//                 with 76 mm flights at 305 mm spacing.
+//   SpeedBatcher  Jón's sketch of the station as actually built on this line
+//                 (buffers, infeed flat + step-up conveyors, two
+//                 checkweighers) — NOT the Marel brochure, whose batcher head
+//                 is a guarded cube with nothing visible from above.
 //   Box erector   generic RSC erector (Eastey ERX-15 class) — 2395 x 2083 mm,
 //                 side-loading blank magazine, 8-cup vacuum pick, flap
 //                 folders, bottom centre-seal tape head, side-belt discharge.
@@ -255,6 +256,56 @@ void _crossTicks(
   }
 }
 
+/// `count` evenly spaced ticks ALONG the flow direction — the transverse
+/// counterpart of [_crossTicks], for machines drawn portrait (rollers and
+/// cleats on a lane running up the page).
+void _lengthwiseTicks(
+  Canvas canvas,
+  UnitSpace u,
+  Paint paint, {
+  required double ul,
+  required double ur,
+  required double ut,
+  required double ub,
+  required int count,
+}) {
+  if (count <= 0) return;
+  final step = (ub - ut) / (count + 1);
+  for (int i = 1; i <= count; i++) {
+    final y = ut + step * i;
+    canvas.drawLine(u.p(ul, y), u.p(ur, y), paint);
+  }
+}
+
+/// Three flow chevrons down a lane, pointing up or down the page.
+///
+/// Drawn at full stroke: on a machine with two parallel lanes running in
+/// OPPOSITE directions, direction is the one thing the boxes cannot tell you.
+void _chevrons(
+  Canvas canvas,
+  UnitSpace u,
+  Paint paint, {
+  required double cx,
+  required double top,
+  required double bottom,
+  required bool pointingDown,
+  int count = 3,
+}) {
+  const halfWidth = 0.055;
+  final span = bottom - top;
+  final height = span / (count * 1.8);
+  for (int i = 0; i < count; i++) {
+    final base = top + span * (i + 0.5) / count - height / 2;
+    final tip = pointingDown ? base + height : base;
+    final tail = pointingDown ? base : base + height;
+    final path = Path()
+      ..moveTo(u.p(cx - halfWidth, tail).dx, u.p(cx - halfWidth, tail).dy)
+      ..lineTo(u.p(cx, tip).dx, u.p(cx, tip).dy)
+      ..lineTo(u.p(cx + halfWidth, tail).dx, u.p(cx + halfWidth, tail).dy);
+    canvas.drawPath(path, paint);
+  }
+}
+
 /// A `rows x cols` grid of small rounded cells — plan-view shorthand for the
 /// cavities in a thermoforming tool.
 void _cavityGrid(
@@ -387,83 +438,146 @@ class MultivacPainter extends ThirdPartyMachinePainter {
 }
 
 // ---------------------------------------------------------------------------
-// SpeedBatcher — Marel SBM3000 class batcher
+// SpeedBatcher station
 // ---------------------------------------------------------------------------
 
-/// Plan view of a Marel SpeedBatcher, product flowing left to right.
+/// Plan view of the SpeedBatcher station as it is actually built on this line.
 ///
-/// Three stacked levels, all drawn flat as a schematic plan: the infeed
-/// weighing belt along the rear with its distribution chute, a row of static
-/// weigh hoppers with drop-flap doors below it, two selection bins that
-/// combine the chosen sub-weights, and the flighted takeaway belt across the
-/// front that carries finished batches away.
+/// Drawn from Jón's sketch of the real installation, NOT from a Marel
+/// brochure. The published SpeedBatcher literature shows the batcher head on
+/// its own — a cube on legs whose weigh hoppers and selection bins are all
+/// under the guarding and invisible from above. What an operator looking down
+/// at this station actually sees is the conveyor-and-checkweigher layout
+/// below, so that is what gets drawn.
 ///
-/// The flighted belt is the giveaway — regular cross bars every 305 mm on a
-/// 610 mm belt. True footprint ~2311 x 1270 mm.
+/// This one is PORTRAIT: product runs up the page, not left to right.
+///
+///   flow:  infeed flat conveyor (left lane, running DOWN)
+///            -> buffers across the infeed end
+///            -> drop onto the step-up conveyor (right lane, running UP)
+///            -> transfer buffer
+///            -> checkweigher 1
+///            -> checkweigher 2
+///
+/// So the product path is a U-turn: down the left lane, across the buffers,
+/// back up the right lane. The chevrons carry that — without them the two
+/// parallel lanes read as two independent lines.
+///
+/// The two conveyor lanes are drawn as light beds rather than full-stroke
+/// machinery on purpose: they are the intended home for live `ConveyorConfig`
+/// children driven by the real drive frequencies. Drop a conveyor asset on a
+/// lane and it sits in its bed; leave it empty and the bed still reads as a
+/// conveyor.
 class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   const SpeedBatcherPainter({required super.color, required super.strokeWidth});
 
-  /// Static weigh scales built into the batcher (SBM3000 has four).
-  static const int scales = 4;
+  /// Buffer cells across the infeed end (2 columns x 2 rows in the sketch).
+  static const int bufferColumns = 2;
+  static const int bufferRows = 2;
 
-  /// Selection bins that assemble the final batch (SBM3000 has two).
-  static const int selectionBins = 2;
+  /// Unit rect of the infeed flat conveyor lane — where a live Conveyor child
+  /// is meant to sit. Exposed so the editor can offer a one-tap "drop a
+  /// conveyor on this lane" without duplicating the geometry.
+  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.46, 0.47, 0.84);
+
+  /// Unit rect of the step-up conveyor lane.
+  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.46, 0.98, 0.84);
 
   @override
   void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
-    // Machine frame.
+    // Station frame.
     canvas.drawRRect(u.rr(0.0, 0.0, 1.0, 1.0, 0.03), stroke);
 
-    // Infeed weighing belt along the rear, with belt rollers.
-    canvas.drawRect(u.r(0.03, 0.05, 0.70, 0.26), stroke);
+    // -- Checkweigher 2 (final station, at the discharge end) --
+    _checkweigher(canvas, u, stroke, detail, top: 0.03, bottom: 0.17);
+
+    // -- Checkweigher 1 --
+    _checkweigher(canvas, u, stroke, detail, top: 0.21, bottom: 0.38);
+
+    // -- Transfer buffer, between the step-up drop and checkweigher 1 --
+    canvas.drawRect(u.r(0.04, 0.405, 0.96, 0.44), stroke);
     _crossTicks(canvas, u, detail,
-        ul: 0.03, ur: 0.70, ut: 0.05, ub: 0.26, count: 7);
+        ul: 0.04, ur: 0.96, ut: 0.405, ub: 0.44, count: 5);
 
-    // Distribution chute that drops product off the belt into the hoppers.
-    canvas.drawRect(u.r(0.30, 0.08, 0.40, 0.23), stroke);
-    canvas.drawLine(u.p(0.30, 0.08), u.p(0.40, 0.23), detail);
+    // -- Conveyor lanes --
+    // Light beds; a live Conveyor child lands on top of these.
+    canvas.drawRect(
+        u.r(infeedLane.left, infeedLane.top, infeedLane.right,
+            infeedLane.bottom),
+        detail);
+    canvas.drawRect(
+        u.r(stepUpLane.left, stepUpLane.top, stepUpLane.right,
+            stepUpLane.bottom),
+        detail);
 
-    // Static weigh hoppers in a row, each with a drop flap hinged along its
-    // front edge and a load cell at the back.
-    const hopperTop = 0.32;
-    const hopperBottom = 0.56;
-    const hopperSpan = 0.70;
-    final hopperSlot = hopperSpan / scales;
-    for (int i = 0; i < scales; i++) {
-      final l = 0.03 + hopperSlot * i + hopperSlot * 0.08;
-      final r = 0.03 + hopperSlot * (i + 1) - hopperSlot * 0.08;
-      canvas.drawRect(u.r(l, hopperTop, r, hopperBottom), stroke);
-      canvas.drawLine(
-          u.p(l, hopperBottom - 0.04), u.p(r, hopperBottom - 0.04), detail);
-      canvas.drawLine(u.p((l + r) / 2, hopperTop),
-          u.p((l + r) / 2, hopperTop - 0.04), detail);
+    // The step-up conveyor is cleated so product cannot roll back down the
+    // incline — the rungs are what tells the two lanes apart from above.
+    _lengthwiseTicks(canvas, u, detail,
+        ul: stepUpLane.left,
+        ur: stepUpLane.right,
+        ut: stepUpLane.top,
+        ub: stepUpLane.bottom,
+        count: 7);
+
+    // Flow chevrons: DOWN the infeed lane, UP the step-up lane. This is the
+    // U-turn, and it is the one thing a reader cannot infer from the boxes.
+    _chevrons(canvas, u, stroke,
+        cx: infeedLane.center.dx, top: 0.54, bottom: 0.78, pointingDown: true);
+    _chevrons(canvas, u, stroke,
+        cx: stepUpLane.center.dx, top: 0.54, bottom: 0.78, pointingDown: false);
+
+    // -- Buffers across the infeed end --
+    const bufTop = 0.87;
+    const bufBottom = 0.99;
+    const bufLeft = 0.02;
+    const bufRight = 0.98;
+    canvas.drawRect(u.r(bufLeft, bufTop, bufRight, bufBottom), stroke);
+    final colW = (bufRight - bufLeft) / bufferColumns;
+    final rowH = (bufBottom - bufTop) / bufferRows;
+    for (int c = 1; c < bufferColumns; c++) {
+      canvas.drawLine(u.p(bufLeft + colW * c, bufTop),
+          u.p(bufLeft + colW * c, bufBottom), stroke);
+    }
+    for (int r = 1; r < bufferRows; r++) {
+      canvas.drawLine(u.p(bufLeft, bufTop + rowH * r),
+          u.p(bufRight, bufTop + rowH * r), stroke);
     }
 
-    // Selection bins that combine sub-weights into the final batch.
-    const binTop = 0.60;
-    const binBottom = 0.80;
-    const binSpan = 0.66;
-    final binSlot = binSpan / selectionBins;
-    for (int i = 0; i < selectionBins; i++) {
-      final l = 0.05 + binSlot * i + binSlot * 0.06;
-      final r = 0.05 + binSlot * (i + 1) - binSlot * 0.06;
-      canvas.drawRect(u.r(l, binTop, r, binBottom), stroke);
-      canvas.drawLine(
-          u.p(l, binBottom - 0.035), u.p(r, binBottom - 0.035), detail);
+    // Adjustable feet at the four corners.
+    for (final corner in const [
+      Offset(0.03, 0.02),
+      Offset(0.97, 0.02),
+      Offset(0.03, 0.98),
+      Offset(0.97, 0.98),
+    ]) {
+      canvas.drawCircle(u.p(corner.dx, corner.dy), u.rad(0.018), detail);
     }
+  }
 
-    // Flighted takeaway belt across the front — batches ride in the pockets
-    // between the flights. Runs past both ends of the frame. The flights are
-    // drawn at full stroke, not as detail: they are what tells this machine
-    // apart from any other box-with-conveyors at a glance.
-    canvas.drawRect(u.r(0.0, 0.84, 1.0, 1.0), stroke);
-    _crossTicks(canvas, u, stroke,
-        ul: 0.0, ur: 1.0, ut: 0.84, ub: 1.0, count: 7);
+  /// One checkweigher: frame, weigh deck with its belt rollers, load cell and
+  /// the reject pusher on the side.
+  void _checkweigher(
+    Canvas canvas,
+    UnitSpace u,
+    Paint stroke,
+    Paint detail, {
+    required double top,
+    required double bottom,
+  }) {
+    canvas.drawRect(u.r(0.02, top, 0.98, bottom), stroke);
 
-    // Operator terminal on its swing arm, at the discharge end.
-    canvas.drawRect(u.r(0.79, 0.10, 0.97, 0.30), stroke);
-    canvas.drawRect(u.r(0.81, 0.13, 0.95, 0.27), detail);
-    canvas.drawLine(u.p(0.79, 0.20), u.p(0.72, 0.20), detail);
+    final deckTop = top + (bottom - top) * 0.22;
+    final deckBottom = bottom - (bottom - top) * 0.22;
+    canvas.drawRect(u.r(0.12, deckTop, 0.88, deckBottom), detail);
+    _lengthwiseTicks(canvas, u, detail,
+        ul: 0.12, ur: 0.88, ut: deckTop, ub: deckBottom, count: 3);
+
+    // Load cell under the deck centre.
+    canvas.drawRect(
+        u.r(0.46, deckTop - 0.012, 0.54, deckTop + 0.012), detail);
+
+    // Reject pusher alongside the deck.
+    canvas.drawRect(u.r(0.03, deckTop, 0.10, deckBottom), detail);
   }
 }
 
@@ -549,25 +663,50 @@ class BoxErectorPainter extends ThirdPartyMachinePainter {
 // Afak SL-15-3 strapping line (Strapex heads)
 // ---------------------------------------------------------------------------
 
-/// Plan view of the Afak SL-15-3 strapping line, boxes flowing left to right.
+/// Plan view of the Afak SL-15-N strapping line, boxes flowing left to right.
 ///
-/// One belt runs the length of the machine under THREE Strapex arches in
-/// series — the box is strapped three times as it indexes through, rather than
-/// being strapped once and turned. Each arch has its own strap coil dispenser
-/// on the rear gantry directly behind it. Cabinets run along the front, and
-/// the control cabinet with the stack light sits at the discharge end.
+/// One belt runs the length of the machine under [heads] Strapex arches in
+/// series — the box is strapped once per arch as it indexes through, rather
+/// than being strapped once and turned. Each arch has its own strap coil
+/// dispenser on the rear gantry directly behind it. Cabinets run along the
+/// front, and the control cabinet with the stack light sits at the discharge
+/// end.
 ///
-/// True footprint ~2665 x 1815 mm, 15 boxes/min, ~530 mm boxes.
+/// Afak sells the head count as separate models — SL-15-1, SL-15-2 and
+/// SL-15-3 — and the real machines get shorter as heads come off. The drawing
+/// still fills its box whatever the count (leaving whitespace inside the
+/// dotted boundary would read as a rendering bug); the true proportions are
+/// carried by `ThirdPartyEquipmentKind.aspectRatio`, which the editor's
+/// "match proportions" button applies.
+///
+/// SL-15-3 footprint ~2665 x 1815 mm, 15 boxes/min, ~530 mm boxes.
 class StrappingLinePainter extends ThirdPartyMachinePainter {
   const StrappingLinePainter({
     required super.color,
     required super.strokeWidth,
-  });
+    this.heads = maxHeads,
+  }) : assert(heads >= 1 && heads <= maxHeads);
 
-  /// Unit x-centre of each Strapex arch, evenly spaced along the belt. The
-  /// `-3` in SL-15-3 is the strap count, so the length of this list IS the
-  /// model designation.
-  static const List<double> archCentres = [0.28, 0.52, 0.76];
+  /// Largest model Afak lists in the SL-15 family.
+  static const int maxHeads = 3;
+
+  /// Number of Strapex arches — the `-N` in the SL-15-N model number.
+  final int heads;
+
+  /// Unit x-centre of each arch, spread evenly with a margin at both ends so
+  /// the outermost arch never collides with the infeed or the cabinet.
+  static List<double> archCentresFor(int heads) {
+    const margin = 0.13;
+    final span = 1.0 - margin * 2;
+    return [
+      for (int i = 0; i < heads; i++) margin + span * (i + 0.5) / heads,
+    ];
+  }
+
+  @override
+  bool shouldRepaint(covariant ThirdPartyMachinePainter oldDelegate) =>
+      super.shouldRepaint(oldDelegate) ||
+      (oldDelegate is StrappingLinePainter && oldDelegate.heads != heads);
 
   @override
   void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
@@ -585,12 +724,16 @@ class StrappingLinePainter extends ThirdPartyMachinePainter {
     _crossTicks(canvas, u, detail,
         ul: 0.0, ur: 1.0, ut: 0.42, ub: 0.68, count: 9);
 
-    for (final cx in archCentres) {
+    final centres = archCentresFor(heads);
+    // Arch width shrinks a little as heads are added so three still breathe.
+    final halfArch = (0.105 / heads).clamp(0.030, 0.055);
+
+    for (final cx in centres) {
       // Strapex arch straddling the belt: the top crossbar spans the full
       // depth, with a heavier footprint where each upright lands.
-      canvas.drawRect(u.r(cx - 0.035, 0.26, cx + 0.035, 0.84), stroke);
-      canvas.drawRect(u.r(cx - 0.035, 0.26, cx + 0.035, 0.42), stroke);
-      canvas.drawRect(u.r(cx - 0.035, 0.68, cx + 0.035, 0.84), stroke);
+      canvas.drawRect(u.r(cx - halfArch, 0.26, cx + halfArch, 0.84), stroke);
+      canvas.drawRect(u.r(cx - halfArch, 0.26, cx + halfArch, 0.42), stroke);
+      canvas.drawRect(u.r(cx - halfArch, 0.68, cx + halfArch, 0.84), stroke);
 
       // Strap coil dispenser on the gantry behind this arch, with its hub and
       // the strap feed running down to the arch.
@@ -599,9 +742,12 @@ class StrappingLinePainter extends ThirdPartyMachinePainter {
       canvas.drawLine(u.p(cx, 0.24), u.p(cx, 0.26), detail);
     }
 
-    // Pneumatic pushers that stop and hold the box at the first arch.
-    canvas.drawRect(u.r(0.17, 0.70, 0.22, 0.76), detail);
-    canvas.drawRect(u.r(0.17, 0.34, 0.22, 0.40), detail);
+    // Pneumatic pushers that stop and hold the box at the first arch. They
+    // ride just ahead of it, so they follow the first arch rather than
+    // sitting at a fixed spot that a 1-head machine would put them past.
+    final pusherX = (centres.first - halfArch - 0.09).clamp(0.02, 0.90);
+    canvas.drawRect(u.r(pusherX, 0.70, pusherX + 0.05, 0.76), detail);
+    canvas.drawRect(u.r(pusherX, 0.34, pusherX + 0.05, 0.40), detail);
 
     // Cabinets along the front of the machine.
     canvas.drawRect(u.r(0.06, 0.88, 0.86, 1.0), stroke);

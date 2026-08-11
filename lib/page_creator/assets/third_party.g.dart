@@ -6,6 +6,24 @@ part of 'third_party.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+ThirdPartyChildEntry _$ThirdPartyChildEntryFromJson(
+        Map<String, dynamic> json) =>
+    ThirdPartyChildEntry(
+      id: json['id'] as String?,
+      offsetX: (json['offsetX'] as num?)?.toDouble() ?? 0.5,
+      offsetY: (json['offsetY'] as num?)?.toDouble() ?? 0.5,
+      child: _childFromJson(json['child'] as Map<String, dynamic>),
+    );
+
+Map<String, dynamic> _$ThirdPartyChildEntryToJson(
+        ThirdPartyChildEntry instance) =>
+    <String, dynamic>{
+      'id': instance.id,
+      'offsetX': instance.offsetX,
+      'offsetY': instance.offsetY,
+      'child': _childToJson(instance.child),
+    };
+
 ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
         Map<String, dynamic> json) =>
     ThirdPartyEquipmentConfig(
@@ -23,6 +41,8 @@ ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
       strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 2.0,
       tag: json['tag'] as String?,
       notes: json['notes'] as String?,
+      strapHeads: (json['strapHeads'] as num?)?.toInt() ?? 3,
+      children: _childrenFromJson(json['children'] as List?),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -51,6 +71,8 @@ Map<String, dynamic> _$ThirdPartyEquipmentConfigToJson(
       'strokeWidth': instance.strokeWidth,
       'tag': instance.tag,
       'notes': instance.notes,
+      'strapHeads': instance.strapHeads,
+      'children': _childrenToJson(instance.children),
       'text': instance.text,
     };
 

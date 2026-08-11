@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/common.dart';
+import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
+import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 
@@ -88,6 +91,144 @@ void main() {
     test('runKey is discoverable through BaseAsset.allKeys', () {
       final config = ThirdPartyEquipmentConfig(runKey: 'ST301.MV01.Running');
       expect(config.allKeys, contains('ST301.MV01.Running'));
+    });
+  });
+
+  group('Children inside the box', () {
+    test('a conveyor child survives the round-trip with its position', () {
+      final original = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        runKey: 'ST201.SB01.Running',
+        children: [
+          ThirdPartyChildEntry(
+            id: 'lane-infeed',
+            offsetX: 0.245,
+            offsetY: 0.65,
+            child: ConveyorConfig.preview(),
+          ),
+        ],
+      );
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>);
+
+      expect(restored.children, hasLength(1));
+      final entry = restored.children.single;
+      expect(entry.id, 'lane-infeed');
+      expect(entry.offsetX, closeTo(0.245, 1e-9));
+      expect(entry.offsetY, closeTo(0.65, 1e-9));
+      expect(entry.child, isA<ConveyorConfig>());
+    });
+
+    test('heterogeneous children round-trip and keep their order', () {
+      final original = ThirdPartyEquipmentConfig(children: [
+        ThirdPartyChildEntry(child: ConveyorConfig.preview()),
+        ThirdPartyChildEntry(child: SensorConfig.preview()),
+      ]);
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>);
+
+      expect(restored.children.map((e) => e.child.runtimeType),
+          [ConveyorConfig, SensorConfig]);
+    });
+
+    test('an unregistered child asset_name fails loudly', () {
+      // Silently dropping the child would let a saved page lose the conveyor
+      // an operator depends on, with no error anywhere.
+      final json = ThirdPartyEquipmentConfig(
+        children: [ThirdPartyChildEntry(child: SensorConfig.preview())],
+      ).toJson();
+      (json['children'] as List).first['child']['asset_name'] = 'NopeConfig';
+
+      expect(() => ThirdPartyEquipmentConfig.fromJson(json),
+          throwsA(isA<FormatException>()));
+    });
+
+    test('child keys surface through allKeys alongside the run key', () {
+      final conveyor = ConveyorConfig.preview();
+      final config = ThirdPartyEquipmentConfig(
+        runKey: 'ST201.SB01.Running',
+        children: [ThirdPartyChildEntry(child: conveyor)],
+      );
+
+      expect(config.allKeys, contains('ST201.SB01.Running'));
+      for (final key in conveyor.allKeys) {
+        expect(config.allKeys, contains(key),
+            reason: 'A conveyor placed inside the box must not be invisible '
+                'to key discovery.');
+      }
+    });
+
+    test('entry ids are unique even when created back to back', () {
+      final ids = {
+        for (int i = 0; i < 50; i++)
+          ThirdPartyChildEntry(child: SensorConfig.preview()).id
+      };
+      expect(ids, hasLength(50));
+    });
+
+    test('children default to empty, not null, on legacy JSON', () {
+      final json = ThirdPartyEquipmentConfig.preview().toJson();
+      json.remove('children');
+      expect(ThirdPartyEquipmentConfig.fromJson(json).children, isEmpty);
+    });
+  });
+
+  group('Strapping heads', () {
+    test('head count round-trips', () {
+      final json = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.strappingLine,
+        strapHeads: 2,
+      ).toJson();
+      expect(ThirdPartyEquipmentConfig.fromJson(json).strapHeads, 2);
+    });
+
+    test('the painter draws one arch per head', () {
+      for (final heads in const [1, 2, 3]) {
+        expect(StrappingLinePainter.archCentresFor(heads), hasLength(heads));
+      }
+    });
+
+    test('arch centres stay inside the machine and in order', () {
+      for (final heads in const [1, 2, 3]) {
+        final centres = StrappingLinePainter.archCentresFor(heads);
+        expect(centres.first, greaterThan(0.05));
+        expect(centres.last, lessThan(0.95));
+        for (int i = 1; i < centres.length; i++) {
+          expect(centres[i], greaterThan(centres[i - 1]));
+        }
+      }
+    });
+
+    test('label and footprint follow the head count into a real model number',
+        () {
+      const kind = ThirdPartyEquipmentKind.strappingLine;
+      expect(kind.labelFor(strapHeads: 1), contains('SL-15-1'));
+      expect(kind.labelFor(strapHeads: 3), contains('SL-15-3'));
+      // Only the SL-15-3 length is published; the others must say so.
+      expect(kind.footprint(strapHeads: 3), isNot(contains('estimated')));
+      expect(kind.footprint(strapHeads: 2), contains('estimated'));
+    });
+
+    test('fewer heads means a shorter machine', () {
+      const kind = ThirdPartyEquipmentKind.strappingLine;
+      expect(kind.aspectRatio(strapHeads: 1),
+          lessThan(kind.aspectRatio(strapHeads: 2)));
+      expect(kind.aspectRatio(strapHeads: 2),
+          lessThan(kind.aspectRatio(strapHeads: 3)));
+    });
+
+    test('an out-of-range head count is clamped, not asserted on', () {
+      // Persisted pages are not trusted input.
+      expect(
+          () => thirdPartyPainterFor(ThirdPartyEquipmentKind.strappingLine,
+              color: Colors.black, strokeWidth: 2, strapHeads: 99),
+          returnsNormally);
+      expect(
+          () => thirdPartyPainterFor(ThirdPartyEquipmentKind.strappingLine,
+              color: Colors.black, strokeWidth: 2, strapHeads: 0),
+          returnsNormally);
     });
   });
 
@@ -205,9 +346,9 @@ void main() {
     test('every kind has a label, a footprint and a sane aspect ratio', () {
       for (final kind in ThirdPartyEquipmentKind.values) {
         expect(kind.label, isNotEmpty);
-        expect(kind.footprint, isNotEmpty);
-        expect(kind.aspectRatio, greaterThan(0.5));
-        expect(kind.aspectRatio, lessThan(10.0));
+        expect(kind.footprint(), isNotEmpty);
+        expect(kind.aspectRatio(), greaterThan(0.5));
+        expect(kind.aspectRatio(), lessThan(10.0));
       }
     });
 

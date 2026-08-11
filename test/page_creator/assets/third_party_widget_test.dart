@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/led.dart';
+import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
+import 'package:tfc/page_creator/assets/third_party_painter.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
 
 void main() {
   // ProviderScope + MaterialApp so showDialog has a Navigator. No provider
@@ -133,14 +137,18 @@ void main() {
     });
   });
 
-  group('Tap for more information', () {
-    testWidgets('tap opens the read-only details dialog, not the editor',
-        (tester) async {
+  group('Tap opens the side pane', () {
+    // A docked SidePane rather than a dialog: this is equipment on a running
+    // line, and a modal barrier would hide the machine being diagnosed.
+    tearDown(closeSidePane);
+
+    testWidgets('tap opens a read-only pane, not the editor', (tester) async {
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.strappingLine,
+        strapHeads: 2,
         runKey: 'ST301.PK01.STRAP01.Running',
         tag: 'STRAP-01',
-        notes: 'Three Strapex heads in series.',
+        notes: 'Two Strapex heads in series.',
       );
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
@@ -151,12 +159,17 @@ void main() {
       await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Equipment'), findsOneWidget);
-      expect(find.text('Footprint'), findsOneWidget);
-      expect(find.text('Run status key'), findsOneWidget);
-      expect(find.text('Tag'), findsOneWidget);
-      expect(find.text('Notes'), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing,
+          reason: 'The pane must not be a modal dialog.');
+
+      // Header carries the tag, and the machine name follows the head count
+      // into a real model number.
+      expect(find.text('STRAP-01'), findsOneWidget);
+      expect(
+          find.textContaining('SL-15-2'), findsWidgets,
+          reason: 'Head count must reach the pane title.');
+      expect(find.text('NOTES'), findsOneWidget);
 
       // Negative locks — the runtime tap must never expose editor controls.
       expect(find.byType(DropdownButton<ThirdPartyEquipmentKind>), findsNothing,
@@ -165,7 +178,25 @@ void main() {
           reason: 'The editor KeyField label must not appear at runtime.');
     });
 
-    testWidgets('details dialog reports unknown run status when there is no key',
+    testWidgets('tapping the same machine again toggles the pane shut',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(runKey: '');
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 160,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+      expect(isSidePaneOpen(), isTrue);
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+      expect(isSidePaneOpen(), isFalse);
+    });
+
+    testWidgets('pane status chip reflects an unconfigured key',
         (tester) async {
       final config = ThirdPartyEquipmentConfig(runKey: '');
       await tester.pumpWidget(wrap(SizedBox(
@@ -177,10 +208,47 @@ void main() {
       await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      expect(find.text('no key configured'), findsOneWidget);
+      expect(find.text('No key'), findsOneWidget);
     });
 
-    testWidgets('Close dismisses the dialog', (tester) async {
+    testWidgets('pane status chip is Stale while the stream has no value',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(runKey: 'ST301.MV01.Running');
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 160,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      // Not "Stopped" — we have no signal, which is a different thing.
+      expect(find.text('Stale'), findsOneWidget);
+      expect(find.text('Stopped'), findsNothing);
+    });
+
+    testWidgets('the pane lists what is placed inside the box',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        runKey: '',
+        children: [ThirdPartyChildEntry(child: ConveyorConfig.preview())],
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 400,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      expect(find.text('INSIDE THE BOX'), findsOneWidget);
+    });
+
+    testWidgets('the pane does not outlive the asset that opened it',
+        (tester) async {
       final config = ThirdPartyEquipmentConfig(runKey: '');
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
@@ -190,10 +258,69 @@ void main() {
 
       await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Close'));
+      expect(isSidePaneOpen(), isTrue);
+
+      // Navigating away disposes the asset. A docked pane lives in the root
+      // overlay, so without the dispose hook it would keep showing a machine
+      // that is no longer on screen.
+      await tester.pumpWidget(wrap(const SizedBox(width: 300, height: 160)));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(isSidePaneOpen(), isFalse);
+    });
+  });
+
+  group('Children inside the box', () {
+    testWidgets('a child asset is built inside the machine area',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        children: [
+          ThirdPartyChildEntry(
+            offsetX: 0.25,
+            offsetY: 0.65,
+            child: ConveyorConfig.preview(),
+          ),
+        ],
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 320,
+        height: 600,
+        child: ThirdPartyEquipment(config: config),
+      )));
+      await tester.pump();
+
+      expect(find.byType(Conveyor), findsOneWidget,
+          reason: 'A live Conveyor must render inside the dotted box.');
+    });
+
+    testWidgets('the child sits within the drawing, clear of the LED header',
+        (tester) async {
+      const paintSize = Size(320, 600);
+      final entry = ThirdPartyChildEntry(
+        offsetX: 0.5,
+        offsetY: 0.5,
+        child: SensorConfig.preview(),
+      );
+      await tester.pumpWidget(wrap(ThirdPartyEquipmentBody(
+        painter: thirdPartyPainterFor(ThirdPartyEquipmentKind.speedBatcher,
+            color: Colors.blueGrey, strokeWidth: 2),
+        paintSize: paintSize,
+        ledColor: Colors.green,
+        children: [entry],
+      )));
+      await tester.pump();
+
+      final area = thirdPartyMachineArea(paintSize);
+      final childCentre = tester.getCenter(find.byType(Sensor));
+      final bodyTopLeft = tester.getTopLeft(find.byType(ThirdPartyEquipmentBody));
+      final local = childCentre - bodyTopLeft;
+
+      // offset 0.5/0.5 must land at the centre of the MACHINE AREA, not of
+      // the whole asset rect — otherwise children drift when the LED header
+      // changes height.
+      expect(local.dx, closeTo(area.center.dx, 1.0));
+      expect(local.dy, closeTo(area.center.dy, 1.0));
     });
   });
 

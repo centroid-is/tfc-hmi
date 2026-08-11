@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
@@ -7,8 +8,13 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
 
 import '../../providers/state_man.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
+import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
+import 'registry.dart';
+import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
 
 part 'third_party.g.dart';
@@ -49,40 +55,149 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
     }
   }
 
-  /// Real machine footprint, shown in the details dialog. Length x width in
-  /// plan, from the manufacturer's spec sheet — see the source notes at the
-  /// top of `third_party_painter.dart`.
-  String get footprint {
+  /// Label including the model variant, where the head count picks a real
+  /// model number. Used for the side-pane title.
+  String labelFor({int strapHeads = 3}) => this == ThirdPartyEquipmentKind
+          .strappingLine
+      ? 'Afak SL-15-${strapHeads.clamp(1, 3)} / Strapex strapping line'
+      : label;
+
+  /// Real machine footprint, shown in the side pane. See the source notes at
+  /// the top of `third_party_painter.dart` for where each figure comes from.
+  ///
+  /// [strapHeads] only affects the strapping line.
+  String footprint({int strapHeads = 3}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
         return '~5437 x 1002 mm (R 245)';
       case ThirdPartyEquipmentKind.speedBatcher:
-        return '~2311 x 1270 mm (SBM3000)';
+        return 'station layout — per site sketch';
       case ThirdPartyEquipmentKind.boxErector:
         return '~2395 x 2083 mm (generic RSC erector)';
       case ThirdPartyEquipmentKind.strappingLine:
-        return '~2665 x 1815 mm (SL-15-3)';
+        // Only the SL-15-3 length is published. The shorter models are the
+        // same machine with arches removed, so their length is estimated at
+        // one arch pitch each and labelled as such rather than quoted as
+        // fact.
+        if (strapHeads >= 3) return '~2665 x 1815 mm (SL-15-3)';
+        final estimated = 2665 - (3 - strapHeads) * 640;
+        return '~$estimated x 1815 mm (SL-15-$strapHeads, length estimated)';
     }
   }
 
-  /// Plan-view aspect ratio (length / width) of the real machine.
+  /// Aspect ratio of the drawing as authored — **width divided by height**,
+  /// matching the real machine's plan proportions.
   ///
-  /// The painters are authored at these proportions. Sizing an asset well away
-  /// from its kind's ratio squashes the layout — the Multivac especially, at
-  /// 5.4:1. Used for the config-editor preview so what you see there is
-  /// undistorted.
-  double get aspectRatio {
+  /// Note the SpeedBatcher is the odd one out at under 1.0: it is drawn
+  /// PORTRAIT, because product runs up the page through it rather than left
+  /// to right.
+  ///
+  /// Sizing an asset well away from its kind's ratio squashes the layout — the
+  /// Multivac especially, at 5.4:1. Used for the editor preview and for the
+  /// "match proportions" button.
+  double aspectRatio({int strapHeads = 3}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
         return 5437 / 1002;
       case ThirdPartyEquipmentKind.speedBatcher:
-        return 2311 / 1270;
+        // From the site sketch: roughly twice as long as it is wide, running
+        // up the page.
+        return 0.53;
       case ThirdPartyEquipmentKind.boxErector:
         return 2395 / 2083;
       case ThirdPartyEquipmentKind.strappingLine:
-        return 2665 / 1815;
+        return (2665 - (3 - strapHeads.clamp(1, 3)) * 640) / 1815;
     }
   }
+
+  /// Whether the head-count control applies to this kind.
+  bool get hasStrapHeads => this == ThirdPartyEquipmentKind.strappingLine;
+}
+
+// ---------------------------------------------------------------------------
+// Child assets inside the box
+// ---------------------------------------------------------------------------
+
+/// Deserialise a polymorphic child asset for a [ThirdPartyChildEntry].
+///
+/// Same envelope trick as `elevator.dart:_childFromJson` — wrapping the child
+/// JSON in a single-key Map makes [AssetRegistry.parse]'s tree crawl find
+/// exactly one asset without bare-Map ambiguity, and any registered asset type
+/// works without a switch here.
+///
+/// FAIL-LOUD: an unregistered `asset_name` throws rather than silently
+/// dropping the child, so a saved page cannot quietly lose the conveyor an
+/// operator relies on.
+BaseAsset _childFromJson(Map<String, dynamic> json) {
+  final assets = AssetRegistry.parse(<String, dynamic>{'wrapped_child': json});
+  if (assets.isEmpty) {
+    throw FormatException(
+      'ThirdPartyChildEntry.child JSON did not match any registered '
+      'asset_name in AssetRegistry: ${json[constAssetName]}',
+    );
+  }
+  return assets.first as BaseAsset;
+}
+
+Map<String, dynamic> _childToJson(BaseAsset child) => child.toJson();
+
+List<ThirdPartyChildEntry> _childrenFromJson(List<dynamic>? json) {
+  if (json == null) return <ThirdPartyChildEntry>[];
+  return json
+      .map((item) =>
+          ThirdPartyChildEntry.fromJson(item as Map<String, dynamic>))
+      .toList();
+}
+
+List<Map<String, dynamic>> _childrenToJson(List<ThirdPartyChildEntry> list) =>
+    list.map((e) => e.toJson()).toList();
+
+/// Monotonic suffix for entry ids. Windows clock resolution (~15 ms) can make
+/// back-to-back `DateTime.now()` calls return the same microseconds; the
+/// suffix guarantees uniqueness regardless. Mirrors `elevator.dart`.
+int _nextThirdPartyChildIdSuffix = 0;
+
+/// A live asset placed inside the dotted box.
+///
+/// The point is that the parts of a third-party machine we CAN see — a
+/// conveyor whose drive frequency we read, a sensor on the infeed — get their
+/// real assets rather than a painted approximation. Drop a `ConveyorConfig`
+/// onto the SpeedBatcher's infeed lane and it animates from the actual
+/// frequency while the surrounding station stays a drawing.
+///
+/// Positions are fractions of the machine area (the rect the plan view is
+/// drawn into), NOT of the whole asset rect — so a child stays on its lane
+/// when the LED header changes height.
+@JsonSerializable(explicitToJson: true)
+class ThirdPartyChildEntry {
+  /// Stable identity, used as a `ValueKey` so the child keeps its State (and
+  /// its subscription) when the list is reordered.
+  String id;
+
+  /// Centre X within the machine area: 0.0 = left edge, 1.0 = right edge.
+  double offsetX;
+
+  /// Centre Y within the machine area: 0.0 = top edge, 1.0 = bottom edge.
+  double offsetY;
+
+  /// Polymorphic child asset. Its own `size` is resolved against the machine
+  /// area rather than the screen, so it scales with the parent.
+  @JsonKey(fromJson: _childFromJson, toJson: _childToJson)
+  BaseAsset child;
+
+  ThirdPartyChildEntry({
+    String? id,
+    this.offsetX = 0.5,
+    this.offsetY = 0.5,
+    required this.child,
+  }) : id = id ??
+            '${DateTime.now().microsecondsSinceEpoch}-'
+                '${_nextThirdPartyChildIdSuffix++}';
+
+  factory ThirdPartyChildEntry.fromJson(Map<String, dynamic> json) =>
+      _$ThirdPartyChildEntryFromJson(json);
+
+  Map<String, dynamic> toJson() => _$ThirdPartyChildEntryToJson(this);
 }
 
 /// A piece of equipment we do NOT control, shown on the line overview so the
@@ -139,9 +254,18 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// Optional human-readable label (e.g. `"MV-01"`).
   String? tag;
 
-  /// Free-text notes surfaced in the details dialog — supplier contact, line
+  /// Free-text notes surfaced in the side pane — supplier contact, line
   /// position, interlock quirks, whatever the operator needs at 03:00.
   String? notes;
+
+  /// Strapex arches on the strapping line — the `-N` in SL-15-N. Ignored by
+  /// the other kinds.
+  int strapHeads;
+
+  /// Live assets placed inside the dotted box (conveyors driven by real drive
+  /// frequencies, sensors, and so on).
+  @JsonKey(fromJson: _childrenFromJson, toJson: _childrenToJson)
+  List<ThirdPartyChildEntry> children;
 
   /// `Asset.text` is what `AssetStack` (in `lib/pages/page_view.dart`) reads to
   /// paint the label OUTSIDE the asset's rotated subtree. Aliasing `text` onto
@@ -168,7 +292,11 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.strokeWidth = 2.0,
     this.tag,
     this.notes,
-  })  : runningColor = runningColor ?? Colors.green,
+    this.strapHeads = 3,
+    List<ThirdPartyChildEntry>? children,
+  })  : children =
+            children != null ? List<ThirdPartyChildEntry>.of(children) : [],
+        runningColor = runningColor ?? Colors.green,
         stoppedColor = stoppedColor ?? Colors.red,
         outlineColor = outlineColor ?? Colors.blueGrey {
     textPos = TextPos.below;
@@ -185,6 +313,19 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
 
   @override
   Map<String, dynamic> toJson() => _$ThirdPartyEquipmentConfigToJson(this);
+
+  /// Own run key plus every key reachable through the children.
+  ///
+  /// `BaseAsset.allKeys` introspects `toJson()` and would only see the nested
+  /// children as opaque maps, so a conveyor placed inside the box would be
+  /// invisible to key discovery. Insertion order is preserved: parent first,
+  /// then children in declaration order.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<String> get allKeys => <String>{
+        ...super.allKeys,
+        for (final key in children.expand((e) => e.child.allKeys)) key,
+      }.toList();
 
   @override
   Widget build(BuildContext context) => ThirdPartyEquipment(config: this);
@@ -214,6 +355,7 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
   ThirdPartyEquipmentKind kind, {
   required Color color,
   required double strokeWidth,
+  int strapHeads = 3,
 }) {
   switch (kind) {
     case ThirdPartyEquipmentKind.multivac:
@@ -223,7 +365,11 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
     case ThirdPartyEquipmentKind.boxErector:
       return BoxErectorPainter(color: color, strokeWidth: strokeWidth);
     case ThirdPartyEquipmentKind.strappingLine:
-      return StrappingLinePainter(color: color, strokeWidth: strokeWidth);
+      return StrappingLinePainter(
+        color: color,
+        strokeWidth: strokeWidth,
+        heads: strapHeads.clamp(1, StrappingLinePainter.maxHeads),
+      );
   }
 }
 
@@ -249,10 +395,37 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// `null` means no stream is needed — the run key is empty.
   Stream<bool>? _runStream;
 
+  /// The single subscription to [_runStream].
+  ///
+  /// The state is fanned out through [_raw] rather than by letting each
+  /// consumer wrap the stream in its own `StreamBuilder`. Two reasons: the
+  /// hoisted stream is single-subscription, so a second listener throws
+  /// "Stream has already been listened to" the moment an operator opens the
+  /// pane on a machine that has a run key; and one subscription means the LED
+  /// and the pane can never disagree about what the machine is doing.
+  StreamSubscription<bool>? _sub;
+
+  /// Latest RAW value off the wire, before polarity is applied. `null` is the
+  /// unknown state — no key, nothing received yet, or the stream errored.
+  ///
+  /// Polarity is deliberately NOT baked in here: the editor can flip
+  /// `invertRunPolarity` without the key changing, and re-hoisting the stream
+  /// just to re-map a bool would drop and recreate a PLC subscription.
+  final ValueNotifier<bool?> _raw = ValueNotifier<bool?>(null);
+
   /// The key `_runStream` was built for. Compared against the live config
   /// rather than `oldWidget.config.runKey` because the page editor mutates the
   /// same config instance in place, so both widgets hold the same reference.
   String? _hoistedKey;
+
+  bool? get _isRunning {
+    final raw = _raw.value;
+    if (raw == null) return null;
+    return thirdPartyIsRunning(
+      rawBool: raw,
+      invertRunPolarity: widget.config.invertRunPolarity,
+    );
+  }
 
   @override
   void initState() {
@@ -271,6 +444,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   void _hoistStream() {
     final key = widget.config.runKey;
     _hoistedKey = key;
+    _sub?.cancel();
+    _sub = null;
+    _raw.value = null;
     if (key.isEmpty) {
       _runStream = null;
       return;
@@ -281,6 +457,12 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         .asyncExpand((sm) => sm.subscribe(key).asStream())
         .asyncExpand((s) => s)
         .map((dv) => dv.asBool);
+    _sub = _runStream!.listen(
+      (value) => _raw.value = value,
+      // Fall back to unknown rather than latching the last good value: a
+      // stale "running" is worse than an honest "we don't know".
+      onError: (Object _) => _raw.value = null,
+    );
   }
 
   /// Test-only window onto the hoisted stream identity, so the stream
@@ -288,53 +470,130 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   @visibleForTesting
   Stream<bool>? get debugRunStream => _runStream;
 
-  /// Read-only details dialog — this is the "more information" behind the tap.
+  @override
+  void dispose() {
+    // A docked pane lives in the root overlay, so it would survive a page
+    // change and go on showing a machine that is no longer on screen. Scoped
+    // by id so we never close someone else's pane.
+    closeSidePane(id: _paneId);
+    _sub?.cancel();
+    _raw.dispose();
+    super.dispose();
+  }
+
+  /// Opens the read-only side pane — the "more information" behind the tap.
   ///
-  /// No writes: we do not command third-party equipment from here, we only
-  /// report what the handshake says.
-  void _showDetailsDialog(BuildContext context, bool? isRunning) {
+  /// A [SidePane] rather than a dialog because this is equipment on a running
+  /// line: the operator wants to read the handshake while still watching the
+  /// mimic, and a modal barrier would hide the very machine they are
+  /// diagnosing. The pane rebuilds itself from the run stream, so the status
+  /// chip stays live while it is open.
+  ///
+  /// No writes: we report what the handshake says, we do not command other
+  /// people's machines.
+  /// Identifies this asset's pane. Tapping the same machine twice toggles its
+  /// pane shut; tapping a different one swaps.
+  String get _paneId {
     final config = widget.config;
-    showDialog<void>(
+    return 'third-party:${config.tag ?? ''}:${config.runKey}:'
+        '${config.kind.name}';
+  }
+
+  void _showPane(BuildContext context) {
+    showSidePane(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(config.kind.label),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _DetailRow('Equipment', config.kind.label),
-              _DetailRow('Footprint', config.kind.footprint),
-              if (config.tag != null && config.tag!.isNotEmpty)
-                _DetailRow('Tag', config.tag!),
-              _DetailRow(
-                'Run status key',
-                config.runKey.isEmpty ? '—' : config.runKey,
-              ),
-              _DetailRow(
-                'Run status',
-                config.runKey.isEmpty
-                    ? 'no key configured'
-                    : isRunning == null
-                        ? 'unknown'
-                        : isRunning
-                            ? 'running'
-                            : 'stopped',
-              ),
-              _DetailRow(
-                'Run polarity inverted',
-                config.invertRunPolarity ? 'yes' : 'no',
-              ),
-              if (config.notes != null && config.notes!.isNotEmpty)
-                _DetailRow('Notes', config.notes!),
-            ],
+      id: _paneId,
+      // Rebuilds off the same notifier the body uses, so the status chip
+      // stays live while the pane is open and always agrees with the LED.
+      builder: (context) => ValueListenableBuilder<bool?>(
+        valueListenable: _raw,
+        builder: (context, _, __) => _paneFor(_isRunning),
+      ),
+    );
+  }
+
+  Widget _paneFor(bool? isRunning) {
+    final config = widget.config;
+    final PaneStatus status;
+    if (config.runKey.isEmpty) {
+      status = const PaneStatus.unknown('No key');
+    } else if (isRunning == null) {
+      status = const PaneStatus.stale();
+    } else {
+      status = isRunning
+          ? const PaneStatus.running()
+          : const PaneStatus.stopped();
+    }
+
+    return SidePane(
+      title: config.tag?.isNotEmpty == true
+          ? config.tag!
+          : config.kind.labelFor(strapHeads: config.strapHeads),
+      subtitle: config.tag?.isNotEmpty == true
+          ? config.kind.labelFor(strapHeads: config.strapHeads)
+          : 'Third-party equipment',
+      icon: Icons.precision_manufacturing,
+      status: status,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          PaneSection(
+            title: 'Equipment',
+            child: Column(
+              children: [
+                PaneDetailRow(
+                  label: 'Machine',
+                  value: config.kind.labelFor(strapHeads: config.strapHeads),
+                ),
+                PaneDetailRow(
+                  label: 'Footprint',
+                  value: config.kind.footprint(strapHeads: config.strapHeads),
+                ),
+                if (config.kind.hasStrapHeads)
+                  PaneDetailRow(
+                    label: 'Strapping heads',
+                    value: '${config.strapHeads}',
+                  ),
+              ],
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
+          PaneSection(
+            title: 'Run status',
+            child: Column(
+              children: [
+                PaneDetailRow(
+                  label: 'Key',
+                  value: config.runKey.isEmpty ? '—' : config.runKey,
+                ),
+                PaneDetailRow(
+                  label: 'Polarity',
+                  value: config.invertRunPolarity
+                      ? 'inverted — running when false'
+                      : 'normal — running when true',
+                ),
+              ],
+            ),
           ),
+          if (config.children.isNotEmpty)
+            PaneSection(
+              title: 'Inside the box',
+              child: Column(
+                children: [
+                  for (final entry in config.children)
+                    PaneDetailRow(
+                      label: entry.child.displayName,
+                      value: entry.child.allKeys.isEmpty
+                          ? 'no keys'
+                          : entry.child.allKeys.join(', '),
+                    ),
+                ],
+              ),
+            ),
+          if (config.notes != null && config.notes!.isNotEmpty)
+            PaneSection(
+              title: 'Notes',
+              child: SelectableText(config.notes!),
+            ),
         ],
       ),
     );
@@ -354,7 +613,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _showDetailsDialog(context, isRunning),
+      onTap: () => _showPane(context),
       child: LayoutRotatedBox(
         angle: (config.coordinates.angle ?? 0.0) * pi / 180,
         child: LayoutBuilder(
@@ -371,9 +630,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                 config.kind,
                 color: config.outlineColor,
                 strokeWidth: config.strokeWidth,
+                strapHeads: config.strapHeads,
               ),
               paintSize: paintSize,
               ledColor: ledColor,
+              children: config.children,
             );
           },
         ),
@@ -383,19 +644,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
 
   @override
   Widget build(BuildContext context) {
-    // Stale path #1: no key configured, so no stream was ever built.
-    if (_runStream == null) return _buildBody(null);
-
-    return StreamBuilder<bool>(
-      stream: _runStream,
-      builder: (context, snapshot) {
-        // Stale paths #2 and #3: nothing emitted yet, or the stream errored.
-        if (!snapshot.hasData || snapshot.hasError) return _buildBody(null);
-        return _buildBody(thirdPartyIsRunning(
-          rawBool: snapshot.data!,
-          invertRunPolarity: widget.config.invertRunPolarity,
-        ));
-      },
+    // All three stale paths — no key, nothing received yet, stream errored —
+    // arrive here as a null `_raw`, and `_isRunning` keeps them null.
+    return ValueListenableBuilder<bool?>(
+      valueListenable: _raw,
+      builder: (context, _, __) => _buildBody(_isRunning),
     );
   }
 }
@@ -415,6 +668,7 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
     required this.painter,
     required this.paintSize,
     required this.ledColor,
+    this.children = const [],
   });
 
   final ThirdPartyMachinePainter painter;
@@ -423,18 +677,52 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
   /// `null` renders the LED's unknown state.
   final Color? ledColor;
 
+  /// Live assets composited over the drawing, inside the machine area.
+  final List<ThirdPartyChildEntry> children;
+
+  /// Positions one child by its centre within the machine area.
+  ///
+  /// The child's own `RelativeSize` is resolved against the MACHINE AREA, not
+  /// the screen — same convention as `Elevator._buildPositionedChild` — so a
+  /// conveyor sized to half a lane stays half a lane at any asset size.
+  Widget _positionedChild(
+      BuildContext context, ThirdPartyChildEntry entry, Rect area) {
+    final intrinsic = entry.child.size.toSize(area.size);
+    final w = intrinsic.width <= 0 ? area.shortestSide / 4 : intrinsic.width;
+    final h = intrinsic.height <= 0 ? area.shortestSide / 4 : intrinsic.height;
+    return Positioned(
+      left: area.left + entry.offsetX * area.width - w / 2,
+      top: area.top + entry.offsetY * area.height - h / 2,
+      width: w,
+      height: h,
+      // KeyedSubtree on the stable entry id: without it, reordering or
+      // editing the list re-creates the child's State and re-subscribes its
+      // stream.
+      child: KeyedSubtree(
+        key: ValueKey<String>(entry.id),
+        child: entry.child.build(context),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final boundary = thirdPartyBoundaryRect(paintSize);
+    final area = thirdPartyMachineArea(paintSize);
     final led = thirdPartyLedDiameter(paintSize);
     final inset = thirdPartyLedInset(paintSize);
 
     return SizedBox(
       width: paintSize.width,
       height: paintSize.height,
+      // Clip.none so a child that overhangs its lane is visible rather than
+      // silently cropped — the editor needs to show the mistake.
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           Positioned.fill(child: CustomPaint(painter: painter)),
+          for (final entry in children)
+            _positionedChild(context, entry, area),
           Positioned(
             left: boundary.left + inset,
             top: boundary.top + inset,
@@ -450,35 +738,22 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
   }
 }
 
-/// Single label/value row for the details dialog. Values are selectable so
-/// operators can copy a state key out while troubleshooting.
-class _DetailRow extends StatelessWidget {
-  const _DetailRow(this.label, this.value);
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 180,
-              child: Text(
-                label,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-            Expanded(child: SelectableText(value)),
-          ],
-        ),
-      );
-}
-
 // ---------------------------------------------------------------------------
 // Config editor
 // ---------------------------------------------------------------------------
+
+/// Fits a preview box of [aspect] (width / height) inside the editor column
+/// without distorting it. Landscape kinds hit the width limit, the portrait
+/// SpeedBatcher hits the height limit.
+Size _fitPreview(double aspect, {double maxW = 300, double maxH = 300}) {
+  double w = maxW;
+  double h = maxW / aspect;
+  if (h > maxH) {
+    h = maxH;
+    w = maxH * aspect;
+  }
+  return Size(w, h);
+}
 
 /// Editor body for [ThirdPartyEquipmentConfig]. Field order follows the
 /// house pattern: preview, identity, live keys, colours, label, geometry.
@@ -574,11 +849,11 @@ class _ThirdPartyEquipmentConfigEditorState
     final config = widget.config;
     // Preview at the machine's TRUE plan aspect ratio, so the layout is
     // undistorted here even if the asset on the page is sized differently.
-    // The floor keeps the Multivac (5.4:1) from collapsing to a hairline.
-    const previewWidth = 300.0;
-    final previewSize = Size(
-      previewWidth,
-      (previewWidth / config.kind.aspectRatio).clamp(56.0, 240.0),
+    // Fitted rather than clamped: the kinds run from a 5.4:1 Multivac strip
+    // to a portrait SpeedBatcher, and clamping either axis would squash one
+    // of them — which is exactly the distortion this preview exists to avoid.
+    final previewSize = _fitPreview(
+      config.kind.aspectRatio(strapHeads: config.strapHeads),
     );
 
     return Container(
@@ -594,11 +869,15 @@ class _ThirdPartyEquipmentConfigEditorState
                   config.kind,
                   color: config.outlineColor,
                   strokeWidth: config.strokeWidth,
+                  strapHeads: config.strapHeads,
                 ),
                 paintSize: previewSize,
                 // Preview always shows the running colour — the operator is
                 // picking colours here, not reading live state.
                 ledColor: config.runningColor,
+                // Children are deliberately NOT rendered in the preview: they
+                // subscribe to real keys, and the editor should not open live
+                // subscriptions just to draw a thumbnail.
               ),
             ),
             const Divider(),
@@ -618,6 +897,24 @@ class _ThirdPartyEquipmentConfigEditorState
                   .toList(),
             ),
             const SizedBox(height: 16),
+
+            // -- Strapping heads (SL-15-1 / -2 / -3) --
+            if (config.kind.hasStrapHeads) ...[
+              Text('Strapping heads',
+                  style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 1, label: Text('1')),
+                  ButtonSegment(value: 2, label: Text('2')),
+                  ButtonSegment(value: 3, label: Text('3')),
+                ],
+                selected: {config.strapHeads.clamp(1, 3)},
+                onSelectionChanged: (selection) =>
+                    setState(() => config.strapHeads = selection.first),
+              ),
+              const SizedBox(height: 16),
+            ],
 
             // -- Run status key --
             KeyField(
@@ -720,9 +1017,10 @@ class _ThirdPartyEquipmentConfigEditorState
                 label: Text('Match ${config.kind.label} proportions'),
                 onPressed: () {
                   final screen = MediaQuery.of(context).size;
-                  final height = config.size.width *
-                      screen.width /
-                      (config.kind.aspectRatio * screen.height);
+                  final aspect =
+                      config.kind.aspectRatio(strapHeads: config.strapHeads);
+                  final height =
+                      config.size.width * screen.width / (aspect * screen.height);
                   setState(() {
                     config.size = RelativeSize(
                       width: config.size.width,
@@ -740,9 +1038,170 @@ class _ThirdPartyEquipmentConfigEditorState
               onChanged: (c) => setState(() => config.coordinates = c),
               enableAngle: true,
             ),
+            const SizedBox(height: 16),
+            const Divider(),
+
+            // -- Children --
+            // The parts of a third-party machine we DO have signals for get
+            // their real asset instead of a painted approximation: a conveyor
+            // driven by its actual drive frequency, a sensor on the infeed.
+            // Positions are fractions of the machine area, so a child stays
+            // on its lane at any asset size.
+            Text('Inside the box',
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text(
+              'Place live assets over the drawing — e.g. a Conveyor on the '
+              'SpeedBatcher infeed lane, driven by its real frequency.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: () => _addChild(ConveyorConfig.preview()),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Conveyor'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => _addChild(SensorConfig.preview()),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Sensor'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (config.children.isEmpty)
+              Text('Nothing placed inside',
+                  style: Theme.of(context).textTheme.bodyMedium)
+            else
+              for (int i = 0; i < config.children.length; i++)
+                _ChildRow(
+                  key: ValueKey(config.children[i].id),
+                  entry: config.children[i],
+                  onChanged: () => setState(() {}),
+                  onRemove: () =>
+                      setState(() => config.children.removeAt(i)),
+                ),
           ],
         ),
       ),
+    );
+  }
+
+  void _addChild(BaseAsset child) {
+    setState(() {
+      widget.config.children.add(ThirdPartyChildEntry(child: child));
+    });
+  }
+}
+
+/// One row of the children list: what it is, where it sits, and how to
+/// configure or remove it.
+class _ChildRow extends StatelessWidget {
+  const _ChildRow({
+    super.key,
+    required this.entry,
+    required this.onChanged,
+    required this.onRemove,
+  });
+
+  final ThirdPartyChildEntry entry;
+  final VoidCallback onChanged;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(entry.child.displayName,
+                      style: Theme.of(context).textTheme.titleSmall),
+                ),
+                IconButton(
+                  tooltip: 'Configure',
+                  icon: const Icon(Icons.tune, size: 18),
+                  onPressed: () async {
+                    await showDialog<void>(
+                      context: context,
+                      builder: (_) => Dialog(
+                        child: SingleChildScrollView(
+                          child: entry.child.configure(context),
+                        ),
+                      ),
+                    );
+                    onChanged();
+                  },
+                ),
+                IconButton(
+                  tooltip: 'Remove',
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  onPressed: onRemove,
+                ),
+              ],
+            ),
+            // Position within the machine area, 0..1 on each axis.
+            _OffsetSlider(
+              label: 'X',
+              value: entry.offsetX,
+              onChanged: (v) {
+                entry.offsetX = v;
+                onChanged();
+              },
+            ),
+            _OffsetSlider(
+              label: 'Y',
+              value: entry.offsetY,
+              onChanged: (v) {
+                entry.offsetY = v;
+                onChanged();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OffsetSlider extends StatelessWidget {
+  const _OffsetSlider({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(width: 16, child: Text(label)),
+        Expanded(
+          child: Slider(
+            value: value.clamp(0.0, 1.0),
+            divisions: 100,
+            label: value.toStringAsFixed(2),
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(
+          width: 40,
+          child: Text(value.toStringAsFixed(2),
+              style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
     );
   }
 }
