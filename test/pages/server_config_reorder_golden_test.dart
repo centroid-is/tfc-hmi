@@ -177,10 +177,22 @@ void main() {
       (tester) async {
     await _pumpSection(tester, _servers(3));
 
-    final list =
-        tester.widget<ReorderableListView>(find.byType(ReorderableListView));
-    list.onReorder(2, 0);
-    await settle(tester);
+    // Drop it where the previous golden was carrying it. Driving the handle
+    // rather than the list's `onReorder` keeps this off an API the framework
+    // has already deprecated once.
+    final handles = find.byIcon(Icons.drag_indicator);
+    final gesture = await tester.startGesture(tester.getCenter(handles.at(2)));
+    await gesture.moveBy(const Offset(0, -12));
+    await tester.pump(const Duration(milliseconds: 20));
+    final travel = tester.getCenter(handles.at(0)).dy -
+        tester.getCenter(handles.at(2)).dy +
+        12;
+    for (var i = 0; i < 4; i++) {
+      await gesture.moveBy(Offset(0, travel / 4));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
 
     await _expectGolden(tester, 'server_reorder_after.png');
   });

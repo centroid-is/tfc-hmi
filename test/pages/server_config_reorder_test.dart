@@ -59,9 +59,16 @@ ModbusConfig _modbus(String host, String alias) => ModbusConfig(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Rendered card titles, top to bottom, of the server list at [list] (0 is
-/// OPC-UA, then JBTM, then Modbus — a section with no servers renders a
-/// placeholder instead of a list and so does not take a slot).
+/// The server list of the section at [index] — 0 is OPC-UA, then JBTM, then
+/// Modbus. A section with no servers renders a placeholder instead of a list
+/// and so does not take a slot.
+Finder listAt(int index) => find.byType(ReorderableListView).at(index);
+
+/// The grab handles of the section at [list], top to bottom.
+Finder handlesIn(int list) => find.descendant(
+    of: listAt(list), matching: find.byIcon(Icons.drag_indicator));
+
+/// Rendered card titles, top to bottom, of the server list at [list].
 ///
 /// A card's title is the first [Text] under its [ExpansionTile] — the bold
 /// alias. Scoping to the list keeps the page's other tiles (the database
@@ -69,10 +76,8 @@ ModbusConfig _modbus(String host, String alias) => ModbusConfig(
 /// tiles (Modbus poll groups) do not show up either.
 List<String> titleOrder(WidgetTester tester, {int list = 0}) {
   final titles = <String>[];
-  final tiles = find.descendant(
-    of: find.byType(ReorderableListView).at(list),
-    matching: find.byType(ExpansionTile),
-  );
+  final tiles =
+      find.descendant(of: listAt(list), matching: find.byType(ExpansionTile));
   for (var i = 0; i < tiles.evaluate().length; i++) {
     final text = tester.widget<Text>(
       find.descendant(of: tiles.at(i), matching: find.byType(Text)).first,
@@ -82,22 +87,58 @@ List<String> titleOrder(WidgetTester tester, {int list = 0}) {
   return titles;
 }
 
-/// Invokes the page's single reorderable list the way a completed drag would.
+/// Drags the card at [from] onto the slot at [to] by its grab handle, in the
+/// section at [list].
 ///
-/// [newIndex] follows the [ReorderableListView] contract: the slot the card
-/// was dropped into *before* it is lifted out, so moving to the very end
-/// means `newIndex == length`.
-Future<void> reorder(WidgetTester tester, int oldIndex, int newIndex) async {
-  final list =
-      tester.widget<ReorderableListView>(find.byType(ReorderableListView));
-  list.onReorder(oldIndex, newIndex);
-  await settle(tester);
+/// A real gesture rather than a poke at the list's `onReorder`: the callback
+/// is the framework's business and its shape has already changed once
+/// (deprecated in favour of `onReorderItem` in Flutter 3.44, with different
+/// index semantics). Driving the handle tests what the operator does and
+/// keeps working across that migration; the index arithmetic itself is
+/// covered directly by the `moveInList` tests.
+Future<void> dragCard(WidgetTester tester,
+    {required int from, required int to, int list = 0}) async {
+  final handles = handlesIn(list);
+  final start = tester.getCenter(handles.at(from));
+  final end = tester.getCenter(handles.at(to));
+
+  final gesture = await tester.startGesture(start);
+  // Nudge first so the drag is picked up, then travel in steps — a single
+  // teleport can outrun the list's hit testing.
+  await gesture.moveBy(const Offset(0, 12));
+  await tester.pump(const Duration(milliseconds: 20));
+  final travel = end.dy - start.dy - 12;
+  for (var i = 1; i <= 4; i++) {
+    await gesture.moveBy(Offset(0, travel / 4));
+    await tester.pump(const Duration(milliseconds: 20));
+  }
+  await gesture.up();
+  await tester.pumpAndSettle();
 }
 
 /// Scrolls the page until [finder] is on screen.
 Future<void> reveal(WidgetTester tester, Finder finder) async {
   await tester.scrollUntilVisible(finder, 200,
       scrollable: find.byType(Scrollable).first);
+  await settle(tester);
+}
+
+/// Pumps the page with a viewport tall enough that a whole section's cards are
+/// on screen at once, then scrolls that section's header to the top.
+///
+/// Drags need both the card being moved and its destination visible: neither
+/// the list (it shrink-wraps inside the page scroll view) nor the page itself
+/// auto-scrolls under a drag.
+Future<void> pumpSection(WidgetTester tester, StateManConfig config,
+    {String header = 'OPC-UA Servers'}) async {
+  await tester.binding.setSurfaceSize(const Size(900, 800));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+
+  await pumpAndLoad(tester, buildTestableServerConfig(stateManConfig: config));
+
+  final page = tester.state<ScrollableState>(find.byType(Scrollable).first);
+  final headerY = tester.getTopLeft(find.text(header)).dy;
+  page.position.jumpTo(page.position.pixels + headerY - 12);
   await settle(tester);
 }
 
@@ -180,19 +221,26 @@ void main() {
 
     testWidgets('dragging the last card to the top reorders the list',
         (tester) async {
-      await pumpAndLoad(tester,
-          buildTestableServerConfig(stateManConfig: _threeOpcuaServers()));
+      await pumpSection(tester, _threeOpcuaServers());
 
-      await reorder(tester, 2, 0);
+      await dragCard(tester, from: 2, to: 0);
 
       expect(titleOrder(tester), ['st301', 'st101', 'st201']);
     });
 
-    testWidgets('the new order survives a save', (tester) async {
-      await pumpAndLoad(tester,
-          buildTestableServerConfig(stateManConfig: _threeOpcuaServers()));
+    testWidgets('dragging the first card to the bottom reorders the list',
+        (tester) async {
+      await pumpSection(tester, _threeOpcuaServers());
 
-      await reorder(tester, 0, 3);
+      await dragCard(tester, from: 0, to: 2);
+
+      expect(titleOrder(tester), ['st201', 'st301', 'st101']);
+    });
+
+    testWidgets('the new order survives a save', (tester) async {
+      await pumpSection(tester, _threeOpcuaServers());
+
+      await dragCard(tester, from: 0, to: 2);
       expect(titleOrder(tester), ['st201', 'st301', 'st101']);
 
       await reveal(tester, find.text('Save Configuration'));
@@ -200,17 +248,16 @@ void main() {
       await settle(tester);
 
       final saved = await persistedConfig(tester);
-      expect(saved.opcua.map((s) => s.serverAlias),
-          ['st201', 'st301', 'st101']);
+      expect(
+          saved.opcua.map((s) => s.serverAlias), ['st201', 'st301', 'st101']);
     });
 
     testWidgets('a reorder counts as an unsaved change', (tester) async {
-      await pumpAndLoad(tester,
-          buildTestableServerConfig(stateManConfig: _threeOpcuaServers()));
+      await pumpSection(tester, _threeOpcuaServers());
 
       expect(find.textContaining('Unsaved'), findsNothing);
 
-      await reorder(tester, 2, 0);
+      await dragCard(tester, from: 2, to: 0);
 
       expect(find.textContaining('Unsaved'), findsAtLeastNWidgets(1));
     });
@@ -220,10 +267,9 @@ void main() {
       // The regression this guards: card fields are seeded once in initState.
       // Keyed on position rather than identity, the card left sitting in slot
       // 0 would still show st101's endpoint while editing st301's config.
-      await pumpAndLoad(tester,
-          buildTestableServerConfig(stateManConfig: _threeOpcuaServers()));
+      await pumpSection(tester, _threeOpcuaServers());
 
-      await reorder(tester, 2, 0);
+      await dragCard(tester, from: 2, to: 0);
 
       // Expand the card now on top — it must be st301, endpoint and all.
       await tester.tap(find.text('st301'));
@@ -291,13 +337,12 @@ void main() {
   // ==================== JBTM ====================
   group('JBTM server reorder', () {
     testWidgets('reorders and persists', (tester) async {
-      await pumpAndLoad(tester,
-          buildTestableServerConfig(stateManConfig: _threeJbtmServers()));
-      await reveal(tester, find.text('weigher_1'));
+      await pumpSection(tester, _threeJbtmServers(),
+          header: 'JBTM M2400 Servers');
 
-      expect(find.byIcon(Icons.drag_indicator), findsNWidgets(3));
+      expect(handlesIn(0), findsNWidgets(3));
 
-      await reorder(tester, 0, 3);
+      await dragCard(tester, from: 0, to: 2);
       expect(titleOrder(tester), ['weigher_2', 'weigher_3', 'weigher_1']);
 
       await reveal(tester, find.text('Save Configuration'));
@@ -313,13 +358,12 @@ void main() {
   // ==================== Modbus ====================
   group('Modbus server reorder', () {
     testWidgets('reorders and persists', (tester) async {
-      await pumpAndLoad(tester,
-          buildTestableServerConfig(stateManConfig: _threeModbusServers()));
-      await reveal(tester, find.text('plc_1'));
+      await pumpSection(tester, _threeModbusServers(),
+          header: 'Modbus TCP Servers');
 
-      expect(find.byIcon(Icons.drag_indicator), findsNWidgets(3));
+      expect(handlesIn(0), findsNWidgets(3));
 
-      await reorder(tester, 2, 0);
+      await dragCard(tester, from: 2, to: 0);
       expect(titleOrder(tester), ['plc_3', 'plc_1', 'plc_2']);
 
       await reveal(tester, find.text('Save Configuration'));
@@ -333,10 +377,9 @@ void main() {
     testWidgets('poll groups travel with their server', (tester) async {
       // Modbus cards carry per-poll-group controllers too — the deepest bit of
       // per-card state on the page.
-      await pumpAndLoad(
+      await pumpSection(
           tester,
-          buildTestableServerConfig(
-              stateManConfig: StateManConfig(opcua: [], modbus: [
+          StateManConfig(opcua: [], modbus: [
             _modbus('10.104.29.31', 'plc_1'),
             ModbusConfig(
               host: '10.104.29.32',
@@ -346,10 +389,10 @@ void main() {
                 ModbusPollGroupConfig(name: 'fast', intervalMs: 50),
               ],
             )..serverAlias = 'plc_2',
-          ])));
-      await reveal(tester, find.text('plc_1'));
+          ]),
+          header: 'Modbus TCP Servers');
 
-      await reorder(tester, 1, 0);
+      await dragCard(tester, from: 1, to: 0);
       expect(titleOrder(tester), ['plc_2', 'plc_1']);
 
       await tester.tap(find.text('plc_2'));
@@ -372,16 +415,12 @@ void main() {
         jbtm: _threeJbtmServers().jbtm,
         modbus: _threeModbusServers().modbus,
       );
-      await pumpAndLoad(
-          tester, buildTestableServerConfig(stateManConfig: config));
+      await pumpSection(tester, config);
 
       expect(find.byType(ReorderableListView), findsNWidgets(3));
 
-      // Reorder the OPC-UA list (the first of the three).
-      final opcuaList = tester
-          .widget<ReorderableListView>(find.byType(ReorderableListView).at(0));
-      opcuaList.onReorder(2, 0);
-      await settle(tester);
+      // Drag inside the OPC-UA list — the first of the three.
+      await dragCard(tester, from: 2, to: 0, list: 0);
 
       await reveal(tester, find.text('Save Configuration'));
       await tester.tap(find.text('Save Configuration').first);
