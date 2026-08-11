@@ -492,25 +492,40 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   /// Unit frame of checkweigher 2 (the last station before discharge).
   static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.16);
 
-  /// The weigh-belt bed inside a checkweigher frame.
+  /// The weigh belt inside a checkweigher frame.
   ///
-  /// Narrower than the frame so the two readouts have somewhere to live: the
-  /// accept rate to the left of the belt, the weight to the right. This is the
-  /// rect a live Conveyor child fills.
-  ///
-  /// The vertical inset is small — the belt should nearly fill its frame. A
-  /// generous inset left the checkweighers reading as two mostly-empty boxes,
-  /// which is dead space on a mimic where the lanes below want the room.
+  /// Spans the FULL width of the frame: a checkweigher is a conveyor with a
+  /// load cell under it, not a box with a short belt in the middle. This is
+  /// the rect a live Conveyor child fills.
   static Rect deckOf(Rect frame) {
-    final inset = frame.height * 0.12;
-    return Rect.fromLTRB(0.27, frame.top + inset, 0.73, frame.bottom - inset);
+    final inset = frame.height * 0.08;
+    return Rect.fromLTRB(
+        frame.left, frame.top + inset, frame.right, frame.bottom - inset);
   }
 
-  /// Centre of the accept-rate readout, left of the weigh belt.
-  static Offset acceptAnchorOf(Rect frame) => Offset(0.145, frame.center.dy);
+  /// Horizontal half-extent of `ConveyorPainter`'s direction arrow, as a
+  /// fraction of the belt width.
+  ///
+  /// The arrow is centred on the belt and its shaft is 40% of the belt width
+  /// (`conveyor.dart:_drawDirectionArrow`), so it owns the middle 0.3..0.7.
+  /// The readouts have to clear that or they land on top of it.
+  static const double arrowHalfExtent = 0.20;
 
-  /// Centre of the weight readout, right of the weigh belt.
-  static Offset weightAnchorOf(Rect frame) => Offset(0.855, frame.center.dy);
+  /// Centre of the accept-rate readout — on the belt, left of the arrow.
+  ///
+  /// Pushed out to 13% rather than sitting nearer the middle so a
+  /// 0.22-wide slot still clears the arrow tail at 0.30.
+  static Offset acceptAnchorOf(Rect frame) => Offset(
+        deckOf(frame).left + deckOf(frame).width * 0.13,
+        frame.center.dy,
+      );
+
+  /// Centre of the weight readout — on the belt, right of the arrow. This is
+  /// the live weight of whatever is on the belt right now.
+  static Offset weightAnchorOf(Rect frame) => Offset(
+        deckOf(frame).left + deckOf(frame).width * 0.87,
+        frame.center.dy,
+      );
 
   @override
   void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {
@@ -580,15 +595,15 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
     }
   }
 
-  /// One checkweigher: the frame, the weigh-belt bed, and the load cell.
+  /// One checkweigher: the station frame and the belt bed filling it.
   ///
-  /// The belt itself is NOT drawn as machinery — only its bed. A live
-  /// bidirectional `ConveyorConfig` child is meant to sit in it and animate
-  /// off the real drive frequency, and a painted belt underneath a real one
-  /// just reads as a double image. Same treatment as the two conveyor lanes.
+  /// The belt is NOT drawn as machinery — only its bed. A live bidirectional
+  /// `ConveyorConfig` child fills the bed and animates off the real drive
+  /// frequency; painting a belt underneath a real one reads as a double
+  /// image. Same treatment as the two conveyor lanes.
   ///
-  /// The space either side of the bed is left clear for the two readouts the
-  /// scaffold drops in: accept rate on the left, weight on the right.
+  /// Nothing is drawn on the belt itself: the middle belongs to the
+  /// conveyor's run-direction arrow, and the readouts sit either side of it.
   void _checkweigher(
     Canvas canvas,
     UnitSpace u,
@@ -601,14 +616,6 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
 
     final deck = deckOf(frame);
     canvas.drawRect(u.r(deck.left, deck.top, deck.right, deck.bottom), detail);
-
-    // Load cells at the belt's two ends, NOT under its centre. A live
-    // Conveyor draws its run-direction arrow in the middle of the belt, and a
-    // painted block there sits right under it.
-    for (final x in [deck.left + 0.05, deck.right - 0.05]) {
-      canvas.drawRect(
-          u.r(x - 0.02, deck.top - 0.012, x + 0.02, deck.top + 0.012), detail);
-    }
   }
 }
 

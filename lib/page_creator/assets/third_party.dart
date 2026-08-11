@@ -471,12 +471,16 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
         size: RelativeSize(width: deck.width, height: deck.height),
       ),
     ));
-    // Readout slots. `NumberWidget` scales its text with BoxFit.contain, so
-    // slot width sets the font size and a long units string shrinks the
-    // number to a smear — which is why the averaging window is NOT spelled
-    // out here. `% 30m` is the longest suffix that stays legible; the full
-    // wording lives in the side pane, where there is room for it.
-    final slot = RelativeSize(width: 0.23, height: frame.height * 0.7);
+    // Readout slots, sitting ON the belt either side of the run-direction
+    // arrow. The arrow owns the middle 40% of the belt, so a slot may be at
+    // most ~0.28 wide before it collides with the arrowhead.
+    //
+    // `NumberWidget` scales its text with BoxFit.contain, so slot width sets
+    // the font size and a long units string shrinks the number to a smear —
+    // which is why the averaging window is NOT spelled out here. `% 30m` is
+    // the longest suffix that stays legible; the full wording lives in the
+    // side pane, where there is room for it.
+    final slot = RelativeSize(width: 0.22, height: frame.height * 0.6);
 
     entries.add(ThirdPartyChildEntry(
       offsetX: accept.dx,
@@ -853,9 +857,20 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
 
     // KeyedSubtree on the stable entry id: without it, reordering or editing
     // the list re-creates the child's State and re-subscribes its stream.
+    //
+    // The MediaQuery override is what makes "the child's size is relative to
+    // the machine area" true for EVERY asset. Most resolve their RelativeSize
+    // against the incoming constraints, but some — Conveyor among them —
+    // resolve it against `MediaQuery.of(context).size`, and would otherwise
+    // paint at full-screen scale and spill straight out of the box. Handing
+    // them a MediaQuery whose size IS the machine area makes both conventions
+    // land on the same pixels.
     Widget built = KeyedSubtree(
       key: ValueKey<String>(entry.id),
-      child: entry.child.build(context),
+      child: MediaQuery(
+        data: MediaQuery.of(context).copyWith(size: area.size),
+        child: entry.child.build(context),
+      ),
     );
     if (entry.keepUpright) {
       built = Transform.rotate(

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
+import 'package:tfc/page_creator/assets/third_party_painter.dart';
 
 const _key = Key('third_party_golden');
 
@@ -78,23 +79,62 @@ Future<void> loadRealFont() async {
   await loader.load();
 }
 
-/// The scaffolded station with its children switched to the assets' own
-/// preview keys, so they render real values without a `StateMan`.
+/// The scaffolded station with both checkweigher belts RUNNING.
 ///
-/// This is the honest limit of a widget test: placement, sizes, fonts and
-/// units are exactly what ships, and each readout shows the sample value
-/// `NumberWidget` renders for its preview key. The belts draw grey rather
-/// than running, because a moving belt needs a live drive frequency and there
-/// is no PLC here.
-Widget buildPopulated() {
+/// The readouts are the real `NumberConfig` children the scaffold creates, on
+/// their real anchors, switched to the preview key so they show a value
+/// without a PLC.
+///
+/// The belts are the real [ConveyorPainter] the `Conveyor` asset paints with,
+/// given the same arguments the asset would pass — bidirectional, geometry
+/// from `ConveyorPathGeometry.build` — plus a frequency the test supplies.
+/// That last part is the one thing a widget test cannot get honestly: the
+/// frequency arrives over a `StateMan` subscription, and `StateMan` has a
+/// private constructor that spins real OPC UA client loops, so there is no
+/// test double to hand. Feeding the painter directly is what makes the
+/// run-direction arrow visible here.
+Widget buildRunningStation({double frequency = 50.0}) {
   final children = buildSpeedBatcherStationChildren(acceptWindowMinutes: 30);
-  for (final entry in children) {
-    final child = entry.child;
-    if (child is ConveyorConfig) child.key = ConveyorConfig.previewStr;
-    if (child is NumberConfig) child.key = 'Number preview';
+  // Readouts stay as real children; the belts are painted below so they can
+  // be shown running.
+  final readouts = children.where((e) => e.child is NumberConfig).toList();
+  for (final entry in readouts) {
+    (entry.child as NumberConfig).key = 'Number preview';
   }
 
   final size = _canvasFor(ThirdPartyEquipmentKind.speedBatcher);
+  final area = thirdPartyMachineArea(size);
+
+  Widget belt(Rect frame) {
+    final deck = SpeedBatcherPainter.deckOf(frame);
+    final rect = Rect.fromLTRB(
+      area.left + deck.left * area.width,
+      area.top + deck.top * area.height,
+      area.left + deck.right * area.width,
+      area.top + deck.bottom * area.height,
+    );
+    final beltSize = Size(rect.width, rect.height);
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: CustomPaint(
+        size: beltSize,
+        painter: ConveyorPainter(
+          color: Colors.green,
+          bidirectional: true,
+          reverseDirection: false,
+          showFrequency: false,
+          frequency: frequency,
+          batches: const {},
+          angle: 0,
+          geometry: ConveyorPathGeometry.build(const [], beltSize),
+        ),
+      ),
+    );
+  }
+
   return ProviderScope(
     child: MaterialApp(
       home: Scaffold(
@@ -102,21 +142,51 @@ Widget buildPopulated() {
         body: Center(
           child: RepaintBoundary(
             key: _key,
-            child: ThirdPartyEquipmentBody(
-              painter: thirdPartyPainterFor(
-                ThirdPartyEquipmentKind.speedBatcher,
-                color: const Color(0xFF37474F),
-                strokeWidth: 2.5,
+            child: SizedBox(
+              width: size.width,
+              height: size.height,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: thirdPartyPainterFor(
+                        ThirdPartyEquipmentKind.speedBatcher,
+                        color: const Color(0xFF37474F),
+                        strokeWidth: 2.5,
+                      ),
+                    ),
+                  ),
+                  belt(SpeedBatcherPainter.checkweigher1Frame),
+                  belt(SpeedBatcherPainter.checkweigher2Frame),
+                  // Readouts on top of the belts, via the real body so their
+                  // anchors and sizing come from production code.
+                  Positioned.fill(
+                    child: ThirdPartyEquipmentBody(
+                      painter: _NoopPainter(),
+                      paintSize: size,
+                      ledColor: Colors.green,
+                      children: readouts,
+                    ),
+                  ),
+                ],
               ),
-              paintSize: size,
-              ledColor: Colors.green,
-              children: children,
             ),
           ),
         ),
       ),
     ),
   );
+}
+
+/// Draws nothing — lets the body be reused purely to place children over an
+/// already-painted machine.
+class _NoopPainter extends ThirdPartyMachinePainter {
+  const _NoopPainter() : super(color: const Color(0x00000000), strokeWidth: 0);
+  @override
+  void paintMachine(Canvas canvas, UnitSpace u, Paint stroke, Paint detail) {}
+  @override
+  void paint(Canvas canvas, Size size) {}
 }
 
 void main() {
@@ -140,17 +210,18 @@ void main() {
       });
     }
 
-    // The SpeedBatcher station with "Build checkweighers" applied: a live
-    // conveyor on each weigh belt, weight to the right, accept rate to the
-    // left. This is the golden to look at when judging whether the layout
-    // works in use, rather than the empty drawing above.
+    // The SpeedBatcher station with "Build checkweighers" applied and both
+    // belts RUNNING: full-width conveyor per checkweigher, run-direction
+    // arrow mid-belt, live weight right of the arrow, accept rate left. This
+    // is the golden to judge the layout by.
+    // testWidgets name kept stable so the golden file name does not churn.
     testWidgets('speedBatcher — checkweighers populated', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(1400, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      await tester.pumpWidget(buildPopulated());
+      await tester.pumpWidget(buildRunningStation());
       await tester.pump(const Duration(milliseconds: 16));
       await expectLater(
         find.byKey(_key),
