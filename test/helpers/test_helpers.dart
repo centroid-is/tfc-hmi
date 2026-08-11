@@ -292,6 +292,8 @@ Widget buildTestableServerConfig({
           throw StateError('No StateMan in tests')),
     ],
     child: MaterialApp(
+      // Keeps the debug ribbon out of the corner of golden captures.
+      debugShowCheckedModeBanner: false,
       home: Scaffold(
         body: const ServerConfigBody(),
       ),

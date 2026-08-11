@@ -558,6 +558,105 @@ class RefreshKey extends _$RefreshKey {
   void increment() => state++;
 }
 
+/// Moves the item at [oldIndex] to [newIndex] in [list], using the index
+/// convention [ReorderableListView] hands to `onReorder`: [newIndex] is the
+/// slot the item was dropped into *before* it is lifted out of its old
+/// position, so a downwards move has to be decremented by one to land where
+/// the operator actually let go.
+///
+/// Indices outside the list are clamped rather than thrown — a stray drag
+/// must never corrupt a saved server configuration. Returns true when [list]
+/// actually changed, so callers can skip a needless `setState`.
+bool moveInList<T>(List<T> list, int oldIndex, int newIndex) {
+  if (oldIndex < 0 || oldIndex >= list.length) return false;
+  var target = newIndex;
+  if (target > oldIndex) target -= 1;
+  if (target < 0) target = 0;
+  if (target > list.length - 1) target = list.length - 1;
+  if (target == oldIndex) return false;
+  list.insert(target, list.removeAt(oldIndex));
+  return true;
+}
+
+/// Hands out a stable widget key per row of a reorderable server list.
+///
+/// The server cards are stateful: they seed their [TextEditingController]s
+/// from the server in `initState` and never re-read it. Left unkeyed, Flutter
+/// matches cards to *positions*, so right after a drag the card sitting in
+/// slot 0 would still be showing slot 0's old endpoint while being handed a
+/// different server — and the next keystroke would write that stale text back
+/// into the config. Each row instead gets an opaque id that travels with its
+/// server through add, remove and reorder, so card state follows the server
+/// rather than the slot.
+class _RowKeys {
+  int _nextId = 0;
+  final List<int> _ids = [];
+
+  /// Re-seeds identities for a freshly loaded list of [length] servers.
+  void reset(int length) {
+    _ids
+      ..clear()
+      ..addAll(List<int>.generate(length, (_) => _nextId++));
+  }
+
+  void add() => _ids.add(_nextId++);
+
+  void removeAt(int index) {
+    if (index >= 0 && index < _ids.length) _ids.removeAt(index);
+  }
+
+  void reorder(int oldIndex, int newIndex) =>
+      moveInList(_ids, oldIndex, newIndex);
+
+  /// Falls back to a positional key should identities ever drift out of step
+  /// with the config — a missing or duplicated key crashes the list, and a
+  /// mismatched card is a far cheaper failure than a red screen.
+  Key operator [](int index) => ValueKey<String>(
+      index < _ids.length ? 'server-${_ids[index]}' : 'server-slot-$index');
+}
+
+/// Leading slot for a server card: the card's own protocol [icon], preceded by
+/// a grab handle when the card sits in a reorderable list.
+///
+/// The handle is an explicit [ReorderableDragStartListener] rather than the
+/// list's default long-press handles — the cards are full of text fields and
+/// buttons, and a long press anywhere on one picking the whole card up is not
+/// what an operator editing an endpoint expects.
+class _ServerCardLeading extends StatelessWidget {
+  /// Index of the card in its [ReorderableListView], or null when the list is
+  /// not reorderable (a single server) — then only [icon] is shown.
+  final int? reorderIndex;
+  final Widget icon;
+
+  const _ServerCardLeading({required this.reorderIndex, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    if (reorderIndex == null) return icon;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ReorderableDragStartListener(
+          index: reorderIndex!,
+          child: const MouseRegion(
+            cursor: SystemMouseCursors.grab,
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4.0),
+              child: Icon(
+                Icons.drag_indicator,
+                size: 20,
+                color: Colors.grey,
+                semanticLabel: 'Drag to reorder',
+              ),
+            ),
+          ),
+        ),
+        icon,
+      ],
+    );
+  }
+}
+
 class _OpcUAServersSection extends ConsumerStatefulWidget {
   const _OpcUAServersSection({super.key});
   @override
@@ -570,6 +669,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   StateManConfig? _savedConfig;
   bool _isLoading = false;
   String? _error;
+  final _rowKeys = _RowKeys();
 
   @override
   void initState() {
@@ -587,6 +687,7 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
       _config = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       _savedConfig = _config?.copy();
+      _rowKeys.reset(_config?.opcua.length ?? 0);
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -633,7 +734,10 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   }
 
   Future<void> _addServer() async {
-    setState(() => _config?.opcua.add(OpcUAConfig()));
+    setState(() {
+      _config?.opcua.add(OpcUAConfig());
+      _rowKeys.add();
+    });
   }
 
   Future<void> _updateServer(int index, OpcUAConfig server) async {
@@ -641,16 +745,33 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
   }
 
   Future<void> _removeServer(int index) async {
-    setState(() => _config!.opcua.removeAt(index));
+    setState(() {
+      _config!.opcua.removeAt(index);
+      _rowKeys.removeAt(index);
+    });
+  }
+
+  /// Drag-and-drop reorder. Order is cosmetic for lookups (keys bind to
+  /// servers by alias, not position) but it is the order the operator reads
+  /// on this page, in the key-mapping server dropdowns, and the order
+  /// [StateMan] brings the clients up in — so it is worth being able to set.
+  void _reorderServer(int oldIndex, int newIndex) {
+    if (_config == null) return;
+    if (!moveInList(_config!.opcua, oldIndex, newIndex)) return;
+    setState(() => _rowKeys.reorder(oldIndex, newIndex));
   }
 
   Widget _buildServerList(StateManConfig config) {
     final stateManAsync = ref.watch(stateManProvider);
     final StateMan? stateMan = stateManAsync.valueOrNull;
+    // A one-server list has nothing to reorder, so it gets no drag handles.
+    final reorderable = config.opcua.length > 1;
 
-    return ListView.builder(
+    return ReorderableListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      onReorder: _reorderServer,
       itemCount: config.opcua.length,
       itemBuilder: (context, index) {
         ClientWrapper? wrapper;
@@ -666,12 +787,14 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
               );
         }
         return _ServerConfigCard(
+          key: _rowKeys[index],
           server: config.opcua[index],
           onUpdate: (server) => _updateServer(index, server),
           onRemove: () => _removeServer(index),
           connectionStatus: wrapper?.connectionStatus,
           connectionStream: wrapper?.connectionStream,
           stateManLoading: stateManAsync.isLoading,
+          reorderIndex: reorderable ? index : null,
         );
       },
     );
@@ -921,6 +1044,7 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
   StateManConfig? _savedConfig;
   bool _isLoading = false;
   String? _error;
+  final _rowKeys = _RowKeys();
 
   @override
   void initState() {
@@ -938,6 +1062,7 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
       _config = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       _savedConfig = _config?.copy();
+      _rowKeys.reset(_config?.jbtm.length ?? 0);
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -984,17 +1109,29 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
   }
 
   void _addServer() {
-    setState(
-        () => _config?.jbtm.add(M2400Config(host: 'localhost', port: 52211)));
+    setState(() {
+      _config?.jbtm.add(M2400Config(host: 'localhost', port: 52211));
+      _rowKeys.add();
+    });
+  }
+
+  /// See [_OpcUAServersSectionState._reorderServer].
+  void _reorderServer(int oldIndex, int newIndex) {
+    if (_config == null) return;
+    if (!moveInList(_config!.jbtm, oldIndex, newIndex)) return;
+    setState(() => _rowKeys.reorder(oldIndex, newIndex));
   }
 
   Widget _buildJbtmServerList(StateManConfig config) {
     final stateManAsync = ref.watch(stateManProvider);
     final StateMan? stateMan = stateManAsync.valueOrNull;
+    final reorderable = config.jbtm.length > 1;
 
-    return ListView.builder(
+    return ReorderableListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      onReorder: _reorderServer,
       itemCount: config.jbtm.length,
       itemBuilder: (context, index) {
         M2400DeviceClientAdapter? adapter;
@@ -1014,12 +1151,14 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
               );
         }
         return _JbtmServerConfigCard(
+          key: _rowKeys[index],
           server: config.jbtm[index],
           onUpdate: (server) => _updateServer(index, server),
           onRemove: () => _removeServer(index),
           connectionStatus: adapter?.connectionStatus,
           connectionStream: adapter?.connectionStream,
           stateManLoading: stateManAsync.isLoading,
+          reorderIndex: reorderable ? index : null,
         );
       },
     );
@@ -1030,7 +1169,10 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
   }
 
   void _removeServer(int index) {
-    setState(() => _config!.jbtm.removeAt(index));
+    setState(() {
+      _config!.jbtm.removeAt(index);
+      _rowKeys.removeAt(index);
+    });
   }
 
   @override
@@ -1108,13 +1250,18 @@ class _JbtmServerConfigCard extends StatefulWidget {
   final Stream<ConnectionStatus>? connectionStream;
   final bool stateManLoading;
 
+  /// See [_ServerConfigCard.reorderIndex].
+  final int? reorderIndex;
+
   const _JbtmServerConfigCard({
+    super.key,
     required this.server,
     required this.onUpdate,
     required this.onRemove,
     this.connectionStatus,
     this.connectionStream,
     this.stateManLoading = false,
+    this.reorderIndex,
   });
 
   @override
@@ -1179,7 +1326,10 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: ExpansionTile(
-        leading: const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
+        leading: _ServerCardLeading(
+          reorderIndex: widget.reorderIndex,
+          icon: const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
+        ),
         title: Text(
           widget.server.serverAlias ??
               '${widget.server.host}:${widget.server.port}',
@@ -1323,6 +1473,7 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
   StateManConfig? _savedConfig;
   bool _isLoading = false;
   String? _error;
+  final _rowKeys = _RowKeys();
 
   @override
   void initState() {
@@ -1340,6 +1491,7 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
       _config = await StateManConfig.fromPrefs(
           await ref.read(preferencesProvider.future));
       _savedConfig = _config?.copy();
+      _rowKeys.reset(_config?.modbus.length ?? 0);
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -1386,23 +1538,34 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
   }
 
   void _addServer() {
-    setState(() => _config?.modbus.add(ModbusConfig(
-          host: 'localhost',
-          port: 502,
-          unitId: 1,
-          pollGroups: [
-            ModbusPollGroupConfig(name: 'default', intervalMs: 1000)
-          ],
-        )));
+    setState(() {
+      _config?.modbus.add(ModbusConfig(
+        host: 'localhost',
+        port: 502,
+        unitId: 1,
+        pollGroups: [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)],
+      ));
+      _rowKeys.add();
+    });
+  }
+
+  /// See [_OpcUAServersSectionState._reorderServer].
+  void _reorderServer(int oldIndex, int newIndex) {
+    if (_config == null) return;
+    if (!moveInList(_config!.modbus, oldIndex, newIndex)) return;
+    setState(() => _rowKeys.reorder(oldIndex, newIndex));
   }
 
   Widget _buildModbusServerList(StateManConfig config) {
     final stateManAsync = ref.watch(stateManProvider);
     final StateMan? stateMan = stateManAsync.valueOrNull;
+    final reorderable = config.modbus.length > 1;
 
-    return ListView.builder(
+    return ReorderableListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      onReorder: _reorderServer,
       itemCount: config.modbus.length,
       itemBuilder: (context, index) {
         ModbusDeviceClientAdapter? adapter;
@@ -1422,6 +1585,7 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
               );
         }
         return _ModbusServerConfigCard(
+          key: _rowKeys[index],
           server: config.modbus[index],
           onUpdate: (server) => _updateServer(index, server),
           onRemove: () => _removeServer(index),
@@ -1432,6 +1596,7 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
           effectiveStatus: adapter?.effectiveStatus,
           effectiveStatusStream: adapter?.effectiveStatusStream,
           stateManLoading: stateManAsync.isLoading,
+          reorderIndex: reorderable ? index : null,
         );
       },
     );
@@ -1442,7 +1607,10 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
   }
 
   void _removeServer(int index) {
-    setState(() => _config!.modbus.removeAt(index));
+    setState(() {
+      _config!.modbus.removeAt(index);
+      _rowKeys.removeAt(index);
+    });
   }
 
   @override
@@ -1527,7 +1695,11 @@ class _ModbusServerConfigCard extends StatefulWidget {
   final Stream<EffectiveDeviceStatus>? effectiveStatusStream;
   final bool stateManLoading;
 
+  /// See [_ServerConfigCard.reorderIndex].
+  final int? reorderIndex;
+
   const _ModbusServerConfigCard({
+    super.key,
     required this.server,
     required this.onUpdate,
     required this.onRemove,
@@ -1536,6 +1708,7 @@ class _ModbusServerConfigCard extends StatefulWidget {
     this.effectiveStatus,
     this.effectiveStatusStream,
     this.stateManLoading = false,
+    this.reorderIndex,
   });
 
   @override
@@ -1720,7 +1893,10 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: ExpansionTile(
-        leading: const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+        leading: _ServerCardLeading(
+          reorderIndex: widget.reorderIndex,
+          icon: const FaIcon(FontAwesomeIcons.networkWired, size: 20),
+        ),
         title: Text(
           widget.server.serverAlias ??
               '${widget.server.host}:${widget.server.port}',
@@ -2063,13 +2239,20 @@ class _ServerConfigCard extends StatefulWidget {
   final Stream<ConnectionStatus>? connectionStream;
   final bool stateManLoading;
 
+  /// Index of this card in the enclosing [ReorderableListView], or null when
+  /// the list has nothing to reorder. Drives the drag handle — see
+  /// [_ServerCardLeading].
+  final int? reorderIndex;
+
   const _ServerConfigCard({
+    super.key,
     required this.server,
     required this.onUpdate,
     required this.onRemove,
     this.connectionStatus,
     this.connectionStream,
     this.stateManLoading = false,
+    this.reorderIndex,
   });
 
   @override
@@ -2242,13 +2425,16 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: ExpansionTile(
-        leading: FaIcon(
-          FontAwesomeIcons.server,
-          size: 20,
-          color: sslCertString == _certPlaceholder ||
-                  sslKeyString == _certPlaceholder
-              ? Theme.of(context).colorScheme.error
-              : null,
+        leading: _ServerCardLeading(
+          reorderIndex: widget.reorderIndex,
+          icon: FaIcon(
+            FontAwesomeIcons.server,
+            size: 20,
+            color: sslCertString == _certPlaceholder ||
+                    sslKeyString == _certPlaceholder
+                ? Theme.of(context).colorScheme.error
+                : null,
+          ),
         ),
         title: Text(
           widget.server.serverAlias ?? widget.server.endpoint,
