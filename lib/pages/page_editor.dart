@@ -93,6 +93,183 @@ bool isAlreadyAtBack<T>(List<T> assets, Set<T> targets) {
   return true;
 }
 
+/// One asset's placement on the canvas, in the normalized 0..1 units the
+/// editor stores. Exists so [rotateGroup] can be exercised — and reasoned
+/// about — without building real assets.
+@visibleForTesting
+@immutable
+class AssetPlacement {
+  const AssetPlacement({
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+    this.angle,
+  });
+
+  /// Centre point, as a fraction of the canvas (matches `Coordinates`).
+  final double x;
+  final double y;
+
+  /// Extents, as a fraction of the canvas (matches `RelativeSize`).
+  final double width;
+  final double height;
+
+  /// Rotation in degrees, clockwise on screen. Null means "never rotated";
+  /// [rotateGroup] preserves that distinction because `AssetStack` only
+  /// applies the page's mirror transform to assets with a non-null angle.
+  final double? angle;
+
+  @override
+  String toString() =>
+      'AssetPlacement(x: $x, y: $y, width: $width, height: $height, '
+      'angle: $angle)';
+}
+
+/// Normalizes an angle in degrees to [0, 360).
+double _normalizeAngle(double degrees) {
+  final wrapped = degrees % 360;
+  return wrapped < 0 ? wrapped + 360 : wrapped;
+}
+
+/// cos/sin packed as (dx, dy), exact for quarter turns.
+///
+/// `math.cos(pi / 2)` is 6.1e-17, not 0, so a nominally rigid 90° turn would
+/// leak a little of each axis into the other — a systematic error that repeats
+/// in the same direction every rotation. The quarter turns are the only
+/// rotations the editor's menu offers, so they are table lookups rather than
+/// trig. Rounding in the surrounding arithmetic still costs an ulp or so per
+/// turn; this only removes the part that would accumulate.
+Offset _rotationFactors(double degrees) {
+  final normalized = _normalizeAngle(degrees);
+  if (normalized == 0) return const Offset(1, 0);
+  if (normalized == 90) return const Offset(0, 1);
+  if (normalized == 180) return const Offset(-1, 0);
+  if (normalized == 270) return const Offset(0, -1);
+  final radians = normalized * math.pi / 180;
+  return Offset(math.cos(radians), math.sin(radians));
+}
+
+/// Rotates [placements] as one rigid group about the centre of their combined
+/// bounding box: every asset both spins on its own centre and orbits the
+/// group's, the way a selection rotates in a drawing tool.
+///
+/// [degrees] is clockwise on screen, matching `Coordinates.angle` and
+/// `Transform.rotate`.
+///
+/// [aspectRatio] is the canvas's width / height. It is required because x and
+/// y are normalized independently against a canvas that is not square — a
+/// rotation applied directly to normalized coordinates would shear the group.
+/// The maths therefore runs in units of canvas height (x scaled by
+/// [aspectRatio]) and converts back at the end.
+///
+/// The bounding box is built from each asset's *rotated* extents, so a quarter
+/// turn maps the box onto itself and the group's centre stays put. Combined
+/// with the exact quarter-turn factors above, that makes CW-then-CCW a round
+/// trip to within a rounding ulp, with no direction the error can accumulate
+/// in.
+///
+/// A group that would leave the canvas is translated back in as a unit rather
+/// than clamped per asset, which would collapse the layout. A group too large
+/// to fit is aligned to the top/left edge and may overhang; as a last resort
+/// centres are clamped into 0..1 so no asset ends up unreachable off-canvas.
+///
+/// Returns a new list positionally matching [placements]; nothing is mutated.
+@visibleForTesting
+List<AssetPlacement> rotateGroup({
+  required List<AssetPlacement> placements,
+  required double degrees,
+  required double aspectRatio,
+}) {
+  if (placements.isEmpty) return const [];
+  // A degenerate canvas has no meaningful aspect; fall back to square rather
+  // than producing NaN coordinates.
+  final aspect = (aspectRatio.isFinite && aspectRatio > 0) ? aspectRatio : 1.0;
+
+  // Half-extents of an asset's axis-aligned bounding box once its own
+  // rotation is applied — the same formula AssetStack uses to size the
+  // Positioned that holds a rotated visual. Uses the exact quarter-turn
+  // factors for the same reason the orbit below does: the box decides where
+  // the group centre sits, so trig noise here would drift the whole selection.
+  Offset halfExtents(double width, double height, double? angle) {
+    final factors = _rotationFactors(angle ?? 0.0);
+    final cosA = factors.dx.abs();
+    final sinA = factors.dy.abs();
+    final halfW = width * aspect / 2;
+    final halfH = height / 2;
+    return Offset(halfW * cosA + halfH * sinA, halfW * sinA + halfH * cosA);
+  }
+
+  // 1) Bounding box of the selection, in canvas-height units.
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  for (final p in placements) {
+    final half = halfExtents(p.width, p.height, p.angle);
+    minX = math.min(minX, p.x * aspect - half.dx);
+    maxX = math.max(maxX, p.x * aspect + half.dx);
+    minY = math.min(minY, p.y - half.dy);
+    maxY = math.max(maxY, p.y + half.dy);
+  }
+  final centreX = (minX + maxX) / 2;
+  final centreY = (minY + maxY) / 2;
+
+  // 2) Orbit each centre about the group centre and spin the asset itself.
+  final factors = _rotationFactors(degrees);
+  final rotated = <AssetPlacement>[];
+  for (final p in placements) {
+    final dx = p.x * aspect - centreX;
+    final dy = p.y - centreY;
+    final newAngle = _normalizeAngle((p.angle ?? 0.0) + degrees);
+    rotated.add(AssetPlacement(
+      x: (centreX + dx * factors.dx - dy * factors.dy) / aspect,
+      y: centreY + dx * factors.dy + dy * factors.dx,
+      width: p.width,
+      height: p.height,
+      // Back at zero means back to null. AssetStack skips the page's mirror
+      // transform for a null angle, so rotating a selection and rotating it
+      // back has to restore the null or the visual would start flipping on
+      // mirrored pages — a no-op round trip must really be a no-op. The cost
+      // is that an angle stored explicitly as 0 collapses to null.
+      angle: newAngle == 0 ? null : newAngle,
+    ));
+  }
+
+  // 3) Translate the group back onto the canvas if the rotation pushed it off.
+  var shiftX = 0.0;
+  var shiftY = 0.0;
+  var rMinX = double.infinity;
+  var rMinY = double.infinity;
+  var rMaxX = double.negativeInfinity;
+  var rMaxY = double.negativeInfinity;
+  for (final p in rotated) {
+    final half = halfExtents(p.width, p.height, p.angle);
+    rMinX = math.min(rMinX, p.x * aspect - half.dx);
+    rMaxX = math.max(rMaxX, p.x * aspect + half.dx);
+    rMinY = math.min(rMinY, p.y - half.dy);
+    rMaxY = math.max(rMaxY, p.y + half.dy);
+  }
+  // Pull the leading edge in first, so an oversized group overhangs the
+  // bottom/right rather than the top/left where it is harder to grab.
+  if (rMaxX > aspect) shiftX = aspect - rMaxX;
+  if (rMinX + shiftX < 0) shiftX = -rMinX;
+  if (rMaxY > 1) shiftY = 1 - rMaxY;
+  if (rMinY + shiftY < 0) shiftY = -rMinY;
+
+  if (shiftX == 0 && shiftY == 0) return rotated;
+  return [
+    for (final p in rotated)
+      AssetPlacement(
+        x: (p.x + shiftX / aspect).clamp(0.0, 1.0),
+        y: (p.y + shiftY).clamp(0.0, 1.0),
+        width: p.width,
+        height: p.height,
+        angle: p.angle,
+      ),
+  ];
+}
+
 /// Projects a drag delta from the rotated GestureDetector's local frame
 /// back into the canvas (parent) frame. The editor's per-asset
 /// GestureDetector lives inside `Transform.rotate(angleRadians)` (so the
@@ -518,9 +695,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
-  /// Menu value for "send to back"; AI entries use their own list index, so
-  /// this sits outside that range.
+  /// Menu values for the editing actions; AI entries use their own list index,
+  /// so these sit outside that range.
   static const int _sendToBackAction = -1;
+  static const int _rotateClockwiseAction = -2;
+  static const int _rotateCounterClockwiseAction = -3;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
@@ -548,11 +727,57 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// Rotates [targets] a quarter turn as one rigid group about the centre of
+  /// their combined bounding box. A single asset is just the degenerate case:
+  /// its own centre is the group centre, so it spins in place.
+  ///
+  /// [constraints] supplies the canvas aspect ratio, without which a rotation
+  /// of the normalized coordinates would shear the group. See [rotateGroup].
+  void _rotateAssets(
+    List<Asset> targets,
+    double degrees,
+    BoxConstraints constraints,
+  ) {
+    if (targets.isEmpty) return;
+
+    final rotated = rotateGroup(
+      placements: [
+        for (final asset in targets)
+          AssetPlacement(
+            x: asset.coordinates.x,
+            y: asset.coordinates.y,
+            width: asset.size.width,
+            height: asset.size.height,
+            angle: asset.coordinates.angle,
+          ),
+      ],
+      degrees: degrees,
+      aspectRatio: constraints.maxWidth / constraints.maxHeight,
+    );
+
+    _saveToHistory();
+    _updateState(() {
+      for (var i = 0; i < targets.length; i++) {
+        targets[i].coordinates = Coordinates(
+          x: rotated[i].x,
+          y: rotated[i].y,
+          angle: rotated[i].angle,
+        );
+      }
+    });
+  }
+
   /// Right-click menu for an asset on the canvas.
   ///
   /// Editing actions are always available; the AI entries are appended only
   /// when MCP chat is up, preserving what the AI-only menu used to offer.
-  Future<void> _showAssetContextMenu(Asset asset, Offset globalPosition) async {
+  ///
+  /// [constraints] are the canvas's, needed by the rotate entries.
+  Future<void> _showAssetContextMenu(
+    Asset asset,
+    Offset globalPosition,
+    BoxConstraints constraints,
+  ) async {
     final aiItems = isMcpChatAvailable()
         ? buildEditorAssetMenuItems(asset)
         : const <AiMenuItem>[];
@@ -571,6 +796,26 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         globalPosition.dy,
       ),
       items: [
+        PopupMenuItem<int>(
+          value: _rotateClockwiseAction,
+          child: ListTile(
+            leading: const Icon(Icons.rotate_right),
+            title: Text(targets.length > 1
+                ? 'Rotate ${targets.length} assets 90° clockwise'
+                : 'Rotate 90° clockwise'),
+            dense: true,
+          ),
+        ),
+        PopupMenuItem<int>(
+          value: _rotateCounterClockwiseAction,
+          child: ListTile(
+            leading: const Icon(Icons.rotate_left),
+            title: Text(targets.length > 1
+                ? 'Rotate ${targets.length} assets 90° counter-clockwise'
+                : 'Rotate 90° counter-clockwise'),
+            dense: true,
+          ),
+        ),
         PopupMenuItem<int>(
           value: _sendToBackAction,
           enabled: canSendToBack,
@@ -604,6 +849,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     if (choice == _sendToBackAction) {
       _sendToBack(targets);
+    } else if (choice == _rotateClockwiseAction) {
+      _rotateAssets(targets, 90, constraints);
+    } else if (choice == _rotateCounterClockwiseAction) {
+      _rotateAssets(targets, -90, constraints);
     } else {
       await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
     }
@@ -767,7 +1016,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             onPanStart: (asset, details) {
                               _saveToHistory();
                             },
-                            onSecondaryTap: _showAssetContextMenu,
+                            onSecondaryTap: (asset, globalPosition) =>
+                                _showAssetContextMenu(
+                                    asset, globalPosition, constraints),
                             absorb: true,
                             selectedAssets: _selectedAssets,
                             proposedAssets: _proposedAssets,
