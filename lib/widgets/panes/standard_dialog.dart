@@ -136,7 +136,7 @@ class StandardDialogFrame extends StatelessWidget {
     final maxHeight = height ?? MediaQuery.sizeOf(context).height * 0.8;
     return Dialog(
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: width, maxHeight: maxHeight),
         child: SizedBox(
@@ -205,7 +205,7 @@ Future<T?> showStandardDialog<T>({
     useRootNavigator: useRootNavigator,
     builder: (dialogContext) => Dialog(
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: width,
@@ -521,13 +521,13 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
             _size = newSize;
           }),
           child: Material(
-            // Matches SidePane: outline over heavy shadow (see side_pane.dart).
-            elevation: 6,
+            // Matches SidePane: outline, not shadow (see side_pane.dart). A
+            // floating window keeps a touch of elevation so it reads as
+            // sitting above the pane it came from.
+            elevation: 2,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-              side: BorderSide(
-                color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
-              ),
+              borderRadius: BorderRadius.circular(8),
+              side: BorderSide(color: Theme.of(context).dividerColor),
             ),
             color: Theme.of(context).colorScheme.surface,
             clipBehavior: Clip.antiAlias,

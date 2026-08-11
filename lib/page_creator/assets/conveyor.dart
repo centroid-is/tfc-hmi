@@ -1321,21 +1321,18 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             ),
                           ],
                         ),
-                        // Room for the field's floating label, which would
-                        // otherwise ride up into the jog button captions.
-                        const SizedBox(height: 14),
-                        // Mode flag and the speed it jogs at, on one row:
-                        // both belong to the buttons above, and neither is a
-                        // headline worth its own line of a one-screen pane.
+                        const SizedBox(height: 4),
+                        // Compact row rather than a SwitchListTile: the pane
+                        // has one screen of height and this is a mode flag,
+                        // not a headline. The wording spells out what the
+                        // jog buttons will do — worth the width.
                         Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Expanded(
                               child: Text(
-                                // Short enough to stay on one line next to
-                                // the switch and the field; wrapping here
-                                // pushed the field into the jog labels.
-                                stopOnRelease ? 'Hold to run' : 'Tap to latch',
+                                stopOnRelease
+                                    ? 'Runs only while held'
+                                    : 'Tap latches the belt on',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                             ),
@@ -1344,18 +1341,16 @@ class _ConveyorState extends ConsumerState<Conveyor>
                               onChanged: (_) =>
                                   write('p_cmd_ManualStopOnRelease', true),
                             ),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 132,
-                              child: _FrequencyField(
-                                fieldKey: 'manual_freq_field',
-                                label: 'Manual',
-                                value: dynValue['p_cfg_ManualFreq'],
-                                onSubmitted: (v) =>
-                                    write('p_cfg_ManualFreq', v),
-                              ),
-                            ),
                           ],
+                        ),
+                        const SizedBox(height: 10),
+                        // The speed those buttons jog at — full width, under
+                        // the controls it belongs to.
+                        _FrequencyField(
+                          fieldKey: 'manual_freq_field',
+                          label: 'Manual frequency',
+                          value: dynValue['p_cfg_ManualFreq'],
+                          onSubmitted: (v) => write('p_cfg_ManualFreq', v),
                         ),
                       ],
                     ),

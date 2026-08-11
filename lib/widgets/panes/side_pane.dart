@@ -411,14 +411,14 @@ class _SidePaneShellState extends State<_SidePaneShell>
           child: Opacity(opacity: _slide.value.clamp(0.0, 1.0), child: child),
         ),
         child: Material(
-          // Low elevation plus an outline: on the dark solarized theme a
-          // heavy shadow reads as a thick black frame around the pane.
-          elevation: 4,
+          // No shadow at all: on the dark solarized theme even a small
+          // elevation renders as a black halo, which reads like a warning
+          // frame around the pane rather than depth. A hairline outline is
+          // enough to separate it from the plant view.
+          elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: BorderSide(
-              color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
-            ),
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(color: Theme.of(context).dividerColor),
           ),
           color: Theme.of(context).colorScheme.surface,
           clipBehavior: Clip.antiAlias,

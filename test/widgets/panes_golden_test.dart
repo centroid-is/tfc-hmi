@@ -347,21 +347,20 @@ SidePane _conveyorPane(BuildContext context) {
                       active: true),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 4),
               Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Expanded(
                     child: Text(
-                      'Hold to run',
+                      'Runs only while held',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
                   Switch(value: true, onChanged: (_) {}),
-                  const SizedBox(width: 8),
-                  SizedBox(width: 132, child: _freqField('Manual', '30.00')),
                 ],
               ),
+              const SizedBox(height: 10),
+              _freqField('Manual frequency', '30.00'),
             ],
           ),
         ),
@@ -850,6 +849,44 @@ SidePane _gatePane(BuildContext context) {
   );
 }
 
+/// A Number asset as it sits on a page — the value the floating chart
+/// belongs to, left readable behind the window.
+class _NumberReadout extends StatelessWidget {
+  const _NumberReadout();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Infeed rate', style: theme.textTheme.labelMedium),
+          const SizedBox(height: 2),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text('4.21',
+                  style: theme.textTheme.displaySmall
+                      ?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(width: 6),
+              Text('mA', style: theme.textTheme.bodyMedium),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Canned channel states for the I/O module goldens.
 const List<IOState> _sixteenChannelStates = [
   IOState.high,
@@ -1080,6 +1117,50 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/conveyor_trend_popup_dark.png'),
+      );
+    });
+  });
+
+  group('Number asset golden', () {
+    // A Number asset with a graph configured: tapping the value opens its
+    // trend as a FLOATING dialog, so the live number stays readable behind
+    // it and the window can be dragged aside. No side pane involved — the
+    // asset is a single value, not a device with controls.
+    testWidgets('number trend — floating chart over the live value',
+        (tester) async {
+      await tester.binding.setSurfaceSize(_screen);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      late BuildContext pageContext;
+      await tester.pumpWidget(_screenApp(
+        theme: dark,
+        body: Builder(builder: (context) {
+          pageContext = context;
+          return Stack(children: const [
+            _MockPlantView(),
+            Positioned(left: 520, top: 120, child: _NumberReadout()),
+          ]);
+        }),
+      ));
+      showFloatingDialog(
+        context: pageContext,
+        id: 'golden-number',
+        title: 'Infeed rate',
+        subtitle: 'Last 15 minutes',
+        icon: Icons.show_chart,
+        size: const Size(760, 420),
+        position: const Offset(430, 300),
+        scrollable: false,
+        builder: (_) => const _AnalogTrendChart(),
+      );
+      await tester.pumpAndSettle();
+      addTearDown(() => closeFloatingDialog('golden-number'));
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/number_trend_popup_dark.png'),
       );
     });
   });

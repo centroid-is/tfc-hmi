@@ -312,7 +312,16 @@ class PaneHeader extends StatelessWidget {
           ],
           if (onClose != null)
             IconButton(
-              icon: const Icon(Icons.close),
+              // Deliberately larger than Material's default: this is the
+              // control an operator reaches for most, often with gloves on
+              // a panel, and it sits in the corner where aim is worst.
+              icon: const Icon(Icons.close, size: 28),
+              iconSize: 28,
+              padding: const EdgeInsets.all(10),
+              constraints: const BoxConstraints(
+                minWidth: 52,
+                minHeight: 52,
+              ),
               tooltip: 'Close',
               onPressed: onClose,
             )
