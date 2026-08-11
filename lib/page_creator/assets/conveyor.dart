@@ -1929,20 +1929,20 @@ class _ConveyorState extends ConsumerState<Conveyor>
                         const SizedBox(height: 4),
                         // Compact row rather than a SwitchListTile: the pane
                         // has one screen of height and this is a mode flag,
-                        // not a headline. The wording spells out what the
-                        // jog buttons will do — worth the width.
+                        // not a headline. On = a tap latches the belt and it
+                        // keeps running; off = it runs only while held —
+                        // so the switch reads as the opposite of the PLC's
+                        // stop-on-release flag.
                         Row(
                           children: [
                             Expanded(
                               child: Text(
-                                stopOnRelease
-                                    ? 'Runs only while held'
-                                    : 'Tap latches the belt on',
+                                'Jog continuous',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                             ),
                             Switch(
-                              value: stopOnRelease,
+                              value: !stopOnRelease,
                               onChanged: (_) =>
                                   write('p_cmd_ManualStopOnRelease', true),
                             ),
