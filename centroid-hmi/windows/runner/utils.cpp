@@ -155,6 +155,17 @@ std::string Utf8FromUtf16Str(const std::wstring& utf16) {
 
 }  // namespace
 
+bool StdoutIsConnected() {
+  HANDLE handle = ::GetStdHandle(STD_OUTPUT_HANDLE);
+  if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+  // FILE_TYPE_CHAR is a console, FILE_TYPE_PIPE is `flutter run` or a shell
+  // pipe, FILE_TYPE_DISK is a `> file` redirect. Only UNKNOWN means the handle
+  // leads nowhere.
+  return ::GetFileType(handle) != FILE_TYPE_UNKNOWN;
+}
+
 std::string DirectoryOf(const std::string& path) {
   std::string::size_type slash = path.find_last_of("/\\");
   if (slash == std::string::npos) return std::string();

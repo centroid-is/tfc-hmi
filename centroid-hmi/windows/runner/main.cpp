@@ -8,6 +8,7 @@
 
 #include "crash_handler.h"
 #include "flutter_window.h"
+#include "output_target.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -44,12 +45,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
   }
 
-  std::string log_path = (log_file_env != nullptr && log_file_env[0] != '\0')
-                             ? std::string(log_file_env)
-                             : DefaultLogPath();
+  const bool explicit_log_file =
+      log_file_env != nullptr && log_file_env[0] != '\0';
+  std::string log_path =
+      explicit_log_file ? std::string(log_file_env) : DefaultLogPath();
 
-  // A console, when asked for or when launched from a terminal. Done first so
-  // the file redirect below wins for stdout/stderr.
+  tfc::OutputTargetInputs target_inputs;
+  target_inputs.explicit_log_file = explicit_log_file;
+  target_inputs.console_requested = debug_mode;
+  target_inputs.stdout_connected = StdoutIsConnected();
+  const tfc::OutputTarget target = tfc::ChooseOutputTarget(target_inputs);
+
+  // A console, when asked for or when launched from a terminal.
   if (debug_mode) {
     if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
       CreateAndAttachConsole();
@@ -60,7 +67,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
-  if (!log_path.empty()) {
+  if (target == tfc::OutputTarget::kInherited) {
+    // Something is already reading stdout — a terminal, or the pipe that
+    // `flutter run` and the VS Code debugger set up. Leave the streams where
+    // they are so Dart's output keeps reaching whoever is watching. Crash
+    // handlers still install; their records go to the same place.
+    tfc::InstallCrashHandlers(DirectoryOf(DefaultLogPath()));
+    std::cerr << "[startup] logging to the attached console/pipe" << std::endl;
+  } else if (!log_path.empty()) {
     // Rotate before opening: RedirectIOToFile truncates, and the previous
     // run's log is the one worth keeping after a crash.
     RotateLogs(log_path, max_archives);
