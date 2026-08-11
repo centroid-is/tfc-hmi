@@ -26,16 +26,16 @@ void main() {
     test('4% resolves to the same pixels with and without turns', () {
       final straight = config(beltWidthRelative: 0.04);
       final turned = config(beltWidthRelative: 0.04, turns: turn);
-      expect(straight.clampedBeltWidth(screen), closeTo(0.04 * 1080, 1e-9));
-      expect(turned.clampedBeltWidth(screen),
-          equals(straight.clampedBeltWidth(screen)));
+      expect(straight.requestedBeltWidth(screen), closeTo(0.04 * 1080, 1e-9));
+      expect(turned.requestedBeltWidth(screen),
+          equals(straight.requestedBeltWidth(screen)));
     });
 
     test('a turned belt actually paints at the requested width', () {
       final turned = config(beltWidthRelative: 0.04, turns: turn);
       final box = turned.size.toSize(screen);
       final g = ConveyorPathGeometry.build(turned.turns, box,
-          beltWidthOverride: turned.clampedBeltWidth(screen));
+          beltWidthOverride: turned.requestedBeltWidth(screen));
       expect(g!.beltWidth, closeTo(0.04 * 1080, 1e-9));
     });
 
@@ -52,25 +52,25 @@ void main() {
           size: const RelativeSize(width: 0.15, height: 0.12));
       double painted(ConveyorConfig c) => ConveyorPathGeometry.build(
               c.turns, c.size.toSize(screen),
-              beltWidthOverride: c.clampedBeltWidth(screen))!
+              beltWidthOverride: c.requestedBeltWidth(screen))!
           .beltWidth;
       expect(painted(wide), closeTo(painted(narrow), 1e-9));
     });
 
     test('unset falls back to the box-relative thickness', () {
       final c = config(turns: turn);
-      expect(c.clampedBeltWidth(screen), isNull);
+      expect(c.requestedBeltWidth(screen), isNull);
       expect(c.beltWidthOverflows(screen), isFalse);
     });
   });
 
-  group('overflow is clamped and flagged', () {
-    test('a belt wider than the box is reported and clamped', () {
+  group('overflow is honoured and flagged', () {
+    test('a belt wider than the box is flagged but still painted as set', () {
       // Box is 10% of screen height = 108px; ask for 20% = 216px.
       final c = config(beltWidthRelative: 0.2);
       expect(c.beltWidthOverflows(screen), isTrue);
-      expect(c.clampedBeltWidth(screen), equals(c.maxBeltWidth(screen)));
-      expect(c.clampedBeltWidth(screen), lessThan(0.2 * 1080));
+      expect(c.requestedBeltWidth(screen), closeTo(0.2 * 1080, 1e-9));
+      expect(c.maxBeltWidth(screen), lessThan(0.2 * 1080));
     });
 
     test('a turned belt is bounded by the short side, not the height', () {
@@ -87,19 +87,40 @@ void main() {
     test('a belt that fits is not flagged', () {
       final c = config(beltWidthRelative: 0.05);
       expect(c.beltWidthOverflows(screen), isFalse);
-      expect(c.clampedBeltWidth(screen), closeTo(0.05 * 1080, 1e-9));
+      expect(c.requestedBeltWidth(screen), closeTo(0.05 * 1080, 1e-9));
     });
 
-    test('a clamped turned belt still stays inside its box', () {
+    test('an oversized turned belt keeps its width and its centerline fit',
+        () {
+      // The belt spills over the box, but the skeleton it is stroked along
+      // must still be laid out as if the belt were containable — otherwise
+      // the fit collapses and the whole conveyor shrinks to nothing.
       final c = config(beltWidthRelative: 0.5, turns: turn);
       final box = c.size.toSize(screen);
       final g = ConveyorPathGeometry.build(c.turns, box,
-          beltWidthOverride: c.clampedBeltWidth(screen))!;
-      final painted = g.path.getBounds().inflate(g.beltWidth / 2 + 2);
-      expect(painted.left, greaterThanOrEqualTo(-0.5));
-      expect(painted.top, greaterThanOrEqualTo(-0.5));
-      expect(painted.right, lessThanOrEqualTo(box.width + 0.5));
-      expect(painted.bottom, lessThanOrEqualTo(box.height + 0.5));
+          beltWidthOverride: c.requestedBeltWidth(screen))!;
+      expect(g.beltWidth, closeTo(0.5 * 1080, 1e-9));
+      final centerline = g.path.getBounds();
+      expect(centerline.left, greaterThanOrEqualTo(-0.5));
+      expect(centerline.top, greaterThanOrEqualTo(-0.5));
+      expect(centerline.right, lessThanOrEqualTo(box.width + 0.5));
+      expect(centerline.bottom, lessThanOrEqualTo(box.height + 0.5));
+    });
+
+    test('shrinking the box does not change an explicit belt width', () {
+      // The reported bug: 2.5% stayed 2.5% only while the box was tall
+      // enough, and quietly thinned once it was not.
+      double painted(RelativeSize size) {
+        final c = config(beltWidthRelative: 0.025, turns: turn, size: size);
+        return ConveyorPathGeometry.build(c.turns, c.size.toSize(screen),
+                beltWidthOverride: c.requestedBeltWidth(screen))!
+            .beltWidth;
+      }
+
+      const roomy = RelativeSize(width: 0.2, height: 0.1);
+      const cramped = RelativeSize(width: 0.2, height: 0.02);
+      expect(painted(cramped), closeTo(0.025 * 1080, 1e-9));
+      expect(painted(cramped), closeTo(painted(roomy), 1e-9));
     });
   });
 
@@ -116,7 +137,7 @@ void main() {
     final restored = ConveyorConfig.fromJson(json);
     expect(restored.beltWidthRelative, isNull);
     // And it still renders, falling back to the box-relative thickness.
-    expect(restored.clampedBeltWidth(screen), isNull);
+    expect(restored.requestedBeltWidth(screen), isNull);
     expect(restored.effectiveBeltThickness, closeTo(0.4, 1e-9));
   });
 }

@@ -119,7 +119,125 @@ void main() {
       final segmentLength = segment
           .computeMetrics()
           .fold<double>(0, (sum, m) => sum + m.length);
-      expect(segmentLength, closeTo(geometry.length * 0.2, 1e-3));
+      // PathMetric walks the curve in flattened steps, so allow a hair of
+      // discretisation error.
+      expect(segmentLength, closeTo(geometry.length * 0.2, 1e-2));
+    });
+
+    test('bandOutline spans the requested stretch of belt', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
+        const Size(400, 200),
+        thicknessFactor: 0.2,
+      )!;
+      final width = geometry.beltWidth * 0.8;
+      final outline =
+          geometry.bandOutline(0.3, 0.6, width: width, radius: width * 0.2)!;
+      final bounds = outline.getBounds();
+      // Every point of the stretch, fattened by half the band, must be inside
+      // the outline's bounds — and nothing far outside it.
+      for (var f = 0.3; f <= 0.6; f += 0.01) {
+        final p = geometry.tangentAt(f).position;
+        expect(bounds.inflate(0.5).contains(p), isTrue, reason: 'at $f');
+      }
+      expect(bounds.width, lessThanOrEqualTo(geometry.length + width));
+      expect(bounds.height, lessThanOrEqualTo(geometry.length + width));
+    });
+
+    test('bandOutline stays within half a band of the centerline', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)],
+        const Size(400, 200),
+        thicknessFactor: 0.2,
+      )!;
+      const width = 20.0;
+      final outline = geometry.bandOutline(0.2, 0.8, width: width, radius: 4)!;
+      final centerline = geometry.extractFraction(0.2, 0.8).getBounds();
+      // The band is the centerline fattened by half its width, no more.
+      expect(outline.getBounds().left,
+          greaterThanOrEqualTo(centerline.left - width / 2 - 0.5));
+      expect(outline.getBounds().right,
+          lessThanOrEqualTo(centerline.right + width / 2 + 0.5));
+      expect(outline.getBounds().top,
+          greaterThanOrEqualTo(centerline.top - width / 2 - 0.5));
+      expect(outline.getBounds().bottom,
+          lessThanOrEqualTo(centerline.bottom + width / 2 + 0.5));
+    });
+
+    test('bandOutline degenerates safely on an empty or inverted stretch', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
+        size,
+      )!;
+      expect(geometry.bandOutline(0.5, 0.5, width: 10, radius: 2)!.getBounds(),
+          Rect.zero);
+      expect(geometry.bandOutline(0.7, 0.2, width: 10, radius: 2)!.getBounds(),
+          Rect.zero);
+      expect(geometry.bandOutline(0, 1, width: 0, radius: 2)!.getBounds(),
+          Rect.zero);
+    });
+
+    test('a band narrower than its corner radius still closes', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
+        const Size(400, 200),
+        thicknessFactor: 0.2,
+      )!;
+      // Radius clamped to half the width and half the span, like an RRect.
+      final outline = geometry.bandOutline(0.4, 0.42, width: 8, radius: 40)!;
+      expect(outline.getBounds().isEmpty, isFalse);
+    });
+
+    test('a band wider than its own bend has no outline', () {
+      // The inner edge would reach past the centre of curvature and fold the
+      // outline into a bow tie; the painter strokes the centerline instead.
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 120, radius: 0.5)],
+        size,
+        thicknessFactor: 1.0,
+      )!;
+      expect(
+          geometry.bandOutline(0, 1,
+              width: geometry.beltWidth * 4, radius: 2),
+          isNull);
+    });
+  });
+
+  group('where a newly added turn lands', () {
+    test('the first turn goes to the middle of the belt', () {
+      expect(ConveyorTurnEntry.freePosition([]), closeTo(0.5, 1e-9));
+    });
+
+    test('a second turn does not stack on the first', () {
+      // Two turns on the same point share a corner, where each fillet is
+      // clamped to the zero-length straight between them and both bends
+      // paint as one — so the added turn appeared to do nothing.
+      final first = [ConveyorTurnEntry(position: 0.5)];
+      final second = ConveyorTurnEntry.freePosition(first);
+      expect(second, isNot(closeTo(0.5, 1e-6)));
+      expect(second, inInclusiveRange(0.0, 1.0));
+    });
+
+    test('each turn lands in the widest gap left', () {
+      final turns = <ConveyorTurnEntry>[];
+      for (var i = 0; i < 5; i++) {
+        turns.add(ConveyorTurnEntry(
+            position: ConveyorTurnEntry.freePosition(turns)));
+      }
+      final positions = turns.map((t) => t.position).toList()..sort();
+      for (var i = 1; i < positions.length; i++) {
+        expect(positions[i] - positions[i - 1], greaterThan(1e-3),
+            reason: 'turns must not stack: $positions');
+      }
+    });
+
+    test('positions outside the belt do not throw the search off', () {
+      final odd = [
+        ConveyorTurnEntry(position: -3),
+        ConveyorTurnEntry(position: 4),
+      ];
+      final pick = ConveyorTurnEntry.freePosition(odd);
+      expect(pick, inInclusiveRange(0.0, 1.0));
     });
   });
 }

@@ -79,6 +79,31 @@ class ConveyorTurnEntry {
     this.radius = 1.5,
   });
 
+  /// Where a freshly added turn should sit: the middle of the widest stretch
+  /// of belt no turn occupies yet.
+  ///
+  /// Every new turn used to land on 0.5. A second one therefore shared the
+  /// first one's corner, where each fillet is clamped to the zero-length
+  /// straight between them and both bends paint as a single sharp corner —
+  /// so adding a turn looked like nothing happened, and deleting either of
+  /// them looked like the wrong one went.
+  static double freePosition(List<ConveyorTurnEntry> existing) {
+    if (existing.isEmpty) return 0.5;
+    final taken = existing.map((t) => t.position.clamp(0.0, 1.0)).toList()
+      ..sort();
+    var widest = -1.0;
+    var pick = 0.5;
+    for (var i = 0; i <= taken.length; i++) {
+      final lo = i == 0 ? 0.0 : taken[i - 1];
+      final hi = i == taken.length ? 1.0 : taken[i];
+      if (hi - lo > widest) {
+        widest = hi - lo;
+        pick = (lo + hi) / 2;
+      }
+    }
+    return pick;
+  }
+
   factory ConveyorTurnEntry.fromJson(Map<String, dynamic> json) =>
       _$ConveyorTurnEntryFromJson(json);
   Map<String, dynamic> toJson() => _$ConveyorTurnEntryToJson(this);
@@ -109,6 +134,153 @@ class ConveyorPathGeometry {
   Path extractFraction(double from, double to) => _metric.extractPath(
       from.clamp(0.0, 1.0) * length, to.clamp(0.0, 1.0) * length);
 
+  /// Outline of a band running along [from]..[to] of the belt: a rectangle
+  /// [width] across with its four corners rounded by [radius], bent to follow
+  /// the centerline.
+  ///
+  /// This is the shape a straight belt draws with a single `RRect` — for the
+  /// belt itself and for every batch on it. Stroking the centerline instead
+  /// cannot produce it: a stroke's cap is a half circle, and squaring one off
+  /// against a bend leaves a wedge where the cap and the body meet at
+  /// different angles.
+  ///
+  /// Null when the band is wider than its own bend can carry — the inner edge
+  /// would reach past the centre of curvature and fold the outline into a bow
+  /// tie. Callers fall back to stroking the centerline there, which is
+  /// meaningless geometry either way but at least stays solid.
+  Path? bandOutline(double from, double to,
+      {required double width, required double radius}) {
+    final start = from.clamp(0.0, 1.0) * length;
+    final span = to.clamp(0.0, 1.0) * length - start;
+    if (span <= 0 || width <= 0) return Path();
+    final half = width / 2;
+    // Same clamping an RRect applies when the radii do not fit the rect.
+    final r = max(min(min(radius, half), span / 2), 0.0);
+
+    /// Half-width of a rounded rectangle [d] along from its nearer flat end.
+    double halfWidthAt(double d) {
+      if (r <= 0 || d >= r) return half;
+      final k = r - d;
+      return (half - r) + sqrt(max(r * r - k * k, 0));
+    }
+
+    // Dense through the two corners, every few pixels along the middle.
+    const cornerSteps = 12;
+    final middleSteps = max((span / 4).ceil(), 2);
+    final offsets = <double>{0, span};
+    for (var i = 0; i <= cornerSteps; i++) {
+      offsets.add(r * i / cornerSteps);
+      offsets.add(span - r * i / cornerSteps);
+    }
+    for (var i = 0; i <= middleSteps; i++) {
+      offsets.add(span * i / middleSteps);
+    }
+
+    final ordered = offsets.toList()..sort();
+    final samples = <double>[];
+    final tangents = <Tangent>[];
+    for (final d in ordered) {
+      final t = _metric.getTangentForOffset(start + d);
+      if (t == null) continue;
+      samples.add(d);
+      tangents.add(t);
+    }
+    if (samples.length < 2) return Path();
+
+    // Heading along the run, unwrapped so a bend does not read as a jump.
+    final heading = <double>[];
+    for (var i = 0; i < tangents.length; i++) {
+      var a = atan2(tangents[i].vector.dy, tangents[i].vector.dx);
+      if (i > 0) {
+        while (a - heading[i - 1] > pi) {
+          a -= 2 * pi;
+        }
+        while (heading[i - 1] - a > pi) {
+          a += 2 * pi;
+        }
+      }
+      heading.add(a);
+    }
+
+    final left = <Offset>[];
+    final right = <Offset>[];
+    for (var i = 0; i < samples.length; i++) {
+      final t = tangents[i];
+      final normal = Offset(-t.vector.dy, t.vector.dx);
+      final h = halfWidthAt(min(samples[i], span - samples[i]));
+      // On the inside of a bend the edge cannot reach past the centre of
+      // curvature without crossing the centerline, which folds the outline
+      // into a bow tie. There is no honest band to draw at that point.
+      final lo = max(i - 1, 0), hi = min(i + 1, samples.length - 1);
+      final ds = samples[hi] - samples[lo];
+      final curvature = ds > 1e-9 ? (heading[hi] - heading[lo]) / ds : 0.0;
+      // With a little margin: an edge that merely grazes the centre of
+      // curvature already leaves a cusp the border traces as a stray hair.
+      if (curvature.abs() > 1e-9 && h > 0.9 / curvature.abs()) return null;
+      left.add(t.position + normal * h);
+      right.add(t.position - normal * h);
+    }
+
+    final outline = Path()..moveTo(left.first.dx, left.first.dy);
+    for (final p in left.skip(1)) {
+      outline.lineTo(p.dx, p.dy);
+    }
+    for (final p in right.reversed) {
+      outline.lineTo(p.dx, p.dy);
+    }
+    return outline..close();
+  }
+
+  /// Whether a fill solve still resembles the configured belt.
+  ///
+  /// Stretching runs is the point of the solve, but a run crushed to nothing
+  /// while its neighbours grow is the belt being folded into a different
+  /// shape. A run may shrink, but not more than a factor of four below the
+  /// uniform rescale.
+  static bool _keepsProportions(List<double> before, List<double> after) {
+    final totalBefore = before.fold<double>(0, (a, b) => a + b);
+    final totalAfter = after.fold<double>(0, (a, b) => a + b);
+    if (totalBefore <= 0 || totalAfter <= 0) return false;
+    final g = totalAfter / totalBefore;
+    for (var i = 0; i < before.length; i++) {
+      if (before[i] <= 1e-9) continue; // was zero, allowed to stay zero
+      if (after[i] < before[i] * g / 4) return false;
+    }
+    return true;
+  }
+
+  /// Whether stroking [path] at [beltWidth] would paint the belt over
+  /// itself — two stretches far apart along the belt but closer across it
+  /// than the belt is wide.
+  ///
+  /// A solve is free to move the runs, and nothing in the extents stops it
+  /// from parking the exit run of a U-turn on top of its entry run: both
+  /// bounds still match the box. Overlap is what makes that wrong, so test
+  /// for it directly. Belts *configured* to self-overlap look the same
+  /// before and after the solve and are the fallback's problem either way.
+  static bool _selfOverlaps(Path path, double beltWidth) {
+    final metrics = path.computeMetrics().toList();
+    if (metrics.isEmpty) return false;
+    final metric = metrics.first;
+    const samples = 64;
+    final pts = <Offset>[];
+    for (var i = 0; i <= samples; i++) {
+      final t = metric.getTangentForOffset(metric.length * i / samples);
+      if (t == null) return false;
+      pts.add(t.position);
+    }
+    final step = metric.length / samples;
+    for (var i = 0; i < pts.length; i++) {
+      for (var j = i + 1; j < pts.length; j++) {
+        // Neighbours along the belt are close by construction; only count
+        // stretches separated by enough arc length to be different runs.
+        if ((j - i) * step <= 2 * beltWidth) continue;
+        if ((pts[i] - pts[j]).distance < beltWidth * 0.9) return true;
+      }
+    }
+    return false;
+  }
+
   static ConveyorPathGeometry? build(
     List<ConveyorTurnEntry> turns,
     Size size, {
@@ -125,17 +297,37 @@ class ConveyorPathGeometry {
     // matter how the centerline is fitted. Cap it against the short side so
     // the box invariant always holds; for the usual wide box this is a no-op.
     const margin = 2.0;
-    final beltWidth = min(
-        beltWidthOverride ?? size.height * thicknessFactor.clamp(0.05, 1.0),
-        max(size.shortestSide - 2 * margin, 1.0));
-    final targetLength = size.width;
+    final containable = max(size.shortestSide - 2 * margin, 1.0);
+    // An explicit belt width is given in screen units, so the same number has
+    // to mean the same belt everywhere — resizing the box must not silently
+    // change it. Only the box-relative thickness is, by definition, bounded
+    // by the box.
+    final double beltWidth;
+    final double fitWidth;
+    if (beltWidthOverride != null) {
+      beltWidth = beltWidthOverride;
+      // The fit insets the box by half the belt width so the belt lands
+      // inside it. Once the belt is wider than the box that is unreachable,
+      // and insetting anyway squeezes the centerline into a sliver — the
+      // bend collapses into a blob. So hand the inset back as the overflow
+      // grows: at the limit it is still the full belt (no jump), and by
+      // twice the limit the bare centerline is fitted and the belt simply
+      // spills over the box.
+      final overflow = max(beltWidthOverride - containable, 0.0);
+      fitWidth = max(min(beltWidthOverride, containable) - overflow, 0.0);
+    } else {
+      beltWidth =
+          min(size.height * thicknessFactor.clamp(0.05, 1.0), containable);
+      fitWidth = beltWidth;
+    }
     final sorted = List<ConveyorTurnEntry>.of(turns)
       ..sort((a, b) => a.position.compareTo(b.position));
 
-    // Turns are corners on a nominal straight skeleton of length
-    // [targetLength], rounded off like a CAD fillet: the corner sits exactly
-    // at `position * targetLength` and the arc cuts `r * tan(sweep/2)` from
-    // the straight on each side of it.
+    // Turns are CAD fillets on a skeleton of straight runs: each keeps its
+    // configured sweep, and its radius is truly `radius * beltWidth` on
+    // screen. The straights are what flexes — they stretch or shrink so the
+    // belt fills the bounding box, the way a conveyor is actually drawn into
+    // a floor plan: the bend is fixed geometry, the runs absorb the space.
     //
     // The arc must not consume the positional budget. When it did, every
     // straight after a turn was only whatever was left over, so a symmetric
@@ -148,96 +340,170 @@ class ConveyorPathGeometry {
         // tan blows up at a half turn, so stop just short of it.
         (t.angle.clamp(-179.5, 179.5)) * pi / 180
     ];
-    final corners = [
-      for (final t in active) t.position.clamp(0.0, 1.0) * targetLength
-    ];
     final n = active.length;
+    final radii = [for (final t in active) max(t.radius, 0.1) * beltWidth];
+
+    final inset = fitWidth / 2 + margin;
+    final inner = Size(max(size.width - 2 * inset, 1.0),
+        max(size.height - 2 * inset, 1.0));
 
     // Straight runs between consecutive corners: seg[0] leads into the first
-    // corner, seg[n] leaves the last one.
+    // corner, seg[n] leaves the last one. Positions seed their proportions;
+    // the fill solve rescales them per axis afterwards.
+    final corners = [
+      for (final t in active) t.position.clamp(0.0, 1.0) * inner.width
+    ];
     final seg = <double>[];
     for (var i = 0; i <= n; i++) {
       final from = i == 0 ? 0.0 : corners[i - 1];
-      final to = i == n ? targetLength : corners[i];
+      final to = i == n ? inner.width : corners[i];
       seg.add(max(to - from, 0.0));
     }
 
-    // Tangent length each fillet eats out of the straights beside it.
-    final tangent = <double>[];
-    for (var i = 0; i < n; i++) {
-      final radius = max(active[i].radius, 0.1) * beltWidth;
-      tangent.add(radius * tan(sweeps[i].abs() / 2));
+    var fillClamped = false;
+    Path buildPath(List<double> seg) {
+      fillClamped = false;
+      // Tangent length each fillet eats out of the straights beside it —
+      // shrink fillets that do not fit rather than dropping the straight:
+      // first against each neighbouring run, then the pair sharing a run.
+      final tangent = <double>[];
+      for (var i = 0; i < n; i++) {
+        tangent.add(radii[i] * tan(sweeps[i].abs() / 2));
+      }
+      final wanted = List<double>.of(tangent);
+      for (var i = 0; i < n; i++) {
+        tangent[i] = min(tangent[i], seg[i]);
+        tangent[i] = min(tangent[i], seg[i + 1]);
+      }
+      for (var i = 1; i < n; i++) {
+        final pair = tangent[i - 1] + tangent[i];
+        if (pair > seg[i] && pair > 0) {
+          final scale = seg[i] / pair;
+          tangent[i - 1] *= scale;
+          tangent[i] *= scale;
+        }
+      }
+      for (var i = 0; i < n; i++) {
+        if (tangent[i] < wanted[i] - 1e-6) fillClamped = true;
+      }
+
+      final path = Path()..moveTo(0, 0);
+      var corner = Offset.zero;
+      var heading = 0.0;
+      for (var i = 0; i < n; i++) {
+        final inDir = Offset(cos(heading), sin(heading));
+        final c = corner + inDir * seg[i];
+        final arcStart = c - inDir * tangent[i];
+        path.lineTo(arcStart.dx, arcStart.dy);
+        heading += sweeps[i];
+        final outDir = Offset(cos(heading), sin(heading));
+        final arcEnd = c + outDir * tangent[i];
+        final effectiveRadius = tangent[i] / tan(sweeps[i].abs() / 2);
+        if (tangent[i] > 0 && effectiveRadius.isFinite && effectiveRadius > 0) {
+          path.arcToPoint(
+            arcEnd,
+            radius: Radius.circular(effectiveRadius),
+            clockwise: sweeps[i] > 0,
+          );
+        } else {
+          // No room to round the corner — keep it sharp rather than skip it.
+          path.lineTo(arcEnd.dx, arcEnd.dy);
+        }
+        corner = c;
+      }
+      final tail = corner + Offset(cos(heading), sin(heading)) * seg[n];
+      path.lineTo(tail.dx, tail.dy);
+      return path;
     }
-    // Shrink fillets that do not fit rather than dropping the straight: first
-    // against each neighbouring run, then against the pair sharing a run.
-    for (var i = 0; i < n; i++) {
-      tangent[i] = min(tangent[i], seg[i]);
-      tangent[i] = min(tangent[i], seg[i + 1]);
-    }
-    for (var i = 1; i < n; i++) {
-      final pair = tangent[i - 1] + tangent[i];
-      if (pair > seg[i] && pair > 0) {
-        final scale = seg[i] / pair;
-        tangent[i - 1] *= scale;
-        tangent[i] *= scale;
+
+    // Fill solve: nudge each straight until the centerline's bounds match the
+    // inner box on both axes. A run contributes to each axis by its heading,
+    // so a horizontal run absorbs width, a vertical one height, a diagonal a
+    // blend — and runs sharing a heading keep their relative proportions,
+    // which is what the position sliders express. The arcs are fixed
+    // geometry; when they alone exceed an axis no seg change can fix it, the
+    // residual stays, and the uniform-fit fallback below takes over.
+    Path? solved;
+    if (n > 0) {
+      // Work on a copy: if the box cannot be filled, the fallback must fit
+      // the position-faithful skeleton, not whatever the failed solve left.
+      final trial = List<double>.of(seg);
+      final headings = <double>[0.0];
+      for (final sweep in sweeps) {
+        headings.add(headings.last + sweep);
+      }
+      var path = buildPath(trial);
+      for (var iter = 0; iter < 40; iter++) {
+        final b = path.getBounds();
+        // A fill only counts when every fillet kept its true radius. The
+        // solve can always "fill" a too-small box by pinching corners sharp
+        // and amputating runs — a belt that fits the box by no longer being
+        // the belt that was configured. That case belongs to the fallback.
+        if (!fillClamped &&
+            (b.width - inner.width).abs() < 0.5 &&
+            (b.height - inner.height).abs() < 0.5 &&
+            _keepsProportions(seg, trial) &&
+            !_selfOverlaps(path, beltWidth)) {
+          solved = path;
+          break;
+        }
+        final fx = b.width > 1e-6 ? inner.width / b.width : 1.0;
+        final fy = b.height > 1e-6 ? inner.height / b.height : 1.0;
+        for (var i = 0; i <= n; i++) {
+          final wx = cos(headings[i]).abs();
+          final wy = sin(headings[i]).abs();
+          final f = (fx * wx + fy * wy) / (wx + wy);
+          trial[i] = max(trial[i] * f, 0.0);
+        }
+        path = buildPath(trial);
       }
     }
 
-    final path = Path()..moveTo(0, 0);
-    var corner = Offset.zero;
-    var heading = 0.0;
-    for (var i = 0; i < n; i++) {
-      final inDir = Offset(cos(heading), sin(heading));
-      final c = corner + inDir * seg[i];
-      final arcStart = c - inDir * tangent[i];
-      path.lineTo(arcStart.dx, arcStart.dy);
-      heading += sweeps[i];
-      final outDir = Offset(cos(heading), sin(heading));
-      final arcEnd = c + outDir * tangent[i];
-      final effectiveRadius = tangent[i] / tan(sweeps[i].abs() / 2);
-      if (tangent[i] > 0 && effectiveRadius.isFinite && effectiveRadius > 0) {
-        path.arcToPoint(
-          arcEnd,
-          radius: Radius.circular(effectiveRadius),
-          clockwise: sweeps[i] > 0,
-        );
-      } else {
-        // No room to round the corner — keep it sharp rather than skip it.
-        path.lineTo(arcEnd.dx, arcEnd.dy);
-      }
-      corner = c;
+    final Path fitted;
+    final double fit;
+    if (solved != null) {
+      // Solved: the belt fills the box at true scale. The residual is under
+      // half a pixel; squeeze it out rather than let the paint cross the box.
+      final bounds = solved.getBounds();
+      final clamp = min(
+          1.0,
+          min(bounds.width > 1e-6 ? inner.width / bounds.width : 1.0,
+              bounds.height > 1e-6 ? inner.height / bounds.height : 1.0));
+      fit = clamp;
+      // Centre on the box, not on the inset origin: a box thinner than the
+      // belt clamps `inner` to a floor, and anchoring to the inset would
+      // push the centerline off-centre and the paint over the box edge.
+      final dx = size.width / 2 - bounds.center.dx * clamp;
+      final dy = size.height / 2 - bounds.center.dy * clamp;
+      fitted = solved.transform(Matrix4(
+        clamp, 0, 0, 0, //
+        0, clamp, 0, 0, //
+        0, 0, 1, 0, //
+        dx, dy, 0, 1,
+      ).storage);
+    } else {
+      // Unfillable box (arcs alone overrun an axis, or a straight belt):
+      // uniform fit inside, centred — bends shrink below true radius, which
+      // is the least-wrong rendering left.
+      final path = buildPath(seg);
+      final bounds = path.getBounds();
+      final sx =
+          bounds.width > 1e-6 ? inner.width / bounds.width : double.infinity;
+      final sy =
+          bounds.height > 1e-6 ? inner.height / bounds.height : double.infinity;
+      var f = min(sx, sy);
+      if (!f.isFinite || f <= 0) f = 1.0;
+      fit = f;
+      final dx = size.width / 2 - bounds.center.dx * fit;
+      final dy = size.height / 2 - bounds.center.dy * fit;
+      final matrix = Matrix4(
+        fit, 0, 0, 0, //
+        0, fit, 0, 0, //
+        0, 0, 1, 0, //
+        dx, dy, 0, 1,
+      );
+      fitted = path.transform(matrix.storage);
     }
-    final tail = corner + Offset(cos(heading), sin(heading)) * seg[n];
-    path.lineTo(tail.dx, tail.dy);
-
-    // Fit only the *centerline* into the box inset by half the belt width
-    // (plus the border stroke), never the belt width itself. Scaling the belt
-    // width by the fit would make painted thickness depend on the turn
-    // geometry, so two conveyors sharing a box height and thickness factor
-    // would render at different belt heights — and a turned belt would never
-    // match a straight one.
-    final inset = beltWidth / 2 + margin;
-    final inner = Size(max(size.width - 2 * inset, 1.0),
-        max(size.height - 2 * inset, 1.0));
-    final bounds = path.getBounds();
-    // A degenerate axis (a straight run) must not drive the fit.
-    final sx =
-        bounds.width > 1e-6 ? inner.width / bounds.width : double.infinity;
-    final sy =
-        bounds.height > 1e-6 ? inner.height / bounds.height : double.infinity;
-    var fit = min(sx, sy);
-    if (!fit.isFinite || fit <= 0) fit = 1.0;
-    // Uniform scale by `fit`, then translate the bounds center to the box
-    // center (column-major 4x4).
-    final dx = size.width / 2 - bounds.center.dx * fit;
-    final dy = size.height / 2 - bounds.center.dy * fit;
-    final matrix = Matrix4(
-      fit, 0, 0, 0, //
-      0, fit, 0, 0, //
-      0, 0, 1, 0, //
-      dx, dy, 0, 1,
-    );
-    final fitted = path.transform(matrix.storage);
     final metrics = fitted.computeMetrics().toList();
     if (metrics.isEmpty) return null;
     return ConveyorPathGeometry._(fitted, beltWidth, fit, metrics.first);
@@ -423,17 +689,15 @@ class ConveyorConfig extends BaseAsset {
     return max((turns.isEmpty ? box.height : box.shortestSide) - 4, 1.0);
   }
 
-  /// Whether the requested belt width does not fit the box, so the render is
-  /// clamped and the editor should say so.
+  /// Whether the requested belt width is wider than its box, so the belt
+  /// paints over the box edge and the editor should say so.
+  ///
+  /// The width itself is still honoured — it is set in screen units, and a
+  /// setting that quietly changed whenever the box was resized would not be
+  /// worth having. Only selection and hit-testing stay on the box.
   bool beltWidthOverflows(Size screen) {
     final requested = requestedBeltWidth(screen);
     return requested != null && requested > maxBeltWidth(screen);
-  }
-
-  /// Belt width actually painted, clamped into the box.
-  double? clampedBeltWidth(Size screen) {
-    final requested = requestedBeltWidth(screen);
-    return requested == null ? null : min(requested, maxBeltWidth(screen));
   }
 
   ConveyorConfig(
@@ -489,6 +753,43 @@ class _ConveyorConfigContent extends StatefulWidget {
 }
 
 class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
+  @override
+  void initState() {
+    super.initState();
+    // Pages saved before turns were kept in belt order.
+    _sortTurns();
+    _pinBeltWidth();
+  }
+
+  /// Makes the belt width of a turned belt an explicit number.
+  ///
+  /// A turned belt has exactly one width knob — the screen-relative field.
+  /// Configs from before that field existed carry a box-relative thickness
+  /// instead, whose meaning shifts every time the box is resized; freeze
+  /// what it currently resolves to so the panel always shows one number and
+  /// the render never moves behind the user's back.
+  void _pinBeltWidth() {
+    if (widget.config.turns.isEmpty) return;
+    widget.config.beltWidthRelative ??=
+        widget.config.effectiveBeltThickness * widget.config.size.height;
+  }
+
+  /// Keeps [ConveyorConfig.turns] in the order the belt actually bends.
+  ///
+  /// [ConveyorPathGeometry.build] sorts by position, so the belt's first bend
+  /// is the lowest position. The panel listed insertion order and numbered
+  /// the cards from it, and "Add Turn" appends — so as soon as a turn was
+  /// added after an earlier one had been dragged along the belt, "Turn 1" in
+  /// the panel was some other bend, and its delete button took out a turn the
+  /// user was not looking at.
+  ///
+  /// Sorting the list itself rather than a display copy keeps the card order
+  /// stable while a position slider is being dragged; the reorder happens
+  /// once the drag ends.
+  void _sortTurns() {
+    widget.config.turns.sort((a, b) => a.position.compareTo(b.position));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -606,6 +907,10 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         SizeField(
           initialValue: widget.config.size,
           onChanged: (size) => setState(() => widget.config.size = size),
+          // The box runs along the belt, so its width is how long the
+          // conveyor is and its height is how wide the belt sits.
+          widthLabel: 'Length %',
+          heightLabel: 'Width %',
         ),
         const SizedBox(height: 16),
         CoordinatesField(
@@ -718,7 +1023,11 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         FilledButton.icon(
           onPressed: () {
             setState(() {
-              widget.config.turns.add(ConveyorTurnEntry());
+              widget.config.turns.add(ConveyorTurnEntry(
+                position: ConveyorTurnEntry.freePosition(widget.config.turns),
+              ));
+              _sortTurns();
+              _pinBeltWidth();
             });
           },
           icon: const Icon(Icons.add),
@@ -734,24 +1043,12 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           if (widget.config.showAuger ?? false)
             Text('Turns are ignored while "Auger conveyor" is enabled',
                 style: Theme.of(context).textTheme.bodySmall),
-          if (widget.config.beltWidthRelative == null) ...[
-            Text(
-              'Belt thickness: '
-              '${(widget.config.effectiveBeltThickness * 100).round()}% of box height',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Slider(
-              min: 0.05,
-              max: 1.0,
-              divisions: 95,
-              value: widget.config.effectiveBeltThickness.clamp(0.05, 1.0),
-              label: '${(widget.config.effectiveBeltThickness * 100).round()}%',
-              onChanged: (v) => setState(() => widget.config.beltThickness = v),
-            ),
-          ],
           ...widget.config.turns.asMap().entries.map((mapEntry) {
             final entry = mapEntry.value;
             return Card(
+              // Identity, not index: ending a position drag can reorder the
+              // cards, and the element state has to follow its own turn.
+              key: ObjectKey(entry),
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: Padding(
                 padding: const EdgeInsets.all(8.0),
@@ -776,41 +1073,42 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      'Belt Position: ${(entry.position * 100).round()}%',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
-                      min: 0.0,
-                      max: 1.0,
+                    _turnValue(
+                      context,
+                      label: 'Belt position',
+                      suffix: '%',
+                      value: entry.position.clamp(0.0, 1.0) * 100,
+                      min: 0,
+                      max: 100,
                       divisions: 100,
-                      value: entry.position.clamp(0.0, 1.0),
-                      label: '${(entry.position * 100).round()}%',
-                      onChanged: (v) => setState(() => entry.position = v),
+                      decimals: 0,
+                      onChanged: (v) =>
+                          setState(() => entry.position = v / 100),
+                      // Dragging a turn past a neighbour changes which bend
+                      // it is; renumber once the drag is over rather than
+                      // shuffling cards under the pointer.
+                      onSettled: () => setState(_sortTurns),
                     ),
-                    Text(
-                      'Angle: ${entry.angle.round()}° '
-                      '(${entry.angle >= 0 ? 'down' : 'up'})',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
+                    _turnValue(
+                      context,
+                      label: 'Angle (${entry.angle >= 0 ? 'down' : 'up'})',
+                      suffix: '°',
+                      value: entry.angle.clamp(-180.0, 180.0),
                       min: -180,
                       max: 180,
                       divisions: 72,
-                      value: entry.angle.clamp(-180.0, 180.0),
-                      label: '${entry.angle.round()}°',
+                      decimals: 0,
                       onChanged: (v) => setState(() => entry.angle = v),
                     ),
-                    Text(
-                      'Radius: ${entry.radius.toStringAsFixed(1)} × belt width',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
+                    _turnValue(
+                      context,
+                      label: 'Radius (× belt width)',
+                      suffix: '×',
+                      value: entry.radius.clamp(0.5, 5.0),
                       min: 0.5,
                       max: 5.0,
                       divisions: 45,
-                      value: entry.radius.clamp(0.5, 5.0),
-                      label: entry.radius.toStringAsFixed(1),
+                      decimals: 1,
                       onChanged: (v) => setState(() => entry.radius = v),
                     ),
                   ],
@@ -819,6 +1117,60 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             );
           }),
         ],
+      ],
+    );
+  }
+
+  /// One turn setting: a label, a box you can type an exact value into, and a
+  /// slider for the same number.
+  ///
+  /// The slider alone could not express a value between its divisions, and
+  /// reading a turn back off a slider is guesswork — the box is the one that
+  /// says what the turn actually is.
+  Widget _turnValue(
+    BuildContext context, {
+    required String label,
+    required String suffix,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required int decimals,
+    required ValueChanged<double> onChanged,
+    VoidCallback? onSettled,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 78,
+              child: _NumberBox(
+                value: value,
+                min: min,
+                max: max,
+                decimals: decimals,
+                suffix: suffix,
+                onChanged: onChanged,
+                onSettled: onSettled,
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          min: min,
+          max: max,
+          divisions: divisions,
+          value: value.clamp(min, max),
+          label: value.toStringAsFixed(decimals),
+          onChanged: onChanged,
+          onChangeEnd: onSettled == null ? null : (_) => onSettled(),
+        ),
       ],
     );
   }
@@ -842,9 +1194,9 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             hintText: 'Empty — belt fills the box',
             suffixText: '%',
             errorText: overflows
-                ? 'Does not fit the box — painted at '
-                    '${maxPercent.toStringAsFixed(2)}%. '
-                    'Increase the box height.'
+                ? 'Wider than the box (fits ${maxPercent.toStringAsFixed(2)}%) '
+                    '— the belt is painted at the width you set and spills '
+                    'over the box, which still owns selection and clicks.'
                 : null,
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -855,6 +1207,95 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           }),
         ),
       ],
+    );
+  }
+}
+
+/// A compact number box that stays in step with the slider beside it.
+///
+/// The value is pushed in from outside only while the box is not being
+/// edited, so a keystroke is never overwritten mid-word, and what is typed is
+/// clamped into the same range the slider covers.
+class _NumberBox extends StatefulWidget {
+  final double value;
+  final double min;
+  final double max;
+  final int decimals;
+  final String suffix;
+  final ValueChanged<double> onChanged;
+  final VoidCallback? onSettled;
+
+  const _NumberBox({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.decimals,
+    required this.suffix,
+    required this.onChanged,
+    this.onSettled,
+  });
+
+  @override
+  State<_NumberBox> createState() => _NumberBoxState();
+}
+
+class _NumberBoxState extends State<_NumberBox> {
+  late final TextEditingController _controller =
+      TextEditingController(text: _format(widget.value));
+  late final FocusNode _focus = FocusNode()..addListener(_onFocusChange);
+
+  String _format(double v) => v.toStringAsFixed(widget.decimals);
+
+  @override
+  void didUpdateWidget(_NumberBox old) {
+    super.didUpdateWidget(old);
+    if (!_focus.hasFocus && _format(widget.value) != _controller.text) {
+      _controller.text = _format(widget.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (_focus.hasFocus) return;
+    // Leaving the box tidies whatever was typed back into range, and settles
+    // the value the same way letting go of the slider does.
+    _controller.text = _format(widget.value);
+    widget.onSettled?.call();
+  }
+
+  void _submit(String raw) {
+    final parsed = double.tryParse(raw.trim().replaceAll(',', '.'));
+    if (parsed == null) return;
+    widget.onChanged(parsed.clamp(widget.min, widget.max));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      focusNode: _focus,
+      textAlign: TextAlign.end,
+      style: Theme.of(context).textTheme.bodySmall,
+      decoration: InputDecoration(
+        isDense: true,
+        suffixText: widget.suffix,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        border: const OutlineInputBorder(),
+      ),
+      keyboardType:
+          TextInputType.numberWithOptions(decimal: widget.decimals > 0, signed: widget.min < 0),
+      onChanged: _submit,
+      onSubmitted: (v) {
+        _submit(v);
+        widget.onSettled?.call();
+      },
     );
   }
 }
@@ -1209,7 +1650,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     // An explicit screen-relative belt width wins over the box-relative
     // thickness, and applies whether or not the belt turns.
     final beltWidth =
-        widget.config.clampedBeltWidth(MediaQuery.of(context).size);
+        widget.config.requestedBeltWidth(MediaQuery.of(context).size);
     final geometry = ConveyorPathGeometry.build(
       widget.config.turns,
       paintSize,
@@ -1265,8 +1706,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
       {double? straightBeltWidth}) {
     // Cross-belt dimension: the turned belt carries its own width, a straight
     // belt is either an explicit band or the full box height.
-    final beltHeight = geometry?.beltWidth ??
-        min(straightBeltWidth ?? conveyorSize.height, conveyorSize.height);
+    final beltHeight =
+        geometry?.beltWidth ?? straightBeltWidth ?? conveyorSize.height;
     // A straight band is centred in the box, so gates hang off the band edge
     // rather than the box edge.
     final bandInset = geometry == null
@@ -1488,20 +1929,20 @@ class _ConveyorState extends ConsumerState<Conveyor>
                         const SizedBox(height: 4),
                         // Compact row rather than a SwitchListTile: the pane
                         // has one screen of height and this is a mode flag,
-                        // not a headline. The wording spells out what the
-                        // jog buttons will do — worth the width.
+                        // not a headline. On = a tap latches the belt and it
+                        // keeps running; off = it runs only while held —
+                        // so the switch reads as the opposite of the PLC's
+                        // stop-on-release flag.
                         Row(
                           children: [
                             Expanded(
                               child: Text(
-                                stopOnRelease
-                                    ? 'Runs only while held'
-                                    : 'Tap latches the belt on',
+                                'Jog continuous',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                             ),
                             Switch(
-                              value: stopOnRelease,
+                              value: !stopOnRelease,
                               onChanged: (_) =>
                                   write('p_cmd_ManualStopOnRelease', true),
                             ),
@@ -1809,10 +2250,13 @@ class ConveyorPainter extends CustomPainter {
     }
     // An explicit belt width paints the belt as a band centred in the box
     // rather than filling it, so a straight belt can be set to the same width
-    // as a turned one. Everything below is box-relative, so shrinking the box
-    // we hand it is enough — batches, arrows and text all follow.
+    // as a turned one. Everything below is box-relative, so resizing the box
+    // we hand it is enough — batches, arrows and text all follow. A band
+    // wider than the box paints over the box edge rather than being trimmed
+    // back to it: the width is set in screen units and must not move when the
+    // box does.
     final band = straightBeltWidth;
-    if (band != null && band < size.height) {
+    if (band != null) {
       canvas.save();
       canvas.translate(0, (size.height - band) / 2);
       _paintStraightBelt(canvas, Size(size.width, band));
@@ -1822,11 +2266,17 @@ class ConveyorPainter extends CustomPainter {
     _paintStraightBelt(canvas, size);
   }
 
+  /// Rounding of the belt's two ends, as a fraction of the belt width.
+  ///
+  /// Shared by both renderers so a belt keeps the same silhouette when a turn
+  /// is added: the turned belt used to end in a stroke cap, which is a half
+  /// circle — 0.5 of the belt width — and looked far blobbier than the
+  /// straight belt beside it at the same width.
+  static const _endRadiusFactor = 0.2;
+
   void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final borderRadius = Radius.circular(
-      size.shortestSide * 0.2,
-    ); // 20% of the shortest side
+    final borderRadius = Radius.circular(size.shortestSide * _endRadiusFactor);
     final rrect = RRect.fromRectAndRadius(rect, borderRadius);
 
     final paint = Paint()
@@ -1880,29 +2330,61 @@ class ConveyorPainter extends CustomPainter {
     _drawFrequency(canvas, size);
   }
 
+  /// Fills a band along the centerline and outlines it with [border].
+  ///
+  /// A band too wide for its own bend has no outline to draw, so it falls
+  /// back to stroking the centerline — the shape is meaningless at that point
+  /// either way, but a solid blob reads as an over-wide belt where a folded
+  /// outline reads as a rendering bug.
+  void _paintBand(Canvas canvas, ConveyorPathGeometry g, double from, double to,
+      {required double width,
+      required double radius,
+      required Color fill,
+      required Paint border}) {
+    final outline = g.bandOutline(from, to, width: width, radius: radius);
+    if (outline != null) {
+      canvas.drawPath(outline, Paint()..color = fill);
+      canvas.drawPath(outline, border);
+      return;
+    }
+    final centerline = g.extractFraction(from, to);
+    canvas.drawPath(
+      centerline,
+      Paint()
+        ..color = border.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width + 2 * border.strokeWidth
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      centerline,
+      Paint()
+        ..color = fill
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
   /// Path-based rendering used when the conveyor has turns configured.
   ///
-  /// The belt is the centerline stroked at full belt width (rounded caps give
-  /// the rounded ends), batches are sub-paths of the same centerline stroked
-  /// slightly narrower, so both follow the bends.
+  /// Belt and batches are both bands along the centerline, filled and then
+  /// outlined — the same recipe [_paintStraightBelt] runs with an `RRect`,
+  /// so a belt keeps its silhouette when a turn is added under it.
   void _paintTurnedBelt(Canvas canvas, Size size) {
     final g = geometry!;
 
-    final borderPaint = Paint()
+    final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = g.beltWidth + 4
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(g.path, borderPaint);
-
-    final beltPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = g.beltWidth
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(g.path, beltPaint);
+      ..strokeWidth = 2;
+    _paintBand(canvas, g, 0, 1,
+        width: g.beltWidth,
+        radius: g.beltWidth * _endRadiusFactor,
+        fill: color,
+        border: border);
 
     if (showExclamation) {
       _drawExclamation(canvas, size);
@@ -1910,38 +2392,21 @@ class ConveyorPainter extends CustomPainter {
     }
 
     final batchWidth = g.beltWidth * 0.8;
-    final batchBorderPaint = Paint()
+    final batchRadius = batchWidth * _endRadiusFactor;
+    final batchBorder = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = batchWidth + 2
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    // Round stroke caps extend half the stroke width past each end of the
-    // extracted segment, so shrink the segment by the cap radius to keep the
-    // painted batch at its true length.
-    final capInset = batchWidth / 2 / g.length;
+      ..strokeWidth = 1;
 
     for (final batch in batches.values) {
-      var start = batch.start.clamp(0.0, 1.0);
-      var end = batch.end.clamp(0.0, 1.0);
+      final start = batch.start.clamp(0.0, 1.0);
+      final end = batch.end.clamp(0.0, 1.0);
       if (end <= start) continue; // not yet visible / already off
-      final mid = (start + end) / 2;
-      // Keep a sliver of length so short batches render as a round dot
-      // instead of disappearing.
-      start = min(start + capInset, mid - 1e-4);
-      end = max(end - capInset, mid + 1e-4);
-      final segment = g.extractFraction(start, end);
-      canvas.drawPath(segment, batchBorderPaint);
-      canvas.drawPath(
-        segment,
-        Paint()
-          ..color = batch.color
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = batchWidth
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round,
-      );
+      _paintBand(canvas, g, start, end,
+          width: batchWidth,
+          radius: batchRadius,
+          fill: batch.color,
+          border: batchBorder);
     }
 
     _drawDirectionArrow(canvas, size);

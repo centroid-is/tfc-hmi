@@ -352,11 +352,12 @@ SidePane _conveyorPane(BuildContext context) {
                 children: [
                   Expanded(
                     child: Text(
-                      'Runs only while held',
+                      'Jog continuous',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
-                  Switch(value: true, onChanged: (_) {}),
+                  // Mirrors the real pane at stop-on-release: continuous off.
+                  Switch(value: false, onChanged: (_) {}),
                 ],
               ),
               const SizedBox(height: 10),

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
@@ -30,15 +32,27 @@ void main() {
       });
     }
 
-    test('single turn: runs either side are mirror lengths', () {
+    test('single turn: the belt fills the box on both axes', () {
       final g = geom([ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)]);
-      final start = g.tangentAt(0.0).position;
-      final end = g.tangentAt(1.0).position;
-      // A 90 turn at the midpoint: the horizontal run before and the vertical
-      // run after are equally long, so the end is as far down as it is right.
-      final acrossX = (end.dx - start.dx).abs();
-      final acrossY = (end.dy - start.dy).abs();
-      expect(acrossX, closeTo(acrossY, 1.0));
+      // The bend is fixed geometry; the runs stretch so the belt spans its
+      // box. The centerline is inset by half the belt width plus the border.
+      const inset = beltWidth / 2 + 2;
+      final b = g.path.getBounds();
+      expect(b.width, closeTo(box.width - 2 * inset, 1.0));
+      expect(b.height, closeTo(box.height - 2 * inset, 1.0));
+    });
+
+    test('single turn: the arc keeps its true radius', () {
+      final g = geom([ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)]);
+      // With true geometry the belt's length is exactly determined: the two
+      // runs reach the box, the fillet replaces the corner with a quarter
+      // circle, and each tangent leg it eats equals its radius at 90.
+      const inset = beltWidth / 2 + 2;
+      const r = 1.5 * beltWidth;
+      final w = box.width - 2 * inset;
+      final h = box.height - 2 * inset;
+      expect(g.length, closeTo(w + h - 2 * r + pi * r / 2, 2.0));
+      expect(g.scale, closeTo(1.0, 0.01));
     });
 
     test('s-curve returns to its entry heading and offsets evenly', () {
@@ -68,9 +82,10 @@ void main() {
       expect((end.dx - start.dx).abs(), lessThan(1.0));
     });
 
-    test('belt length stays near the nominal length', () {
-      // A fillet cuts the corner, so the belt is at most the nominal length
-      // and never wildly over it the way the additive walk was.
+    test('the belt spans its box for any loop radius that fits', () {
+      // The runs absorb whatever length the box demands, so changing the
+      // loop radius changes the shape but never leaves the box unfilled.
+      const inset = beltWidth / 2 + 2;
       for (final radius in [0.8, 1.2, 2.5]) {
         final g = geom([
           ConveyorTurnEntry(position: 0.15, angle: -30, radius: 1.0),
@@ -78,11 +93,11 @@ void main() {
           ConveyorTurnEntry(position: 0.65, angle: 120, radius: radius),
           ConveyorTurnEntry(position: 0.85, angle: -30, radius: 1.0),
         ]);
-        final natural = g.length / g.scale;
-        expect(natural, lessThanOrEqualTo(box.width + 1.0),
-            reason: 'radius $radius overran the nominal belt length');
-        expect(natural, greaterThan(box.width * 0.5),
-            reason: 'radius $radius collapsed the belt');
+        final b = g.path.getBounds();
+        expect(b.width, closeTo(box.width - 2 * inset, 1.0),
+            reason: 'radius $radius left the box unfilled across');
+        expect(b.height, closeTo(box.height - 2 * inset, 1.0),
+            reason: 'radius $radius left the box unfilled down');
       }
     });
 
