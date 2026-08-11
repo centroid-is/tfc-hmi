@@ -1,6 +1,7 @@
 import 'dart:ui' show PathMetric, Tangent;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/collector.dart';
@@ -542,20 +543,15 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                         IconButton(
                           icon: const Icon(Icons.edit, size: 20),
                           tooltip: 'Edit gate',
-                          onPressed: () => showDialog(
+                          onPressed: () => showStandardDialog<void>(
                             context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Edit Gate'),
-                              content: SizedBox(
-                                width: 300,
-                                child: entry.gate.configure(context),
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(context).pop(),
-                                  child: const Text('Done'),
-                                ),
-                              ],
+                            title: 'Edit gate',
+                            icon: Icons.swap_horiz,
+                            width: 360,
+                            closeLabel: 'Done',
+                            builder: (context) => SizedBox(
+                              width: 300,
+                              child: entry.gate.configure(context),
                             ),
                           ).then((_) => setState(() {})),
                         ),
@@ -1328,7 +1324,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
                         const SizedBox(height: 4),
                         // Compact row rather than a SwitchListTile: the pane
                         // has one screen of height and this is a mode flag,
-                        // not a headline.
+                        // not a headline. The wording spells out what the
+                        // jog buttons will do — worth the width.
                         Row(
                           children: [
                             Expanded(
@@ -1345,6 +1342,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
                                   write('p_cmd_ManualStopOnRelease', true),
                             ),
                           ],
+                        ),
+                        const SizedBox(height: 10),
+                        // The speed those buttons jog at — full width, under
+                        // the controls it belongs to.
+                        _FrequencyField(
+                          fieldKey: 'manual_freq_field',
+                          label: 'Manual frequency',
+                          value: dynValue['p_cfg_ManualFreq'],
+                          onSubmitted: (v) => write('p_cfg_ManualFreq', v),
                         ),
                       ],
                     ),
@@ -1408,13 +1414,21 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   PaneSection(
                     title: 'Trend',
                     child: PaneGraphTile(
-                      label: '${widget.config.key!} statistics',
+                      // Tall enough for a two-axis line chart to be readable
+                      // rather than decorative, and no taller — the setpoint
+                      // fields below it have to fit on the same screen.
+                      height: 100,
                       preview: _ConveyorStatsGraphLoader(
                         keyName: widget.config.key!,
+                        showButtons: false,
+                        compact: true,
+                        xSpan: const Duration(minutes: 5),
                       ),
-                      expandedTitle: '${widget.config.key!} — statistics',
+                      expandedTitle: '${widget.config.key!} — trend',
+                      expandedSize: const Size(820, 520),
                       expandedBuilder: (context) => _ConveyorStatsGraphLoader(
                         keyName: widget.config.key!,
+                        xSpan: const Duration(minutes: 30),
                       ),
                     ),
                   ),
@@ -1422,49 +1436,42 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
                   // --- Setpoints --------------------------------------------
                   //
-                  // Three frequency fields are a form, not a glance, so they
-                  // live in a floating dialog the operator can park anywhere.
+                  // Inline, not behind a dialog: there are only two of them
+                  // and an operator changing a frequency wants to see the
+                  // belt while doing it. Manual frequency is not here — it
+                  // belongs to jogging, so it sits beside the jog toggle.
+                  //
                   // Committed on submit (Enter / focus-out), never per
                   // keystroke — a half-typed frequency must not reach the
                   // drive. Keys embed the current value so a field resets when
                   // the PLC reports a different one.
                   PaneSection(
                     title: 'Setpoints',
-                    child: PaneExpandTile(
-                      label: 'Frequencies',
-                      summary:
-                          'Auto ${dynValue['p_cfg_AutoFreq'].asDouble.toStringAsFixed(2)} Hz · '
-                          'Cleaning ${dynValue['p_cfg_CleaningFreq'].asDouble.toStringAsFixed(2)} Hz · '
-                          'Manual ${dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2)} Hz',
-                      icon: Icons.tune,
-                      expandedTitle: '${widget.config.key!} — setpoints',
-                      expandedSize: const Size(420, 320),
-                      expandedBuilder: (context) => Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _FrequencyField(
+                    // Side by side — two short numbers read better as a pair
+                    // than as a stack, and it costs one row instead of two.
+                    child: Row(
+                      // Top-aligned: a field showing a validation or helper
+                      // line below it must not shove its neighbour down.
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _FrequencyField(
                             fieldKey: 'auto_freq_field',
-                            label: 'Auto frequency',
+                            label: 'Auto',
                             value: dynValue['p_cfg_AutoFreq'],
                             onSubmitted: (v) => write('p_cfg_AutoFreq', v),
                           ),
-                          const SizedBox(height: 12),
-                          _FrequencyField(
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _FrequencyField(
                             fieldKey: 'cleaning_freq_field',
-                            label: 'Cleaning frequency',
+                            label: 'Cleaning',
                             value: dynValue['p_cfg_CleaningFreq'],
                             onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
                           ),
-                          const SizedBox(height: 12),
-                          _FrequencyField(
-                            fieldKey: 'manual_freq_field',
-                            label: 'Manual frequency',
-                            value: dynValue['p_cfg_ManualFreq'],
-                            onSubmitted: (v) => write('p_cfg_ManualFreq', v),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1562,8 +1569,16 @@ class _FrequencyField extends StatelessWidget {
 /// two can never drift apart.
 class _ConveyorStatsGraphLoader extends ConsumerWidget {
   final String keyName;
+  final bool showButtons;
+  final Duration xSpan;
+  final bool compact;
 
-  const _ConveyorStatsGraphLoader({required this.keyName});
+  const _ConveyorStatsGraphLoader({
+    required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1576,6 +1591,9 @@ class _ConveyorStatsGraphLoader extends ConsumerWidget {
         return ConveyorStatsGraph(
           collector: snapshot.data,
           keyName: keyName,
+          showButtons: showButtons,
+          xSpan: xSpan,
+          compact: compact,
         );
       },
     );
@@ -1866,12 +1884,39 @@ class ConveyorPainter extends CustomPainter {
       !identical(oldDelegate.geometry, geometry);
 }
 
+/// Series colours for the conveyor trend, fixed so the small preview in the
+/// pane and the full chart in the floating dialog read as the same chart.
+/// The legend carries the units, so the tile needs no caption repeating them.
+const String kConveyorFreqSeries = 'Frequency (Hz)';
+const String kConveyorCurrentSeries = 'Current (A)';
+
+const Map<String, Color> conveyorTrendColors = {
+  kConveyorFreqSeries: Colors.blue,
+  kConveyorCurrentSeries: Colors.orange,
+};
+
 class ConveyorStatsGraph extends ConsumerStatefulWidget {
   final Collector? collector;
   final String keyName;
+
+  /// Pan/zoom/now buttons. Off in the pane preview, on in the floating chart.
+  final bool showButtons;
+
+  /// Visible window. The preview shows a short span so the line has shape;
+  /// the expanded chart shows more history.
+  final Duration xSpan;
+
+  /// Drops the units from the tick labels. In the pane preview there is only
+  /// ~20px of gutter, so "48.20 Hz" wraps to four lines and eats the plot —
+  /// the tile caption names the units instead.
+  final bool compact;
+
   const ConveyorStatsGraph({
     required this.collector,
     required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
     super.key,
   });
 
@@ -1925,27 +1970,67 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           maxFreq++;
         }
 
-        // Create graph configuration
+        // Headroom above and below the data.
+        //
+        // Scaling each axis to the exact extremes pins the traces to the top
+        // and bottom edges of the plot, where they run into the tick labels —
+        // the top reading and the top of the line end up drawn on each other.
+        // A 10% margin keeps the line inside the frame and the labels clear
+        // of it, on both axes.
+        (double, double) withHeadroom(double min, double max) {
+          final margin = (max - min) * 0.1;
+          return (min - margin, max + margin);
+        }
+
+        (minFreq, maxFreq) = withHeadroom(minFreq, maxFreq);
+        (_, maxCurrent) = withHeadroom(minCurrent, maxCurrent);
+        // Current is framed from zero, not from its own minimum. Load tracks
+        // speed, so scaling both axes to their own extremes maps the two
+        // traces onto the same shape and the second one drawn simply hides
+        // the first. Anchoring current at zero separates them — and zero is
+        // the meaningful floor for a current reading anyway.
+        minCurrent = 0;
+
+        // Time along the bottom, frequency on the LEFT axis and current on
+        // the RIGHT — frequency is what an operator reads first, so it gets
+        // the axis the eye lands on.
         final graphConfig = GraphConfig(
           type: GraphType.timeseries,
-          xAxis: GraphAxisConfig(unit: 'Time'),
-          yAxis: GraphAxisConfig(unit: 'A', min: minCurrent, max: maxCurrent),
-          yAxis2: GraphAxisConfig(unit: 'Hz', min: minFreq, max: maxFreq),
-          xSpan: const Duration(minutes: 5),
+          xAxis: GraphAxisConfig(unit: widget.compact ? '' : 'Time'),
+          yAxis: GraphAxisConfig(
+            unit: widget.compact ? '' : 'Hz',
+            min: minFreq,
+            max: maxFreq,
+          ),
+          yAxis2: GraphAxisConfig(
+            unit: widget.compact ? '' : 'A',
+            min: minCurrent,
+            max: maxCurrent,
+          ),
+          xSpan: widget.xSpan,
         );
 
-        // Create data for the graph
         final List<Map<String, dynamic>> data = [];
-        data.addAll(
-            currentData.map((e) => {'x': e[0], 'y': e[1], 's': 'Current'}));
-        data.addAll(
-            freqData.map((e) => {'x': e[0], 'y2': e[1], 's': 'Frequency'}));
+        data.addAll(freqData
+            .map((e) => {'x': e[0], 'y': e[1], 's': kConveyorFreqSeries}));
+        data.addAll(currentData
+            .map((e) => {'x': e[0], 'y2': e[1], 's': kConveyorCurrentSeries}));
+
+        // The compact preview needs its own gutters: at 130px tall the
+        // default padding lets tick labels print over the tile caption and
+        // the time row. Same theme otherwise, so both charts still match.
+        final theme = widget.compact
+            ? (Theme.of(context).brightness == Brightness.dark
+                ? darkChartTheme(padding: kCompactChartPadding)
+                : lightChartTheme(padding: kCompactChartPadding))
+            : ref.watch(chartThemeNotifierProvider);
 
         return Graph(
           config: graphConfig,
           data: data,
-          showButtons: false,
-          chartTheme: ref.watch(chartThemeNotifierProvider),
+          showButtons: widget.showButtons,
+          categoryColors: conveyorTrendColors,
+          chartTheme: theme,
           redraw: () {},
         ).build(context);
       },

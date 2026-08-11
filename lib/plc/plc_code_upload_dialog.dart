@@ -1,4 +1,6 @@
 import 'package:file_picker/file_picker.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
@@ -165,36 +167,23 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
 
     // Confirm before replacing an existing index
     if (widget.uploadService.hasExistingIndex) {
-      final confirmed = await showDialog<bool>(
+      final confirmed = await showConfirmDialog(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Replace Existing Index?'),
-          content: const Text(
-            'This asset already has PLC code indexed. '
+        title: 'Replace existing index?',
+        message: 'This asset already has PLC code indexed. '
             'Replace existing index?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Replace'),
-            ),
-          ],
-        ),
+        confirmLabel: 'Replace',
+        destructive: true,
       );
 
-      if (confirmed != true) return;
+      if (!confirmed) return;
     }
 
     setState(() => _isUploading = true);
 
     try {
-      final effectiveAlias = _selectedServerAlias == _kDefaultAlias
-          ? null
-          : _selectedServerAlias;
+      final effectiveAlias =
+          _selectedServerAlias == _kDefaultAlias ? null : _selectedServerAlias;
       final result = await widget.uploadService.uploadProject(
         sourceFilePath: _selectedFilePath!,
         assetKey: _effectiveAssetKey!,
@@ -226,9 +215,22 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
     }
 
     // File selection and upload view
-    return AlertDialog(
-      title: const Text('Upload PLC Project'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Upload PLC project',
+      icon: Icons.upload_file,
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: 'Cancel',
+          onPressed: _isUploading ? null : () => Navigator.of(context).pop(),
+        ),
+        PaneAction.primary(
+          label: 'Upload',
+          icon: Icons.upload,
+          onPressed: _canUpload ? _upload : null,
+        ),
+      ],
+      child: SizedBox(
         width: 400,
         child: SingleChildScrollView(
           child: Column(
@@ -339,16 +341,6 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _isUploading ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _canUpload ? _upload : null,
-          child: const Text('Upload'),
-        ),
-      ],
     );
   }
 
@@ -360,9 +352,17 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
         .map((e) => '${e.key}: ${e.value}')
         .join(', ');
 
-    return AlertDialog(
-      title: const Text('Upload Complete'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Upload complete',
+      icon: Icons.check_circle_outline,
+      showClose: false,
+      actions: [
+        PaneAction.primary(
+          label: 'Close',
+          onPressed: () => Navigator.of(context).pop(true),
+        ),
+      ],
+      child: SizedBox(
         width: 400,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -378,12 +378,6 @@ class _PlcCodeUploadDialogState extends State<PlcCodeUploadDialog> {
           ],
         ),
       ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('Close'),
-        ),
-      ],
     );
   }
 

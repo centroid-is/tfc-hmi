@@ -56,7 +56,8 @@ void main() {
     );
   }
 
-  SidePane demoPane({String title = 'CN-04', List<PaneAction> actions = const []}) {
+  SidePane demoPane(
+      {String title = 'CN-04', List<PaneAction> actions = const []}) {
     return SidePane(
       title: title,
       subtitle: 'Conveyor',
@@ -372,6 +373,81 @@ void main() {
 
       expect(after.dx, closeTo(before.dx - 60, 1));
       expect(after.dy, closeTo(before.dy + 40, 1));
+    });
+
+    testWidgets('is resizable by its edges and corners', (tester) async {
+      // Floating dialogs are windows: charts and grids get resized to suit
+      // the screen, and the size has to survive being dragged smaller as
+      // well as larger.
+      await tester.pumpWidget(host(
+        onOpen: (context) => showFloatingDialog(
+          context: context,
+          id: 'trend',
+          title: 'Trend',
+          size: const Size(400, 300),
+          position: const Offset(120, 120),
+          builder: (_) => const Text('chart'),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      final before = tester.getSize(find.byType(StandardDialog));
+      expect(before, const Size(400, 300));
+
+      // Drag the bottom-right corner out.
+      final rect = tester.getRect(find.byType(StandardDialog));
+      await tester.dragFrom(
+        rect.bottomRight - const Offset(2, 2),
+        const Offset(120, 60),
+      );
+      await tester.pumpAndSettle();
+      final grown = tester.getSize(find.byType(StandardDialog));
+      expect(grown.width, closeTo(520, 2));
+      expect(grown.height, closeTo(360, 2));
+
+      // And back in.
+      await tester.dragFrom(
+        tester.getRect(find.byType(StandardDialog)).bottomRight -
+            const Offset(2, 2),
+        const Offset(-100, -40),
+      );
+      await tester.pumpAndSettle();
+      final shrunk = tester.getSize(find.byType(StandardDialog));
+      expect(shrunk.width, closeTo(420, 2));
+      expect(shrunk.height, closeTo(320, 2));
+    });
+
+    testWidgets('resizes by its corner grip', (tester) async {
+      // The grip is the touch-sized, visible way to resize — 44px square in
+      // the bottom-right corner, where the invisible 6px frame edges are
+      // unusable with a finger.
+      await tester.pumpWidget(host(
+        onOpen: (context) => showFloatingDialog(
+          context: context,
+          id: 'trend',
+          title: 'Trend',
+          size: const Size(400, 300),
+          position: const Offset(100, 100),
+          builder: (_) => const Text('chart'),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(tester.getSize(find.byType(StandardDialog)), const Size(400, 300));
+
+      final grip = find.byType(CustomPaint).last;
+      await tester.drag(grip, const Offset(90, 50));
+      await tester.pumpAndSettle();
+      final grown = tester.getSize(find.byType(StandardDialog));
+      expect(grown.width, closeTo(490, 2));
+      expect(grown.height, closeTo(350, 2));
+
+      await tester.drag(find.byType(CustomPaint).last, const Offset(-60, -30));
+      await tester.pumpAndSettle();
+      final shrunk = tester.getSize(find.byType(StandardDialog));
+      expect(shrunk.width, closeTo(430, 2));
+      expect(shrunk.height, closeTo(320, 2));
     });
 
     testWidgets('the same id does not open twice', (tester) async {

@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'package:flutter/rendering.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/state_man.dart';
@@ -244,8 +246,7 @@ abstract class BaseAsset implements Asset {
   /// JSON key-name pattern for tag-key fields.
   ///
   /// Matches:  key | key1 | key2 | fooKey | foo_key
-  static final RegExp _keyFieldPattern =
-      RegExp(r'^key$|^key\d+$|Key$|_key$');
+  static final RegExp _keyFieldPattern = RegExp(r'^key$|^key\d+$|Key$|_key$');
 
   /// JSON field names that match [_keyFieldPattern] but are NOT tag keys.
   static const Set<String> _excludedFields = {
@@ -271,6 +272,7 @@ class KeyField extends ConsumerStatefulWidget {
   final String? initialValue;
   final ValueChanged<String>? onChanged;
   final String label;
+
   /// If the key maps to a fixed-size OPC UA array, pass its size here
   /// so the "add key" dialog can offer a dropdown for the index.
   final int? arraySize;
@@ -433,9 +435,11 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Search Keys'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Search keys',
+      icon: Icons.search,
+      closeLabel: 'Cancel',
+      child: SizedBox(
         width: double.maxFinite,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -467,12 +471,6 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-      ],
     );
   }
 }
@@ -517,9 +515,23 @@ class _KeyFieldDialogState extends State<_KeyFieldDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Format OPC UA NodeId'),
-      content: Column(
+    return StandardDialogFrame(
+      title: 'Format OPC UA NodeId',
+      icon: Icons.tag,
+      closeLabel: 'Cancel',
+      actions: [
+        PaneAction.primary(
+          label: 'OK',
+          onPressed: () {
+            final ns = int.tryParse(_namespaceController.text) ?? 0;
+            final id = _identifierController.text;
+            final isInt = int.tryParse(id) != null;
+            final nodeId = isInt ? 'ns=$ns;i=$id' : 'ns=$ns;s=$id';
+            Navigator.of(context).pop(nodeId);
+          },
+        ),
+      ],
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
@@ -533,22 +545,6 @@ class _KeyFieldDialogState extends State<_KeyFieldDialog> {
           ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            final ns = int.tryParse(_namespaceController.text) ?? 0;
-            final id = _identifierController.text;
-            final isInt = int.tryParse(id) != null;
-            final nodeId = isInt ? 'ns=$ns;i=$id' : 'ns=$ns;s=$id';
-            Navigator.of(context).pop(nodeId);
-          },
-          child: const Text('OK'),
-        ),
-      ],
     );
   }
 }
@@ -743,20 +739,13 @@ class _CoordinatesFieldState extends State<CoordinatesField> {
               suffixIcon: IconButton(
                 icon: const Icon(Icons.info_outline),
                 onPressed: () {
-                  showDialog(
+                  showStandardDialog<void>(
                     context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('Angle and Mirroring'),
-                      content: const Text(
-                        'When an angle is specified, the asset will be mirrored. '
-                        'Positive angles rotate clockwise, negative angles rotate counterclockwise.',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('OK'),
-                        ),
-                      ],
+                    title: 'Angle and mirroring',
+                    builder: (context) => const Text(
+                      'When an angle is specified, the asset will be mirrored. '
+                      'Positive angles rotate clockwise, negative angles '
+                      'rotate counterclockwise.',
                     ),
                   );
                 },
@@ -774,6 +763,7 @@ class _CoordinatesFieldState extends State<CoordinatesField> {
 class KeyMappingEntryDialog extends ConsumerStatefulWidget {
   final String? initialKey;
   final KeyMappingEntry? initialKeyMappingEntry;
+
   /// Known array size for the target node. When set, the array-index field
   /// shows a dropdown (0-based) instead of a free-text box.
   final int? arraySize;
@@ -871,9 +861,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   }
 
   /// Builds the unified server list from all three protocol configs.
-  List<({String alias, _DialogProtocol protocol, String label})> _buildServerList(
-      StateManConfig config) {
-    final servers = <({String alias, _DialogProtocol protocol, String label})>[];
+  List<({String alias, _DialogProtocol protocol, String label})>
+      _buildServerList(StateManConfig config) {
+    final servers =
+        <({String alias, _DialogProtocol protocol, String label})>[];
     for (final c in config.opcua) {
       final alias = c.serverAlias ?? '__default';
       servers.add((
@@ -946,8 +937,12 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
   @override
   Widget build(BuildContext context) {
     if (_configLoading || _config == null) {
-      return const AlertDialog(
-        content: Center(child: CircularProgressIndicator()),
+      return const StandardDialogFrame(
+        title: 'Configure key mapping',
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Center(child: CircularProgressIndicator()),
+        ),
       );
     }
 
@@ -955,9 +950,13 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     final servers = _buildServerList(config);
     final selectedLabel = _findSelectedLabel(servers);
 
-    return AlertDialog(
-      title: const Text('Configure Key Mapping'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Configure key mapping',
+      icon: Icons.link,
+      closeLabel: 'Cancel',
+      width: 540,
+      actions: [PaneAction.primary(label: 'OK', onPressed: _submit)],
+      child: SizedBox(
         width: 500,
         child: SingleChildScrollView(
           child: Column(
@@ -1192,12 +1191,10 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
                 if (_useSampleExpression) ...[
                   const SizedBox(height: 16),
                   ExpressionBuilder(
-                    value:
-                        _sampleExpression?.value ?? Expression(formula: ''),
+                    value: _sampleExpression?.value ?? Expression(formula: ''),
                     onChanged: (expression) {
                       setState(() {
-                        _sampleExpression =
-                            ExpressionConfig(value: expression);
+                        _sampleExpression = ExpressionConfig(value: expression);
                       });
                     },
                   ),
@@ -1207,70 +1204,52 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            final key = _keyController.text;
-            if (key.isEmpty) return;
-
-            // Build the final collect entry with sample expression
-            CollectEntry? collectEntry;
-            if (_isCollecting && _entry.collect != null) {
-              collectEntry = CollectEntry(
-                key: key,
-                name: _entry.collect!.name,
-                sampleInterval: _entry.collect!.sampleInterval,
-                sampleExpression:
-                    _useSampleExpression ? _sampleExpression : null,
-                retention: _entry.collect!.retention,
-              );
-            }
-
-            final result = KeyMappingEntry(
-              opcuaNode: _protocol == _DialogProtocol.opcua
-                  ? _entry.opcuaNode
-                  : null,
-              modbusNode: _protocol == _DialogProtocol.modbus
-                  ? _entry.modbusNode
-                  : null,
-              variableName: _protocol == _DialogProtocol.modbus
-                  ? _entry.variableName
-                  : null,
-              m2400Node: _protocol == _DialogProtocol.m2400
-                  ? _entry.m2400Node
-                  : null,
-              collect: collectEntry,
-              bitMask: _protocol != _DialogProtocol.m2400
-                  ? _entry.bitMask
-                  : null,
-              bitShift: _protocol != _DialogProtocol.m2400
-                  ? _entry.bitShift
-                  : null,
-            );
-
-            // Validate required fields
-            if (_protocol == _DialogProtocol.opcua &&
-                (result.opcuaNode?.identifier.isEmpty ?? true)) {
-              return;
-            }
-            // Bit type requires a bit selection
-            if (_isBitType && result.bitMask == null) {
-              return;
-            }
-
-            Navigator.of(context).pop({
-              'key': key,
-              'entry': result,
-            });
-          },
-          child: const Text('OK'),
-        ),
-      ],
     );
+  }
+
+  /// Builds the mapping entry and pops it back to the caller.
+  void _submit() {
+    final key = _keyController.text;
+    if (key.isEmpty) return;
+
+    // Build the final collect entry with sample expression
+    CollectEntry? collectEntry;
+    if (_isCollecting && _entry.collect != null) {
+      collectEntry = CollectEntry(
+        key: key,
+        name: _entry.collect!.name,
+        sampleInterval: _entry.collect!.sampleInterval,
+        sampleExpression: _useSampleExpression ? _sampleExpression : null,
+        retention: _entry.collect!.retention,
+      );
+    }
+
+    final result = KeyMappingEntry(
+      opcuaNode: _protocol == _DialogProtocol.opcua ? _entry.opcuaNode : null,
+      modbusNode:
+          _protocol == _DialogProtocol.modbus ? _entry.modbusNode : null,
+      variableName:
+          _protocol == _DialogProtocol.modbus ? _entry.variableName : null,
+      m2400Node: _protocol == _DialogProtocol.m2400 ? _entry.m2400Node : null,
+      collect: collectEntry,
+      bitMask: _protocol != _DialogProtocol.m2400 ? _entry.bitMask : null,
+      bitShift: _protocol != _DialogProtocol.m2400 ? _entry.bitShift : null,
+    );
+
+    // Validate required fields
+    if (_protocol == _DialogProtocol.opcua &&
+        (result.opcuaNode?.identifier.isEmpty ?? true)) {
+      return;
+    }
+    // Bit type requires a bit selection
+    if (_isBitType && result.bitMask == null) {
+      return;
+    }
+
+    Navigator.of(context).pop({
+      'key': key,
+      'entry': result,
+    });
   }
 }
 

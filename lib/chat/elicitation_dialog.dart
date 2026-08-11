@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 
 import 'package:flutter/material.dart';
 import 'package:mcp_dart/mcp_dart.dart';
@@ -67,20 +69,24 @@ class _ElicitationDialogContent extends StatelessWidget {
     final theme = Theme.of(context);
     final parsed = _parseMessage(request.message);
 
-    return AlertDialog(
-      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
-      title: Row(
-        children: [
-          Icon(
-            Icons.help_outline,
-            color: theme.colorScheme.primary,
-            size: 28,
-          ),
-          const SizedBox(width: 12),
-          const Text('Confirm Action'),
-        ],
-      ),
-      content: ConstrainedBox(
+    return StandardDialogFrame(
+      title: 'Confirm action',
+      icon: Icons.help_outline,
+      width: 520,
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: 'Deny',
+          buttonKey: const ValueKey<String>('elicitation-deny'),
+          onPressed: onDeny,
+        ),
+        PaneAction.primary(
+          label: 'Confirm',
+          buttonKey: const ValueKey<String>('elicitation-confirm'),
+          onPressed: onConfirm,
+        ),
+      ],
+      child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480, maxHeight: 400),
         child: SingleChildScrollView(
           child: Column(
@@ -134,18 +140,6 @@ class _ElicitationDialogContent extends StatelessWidget {
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          key: const ValueKey<String>('elicitation-deny'),
-          onPressed: onDeny,
-          child: const Text('Deny'),
-        ),
-        FilledButton(
-          key: const ValueKey<String>('elicitation-confirm'),
-          onPressed: onConfirm,
-          child: const Text('Confirm'),
-        ),
-      ],
     );
   }
 

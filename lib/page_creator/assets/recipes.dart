@@ -11,6 +11,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -32,7 +33,8 @@ class RecipesConfig extends BaseAsset {
     required this.label,
   });
 
-  factory RecipesConfig.fromJson(Map<String, dynamic> json) => _$RecipesConfigFromJson(json);
+  factory RecipesConfig.fromJson(Map<String, dynamic> json) =>
+      _$RecipesConfigFromJson(json);
   @override
   Map<String, dynamic> toJson() => _$RecipesConfigToJson(this);
 
@@ -102,7 +104,9 @@ class _RecipesConfigEditorState extends State<_RecipesConfigEditor> {
             onChanged: (val) => setState(() => widget.config.label = val),
           ),
           SizedBox(height: 10),
-          SizeField(initialValue: widget.config.size, onChanged: (size) => setState(() => widget.config.size = size)),
+          SizeField(
+              initialValue: widget.config.size,
+              onChanged: (size) => setState(() => widget.config.size = size)),
         ],
       ),
     );
@@ -140,7 +144,11 @@ class PillText extends StatelessWidget {
       child: Text(
         text,
         style: selected
-            ? selectedStyle ?? Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)
+            ? selectedStyle ??
+                Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)
             : unselectedStyle ?? Theme.of(context).textTheme.titleMedium,
       ),
     );
@@ -180,7 +188,8 @@ class _RecipesState extends ConsumerState<Recipes> {
     await prefs.setString(prefKey, jsonEncode(recipes));
   }
 
-  void _addRecipe(String name, List<Recipe> recipes, DynamicValue data, void Function(VoidCallback) setState) {
+  void _addRecipe(String name, List<Recipe> recipes, DynamicValue data,
+      void Function(VoidCallback) setState) {
     final initial = <String, dynamic>{};
     data.asObject.forEach((k, v) => initial[k] = v.value);
     setState(() {
@@ -193,7 +202,7 @@ class _RecipesState extends ConsumerState<Recipes> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => _showDialog(context),
+      onTap: () => _showRecipesDialog(context),
       child: CustomPaint(
         painter: ButtonPainter(
           color: Theme.of(context).colorScheme.primary,
@@ -219,10 +228,11 @@ class _RecipesState extends ConsumerState<Recipes> {
     );
   }
 
-  Widget _dialogContent(StateMan stateMan, DynamicValue data, List<Recipe> recipes) {
+  Widget _dialogContent(
+      StateMan stateMan, DynamicValue data, List<Recipe> recipes) {
     return StatefulBuilder(builder: (dialogContext, dialogSetState) {
-      return AlertDialog(
-        content: ConstrainedBox(
+      return SizedBox(
+        child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 1000, maxHeight: 700),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -262,10 +272,12 @@ class _RecipesState extends ConsumerState<Recipes> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Recipes', style: Theme.of(context).textTheme.titleMedium),
+                          Text('Recipes',
+                              style: Theme.of(context).textTheme.titleMedium),
                           Divider(),
                           ConstrainedBox(
-                            constraints: BoxConstraints(maxHeight: listMaxHeight),
+                            constraints:
+                                BoxConstraints(maxHeight: listMaxHeight),
                             child: ListView(
                               shrinkWrap: true,
                               children: List.generate(recipes.length, (r) {
@@ -287,13 +299,16 @@ class _RecipesState extends ConsumerState<Recipes> {
                                           selectedRecipeIndex = r;
                                         }),
                                         child: Padding(
-                                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 8.0),
                                           child: PillText(
                                             text: recipe.name,
                                             selected: selected,
-                                            selectedStyle:
-                                                const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
-                                            unselectedStyle: const TextStyle(color: Colors.grey),
+                                            selectedStyle: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.black),
+                                            unselectedStyle: const TextStyle(
+                                                color: Colors.grey),
                                           ),
                                         ),
                                       ),
@@ -311,7 +326,8 @@ class _RecipesState extends ConsumerState<Recipes> {
                                 border: OutlineInputBorder(),
                                 labelText: 'New recipe',
                               ),
-                              onSubmitted: (v) => _addRecipe(v, recipes, data[selectedLine], dialogSetState),
+                              onSubmitted: (v) => _addRecipe(v, recipes,
+                                  data[selectedLine], dialogSetState),
                             ),
                           ),
                           Center(
@@ -319,7 +335,10 @@ class _RecipesState extends ConsumerState<Recipes> {
                               icon: Icon(Icons.add),
                               label: Text('Add recipe'),
                               onPressed: () => _addRecipe(
-                                  _newRecipeNameController.text, recipes, data[selectedLine], dialogSetState),
+                                  _newRecipeNameController.text,
+                                  recipes,
+                                  data[selectedLine],
+                                  dialogSetState),
                             ),
                           ),
                         ],
@@ -335,7 +354,8 @@ class _RecipesState extends ConsumerState<Recipes> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Recipe values', style: Theme.of(context).textTheme.titleMedium),
+                      Text('Recipe values',
+                          style: Theme.of(context).textTheme.titleMedium),
                       Divider(),
                       if (selectedRecipeIndex != null)
                         DynamicValueWidget(
@@ -352,7 +372,8 @@ class _RecipesState extends ConsumerState<Recipes> {
                           ElevatedButton(
                             onPressed: () async {
                               var newValue = DynamicValue.from(data);
-                              newValue[selectedLine] = DynamicValue.from(recipes[selectedRecipeIndex!].value);
+                              newValue[selectedLine] = DynamicValue.from(
+                                  recipes[selectedRecipeIndex!].value);
                               await stateMan.write(widget.config.key, newValue);
                             },
                             child: Text('Send values ->'),
@@ -370,7 +391,8 @@ class _RecipesState extends ConsumerState<Recipes> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Current values', style: Theme.of(context).textTheme.titleMedium),
+                      Text('Current values',
+                          style: Theme.of(context).textTheme.titleMedium),
                       Divider(),
                       DynamicValueWidget(
                         value: data[selectedLine],
@@ -387,36 +409,43 @@ class _RecipesState extends ConsumerState<Recipes> {
     });
   }
 
-  void _showDialog(BuildContext context) {
-    showDialog(
+  String get _dialogId => 'recipes:${identityHashCode(widget.config)}';
+
+  void _showRecipesDialog(BuildContext context) {
+    showFloatingDialog(
       context: context,
+      id: _dialogId,
+      title: 'Recipes',
+      subtitle: widget.config.label,
+      icon: Icons.receipt_long,
+      size: const Size(1040, 700),
       builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
-        stream: ref.watch(stateManProvider.future).asStream().switchMap((stateMan) => stateMan
-            .subscribe(widget.config.key)
-            .asStream()
-            .map((stream) => Rx.combineLatest2(Stream.value(stateMan), stream, (stateMan, value) => (stateMan, value)))
-            .switchMap((stream) => stream)),
+        stream: ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.key)
+                .asStream()
+                .map((stream) => Rx.combineLatest2(Stream.value(stateMan),
+                    stream, (stateMan, value) => (stateMan, value)))
+                .switchMap((stream) => stream)),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
-            return AlertDialog(
-              content: Text('Error loading recipes: ${snapshot.error}'),
-            );
+            return Text('Error loading recipes: ${snapshot.error}');
           }
           if (!snapshot.hasData) {
             return Center(child: CircularProgressIndicator());
           }
           final (stateMan, data) = snapshot.data!;
           if (!data.isArray) {
-            return Center(child: Text('Unsupported type: ${data.type}, needs to be an array'));
+            return Center(
+                child: Text(
+                    'Unsupported type: ${data.type}, needs to be an array'));
           }
 
           return FutureBuilder<List<Recipe>>(
             future: _getRecipes(),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
-                return AlertDialog(
-                  content: Text('Error loading recipes: ${snapshot.error}'),
-                );
+                return Text('Error loading recipes: ${snapshot.error}');
               }
               if (!snapshot.hasData) {
                 return Center(child: CircularProgressIndicator());

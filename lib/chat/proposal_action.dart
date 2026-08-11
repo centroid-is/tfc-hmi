@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 
 import 'package:beamer/beamer.dart';
 import 'package:flutter/material.dart';
@@ -76,7 +77,8 @@ class ProposalAction extends ConsumerWidget {
         ElevatedButton.icon(
           onPressed: () {
             try {
-              Beamer.of(_navContext(ref, context)).beamToNamed(route, data: proposalJson);
+              Beamer.of(_navContext(ref, context))
+                  .beamToNamed(route, data: proposalJson);
             } catch (_) {
               // Beamer not available from this context — best effort.
             }
@@ -95,23 +97,14 @@ class ProposalAction extends ConsumerWidget {
   Widget _buildFallbackButton(BuildContext context, WidgetRef ref) {
     return ElevatedButton.icon(
       onPressed: () {
-        showDialog(
+        showStandardDialog<void>(
           context: _navContext(ref, context),
           useRootNavigator: true,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Proposal'),
-            content: SingleChildScrollView(
-              child: SelectableText(
-                _formatJson(proposalJson),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Close'),
-              ),
-            ],
+          title: 'Proposal',
+          icon: Icons.description_outlined,
+          builder: (ctx) => SelectableText(
+            _formatJson(proposalJson),
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
         );
       },

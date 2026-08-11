@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
@@ -334,13 +335,13 @@ void main() {
       await _openDialog(tester);
 
       // Dialog should be showing
-      expect(find.text('Upload PLC Project'), findsOneWidget);
+      expect(find.text('Upload PLC project'), findsOneWidget);
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       // Dialog should be dismissed
-      expect(find.text('Upload PLC Project'), findsNothing);
+      expect(find.text('Upload PLC project'), findsNothing);
     });
   });
 
@@ -358,11 +359,11 @@ void main() {
       expect(button.onPressed, isNull);
     });
 
-    testWidgets('dialog title is Upload PLC Project', (tester) async {
+    testWidgets('dialog title is Upload PLC project', (tester) async {
       await tester.pumpWidget(_wrap(uploadService: uploadService));
       await _openDialog(tester);
 
-      expect(find.text('Upload PLC Project'), findsOneWidget);
+      expect(find.text('Upload PLC project'), findsOneWidget);
     });
   });
 
@@ -427,7 +428,7 @@ void main() {
       await _openDialog(tester);
 
       // The dialog should still render normally
-      expect(find.text('Upload PLC Project'), findsOneWidget);
+      expect(find.text('Upload PLC project'), findsOneWidget);
     });
   });
 
@@ -461,8 +462,8 @@ void main() {
       await _openDialog(tester);
 
       // Verify the dialog has the expected structure
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Upload PLC Project'), findsOneWidget);
+      expect(find.byType(StandardDialog), findsOneWidget);
+      expect(find.text('Upload PLC project'), findsOneWidget);
       expect(find.text('Cancel'), findsOneWidget);
       expect(find.text('Upload'), findsOneWidget);
     });

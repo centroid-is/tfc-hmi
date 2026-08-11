@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:beamer/beamer.dart';
 import '../models/menu_item.dart';
 import '../route_registry.dart';
@@ -99,7 +100,8 @@ class NavDropdownState extends State<NavDropdown> {
               children: [
                 Icon(child.icon, size: 20),
                 const SizedBox(width: 12),
-                Text(child.label, style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text(child.label,
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
               ],
             ),
           ),
@@ -116,7 +118,8 @@ class NavDropdownState extends State<NavDropdown> {
               children: [
                 Icon(child.icon, size: 20),
                 const SizedBox(width: 12),
-                Flexible(child: Text(child.label, overflow: TextOverflow.ellipsis)),
+                Flexible(
+                    child: Text(child.label, overflow: TextOverflow.ellipsis)),
               ],
             ),
           ),
@@ -230,21 +233,11 @@ void beamSafelyKids(BuildContext context, MenuItem item) {
     context.beamToNamed(item.path.toString());
   } else {
     stderr.writeln('Item pressed and navigated does not have a page $item');
-    showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-              title: Text('Page does not exist!',
-                  style: Theme.of(context).textTheme.titleMedium!),
-              icon:
-                  Icon(Icons.error, color: Theme.of(context).colorScheme.error),
-              actions: [
-                TextButton(
-                    child: const Text('Close'),
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    }),
-              ]);
-        });
+    showStandardDialog<void>(
+      context: context,
+      title: 'Page does not exist',
+      icon: Icons.error,
+      builder: (context) => Text('No page is registered for $item.'),
+    );
   }
 }

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
@@ -754,28 +756,16 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
   }
 
   Future<void> _confirmDelete(BuildContext context, TechDocSummary doc) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showConfirmDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Document'),
-        content: Text(
-          'Delete "${doc.name}"?\n\n'
+      title: 'Delete document',
+      message: 'Delete "${doc.name}"?\n\n'
           'Any assets linked to this document will be unlinked.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Delete',
+      destructive: true,
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     final service = ref.read(techDocUploadServiceProvider);
     if (service == null) {
@@ -843,30 +833,26 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
 
   Future<String?> _showNameDialog(String defaultName) async {
     final controller = TextEditingController(text: defaultName);
-    return showDialog<String>(
+    return showStandardDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Document Name'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Enter document name',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (v) => Navigator.pop(ctx, v),
+      title: 'Document name',
+      icon: Icons.edit,
+      closeLabel: 'Cancel',
+      builder: (ctx) => TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: 'Enter document name',
+          border: OutlineInputBorder(),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('OK'),
-          ),
-        ],
+        onSubmitted: (v) => Navigator.pop(ctx, v),
       ),
+      actionsBuilder: (ctx) => [
+        PaneAction.primary(
+          label: 'OK',
+          onPressed: () => Navigator.pop(ctx, controller.text),
+        ),
+      ],
     );
   }
 
@@ -883,8 +869,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         ref.read(selectedPlcAssetProvider.notifier).state =
             isSelected ? null : plc.assetKey;
       },
-      onSecondaryTapUp: (details) =>
-          _showPlcContextMenu(context, details, plc),
+      onSecondaryTapUp: (details) => _showPlcContextMenu(context, details, plc),
       child: Container(
         color: isSelected
             ? Theme.of(context)
@@ -1120,29 +1105,17 @@ Then provide a summary of what this PLC code controls and how it is structured.'
     BuildContext context,
     PlcAssetSummary plc,
   ) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showConfirmDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete PLC Index'),
-        content: Text(
-          'Delete all indexed PLC code for "${plc.assetKey}"?\n\n'
+      title: 'Delete PLC index',
+      message: 'Delete all indexed PLC code for "${plc.assetKey}"?\n\n'
           '${plc.blockCount} blocks and ${plc.variableCount} variables '
           'will be removed.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Delete',
+      destructive: true,
     );
 
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     final index = ref.read(plcCodeIndexProvider);
     if (index == null) {

@@ -1431,7 +1431,9 @@ void main() {
   // Detail dialog — trigger group. Mirrors DDI3725 dialog trigger group but
   // with three keys (no filter keys).
   // ---------------------------------------------------------------------------
-  group('STBDDO3705 detail dialog — trigger', () {
+  group('STBDDO3705 detail pane — trigger', () {
+    tearDown(closeSidePane);
+
     Future<void> pumpAndOpen(WidgetTester tester, STBDDO3705Config cfg,
         {StateMan? stateMan}) async {
       await tester.pumpWidget(
@@ -1457,30 +1459,31 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    testWidgets('tap opens AlertDialog titled with nameOrId', (tester) async {
+    testWidgets('tap opens SidePane titled with nameOrId', (tester) async {
       final cfg = STBDDO3705Config(nameOrId: 'DO-3705-A');
       await pumpAndOpen(tester, cfg);
 
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SidePane), findsNothing);
 
       await tester.tap(find.byType(STBDDO3705Widget));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
       expect(find.text('DO-3705-A'), findsOneWidget);
       expect(find.text('Close'), findsOneWidget);
     });
 
     testWidgets(
-      'with all-null keys, dialog body renders no rows (no data yet)',
+      'with all-null keys, pane opens without the channel grid (no data yet)',
       (tester) async {
         final cfg = STBDDO3705Config(nameOrId: '1');
         await pumpAndOpen(tester, cfg);
 
         await tester.tap(find.byType(STBDDO3705Widget));
         await tester.pumpAndSettle();
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(SidePane), findsOneWidget);
         expect(find.byType(RowIOView), findsNothing);
+        expect(find.text('Channel detail'), findsOneWidget);
       },
     );
   });
@@ -1492,7 +1495,8 @@ void main() {
   // RowIOView widgets. Outputs do NOT have filter rows — assert ZERO
   // FilterEdit widgets (this is the key visual difference from DDI3725).
   // ---------------------------------------------------------------------------
-  group('STBDDO3705 detail dialog — row structure (NO filters)', () {
+  group('STBDDO3705 channel grid — row structure (NO filters)', () {
+    tearDown(closeSidePane);
     late _StreamingStubDOStateMan stub;
     setUp(() {
       stub = _StreamingStubDOStateMan(
@@ -1531,13 +1535,17 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
+      // Tap 1 opens the docked pane; tap 2 expands the channel grid into its
+      // floating dialog, which is where RowIOView now lives.
       await tester.tap(find.byType(STBDDO3705Widget));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Channel detail'));
       await tester.pumpAndSettle();
     }
 
     testWidgets('renders 8 RowIOView widgets when data flows', (tester) async {
       await openWithStub(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(StandardDialog), findsOneWidget);
       // DDO-06: 8 rows × 2 cols.
       expect(find.byType(RowIOView), findsNWidgets(8));
     });
@@ -1570,7 +1578,8 @@ void main() {
   // This is the genuine operator-driven force-write path: tap Low on the
   // SegmentedButton → handler writes int8[16] to forceValuesKey via StateMan.
   // ---------------------------------------------------------------------------
-  group('STBDDO3705 detail dialog — force write integration (DDO-09)', () {
+  group('STBDDO3705 channel grid — force write integration (DDO-09)', () {
+    tearDown(closeSidePane);
     late _StreamingStubDOStateMan stub;
     setUp(() {
       stub = _StreamingStubDOStateMan(
@@ -1609,7 +1618,11 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
+      // Tap 1 opens the docked pane; tap 2 expands the channel grid into its
+      // floating dialog, which is where RowIOView now lives.
       await tester.tap(find.byType(STBDDO3705Widget));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Channel detail'));
       await tester.pumpAndSettle();
     }
 
@@ -1617,7 +1630,7 @@ void main() {
       'tapping a Low SegmentedButton writes to forceValuesKey with [0]==1',
       (tester) async {
         await openWithStub(tester);
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(StandardDialog), findsOneWidget);
 
         final lowFinders = find.text('Low ');
         expect(lowFinders, findsNWidgets(16));
@@ -1641,7 +1654,7 @@ void main() {
       'tapping a High SegmentedButton writes to forceValuesKey with [0]==2',
       (tester) async {
         await openWithStub(tester);
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(StandardDialog), findsOneWidget);
 
         // RowControl renders the High label as 'High'. Tap the first High to
         // force channel 1 high.
@@ -1679,6 +1692,10 @@ void main() {
         //   index 10 → ch6   (row 5 left)  ← target
         final highFinders = find.text('High');
         expect(highFinders, findsNWidgets(16));
+        // The grid scrolls inside the floating dialog now, so row 5 may sit
+        // below the fold — bring it into view before tapping.
+        await tester.ensureVisible(highFinders.at(10));
+        await tester.pumpAndSettle();
         await tester.tap(highFinders.at(10));
         await tester.pumpAndSettle();
 
@@ -3189,20 +3206,21 @@ void main() {
     );
 
     testWidgets(
-      'Test 4: tap on DDO body opens its detail AlertDialog',
+      'Test 4: tap on DDO body opens its detail SidePane',
       (tester) async {
+        addTearDown(closeSidePane);
         final head = buildCanonicalHead();
         await pumpHead(tester, head);
 
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(SidePane), findsNothing);
         await tester.tap(find.byType(STBDDO3705Widget));
         await tester.pumpAndSettle();
 
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(SidePane), findsOneWidget);
 
-        await tester.tap(find.text('Close'));
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
         await tester.pumpAndSettle();
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(SidePane), findsNothing);
       },
     );
 

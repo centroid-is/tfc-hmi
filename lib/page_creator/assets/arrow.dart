@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -80,24 +80,11 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
   }
 
   void _showColorPicker() {
-    showDialog<void>(
+    showColorPickerDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Select Arrow Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: widget.config.color,
-            onColorChanged: (c) => setState(() => widget.config.color = c),
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
+      title: 'Select arrow colour',
+      initialColor: widget.config.color,
+      onChanged: (c) => setState(() => widget.config.color = c),
     );
   }
 

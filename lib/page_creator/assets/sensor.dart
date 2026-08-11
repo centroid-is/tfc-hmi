@@ -1,13 +1,15 @@
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
 
 import '../../providers/state_man.dart';
 import 'common.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 import 'sensor_painter.dart';
 
 part 'sensor.g.dart';
@@ -290,56 +292,59 @@ class _SensorState extends ConsumerState<Sensor> {
   /// than re-plumbing the live stream into the dialog (the painter glyph
   /// already surfaces live state visually — wiring it twice is not worth
   /// the complexity for a polish-phase feature).
-  void _showDetailsDialog(BuildContext context) {
-    showDialog<void>(
+  String get _paneId => 'sensor:${identityHashCode(widget.config)}';
+
+  void _showDetailsPane(BuildContext context) {
+    showSidePane(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Sensor: ${widget.config.kind.name}'),
-        content: SingleChildScrollView(
+      id: _paneId,
+      builder: (_) => SidePane(
+        title: 'Sensor',
+        subtitle: widget.config.kind.name,
+        icon: Icons.sensors,
+        status: widget.config.detectionKey.isEmpty
+            ? const PaneStatus.unknown('No key')
+            : const PaneStatus.running('Live'),
+        child: PaneSection(
+          title: 'Details',
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _DetailRow('Kind', widget.config.kind.name),
-              _DetailRow(
-                'Detection key',
-                widget.config.detectionKey.isEmpty
+              PaneDetailRow(label: 'Kind', value: widget.config.kind.name),
+              PaneDetailRow(
+                label: 'Detection key',
+                value: widget.config.detectionKey.isEmpty
                     ? '—'
                     : widget.config.detectionKey,
               ),
-              _DetailRow(
-                'Detection state',
-                widget.config.detectionKey.isEmpty
+              PaneDetailRow(
+                label: 'Detection state',
+                value: widget.config.detectionKey.isEmpty
                     ? 'no key configured'
                     : '(see glyph)',
               ),
-              _DetailRow(
-                'Active polarity inverted',
-                widget.config.invertActivePolarity ? 'yes' : 'no',
+              PaneDetailRow(
+                label: 'Active polarity inverted',
+                value: widget.config.invertActivePolarity ? 'yes' : 'no',
               ),
-              _DetailRow(
-                'Rising edge delay key',
-                widget.config.risingEdgeDelayKey.isEmpty
+              PaneDetailRow(
+                label: 'Rising edge delay key',
+                value: widget.config.risingEdgeDelayKey.isEmpty
                     ? '—'
                     : widget.config.risingEdgeDelayKey,
               ),
-              _DetailRow(
-                'Falling edge delay key',
-                widget.config.fallingEdgeDelayKey.isEmpty
+              PaneDetailRow(
+                label: 'Falling edge delay key',
+                value: widget.config.fallingEdgeDelayKey.isEmpty
                     ? '—'
                     : widget.config.fallingEdgeDelayKey,
               ),
               if (widget.config.tag != null && widget.config.tag!.isNotEmpty)
-                _DetailRow('Tag', widget.config.tag!),
+                PaneDetailRow(label: 'Tag', value: widget.config.tag!),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
       ),
     );
   }
@@ -352,7 +357,7 @@ class _SensorState extends ConsumerState<Sensor> {
   ///   GestureDetector → LayoutRotatedBox → LayoutBuilder → CustomPaint
   ///
   /// The hover tooltip path was removed — operators read full state via
-  /// `_showDetailsDialog` on tap. No floating panel sits above the sensor
+  /// `_showDetailsPane` on tap. No floating panel sits above the sensor
   /// on a busy HMI canvas.
   ///
   /// The GestureDetector lives OUTSIDE LayoutRotatedBox because
@@ -369,7 +374,7 @@ class _SensorState extends ConsumerState<Sensor> {
     final angleDeg = widget.config.coordinates.angle ?? 0.0;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _showDetailsDialog(context),
+      onTap: () => _showDetailsPane(context),
       child: LayoutRotatedBox(
         angle: angleDeg * pi / 180,
         child: LayoutBuilder(
@@ -419,38 +424,12 @@ class _SensorState extends ConsumerState<Sensor> {
 }
 
 // ---------------------------------------------------------------------------
-// Details dialog row helper (Plan 04-05 / SENS-01)
+// Details rows (Plan 04-05 / SENS-01)
 // ---------------------------------------------------------------------------
-
-/// Single label/value row for the runtime details dialog.
-///
-/// Used exclusively by `_SensorState._showDetailsDialog`. The label sits
-/// in a fixed-width column so multiple rows align vertically; the value
-/// is a [SelectableText] so operators can copy state-key strings out of
-/// the dialog (a recurring request when troubleshooting PLC tag mappings).
-class _DetailRow extends StatelessWidget {
-  const _DetailRow(this.label, this.value);
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 200,
-              child: Text(
-                label,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-            Expanded(child: SelectableText(value)),
-          ],
-        ),
-      );
-}
+//
+// The private `_DetailRow` helper that used to live here is now
+// `PaneDetailRow` in widgets/panes/pane_chrome.dart, shared by every pane and
+// dialog.
 
 // ---------------------------------------------------------------------------
 // Config editor — the body of the configure dialog.
@@ -492,24 +471,10 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
     Color current,
     ValueChanged<Color> onChanged,
   ) {
-    showDialog<void>(
+    showColorPickerDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Select Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: current,
-            onColorChanged: onChanged,
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
+      initialColor: current,
+      onChanged: onChanged,
     );
   }
 
@@ -611,8 +576,7 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
                     : 'Active when state is true',
               ),
               value: config.invertActivePolarity,
-              onChanged: (v) =>
-                  setState(() => config.invertActivePolarity = v),
+              onChanged: (v) => setState(() => config.invertActivePolarity = v),
               contentPadding: EdgeInsets.zero,
             ),
             const SizedBox(height: 16),

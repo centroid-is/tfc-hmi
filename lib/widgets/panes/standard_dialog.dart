@@ -40,6 +40,9 @@ class StandardDialog extends StatelessWidget {
   /// Whether the body scrolls when it does not fit.
   final bool scrollable;
 
+  /// Trailing space in the action bar — see [PaneActionBar.endInset].
+  final double actionBarEndInset;
+
   const StandardDialog({
     super.key,
     required this.title,
@@ -53,6 +56,7 @@ class StandardDialog extends StatelessWidget {
     this.headerTrailing,
     this.headerWrap,
     this.scrollable = true,
+    this.actionBarEndInset = 0,
   });
 
   @override
@@ -83,8 +87,79 @@ class StandardDialog extends StatelessWidget {
           actions: actions,
           onClose: onClose,
           closeLabel: closeLabel,
+          endInset: actionBarEndInset,
         ),
       ],
+    );
+  }
+}
+
+/// A [StandardDialog] in a modal frame, for widget classes that ARE the
+/// argument to `showDialog` rather than a call to [showStandardDialog].
+///
+/// This is the drop-in replacement for `AlertDialog` in a class whose
+/// `build` returns the dialog itself:
+///
+/// ```dart
+/// // was: AlertDialog(title: Text('Edit key'), content: body, actions: [...])
+/// StandardDialogFrame(title: 'Edit key', actions: [...], child: body)
+/// ```
+class StandardDialogFrame extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final IconData? icon;
+  final PaneStatus? status;
+  final List<PaneAction> actions;
+  final Widget child;
+  final String closeLabel;
+
+  /// Omit the automatic Close — for dialogs whose own actions already cover
+  /// dismissal (Cancel/Save), where a third button would just be noise.
+  final bool showClose;
+
+  final double width;
+  final double? height;
+  final bool scrollable;
+
+  const StandardDialogFrame({
+    super.key,
+    required this.title,
+    required this.child,
+    this.subtitle,
+    this.icon,
+    this.status,
+    this.actions = const [],
+    this.closeLabel = 'Close',
+    this.showClose = true,
+    this.width = 520,
+    this.height,
+    this.scrollable = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final maxHeight = height ?? MediaQuery.sizeOf(context).height * 0.8;
+    return Dialog(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: width, maxHeight: maxHeight),
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: StandardDialog(
+            title: title,
+            subtitle: subtitle,
+            icon: icon,
+            status: status,
+            actions: actions,
+            closeLabel: closeLabel,
+            scrollable: scrollable,
+            onClose: showClose ? () => Navigator.of(context).pop() : null,
+            child: child,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -124,13 +199,18 @@ Future<T?> showStandardDialog<T>({
   double? height,
   bool barrierDismissible = true,
   String closeLabel = 'Close',
+
+  /// For callers that live ABOVE the app Navigator — overlay-hosted widgets
+  /// like the chat window, whose own context has no Navigator to push onto.
+  bool useRootNavigator = false,
 }) {
   return showDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
+    useRootNavigator: useRootNavigator,
     builder: (dialogContext) => Dialog(
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: width,
@@ -153,6 +233,47 @@ Future<T?> showStandardDialog<T>({
       ),
     ),
   );
+}
+
+/// The confirm/cancel prompt, once.
+///
+/// Returns true only if the operator confirmed; a dismissed dialog is `false`,
+/// never null, so callers do not have to handle three outcomes for a
+/// two-outcome question.
+///
+/// Set [destructive] for anything that deletes, resets or stops something —
+/// it colours the confirm action with the error colour.
+Future<bool> showConfirmDialog({
+  required BuildContext context,
+  required String title,
+  required String message,
+  String confirmLabel = 'Confirm',
+  String cancelLabel = 'Cancel',
+  bool destructive = false,
+  IconData? icon,
+  bool autofocusConfirm = false,
+}) async {
+  final result = await showStandardDialog<bool>(
+    context: context,
+    title: title,
+    icon: icon ?? (destructive ? Icons.warning_amber : Icons.help_outline),
+    closeLabel: cancelLabel,
+    builder: (_) => Text(message),
+    actionsBuilder: (dialogContext) => [
+      destructive
+          ? PaneAction.destructive(
+              label: confirmLabel,
+              autofocus: autofocusConfirm,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+            )
+          : PaneAction.primary(
+              label: confirmLabel,
+              autofocus: autofocusConfirm,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+            ),
+    ],
+  );
+  return result ?? false;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +299,11 @@ void showFloatingDialog({
   Offset? position,
   String closeLabel = 'Close',
   VoidCallback? onClosed,
+
+  /// Set false for content that fills the window itself — a chart with an
+  /// `Expanded` inside cannot lay out against a scroll view's unbounded
+  /// height, and a chart wants the whole window anyway.
+  bool scrollable = true,
 }) {
   FloatingDialogs._show(
     context: context,
@@ -192,6 +318,7 @@ void showFloatingDialog({
     position: position,
     closeLabel: closeLabel,
     onClosed: onClosed,
+    scrollable: scrollable,
   );
 }
 
@@ -227,6 +354,7 @@ abstract final class FloatingDialogs {
     Offset? position,
     String closeLabel = 'Close',
     VoidCallback? onClosed,
+    bool scrollable = true,
   }) {
     if (_entries.containsKey(id)) return;
 
@@ -245,6 +373,7 @@ abstract final class FloatingDialogs {
         initialSize: size,
         initialPosition: position,
         cascade: cascade,
+        scrollable: scrollable,
         builder: builder,
       ),
     );
@@ -293,6 +422,7 @@ class _FloatingDialogShell extends StatefulWidget {
   final Size initialSize;
   final Offset? initialPosition;
   final double cascade;
+  final bool scrollable;
   final WidgetBuilder builder;
 
   const _FloatingDialogShell({
@@ -303,6 +433,7 @@ class _FloatingDialogShell extends StatefulWidget {
     required this.initialSize,
     required this.cascade,
     required this.builder,
+    this.scrollable = true,
     this.subtitle,
     this.icon,
     this.status,
@@ -394,42 +525,131 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
             _position = newPosition;
             _size = newSize;
           }),
-          child: Material(
-            // Matches SidePane: outline over heavy shadow (see side_pane.dart).
-            elevation: 6,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-              side: BorderSide(
-                color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
+          child: Stack(children: [
+            Positioned.fill(child: _dialogSurface(context)),
+            // The frame's own handles are 6px of invisible edge — fine with a
+            // mouse, unusable with a finger and undiscoverable either way.
+            // This corner grip is visible and 44px square.
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _ResizeGrip(
+                onDrag: (delta) => setState(() {
+                  _size = Size(
+                    (_size.width + delta.dx).clamp(
+                      _minSize.width,
+                      _screen.width - _position!.dx,
+                    ),
+                    (_size.height + delta.dy).clamp(
+                      _minSize.height,
+                      _screen.height - _position!.dy,
+                    ),
+                  );
+                }),
               ),
             ),
-            color: Theme.of(context).colorScheme.surface,
-            clipBehavior: Clip.antiAlias,
-            child: StandardDialog(
-              title: widget.title,
-              subtitle: widget.subtitle,
-              icon: widget.icon,
-              status: widget.status,
-              actions: widget.actions,
-              closeLabel: widget.closeLabel,
-              onClose: () => FloatingDialogs.close(widget.id),
-              // The header doubles as the window's title bar.
-              headerWrap: (context, header) => GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onPanUpdate: (d) => setState(() {
-                  _position = _position! + d.delta;
-                  _clamp();
-                }),
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.move,
-                  child: header,
-                ),
-              ),
-              child: widget.builder(context),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _dialogSurface(BuildContext context) {
+    return Material(
+      // Matches SidePane: outline, not shadow (see side_pane.dart). A
+      // floating window keeps a touch of elevation so it reads as
+      // sitting above the pane it came from.
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Theme.of(context).dividerColor),
+      ),
+      color: Theme.of(context).colorScheme.surface,
+      clipBehavior: Clip.antiAlias,
+      child: StandardDialog(
+        title: widget.title,
+        subtitle: widget.subtitle,
+        icon: widget.icon,
+        status: widget.status,
+        actions: widget.actions,
+        closeLabel: widget.closeLabel,
+        scrollable: widget.scrollable,
+        onClose: () => FloatingDialogs.close(widget.id),
+        // The header doubles as the window's title bar.
+        headerWrap: (context, header) => GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onPanUpdate: (d) => setState(() {
+            _position = _position! + d.delta;
+            _clamp();
+          }),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.move,
+            child: header,
+          ),
+        ),
+        child: widget.builder(context),
+      ),
+    );
+  }
+}
+
+/// The visible corner grip that resizes a floating dialog.
+///
+/// 44px square — a finger target, not a mouse one — with the diagonal rules
+/// that say "drag me" on every desktop, drawn into the corner radius so it
+/// reads as part of the window rather than as content.
+class _ResizeGrip extends StatelessWidget {
+  final ValueChanged<Offset> onDrag;
+
+  const _ResizeGrip({required this.onDrag});
+
+  static const double _size = 44;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeDownRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: (d) => onDrag(d.delta),
+        child: SizedBox(
+          width: _size,
+          height: _size,
+          child: CustomPaint(
+            painter: _ResizeGripPainter(
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.55),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+class _ResizeGripPainter extends CustomPainter {
+  final Color color;
+
+  const _ResizeGripPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    // Three rules stepping out of the corner, longest innermost.
+    const inset = 8.0;
+    for (final offset in const [6.0, 13.0, 20.0]) {
+      canvas.drawLine(
+        Offset(size.width - inset, size.height - inset - offset),
+        Offset(size.width - inset - offset, size.height - inset),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ResizeGripPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

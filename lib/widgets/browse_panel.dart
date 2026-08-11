@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -239,30 +240,14 @@ class BrowsePanelState extends State<BrowsePanel> {
 
   void _showErrorHelpDialog(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    showDialog(
+    showStandardDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: cs.surface,
-        title: Row(
-          children: [
-            Icon(Icons.info_outline, color: cs.primary, size: 20),
-            const SizedBox(width: 8),
-            const Text('Troubleshooting'),
-          ],
-        ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 460),
-          child: SelectableText(
-            _errorHelp!,
-            style: TextStyle(color: cs.onSurface, fontSize: 13, height: 1.5),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
+      title: 'Troubleshooting',
+      icon: Icons.info_outline,
+      width: 460,
+      builder: (ctx) => SelectableText(
+        _errorHelp!,
+        style: TextStyle(color: cs.onSurface, fontSize: 13, height: 1.5),
       ),
     );
   }
@@ -423,8 +408,8 @@ class BrowsePanelState extends State<BrowsePanel> {
     });
   }
 
-  Future<void> _loadChildren(String nodeId, BrowseNode browseNode,
-      int parentDepth) async {
+  Future<void> _loadChildren(
+      String nodeId, BrowseNode browseNode, int parentDepth) async {
     if (_loading.contains(nodeId)) return;
     setState(() => _loading.add(nodeId));
     try {
@@ -503,8 +488,7 @@ class BrowsePanelState extends State<BrowsePanel> {
         // them and the browse tree has no children yet.
         if (detail.structChildren != null &&
             detail.structChildren!.isNotEmpty &&
-            (!_children.containsKey(nodeId) ||
-                _children[nodeId]!.isEmpty)) {
+            (!_children.containsKey(nodeId) || _children[nodeId]!.isEmpty)) {
           final depth = treeNode.depth;
           _children[nodeId] = detail.structChildren!
               .map((child) => BrowseTreeEntry(
@@ -569,6 +553,7 @@ class BrowsePanelState extends State<BrowsePanel> {
         }
       }
     }
+
     walk(_roots);
     return flat;
   }
@@ -617,13 +602,11 @@ class BrowsePanelState extends State<BrowsePanel> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: cs.surfaceContainerLow,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(4)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
           ),
           child: Row(
             children: [
-              FaIcon(FontAwesomeIcons.sitemap,
-                  size: 14, color: cs.onSurface),
+              FaIcon(FontAwesomeIcons.sitemap, size: 14, color: cs.onSurface),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -723,8 +706,8 @@ class BrowsePanelState extends State<BrowsePanel> {
                             const SizedBox(height: 12),
                             Text(
                               _error!,
-                              style: TextStyle(
-                                  color: cs.onSurface, fontSize: 13),
+                              style:
+                                  TextStyle(color: cs.onSurface, fontSize: 13),
                               textAlign: TextAlign.center,
                             ),
                             if (_errorHelp != null) ...[
@@ -743,8 +726,7 @@ class BrowsePanelState extends State<BrowsePanel> {
                       ? Center(
                           child: Text(
                             'No nodes found',
-                            style: TextStyle(
-                                color: cs.secondary, fontSize: 12),
+                            style: TextStyle(color: cs.secondary, fontSize: 12),
                           ),
                         )
                       : ListView.builder(
@@ -755,19 +737,13 @@ class BrowsePanelState extends State<BrowsePanel> {
                             final kids = _children[treeNode.id];
                             return BrowseNodeTile(
                               node: treeNode,
-                              isSelected:
-                                  _selected?.id == treeNode.id,
-                              isExpanded:
-                                  _expanded.contains(treeNode.id),
-                              isLoading:
-                                  _loading.contains(treeNode.id),
-                              hasChildren:
-                                  kids != null && kids.isNotEmpty,
+                              isSelected: _selected?.id == treeNode.id,
+                              isExpanded: _expanded.contains(treeNode.id),
+                              isLoading: _loading.contains(treeNode.id),
+                              hasChildren: kids != null && kids.isNotEmpty,
                               onTap: () => _onTapNode(treeNode),
-                              onDoubleTap: () =>
-                                  _onDoubleTapNode(treeNode),
-                              onToggleExpand: () =>
-                                  _toggleExpand(treeNode),
+                              onDoubleTap: () => _onDoubleTapNode(treeNode),
+                              onToggleExpand: () => _toggleExpand(treeNode),
                             );
                           },
                         ),
@@ -790,8 +766,7 @@ class BrowsePanelState extends State<BrowsePanel> {
             children: [
               TextButton(
                 onPressed: widget.onCancelled,
-                child:
-                    const Text('Cancel', style: TextStyle(fontSize: 12)),
+                child: const Text('Cancel', style: TextStyle(fontSize: 12)),
               ),
               const Spacer(),
               TextButton(
@@ -801,8 +776,7 @@ class BrowsePanelState extends State<BrowsePanel> {
                 style: TextButton.styleFrom(
                   foregroundColor: SolarizedColors.cyan,
                 ),
-                child:
-                    const Text('Select', style: TextStyle(fontSize: 12)),
+                child: const Text('Select', style: TextStyle(fontSize: 12)),
               ),
             ],
           ),
@@ -848,13 +822,11 @@ class BrowseNodeTile extends StatelessWidget {
       final meta = node.node.metadata;
       // Inaccessible members always take priority over direction icons.
       if (!UmasFbMember.readableFromMetadata(meta)) {
-        return const Icon(Icons.block,
-            size: 14, color: SolarizedColors.red);
+        return const Icon(Icons.block, size: 14, color: SolarizedColors.red);
       }
       switch (UmasFbMember.directionFromMetadata(meta)) {
         case UmasFbMemberDirection.input:
-          return const Icon(Icons.login,
-              size: 14, color: SolarizedColors.blue);
+          return const Icon(Icons.login, size: 14, color: SolarizedColors.blue);
         case UmasFbMemberDirection.output:
           return const Icon(Icons.logout,
               size: 14, color: SolarizedColors.orange);

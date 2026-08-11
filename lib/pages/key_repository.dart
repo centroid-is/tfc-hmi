@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -592,8 +593,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     // Reactively watch for new key mapping proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
       if (_isProposal) return; // Already showing a proposal.
-      final keyProposals = next.proposals.where(
-          (p) => p.proposalType == 'key_mapping');
+      final keyProposals =
+          next.proposals.where((p) => p.proposalType == 'key_mapping');
       if (keyProposals.isEmpty) return;
       final proposal = keyProposals.first;
       _parseKeyMappingProposal(proposal.proposalJson);
@@ -665,7 +666,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                     }
                     if (_proposalId != null) {
                       try {
-                        ref.read(proposalStateProvider.notifier)
+                        ref
+                            .read(proposalStateProvider.notifier)
                             .acceptProposal(_proposalId!);
                       } catch (_) {}
                     }
@@ -686,7 +688,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                   onPressed: () {
                     if (_proposalId != null) {
                       try {
-                        ref.read(proposalStateProvider.notifier)
+                        ref
+                            .read(proposalStateProvider.notifier)
                             .rejectProposal(_proposalId!);
                       } catch (_) {}
                     }
@@ -717,164 +720,174 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
           ),
         Expanded(
           child: Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 500;
-                if (isNarrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const FaIcon(FontAwesomeIcons.key, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('Key Mappings',
-                                style: Theme.of(context).textTheme.titleMedium),
-                          ),
-                          if (_hasUnsavedChanges) ...[
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.orange,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: const Text('Unsaved',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold)),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isNarrow = constraints.maxWidth < 500;
+                      if (isNarrow) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                const FaIcon(FontAwesomeIcons.key, size: 20),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text('Key Mappings',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium),
+                                ),
+                                if (_hasUnsavedChanges) ...[
+                                  const SizedBox(width: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                        color: Colors.orange,
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
+                                    child: const Text('Unsaved',
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold)),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              decoration: const InputDecoration(
+                                prefixIcon: Icon(Icons.search),
+                                hintText: 'Search keys...',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              onChanged: (value) =>
+                                  setState(() => _searchQuery = value),
+                            ),
+                            const SizedBox(height: 8),
+                            ElevatedButton.icon(
+                              onPressed: _addKey,
+                              icon:
+                                  const FaIcon(FontAwesomeIcons.plus, size: 16),
+                              label: const Text('Add Key'),
                             ),
                           ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      TextField(
-                        decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.search),
-                          hintText: 'Search keys...',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        onChanged: (value) =>
-                            setState(() => _searchQuery = value),
-                      ),
-                      const SizedBox(height: 8),
-                      ElevatedButton.icon(
-                        onPressed: _addKey,
-                        icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                        label: const Text('Add Key'),
-                      ),
-                    ],
-                  );
-                }
-                return Column(
-                  children: [
-                    Row(
-                      children: [
-                        const FaIcon(FontAwesomeIcons.key, size: 20),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text('Key Mappings',
-                              style: Theme.of(context).textTheme.titleMedium),
-                        ),
-                        if (_hasUnsavedChanges) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                                color: Colors.orange,
-                                borderRadius: BorderRadius.circular(12)),
-                            child: const Text('Unsaved Changes',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold)),
+                        );
+                      }
+                      return Column(
+                        children: [
+                          Row(
+                            children: [
+                              const FaIcon(FontAwesomeIcons.key, size: 20),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text('Key Mappings',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                              ),
+                              if (_hasUnsavedChanges) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                      color: Colors.orange,
+                                      borderRadius: BorderRadius.circular(12)),
+                                  child: const Text('Unsaved Changes',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                              const Spacer(),
+                              SizedBox(
+                                width: 200,
+                                child: TextField(
+                                  decoration: const InputDecoration(
+                                    prefixIcon: Icon(Icons.search),
+                                    hintText: 'Search keys...',
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  onChanged: (value) =>
+                                      setState(() => _searchQuery = value),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton.icon(
+                                onPressed: _addKey,
+                                icon: const FaIcon(FontAwesomeIcons.plus,
+                                    size: 16),
+                                label: const Text('Add Key'),
+                              ),
+                            ],
                           ),
                         ],
-                        const Spacer(),
-                        SizedBox(
-                          width: 200,
-                          child: TextField(
-                            decoration: const InputDecoration(
-                              prefixIcon: Icon(Icons.search),
-                              hintText: 'Search keys...',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                            onChanged: (value) =>
-                                setState(() => _searchQuery = value),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: _addKey,
-                          icon: const FaIcon(FontAwesomeIcons.plus, size: 16),
-                          label: const Text('Add Key'),
-                        ),
-                      ],
-                    ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-            // Key list. Both branches scroll themselves and build lazily —
-            // only the cards on screen exist, so a repository with thousands
-            // of keys costs the same to render as one with ten.
-            Expanded(
-              child: filtered.isEmpty
-                  ? const _EmptyKeysWidget()
-                  : _searchQuery.isEmpty
-                      ? ReorderableListView.builder(
-                          scrollController: _listController,
-                          buildDefaultDragHandles: false,
-                          itemCount: filtered.length,
-                          onReorder: _reorderKey,
-                          itemBuilder: (context, index) =>
-                              _buildCard(filtered[index], reorderIndex: index),
-                        )
-                      : ListView.builder(
-                          controller: _listController,
-                          itemCount: filtered.length,
-                          itemBuilder: (context, index) =>
-                              _buildCard(filtered[index]),
-                        ),
-            ),
-            const SizedBox(height: 16),
-            // Save button
-            Row(
-              children: [
-                if (_keyMappings!.nodes.isNotEmpty || _hasUnsavedChanges)
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _hasUnsavedChanges ? _saveKeyMappings : null,
-                      icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                          size: 16,
-                          color: _hasUnsavedChanges ? null : Colors.grey),
-                      label: Text(_hasUnsavedChanges
-                          ? 'Save Key Mappings'
-                          : 'All Changes Saved'),
-                      style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor:
-                              _hasUnsavedChanges ? null : Colors.grey),
-                    ),
+                      );
+                    },
                   ),
-              ],
+                  const SizedBox(height: 16),
+                  // Key list. Both branches scroll themselves and build lazily —
+                  // only the cards on screen exist, so a repository with thousands
+                  // of keys costs the same to render as one with ten.
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? const _EmptyKeysWidget()
+                        : _searchQuery.isEmpty
+                            ? ReorderableListView.builder(
+                                scrollController: _listController,
+                                buildDefaultDragHandles: false,
+                                itemCount: filtered.length,
+                                onReorder: _reorderKey,
+                                itemBuilder: (context, index) => _buildCard(
+                                    filtered[index],
+                                    reorderIndex: index),
+                              )
+                            : ListView.builder(
+                                controller: _listController,
+                                itemCount: filtered.length,
+                                itemBuilder: (context, index) =>
+                                    _buildCard(filtered[index]),
+                              ),
+                  ),
+                  const SizedBox(height: 16),
+                  // Save button
+                  Row(
+                    children: [
+                      if (_keyMappings!.nodes.isNotEmpty || _hasUnsavedChanges)
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed:
+                                _hasUnsavedChanges ? _saveKeyMappings : null,
+                            icon: FaIcon(FontAwesomeIcons.floppyDisk,
+                                size: 16,
+                                color: _hasUnsavedChanges ? null : Colors.grey),
+                            label: Text(_hasUnsavedChanges
+                                ? 'Save Key Mappings'
+                                : 'All Changes Saved'),
+                            style: ElevatedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                backgroundColor:
+                                    _hasUnsavedChanges ? null : Colors.grey),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
-    ),
+          ),
         ),
       ],
     );
@@ -915,25 +928,15 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     );
   }
 
-  void _showDeleteDialog(String key) {
-    showDialog(
+  void _showDeleteDialog(String key) async {
+    final confirmed = await showConfirmDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Remove Key'),
-        content: Text('Are you sure you want to remove "$key"?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _removeKey(key);
-              },
-              child: const Text('Remove')),
-        ],
-      ),
+      title: 'Remove key',
+      message: 'Are you sure you want to remove "$key"?',
+      confirmLabel: 'Remove',
+      destructive: true,
     );
+    if (confirmed) _removeKey(key);
   }
 }
 
@@ -1240,7 +1243,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       ),
       child: Text(
         label,
-        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
+        style:
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -1315,7 +1319,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                 ),
                 const SizedBox(height: 12),
                 // Device type selector
-                if (widget.jbtmServerAliases.isNotEmpty || widget.modbusServerAliases.isNotEmpty)
+                if (widget.jbtmServerAliases.isNotEmpty ||
+                    widget.modbusServerAliases.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4.0),
                     child: Row(
@@ -1329,7 +1334,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                           label: const Text('OPC UA'),
                           selected: !_isM2400 && !_isModbus,
                           onSelected: (selected) {
-                            if (selected && (_isM2400 || _isModbus)) _switchToOpcUa();
+                            if (selected && (_isM2400 || _isModbus))
+                              _switchToOpcUa();
                           },
                         ),
                         if (widget.jbtmServerAliases.isNotEmpty) ...[
@@ -1456,7 +1462,6 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
   }
 }
 
-
 // ===================== Import/Export Card =====================
 
 class _KeyMappingsImportExportCard extends ConsumerWidget {
@@ -1582,23 +1587,15 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
       if (!context.mounted) return;
 
       // Confirm overwrite
-      final confirm = await showDialog<bool>(
+      final confirm = await showConfirmDialog(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Import Key Mappings'),
-          content: Text(
-              'This will overwrite all existing key mappings with ${imported.nodes.length} imported keys. Continue?'),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Import')),
-          ],
-        ),
+        title: 'Import key mappings',
+        message: 'This will overwrite all existing key mappings with '
+            '${imported.nodes.length} imported keys. Continue?',
+        confirmLabel: 'Import',
+        destructive: true,
       );
-      if (confirm != true) return;
+      if (!confirm) return;
 
       final prefs = await ref.read(preferencesProvider.future);
       await prefs.setString('key_mappings', jsonEncode(imported.toJson()));

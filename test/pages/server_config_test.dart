@@ -162,7 +162,7 @@ void main() {
       await tester.tap(trashButtons.last);
       await settle(tester);
 
-      expect(find.text('Remove Server'), findsOneWidget);
+      expect(find.text('Remove server'), findsOneWidget);
       expect(
           find.text('Are you sure you want to remove this Modbus server?'),
           findsOneWidget);

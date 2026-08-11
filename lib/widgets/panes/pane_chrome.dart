@@ -144,23 +144,38 @@ class PaneAction {
   final VoidCallback? onPressed;
   final PaneActionStyle style;
 
+  /// Takes focus when the dialog opens, so Enter confirms without reaching
+  /// for the mouse — worth setting on the confirm action of a prompt the
+  /// operator answers repeatedly.
+  final bool autofocus;
+
+  /// Key applied to the rendered button, for tests and automation that
+  /// address a specific action.
+  final Key? buttonKey;
+
   const PaneAction({
     required this.label,
     this.onPressed,
     this.icon,
+    this.buttonKey,
     this.style = PaneActionStyle.plain,
+    this.autofocus = false,
   });
 
   const PaneAction.primary({
     required this.label,
     this.onPressed,
     this.icon,
+    this.buttonKey,
+    this.autofocus = false,
   }) : style = PaneActionStyle.primary;
 
   const PaneAction.destructive({
     required this.label,
     this.onPressed,
     this.icon,
+    this.buttonKey,
+    this.autofocus = false,
   }) : style = PaneActionStyle.destructive;
 
   Widget build(BuildContext context) {
@@ -170,23 +185,49 @@ class PaneAction {
     switch (style) {
       case PaneActionStyle.primary:
         return child == null
-            ? FilledButton(onPressed: onPressed, child: label)
+            ? FilledButton(
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                child: label)
             : FilledButton.icon(
-                onPressed: onPressed, icon: child, label: label);
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                icon: child,
+                label: label,
+              );
       case PaneActionStyle.destructive:
         final style = TextButton.styleFrom(foregroundColor: scheme.error);
         return child == null
-            ? TextButton(onPressed: onPressed, style: style, child: label)
+            ? TextButton(
+                key: buttonKey,
+                onPressed: onPressed,
+                style: style,
+                autofocus: autofocus,
+                child: label,
+              )
             : TextButton.icon(
                 onPressed: onPressed,
                 style: style,
+                autofocus: autofocus,
                 icon: child,
                 label: label,
               );
       case PaneActionStyle.plain:
         return child == null
-            ? TextButton(onPressed: onPressed, child: label)
-            : TextButton.icon(onPressed: onPressed, icon: child, label: label);
+            ? TextButton(
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                child: label)
+            : TextButton.icon(
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                icon: child,
+                label: label,
+              );
     }
   }
 }
@@ -271,7 +312,16 @@ class PaneHeader extends StatelessWidget {
           ],
           if (onClose != null)
             IconButton(
-              icon: const Icon(Icons.close),
+              // Deliberately larger than Material's default: this is the
+              // control an operator reaches for most, often with gloves on
+              // a panel, and it sits in the corner where aim is worst.
+              icon: const Icon(Icons.close, size: 28),
+              iconSize: 28,
+              padding: const EdgeInsets.all(10),
+              constraints: const BoxConstraints(
+                minWidth: 52,
+                minHeight: 52,
+              ),
               tooltip: 'Close',
               onPressed: onClose,
             )
@@ -291,18 +341,23 @@ class PaneActionBar extends StatelessWidget {
   final VoidCallback? onClose;
   final String closeLabel;
 
+  /// Extra space at the trailing end. A floating dialog reserves room here
+  /// so its corner resize grip cannot swallow taps meant for Close.
+  final double endInset;
+
   const PaneActionBar({
     super.key,
     this.actions = const [],
     this.onClose,
     this.closeLabel = 'Close',
+    this.endInset = 0,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: EdgeInsets.fromLTRB(12, 8, 12 + endInset, 8),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest,
         border: Border(
@@ -547,8 +602,10 @@ class PaneTileRow extends StatelessWidget {
 /// dialog shows the real graph, and because the dialog floats it can be
 /// dragged aside and left open next to the live plant view.
 class PaneGraphTile extends StatelessWidget {
-  /// Caption under/over the preview.
-  final String label;
+  /// Caption above the preview. Omit it when the chart's own legend and axes
+  /// already say what the lines are — a caption repeating them is noise in a
+  /// tile this small.
+  final String? label;
 
   /// The compact preview drawn inside the pane (sparkline, gauge, mini bar).
   final Widget preview;
@@ -569,7 +626,7 @@ class PaneGraphTile extends StatelessWidget {
 
   const PaneGraphTile({
     super.key,
-    required this.label,
+    this.label,
     required this.preview,
     required this.expandedBuilder,
     this.expandedTitle,
@@ -587,10 +644,12 @@ class PaneGraphTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         onTap: () => showFloatingDialog(
           context: context,
-          id: 'graph:$label',
-          title: expandedTitle ?? label,
+          id: 'graph:${expandedTitle ?? label}',
+          title: expandedTitle ?? label ?? 'Trend',
           icon: Icons.show_chart,
           size: expandedSize,
+          // A chart fills the window; it must not sit in a scroll view.
+          scrollable: false,
           builder: expandedBuilder,
         ),
         child: Padding(
@@ -601,13 +660,16 @@ class PaneGraphTile extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: theme.textTheme.labelSmall,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                  if (label != null)
+                    Expanded(
+                      child: Text(
+                        label!,
+                        style: theme.textTheme.labelSmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                  else
+                    const Spacer(),
                   Icon(
                     Icons.open_in_full,
                     size: 14,
@@ -615,7 +677,7 @@ class PaneGraphTile extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               SizedBox(height: height, child: preview),
             ],
           ),

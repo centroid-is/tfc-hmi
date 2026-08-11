@@ -244,7 +244,7 @@ void _deleteDialogTests() {
 
       await tester.tap(find.byIcon(FontAwesomeIcons.trash.data).first);
       await tester.pumpAndSettle();
-      expect(find.text('Delete Preference'), findsOneWidget);
+      expect(find.text('Delete preference'), findsOneWidget);
 
       final prompt = tester
           .widgetList<Text>(find.byType(Text))
@@ -265,7 +265,7 @@ void _deleteDialogTests() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
 
-      expect(find.text('Delete Preference'), findsNothing,
+      expect(find.text('Delete preference'), findsNothing,
           reason: 'Enter should activate the focused Delete button');
       expect(await SharedPreferencesAsync().containsKey(key), isFalse,
           reason: 'Enter should confirm, not merely dismiss, the dialog');
@@ -277,7 +277,7 @@ void _deleteDialogTests() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
 
-      expect(find.text('Delete Preference'), findsNothing);
+      expect(find.text('Delete preference'), findsNothing);
       expect(await SharedPreferencesAsync().containsKey(key), isTrue,
           reason: 'Escape must not delete anything');
     });
