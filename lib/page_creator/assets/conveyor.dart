@@ -132,40 +132,83 @@ class ConveyorPathGeometry {
     final sorted = List<ConveyorTurnEntry>.of(turns)
       ..sort((a, b) => a.position.compareTo(b.position));
 
+    // Turns are corners on a nominal straight skeleton of length
+    // [targetLength], rounded off like a CAD fillet: the corner sits exactly
+    // at `position * targetLength` and the arc cuts `r * tan(sweep/2)` from
+    // the straight on each side of it.
+    //
+    // The arc must not consume the positional budget. When it did, every
+    // straight after a turn was only whatever was left over, so a symmetric
+    // set of positions produced an asymmetric belt — the run into the first
+    // turn kept its full length while the run out of the last one got the
+    // remainder — and a large radius silently deleted straights entirely.
+    final active = sorted.where((t) => t.angle != 0).toList();
+    final sweeps = [
+      for (final t in active)
+        // tan blows up at a half turn, so stop just short of it.
+        (t.angle.clamp(-179.5, 179.5)) * pi / 180
+    ];
+    final corners = [
+      for (final t in active) t.position.clamp(0.0, 1.0) * targetLength
+    ];
+    final n = active.length;
+
+    // Straight runs between consecutive corners: seg[0] leads into the first
+    // corner, seg[n] leaves the last one.
+    final seg = <double>[];
+    for (var i = 0; i <= n; i++) {
+      final from = i == 0 ? 0.0 : corners[i - 1];
+      final to = i == n ? targetLength : corners[i];
+      seg.add(max(to - from, 0.0));
+    }
+
+    // Tangent length each fillet eats out of the straights beside it.
+    final tangent = <double>[];
+    for (var i = 0; i < n; i++) {
+      final radius = max(active[i].radius, 0.1) * beltWidth;
+      tangent.add(radius * tan(sweeps[i].abs() / 2));
+    }
+    // Shrink fillets that do not fit rather than dropping the straight: first
+    // against each neighbouring run, then against the pair sharing a run.
+    for (var i = 0; i < n; i++) {
+      tangent[i] = min(tangent[i], seg[i]);
+      tangent[i] = min(tangent[i], seg[i + 1]);
+    }
+    for (var i = 1; i < n; i++) {
+      final pair = tangent[i - 1] + tangent[i];
+      if (pair > seg[i] && pair > 0) {
+        final scale = seg[i] / pair;
+        tangent[i - 1] *= scale;
+        tangent[i] *= scale;
+      }
+    }
+
     final path = Path()..moveTo(0, 0);
-    var point = Offset.zero;
+    var corner = Offset.zero;
     var heading = 0.0;
-    var distance = 0.0;
-
-    void straight(double len) {
-      if (len <= 0) return;
-      point += Offset(cos(heading), sin(heading)) * len;
-      path.lineTo(point.dx, point.dy);
-      distance += len;
+    for (var i = 0; i < n; i++) {
+      final inDir = Offset(cos(heading), sin(heading));
+      final c = corner + inDir * seg[i];
+      final arcStart = c - inDir * tangent[i];
+      path.lineTo(arcStart.dx, arcStart.dy);
+      heading += sweeps[i];
+      final outDir = Offset(cos(heading), sin(heading));
+      final arcEnd = c + outDir * tangent[i];
+      final effectiveRadius = tangent[i] / tan(sweeps[i].abs() / 2);
+      if (tangent[i] > 0 && effectiveRadius.isFinite && effectiveRadius > 0) {
+        path.arcToPoint(
+          arcEnd,
+          radius: Radius.circular(effectiveRadius),
+          clockwise: sweeps[i] > 0,
+        );
+      } else {
+        // No room to round the corner — keep it sharp rather than skip it.
+        path.lineTo(arcEnd.dx, arcEnd.dy);
+      }
+      corner = c;
     }
-
-    for (final turn in sorted) {
-      final sweep = turn.angle * pi / 180;
-      if (sweep == 0) continue;
-      final radius = max(turn.radius, 0.1) * beltWidth;
-      straight(turn.position.clamp(0.0, 1.0) * targetLength - distance);
-      // Arc center sits perpendicular to the travel direction, on the side
-      // the belt turns towards (screen coordinates, y down).
-      final centerDir = heading + (sweep > 0 ? pi / 2 : -pi / 2);
-      final center = point + Offset(cos(centerDir), sin(centerDir)) * radius;
-      final startAngle = centerDir + pi;
-      path.arcTo(
-        Rect.fromCircle(center: center, radius: radius),
-        startAngle,
-        sweep,
-        false,
-      );
-      heading += sweep;
-      point = center +
-          Offset(cos(startAngle + sweep), sin(startAngle + sweep)) * radius;
-      distance += radius * sweep.abs();
-    }
-    straight(targetLength - distance);
+    final tail = corner + Offset(cos(heading), sin(heading)) * seg[n];
+    path.lineTo(tail.dx, tail.dy);
 
     // Fit only the *centerline* into the box inset by half the belt width
     // (plus the border stroke), never the belt width itself. Scaling the belt
