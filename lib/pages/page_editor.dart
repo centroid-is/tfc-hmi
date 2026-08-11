@@ -17,6 +17,8 @@ import '../tech_docs/tech_doc_picker.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../chat/ai_context_action.dart';
+import '../chat/asset_context_menu.dart' show buildEditorAssetMenuItems;
+import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../chat/chat_overlay.dart' show ChatContext;
 import '../chat/hamburger_context_menu.dart';
 import '../chat/page_context_menu.dart';
@@ -55,6 +57,40 @@ bool marqueeHitTestRotatedAsset({
   final localDx = dx * cosA - dy * sinA;
   final localDy = dx * sinA + dy * cosA;
   return localDx.abs() <= halfW && localDy.abs() <= halfH;
+}
+
+/// Reorders [assets] so that [targets] sit beneath everything else.
+///
+/// Paint order is list order — `AssetStack` renders assets in sequence, so the
+/// head of the list is the back of the stack. Members of [targets] keep their
+/// own relative stacking; only their position relative to the rest changes.
+///
+/// Returns a new list; [assets] is not modified. Generic so the ordering can
+/// be tested without building real assets.
+@visibleForTesting
+List<T> sendToBackOrder<T>(List<T> assets, Set<T> targets) {
+  final moving = <T>[];
+  final rest = <T>[];
+  for (final asset in assets) {
+    (targets.contains(asset) ? moving : rest).add(asset);
+  }
+  return [...moving, ...rest];
+}
+
+/// Whether [targets] already occupy the back of the stack, i.e. the leading
+/// run of [assets]. Empty or absent targets count as already-at-back, since
+/// there is nothing to move.
+@visibleForTesting
+bool isAlreadyAtBack<T>(List<T> assets, Set<T> targets) {
+  var seen = 0;
+  for (var i = 0; i < assets.length; i++) {
+    if (targets.contains(assets[i])) {
+      // Out of the leading run: something else is already below it.
+      if (i != seen) return false;
+      seen++;
+    }
+  }
+  return true;
 }
 
 /// Projects a drag delta from the rotated GestureDetector's local frame
@@ -482,6 +518,97 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// Menu value for "send to back"; AI entries use their own list index, so
+  /// this sits outside that range.
+  static const int _sendToBackAction = -1;
+
+  /// Assets a canvas action applies to: the whole selection when the asset
+  /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
+  List<Asset> _actionTargets(Asset asset) =>
+      _selectedAssets.contains(asset) ? _selectedAssets.toList() : [asset];
+
+  /// False when [targets] already sit at the bottom, so the menu entry can be
+  /// disabled rather than pushing a no-op onto the undo history.
+  bool _canSendToBack(List<Asset> targets) =>
+      !isAlreadyAtBack(assets, targets.toSet());
+
+  /// Moves [targets] beneath every other asset on the page.
+  void _sendToBack(List<Asset> targets) {
+    final moving = targets.toSet();
+    if (isAlreadyAtBack(assets, moving)) return;
+
+    _saveToHistory();
+    setState(() {
+      final reordered = sendToBackOrder(assets, moving);
+      // Mutate in place: AssetPage holds a reference to this same list.
+      assets
+        ..clear()
+        ..addAll(reordered);
+      _updateCurrentJson();
+    });
+  }
+
+  /// Right-click menu for an asset on the canvas.
+  ///
+  /// Editing actions are always available; the AI entries are appended only
+  /// when MCP chat is up, preserving what the AI-only menu used to offer.
+  Future<void> _showAssetContextMenu(Asset asset, Offset globalPosition) async {
+    final aiItems = isMcpChatAvailable()
+        ? buildEditorAssetMenuItems(asset)
+        : const <AiMenuItem>[];
+
+    final targets = _actionTargets(asset);
+    final canSendToBack = _canSendToBack(targets);
+
+    final choice = await showMenu<int>(
+      context: context,
+      useRootNavigator: true,
+      clipBehavior: Clip.antiAlias,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        globalPosition.dx,
+        globalPosition.dy,
+      ),
+      items: [
+        PopupMenuItem<int>(
+          value: _sendToBackAction,
+          enabled: canSendToBack,
+          child: ListTile(
+            leading: const Icon(Icons.flip_to_back),
+            title: Text(targets.length > 1
+                ? 'Send ${targets.length} assets to back'
+                : 'Send to back'),
+            dense: true,
+            enabled: canSendToBack,
+          ),
+        ),
+        if (aiItems.isNotEmpty) const PopupMenuDivider(),
+        for (var i = 0; i < aiItems.length; i++)
+          PopupMenuItem<int>(
+            value: i,
+            child: ListTile(
+              leading: Icon(aiItems[i].icon),
+              title: Text(aiItems[i].label),
+              dense: true,
+            ),
+          ),
+      ],
+    );
+
+    if (choice == null) return;
+    // The editor can be torn down while the menu is open — proposal events
+    // arriving over MCP navigate on their own — and both branches below touch
+    // State (setState / ref) that is invalid after dispose.
+    if (!mounted) return;
+
+    if (choice == _sendToBackAction) {
+      _sendToBack(targets);
+    } else {
+      await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Reactively watch for new page/asset proposals arriving via MCP.
@@ -640,6 +767,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             onPanStart: (asset, details) {
                               _saveToHistory();
                             },
+                            onSecondaryTap: _showAssetContextMenu,
                             absorb: true,
                             selectedAssets: _selectedAssets,
                             proposedAssets: _proposedAssets,

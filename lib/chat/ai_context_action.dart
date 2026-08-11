@@ -200,7 +200,19 @@ class AiContextAction {
 
     if (result == null) return null;
 
-    final item = menuItems[result];
+    return runMenuItem(ref: ref, item: menuItems[result]);
+  }
+
+  /// Opens chat for a single [item], as if it had been picked from the menu
+  /// shown by [showMenuAndChat].
+  ///
+  /// Exposed so callers that build their own menu — the page editor mixes AI
+  /// actions with plain editing actions in one popup — can dispatch an
+  /// [AiMenuItem] without duplicating this logic.
+  static Future<bool?> runMenuItem({
+    required WidgetRef ref,
+    required AiMenuItem item,
+  }) async {
     if (item.sendImmediately) {
       return openChatAndSend(ref: ref, message: item.prefillText);
     } else {
