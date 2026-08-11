@@ -8,17 +8,17 @@ on:
         description: 'Git ref to checkout (commit SHA, branch, tag)'
         type: string
         default: ''
+  # No push trigger for main — main-prerelease.yml calls this workflow so the
+  # build happens once and its artifacts get published.
   push:
     branches:
-      - main
       - 'feat/centroidx-manager'
     paths:
       - 'centroid-hmi/**'
       - '.github/workflows/macos.yml'
+  # Unfiltered: every PR must prove it does not break the desktop build that
+  # main-prerelease.yml publishes.
   pull_request:
-    paths:
-      - 'centroid-hmi/**'
-      - '.github/workflows/macos.yml'
 
 permissions:
   contents: write
@@ -151,18 +151,28 @@ jobs:
           codesign --verify --strict "$DMG_NAME"
           echo "DMG signed"
 
+      # Non-fatal: notarization depends on Apple's service and on the team's
+      # licence agreements being current, neither of which a code change can
+      # break, so it must not fail the build. The DMG is still Developer ID
+      # signed — it just is not stapled, and macOS shows a Gatekeeper prompt on
+      # first launch. Failure raises a warning annotation on the run summary;
+      # do not ship a release built from an orange run without checking it.
       - name: Notarize the DMG
         if: env.CODESIGN_IDENTITY != ''
+        continue-on-error: true
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcrun notarytool submit "$DMG_NAME" \
+          if ! xcrun notarytool submit "$DMG_NAME" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --wait; then
+            echo "::warning title=Notarization failed::$DMG_NAME is signed but NOT notarized or stapled. macOS will warn on first launch. Check the Apple Developer team's agreements and the notary service status."
+            exit 1
+          fi
           echo "Notarization complete"
 
           xcrun stapler staple "$DMG_NAME"

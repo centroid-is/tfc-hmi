@@ -12,9 +12,8 @@ on:
         description: 'Create a GitHub release with the MSIX'
         type: boolean
         default: false
-  push:
-    branches:
-      - main
+  # No push trigger for main — main-prerelease.yml calls this workflow so the
+  # build happens once and its artifacts get published.
   pull_request:
 
 permissions:
