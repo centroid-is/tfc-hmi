@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../resizable_overlay_frame.dart';
 import 'pane_chrome.dart';
 
 /// The standard popup window: same header, body and pinned action bar as
@@ -511,49 +510,43 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
       child: SizedBox(
         width: _size.width,
         height: _size.height,
-        child: ResizableOverlayFrame(
-          position: _position!,
-          size: _size,
-          minSize: _minSize,
-          screenSize: _screen,
-          onResize: (newPosition, newSize) => setState(() {
-            _position = newPosition;
-            _size = newSize;
-          }),
-          child: Material(
-            // Matches SidePane: outline, not shadow (see side_pane.dart). A
-            // floating window keeps a touch of elevation so it reads as
-            // sitting above the pane it came from.
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: BorderSide(color: Theme.of(context).dividerColor),
-            ),
-            color: Theme.of(context).colorScheme.surface,
-            clipBehavior: Clip.antiAlias,
-            child: StandardDialog(
-              title: widget.title,
-              subtitle: widget.subtitle,
-              icon: widget.icon,
-              status: widget.status,
-              actions: widget.actions,
-              closeLabel: widget.closeLabel,
-              scrollable: widget.scrollable,
-              onClose: () => FloatingDialogs.close(widget.id),
-              // The header doubles as the window's title bar.
-              headerWrap: (context, header) => GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onPanUpdate: (d) => setState(() {
-                  _position = _position! + d.delta;
-                  _clamp();
-                }),
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.move,
-                  child: header,
-                ),
+        // Not resizable: a floating dialog is sized by whoever opens it —
+        // a chart asks for chart-sized, a grid for grid-sized — and it
+        // shrinks itself to fit a smaller window. Drag handles on every edge
+        // bought fiddly targets around content the operator is aiming at.
+        child: Material(
+          // Matches SidePane: outline, not shadow (see side_pane.dart). A
+          // floating window keeps a touch of elevation so it reads as
+          // sitting above the pane it came from.
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(color: Theme.of(context).dividerColor),
+          ),
+          color: Theme.of(context).colorScheme.surface,
+          clipBehavior: Clip.antiAlias,
+          child: StandardDialog(
+            title: widget.title,
+            subtitle: widget.subtitle,
+            icon: widget.icon,
+            status: widget.status,
+            actions: widget.actions,
+            closeLabel: widget.closeLabel,
+            scrollable: widget.scrollable,
+            onClose: () => FloatingDialogs.close(widget.id),
+            // The header doubles as the window's title bar.
+            headerWrap: (context, header) => GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onPanUpdate: (d) => setState(() {
+                _position = _position! + d.delta;
+                _clamp();
+              }),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.move,
+                child: header,
               ),
-              child: widget.builder(context),
             ),
+            child: widget.builder(context),
           ),
         ),
       ),
