@@ -99,6 +99,7 @@ import 'package:tfc/page_creator/assets/elevator.dart';
 import 'package:tfc/page_creator/assets/elevator_layout.dart';
 import 'package:tfc/page_creator/assets/elevator_painter.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
 
 void main() {
   Widget wrap(Widget child) => ProviderScope(
@@ -140,15 +141,23 @@ void main() {
 
   group('Tap to show details (Plan 04-05)', () {
     // Plan 04-05: tapping an Elevator at runtime opens a READ-ONLY details
-    // dialog — NOT the config editor. Config remains editor-only via
+    // surface — NOT the config editor. Config remains editor-only via
     // page_editor.dart's _showConfigDialog → asset.configure(context).
     //
     // Locks the ELEV-01 contract: operators can inspect runtime state
     // (position key, current progress, tween duration, simulate flag,
     // out-of-range/stale flags, child count) but must never mutate page
     // configuration via runtime taps.
+    //
+    // Plan 260811 moved that surface from an `AlertDialog` to the non-modal
+    // `SidePane`. The ELEV-01 contract is unchanged — only the host is —
+    // so these tests assert on `SidePane` and the same labels.
 
-    testWidgets('tap on elevator opens details dialog (NOT config dialog)',
+    // A docked pane lives in the root overlay and survives the widget that
+    // opened it being torn down between tests, so close it explicitly.
+    tearDown(closeSidePane);
+
+    testWidgets('tap on elevator opens details pane (NOT config dialog)',
         (tester) async {
       final config = ElevatorConfig(
         positionKey: '/elev/01/position',
@@ -159,11 +168,10 @@ void main() {
       await tester.tap(find.byType(GestureDetector).first);
       await tester.pumpAndSettle();
 
-      // Details dialog is an AlertDialog with read-only labels.
-      expect(find.byType(AlertDialog), findsOneWidget,
-          reason: 'Tap must open an AlertDialog (the details dialog).');
+      expect(find.byType(SidePane), findsOneWidget,
+          reason: 'Tap must open the docked details pane.');
       expect(find.text('Position key'), findsOneWidget,
-          reason: 'Details dialog must show "Position key" label.');
+          reason: 'Details pane must show "Position key" label.');
 
       // Negative locks — runtime tap must NOT open the editor.
       expect(find.text('Position State Key (0-100%)'), findsNothing,
@@ -172,7 +180,23 @@ void main() {
           reason: 'Runtime tap must NOT render editor controls.');
     });
 
-    testWidgets('details dialog has Close button that dismisses it',
+    testWidgets('tapping the elevator again toggles the pane shut',
+        (tester) async {
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+      expect(find.byType(SidePane), findsOneWidget);
+
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+      expect(find.byType(SidePane), findsNothing,
+          reason: 'A second tap on the same asset must close its pane.');
+    });
+
+    testWidgets('details pane has Close button that dismisses it',
         (tester) async {
       final config = ElevatorConfig(positionKey: '');
       await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -180,17 +204,34 @@ void main() {
       await tester.tap(find.byType(GestureDetector).first);
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
       final closeBtn = find.widgetWithText(TextButton, 'Close');
       expect(closeBtn, findsOneWidget,
-          reason: 'Details dialog must have a TextButton labelled "Close".');
+          reason: 'Details pane must have a TextButton labelled "Close".');
       await tester.tap(closeBtn);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing,
-          reason: 'Tapping Close must dismiss the details dialog.');
+      expect(find.byType(SidePane), findsNothing,
+          reason: 'Tapping Close must dismiss the details pane.');
     });
 
-    testWidgets('details dialog does NOT contain editable fields',
+    testWidgets('unmounting the elevator closes its pane', (tester) async {
+      // The pane body listens to the State's `_progress` notifier, so a pane
+      // that outlived its elevator would tick against a disposed notifier.
+      final config = ElevatorConfig(positionKey: '/elev/01/position');
+      await tester.pumpWidget(wrap(Elevator(config: config)));
+      await tester.pump(Duration.zero);
+      await tester.tap(find.byType(GestureDetector).first);
+      await tester.pumpAndSettle();
+      expect(find.byType(SidePane), findsOneWidget);
+
+      await tester.pumpWidget(wrap(const SizedBox.shrink()));
+      await tester.pumpAndSettle();
+      expect(find.byType(SidePane), findsNothing,
+          reason: 'dispose() must close the pane it opened.');
+      expect(isSidePaneOpen(), isFalse);
+    });
+
+    testWidgets('details pane does NOT contain editable fields',
         (tester) async {
       final config = ElevatorConfig(
         positionKey: '/elev/01/position',
@@ -204,18 +245,18 @@ void main() {
       await tester.pumpAndSettle();
 
       // Editor-specific widgets MUST NOT appear in the runtime details
-      // dialog. These are the unique surface markers of _ElevatorConfigEditor.
+      // pane. These are the unique surface markers of _ElevatorConfigEditor.
       expect(find.byType(SegmentedButton), findsNothing);
       expect(find.byType(SwitchListTile), findsNothing,
           reason: 'No SwitchListTile (Simulate motion is editor-only).');
       expect(find.widgetWithText(FilledButton, 'Add child'), findsNothing);
       // The locked editor label "Position State Key (0-100%)" is unique
       // to _ElevatorConfigEditor and MUST NOT appear in the details
-      // dialog (Plan 04-05 lock).
+      // pane (Plan 04-05 lock).
       expect(find.text('Position State Key (0-100%)'), findsNothing);
     });
 
-    testWidgets('details dialog shows children count', (tester) async {
+    testWidgets('details pane shows children count', (tester) async {
       final config = ElevatorConfig(
         positionKey: '',
         children: [
