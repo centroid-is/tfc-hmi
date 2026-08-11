@@ -455,13 +455,16 @@ class MultivacPainter extends ThirdPartyMachinePainter {
 ///   flow:  infeed flat conveyor (left lane, running DOWN)
 ///            -> buffers across the infeed end
 ///            -> drop onto the step-up conveyor (right lane, running UP)
-///            -> transfer buffer
 ///            -> checkweigher 1
 ///            -> checkweigher 2
 ///
 /// So the product path is a U-turn: down the left lane, across the buffers,
 /// back up the right lane. The chevrons carry that — without them the two
 /// parallel lanes read as two independent lines.
+///
+/// There is also a buffer between the step-up drop and checkweigher 1 on the
+/// real machine. It is left out of the drawing: as a full-width band it read
+/// as a third checkweigher and crowded the two that matter.
 ///
 /// The two conveyor lanes are drawn as light beds rather than full-stroke
 /// machinery on purpose: they are the intended home for live `ConveyorConfig`
@@ -494,11 +497,10 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
     // -- Checkweigher 1 --
     _checkweigher(canvas, u, stroke, detail, top: 0.21, bottom: 0.38);
 
-    // -- Transfer buffer, between the step-up drop and checkweigher 1 --
-    canvas.drawRect(u.r(0.04, 0.405, 0.96, 0.44), stroke);
-    _crossTicks(canvas, u, detail,
-        ul: 0.04, ur: 0.96, ut: 0.405, ub: 0.44, count: 5);
-
+    // The buffer between the step-up drop and checkweigher 1 is deliberately
+    // NOT drawn. It is really there on the machine, but as a full-width band
+    // it read as a third checkweigher and crowded the two that matter.
+    //
     // -- Conveyor lanes --
     // Light beds; a live Conveyor child lands on top of these.
     canvas.drawRect(
