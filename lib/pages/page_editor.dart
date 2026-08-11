@@ -1617,7 +1617,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               child: Column(
                 children: [
                   Text(
-                    'Tap to select. Sections are navigation groups.',
+                    'Tap to select. Sections are navigation groups. Drag the '
+                    'handle to reorder, or use the move button to put an item '
+                    'under a different section.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 8),
@@ -1761,6 +1763,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         dialogContext: dialogContext,
                       ),
                     ),
+                  IconButton(
+                    icon: const Icon(Icons.drive_file_move_outline, size: 18),
+                    onPressed: () =>
+                        _showMoveDialog(pageName, dialogSetState, dialogContext),
+                    tooltip: isSection ? 'Move section' : 'Move to section',
+                  ),
                   IconButton(
                     icon: const Icon(Icons.edit, size: 18),
                     onPressed: () => _editPage(
@@ -2062,6 +2070,183 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       }
     }
     return null;
+  }
+
+  /// How deep a section may sit and still take children, matching the limit
+  /// the "Add Page / Add Section" buttons already enforce.
+  static const int _maxSectionDepth = 3;
+
+  /// Every section in the tree, in the order the Pages dialog renders them,
+  /// with the depth used to indent them in the move picker.
+  List<({String path, String label, IconData icon, int depth})>
+      _collectSectionTargets() {
+    final targets = <({String path, String label, IconData icon, int depth})>[];
+    final seen = <String>{};
+
+    void walk(String path, int depth) {
+      if (!seen.add(path)) return;
+      final page = _temporaryPages[path];
+      if (page == null) return;
+      if (page.menuItem.isNavigationSection) {
+        targets.add((
+          path: path,
+          label: page.menuItem.label,
+          icon: page.menuItem.icon,
+          depth: depth,
+        ));
+      }
+      for (final child in page.menuItem.children) {
+        final childPath = child.path;
+        // Self-references are the section's own landing page, not a child.
+        if (childPath == null || childPath.isEmpty || childPath == path) {
+          continue;
+        }
+        walk(childPath, depth + 1);
+      }
+    }
+
+    for (final root in _getRootPageNames()) {
+      walk(root, 0);
+    }
+    return targets;
+  }
+
+  /// Why [targetPath] cannot receive [pagePath], or null when it can.
+  String? _moveBlockedReason(String pagePath, String targetPath, int depth) {
+    if (targetPath == pagePath) return 'This is the item being moved';
+    if (targetPath == _findParentOf(pagePath)) return 'Already here';
+    if (PageManager.isDescendantOf(_temporaryPages,
+        ancestor: pagePath, candidate: targetPath)) {
+      return 'Inside the item being moved';
+    }
+    if (depth >= _maxSectionDepth) return 'Nesting limit reached';
+    return null;
+  }
+
+  /// Destination picker for moving a page or section somewhere else.
+  ///
+  /// A flat, indented list rather than drag-and-drop: the Pages dialog already
+  /// uses nested [ReorderableListView]s for ordering within a level, and those
+  /// swallow drags, so cross-section moves get their own explicit gesture that
+  /// also works on a touch panel.
+  void _showMoveDialog(
+    String pagePath,
+    StateSetter dialogSetState,
+    BuildContext dialogContext,
+  ) {
+    final page = _temporaryPages[pagePath];
+    if (page == null) return;
+    final isRoot = _findParentOf(pagePath) == null;
+    final targets = _collectSectionTargets();
+
+    showDialog(
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        title: Text('Move "${page.menuItem.label}"'),
+        content: SizedBox(
+          width: 420,
+          height: 420,
+          child: Column(
+            children: [
+              Text(
+                'Pick the section it should live under. The address stays the '
+                'same, so links to it keep working.',
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView(
+                  children: [
+                    _buildMoveTarget(
+                      ctx: ctx,
+                      icon: Icons.north,
+                      label: 'Top level',
+                      depth: 0,
+                      blockedReason: isRoot ? 'Already here' : null,
+                      onMove: () => _movePage(pagePath, null, dialogSetState),
+                    ),
+                    if (targets.isNotEmpty) const Divider(height: 1),
+                    for (final target in targets)
+                      _buildMoveTarget(
+                        ctx: ctx,
+                        icon: target.icon,
+                        label: target.label,
+                        depth: target.depth,
+                        blockedReason: _moveBlockedReason(
+                            pagePath, target.path, target.depth),
+                        onMove: () =>
+                            _movePage(pagePath, target.path, dialogSetState),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMoveTarget({
+    required BuildContext ctx,
+    required IconData icon,
+    required String label,
+    required int depth,
+    required String? blockedReason,
+    required VoidCallback onMove,
+  }) {
+    final enabled = blockedReason == null;
+    return Padding(
+      padding: EdgeInsets.only(left: depth * 20.0),
+      child: ListTile(
+        dense: true,
+        enabled: enabled,
+        leading: Icon(icon),
+        title: Text(label),
+        subtitle: blockedReason == null ? null : Text(blockedReason),
+        onTap: enabled
+            ? () {
+                Navigator.pop(ctx);
+                onMove();
+              }
+            : null,
+      ),
+    );
+  }
+
+  /// Applies a move and reports it, since the tree may scroll the moved item
+  /// out of view.
+  void _movePage(
+    String pagePath,
+    String? newParentPath,
+    StateSetter dialogSetState,
+  ) {
+    final label = _temporaryPages[pagePath]?.menuItem.label ?? pagePath;
+    final destination = newParentPath == null
+        ? 'the top level'
+        : '"${_temporaryPages[newParentPath]?.menuItem.label ?? newParentPath}"';
+
+    _saveToHistory();
+    setState(() {
+      _temporaryPages = PageManager.movePage(
+        _temporaryPages,
+        pagePath: pagePath,
+        newParentPath: newParentPath,
+      );
+      _updateCurrentJson();
+    });
+    dialogSetState(() {});
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Moved "$label" to $destination.')),
+    );
   }
 
   void _addItem({

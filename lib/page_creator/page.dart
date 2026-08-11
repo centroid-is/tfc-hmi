@@ -282,6 +282,168 @@ class PageManager {
     }
   }
 
+  /// Sentinel priority that sorts after every real sibling index, used to park
+  /// a just-moved page at the end of its new level before renumbering.
+  static const int _lastPriority = 1 << 30;
+
+  static AssetPage _copyPage(
+    AssetPage page, {
+    MenuItem? menuItem,
+    int? navigationPriority,
+  }) {
+    return AssetPage(
+      menuItem: menuItem ?? page.menuItem,
+      assets: page.assets,
+      mirroringDisabled: page.mirroringDisabled,
+      navigationPriority: navigationPriority ?? page.navigationPriority,
+    );
+  }
+
+  /// Whether [candidate] sits anywhere beneath [ancestor] in the page tree.
+  ///
+  /// Used to refuse a move that would drop a section inside itself, which
+  /// would detach the whole subtree from the roots and make it unreachable.
+  static bool isDescendantOf(
+    Map<String, AssetPage> pages, {
+    required String ancestor,
+    required String candidate,
+  }) {
+    final seen = <String>{ancestor};
+    final queue = <String>[ancestor];
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      for (final child in pages[current]?.menuItem.children ?? const []) {
+        final path = child.path;
+        // A section may list itself as a child — that self-reference is the
+        // section's own landing page, not a step down the tree.
+        if (path == null || path.isEmpty || path == current) continue;
+        if (path == candidate) return true;
+        if (seen.add(path)) queue.add(path);
+      }
+    }
+    return false;
+  }
+
+  /// Moves [pagePath] out of whatever section holds it and appends it to
+  /// [newParentPath] — or to the top level when that is null.
+  ///
+  /// Nesting lives in the `children` lists, not in the paths: routes are
+  /// registered flat, keyed by path, so a moved page keeps its address and
+  /// every link, bookmark and asset that points at it stays valid.
+  ///
+  /// Returns a new map; [pages] and the pages inside it are not modified. The
+  /// move is refused — the input is returned unchanged — when the page is
+  /// unknown, the destination is unknown or is not a section, or the
+  /// destination sits inside the page being moved.
+  static Map<String, AssetPage> movePage(
+    Map<String, AssetPage> pages, {
+    required String pagePath,
+    required String? newParentPath,
+  }) {
+    final moved = pages[pagePath];
+    if (moved == null) return pages;
+    if (newParentPath != null) {
+      final target = pages[newParentPath];
+      if (target == null || newParentPath == pagePath) return pages;
+      if (!target.menuItem.isNavigationSection) return pages;
+      if (isDescendantOf(pages, ancestor: pagePath, candidate: newParentPath)) {
+        return pages;
+      }
+    }
+
+    final result = Map<String, AssetPage>.from(pages);
+
+    // Detach from its current home. Every children list is swept rather than
+    // just the known parent's, so a page that was accidentally listed twice
+    // ends up in exactly one place afterwards. The page's own entry is skipped
+    // so a section keeps its self-referencing landing page.
+    for (final entry in pages.entries) {
+      if (entry.key == pagePath) continue;
+      final pruned = _withoutPath(entry.value.menuItem.children, pagePath);
+      if (pruned == null) continue;
+      result[entry.key] = _copyPage(
+        entry.value,
+        menuItem: entry.value.menuItem.copyWith(children: pruned),
+      );
+    }
+
+    if (newParentPath != null) {
+      final parent = result[newParentPath]!;
+      result[newParentPath] = _copyPage(
+        parent,
+        menuItem: parent.menuItem.copyWith(
+          children: [...parent.menuItem.children, moved.menuItem],
+        ),
+      );
+    }
+    // Land last among the new siblings; _renumber turns this into an index.
+    result[pagePath] =
+        _copyPage(result[pagePath]!, navigationPriority: _lastPriority);
+
+    return _renumber(result);
+  }
+
+  /// Drops every [MenuItem] pointing at [path], at any depth. Returns null
+  /// when nothing matched, so callers can skip rebuilding untouched pages.
+  static List<MenuItem>? _withoutPath(List<MenuItem> children, String path) {
+    var changed = false;
+    final result = <MenuItem>[];
+    for (final child in children) {
+      if (child.path == path) {
+        changed = true;
+        continue;
+      }
+      final pruned = _withoutPath(child.children, path);
+      if (pruned != null) {
+        changed = true;
+        result.add(child.copyWith(children: pruned));
+      } else {
+        result.add(child);
+      }
+    }
+    return changed ? result : null;
+  }
+
+  /// Rewrites every [AssetPage.navigationPriority] from the tree structure, so
+  /// each level is numbered 0..n-1 with no gaps or duplicates after a move.
+  static Map<String, AssetPage> _renumber(Map<String, AssetPage> pages) {
+    final result = Map<String, AssetPage>.from(pages);
+
+    for (final entry in pages.entries) {
+      final children = entry.value.menuItem.children;
+      for (var i = 0; i < children.length; i++) {
+        final path = children[i].path;
+        // Self-references order with the section itself, not against it.
+        if (path == null || path == entry.key) continue;
+        final child = result[path];
+        if (child == null) continue;
+        result[path] = _copyPage(child, navigationPriority: i);
+      }
+    }
+
+    final childPaths = <String>{};
+    for (final entry in result.entries) {
+      collectChildPaths(entry.value.menuItem.children, childPaths, entry.key);
+    }
+    final insertionOrder = result.keys.toList();
+    final roots =
+        insertionOrder.where((path) => !childPaths.contains(path)).toList();
+    roots.sort((a, b) {
+      final pa = result[a]!.navigationPriority ?? _lastPriority;
+      final pb = result[b]!.navigationPriority ?? _lastPriority;
+      // Ties keep map order: sort() is not stable, and equal priorities are
+      // common in data written before priorities existed.
+      return pa != pb
+          ? pa.compareTo(pb)
+          : insertionOrder.indexOf(a).compareTo(insertionOrder.indexOf(b));
+    });
+    for (var i = 0; i < roots.length; i++) {
+      result[roots[i]] = _copyPage(result[roots[i]]!, navigationPriority: i);
+    }
+
+    return result;
+  }
+
   /// Generates a slug path from a label, used for migrating old data.
   static String _slugify(String text) {
     return text
