@@ -79,6 +79,31 @@ class ConveyorTurnEntry {
     this.radius = 1.5,
   });
 
+  /// Where a freshly added turn should sit: the middle of the widest stretch
+  /// of belt no turn occupies yet.
+  ///
+  /// Every new turn used to land on 0.5. A second one therefore shared the
+  /// first one's corner, where each fillet is clamped to the zero-length
+  /// straight between them and both bends paint as a single sharp corner —
+  /// so adding a turn looked like nothing happened, and deleting either of
+  /// them looked like the wrong one went.
+  static double freePosition(List<ConveyorTurnEntry> existing) {
+    if (existing.isEmpty) return 0.5;
+    final taken = existing.map((t) => t.position.clamp(0.0, 1.0)).toList()
+      ..sort();
+    var widest = -1.0;
+    var pick = 0.5;
+    for (var i = 0; i <= taken.length; i++) {
+      final lo = i == 0 ? 0.0 : taken[i - 1];
+      final hi = i == taken.length ? 1.0 : taken[i];
+      if (hi - lo > widest) {
+        widest = hi - lo;
+        pick = (lo + hi) / 2;
+      }
+    }
+    return pick;
+  }
+
   factory ConveyorTurnEntry.fromJson(Map<String, dynamic> json) =>
       _$ConveyorTurnEntryFromJson(json);
   Map<String, dynamic> toJson() => _$ConveyorTurnEntryToJson(this);
@@ -109,6 +134,14 @@ class ConveyorPathGeometry {
   Path extractFraction(double from, double to) => _metric.extractPath(
       from.clamp(0.0, 1.0) * length, to.clamp(0.0, 1.0) * length);
 
+  /// The centerline with [amount] logical pixels cut off each end, so the
+  /// ends can be painted as their own shape instead of as a stroke cap.
+  Path trimmedEnds(double amount) {
+    final cut = min(amount, length / 2 - 1e-3);
+    if (cut <= 0) return path;
+    return _metric.extractPath(cut, length - cut);
+  }
+
   static ConveyorPathGeometry? build(
     List<ConveyorTurnEntry> turns,
     Size size, {
@@ -125,9 +158,29 @@ class ConveyorPathGeometry {
     // matter how the centerline is fitted. Cap it against the short side so
     // the box invariant always holds; for the usual wide box this is a no-op.
     const margin = 2.0;
-    final beltWidth = min(
-        beltWidthOverride ?? size.height * thicknessFactor.clamp(0.05, 1.0),
-        max(size.shortestSide - 2 * margin, 1.0));
+    final containable = max(size.shortestSide - 2 * margin, 1.0);
+    // An explicit belt width is given in screen units, so the same number has
+    // to mean the same belt everywhere — resizing the box must not silently
+    // change it. Only the box-relative thickness is, by definition, bounded
+    // by the box.
+    final double beltWidth;
+    final double fitWidth;
+    if (beltWidthOverride != null) {
+      beltWidth = beltWidthOverride;
+      // The fit insets the box by half the belt width so the belt lands
+      // inside it. Once the belt is wider than the box that is unreachable,
+      // and insetting anyway squeezes the centerline into a sliver — the
+      // bend collapses into a blob. So hand the inset back as the overflow
+      // grows: at the limit it is still the full belt (no jump), and by
+      // twice the limit the bare centerline is fitted and the belt simply
+      // spills over the box.
+      final overflow = max(beltWidthOverride - containable, 0.0);
+      fitWidth = max(min(beltWidthOverride, containable) - overflow, 0.0);
+    } else {
+      beltWidth =
+          min(size.height * thicknessFactor.clamp(0.05, 1.0), containable);
+      fitWidth = beltWidth;
+    }
     final targetLength = size.width;
     final sorted = List<ConveyorTurnEntry>.of(turns)
       ..sort((a, b) => a.position.compareTo(b.position));
@@ -216,7 +269,7 @@ class ConveyorPathGeometry {
     // geometry, so two conveyors sharing a box height and thickness factor
     // would render at different belt heights — and a turned belt would never
     // match a straight one.
-    final inset = beltWidth / 2 + margin;
+    final inset = fitWidth / 2 + margin;
     final inner = Size(max(size.width - 2 * inset, 1.0),
         max(size.height - 2 * inset, 1.0));
     final bounds = path.getBounds();
@@ -423,17 +476,15 @@ class ConveyorConfig extends BaseAsset {
     return max((turns.isEmpty ? box.height : box.shortestSide) - 4, 1.0);
   }
 
-  /// Whether the requested belt width does not fit the box, so the render is
-  /// clamped and the editor should say so.
+  /// Whether the requested belt width is wider than its box, so the belt
+  /// paints over the box edge and the editor should say so.
+  ///
+  /// The width itself is still honoured — it is set in screen units, and a
+  /// setting that quietly changed whenever the box was resized would not be
+  /// worth having. Only selection and hit-testing stay on the box.
   bool beltWidthOverflows(Size screen) {
     final requested = requestedBeltWidth(screen);
     return requested != null && requested > maxBeltWidth(screen);
-  }
-
-  /// Belt width actually painted, clamped into the box.
-  double? clampedBeltWidth(Size screen) {
-    final requested = requestedBeltWidth(screen);
-    return requested == null ? null : min(requested, maxBeltWidth(screen));
   }
 
   ConveyorConfig(
@@ -489,6 +540,29 @@ class _ConveyorConfigContent extends StatefulWidget {
 }
 
 class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
+  @override
+  void initState() {
+    super.initState();
+    // Pages saved before turns were kept in belt order.
+    _sortTurns();
+  }
+
+  /// Keeps [ConveyorConfig.turns] in the order the belt actually bends.
+  ///
+  /// [ConveyorPathGeometry.build] sorts by position, so the belt's first bend
+  /// is the lowest position. The panel listed insertion order and numbered
+  /// the cards from it, and "Add Turn" appends — so as soon as a turn was
+  /// added after an earlier one had been dragged along the belt, "Turn 1" in
+  /// the panel was some other bend, and its delete button took out a turn the
+  /// user was not looking at.
+  ///
+  /// Sorting the list itself rather than a display copy keeps the card order
+  /// stable while a position slider is being dragged; the reorder happens
+  /// once the drag ends.
+  void _sortTurns() {
+    widget.config.turns.sort((a, b) => a.position.compareTo(b.position));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -606,6 +680,10 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         SizeField(
           initialValue: widget.config.size,
           onChanged: (size) => setState(() => widget.config.size = size),
+          // The box runs along the belt, so its width is how long the
+          // conveyor is and its height is how wide the belt sits.
+          widthLabel: 'Length %',
+          heightLabel: 'Width %',
         ),
         const SizedBox(height: 16),
         CoordinatesField(
@@ -718,7 +796,10 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         FilledButton.icon(
           onPressed: () {
             setState(() {
-              widget.config.turns.add(ConveyorTurnEntry());
+              widget.config.turns.add(ConveyorTurnEntry(
+                position: ConveyorTurnEntry.freePosition(widget.config.turns),
+              ));
+              _sortTurns();
             });
           },
           icon: const Icon(Icons.add),
@@ -752,6 +833,9 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           ...widget.config.turns.asMap().entries.map((mapEntry) {
             final entry = mapEntry.value;
             return Card(
+              // Identity, not index: ending a position drag can reorder the
+              // cards, and the element state has to follow its own turn.
+              key: ObjectKey(entry),
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: Padding(
                 padding: const EdgeInsets.all(8.0),
@@ -787,6 +871,10 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                       value: entry.position.clamp(0.0, 1.0),
                       label: '${(entry.position * 100).round()}%',
                       onChanged: (v) => setState(() => entry.position = v),
+                      // Dragging a turn past a neighbour changes which bend
+                      // it is; renumber once the drag is over rather than
+                      // shuffling cards under the pointer.
+                      onChangeEnd: (_) => setState(_sortTurns),
                     ),
                     Text(
                       'Angle: ${entry.angle.round()}° '
@@ -842,9 +930,9 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             hintText: 'Empty — belt fills the box',
             suffixText: '%',
             errorText: overflows
-                ? 'Does not fit the box — painted at '
-                    '${maxPercent.toStringAsFixed(2)}%. '
-                    'Increase the box height.'
+                ? 'Wider than the box (fits ${maxPercent.toStringAsFixed(2)}%) '
+                    '— the belt is painted at the width you set and spills '
+                    'over the box, which still owns selection and clicks.'
                 : null,
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1209,7 +1297,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     // An explicit screen-relative belt width wins over the box-relative
     // thickness, and applies whether or not the belt turns.
     final beltWidth =
-        widget.config.clampedBeltWidth(MediaQuery.of(context).size);
+        widget.config.requestedBeltWidth(MediaQuery.of(context).size);
     final geometry = ConveyorPathGeometry.build(
       widget.config.turns,
       paintSize,
@@ -1265,8 +1353,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
       {double? straightBeltWidth}) {
     // Cross-belt dimension: the turned belt carries its own width, a straight
     // belt is either an explicit band or the full box height.
-    final beltHeight = geometry?.beltWidth ??
-        min(straightBeltWidth ?? conveyorSize.height, conveyorSize.height);
+    final beltHeight =
+        geometry?.beltWidth ?? straightBeltWidth ?? conveyorSize.height;
     // A straight band is centred in the box, so gates hang off the band edge
     // rather than the box edge.
     final bandInset = geometry == null
@@ -1809,10 +1897,13 @@ class ConveyorPainter extends CustomPainter {
     }
     // An explicit belt width paints the belt as a band centred in the box
     // rather than filling it, so a straight belt can be set to the same width
-    // as a turned one. Everything below is box-relative, so shrinking the box
-    // we hand it is enough — batches, arrows and text all follow.
+    // as a turned one. Everything below is box-relative, so resizing the box
+    // we hand it is enough — batches, arrows and text all follow. A band
+    // wider than the box paints over the box edge rather than being trimmed
+    // back to it: the width is set in screen units and must not move when the
+    // box does.
     final band = straightBeltWidth;
-    if (band != null && band < size.height) {
+    if (band != null) {
       canvas.save();
       canvas.translate(0, (size.height - band) / 2);
       _paintStraightBelt(canvas, Size(size.width, band));
@@ -1822,11 +1913,17 @@ class ConveyorPainter extends CustomPainter {
     _paintStraightBelt(canvas, size);
   }
 
+  /// Rounding of the belt's two ends, as a fraction of the belt width.
+  ///
+  /// Shared by both renderers so a belt keeps the same silhouette when a turn
+  /// is added: the turned belt used to end in a stroke cap, which is a half
+  /// circle — 0.5 of the belt width — and looked far blobbier than the
+  /// straight belt beside it at the same width.
+  static const _endRadiusFactor = 0.2;
+
   void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final borderRadius = Radius.circular(
-      size.shortestSide * 0.2,
-    ); // 20% of the shortest side
+    final borderRadius = Radius.circular(size.shortestSide * _endRadiusFactor);
     final rrect = RRect.fromRectAndRadius(rect, borderRadius);
 
     final paint = Paint()
@@ -1880,29 +1977,86 @@ class ConveyorPainter extends CustomPainter {
     _drawFrequency(canvas, size);
   }
 
+  /// Paints the two ends of a stroked run — the belt itself or one batch on
+  /// it — as rounded-corner rectangles aligned with the centerline.
+  ///
+  /// [head] and [tail] are the tangents at the run's true ends, [width] the
+  /// cross-belt size of the layer being capped, [radius] its corner rounding,
+  /// and [overhang] how far past the endpoint the shape reaches — a black
+  /// border layer sits proud of what it outlines on the ends just as it does
+  /// along the sides. Each cap is exactly as long as the stretch trimmed off
+  /// the stroke, so cap and body meet on a flat seam.
+  void _paintEndCaps(Canvas canvas,
+      {required Tangent head,
+      required Tangent tail,
+      required double width,
+      required double radius,
+      required double overhang,
+      required Paint paint}) {
+    if (radius <= 0 || width <= 0) return;
+    void cap(Tangent t, double flip) {
+      canvas.save();
+      canvas.translate(t.position.dx, t.position.dy);
+      // +x points into the belt for both ends, so the rounded side is always
+      // the low-x one.
+      canvas.rotate(atan2(t.vector.dy, t.vector.dx) + flip);
+      canvas.drawRRect(
+        RRect.fromRectAndCorners(
+          Rect.fromLTRB(-overhang, -width / 2, radius - overhang, width / 2),
+          topLeft: Radius.circular(radius),
+          bottomLeft: Radius.circular(radius),
+        ),
+        paint,
+      );
+      canvas.restore();
+    }
+
+    cap(head, 0);
+    cap(tail, pi);
+  }
+
   /// Path-based rendering used when the conveyor has turns configured.
   ///
-  /// The belt is the centerline stroked at full belt width (rounded caps give
-  /// the rounded ends), batches are sub-paths of the same centerline stroked
-  /// slightly narrower, so both follow the bends.
+  /// The belt is the centerline stroked at full belt width, batches are
+  /// sub-paths of the same centerline stroked slightly narrower, so both
+  /// follow the bends. The two ends are cut off the stroke and drawn as
+  /// rounded-corner caps instead, matching the straight belt's rounding.
   void _paintTurnedBelt(Canvas canvas, Size size) {
     final g = geometry!;
+
+    final endRadius = g.beltWidth * _endRadiusFactor;
+    final body = g.trimmedEnds(endRadius);
 
     final borderPaint = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = g.beltWidth + 4
-      ..strokeCap = StrokeCap.round
+      ..strokeCap = StrokeCap.butt
       ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(g.path, borderPaint);
+    canvas.drawPath(body, borderPaint);
+    // The border sits 2px outside the belt all round, ends included.
+    _paintEndCaps(canvas,
+        head: g.tangentAt(0),
+        tail: g.tangentAt(1),
+        width: g.beltWidth + 4,
+        radius: endRadius + 2,
+        overhang: 2,
+        paint: Paint()..color = Colors.black);
 
     final beltPaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = g.beltWidth
-      ..strokeCap = StrokeCap.round
+      ..strokeCap = StrokeCap.butt
       ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(g.path, beltPaint);
+    canvas.drawPath(body, beltPaint);
+    _paintEndCaps(canvas,
+        head: g.tangentAt(0),
+        tail: g.tangentAt(1),
+        width: g.beltWidth,
+        radius: endRadius,
+        overhang: 0,
+        paint: Paint()..color = color);
 
     if (showExclamation) {
       _drawExclamation(canvas, size);
@@ -1914,34 +2068,53 @@ class ConveyorPainter extends CustomPainter {
       ..color = Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = batchWidth + 2
-      ..strokeCap = StrokeCap.round
+      ..strokeCap = StrokeCap.butt
       ..strokeJoin = StrokeJoin.round;
 
-    // Round stroke caps extend half the stroke width past each end of the
-    // extracted segment, so shrink the segment by the cap radius to keep the
-    // painted batch at its true length.
-    final capInset = batchWidth / 2 / g.length;
+    // Batches are capped the same way the belt is, so a batch keeps its shape
+    // when a turn is added under it. The stroke stops short by the corner
+    // radius and the cap fills the gap, leaving the batch at its true length.
+    final batchRadius = batchWidth * _endRadiusFactor;
+    final radiusFraction = batchRadius / g.length;
 
     for (final batch in batches.values) {
-      var start = batch.start.clamp(0.0, 1.0);
-      var end = batch.end.clamp(0.0, 1.0);
+      final start = batch.start.clamp(0.0, 1.0);
+      final end = batch.end.clamp(0.0, 1.0);
       if (end <= start) continue; // not yet visible / already off
+      // A batch shorter than its own caps collapses to the two caps meeting,
+      // rather than disappearing.
       final mid = (start + end) / 2;
-      // Keep a sliver of length so short batches render as a round dot
-      // instead of disappearing.
-      start = min(start + capInset, mid - 1e-4);
-      end = max(end - capInset, mid + 1e-4);
-      final segment = g.extractFraction(start, end);
+      final bodyStart = min(start + radiusFraction, mid);
+      final bodyEnd = max(end - radiusFraction, mid);
+      final segment = g.extractFraction(bodyStart, bodyEnd);
+      final head = g.tangentAt(start);
+      final tail = g.tangentAt(end);
+
       canvas.drawPath(segment, batchBorderPaint);
+      _paintEndCaps(canvas,
+          head: head,
+          tail: tail,
+          width: batchWidth + 2,
+          radius: batchRadius + 1,
+          overhang: 1,
+          paint: Paint()..color = Colors.black);
+
       canvas.drawPath(
         segment,
         Paint()
           ..color = batch.color
           ..style = PaintingStyle.stroke
           ..strokeWidth = batchWidth
-          ..strokeCap = StrokeCap.round
+          ..strokeCap = StrokeCap.butt
           ..strokeJoin = StrokeJoin.round,
       );
+      _paintEndCaps(canvas,
+          head: head,
+          tail: tail,
+          width: batchWidth,
+          radius: batchRadius,
+          overhang: 0,
+          paint: Paint()..color = batch.color);
     }
 
     _drawDirectionArrow(canvas, size);

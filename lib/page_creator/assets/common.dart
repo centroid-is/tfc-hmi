@@ -554,11 +554,19 @@ class SizeField extends StatefulWidget {
   final ValueChanged<RelativeSize>? onChanged;
   final bool useSingleSize;
 
+  /// Labels for the two fields. An asset whose box has a natural orientation
+  /// can name them for what they mean on that asset — a conveyor's box width
+  /// is the belt's length, and its height is the belt's width.
+  final String widthLabel;
+  final String heightLabel;
+
   const SizeField({
     super.key,
     required this.initialValue,
     this.onChanged,
     this.useSingleSize = false, // Default to false for backward compatibility
+    this.widthLabel = 'Width %',
+    this.heightLabel = 'Height %',
   });
 
   @override
@@ -625,7 +633,7 @@ class _SizeFieldState extends State<SizeField> {
         Expanded(
           child: TextFormField(
             controller: _widthController,
-            decoration: const InputDecoration(labelText: 'Width %'),
+            decoration: InputDecoration(labelText: widget.widthLabel),
             keyboardType: TextInputType.number,
             onChanged: (_) => _onChanged(),
           ),
@@ -634,7 +642,7 @@ class _SizeFieldState extends State<SizeField> {
         Expanded(
           child: TextFormField(
             controller: _heightController,
-            decoration: const InputDecoration(labelText: 'Height %'),
+            decoration: InputDecoration(labelText: widget.heightLabel),
             keyboardType: TextInputType.number,
             onChanged: (_) => _onChanged(),
           ),

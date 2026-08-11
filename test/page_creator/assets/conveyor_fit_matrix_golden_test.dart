@@ -206,6 +206,36 @@ void main() {
       );
     });
 
+    testWidgets('explicit belt width survives the box being resized',
+        (tester) async {
+      // An explicit width is in screen units, so it has to paint the same
+      // belt whatever the box does — including boxes too short to hold it,
+      // where the belt now spills over the box edge instead of thinning.
+      tester.view.physicalSize = const Size(1500, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      const beltWidth = 40.0;
+      final cells = <Widget>[];
+      for (final height in [200.0, 120.0, 60.0, 30.0]) {
+        cells.add(_cell(
+            label: 'straight, box 360x${height.toInt()}',
+            box: Size(360, height),
+            straightBeltWidth: beltWidth));
+        cells.add(_cell(
+            label: '45deg, box 360x${height.toInt()}',
+            box: Size(360, height),
+            turns: [ConveyorTurnEntry(position: 0.4, angle: 45, radius: 1.5)],
+            beltWidthOverride: beltWidth));
+      }
+
+      await tester.pumpWidget(_matrix(cells));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/conveyor_belt_width_box_sweep.png'),
+      );
+    });
+
     testWidgets('thickness factor sweep on a wide box', (tester) async {
       tester.view.physicalSize = const Size(1500, 900);
       tester.view.devicePixelRatio = 1.0;

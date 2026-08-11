@@ -121,5 +121,69 @@ void main() {
           .fold<double>(0, (sum, m) => sum + m.length);
       expect(segmentLength, closeTo(geometry.length * 0.2, 1e-3));
     });
+
+    test('trimmedEnds cuts the requested length off both ends', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
+        size,
+      )!;
+      final trim = geometry.length * 0.1;
+      final trimmed = geometry.trimmedEnds(trim);
+      final length = trimmed
+          .computeMetrics()
+          .fold<double>(0, (sum, m) => sum + m.length);
+      expect(length, closeTo(geometry.length - 2 * trim, 1e-3));
+    });
+
+    test('trimmedEnds never inverts on a belt shorter than the trim', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
+        size,
+      )!;
+      final trimmed = geometry.trimmedEnds(geometry.length * 5);
+      final length = trimmed
+          .computeMetrics()
+          .fold<double>(0, (sum, m) => sum + m.length);
+      expect(length, greaterThanOrEqualTo(0));
+      expect(length, lessThan(geometry.length));
+    });
+  });
+
+  group('where a newly added turn lands', () {
+    test('the first turn goes to the middle of the belt', () {
+      expect(ConveyorTurnEntry.freePosition([]), closeTo(0.5, 1e-9));
+    });
+
+    test('a second turn does not stack on the first', () {
+      // Two turns on the same point share a corner, where each fillet is
+      // clamped to the zero-length straight between them and both bends
+      // paint as one — so the added turn appeared to do nothing.
+      final first = [ConveyorTurnEntry(position: 0.5)];
+      final second = ConveyorTurnEntry.freePosition(first);
+      expect(second, isNot(closeTo(0.5, 1e-6)));
+      expect(second, inInclusiveRange(0.0, 1.0));
+    });
+
+    test('each turn lands in the widest gap left', () {
+      final turns = <ConveyorTurnEntry>[];
+      for (var i = 0; i < 5; i++) {
+        turns.add(ConveyorTurnEntry(
+            position: ConveyorTurnEntry.freePosition(turns)));
+      }
+      final positions = turns.map((t) => t.position).toList()..sort();
+      for (var i = 1; i < positions.length; i++) {
+        expect(positions[i] - positions[i - 1], greaterThan(1e-3),
+            reason: 'turns must not stack: $positions');
+      }
+    });
+
+    test('positions outside the belt do not throw the search off', () {
+      final odd = [
+        ConveyorTurnEntry(position: -3),
+        ConveyorTurnEntry(position: 4),
+      ];
+      final pick = ConveyorTurnEntry.freePosition(odd);
+      expect(pick, inInclusiveRange(0.0, 1.0));
+    });
   });
 }
