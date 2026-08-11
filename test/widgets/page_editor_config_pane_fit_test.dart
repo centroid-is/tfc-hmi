@@ -34,8 +34,9 @@ void main() {
         ..size = const RelativeSize(width: 0.12, height: 0.06);
 
       await pumpEditorWith(tester, [asset]);
-      await tester.tapAt(onCanvas(tester, 0.3, 0.4));
-      await tester.pumpAndSettle();
+      // Right-click, then "Edit": the editor has one mode now, so a plain tap
+      // selects rather than opening the configuration.
+      await chooseFromAssetMenu(tester, 0.3, 0.4, 'Edit');
 
       expect(find.byType(SidePane), findsOneWidget,
           reason: '${entry.key} should open a config pane');

@@ -6,6 +6,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/collector.dart';
 import 'dart:math';
+import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
@@ -344,8 +345,8 @@ class ConveyorPathGeometry {
     final radii = [for (final t in active) max(t.radius, 0.1) * beltWidth];
 
     final inset = fitWidth / 2 + margin;
-    final inner = Size(max(size.width - 2 * inset, 1.0),
-        max(size.height - 2 * inset, 1.0));
+    final inner = Size(
+        max(size.width - 2 * inset, 1.0), max(size.height - 2 * inset, 1.0));
 
     // Straight runs between consecutive corners: seg[0] leads into the first
     // corner, seg[n] leaves the last one. Positions seed their proportions;
@@ -999,16 +1000,15 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                     ),
                     const SizedBox(height: 8),
                     // Position slider
-                    Text(
-                      'Belt Position: ${(entry.position * 100).round()}%',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
+                    NumberSlider(
+                      labelAbove: true,
+                      label: 'Belt Position',
                       min: 0.0,
                       max: 1.0,
                       divisions: 100,
+                      displayScale: 100,
+                      suffix: '%',
                       value: entry.position,
-                      label: '${(entry.position * 100).round()}%',
                       onChanged: (v) => setState(() => entry.position = v),
                     ),
                   ],
@@ -1289,8 +1289,8 @@ class _NumberBoxState extends State<_NumberBox> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
         border: const OutlineInputBorder(),
       ),
-      keyboardType:
-          TextInputType.numberWithOptions(decimal: widget.decimals > 0, signed: widget.min < 0),
+      keyboardType: TextInputType.numberWithOptions(
+          decimal: widget.decimals > 0, signed: widget.min < 0),
       onChanged: _submit,
       onSubmitted: (v) {
         _submit(v);
@@ -1710,9 +1710,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
         geometry?.beltWidth ?? straightBeltWidth ?? conveyorSize.height;
     // A straight band is centred in the box, so gates hang off the band edge
     // rather than the box edge.
-    final bandInset = geometry == null
-        ? (conveyorSize.height - beltHeight) / 2
-        : 0.0;
+    final bandInset =
+        geometry == null ? (conveyorSize.height - beltHeight) / 2 : 0.0;
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 

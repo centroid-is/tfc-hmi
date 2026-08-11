@@ -14,6 +14,11 @@
 /// straight into the asset they were handed, so the editor watches the asset's
 /// serialization rather than any callback; if that watch stops running these
 /// tests fail while nothing else does.
+///
+/// The pane is opened from the right-click menu's "Edit" entry. It used to
+/// open on a plain tap, back when the editor had a separate mode in which
+/// tapping selected instead; with one mode a tap always selects, so
+/// configuring moved to the menu.
 library;
 
 import 'package:flutter/material.dart';
@@ -25,12 +30,10 @@ import 'package:tfc/widgets/panes/side_pane.dart';
 
 import '../helpers/page_editor_harness.dart';
 
-/// Taps the asset at canvas-relative ([fx], [fy]) in pan mode, which is what
-/// opens its config pane.
-Future<void> tapAsset(WidgetTester tester, double fx, double fy) async {
-  await tester.tapAt(onCanvas(tester, fx, fy));
-  await tester.pumpAndSettle();
-}
+/// Opens the config pane for the asset at canvas-relative ([fx], [fy]) the way
+/// an operator does: right-click, then "Edit".
+Future<void> openConfigPane(WidgetTester tester, double fx, double fy) =>
+    chooseFromAssetMenu(tester, fx, fy, 'Edit');
 
 /// Where the single drawn box sits, as a fraction of the canvas.
 Offset boxOnCanvas(WidgetTester tester, [int index = 0]) {
@@ -85,10 +88,9 @@ Future<void> closePane(WidgetTester tester) async {
 void main() {
   setUp(setUpEditorEnvironment);
 
-  testWidgets('tapping an asset docks a pane instead of a modal dialog',
-      (tester) async {
+  testWidgets('"Edit" docks a pane instead of a modal dialog', (tester) async {
     await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
 
     expect(find.byType(SidePane), findsOneWidget);
     expect(find.byType(Dialog), findsNothing,
@@ -107,7 +109,7 @@ void main() {
   testWidgets('edits in the pane reach the canvas while it stays open',
       (tester) async {
     await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
 
     await enterCoordinate(tester, 'X 0-100%', '70');
 
@@ -121,7 +123,7 @@ void main() {
 
   testWidgets('a pane edit is part of what gets saved', (tester) async {
     final prefs = await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
     await enterCoordinate(tester, 'Y 0-100%', '80');
     await closePane(tester);
 
@@ -129,17 +131,24 @@ void main() {
     expect(savedYs(saved), [closeTo(0.8, 1e-9)]);
   });
 
-  testWidgets('tapping another asset re-points the open pane', (tester) async {
+  testWidgets('a plain tap on another asset re-points the open pane',
+      (tester) async {
     // Both boxes sit left of where the pane docks, so the second tap reaches
     // the canvas rather than the pane sitting over it.
     await pumpEditorWith(tester, [editorBox(0.2, 0.3), editorBox(0.45, 0.6)]);
 
-    await tapAsset(tester, 0.2, 0.3);
+    await openConfigPane(tester, 0.2, 0.3);
     expect(find.byType(SidePane), findsOneWidget);
 
+    // Only the first one needs the menu. With a pane already up it behaves as
+    // an inspector for the selection, so selecting the next asset is enough —
+    // which is what makes configuring several assets in a row bearable now
+    // that a tap no longer opens the editor by itself.
     await tapAsset(tester, 0.45, 0.6);
     expect(find.byType(SidePane), findsOneWidget,
         reason: 'one pane, swapped over — not a second one on top');
+    expect(selectedCount(tester), 1,
+        reason: 'the tap should have selected the asset it re-pointed to');
 
     // The pane is now editing the second box: move it and check which one
     // shifted.
@@ -153,7 +162,7 @@ void main() {
   testWidgets('the canvas still takes drags while the pane is open',
       (tester) async {
     final prefs = await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
     expect(find.byType(SidePane), findsOneWidget);
 
     // The whole point of the pane: drag the asset around without dismissing
@@ -170,46 +179,33 @@ void main() {
     expect(savedXs(saved).single, greaterThan(0.35));
   });
 
-  testWidgets('the pane can be dragged wider, and stays that wide',
+  testWidgets('tapping the asset the pane is already on leaves it open',
       (tester) async {
-    await pumpEditorWith(tester, [editorBox(0.2, 0.3), editorBox(0.45, 0.6)]);
-    await tapAsset(tester, 0.2, 0.3);
-
-    final before = tester.getRect(find.byType(SidePane)).width;
-
-    // The handle is the strip down the pane's left edge.
-    final pane = tester.getRect(find.byType(SidePane));
-    await tester.dragFrom(
-      Offset(pane.left + 4, pane.center.dy),
-      const Offset(-160, 0),
-    );
-    await tester.pumpAndSettle();
-
-    final after = tester.getRect(find.byType(SidePane)).width;
-    expect(after, closeTo(before + 160, 1),
-        reason: 'dragging the handle left should widen the pane');
-
-    // The width an engineer settled on is the one the next asset opens at.
-    await tapAsset(tester, 0.45, 0.6);
-    expect(tester.getRect(find.byType(SidePane)).width, closeTo(after, 1));
-
-    await closePane(tester);
-  });
-
-  testWidgets('tapping the same asset again closes its pane', (tester) async {
+    // The pane's open/close is a toggle underneath, which would make the
+    // asset it is already showing the one asset you cannot click without
+    // losing the editor. Both routes back onto it have to be no-ops.
     await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
 
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
     expect(find.byType(SidePane), findsOneWidget);
 
     await tapAsset(tester, 0.3, 0.4);
-    expect(find.byType(SidePane), findsNothing);
+    expect(find.byType(SidePane), findsOneWidget,
+        reason: 'selecting the configured asset should not close its pane');
+
+    await openConfigPane(tester, 0.3, 0.4);
+    expect(find.byType(SidePane), findsOneWidget,
+        reason: '"Edit" on the configured asset should not close its pane');
+
+    await closePane(tester);
+    expect(find.byType(SidePane), findsNothing,
+        reason: 'Close is what closes it');
   });
 
   testWidgets('deleting from the pane removes the asset and closes the pane',
       (tester) async {
     final prefs = await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
 
     await tester.tap(find.widgetWithText(TextButton, 'Delete'));
     await tester.pumpAndSettle();
@@ -223,12 +219,11 @@ void main() {
 
   testWidgets('the pane follows the asset off the canvas', (tester) async {
     await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await tapAsset(tester, 0.3, 0.4);
+    await openConfigPane(tester, 0.3, 0.4);
     expect(find.byType(SidePane), findsOneWidget);
 
     // Select the box and delete it with the keyboard — a path that knows
     // nothing about the pane.
-    await enterSelectMode(tester);
     await marquee(tester, 0.1, 0.2, 0.6, 0.7);
     await tester.sendKeyEvent(LogicalKeyboardKey.delete);
     await tester.pump(const Duration(milliseconds: 150));

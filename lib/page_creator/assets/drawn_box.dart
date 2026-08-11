@@ -8,6 +8,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'package:tfc/converter/color_converter.dart';
 part 'drawn_box.g.dart';
@@ -88,22 +89,16 @@ class _DrawnBoxConfigEditorState extends State<_DrawnBoxConfigEditor> {
           const SizedBox(height: 16),
 
           // Line width slider
-          Row(
-            children: [
-              const Text('Line Width:'),
-              Expanded(
-                child: Slider(
-                  value: widget.config.lineWidth,
-                  min: 1.0,
-                  max: 10.0,
-                  divisions: 18,
-                  label: widget.config.lineWidth.toStringAsFixed(1),
-                  onChanged: (value) =>
-                      setState(() => widget.config.lineWidth = value),
-                ),
-              ),
-              Text('${widget.config.lineWidth.toStringAsFixed(1)}px'),
-            ],
+          NumberSlider(
+            label: 'Line Width:',
+            value: widget.config.lineWidth,
+            min: 1.0,
+            max: 10.0,
+            divisions: 18,
+            decimals: 1,
+            suffix: 'px',
+            onChanged: (value) =>
+                setState(() => widget.config.lineWidth = value),
           ),
 
           // Dashed/Solid toggle
@@ -116,40 +111,27 @@ class _DrawnBoxConfigEditorState extends State<_DrawnBoxConfigEditor> {
 
           // Dash settings (only visible when dashed is true)
           if (widget.config.isDashed) ...[
-            Row(
-              children: [
-                const Text('Dash Length:'),
-                Expanded(
-                  child: Slider(
-                    value: widget.config.dashLength ?? 5.0,
-                    min: 2.0,
-                    max: 20.0,
-                    divisions: 36,
-                    label: (widget.config.dashLength ?? 5.0).toStringAsFixed(1),
-                    onChanged: (value) =>
-                        setState(() => widget.config.dashLength = value),
-                  ),
-                ),
-                Text('${widget.config.dashLength?.toStringAsFixed(1)}px'),
-              ],
+            NumberSlider(
+              label: 'Dash Length:',
+              value: widget.config.dashLength ?? 5.0,
+              min: 2.0,
+              max: 20.0,
+              divisions: 36,
+              decimals: 1,
+              suffix: 'px',
+              onChanged: (value) =>
+                  setState(() => widget.config.dashLength = value),
             ),
-            Row(
-              children: [
-                const Text('Dash Spacing:'),
-                Expanded(
-                  child: Slider(
-                    value: widget.config.dashSpacing ?? 5.0,
-                    min: 2.0,
-                    max: 20.0,
-                    divisions: 36,
-                    label:
-                        (widget.config.dashSpacing ?? 5.0).toStringAsFixed(1),
-                    onChanged: (value) =>
-                        setState(() => widget.config.dashSpacing = value),
-                  ),
-                ),
-                Text('${widget.config.dashSpacing?.toStringAsFixed(1)}px'),
-              ],
+            NumberSlider(
+              label: 'Dash Spacing:',
+              value: widget.config.dashSpacing ?? 5.0,
+              min: 2.0,
+              max: 20.0,
+              divisions: 36,
+              decimals: 1,
+              suffix: 'px',
+              onChanged: (value) =>
+                  setState(() => widget.config.dashSpacing = value),
             ),
           ],
 

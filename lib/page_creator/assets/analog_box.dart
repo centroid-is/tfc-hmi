@@ -8,6 +8,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
+import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import '../../providers/state_man.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -286,21 +287,16 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                       setState(() => widget.config.rangeUnits = v),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Slider(
-                        min: 0,
-                        max: .5,
-                        divisions: 50,
-                        label:
-                            'Radius ${(widget.config.borderRadiusPct * 100).toStringAsFixed(0)}%',
-                        value: widget.config.borderRadiusPct,
-                        onChanged: (v) =>
-                            setState(() => widget.config.borderRadiusPct = v),
-                      ),
-                    ),
-                  ],
+                NumberSlider(
+                  label: 'Radius',
+                  min: 0,
+                  max: .5,
+                  divisions: 50,
+                  displayScale: 100,
+                  suffix: '%',
+                  value: widget.config.borderRadiusPct,
+                  onChanged: (v) =>
+                      setState(() => widget.config.borderRadiusPct = v),
                 ),
                 const SizedBox(height: 8),
                 SwitchListTile(

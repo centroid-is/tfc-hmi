@@ -35,7 +35,6 @@ void main() {
 
   /// Marquee-selects all three.
   Future<void> selectAll(WidgetTester tester) async {
-    await enterSelectMode(tester);
     await marquee(tester, 0.1, 0.15, 0.9, 0.85);
   }
 
@@ -86,7 +85,6 @@ void main() {
       editorBox(0.3, 0.3, angle: 45),
       editorBox(0.7, 0.7),
     ]);
-    await enterSelectMode(tester);
     await marquee(tester, 0.15, 0.15, 0.85, 0.85);
 
     await chooseFromAssetMenu(tester, 0.7, 0.7, 'Align 2 assets horizontally');
@@ -133,7 +131,6 @@ void main() {
     // vertically is still real work, which proves the check is per axis.
     await pumpEditorWith(tester,
         [editorBox(0.3, 0.5), editorBox(0.5, 0.5), editorBox(0.7, 0.5)]);
-    await enterSelectMode(tester);
     await marquee(tester, 0.15, 0.3, 0.85, 0.7);
 
     await openMenu(tester, 0.5, 0.5);

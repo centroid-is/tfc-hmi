@@ -10,6 +10,7 @@ import 'package:tfc/converter/color_converter.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
@@ -162,8 +163,8 @@ Map<String, dynamic> _childToJson(BaseAsset child) => child.toJson();
 List<ThirdPartyChildEntry> _childrenFromJson(List<dynamic>? json) {
   if (json == null) return <ThirdPartyChildEntry>[];
   return json
-      .map((item) =>
-          ThirdPartyChildEntry.fromJson(item as Map<String, dynamic>))
+      .map(
+          (item) => ThirdPartyChildEntry.fromJson(item as Map<String, dynamic>))
       .toList();
 }
 
@@ -370,9 +371,8 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
       kind: ThirdPartyEquipmentKind.speedBatcher,
       acceptWindowMinutes: acceptWindowMinutes,
     );
-    config.children
-        .addAll(buildSpeedBatcherStationChildren(
-            acceptWindowMinutes: acceptWindowMinutes));
+    config.children.addAll(buildSpeedBatcherStationChildren(
+        acceptWindowMinutes: acceptWindowMinutes));
     return config;
   }
 
@@ -719,9 +719,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     } else if (isRunning == null) {
       status = const PaneStatus.stale();
     } else {
-      status = isRunning
-          ? const PaneStatus.running()
-          : const PaneStatus.stopped();
+      status =
+          isRunning ? const PaneStatus.running() : const PaneStatus.stopped();
     }
 
     return SidePane(
@@ -742,11 +741,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               children: [
                 PaneDetailRow(
                   label: 'Machine',
-                  value: config.kind.labelFor(strapMachines: config.strapMachines),
+                  value:
+                      config.kind.labelFor(strapMachines: config.strapMachines),
                 ),
                 PaneDetailRow(
                   label: 'Footprint',
-                  value: config.kind.footprint(strapMachines: config.strapMachines),
+                  value: config.kind
+                      .footprint(strapMachines: config.strapMachines),
                 ),
                 if (config.kind.hasStrapMachines)
                   PaneDetailRow(
@@ -964,8 +965,7 @@ class ThirdPartyEquipmentBody extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           Positioned.fill(child: CustomPaint(painter: painter)),
-          for (final entry in children)
-            _positionedChild(context, entry, area),
+          for (final entry in children) _positionedChild(context, entry, area),
           Positioned(
             left: boundary.left + inset,
             top: boundary.top + inset,
@@ -1226,7 +1226,8 @@ class _ThirdPartyEquipmentConfigEditorState
                 labelText: 'Tag (e.g. MV-01)',
                 hintText: 'Optional',
               ),
-              onChanged: (v) => setState(() => config.tag = v.isEmpty ? null : v),
+              onChanged: (v) =>
+                  setState(() => config.tag = v.isEmpty ? null : v),
             ),
             const SizedBox(height: 16),
 
@@ -1275,10 +1276,11 @@ class _ThirdPartyEquipmentConfigEditorState
                 label: Text('Match ${config.kind.label} proportions'),
                 onPressed: () {
                   final screen = MediaQuery.of(context).size;
-                  final aspect =
-                      config.kind.aspectRatio(strapMachines: config.strapMachines);
-                  final height =
-                      config.size.width * screen.width / (aspect * screen.height);
+                  final aspect = config.kind
+                      .aspectRatio(strapMachines: config.strapMachines);
+                  final height = config.size.width *
+                      screen.width /
+                      (aspect * screen.height);
                   setState(() {
                     config.size = RelativeSize(
                       width: config.size.width,
@@ -1411,8 +1413,7 @@ class _ThirdPartyEquipmentConfigEditorState
                   key: ValueKey(config.children[i].id),
                   entry: config.children[i],
                   onChanged: () => setState(() {}),
-                  onRemove: () =>
-                      setState(() => config.children.removeAt(i)),
+                  onRemove: () => setState(() => config.children.removeAt(i)),
                 ),
           ],
         ),
@@ -1422,8 +1423,8 @@ class _ThirdPartyEquipmentConfigEditorState
 
   void _addChild(BaseAsset child, {bool keepUpright = false}) {
     setState(() {
-      widget.config.children.add(
-          ThirdPartyChildEntry(child: child, keepUpright: keepUpright));
+      widget.config.children
+          .add(ThirdPartyChildEntry(child: child, keepUpright: keepUpright));
     });
   }
 
@@ -1527,6 +1528,9 @@ class _ChildRow extends StatelessWidget {
   }
 }
 
+/// The x/y pair that places a machine's plan view. A one-character label ('X',
+/// 'Y') and a fraction of the bounding box, so it reads as a coordinate rather
+/// than a percentage.
 class _OffsetSlider extends StatelessWidget {
   const _OffsetSlider({
     required this.label,
@@ -1540,23 +1544,15 @@ class _OffsetSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        SizedBox(width: 16, child: Text(label)),
-        Expanded(
-          child: Slider(
-            value: value.clamp(0.0, 1.0),
-            divisions: 100,
-            label: value.toStringAsFixed(2),
-            onChanged: onChanged,
-          ),
-        ),
-        SizedBox(
-          width: 40,
-          child: Text(value.toStringAsFixed(2),
-              style: Theme.of(context).textTheme.bodySmall),
-        ),
-      ],
+    return NumberSlider(
+      label: label,
+      labelWidth: 16,
+      value: value.clamp(0.0, 1.0),
+      min: 0.0,
+      max: 1.0,
+      divisions: 100,
+      decimals: 2,
+      onChanged: onChanged,
     );
   }
 }
