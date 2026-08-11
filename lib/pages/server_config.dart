@@ -996,7 +996,7 @@ class _ServerSectionHeader extends StatelessWidget {
   }
 }
 
-/// Compact enable/disable toggle shown in a server card's header.
+/// Compact enable/disable checkbox shown in a server card's header.
 ///
 /// Disabling a server is the operator's escape hatch for a PLC that is off
 /// the network: [StateMan] then never creates a client for it, so the
@@ -1013,16 +1013,12 @@ class _ServerEnabledToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message: enabled
-          ? 'Server is enabled — click to disable it and stop all\n'
+          ? 'Server is enabled — untick to disable it and stop all\n'
               'connection attempts and key traffic for it.'
-          : 'Server is disabled — click to enable it again.',
-      child: IconButton(
-        icon: FaIcon(
-          FontAwesomeIcons.powerOff,
-          size: 16,
-          color: enabled ? Colors.green : Colors.grey,
-        ),
-        onPressed: () => onChanged(!enabled),
+          : 'Server is disabled — tick to enable it again.',
+      child: Checkbox(
+        value: enabled,
+        onChanged: (value) => onChanged(value ?? false),
       ),
     );
   }

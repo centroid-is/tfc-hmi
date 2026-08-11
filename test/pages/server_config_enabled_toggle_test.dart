@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
@@ -9,9 +8,14 @@ import 'package:tfc_dart/core/state_man.dart';
 
 import '../helpers/test_helpers.dart';
 
-/// Finds the power-off toggle buttons rendered by every server card.
-Finder _powerToggles() => find.byWidgetPredicate(
-    (w) => w is FaIcon && w.icon == FontAwesomeIcons.powerOff.data);
+/// Finds the enable/disable checkboxes rendered in every server card header.
+///
+/// Cards are collapsed in these tests, so the only checkboxes on screen are
+/// the header ones — the UMAS checkbox lives inside the expanded Modbus body.
+Finder _toggles() => find.byType(Checkbox);
+
+bool _isTicked(WidgetTester tester, Finder toggle) =>
+    tester.widget<Checkbox>(toggle).value ?? false;
 
 void main() {
   setUp(() {
@@ -22,7 +26,7 @@ void main() {
   });
 
   group('server enable/disable toggle', () {
-    testWidgets('each configured server card shows a power toggle',
+    testWidgets('each configured server card shows an enable checkbox',
         (tester) async {
       await pumpAndLoad(
         tester,
@@ -35,10 +39,10 @@ void main() {
         ),
       );
 
-      expect(_powerToggles(), findsNWidgets(3));
+      expect(_toggles(), findsNWidgets(3));
     });
 
-    testWidgets('an enabled server shows a green toggle and no Disabled chip',
+    testWidgets('an enabled server shows a ticked box and no Disabled chip',
         (tester) async {
       await pumpAndLoad(
         tester,
@@ -49,12 +53,11 @@ void main() {
         ),
       );
 
-      final icon = tester.widget<FaIcon>(_powerToggles().first);
-      expect(icon.color, Colors.green);
+      expect(_isTicked(tester, _toggles().first), isTrue);
       expect(find.text('Disabled'), findsNothing);
     });
 
-    testWidgets('a disabled server renders grey with a Disabled chip',
+    testWidgets('a disabled server renders unticked with a Disabled chip',
         (tester) async {
       await pumpAndLoad(
         tester,
@@ -69,12 +72,11 @@ void main() {
         ),
       );
 
-      final icon = tester.widget<FaIcon>(_powerToggles().first);
-      expect(icon.color, Colors.grey);
+      expect(_isTicked(tester, _toggles().first), isFalse);
       expect(find.text('Disabled'), findsOneWidget);
     });
 
-    testWidgets('tapping the toggle disables the server and marks it unsaved',
+    testWidgets('unticking the box disables the server and marks it unsaved',
         (tester) async {
       await pumpAndLoad(
         tester,
@@ -87,17 +89,17 @@ void main() {
 
       expect(find.text('Disabled'), findsNothing);
 
-      await tester.tap(_powerToggles().first);
+      await tester.tap(_toggles().first);
       await settle(tester);
 
       expect(find.text('Disabled'), findsOneWidget);
-      expect(tester.widget<FaIcon>(_powerToggles().first).color, Colors.grey);
+      expect(_isTicked(tester, _toggles().first), isFalse);
       // Toggling is a config change like any other, so the section must
       // offer to save it.
       expect(find.text('Save Configuration'), findsAtLeastNWidgets(1));
     });
 
-    testWidgets('tapping the toggle again re-enables the server',
+    testWidgets('ticking the box again re-enables the server',
         (tester) async {
       await pumpAndLoad(
         tester,
@@ -112,11 +114,11 @@ void main() {
         ),
       );
 
-      await tester.tap(_powerToggles().first);
+      await tester.tap(_toggles().first);
       await settle(tester);
 
       expect(find.text('Disabled'), findsNothing);
-      expect(tester.widget<FaIcon>(_powerToggles().first).color, Colors.green);
+      expect(_isTicked(tester, _toggles().first), isTrue);
     });
 
     testWidgets('editing other fields does not clear the disabled flag',
