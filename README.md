@@ -22,7 +22,7 @@ Unpackaged builds straight from the tip of `main`, rebuilt on every merge. No in
 
 | Platform | Download | Notes |
 |----------|----------|-------|
-| :apple: **macOS** (Apple Silicon) | [`centroidx_darwin_arm64.dmg`](https://github.com/centroid-is/tfc-hmi/releases/download/main-latest/centroidx_darwin_arm64.dmg) | Signed and notarized |
+| :apple: **macOS** (Apple Silicon) | [`centroidx_darwin_arm64.dmg`](https://github.com/centroid-is/tfc-hmi/releases/download/main-latest/centroidx_darwin_arm64.dmg) | Developer ID signed; Gatekeeper may warn if the build was not notarized |
 | :window: **Windows** (x64) | [`centroidx_windows_x64.zip`](https://github.com/centroid-is/tfc-hmi/releases/download/main-latest/centroidx_windows_x64.zip) | Portable `centroidx.exe` + libs, no MSIX |
 | :penguin: **Linux** (x64) | [`centroidx_linux_x64.tar.gz`](https://github.com/centroid-is/tfc-hmi/releases/download/main-latest/centroidx_linux_x64.tar.gz) | Needs GTK 3 and libsecret installed |
 

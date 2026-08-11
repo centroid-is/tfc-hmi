@@ -94,7 +94,7 @@ jobs:
 
           | Platform | Asset |
           |----------|-------|
-          | macOS (Apple Silicon) | \`centroidx_darwin_arm64.dmg\` — signed and notarized |
+          | macOS (Apple Silicon) | \`centroidx_darwin_arm64.dmg\` — Developer ID signed; notarized only when Apple's notary service accepts the build |
           | Windows (x64) | \`centroidx_windows_x64.zip\` — portable exe + libs, no installer |
           | Linux (x64) | \`centroidx_linux_x64.tar.gz\` — GTK3 desktop bundle |
 
