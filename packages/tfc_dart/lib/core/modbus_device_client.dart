@@ -1387,11 +1387,14 @@ Map<String, String> buildUmasPollGroupsFromKeyMappings(
 ///
 /// This is the primary entry point for both data_acquisition_isolate and
 /// the Flutter UI provider.
+///
+/// Servers with `enabled == false` are skipped entirely — no wrapper, no
+/// poll timers, no per-cycle read failures in the log while the PLC is down.
 List<DeviceClient> buildModbusDeviceClients(
   List<ModbusConfig> modbusConfigs,
   KeyMappings keyMappings,
 ) {
-  return modbusConfigs.map((config) {
+  return modbusConfigs.where((config) => config.enabled).map((config) {
     final specs = buildSpecsFromKeyMappings(
       keyMappings,
       config.serverAlias,

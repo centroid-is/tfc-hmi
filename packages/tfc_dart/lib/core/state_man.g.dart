@@ -12,7 +12,8 @@ OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
   ..password = json['password'] as String?
   ..sslCert = const Base64Converter().fromJson(json['ssl_cert'] as String?)
   ..sslKey = const Base64Converter().fromJson(json['ssl_key'] as String?)
-  ..serverAlias = json['server_alias'] as String?;
+  ..serverAlias = json['server_alias'] as String?
+  ..enabled = json['enabled'] as bool? ?? true;
 
 Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
     <String, dynamic>{
@@ -22,12 +23,14 @@ Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
       'ssl_cert': const Base64Converter().toJson(instance.sslCert),
       'ssl_key': const Base64Converter().toJson(instance.sslKey),
       'server_alias': instance.serverAlias,
+      'enabled': instance.enabled,
     };
 
 M2400Config _$M2400ConfigFromJson(Map<String, dynamic> json) => M2400Config(
       type: json['type'] as String? ?? 'm2400',
       host: json['host'] as String? ?? '',
       port: (json['port'] as num?)?.toInt() ?? 52211,
+      enabled: json['enabled'] as bool? ?? true,
     )..serverAlias = json['server_alias'] as String?;
 
 Map<String, dynamic> _$M2400ConfigToJson(M2400Config instance) =>
@@ -36,6 +39,7 @@ Map<String, dynamic> _$M2400ConfigToJson(M2400Config instance) =>
       'host': instance.host,
       'port': instance.port,
       'server_alias': instance.serverAlias,
+      'enabled': instance.enabled,
     };
 
 M2400NodeConfig _$M2400NodeConfigFromJson(Map<String, dynamic> json) =>
@@ -147,6 +151,7 @@ ModbusConfig _$ModbusConfigFromJson(Map<String, dynamic> json) => ModbusConfig(
           $enumDecodeNullable(_$ModbusEndiannessEnumMap, json['endianness']) ??
               ModbusEndianness.ABCD,
       addressBase: (json['address_base'] as num?)?.toInt() ?? 0,
+      enabled: json['enabled'] as bool? ?? true,
     );
 
 Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
@@ -155,6 +160,7 @@ Map<String, dynamic> _$ModbusConfigToJson(ModbusConfig instance) =>
       'port': instance.port,
       'unit_id': instance.unitId,
       'server_alias': instance.serverAlias,
+      'enabled': instance.enabled,
       'poll_groups': instance.pollGroups.map((e) => e.toJson()).toList(),
       'umas_enabled': instance.umasEnabled,
       'endianness': _$ModbusEndiannessEnumMap[instance.endianness]!,

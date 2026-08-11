@@ -53,10 +53,19 @@ class Evaluator {
   Stream<String?> state() {
     streamController.onListen = () async {
       final variables = expression.value.extractVariables();
-      final streams = await Future.wait(variables.map((variable) async {
-        final stream = await stateMan.subscribe(variable);
-        return stream;
-      }));
+      final List<Stream<DynamicValue>> streams;
+      try {
+        streams = await Future.wait(variables.map((variable) async {
+          final stream = await stateMan.subscribe(variable);
+          return stream;
+        }));
+      } catch (error, stack) {
+        // subscribe() throws synchronously for keys on a disabled server.
+        // Surface it on the stream instead of letting it escape this async
+        // onListen callback as an unhandled zone error.
+        streamController.addError(error, stack);
+        return;
+      }
 
       subscription = CombineLatestStream.list<DynamicValue>(streams).listen(
         (values) {

@@ -35,7 +35,7 @@ extension ModbusConfigListExt on List<ModbusConfig> {
   }
 }
 
-enum _KeyStatus { ok, error, serverDisconnected }
+enum _KeyStatus { ok, error, serverDisconnected, serverDisabled }
 
 /// The full page widget with BaseScaffold (used in navigation).
 class KeyRepositoryPage extends ConsumerWidget {
@@ -450,6 +450,13 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       // later given that same name inherits a stale status.
       if (!_keyMappings!.nodes.containsKey(key)) {
         _keyStatuses.remove(key);
+        continue;
+      }
+      // Keys on a disabled server have nothing to probe — reading them
+      // would just burn the 5 s timeout each, one key at a time.
+      if (stateMan.isKeyDisabled(key)) {
+        _keyStatuses[key] = _KeyStatus.serverDisabled;
+        _scheduleStatusFlush();
         continue;
       }
       try {
@@ -1233,6 +1240,8 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       _KeyStatus.ok => (Colors.green, 'OK'),
       _KeyStatus.error => (Colors.red, 'Error'),
       _KeyStatus.serverDisconnected => (Colors.red, 'Disconnected'),
+      // Grey, not red: the server is off because someone switched it off.
+      _KeyStatus.serverDisabled => (Colors.grey, 'Disabled'),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
