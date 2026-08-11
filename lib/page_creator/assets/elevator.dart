@@ -9,6 +9,8 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
 import '../../providers/state_man.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'elevator_layout.dart';
@@ -125,7 +127,8 @@ class ElevatorChildEntry {
     this.offsetX = 0.5,
     this.offsetY = 0.0,
     required this.child,
-  }) : id = id ?? '${DateTime.now().microsecondsSinceEpoch}-${_nextElevatorChildEntryIdSuffix++}';
+  }) : id = id ??
+            '${DateTime.now().microsecondsSinceEpoch}-${_nextElevatorChildEntryIdSuffix++}';
 
   factory ElevatorChildEntry.fromJson(Map<String, dynamic> json) =>
       _$ElevatorChildEntryFromJson(json);
@@ -192,8 +195,7 @@ class ElevatorConfig extends BaseAsset {
     this.simulate,
     this.travelRange = 1.0,
     List<ElevatorChildEntry>? children,
-  }) : children =
-            children != null ? List<ElevatorChildEntry>.of(children) : [];
+  }) : children = children != null ? List<ElevatorChildEntry>.of(children) : [];
 
   /// Preview factory for the asset palette.
   ElevatorConfig.preview() : this();
@@ -585,80 +587,148 @@ class _ElevatorState extends ConsumerState<Elevator> {
   bool get _isStaleEffective =>
       widget.config.positionKey.isEmpty || _isStreamStale;
 
-  /// Opens the read-only details dialog (Plan 04-05 / ELEV-01).
+  /// Identity of this elevator's docked pane. Tapping the same elevator
+  /// twice toggles the pane; opening another asset's pane replaces it.
+  String get _paneId => 'elevator:${identityHashCode(widget.config)}';
+
+  /// Opens the read-only details pane (Plan 04-05 / ELEV-01).
   ///
   /// Operators tap the elevator at runtime to inspect current state —
   /// position key, current progress, tween duration, simulate flag,
-  /// out-of-range/stale flags, child count. The dialog is purely
+  /// out-of-range/stale flags, child count. The pane is purely
   /// informational: no PLC writes, no config edits. Configuration is
   /// editor-only and routed through `page_editor.dart` →
-  /// `ElevatorConfig.configure(context)`. Mirrors the
-  /// `_ConveyorState._showDetailsDialog` precedent (conveyor.dart:902)
-  /// in spirit while staying simpler — elevators have no jog buttons or
-  /// other operator actions.
+  /// `ElevatorConfig.configure(context)`.
   ///
-  /// Reads the live `_progress` notifier directly so the displayed
-  /// percentage reflects the most recent stream emission (or simulator
-  /// tick). The notifier is owned by this State instance, so the dialog
-  /// captures the value at open-time — operators close+reopen to refresh.
-  /// This avoids running a ValueListenableBuilder inside the AlertDialog
-  /// route which would force the dialog itself to rebuild on every
-  /// 50ms simulator tick or PLC emission.
-  void _showDetailsDialog(BuildContext context) {
-    showDialog<void>(
+  /// Since Plan 260811 this is a non-modal [SidePane] instead of an
+  /// `AlertDialog`: the plant view behind it keeps running, so an operator
+  /// can watch the lift move while reading its numbers. That also lets the
+  /// body listen to `_progress` — the pane lives in its own overlay subtree,
+  /// so a 50ms simulator tick rebuilds only these few rows and never the
+  /// elevator itself (the reason the old dialog froze its value at
+  /// open-time). `_progress` is owned by this State, so the pane MUST be
+  /// closed from [dispose] before the notifier goes away.
+  void _showDetailsPane(BuildContext context) {
+    showSidePane(
       context: context,
-      builder: (ctx) {
-        final pct = (_progress.value.clamp(0.0, 1.0) * 100).round();
-        final positionText = (widget.config.simulate ?? false)
-            ? 'simulating ($pct%)'
-            : (_isStaleEffective ? '— (stale)' : '$pct%');
-        return AlertDialog(
-          title: const Text('Elevator'),
-          content: SingleChildScrollView(
+      id: _paneId,
+      builder: (paneContext) => ValueListenableBuilder<double>(
+        valueListenable: _progress,
+        builder: (paneContext, progress, _) {
+          final pct = (progress.clamp(0.0, 1.0) * 100).round();
+          final simulating = widget.config.simulate ?? false;
+          final stale = _isStaleEffective;
+          final outOfRange = _isOutOfRange && !stale;
+          final positionText = simulating
+              ? 'simulating ($pct%)'
+              : (stale ? '— (stale)' : '$pct%');
+          return SidePane(
+            title: 'Elevator',
+            subtitle: widget.config.positionKey.isEmpty
+                ? 'no position key'
+                : widget.config.positionKey,
+            icon: Icons.elevator,
+            status: stale
+                ? const PaneStatus.stale()
+                : outOfRange
+                    ? const PaneStatus.warning('Out of range')
+                    : simulating
+                        ? const PaneStatus.running('Simulating')
+                        : const PaneStatus.running('Live'),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _DetailRow(
-                  'Position key',
-                  widget.config.positionKey.isEmpty
-                      ? '—'
-                      : widget.config.positionKey,
+                PaneSection(
+                  title: 'Position',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PaneTileRow(
+                        children: [
+                          PaneMetricTile(
+                            label: 'Travel',
+                            value: stale && !simulating ? '—' : '$pct',
+                            unit: '%',
+                            icon: Icons.height,
+                          ),
+                          PaneMetricTile(
+                            label: 'Tween',
+                            value: '${widget.config.tweenDurationMs}',
+                            unit: 'ms',
+                            icon: Icons.timer_outlined,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      // Always determinate: an indeterminate bar would
+                      // animate forever, which reads as "moving" on a stale
+                      // lift and never lets a test settle. Staleness is
+                      // carried by the status chip and the Stale row.
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: progress.clamp(0.0, 1.0),
+                          minHeight: 8,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                _DetailRow('Current position', positionText),
-                _DetailRow(
-                  'Tween duration',
-                  '${widget.config.tweenDurationMs} ms',
-                ),
-                _DetailRow(
-                  'Out-of-range',
-                  _isOutOfRange && !_isStaleEffective ? 'yes' : 'no',
-                ),
-                _DetailRow('Stale', _isStaleEffective ? 'yes' : 'no'),
-                _DetailRow(
-                  'Simulate motion',
-                  (widget.config.simulate ?? false) ? 'on' : 'off',
-                ),
-                _DetailRow(
-                  'Children',
-                  '${widget.config.children.length} attached',
+                const Divider(height: 1),
+                PaneSection(
+                  title: 'Details',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PaneDetailRow(
+                        label: 'Position key',
+                        value: widget.config.positionKey.isEmpty
+                            ? '—'
+                            : widget.config.positionKey,
+                      ),
+                      PaneDetailRow(
+                        label: 'Current position',
+                        value: positionText,
+                      ),
+                      PaneDetailRow(
+                        label: 'Tween duration',
+                        value: '${widget.config.tweenDurationMs} ms',
+                      ),
+                      PaneDetailRow(
+                        label: 'Out-of-range',
+                        value: outOfRange ? 'yes' : 'no',
+                      ),
+                      PaneDetailRow(
+                        label: 'Stale',
+                        value: stale ? 'yes' : 'no',
+                      ),
+                      PaneDetailRow(
+                        label: 'Simulate motion',
+                        value: simulating ? 'on' : 'off',
+                      ),
+                      PaneDetailRow(
+                        label: 'Children',
+                        value: '${widget.config.children.length} attached',
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Close'),
-            ),
-          ],
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
   @override
   void dispose() {
+    // The pane's body listens to `_progress`, which dies with this State —
+    // and a docked pane outlives the route that opened it. Close it first.
+    closeSidePane(id: _paneId);
     _streamSub?.cancel();
     // Plan 04-04 — cancel the simulation timer (if running) BEFORE
     // disposing the progress notifier so a final tick can't fire on
@@ -756,12 +826,10 @@ class _ElevatorState extends ConsumerState<Elevator> {
     double maxChildHeight,
   ) {
     final intrinsic = entry.child.size.toSize(paintSize);
-    final childW = intrinsic.width <= 0
-        ? paintSize.shortestSide / 4
-        : intrinsic.width;
-    final childH = intrinsic.height <= 0
-        ? paintSize.shortestSide / 4
-        : intrinsic.height;
+    final childW =
+        intrinsic.width <= 0 ? paintSize.shortestSide / 4 : intrinsic.width;
+    final childH =
+        intrinsic.height <= 0 ? paintSize.shortestSide / 4 : intrinsic.height;
     final left = entry.offsetX * paintSize.width - childW / 2;
     return ValueListenableBuilder<double>(
       valueListenable: _animProgress,
@@ -802,7 +870,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
     final activeColor = Theme.of(context).colorScheme.primary;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _showDetailsDialog(context),
+      onTap: () => _showDetailsPane(context),
       child: LayoutRotatedBox(
         angle: angleDeg * pi / 180,
         child: LayoutBuilder(
@@ -862,38 +930,13 @@ class _ElevatorState extends ConsumerState<Elevator> {
 }
 
 // ---------------------------------------------------------------------------
-// Details dialog row helper (Plan 04-05 / ELEV-01)
+// Details rows (Plan 04-05 / ELEV-01)
 // ---------------------------------------------------------------------------
-
-/// Single label/value row for the runtime details dialog.
-///
-/// Used exclusively by `_ElevatorState._showDetailsDialog`. Duplicated
-/// from sensor.dart on purpose — keeping the helper private to its file
-/// avoids a cross-file public-API surface for what is a one-screen polish
-/// feature. If a third call site emerges, promote this to common.dart.
-class _DetailRow extends StatelessWidget {
-  const _DetailRow(this.label, this.value);
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 200,
-              child: Text(
-                label,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-            Expanded(child: SelectableText(value)),
-          ],
-        ),
-      );
-}
+//
+// The private `_DetailRow` helper that used to live here was the third copy
+// of the same label/value row (sensor.dart, conveyor.dart, here) — it is now
+// `PaneDetailRow` in widgets/panes/pane_chrome.dart, shared by every pane and
+// dialog, exactly as the old TODO on this helper asked for.
 
 // ---------------------------------------------------------------------------
 // Config editor — the body of the configure dialog.
@@ -1162,12 +1205,14 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
               // in build() iterates config.children directly, so
               // reordering the list naturally re-orders paint order
               // without touching the runtime widget.
-              ...config.children.reversed.toList().asMap().entries.map(
-                  (displayed) {
+              ...config.children.reversed
+                  .toList()
+                  .asMap()
+                  .entries
+                  .map((displayed) {
                 final displayIndex = displayed.key;
                 final entry = displayed.value;
-                final actualIndex =
-                    config.children.length - 1 - displayIndex;
+                final actualIndex = config.children.length - 1 - displayIndex;
                 final isTopmost = actualIndex == config.children.length - 1;
                 final isBottommost = actualIndex == 0;
                 return Card(
@@ -1190,17 +1235,14 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                               tooltip: 'Move forward (paint on top)',
                               onPressed: isTopmost
                                   ? null
-                                  : () =>
-                                      _onReorderChildPressed(entry, 1),
+                                  : () => _onReorderChildPressed(entry, 1),
                             ),
                             IconButton(
-                              icon:
-                                  const Icon(Icons.arrow_downward, size: 20),
+                              icon: const Icon(Icons.arrow_downward, size: 20),
                               tooltip: 'Move backward (paint behind)',
                               onPressed: isBottommost
                                   ? null
-                                  : () =>
-                                      _onReorderChildPressed(entry, -1),
+                                  : () => _onReorderChildPressed(entry, -1),
                             ),
                             IconButton(
                               icon: const Icon(Icons.edit, size: 20),
@@ -1226,8 +1268,7 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                           divisions: 100,
                           value: entry.offsetX,
                           label: '${(entry.offsetX * 100).round()}%',
-                          onChanged: (v) =>
-                              setState(() => entry.offsetX = v),
+                          onChanged: (v) => setState(() => entry.offsetX = v),
                         ),
                         Text(
                           'Vertical offset: ${(entry.offsetY * 100).round()}% of child height',
@@ -1240,8 +1281,7 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                           value: entry.offsetY,
                           label:
                               'Vertical offset: ${(entry.offsetY * 100).round()}%',
-                          onChanged: (v) =>
-                              setState(() => entry.offsetY = v),
+                          onChanged: (v) => setState(() => entry.offsetY = v),
                         ),
                       ],
                     ),

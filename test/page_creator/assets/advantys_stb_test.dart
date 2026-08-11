@@ -26,6 +26,8 @@ import 'package:tfc/painter/advantys_stb/pdt3100.dart';
 import 'package:tfc/painter/advantys_stb/io16.dart';
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
+import 'package:tfc/widgets/panes/side_pane.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 void main() {
@@ -518,18 +520,26 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Plan 03: detail dialog — trigger group.
+  // Plan 03: detail surface — trigger group.
   //
   // With all five `*Key` fields null, `_combinedStream` emits nothing, so the
-  // `StreamBuilder` inside the dialog stays in the no-data state. The dialog
+  // `StreamBuilder` inside the pane stays in the no-data state. The pane
   // still opens with its title (`config.nameOrId`) and `Close` action — that's
   // enough to lock the onTap-handler shape replaced from the Plan 02 stub.
+  //
+  // Plan 260811 moved this surface from an `AlertDialog` to the non-modal
+  // `SidePane`, with the wide per-channel grid behind the pane's
+  // "Channel detail" tile in a floating `StandardDialog`.
   //
   // `_FakeStateMan` lets `stateManProvider.future` resolve so the
   // `_STBDDI3725State.initState` callback runs to completion. No `subscribe`
   // or `write` methods are touched on this path (keys are null).
   // ---------------------------------------------------------------------------
-  group('STBDDI3725 detail dialog — trigger', () {
+  group('STBDDI3725 detail pane — trigger', () {
+    // Panes and floating dialogs live in the root overlay, outside the
+    // widget under test — close anything a test leaves behind.
+    tearDown(closeSidePane);
+
     Future<void> pumpAndOpen(WidgetTester tester, STBDDI3725Config cfg,
         {StateMan? stateMan}) async {
       await tester.pumpWidget(
@@ -557,12 +567,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
 
-    testWidgets('tap opens AlertDialog titled with nameOrId', (tester) async {
+    testWidgets('tap opens SidePane titled with nameOrId', (tester) async {
       final cfg = STBDDI3725Config(nameOrId: 'DI-3725-A');
       await pumpAndOpen(tester, cfg);
 
-      // No dialog up front.
-      expect(find.byType(AlertDialog), findsNothing);
+      // No pane up front.
+      expect(find.byType(SidePane), findsNothing);
 
       // Tap the body. With null keys the body renders the stale shell — the
       // GestureDetector wraps the `STBDDI3725Widget`. Tap the widget directly
@@ -570,50 +580,57 @@ void main() {
       await tester.tap(find.byType(STBDDI3725Widget));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
       expect(find.text('DI-3725-A'), findsOneWidget);
       expect(find.text('Close'), findsOneWidget);
     });
 
-    testWidgets('Close action dismisses the dialog', (tester) async {
+    testWidgets('Close action dismisses the pane', (tester) async {
       final cfg = STBDDI3725Config(nameOrId: 'DI-X');
       await pumpAndOpen(tester, cfg);
 
       await tester.tap(find.byType(STBDDI3725Widget));
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SidePane), findsOneWidget);
 
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.widgetWithText(TextButton, 'Close'));
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SidePane), findsNothing);
     });
 
     testWidgets(
-      'with all-null keys, dialog body renders no rows (no data yet)',
+      'with all-null keys, pane opens without the channel grid (no data yet)',
       (tester) async {
-        // All-null path: `_combinedStream` is empty, so the StreamBuilder
-        // returns `SizedBox.shrink()` (mirrors EL1008 behaviour). RowIOView
-        // count must be zero.
+        // All-null path: `_combinedStream` is empty, so the pane renders its
+        // strip from an all-low fallback. The wide `RowIOView` grid is not in
+        // the pane at all — it lives behind the "Channel detail" tile.
         final cfg = STBDDI3725Config(nameOrId: '1');
         await pumpAndOpen(tester, cfg);
 
         await tester.tap(find.byType(STBDDI3725Widget));
         await tester.pumpAndSettle();
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(SidePane), findsOneWidget);
         expect(find.byType(RowIOView), findsNothing);
+        expect(find.text('Channel detail'), findsOneWidget);
       },
     );
   });
 
   // ---------------------------------------------------------------------------
-  // Plan 03: detail dialog — row structure + force-write integration.
+  // Plan 03: channel grid — row structure + force-write integration.
   //
   // `_StreamingStubStateMan` returns canned DynamicValues for each *Key. The
-  // dialog StreamBuilder receives a single combined emission and renders the
+  // grid StreamBuilder receives a single combined emission and renders the
   // 8 RowIOView widgets (16 FilterEdits). Force writes round-trip through
   // the fake's `writes` log so we can assert the mutated `force` list.
+  //
+  // Plan 260811: the grid moved out of the `AlertDialog` and into the
+  // floating `StandardDialog` behind the pane's "Channel detail" tile, so
+  // these tests take one extra tap to get there. Everything they assert
+  // about the grid itself is unchanged.
   // ---------------------------------------------------------------------------
-  group('STBDDI3725 detail dialog — row structure', () {
+  group('STBDDI3725 channel grid — row structure', () {
+    tearDown(closeSidePane);
     late _StreamingStubStateMan stub;
     setUp(() {
       stub = _StreamingStubStateMan(
@@ -664,13 +681,17 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
+      // Tap 1 opens the docked pane; tap 2 expands the channel grid into
+      // its floating dialog, which is where RowIOView now lives.
       await tester.tap(find.byType(STBDDI3725Widget));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Channel detail'));
       await tester.pumpAndSettle();
     }
 
     testWidgets('renders 8 RowIOView widgets when data flows', (tester) async {
       await openWithStub(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(StandardDialog), findsOneWidget);
       // DDI-09: 8 rows × 2 cols.
       expect(find.byType(RowIOView), findsNWidgets(8));
     });
@@ -696,7 +717,8 @@ void main() {
     });
   });
 
-  group('STBDDI3725 detail dialog — force write integration', () {
+  group('STBDDI3725 channel grid — force write integration', () {
+    tearDown(closeSidePane);
     late _StreamingStubStateMan stub;
     setUp(() {
       stub = _StreamingStubStateMan(
@@ -739,7 +761,11 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
+      // Tap 1 opens the docked pane; tap 2 expands the channel grid into
+      // its floating dialog, which is where RowIOView now lives.
       await tester.tap(find.byType(STBDDI3725Widget));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Channel detail'));
       await tester.pumpAndSettle();
     }
 
@@ -747,7 +773,7 @@ void main() {
       'tapping a Low SegmentedButton writes to forceValuesKey with [0]==1',
       (tester) async {
         await openWithStub(tester);
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(StandardDialog), findsOneWidget);
 
         // Each of 16 channels has an "Auto / Low / High" SegmentedButton.
         // Tap the FIRST "Low " label (channel 1, row 0 left). The Low label
@@ -1109,10 +1135,11 @@ void main() {
   });
 
   group(
-    'STBDDI3725 dialog open/close 10× leak (DDI-10 / QUAL-03)',
+    'STBDDI3725 pane open/close 10× leak (DDI-10 / QUAL-03)',
     () {
+      tearDown(closeSidePane);
       testWidgets(
-        '10 dialog cycles + unmount throws no exceptions',
+        '10 pane cycles + unmount throws no exceptions',
         (tester) async {
           await tester.binding.setSurfaceSize(const Size(1400, 900));
           addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1155,23 +1182,23 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
           expect(find.byType(STBDDI3725Widget), findsOneWidget);
 
-          // 10× open / close cycles. Each open spawns a fresh dialog
-          // StreamBuilder; each close (Navigator.pop via 'Close' action)
-          // disposes it, releasing the underlying StateMan listeners.
+          // 10× open / close cycles. Each open spawns a fresh pane
+          // StreamBuilder; each close (the pinned 'Close' action removing the
+          // overlay entry) disposes it, releasing the StateMan listeners.
           for (int i = 0; i < 10; i++) {
             await tester.tap(find.byType(STBDDI3725Widget));
             await tester.pumpAndSettle();
-            expect(find.byType(AlertDialog), findsOneWidget,
-                reason: 'iteration $i: dialog should open');
+            expect(find.byType(SidePane), findsOneWidget,
+                reason: 'iteration $i: pane should open');
 
             await tester.tap(find.widgetWithText(TextButton, 'Close'));
             await tester.pumpAndSettle();
-            expect(find.byType(AlertDialog), findsNothing,
-                reason: 'iteration $i: dialog should close');
+            expect(find.byType(SidePane), findsNothing,
+                reason: 'iteration $i: pane should close');
           }
 
           // After 10 cycles, also dispose the parent — covers the
-          // combined "dialog churn + page navigation" lifecycle path.
+          // combined "pane churn + page navigation" lifecycle path.
           await tester.pumpWidget(const SizedBox.shrink());
           await tester.pump(const Duration(seconds: 1));
 
@@ -3143,20 +3170,21 @@ void main() {
     );
 
     testWidgets(
-      'Test 3: tap on DDI body opens its detail AlertDialog',
+      'Test 3: tap on DDI body opens its detail SidePane',
       (tester) async {
+        addTearDown(closeSidePane);
         final head = buildCanonicalHead();
         await pumpHead(tester, head);
 
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(SidePane), findsNothing);
         await tester.tap(find.byType(STBDDI3725Widget));
         await tester.pumpAndSettle();
 
-        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.byType(SidePane), findsOneWidget);
 
-        await tester.tap(find.text('Close'));
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
         await tester.pumpAndSettle();
-        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(SidePane), findsNothing);
       },
     );
 

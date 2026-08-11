@@ -48,6 +48,8 @@ import '../../painter/advantys_stb/ddo3705.dart';
 import '../../painter/advantys_stb/nip2311.dart';
 import '../../painter/advantys_stb/pdt3100.dart';
 import '../../painter/beckhoff/io8.dart' show IOState;
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 
 part 'advantys_stb.g.dart';
 
@@ -192,10 +194,18 @@ class _STBDDI3725State extends ConsumerState<_STBDDI3725> {
     // keeping `StateMan` reachable through GC roots if the page is
     // long-lived but the widget cycles in/out). The `_stateMan` field
     // is similarly cleared to drop the strong ref.
+    //
+    // The docked pane holds `_stateMan` too and lives in the root overlay, so
+    // it must go first — otherwise a page change would leave a pane behind
+    // writing to a module that is no longer on screen.
+    closeSidePane(id: _paneId);
     _combinedStreamCache = null;
     _stateMan = null;
     super.dispose();
   }
+
+  /// Identity of this module's docked pane — tapping it again toggles it.
+  String get _paneId => 'stb-ddi3725:${identityHashCode(widget.config)}';
 
   @override
   Widget build(BuildContext context) {
@@ -235,11 +245,12 @@ class _STBDDI3725State extends ConsumerState<_STBDDI3725> {
       behavior: HitTestBehavior.opaque,
       onTap: () {
         if (_stateMan == null) return;
-        _showDDI3725DetailDialog(
+        _showDDI3725DetailPane(
           context,
           widget.config,
           _stateMan!,
           const AlwaysStoppedAnimation<int>(0),
+          _paneId,
         );
       },
       child: STBDDI3725Widget(
@@ -385,135 +396,306 @@ List<int>? _forceArrayFromDynamicValue(DynamicValue? dv) {
 }
 
 // ---------------------------------------------------------------------------
-// Detail dialog — _showDDI3725DetailDialog
+// Detail pane — _showDDI3725DetailPane
 //
-// 8 rows × 2 columns of `RowIOView` reused verbatim from `beckhoff.dart`. Each
-// row pairs channels `(r+1, r+9)` (UI-SPEC §Detail Dialog). Per-channel
-// surface: state indicator + force `SegmentedButton` + ON/OFF filter
-// `TextFormField`s + description `TextFormField`.
+// Since Plan 260811 tapping the module opens a non-modal `SidePane` instead of
+// an `AlertDialog`. The 8 rows × 2 columns of `RowIOView` did not fit a pane
+// and never really fitted a dialog either — per-channel force buttons, two
+// filter fields and a description field are simply wide. So the surface is
+// split the way the pane standard prescribes:
 //
-// The combined stream subscribes to all FIVE keys (raw, force, on_filters,
-// off_filters, descriptions) — distinct from the body stream which only
-// touches raw + force. The dialog StreamBuilder owns the subscription; when
-// the dialog pops, the StreamBuilder is disposed and the underlying StateMan
-// listeners are released. Plan 04 will land a leak test that opens/closes
-// the dialog 10× and verifies listener counts return to baseline.
+//   * the PANE carries identity, link status, a 16-channel state strip and
+//     the forced-channel count — a glance, no scrolling;
+//   * the GRID moves behind a `PaneExpandTile` into a free-floating
+//     `StandardDialog` the operator can drag onto the plant view and resize.
+//
+// Stream lifetimes are unchanged in kind: the pane subscribes to raw + force
+// only (like the body), while the grid subscribes to all FIVE keys (raw,
+// force, on_filters, off_filters, descriptions) and owns that subscription
+// through its own `StreamBuilder` — closing the dialog disposes the builder
+// and releases the StateMan listeners, exactly as popping the dialog did.
 // ---------------------------------------------------------------------------
 
-void _showDDI3725DetailDialog(
+void _showDDI3725DetailPane(
   BuildContext context,
   STBDDI3725Config config,
   StateMan stateMan,
   Animation<int> animation,
+  String paneId,
 ) {
-  showDialog<void>(
+  showSidePane(
     context: context,
-    builder: (dialogContext) {
-      return AlertDialog(
-        title: Text(config.nameOrId),
-        content: SingleChildScrollView(
-          child: StreamBuilder<Map<String, DynamicValue>>(
-            stream: _combinedStream(
-              LinkedHashMap<String, String?>.from(<String, String?>{
-                'raw': config.rawStateKey,
-                'force': config.forceValuesKey,
-                'on_filters': config.onFiltersKey,
-                'off_filters': config.offFiltersKey,
-                'descriptions': config.descriptionsKey,
-              }),
-              stateMan,
-            ),
-            builder: (context, snap) {
-              if (!snap.hasData || snap.hasError) {
-                return const SizedBox.shrink();
-              }
-              final map = snap.data!;
-              final rawDv = map['raw'];
-              final List<bool>? rawStates = rawDv != null
-                  ? List<bool>.generate(
-                      16, (i) => (rawDv.asInt & (1 << i)) != 0)
-                  : null;
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (int r = 0; r < 8; r++)
-                    Padding(
-                      padding: EdgeInsets.only(bottom: r < 7 ? 2.0 : 0.0),
-                      child: RowIOView(
-                        leftRaw: rawStates?[r] ?? false,
-                        rightRaw: rawStates?[r + 8] ?? false,
-                        leftProcessed: null,
-                        rightProcessed: null,
-                        leftSelected: map['force']?[r].asInt ?? 0,
-                        rightSelected: map['force']?[r + 8].asInt ?? 0,
-                        animationValue: animation,
-                        leftOnChanged: (value) async {
-                          map['force']![r].value = value;
-                          await stateMan.write(
-                              config.forceValuesKey!, map['force']!);
-                        },
-                        rightOnChanged: (value) async {
-                          map['force']![r + 8].value = value;
-                          await stateMan.write(
-                              config.forceValuesKey!, map['force']!);
-                        },
-                        leftDescription: map['descriptions']?[r].asString,
-                        rightDescription: map['descriptions']?[r + 8].asString,
-                        leftFilterEdit: (map.containsKey('on_filters') &&
-                                map.containsKey('off_filters'))
-                            ? FilterEdit(
-                                onFilter: map['on_filters']?[r].asInt ?? 0,
-                                offFilter: map['off_filters']?[r].asInt ?? 0,
-                                onChangedOnFilter: (v) async {
-                                  map['on_filters']![r].value = v;
-                                  await stateMan.write(
-                                      config.onFiltersKey!,
-                                      map['on_filters']!);
-                                },
-                                onChangedOffFilter: (v) async {
-                                  map['off_filters']![r].value = v;
-                                  await stateMan.write(
-                                      config.offFiltersKey!,
-                                      map['off_filters']!);
-                                },
-                              )
-                            : null,
-                        rightFilterEdit: (map.containsKey('on_filters') &&
-                                map.containsKey('off_filters'))
-                            ? FilterEdit(
-                                onFilter: map['on_filters']?[r + 8].asInt ?? 0,
-                                offFilter:
-                                    map['off_filters']?[r + 8].asInt ?? 0,
-                                onChangedOnFilter: (v) async {
-                                  map['on_filters']![r + 8].value = v;
-                                  await stateMan.write(
-                                      config.onFiltersKey!,
-                                      map['on_filters']!);
-                                },
-                                onChangedOffFilter: (v) async {
-                                  map['off_filters']![r + 8].value = v;
-                                  await stateMan.write(
-                                      config.offFiltersKey!,
-                                      map['off_filters']!);
-                                },
-                              )
-                            : null,
-                      ),
+    id: paneId,
+    builder: (paneContext) => StreamBuilder<Map<String, DynamicValue>>(
+      stream: _combinedStream(
+        LinkedHashMap<String, String?>.from(<String, String?>{
+          'raw': config.rawStateKey,
+          'force': config.forceValuesKey,
+        }),
+        stateMan,
+      ),
+      builder: (context, snap) {
+        final data = (snap.hasData && !snap.hasError) ? snap.data : null;
+        final raw = data?['raw']?.asInt ?? 0;
+        final forceList = _forceArrayFromDynamicValue(data?['force']);
+        final leds = bitmaskToLedStates(raw, forceValues: forceList);
+        final forcedCount = leds
+            .where((s) => s == IOState.forcedHigh || s == IOState.forcedLow)
+            .length;
+        final highCount = leds
+            .where((s) => s == IOState.high || s == IOState.forcedHigh)
+            .length;
+
+        return SidePane(
+          title: config.nameOrId,
+          subtitle: 'Advantys STB · 16 DI',
+          icon: Icons.developer_board,
+          status: data == null
+              ? const PaneStatus.stale('No data')
+              : forcedCount > 0
+                  ? PaneStatus.warning('$forcedCount forced')
+                  : const PaneStatus.running('Live'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              PaneSection(
+                title: 'Channels',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ChannelStrip(states: leds),
+                    const SizedBox(height: 10),
+                    PaneTileRow(
+                      children: [
+                        PaneMetricTile(
+                          label: 'High',
+                          value: '$highCount',
+                          unit: '/ 16',
+                          icon: Icons.input,
+                        ),
+                        PaneMetricTile(
+                          label: 'Forced',
+                          value: '$forcedCount',
+                          unit: '/ 16',
+                          icon: Icons.pan_tool,
+                          valueColor: forcedCount > 0 ? Colors.orange : null,
+                        ),
+                      ],
                     ),
-                ],
-              );
-            },
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              PaneSection(
+                title: 'Detail',
+                child: PaneExpandTile(
+                  label: 'Channel detail',
+                  summary: 'Force, filters and descriptions for all 16',
+                  icon: Icons.grid_on,
+                  expandedTitle: '${config.nameOrId} — channels',
+                  // Wide enough for a full RowIOView without sideways
+                  // scrolling; the dialog clamps itself on smaller screens.
+                  expandedSize: const Size(940, 560),
+                  expandedBuilder: (context) => _DDI3725ChannelGrid(
+                    config: config,
+                    stateMan: stateMan,
+                    animation: animation,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
+}
+
+/// A 16-square read-out of the module's channels, two rows of eight.
+///
+/// This is the pane's whole-module glance: colour is the channel state,
+/// an outline marks a forced channel. Anything an operator can *do* with a
+/// channel lives in the expanded grid.
+class _ChannelStrip extends StatelessWidget {
+  final List<IOState> states;
+
+  const _ChannelStrip({required this.states});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget cell(int index) {
+      final state = index < states.length ? states[index] : IOState.low;
+      final high = state == IOState.high || state == IOState.forcedHigh;
+      final forced = state == IOState.forcedHigh || state == IOState.forcedLow;
+      final error = state == IOState.error;
+      final color = error
+          ? theme.colorScheme.error
+          : high
+              ? Colors.green
+              : theme.disabledColor;
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 22,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: high ? 0.85 : 0.25),
+                  borderRadius: BorderRadius.circular(4),
+                  border: forced
+                      ? Border.all(color: Colors.orange, width: 2)
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text('${index + 1}', style: theme.textTheme.labelSmall),
+            ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
-          ),
-        ],
       );
-    },
-  );
+    }
+
+    return Column(
+      children: [
+        Row(children: [for (int i = 0; i < 8; i++) cell(i)]),
+        const SizedBox(height: 6),
+        Row(children: [for (int i = 8; i < 16; i++) cell(i)]),
+      ],
+    );
+  }
+}
+
+/// The full per-channel grid: 8 rows × 2 columns of `RowIOView`, each row
+/// pairing channels `(r+1, r+9)` (UI-SPEC §Detail Dialog). Per-channel
+/// surface: state indicator + force `SegmentedButton` + ON/OFF filter
+/// `TextFormField`s + description `TextFormField`.
+///
+/// Lifted verbatim out of the old `AlertDialog` so the force/filter write
+/// paths are byte-for-byte the ones the Plan 03/04 tests lock; only its host
+/// changed, from a modal dialog to a floating one.
+class _DDI3725ChannelGrid extends StatelessWidget {
+  final STBDDI3725Config config;
+  final StateMan stateMan;
+  final Animation<int> animation;
+
+  const _DDI3725ChannelGrid({
+    required this.config,
+    required this.stateMan,
+    required this.animation,
+  });
+
+  /// A `RowIOView` is intrinsically ~900px wide: state indicator, force
+  /// SegmentedButton, two filter fields and a description field, twice over.
+  /// Below this the row scrolls sideways rather than overflowing — the
+  /// floating dialog is resizable, and the operator may make it narrow.
+  static const double _minGridWidth = 900;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: constraints.maxWidth < _minGridWidth
+              ? _minGridWidth
+              : constraints.maxWidth,
+          child: _buildGrid(context),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGrid(BuildContext context) {
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: _combinedStream(
+        LinkedHashMap<String, String?>.from(<String, String?>{
+          'raw': config.rawStateKey,
+          'force': config.forceValuesKey,
+          'on_filters': config.onFiltersKey,
+          'off_filters': config.offFiltersKey,
+          'descriptions': config.descriptionsKey,
+        }),
+        stateMan,
+      ),
+      builder: (context, snap) {
+        if (!snap.hasData || snap.hasError) {
+          return const SizedBox.shrink();
+        }
+        final map = snap.data!;
+        final rawDv = map['raw'];
+        final List<bool>? rawStates = rawDv != null
+            ? List<bool>.generate(16, (i) => (rawDv.asInt & (1 << i)) != 0)
+            : null;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (int r = 0; r < 8; r++)
+              Padding(
+                padding: EdgeInsets.only(bottom: r < 7 ? 2.0 : 0.0),
+                child: RowIOView(
+                  leftRaw: rawStates?[r] ?? false,
+                  rightRaw: rawStates?[r + 8] ?? false,
+                  leftProcessed: null,
+                  rightProcessed: null,
+                  leftSelected: map['force']?[r].asInt ?? 0,
+                  rightSelected: map['force']?[r + 8].asInt ?? 0,
+                  animationValue: animation,
+                  leftOnChanged: (value) async {
+                    map['force']![r].value = value;
+                    await stateMan.write(config.forceValuesKey!, map['force']!);
+                  },
+                  rightOnChanged: (value) async {
+                    map['force']![r + 8].value = value;
+                    await stateMan.write(config.forceValuesKey!, map['force']!);
+                  },
+                  leftDescription: map['descriptions']?[r].asString,
+                  rightDescription: map['descriptions']?[r + 8].asString,
+                  leftFilterEdit: (map.containsKey('on_filters') &&
+                          map.containsKey('off_filters'))
+                      ? FilterEdit(
+                          onFilter: map['on_filters']?[r].asInt ?? 0,
+                          offFilter: map['off_filters']?[r].asInt ?? 0,
+                          onChangedOnFilter: (v) async {
+                            map['on_filters']![r].value = v;
+                            await stateMan.write(
+                                config.onFiltersKey!, map['on_filters']!);
+                          },
+                          onChangedOffFilter: (v) async {
+                            map['off_filters']![r].value = v;
+                            await stateMan.write(
+                                config.offFiltersKey!, map['off_filters']!);
+                          },
+                        )
+                      : null,
+                  rightFilterEdit: (map.containsKey('on_filters') &&
+                          map.containsKey('off_filters'))
+                      ? FilterEdit(
+                          onFilter: map['on_filters']?[r + 8].asInt ?? 0,
+                          offFilter: map['off_filters']?[r + 8].asInt ?? 0,
+                          onChangedOnFilter: (v) async {
+                            map['on_filters']![r + 8].value = v;
+                            await stateMan.write(
+                                config.onFiltersKey!, map['on_filters']!);
+                          },
+                          onChangedOffFilter: (v) async {
+                            map['off_filters']![r + 8].value = v;
+                            await stateMan.write(
+                                config.offFiltersKey!, map['off_filters']!);
+                          },
+                        )
+                      : null,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
 }
 
 // ===========================================================================
@@ -854,8 +1036,7 @@ void _showDDO3705DetailDialog(
                               config.forceValuesKey!, map['force']!);
                         },
                         leftDescription: map['descriptions']?[r].asString,
-                        rightDescription:
-                            map['descriptions']?[r + 8].asString,
+                        rightDescription: map['descriptions']?[r + 8].asString,
                         // DDO-06: outputs have NO filter inputs.
                         leftFilterEdit: null,
                         rightFilterEdit: null,

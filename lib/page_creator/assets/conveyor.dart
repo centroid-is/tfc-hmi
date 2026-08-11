@@ -13,6 +13,8 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../widgets/graph.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 import 'auger_conveyor_painter.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
@@ -634,10 +636,8 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             max: 1.0,
             divisions: 95,
             value: (widget.config.beltThickness ?? 1.0).clamp(0.05, 1.0),
-            label:
-                '${((widget.config.beltThickness ?? 1.0) * 100).round()}%',
-            onChanged: (v) =>
-                setState(() => widget.config.beltThickness = v),
+            label: '${((widget.config.beltThickness ?? 1.0) * 100).round()}%',
+            onChanged: (v) => setState(() => widget.config.beltThickness = v),
           ),
           ...widget.config.turns.asMap().entries.map((mapEntry) {
             final entry = mapEntry.value;
@@ -765,6 +765,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
   @override
   void dispose() {
+    // A docked pane outlives the route that opened it, so a page change must
+    // not leave this conveyor's pane behind.
+    closeSidePane(id: _paneId);
     _augerAnimationTimer?.cancel();
     _augerPhase.dispose();
     _simulateBatchesTimer?.cancel();
@@ -1003,7 +1006,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
             widget.config.key != null && widget.config.key!.isNotEmpty;
         if (hasMainKey) {
           return GestureDetector(
-            onTap: () => _showDetailsDialog(context),
+            onTap: () => _showDetailsPane(context),
             child: _buildConveyorVisual(context, color, null, freq),
           );
         }
@@ -1185,364 +1188,396 @@ class _ConveyorState extends ConsumerState<Conveyor>
     }
   }
 
-  void _showDetailsDialog(BuildContext context) {
-    showDialog(
+  /// Identity of this conveyor's docked pane. Tapping the same conveyor
+  /// twice toggles it; tapping another device replaces it.
+  String get _paneId => 'conveyor:${identityHashCode(widget.config)}';
+
+  /// Opens the operator pane for this conveyor.
+  ///
+  /// Since Plan 260811 this is a non-modal [SidePane] rather than an
+  /// `AlertDialog`. It matters more here than anywhere else: jogging a belt
+  /// is a hand-on-button, eyes-on-the-belt operation, and the old dialog put
+  /// a barrier over the very mimic the operator was watching.
+  ///
+  /// The layout follows the house rule — headline numbers as tiles, commands
+  /// pinned in the footer, and the stats trend behind a [PaneGraphTile] so
+  /// the pane itself stays inside one screen. Tapping the trend opens it in a
+  /// free-floating dialog the operator can drag onto the plant view.
+  ///
+  /// The subscription lives in a `StreamBuilder` inside the pane body, so it
+  /// is released when the pane closes — same lifetime contract as the dialog
+  /// it replaces.
+  void _showDetailsPane(BuildContext context) {
+    showSidePane(
       context: context,
-      builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
-        stream: ref.watch(stateManProvider.future).asStream().switchMap(
-              (stateMan) => stateMan
-                  .subscribe(widget.config.key!)
-                  .asStream()
-                  .map(
-                    (stream) => Rx.combineLatest2(
-                      Stream.value(stateMan),
-                      stream,
-                      (stateMan, value) => (stateMan, value),
-                    ),
-                  )
-                  .switchMap((stream) => stream),
-            ),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Dialog(
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          if (snapshot.hasError) {
-            return AlertDialog(
-              title: const Text('Error'),
-              content: Text(snapshot.error.toString()),
-            );
-          }
+      id: _paneId,
+      builder: (paneContext) => Consumer(
+        builder: (paneContext, ref, _) =>
+            StreamBuilder<(StateMan, DynamicValue)>(
+          stream: ref.watch(stateManProvider.future).asStream().switchMap(
+                (stateMan) => stateMan
+                    .subscribe(widget.config.key!)
+                    .asStream()
+                    .map(
+                      (stream) => Rx.combineLatest2(
+                        Stream.value(stateMan),
+                        stream,
+                        (stateMan, value) => (stateMan, value),
+                      ),
+                    )
+                    .switchMap((stream) => stream),
+              ),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return SidePane(
+                title: widget.config.key!,
+                subtitle: 'Conveyor',
+                icon: Icons.conveyor_belt,
+                status: const PaneStatus.unknown('Connecting'),
+                child: const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              );
+            }
+            if (snapshot.hasError) {
+              return SidePane(
+                title: widget.config.key!,
+                subtitle: 'Conveyor',
+                icon: Icons.conveyor_belt,
+                status: const PaneStatus.fault('Error'),
+                child: PaneSection(
+                  title: 'Subscription failed',
+                  child: SelectableText(snapshot.error.toString()),
+                ),
+              );
+            }
 
-          var (stateMan, dynValue) = snapshot.data!;
+            final (stateMan, dynValue) = snapshot.data!;
 
-          return AlertDialog(
-            title: Text(widget.config.key!),
-            content: SingleChildScrollView(
+            /// Copy-on-write helper — every command follows the same shape:
+            /// clone the current value, set one field, write the whole thing
+            /// back. Preserved verbatim from the dialog this replaced.
+            void write(String field, Object? value) {
+              final newValue = DynamicValue.from(dynValue);
+              newValue[field] = value;
+              stateMan.write(widget.config.key!, newValue);
+            }
+
+            final jogFwd = dynValue['p_stat_JogFwd'].asBool;
+            final jogBwd = dynValue['p_stat_JogBwd'].asBool;
+            final stopOnRelease = dynValue['p_stat_ManualStopOnRelease'].asBool;
+            final frequency = dynValue['p_stat_Frequency'].asDouble;
+            final runMinutes = dynValue['p_stat_RunMinutes'].asInt;
+
+            return SidePane(
+              title: widget.config.key!,
+              subtitle: 'Conveyor',
+              icon: Icons.conveyor_belt,
+              status: (jogFwd || jogBwd)
+                  ? const PaneStatus.running('Jogging')
+                  : frequency.abs() > 0.01
+                      ? const PaneStatus.running()
+                      : const PaneStatus.stopped(),
+              // One command in the footer: three buttons wrap onto two rows
+              // in a 380px pane and the pinned bar stops reading as a bar.
+              // 'Reset run hours' sits on the Status section instead, next to
+              // the number it resets.
+              actions: [
+                PaneAction.destructive(
+                  label: 'Fault reset',
+                  icon: Icons.restart_alt,
+                  onPressed: () => write('p_cmd_FaultReset', true),
+                ),
+              ],
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Status header
-                  Center(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  // --- Jog -------------------------------------------------
+                  //
+                  // `p_stat_ManualStopOnRelease` decides the gesture: when
+                  // set, the belt runs only while the button is held (the
+                  // press/release callbacks write true/false); when clear, a
+                  // tap latches it. Both paths are unchanged from the dialog.
+                  PaneSection(
+                    title: 'Jog',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        RawMaterialButton(
-                          shape: const CircleBorder(),
-                          padding: const EdgeInsets.all(8),
-                          onHighlightChanged: (isPressed) async {
-                            if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
-                              final newValue = DynamicValue.from(dynValue);
-                              newValue['p_cmd_JogBwd'] = isPressed;
-                              await stateMan.write(
-                                widget.config.key!,
-                                newValue,
-                              );
-                            }
-                          },
-                          onPressed: () {
-                            if (!dynValue['p_stat_ManualStopOnRelease']
-                                .asBool) {
-                              final newValue = DynamicValue.from(dynValue);
-                              newValue['p_cmd_JogBwd'] = true;
-                              stateMan.write(widget.config.key!, newValue);
-                            }
-                          },
-                          child: Icon(
-                            Icons.arrow_back,
-                            color: dynValue['p_stat_JogBwd'].asBool
-                                ? Colors.green
-                                : Colors.grey,
-                            size: 48,
-                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _JogButton(
+                              icon: Icons.arrow_back,
+                              label: 'Reverse',
+                              active: jogBwd,
+                              stopOnRelease: stopOnRelease,
+                              onCommand: (v) => write('p_cmd_JogBwd', v),
+                            ),
+                            _JogButton(
+                              icon: Icons.arrow_forward,
+                              label: 'Forward',
+                              active: jogFwd,
+                              stopOnRelease: stopOnRelease,
+                              onCommand: (v) => write('p_cmd_JogFwd', v),
+                            ),
+                          ],
                         ),
-                        Text(
-                          'Jog',
-                          style: Theme.of(context).textTheme.headlineLarge,
-                        ),
-                        RawMaterialButton(
-                          shape: const CircleBorder(),
-                          padding: const EdgeInsets.all(8),
-                          onHighlightChanged: (isPressed) async {
-                            if (dynValue['p_stat_ManualStopOnRelease'].asBool) {
-                              final newValue = DynamicValue.from(dynValue);
-                              newValue['p_cmd_JogFwd'] = isPressed;
-                              await stateMan.write(
-                                widget.config.key!,
-                                newValue,
-                              );
-                            }
-                          },
-                          onPressed: () {
-                            if (!dynValue['p_stat_ManualStopOnRelease']
-                                .asBool) {
-                              final newValue = DynamicValue.from(dynValue);
-                              newValue['p_cmd_JogFwd'] = true;
-                              stateMan.write(widget.config.key!, newValue);
-                            }
-                          },
-                          child: Icon(
-                            Icons.arrow_forward,
-                            color: dynValue['p_stat_JogFwd'].asBool
-                                ? Colors.green
-                                : Colors.grey,
-                            size: 48,
-                          ),
+                        const SizedBox(height: 4),
+                        // Compact row rather than a SwitchListTile: the pane
+                        // has one screen of height and this is a mode flag,
+                        // not a headline.
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                stopOnRelease
+                                    ? 'Runs only while held'
+                                    : 'Tap latches the belt on',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                            Switch(
+                              value: stopOnRelease,
+                              onChanged: (_) =>
+                                  write('p_cmd_ManualStopOnRelease', true),
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
+                  const Divider(height: 1),
 
-                  const SizedBox(height: 12),
-
-                  // Fault reset toggle
-                  Row(
-                    children: [
-                      RawMaterialButton(
-                        shape: const CircleBorder(),
-                        padding: const EdgeInsets.all(8),
-                        onPressed: () {
-                          final newValue = DynamicValue.from(dynValue);
-                          newValue['p_cmd_FaultReset'] = true;
-                          stateMan.write(widget.config.key!, newValue);
-                        },
-                        child: Icon(
-                          Icons.circle,
-                          color: dynValue['p_stat_FaultReset'].asBool
-                              ? Colors.green
-                              : Colors.grey,
-                          size: 48,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Fault reset',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
-                  ),
-
-                  // Manual stop on release toggle
-                  Row(
-                    children: [
-                      RawMaterialButton(
-                        shape: const CircleBorder(),
-                        padding: const EdgeInsets.all(8),
-                        onPressed: () {
-                          final newValue = DynamicValue.from(dynValue);
-                          newValue['p_cmd_ManualStopOnRelease'] = true;
-                          stateMan.write(widget.config.key!, newValue);
-                        },
-                        child: Icon(
-                          Icons.circle,
-                          color: dynValue['p_stat_ManualStopOnRelease'].asBool
-                              ? Colors.green
-                              : Colors.grey,
-                          size: 48,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Manual stop on release',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 4),
-
-                  // Reset run hours
-                  Row(
-                    children: [
-                      RawMaterialButton(
-                        shape: const CircleBorder(),
-                        padding: const EdgeInsets.all(8),
-                        onPressed: () {
-                          final newValue = DynamicValue.from(dynValue);
-                          newValue['p_cmd_ResetRunHours'] = true;
-                          stateMan.write(widget.config.key!, newValue);
-                        },
-                        child: const Icon(
-                          Icons.circle,
-                          color: Colors.grey,
-                          size: 48,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Reset run hours',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // Statistics columns
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Labels
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('HMIS',
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text('Last Fault',
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text('Frequency',
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text('Run hours',
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text('Current',
-                              style: Theme.of(context).textTheme.bodyLarge),
-                        ],
-                      ),
-                      // Values
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(dynValue['p_stat_State'].toString(),
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text(dynValue['p_stat_LastFault'].toString(),
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text(
-                              "${dynValue['p_stat_Frequency'].asDouble.toStringAsFixed(2)} Hz",
-                              style: Theme.of(context).textTheme.bodyLarge),
-                          Text(
-                            "${dynValue['p_stat_RunMinutes'].asInt ~/ 60}:${dynValue['p_stat_RunMinutes'].asInt % 60} h:m",
-                            style: Theme.of(context).textTheme.bodyLarge,
-                          ),
-                          Text(
-                              "${dynValue['p_stat_Current'].asDouble.toStringAsFixed(2)} A",
-                              style: Theme.of(context).textTheme.bodyLarge),
-                        ],
-                      ),
-                      // Editable fields
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: SizedBox(
-                              width: 200,
-                              child: TextFormField(
-                                key: Key(
-                                    'auto_freq_field-${dynValue['p_cfg_AutoFreq'].asString}'),
-                                initialValue: dynValue['p_cfg_AutoFreq']
-                                    .asDouble
-                                    .toStringAsFixed(2),
-                                decoration: const InputDecoration(
-                                    labelText: 'Auto frequency',
-                                    suffixText: 'Hz',
-                                    suffixIcon: null),
-                                onFieldSubmitted: (value) {
-                                  if (value.isEmpty) {
-                                    return;
-                                  }
-                                  final newValue = DynamicValue.from(dynValue);
-                                  newValue['p_cfg_AutoFreq'] =
-                                      double.parse(value);
-                                  stateMan.write(widget.config.key!, newValue);
-                                },
-                              ),
+                  // --- Live numbers ----------------------------------------
+                  PaneSection(
+                    title: 'Status',
+                    trailing: TextButton(
+                      onPressed: () => write('p_cmd_ResetRunHours', true),
+                      child: const Text('Reset hours'),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        PaneTileRow(
+                          children: [
+                            PaneMetricTile(
+                              label: 'Frequency',
+                              value: frequency.toStringAsFixed(2),
+                              unit: 'Hz',
+                              icon: Icons.speed,
                             ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: SizedBox(
-                              width: 200,
-                              child: TextFormField(
-                                key: Key(
-                                    'cleaning_freq_field-${dynValue['p_cfg_CleaningFreq'].asString}'),
-                                initialValue: dynValue['p_cfg_CleaningFreq']
-                                    .asDouble
-                                    .toStringAsFixed(2),
-                                decoration: const InputDecoration(
-                                    labelText: 'Cleaning frequency',
-                                    suffixText: 'Hz',
-                                    suffixIcon: null),
-                                onFieldSubmitted: (value) {
-                                  if (value.isEmpty) {
-                                    return;
-                                  }
-                                  final newValue = DynamicValue.from(dynValue);
-                                  newValue['p_cfg_CleaningFreq'] =
-                                      double.parse(value);
-                                  stateMan.write(widget.config.key!, newValue);
-                                },
-                              ),
+                            PaneMetricTile(
+                              label: 'Current',
+                              value: dynValue['p_stat_Current']
+                                  .asDouble
+                                  .toStringAsFixed(2),
+                              unit: 'A',
+                              icon: Icons.bolt,
                             ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: SizedBox(
-                              width: 200,
-                              child: TextFormField(
-                                key: Key(
-                                    'manual_freq_field-${dynValue['p_cfg_ManualFreq'].asString}'),
-                                initialValue: dynValue['p_cfg_ManualFreq']
-                                    .asDouble
-                                    .toStringAsFixed(2),
-                                decoration: const InputDecoration(
-                                  labelText: 'Manual frequency',
-                                  suffixText: 'Hz',
-                                  suffixIcon: null,
-                                ),
-                                onFieldSubmitted: (value) {
-                                  if (value.isEmpty) {
-                                    return;
-                                  }
-                                  final newValue = DynamicValue.from(dynValue);
-                                  newValue['p_cfg_ManualFreq'] =
-                                      double.parse(value);
-                                  stateMan.write(widget.config.key!, newValue);
-                                },
-                              ),
+                            PaneMetricTile(
+                              label: 'Run hours',
+                              value:
+                                  '${runMinutes ~/ 60}:${(runMinutes % 60).toString().padLeft(2, '0')}',
+                              unit: 'h:m',
+                              icon: Icons.schedule,
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        PaneDetailRow(
+                          label: 'HMIS',
+                          value: dynValue['p_stat_State'].toString(),
+                        ),
+                        PaneDetailRow(
+                          label: 'Last fault',
+                          value: dynValue['p_stat_LastFault'].toString(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+
+                  // --- Trend ------------------------------------------------
+                  //
+                  // A preview in the pane, the real chart in a floating
+                  // dialog the operator can park next to the mimic.
+                  PaneSection(
+                    title: 'Trend',
+                    child: PaneGraphTile(
+                      label: '${widget.config.key!} statistics',
+                      preview: _ConveyorStatsGraphLoader(
+                        keyName: widget.config.key!,
+                      ),
+                      expandedTitle: '${widget.config.key!} — statistics',
+                      expandedBuilder: (context) => _ConveyorStatsGraphLoader(
+                        keyName: widget.config.key!,
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1),
+
+                  // --- Setpoints --------------------------------------------
+                  //
+                  // Three frequency fields are a form, not a glance, so they
+                  // live in a floating dialog the operator can park anywhere.
+                  // Committed on submit (Enter / focus-out), never per
+                  // keystroke — a half-typed frequency must not reach the
+                  // drive. Keys embed the current value so a field resets when
+                  // the PLC reports a different one.
+                  PaneSection(
+                    title: 'Setpoints',
+                    child: PaneExpandTile(
+                      label: 'Frequencies',
+                      summary:
+                          'Auto ${dynValue['p_cfg_AutoFreq'].asDouble.toStringAsFixed(2)} Hz · '
+                          'Cleaning ${dynValue['p_cfg_CleaningFreq'].asDouble.toStringAsFixed(2)} Hz · '
+                          'Manual ${dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2)} Hz',
+                      icon: Icons.tune,
+                      expandedTitle: '${widget.config.key!} — setpoints',
+                      expandedSize: const Size(420, 320),
+                      expandedBuilder: (context) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _FrequencyField(
+                            fieldKey: 'auto_freq_field',
+                            label: 'Auto frequency',
+                            value: dynValue['p_cfg_AutoFreq'],
+                            onSubmitted: (v) => write('p_cfg_AutoFreq', v),
+                          ),
+                          const SizedBox(height: 12),
+                          _FrequencyField(
+                            fieldKey: 'cleaning_freq_field',
+                            label: 'Cleaning frequency',
+                            value: dynValue['p_cfg_CleaningFreq'],
+                            onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
+                          ),
+                          const SizedBox(height: 12),
+                          _FrequencyField(
+                            fieldKey: 'manual_freq_field',
+                            label: 'Manual frequency',
+                            value: dynValue['p_cfg_ManualFreq'],
+                            onSubmitted: (v) => write('p_cfg_ManualFreq', v),
                           ),
                         ],
                       ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // Graph
-                  SizedBox(
-                    width: MediaQuery.of(context).size.width * 0.4,
-                    height: MediaQuery.of(context).size.height * 0.3,
-                    child: FutureBuilder<Collector?>(
-                      future: ref.watch(collectorProvider.future),
-                      builder: (context, collectorSnapshot) {
-                        if (!collectorSnapshot.hasData) {
-                          return const Center(
-                              child: CircularProgressIndicator());
-                        }
-                        return ConveyorStatsGraph(
-                          collector: collectorSnapshot.data,
-                          keyName: widget.config.key!,
-                        );
-                      },
                     ),
                   ),
                 ],
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
-              ),
-            ],
-          );
-        },
+            );
+          },
+        ),
       ),
+    );
+  }
+}
+
+/// One jog button — a large touch target with a label underneath.
+///
+/// [stopOnRelease] mirrors `p_stat_ManualStopOnRelease`: when true the
+/// command follows the press state (true on press, false on release); when
+/// false a tap writes a single latching `true`.
+class _JogButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final bool stopOnRelease;
+  final void Function(bool value) onCommand;
+
+  const _JogButton({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.stopOnRelease,
+    required this.onCommand,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = active ? Colors.green : Theme.of(context).disabledColor;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        RawMaterialButton(
+          shape: const CircleBorder(),
+          padding: const EdgeInsets.all(8),
+          constraints: const BoxConstraints(minWidth: 56, minHeight: 56),
+          onHighlightChanged: (isPressed) {
+            if (stopOnRelease) onCommand(isPressed);
+          },
+          onPressed: () {
+            if (!stopOnRelease) onCommand(true);
+          },
+          child: Icon(icon, color: color, size: 36),
+        ),
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+      ],
+    );
+  }
+}
+
+/// A frequency setpoint field. Submits on Enter/focus-out only.
+class _FrequencyField extends StatelessWidget {
+  final String fieldKey;
+  final String label;
+  final DynamicValue value;
+  final void Function(double value) onSubmitted;
+
+  const _FrequencyField({
+    required this.fieldKey,
+    required this.label,
+    required this.value,
+    required this.onSubmitted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      key: Key('$fieldKey-${value.asString}'),
+      initialValue: value.asDouble.toStringAsFixed(2),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(
+        labelText: label,
+        suffixText: 'Hz',
+        isDense: true,
+      ),
+      onFieldSubmitted: (text) {
+        if (text.isEmpty) return;
+        final parsed = double.tryParse(text);
+        if (parsed == null) return;
+        onSubmitted(parsed);
+      },
+    );
+  }
+}
+
+/// Resolves the [Collector] and hands it to [ConveyorStatsGraph].
+///
+/// Used for both the pane preview and the expanded floating chart, so the
+/// two can never drift apart.
+class _ConveyorStatsGraphLoader extends ConsumerWidget {
+  final String keyName;
+
+  const _ConveyorStatsGraphLoader({required this.keyName});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Collector?>(
+      future: ref.watch(collectorProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return ConveyorStatsGraph(
+          collector: snapshot.data,
+          keyName: keyName,
+        );
+      },
     );
   }
 }
