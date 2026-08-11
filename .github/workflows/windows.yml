@@ -108,6 +108,11 @@ jobs:
           foreach ($dll in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
             Copy-Item "C:\Windows\System32\$dll" $release
           }
+          # msix:create drops the package here, so it would otherwise ride
+          # along inside the portable zip — 26 MB of installer in a download
+          # whose whole point is not being an installer. Already uploaded as
+          # its own artifact by this point.
+          Remove-Item "$release/*.msix" -Force -ErrorAction SilentlyContinue
           Get-ChildItem $release
 
       - name: Upload portable exe artifact
