@@ -122,30 +122,82 @@ void main() {
       expect(segmentLength, closeTo(geometry.length * 0.2, 1e-3));
     });
 
-    test('trimmedEnds cuts the requested length off both ends', () {
+    test('bandOutline spans the requested stretch of belt', () {
       final geometry = ConveyorPathGeometry.build(
         [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
-        size,
+        const Size(400, 200),
+        thicknessFactor: 0.2,
       )!;
-      final trim = geometry.length * 0.1;
-      final trimmed = geometry.trimmedEnds(trim);
-      final length = trimmed
-          .computeMetrics()
-          .fold<double>(0, (sum, m) => sum + m.length);
-      expect(length, closeTo(geometry.length - 2 * trim, 1e-3));
+      final width = geometry.beltWidth * 0.8;
+      final outline =
+          geometry.bandOutline(0.3, 0.6, width: width, radius: width * 0.2)!;
+      final bounds = outline.getBounds();
+      // Every point of the stretch, fattened by half the band, must be inside
+      // the outline's bounds — and nothing far outside it.
+      for (var f = 0.3; f <= 0.6; f += 0.01) {
+        final p = geometry.tangentAt(f).position;
+        expect(bounds.inflate(0.5).contains(p), isTrue, reason: 'at $f');
+      }
+      expect(bounds.width, lessThanOrEqualTo(geometry.length + width));
+      expect(bounds.height, lessThanOrEqualTo(geometry.length + width));
     });
 
-    test('trimmedEnds never inverts on a belt shorter than the trim', () {
+    test('bandOutline stays within half a band of the centerline', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)],
+        const Size(400, 200),
+        thicknessFactor: 0.2,
+      )!;
+      const width = 20.0;
+      final outline = geometry.bandOutline(0.2, 0.8, width: width, radius: 4)!;
+      final centerline = geometry.extractFraction(0.2, 0.8).getBounds();
+      // The band is the centerline fattened by half its width, no more.
+      expect(outline.getBounds().left,
+          greaterThanOrEqualTo(centerline.left - width / 2 - 0.5));
+      expect(outline.getBounds().right,
+          lessThanOrEqualTo(centerline.right + width / 2 + 0.5));
+      expect(outline.getBounds().top,
+          greaterThanOrEqualTo(centerline.top - width / 2 - 0.5));
+      expect(outline.getBounds().bottom,
+          lessThanOrEqualTo(centerline.bottom + width / 2 + 0.5));
+    });
+
+    test('bandOutline degenerates safely on an empty or inverted stretch', () {
       final geometry = ConveyorPathGeometry.build(
         [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
         size,
       )!;
-      final trimmed = geometry.trimmedEnds(geometry.length * 5);
-      final length = trimmed
-          .computeMetrics()
-          .fold<double>(0, (sum, m) => sum + m.length);
-      expect(length, greaterThanOrEqualTo(0));
-      expect(length, lessThan(geometry.length));
+      expect(geometry.bandOutline(0.5, 0.5, width: 10, radius: 2)!.getBounds(),
+          Rect.zero);
+      expect(geometry.bandOutline(0.7, 0.2, width: 10, radius: 2)!.getBounds(),
+          Rect.zero);
+      expect(geometry.bandOutline(0, 1, width: 0, radius: 2)!.getBounds(),
+          Rect.zero);
+    });
+
+    test('a band narrower than its corner radius still closes', () {
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 2.0)],
+        const Size(400, 200),
+        thicknessFactor: 0.2,
+      )!;
+      // Radius clamped to half the width and half the span, like an RRect.
+      final outline = geometry.bandOutline(0.4, 0.42, width: 8, radius: 40)!;
+      expect(outline.getBounds().isEmpty, isFalse);
+    });
+
+    test('a band wider than its own bend has no outline', () {
+      // The inner edge would reach past the centre of curvature and fold the
+      // outline into a bow tie; the painter strokes the centerline instead.
+      final geometry = ConveyorPathGeometry.build(
+        [ConveyorTurnEntry(position: 0.5, angle: 120, radius: 0.5)],
+        size,
+        thicknessFactor: 1.0,
+      )!;
+      expect(
+          geometry.bandOutline(0, 1,
+              width: geometry.beltWidth * 4, radius: 2),
+          isNull);
     });
   });
 

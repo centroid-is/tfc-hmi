@@ -134,12 +134,101 @@ class ConveyorPathGeometry {
   Path extractFraction(double from, double to) => _metric.extractPath(
       from.clamp(0.0, 1.0) * length, to.clamp(0.0, 1.0) * length);
 
-  /// The centerline with [amount] logical pixels cut off each end, so the
-  /// ends can be painted as their own shape instead of as a stroke cap.
-  Path trimmedEnds(double amount) {
-    final cut = min(amount, length / 2 - 1e-3);
-    if (cut <= 0) return path;
-    return _metric.extractPath(cut, length - cut);
+  /// Outline of a band running along [from]..[to] of the belt: a rectangle
+  /// [width] across with its four corners rounded by [radius], bent to follow
+  /// the centerline.
+  ///
+  /// This is the shape a straight belt draws with a single `RRect` — for the
+  /// belt itself and for every batch on it. Stroking the centerline instead
+  /// cannot produce it: a stroke's cap is a half circle, and squaring one off
+  /// against a bend leaves a wedge where the cap and the body meet at
+  /// different angles.
+  ///
+  /// Null when the band is wider than its own bend can carry — the inner edge
+  /// would reach past the centre of curvature and fold the outline into a bow
+  /// tie. Callers fall back to stroking the centerline there, which is
+  /// meaningless geometry either way but at least stays solid.
+  Path? bandOutline(double from, double to,
+      {required double width, required double radius}) {
+    final start = from.clamp(0.0, 1.0) * length;
+    final span = to.clamp(0.0, 1.0) * length - start;
+    if (span <= 0 || width <= 0) return Path();
+    final half = width / 2;
+    // Same clamping an RRect applies when the radii do not fit the rect.
+    final r = max(min(min(radius, half), span / 2), 0.0);
+
+    /// Half-width of a rounded rectangle [d] along from its nearer flat end.
+    double halfWidthAt(double d) {
+      if (r <= 0 || d >= r) return half;
+      final k = r - d;
+      return (half - r) + sqrt(max(r * r - k * k, 0));
+    }
+
+    // Dense through the two corners, every few pixels along the middle.
+    const cornerSteps = 12;
+    final middleSteps = max((span / 4).ceil(), 2);
+    final offsets = <double>{0, span};
+    for (var i = 0; i <= cornerSteps; i++) {
+      offsets.add(r * i / cornerSteps);
+      offsets.add(span - r * i / cornerSteps);
+    }
+    for (var i = 0; i <= middleSteps; i++) {
+      offsets.add(span * i / middleSteps);
+    }
+
+    final ordered = offsets.toList()..sort();
+    final samples = <double>[];
+    final tangents = <Tangent>[];
+    for (final d in ordered) {
+      final t = _metric.getTangentForOffset(start + d);
+      if (t == null) continue;
+      samples.add(d);
+      tangents.add(t);
+    }
+    if (samples.length < 2) return Path();
+
+    // Heading along the run, unwrapped so a bend does not read as a jump.
+    final heading = <double>[];
+    for (var i = 0; i < tangents.length; i++) {
+      var a = atan2(tangents[i].vector.dy, tangents[i].vector.dx);
+      if (i > 0) {
+        while (a - heading[i - 1] > pi) {
+          a -= 2 * pi;
+        }
+        while (heading[i - 1] - a > pi) {
+          a += 2 * pi;
+        }
+      }
+      heading.add(a);
+    }
+
+    final left = <Offset>[];
+    final right = <Offset>[];
+    for (var i = 0; i < samples.length; i++) {
+      final t = tangents[i];
+      final normal = Offset(-t.vector.dy, t.vector.dx);
+      final h = halfWidthAt(min(samples[i], span - samples[i]));
+      // On the inside of a bend the edge cannot reach past the centre of
+      // curvature without crossing the centerline, which folds the outline
+      // into a bow tie. There is no honest band to draw at that point.
+      final lo = max(i - 1, 0), hi = min(i + 1, samples.length - 1);
+      final ds = samples[hi] - samples[lo];
+      final curvature = ds > 1e-9 ? (heading[hi] - heading[lo]) / ds : 0.0;
+      // With a little margin: an edge that merely grazes the centre of
+      // curvature already leaves a cusp the border traces as a stray hair.
+      if (curvature.abs() > 1e-9 && h > 0.9 / curvature.abs()) return null;
+      left.add(t.position + normal * h);
+      right.add(t.position - normal * h);
+    }
+
+    final outline = Path()..moveTo(left.first.dx, left.first.dy);
+    for (final p in left.skip(1)) {
+      outline.lineTo(p.dx, p.dy);
+    }
+    for (final p in right.reversed) {
+      outline.lineTo(p.dx, p.dy);
+    }
+    return outline..close();
   }
 
   static ConveyorPathGeometry? build(
@@ -860,45 +949,42 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      'Belt Position: ${(entry.position * 100).round()}%',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
-                      min: 0.0,
-                      max: 1.0,
+                    _turnValue(
+                      context,
+                      label: 'Belt position',
+                      suffix: '%',
+                      value: entry.position.clamp(0.0, 1.0) * 100,
+                      min: 0,
+                      max: 100,
                       divisions: 100,
-                      value: entry.position.clamp(0.0, 1.0),
-                      label: '${(entry.position * 100).round()}%',
-                      onChanged: (v) => setState(() => entry.position = v),
+                      decimals: 0,
+                      onChanged: (v) =>
+                          setState(() => entry.position = v / 100),
                       // Dragging a turn past a neighbour changes which bend
                       // it is; renumber once the drag is over rather than
                       // shuffling cards under the pointer.
-                      onChangeEnd: (_) => setState(_sortTurns),
+                      onSettled: () => setState(_sortTurns),
                     ),
-                    Text(
-                      'Angle: ${entry.angle.round()}° '
-                      '(${entry.angle >= 0 ? 'down' : 'up'})',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
+                    _turnValue(
+                      context,
+                      label: 'Angle (${entry.angle >= 0 ? 'down' : 'up'})',
+                      suffix: '°',
+                      value: entry.angle.clamp(-180.0, 180.0),
                       min: -180,
                       max: 180,
                       divisions: 72,
-                      value: entry.angle.clamp(-180.0, 180.0),
-                      label: '${entry.angle.round()}°',
+                      decimals: 0,
                       onChanged: (v) => setState(() => entry.angle = v),
                     ),
-                    Text(
-                      'Radius: ${entry.radius.toStringAsFixed(1)} × belt width',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Slider(
+                    _turnValue(
+                      context,
+                      label: 'Radius (× belt width)',
+                      suffix: '×',
+                      value: entry.radius.clamp(0.5, 5.0),
                       min: 0.5,
                       max: 5.0,
                       divisions: 45,
-                      value: entry.radius.clamp(0.5, 5.0),
-                      label: entry.radius.toStringAsFixed(1),
+                      decimals: 1,
                       onChanged: (v) => setState(() => entry.radius = v),
                     ),
                   ],
@@ -907,6 +993,60 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             );
           }),
         ],
+      ],
+    );
+  }
+
+  /// One turn setting: a label, a box you can type an exact value into, and a
+  /// slider for the same number.
+  ///
+  /// The slider alone could not express a value between its divisions, and
+  /// reading a turn back off a slider is guesswork — the box is the one that
+  /// says what the turn actually is.
+  Widget _turnValue(
+    BuildContext context, {
+    required String label,
+    required String suffix,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required int decimals,
+    required ValueChanged<double> onChanged,
+    VoidCallback? onSettled,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 78,
+              child: _NumberBox(
+                value: value,
+                min: min,
+                max: max,
+                decimals: decimals,
+                suffix: suffix,
+                onChanged: onChanged,
+                onSettled: onSettled,
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          min: min,
+          max: max,
+          divisions: divisions,
+          value: value.clamp(min, max),
+          label: value.toStringAsFixed(decimals),
+          onChanged: onChanged,
+          onChangeEnd: onSettled == null ? null : (_) => onSettled(),
+        ),
       ],
     );
   }
@@ -943,6 +1083,95 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           }),
         ),
       ],
+    );
+  }
+}
+
+/// A compact number box that stays in step with the slider beside it.
+///
+/// The value is pushed in from outside only while the box is not being
+/// edited, so a keystroke is never overwritten mid-word, and what is typed is
+/// clamped into the same range the slider covers.
+class _NumberBox extends StatefulWidget {
+  final double value;
+  final double min;
+  final double max;
+  final int decimals;
+  final String suffix;
+  final ValueChanged<double> onChanged;
+  final VoidCallback? onSettled;
+
+  const _NumberBox({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.decimals,
+    required this.suffix,
+    required this.onChanged,
+    this.onSettled,
+  });
+
+  @override
+  State<_NumberBox> createState() => _NumberBoxState();
+}
+
+class _NumberBoxState extends State<_NumberBox> {
+  late final TextEditingController _controller =
+      TextEditingController(text: _format(widget.value));
+  late final FocusNode _focus = FocusNode()..addListener(_onFocusChange);
+
+  String _format(double v) => v.toStringAsFixed(widget.decimals);
+
+  @override
+  void didUpdateWidget(_NumberBox old) {
+    super.didUpdateWidget(old);
+    if (!_focus.hasFocus && _format(widget.value) != _controller.text) {
+      _controller.text = _format(widget.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() {
+    if (_focus.hasFocus) return;
+    // Leaving the box tidies whatever was typed back into range, and settles
+    // the value the same way letting go of the slider does.
+    _controller.text = _format(widget.value);
+    widget.onSettled?.call();
+  }
+
+  void _submit(String raw) {
+    final parsed = double.tryParse(raw.trim().replaceAll(',', '.'));
+    if (parsed == null) return;
+    widget.onChanged(parsed.clamp(widget.min, widget.max));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      focusNode: _focus,
+      textAlign: TextAlign.end,
+      style: Theme.of(context).textTheme.bodySmall,
+      decoration: InputDecoration(
+        isDense: true,
+        suffixText: widget.suffix,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        border: const OutlineInputBorder(),
+      ),
+      keyboardType:
+          TextInputType.numberWithOptions(decimal: widget.decimals > 0, signed: widget.min < 0),
+      onChanged: _submit,
+      onSubmitted: (v) {
+        _submit(v);
+        widget.onSettled?.call();
+      },
     );
   }
 }
@@ -1977,86 +2206,61 @@ class ConveyorPainter extends CustomPainter {
     _drawFrequency(canvas, size);
   }
 
-  /// Paints the two ends of a stroked run — the belt itself or one batch on
-  /// it — as rounded-corner rectangles aligned with the centerline.
+  /// Fills a band along the centerline and outlines it with [border].
   ///
-  /// [head] and [tail] are the tangents at the run's true ends, [width] the
-  /// cross-belt size of the layer being capped, [radius] its corner rounding,
-  /// and [overhang] how far past the endpoint the shape reaches — a black
-  /// border layer sits proud of what it outlines on the ends just as it does
-  /// along the sides. Each cap is exactly as long as the stretch trimmed off
-  /// the stroke, so cap and body meet on a flat seam.
-  void _paintEndCaps(Canvas canvas,
-      {required Tangent head,
-      required Tangent tail,
-      required double width,
+  /// A band too wide for its own bend has no outline to draw, so it falls
+  /// back to stroking the centerline — the shape is meaningless at that point
+  /// either way, but a solid blob reads as an over-wide belt where a folded
+  /// outline reads as a rendering bug.
+  void _paintBand(Canvas canvas, ConveyorPathGeometry g, double from, double to,
+      {required double width,
       required double radius,
-      required double overhang,
-      required Paint paint}) {
-    if (radius <= 0 || width <= 0) return;
-    void cap(Tangent t, double flip) {
-      canvas.save();
-      canvas.translate(t.position.dx, t.position.dy);
-      // +x points into the belt for both ends, so the rounded side is always
-      // the low-x one.
-      canvas.rotate(atan2(t.vector.dy, t.vector.dx) + flip);
-      canvas.drawRRect(
-        RRect.fromRectAndCorners(
-          Rect.fromLTRB(-overhang, -width / 2, radius - overhang, width / 2),
-          topLeft: Radius.circular(radius),
-          bottomLeft: Radius.circular(radius),
-        ),
-        paint,
-      );
-      canvas.restore();
+      required Color fill,
+      required Paint border}) {
+    final outline = g.bandOutline(from, to, width: width, radius: radius);
+    if (outline != null) {
+      canvas.drawPath(outline, Paint()..color = fill);
+      canvas.drawPath(outline, border);
+      return;
     }
-
-    cap(head, 0);
-    cap(tail, pi);
+    final centerline = g.extractFraction(from, to);
+    canvas.drawPath(
+      centerline,
+      Paint()
+        ..color = border.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width + 2 * border.strokeWidth
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      centerline,
+      Paint()
+        ..color = fill
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
   }
 
   /// Path-based rendering used when the conveyor has turns configured.
   ///
-  /// The belt is the centerline stroked at full belt width, batches are
-  /// sub-paths of the same centerline stroked slightly narrower, so both
-  /// follow the bends. The two ends are cut off the stroke and drawn as
-  /// rounded-corner caps instead, matching the straight belt's rounding.
+  /// Belt and batches are both bands along the centerline, filled and then
+  /// outlined — the same recipe [_paintStraightBelt] runs with an `RRect`,
+  /// so a belt keeps its silhouette when a turn is added under it.
   void _paintTurnedBelt(Canvas canvas, Size size) {
     final g = geometry!;
 
-    final endRadius = g.beltWidth * _endRadiusFactor;
-    final body = g.trimmedEnds(endRadius);
-
-    final borderPaint = Paint()
+    final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = g.beltWidth + 4
-      ..strokeCap = StrokeCap.butt
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(body, borderPaint);
-    // The border sits 2px outside the belt all round, ends included.
-    _paintEndCaps(canvas,
-        head: g.tangentAt(0),
-        tail: g.tangentAt(1),
-        width: g.beltWidth + 4,
-        radius: endRadius + 2,
-        overhang: 2,
-        paint: Paint()..color = Colors.black);
-
-    final beltPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = g.beltWidth
-      ..strokeCap = StrokeCap.butt
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(body, beltPaint);
-    _paintEndCaps(canvas,
-        head: g.tangentAt(0),
-        tail: g.tangentAt(1),
+      ..strokeWidth = 2;
+    _paintBand(canvas, g, 0, 1,
         width: g.beltWidth,
-        radius: endRadius,
-        overhang: 0,
-        paint: Paint()..color = color);
+        radius: g.beltWidth * _endRadiusFactor,
+        fill: color,
+        border: border);
 
     if (showExclamation) {
       _drawExclamation(canvas, size);
@@ -2064,57 +2268,21 @@ class ConveyorPainter extends CustomPainter {
     }
 
     final batchWidth = g.beltWidth * 0.8;
-    final batchBorderPaint = Paint()
+    final batchRadius = batchWidth * _endRadiusFactor;
+    final batchBorder = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = batchWidth + 2
-      ..strokeCap = StrokeCap.butt
-      ..strokeJoin = StrokeJoin.round;
-
-    // Batches are capped the same way the belt is, so a batch keeps its shape
-    // when a turn is added under it. The stroke stops short by the corner
-    // radius and the cap fills the gap, leaving the batch at its true length.
-    final batchRadius = batchWidth * _endRadiusFactor;
-    final radiusFraction = batchRadius / g.length;
+      ..strokeWidth = 1;
 
     for (final batch in batches.values) {
       final start = batch.start.clamp(0.0, 1.0);
       final end = batch.end.clamp(0.0, 1.0);
       if (end <= start) continue; // not yet visible / already off
-      // A batch shorter than its own caps collapses to the two caps meeting,
-      // rather than disappearing.
-      final mid = (start + end) / 2;
-      final bodyStart = min(start + radiusFraction, mid);
-      final bodyEnd = max(end - radiusFraction, mid);
-      final segment = g.extractFraction(bodyStart, bodyEnd);
-      final head = g.tangentAt(start);
-      final tail = g.tangentAt(end);
-
-      canvas.drawPath(segment, batchBorderPaint);
-      _paintEndCaps(canvas,
-          head: head,
-          tail: tail,
-          width: batchWidth + 2,
-          radius: batchRadius + 1,
-          overhang: 1,
-          paint: Paint()..color = Colors.black);
-
-      canvas.drawPath(
-        segment,
-        Paint()
-          ..color = batch.color
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = batchWidth
-          ..strokeCap = StrokeCap.butt
-          ..strokeJoin = StrokeJoin.round,
-      );
-      _paintEndCaps(canvas,
-          head: head,
-          tail: tail,
+      _paintBand(canvas, g, start, end,
           width: batchWidth,
           radius: batchRadius,
-          overhang: 0,
-          paint: Paint()..color = batch.color);
+          fill: batch.color,
+          border: batchBorder);
     }
 
     _drawDirectionArrow(canvas, size);

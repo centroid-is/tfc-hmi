@@ -34,6 +34,18 @@ void _ignoreTestFontOverflow() {
   addTearDown(() => FlutterError.onError = original);
 }
 
+/// Values shown in the per-turn number boxes. Each turn card carries three:
+/// position, angle, radius — [offset] picks which.
+List<String> _boxValues(WidgetTester tester, int offset) {
+  final fields = tester
+      .widgetList<TextField>(find.descendant(
+          of: find.byType(Card), matching: find.byType(TextField)))
+      .toList();
+  return [
+    for (var i = offset; i < fields.length; i += 3) fields[i].controller!.text
+  ];
+}
+
 void main() {
   testWidgets('deleting a turn removes the turn whose button was tapped',
       (tester) async {
@@ -60,12 +72,8 @@ void main() {
     expect(config.turns.map((t) => t.angle).toList(), [10.0, 30.0]);
 
     // And the surviving cards must show the surviving turns.
-    expect(find.textContaining('Angle: 10°'), findsOneWidget);
-    expect(find.textContaining('Angle: 30°'), findsOneWidget);
-    expect(find.textContaining('Angle: 20°'), findsNothing);
-    expect(find.textContaining('Belt Position: 20%'), findsOneWidget);
-    expect(find.textContaining('Belt Position: 80%'), findsOneWidget);
-    expect(find.textContaining('Belt Position: 50%'), findsNothing);
+    expect(_boxValues(tester, 1), ['10', '30']);
+    expect(_boxValues(tester, 0), ['20', '80']);
     final sliders = tester.widgetList<Slider>(find.byType(Slider)).toList();
     // 3 sliders per turn card (position, angle, radius) + the thickness slider.
     expect(sliders.length, 3 * 2 + 1);
@@ -121,15 +129,7 @@ void main() {
     await tester.pumpWidget(_wrap(config));
     await tester.pump();
 
-    final positions = tester
-        .widgetList<Text>(find.textContaining('Belt Position:'))
-        .map((t) => t.data)
-        .toList();
-    expect(positions, [
-      'Belt Position: 20%',
-      'Belt Position: 50%',
-      'Belt Position: 80%',
-    ]);
+    expect(_boxValues(tester, 0), ['20', '50', '80']);
 
     // Turn 1 is the belt's first bend, so deleting it removes the 20% entry.
     await tester.tap(find.byTooltip('Remove turn').at(0));
@@ -159,6 +159,77 @@ void main() {
     expect(positions.toSet(), hasLength(3), reason: 'stacked: $positions');
     // And the list is kept in belt order, so the cards are numbered by bend.
     expect(positions, orderedEquals(List.of(positions)..sort()));
+  });
+
+  testWidgets('turn values can be typed instead of dragged', (tester) async {
+    _ignoreTestFontOverflow();
+    final config = ConveyorConfig(turns: [
+      ConveyorTurnEntry(position: 0.5, angle: 45, radius: 1.5),
+    ]);
+
+    tester.view.physicalSize = const Size(1400, 5000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_wrap(config));
+    await tester.pump();
+
+    // One box per turn setting: position, angle, radius.
+    final boxes = find.descendant(
+      of: find.byType(Card),
+      matching: find.byType(TextField),
+    );
+    expect(boxes, findsNWidgets(3));
+
+    await tester.enterText(boxes.at(0), '37');
+    await tester.pump();
+    expect(config.turns.single.position, closeTo(0.37, 1e-9));
+
+    await tester.enterText(boxes.at(1), '-62');
+    await tester.pump();
+    expect(config.turns.single.angle, closeTo(-62, 1e-9));
+
+    await tester.enterText(boxes.at(2), '3.4');
+    await tester.pump();
+    expect(config.turns.single.radius, closeTo(3.4, 1e-9));
+  });
+
+  testWidgets('typed turn values are held inside the slider range',
+      (tester) async {
+    _ignoreTestFontOverflow();
+    final config = ConveyorConfig(turns: [
+      ConveyorTurnEntry(position: 0.5, angle: 45, radius: 1.5),
+    ]);
+
+    tester.view.physicalSize = const Size(1400, 5000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_wrap(config));
+    await tester.pump();
+
+    final boxes = find.descendant(
+      of: find.byType(Card),
+      matching: find.byType(TextField),
+    );
+
+    // A turn past a half circle would send the belt back over itself.
+    await tester.enterText(boxes.at(1), '400');
+    await tester.pump();
+    expect(config.turns.single.angle, 180);
+
+    await tester.enterText(boxes.at(0), '-40');
+    await tester.pump();
+    expect(config.turns.single.position, 0);
+
+    await tester.enterText(boxes.at(2), '99');
+    await tester.pump();
+    expect(config.turns.single.radius, 5.0);
+
+    // Gibberish leaves the value alone rather than zeroing it.
+    await tester.enterText(boxes.at(2), 'abc');
+    await tester.pump();
+    expect(config.turns.single.radius, 5.0);
   });
 
   testWidgets('delete works inside the scrolling page-editor config dialog',
