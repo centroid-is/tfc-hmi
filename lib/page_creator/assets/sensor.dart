@@ -563,10 +563,22 @@ class _SensorState extends ConsumerState<Sensor> {
               // set one member, write the whole thing back. The `p_stat_*`
               // members ride along unchanged and the FB overwrites them on the
               // next scan.
+              //
+              // A rejected write is reported rather than swallowed. The only
+              // feedback a setpoint has is the field itself, and on the next
+              // PLC update that field snaps back to the old value — without
+              // this the operator sees their entry silently undone with no
+              // reason given. The messenger is resolved before the await so
+              // nothing reaches for a disposed context afterwards.
               onWrite: (field, value) {
+                final messenger = ScaffoldMessenger.maybeOf(context);
                 final newValue = DynamicValue.from(dynValue);
                 newValue[field] = value;
-                stateMan.write(key, newValue);
+                stateMan.write(key, newValue).catchError((Object e) {
+                  messenger?.showSnackBar(
+                    SnackBar(content: Text('Write to $key failed: $e')),
+                  );
+                });
               },
             );
           },
