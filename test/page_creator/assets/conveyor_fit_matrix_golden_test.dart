@@ -15,13 +15,15 @@ Widget _cell({
   required Size box,
   List<ConveyorTurnEntry> turns = const [],
   double? thickness,
+  double? beltWidthOverride,
+  double? straightBeltWidth,
 }) {
   // Mirror what the asset renders with, so the matrix exercises the real
   // default rather than a value only the test knows about.
   final factor = thickness ??
       ConveyorConfig(turns: turns).effectiveBeltThickness;
-  final geometry =
-      ConveyorPathGeometry.build(turns, box, thicknessFactor: factor);
+  final geometry = ConveyorPathGeometry.build(turns, box,
+      thicknessFactor: factor, beltWidthOverride: beltWidthOverride);
   return Padding(
     padding: const EdgeInsets.all(8),
     child: Column(
@@ -51,6 +53,7 @@ Widget _cell({
               showFrequency: false,
               frequency: null,
               geometry: geometry,
+              straightBeltWidth: straightBeltWidth,
             ),
           ),
         ),
@@ -158,6 +161,47 @@ void main() {
       await expectLater(
         find.byKey(_key),
         matchesGoldenFile('goldens/conveyor_u_turn_flared.png'),
+      );
+    });
+
+    testWidgets('same belt width, straight vs turned', (tester) async {
+      // The point of the screen-relative width: set both to the same number
+      // and the belts match, whatever their boxes or turns do.
+      tester.view.physicalSize = const Size(1500, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      const beltWidth = 30.0;
+      final cells = <Widget>[
+        _cell(
+            label: 'straight, box 400x160',
+            box: const Size(400, 160),
+            straightBeltWidth: beltWidth),
+        _cell(
+            label: '45deg, box 400x160',
+            box: const Size(400, 160),
+            turns: [ConveyorTurnEntry(position: 0.4, angle: 45, radius: 1.5)],
+            beltWidthOverride: beltWidth),
+        _cell(
+            label: '90deg, box 400x220',
+            box: const Size(400, 220),
+            turns: [ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)],
+            beltWidthOverride: beltWidth),
+        _cell(
+            label: 'u-turn, box 400x300',
+            box: const Size(400, 300),
+            turns: uTurn(loopRadius: 2.5),
+            beltWidthOverride: beltWidth),
+        _cell(
+            label: 'straight, taller box 400x260',
+            box: const Size(400, 260),
+            straightBeltWidth: beltWidth),
+      ];
+
+      await tester.pumpWidget(_matrix(cells));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/conveyor_belt_width_match.png'),
       );
     });
 

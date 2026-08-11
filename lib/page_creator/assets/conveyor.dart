@@ -113,6 +113,7 @@ class ConveyorPathGeometry {
     List<ConveyorTurnEntry> turns,
     Size size, {
     double thicknessFactor = 1.0,
+    double? beltWidthOverride,
   }) {
     if (turns.isEmpty || size.width <= 0 || size.height <= 0) return null;
     // Belt thickness relative to the box height. A bend needs a taller box to
@@ -124,7 +125,8 @@ class ConveyorPathGeometry {
     // matter how the centerline is fitted. Cap it against the short side so
     // the box invariant always holds; for the usual wide box this is a no-op.
     const margin = 2.0;
-    final beltWidth = min(size.height * thicknessFactor.clamp(0.05, 1.0),
+    final beltWidth = min(
+        beltWidthOverride ?? size.height * thicknessFactor.clamp(0.05, 1.0),
         max(size.shortestSide - 2 * margin, 1.0));
     final targetLength = size.width;
     final sorted = List<ConveyorTurnEntry>.of(turns)
@@ -356,6 +358,40 @@ class ConveyorConfig extends BaseAsset {
       beltThickness ?? (turns.isEmpty ? 1.0 : _defaultTurnedThickness);
 
   static const _defaultTurnedThickness = 0.4;
+
+  /// Belt width as a fraction of the screen height — the same units as
+  /// [size], so a straight belt set to 4% and a turned belt set to 4% paint
+  /// the same width and line up on a page.
+  ///
+  /// Applies with or without turns. Null falls back to [beltThickness] /
+  /// [effectiveBeltThickness], which are relative to the box instead.
+  double? beltWidthRelative;
+
+  /// Requested belt width in logical pixels, or null when the box-relative
+  /// thickness should be used instead.
+  double? requestedBeltWidth(Size screen) =>
+      beltWidthRelative == null ? null : beltWidthRelative! * screen.height;
+
+  /// The widest belt this asset's box can hold. A belt is a band across the
+  /// box, and a turned belt curves in both axes, so a bend is bounded by the
+  /// short side rather than the height.
+  double maxBeltWidth(Size screen) {
+    final box = size.toSize(screen);
+    return max((turns.isEmpty ? box.height : box.shortestSide) - 4, 1.0);
+  }
+
+  /// Whether the requested belt width does not fit the box, so the render is
+  /// clamped and the editor should say so.
+  bool beltWidthOverflows(Size screen) {
+    final requested = requestedBeltWidth(screen);
+    return requested != null && requested > maxBeltWidth(screen);
+  }
+
+  /// Belt width actually painted, clamped into the box.
+  double? clampedBeltWidth(Size screen) {
+    final requested = requestedBeltWidth(screen);
+    return requested == null ? null : min(requested, maxBeltWidth(screen));
+  }
 
   ConveyorConfig(
       {this.key,
@@ -646,6 +682,8 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           label: const Text('Add Turn'),
         ),
         const SizedBox(height: 8),
+        _beltWidthField(context),
+        const SizedBox(height: 8),
         if (widget.config.turns.isEmpty)
           Text('No turns configured — belt is straight',
               style: Theme.of(context).textTheme.bodyMedium)
@@ -653,19 +691,21 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           if (widget.config.showAuger ?? false)
             Text('Turns are ignored while "Auger conveyor" is enabled',
                 style: Theme.of(context).textTheme.bodySmall),
-          Text(
-            'Belt thickness: '
-            '${(widget.config.effectiveBeltThickness * 100).round()}% of box height',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          Slider(
-            min: 0.05,
-            max: 1.0,
-            divisions: 95,
-            value: widget.config.effectiveBeltThickness.clamp(0.05, 1.0),
-            label: '${(widget.config.effectiveBeltThickness * 100).round()}%',
-            onChanged: (v) => setState(() => widget.config.beltThickness = v),
-          ),
+          if (widget.config.beltWidthRelative == null) ...[
+            Text(
+              'Belt thickness: '
+              '${(widget.config.effectiveBeltThickness * 100).round()}% of box height',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Slider(
+              min: 0.05,
+              max: 1.0,
+              divisions: 95,
+              value: widget.config.effectiveBeltThickness.clamp(0.05, 1.0),
+              label: '${(widget.config.effectiveBeltThickness * 100).round()}%',
+              onChanged: (v) => setState(() => widget.config.beltThickness = v),
+            ),
+          ],
           ...widget.config.turns.asMap().entries.map((mapEntry) {
             final entry = mapEntry.value;
             return Card(
@@ -736,6 +776,41 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             );
           }),
         ],
+      ],
+    );
+  }
+
+  /// Belt width in the same screen-relative percent as the Size fields, so a
+  /// straight belt and a turned belt set to the same number match on a page.
+  /// Empty falls back to the box-relative thickness.
+  Widget _beltWidthField(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    final overflows = widget.config.beltWidthOverflows(screen);
+    final maxPercent = widget.config.maxBeltWidth(screen) / screen.height * 100;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextFormField(
+          initialValue: widget.config.beltWidthRelative == null
+              ? ''
+              : (widget.config.beltWidthRelative! * 100).toStringAsFixed(2),
+          decoration: InputDecoration(
+            labelText: 'Belt width (% of screen height)',
+            hintText: 'Empty — belt fills the box',
+            suffixText: '%',
+            errorText: overflows
+                ? 'Does not fit the box — painted at '
+                    '${maxPercent.toStringAsFixed(2)}%. '
+                    'Increase the box height.'
+                : null,
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: (v) => setState(() {
+            final parsed = double.tryParse(v.trim().replaceAll(',', '.'));
+            widget.config.beltWidthRelative =
+                parsed == null || parsed <= 0 ? null : parsed / 100;
+          }),
+        ),
       ],
     );
   }
@@ -1088,10 +1163,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
+    // An explicit screen-relative belt width wins over the box-relative
+    // thickness, and applies whether or not the belt turns.
+    final beltWidth =
+        widget.config.clampedBeltWidth(MediaQuery.of(context).size);
     final geometry = ConveyorPathGeometry.build(
       widget.config.turns,
       paintSize,
       thicknessFactor: widget.config.effectiveBeltThickness,
+      beltWidthOverride: beltWidth,
     );
 
     final conveyorPaint = CustomPaint(
@@ -1106,6 +1186,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         batches: _batches,
         angle: widget.config.coordinates.angle ?? 0.0,
         geometry: geometry,
+        straightBeltWidth: beltWidth,
       ),
     );
 
@@ -1123,7 +1204,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
           children: [
             conveyorPaint,
             for (final entry in gateEntries)
-              _positionedChildGate(entry, paintSize, geometry),
+              _positionedChildGate(entry, paintSize, geometry,
+                  straightBeltWidth: beltWidth),
           ],
         ),
       );
@@ -1136,9 +1218,17 @@ class _ConveyorState extends ConsumerState<Conveyor>
   }
 
   Widget _positionedChildGate(
-      ChildGateEntry entry, Size conveyorSize, ConveyorPathGeometry? geometry) {
-    final beltHeight =
-        geometry?.beltWidth ?? conveyorSize.height; // cross-belt dimension
+      ChildGateEntry entry, Size conveyorSize, ConveyorPathGeometry? geometry,
+      {double? straightBeltWidth}) {
+    // Cross-belt dimension: the turned belt carries its own width, a straight
+    // belt is either an explicit band or the full box height.
+    final beltHeight = geometry?.beltWidth ??
+        min(straightBeltWidth ?? conveyorSize.height, conveyorSize.height);
+    // A straight band is centred in the box, so gates hang off the band edge
+    // rather than the box edge.
+    final bandInset = geometry == null
+        ? (conveyorSize.height - beltHeight) / 2
+        : 0.0;
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 
@@ -1199,7 +1289,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     if (entry.side == GateSide.left) {
       return Positioned(
         left: xCenter - gateSize / 2,
-        top: -outsideOverhang,
+        top: bandInset - outsideOverhang,
         width: gateSize,
         height: gateSize,
         child: child,
@@ -1207,7 +1297,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     } else {
       return Positioned(
         left: xCenter - gateSize / 2,
-        bottom: -outsideOverhang,
+        bottom: bandInset - outsideOverhang,
         width: gateSize,
         height: gateSize,
         child: child,
@@ -1650,6 +1740,12 @@ class ConveyorPainter extends CustomPainter {
   final double angle;
   final ConveyorPathGeometry? geometry;
 
+  /// Explicit belt width for a *straight* belt, in logical pixels.
+  ///
+  /// Null keeps the original convention of filling the box height. Turned
+  /// belts carry their width on [geometry] instead.
+  final double? straightBeltWidth;
+
   ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
@@ -1659,7 +1755,8 @@ class ConveyorPainter extends CustomPainter {
       this.frequency,
       required this.batches,
       required this.angle,
-      this.geometry});
+      this.geometry,
+      this.straightBeltWidth});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1667,6 +1764,22 @@ class ConveyorPainter extends CustomPainter {
       _paintTurnedBelt(canvas, size);
       return;
     }
+    // An explicit belt width paints the belt as a band centred in the box
+    // rather than filling it, so a straight belt can be set to the same width
+    // as a turned one. Everything below is box-relative, so shrinking the box
+    // we hand it is enough — batches, arrows and text all follow.
+    final band = straightBeltWidth;
+    if (band != null && band < size.height) {
+      canvas.save();
+      canvas.translate(0, (size.height - band) / 2);
+      _paintStraightBelt(canvas, Size(size.width, band));
+      canvas.restore();
+      return;
+    }
+    _paintStraightBelt(canvas, size);
+  }
+
+  void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final borderRadius = Radius.circular(
       size.shortestSide * 0.2,
@@ -1910,6 +2023,7 @@ class ConveyorPainter extends CustomPainter {
       oldDelegate.bidirectional != bidirectional ||
       oldDelegate.showFrequency != showFrequency ||
       oldDelegate.frequency != frequency ||
+      oldDelegate.straightBeltWidth != straightBeltWidth ||
       // Geometry is rebuilt each frame when turns are configured, so curved
       // conveyors repaint on every rebuild (needed for batch animation).
       !identical(oldDelegate.geometry, geometry);
