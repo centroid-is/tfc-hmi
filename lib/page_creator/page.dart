@@ -270,12 +270,7 @@ class PageManager {
       }
       return child;
     }).toList();
-    return MenuItem(
-      label: page.menuItem.label,
-      path: page.menuItem.path,
-      icon: page.menuItem.icon,
-      children: resolvedChildren,
-    );
+    return page.menuItem.copyWith(children: resolvedChildren);
   }
 
   static void collectChildPaths(
@@ -312,12 +307,7 @@ class PageManager {
       // If the page had an empty path, update the menuItem with the generated path
       if (path == null || path.isEmpty) {
         result[key] = AssetPage(
-          menuItem: MenuItem(
-            label: page.menuItem.label,
-            path: key,
-            icon: page.menuItem.icon,
-            children: page.menuItem.children,
-          ),
+          menuItem: page.menuItem.copyWith(path: key),
           assets: page.assets,
           mirroringDisabled: page.mirroringDisabled,
           navigationPriority: page.navigationPriority,
@@ -462,6 +452,10 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                     // Preserve existing children from the tree structure
                     children:
                         widget.initialPage?.menuItem.children ?? const [],
+                    // Persist section-ness so an empty section stays a
+                    // section instead of collapsing back into a page.
+                    isSection: widget.isSection ||
+                        (widget.initialPage?.menuItem.isSection ?? false),
                   );
                   final page = AssetPage(
                     menuItem: menuItem,
