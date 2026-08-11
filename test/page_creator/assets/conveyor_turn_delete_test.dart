@@ -75,8 +75,9 @@ void main() {
     expect(_boxValues(tester, 1), ['10', '30']);
     expect(_boxValues(tester, 0), ['20', '80']);
     final sliders = tester.widgetList<Slider>(find.byType(Slider)).toList();
-    // 3 sliders per turn card (position, angle, radius) + the thickness slider.
-    expect(sliders.length, 3 * 2 + 1);
+    // 3 sliders per turn card (position, angle, radius); belt width is a
+    // field, not a slider.
+    expect(sliders.length, 3 * 2);
   });
 
   testWidgets('repeated deletes each remove the tapped turn', (tester) async {

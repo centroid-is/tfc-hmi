@@ -18,7 +18,9 @@ Widget buildPainterScenario({
   Color color = Colors.green,
   bool showFrequency = false,
   double? frequency,
-  double thickness = 1.0,
+  // The turned-belt default: what ConveyorConfig.effectiveBeltThickness
+  // resolves to when nothing is configured.
+  double thickness = 0.4,
 }) {
   final geometry = ConveyorPathGeometry.build(turns, canvasSize,
       thicknessFactor: thickness);
