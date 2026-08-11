@@ -96,6 +96,34 @@ StateManConfig sampleStateManConfig() {
 
 /// Wraps the [KeyRepositoryContent] widget in a testable widget tree
 /// with [ProviderScope] overrides for [preferencesProvider].
+/// The key list's own scrollable.
+///
+/// The key repository page no longer scrolls as a whole: the list builds
+/// lazily so cards outside the viewport do not exist, and tests must scroll
+/// this to reach them. Text fields contain Scrollables too, but those run
+/// horizontally.
+final Finder keyListScrollable = find.byWidgetPredicate(
+    (w) => w is Scrollable && w.axisDirection == AxisDirection.down);
+
+/// Scrolls the key list back to the top so the first cards are built again.
+Future<void> scrollKeyListToTop(WidgetTester tester) async {
+  tester.state<ScrollableState>(keyListScrollable).position.jumpTo(0);
+  await tester.pumpAndSettle();
+}
+
+/// Scrolls down the key list until the card named [name] is built, and
+/// asserts it showed up.
+Future<void> revealKeyCard(WidgetTester tester, String name) async {
+  final finder = find.text(name);
+  var guard = 0;
+  while (finder.evaluate().isEmpty && guard++ < 30) {
+    await tester.drag(keyListScrollable, const Offset(0, -200));
+    await tester.pumpAndSettle();
+  }
+  expect(finder, findsAtLeastNWidgets(1),
+      reason: 'card "$name" never scrolled into view');
+}
+
 Widget buildTestableKeyRepository({
   KeyMappings? keyMappings,
   StateManConfig? stateManConfig,
