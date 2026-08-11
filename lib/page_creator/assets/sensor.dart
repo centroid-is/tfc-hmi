@@ -5,6 +5,9 @@ import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
+import 'package:rxdart/rxdart.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/state_man.dart';
 
 import '../../providers/state_man.dart';
 import 'common.dart';
@@ -13,6 +16,141 @@ import '../../widgets/panes/side_pane.dart';
 import 'sensor_painter.dart';
 
 part 'sensor.g.dart';
+
+// ---------------------------------------------------------------------------
+// FB_Sensor binding
+// ---------------------------------------------------------------------------
+//
+// The PLC side of this asset is `FB_Sensor` in the SVNCoreComponents library
+// (`SVNCoreComponents/DigitalSignals/Sensor/FB_Sensor.TcPOU`). Every instance
+// carries a PERSISTENT RETAIN `HMI : ST_Sensor_HMI` member published as an OPC
+// UA structured type — that struct node is what `SensorConfig.detectionKey`
+// should point at (e.g. `sensors.CVS01_CN01_PX01.HMI`).
+//
+// The FB writes the status mirrors every scan and reads the two config members
+// back, so the operator can retune debounce from the side pane without a
+// download. Writes go back as a whole-struct copy-on-write, the same shape the
+// conveyor pane uses — the status members the FB owns are overwritten on the
+// next scan, so echoing them back is harmless.
+//
+// A plain BOOL node still works: when the subscribed value is not an
+// `ST_Sensor_HMI` struct the widget falls back to reading it as a bare bool and
+// the pane degrades to the read-only detail list.
+
+/// Member names on `ST_Sensor_HMI`. Spelled once so a rename in the PLC
+/// library is a one-line change here rather than a hunt through string
+/// literals.
+abstract final class SensorFbFields {
+  /// Final output after on/off delay — what interlock chains read.
+  static const output = 'p_stat_xOutput';
+
+  /// Unfiltered NO input.
+  static const rawNO = 'p_stat_xRaw';
+
+  /// Unfiltered NC input (only meaningful when [hasNC] is set).
+  static const rawNC = 'p_stat_xRawNC';
+
+  /// Neither NO nor NC active for 100 ms — the sensor state is unknowable.
+  static const fault = 'p_stat_xFault';
+
+  /// Whether this instance is wired with both an NO and an NC contact.
+  static const hasNC = 'p_stat_xHasNC';
+
+  /// Time the output has been continuously TRUE (caps at one day).
+  static const blockedFor = 'p_stat_tBlockedFor';
+
+  /// Time the output has been continuously FALSE (caps at one day).
+  static const clearFor = 'p_stat_tClearFor';
+
+  /// Rising-edge (on) delay — writable.
+  static const onDelay = 'p_cfg_tOnDelay';
+
+  /// Falling-edge (off) delay — writable.
+  static const offDelay = 'p_cfg_tOffDelay';
+}
+
+/// A decoded snapshot of one `ST_Sensor_HMI` struct.
+///
+/// Pure value type — no widgets, no I/O — so the decode rules are unit
+/// testable without a live `StateMan`.
+///
+/// TwinCAT publishes `TIME` as a millisecond count, which is why the four
+/// duration members are read through [_durationAt] rather than `asDateTime`.
+@immutable
+class SensorFbState {
+  final bool output;
+  final bool rawNO;
+  final bool rawNC;
+  final bool fault;
+  final bool hasNC;
+  final Duration blockedFor;
+  final Duration clearFor;
+  final Duration onDelay;
+  final Duration offDelay;
+
+  const SensorFbState({
+    required this.output,
+    required this.rawNO,
+    required this.rawNC,
+    required this.fault,
+    required this.hasNC,
+    required this.blockedFor,
+    required this.clearFor,
+    required this.onDelay,
+    required this.offDelay,
+  });
+
+  /// Decodes [value] when it is an `ST_Sensor_HMI` struct, `null` otherwise.
+  ///
+  /// The discriminator is the presence of [SensorFbFields.output]: it is the
+  /// member the FB always publishes and no plain BOOL node can carry it. A
+  /// `null` return is the legacy path — the caller reads the node as a bare
+  /// bool instead.
+  static SensorFbState? tryParse(DynamicValue value) {
+    if (!value.isObject) return null;
+    if (!value.contains(SensorFbFields.output)) return null;
+    return SensorFbState(
+      output: _boolAt(value, SensorFbFields.output),
+      rawNO: _boolAt(value, SensorFbFields.rawNO),
+      rawNC: _boolAt(value, SensorFbFields.rawNC),
+      fault: _boolAt(value, SensorFbFields.fault),
+      hasNC: _boolAt(value, SensorFbFields.hasNC),
+      blockedFor: _durationAt(value, SensorFbFields.blockedFor),
+      clearFor: _durationAt(value, SensorFbFields.clearFor),
+      onDelay: _durationAt(value, SensorFbFields.onDelay),
+      offDelay: _durationAt(value, SensorFbFields.offDelay),
+    );
+  }
+
+  /// `DynamicValue.operator[]` throws on a missing member, so every read is
+  /// guarded — an older PLC library revision missing a member must degrade,
+  /// not crash the mimic.
+  static bool _boolAt(DynamicValue value, String field) =>
+      value.contains(field) ? value[field].asBool : false;
+
+  static Duration _durationAt(DynamicValue value, String field) =>
+      Duration(milliseconds: value.contains(field) ? value[field].asInt : 0);
+}
+
+/// Formats an elapsed time for a [PaneMetricTile] as a `(value, unit)` pair.
+///
+/// `q_tBlockedFor` / `q_tClearFor` run from milliseconds to a full day, so a
+/// single format string cannot stay readable across the range.
+(String, String) formatSensorElapsed(Duration d) {
+  if (d.inSeconds < 60) {
+    return ((d.inMilliseconds / 1000).toStringAsFixed(1), 's');
+  }
+  if (d.inMinutes < 60) {
+    return (
+      '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}',
+      'm:s'
+    );
+  }
+  return (
+    '${d.inHours}:${(d.inMinutes % 60).toString().padLeft(2, '0')}',
+    'h:m'
+  );
+}
 
 /// The kind of sensor — drives painter dispatch and glyph appearance.
 @JsonEnum()
@@ -39,16 +177,27 @@ class SensorConfig extends BaseAsset {
   @JsonKey(unknownEnumValue: SensorKind.redLight)
   SensorKind kind;
 
-  /// State key emitting the raw detection bool.
+  /// State key the sensor binds to.
+  ///
+  /// Preferred: the `HMI` member of an `FB_Sensor` instance (an
+  /// `ST_Sensor_HMI` struct node) — that unlocks the full pane, including
+  /// live debounce editing. A plain BOOL node is still accepted and read as
+  /// the raw detection bit.
   String detectionKey;
 
-  /// When true, the visual `isActive` is the inverse of the raw bool.
+  /// When true, the visual `isActive` is the inverse of the detection bool.
   bool invertActivePolarity;
 
-  /// State key carrying the rising-edge delay (ms). Display-only.
+  /// Legacy: state key carrying the rising-edge delay (ms), display-only.
+  ///
+  /// Only used when [detectionKey] points at a plain BOOL. Against an
+  /// `FB_Sensor` the delay lives in `p_cfg_tOnDelay` inside the bound struct
+  /// and is edited in the side pane.
   String risingEdgeDelayKey;
 
-  /// State key carrying the falling-edge delay (ms). Display-only.
+  /// Legacy: state key carrying the falling-edge delay (ms), display-only.
+  ///
+  /// See [risingEdgeDelayKey] — superseded by `p_cfg_tOffDelay`.
   String fallingEdgeDelayKey;
 
   /// Per-instance active colour. Default `Colors.green` matches `led.dart`.
@@ -167,9 +316,13 @@ class Sensor extends ConsumerStatefulWidget {
 }
 
 class _SensorState extends ConsumerState<Sensor> {
-  /// The bool stream constructed once per mount (or per detectionKey change).
+  /// The value stream constructed once per mount (or per detectionKey change).
   /// `null` indicates the stale path: empty detectionKey — no stream needed.
-  Stream<bool>? _detectionStream;
+  ///
+  /// Carries the raw [DynamicValue] rather than a pre-mapped bool: the same
+  /// subscription serves both bindings — an `ST_Sensor_HMI` struct (decoded by
+  /// [SensorFbState.tryParse]) and a plain BOOL node (read with `asBool`).
+  Stream<DynamicValue>? _detectionStream;
 
   /// The detectionKey that `_detectionStream` was constructed for. Compared
   /// against `widget.config.detectionKey` in `didUpdateWidget` so we re-hoist
@@ -213,8 +366,7 @@ class _SensorState extends ConsumerState<Sensor> {
         .read(stateManProvider.future)
         .asStream()
         .asyncExpand((sm) => sm.subscribe(key).asStream())
-        .asyncExpand((s) => s)
-        .map((dv) => dv.asBool);
+        .asyncExpand((s) => s);
   }
 
   /// Test-only window: resolves the painter `isActive` from a raw stream
@@ -236,7 +388,7 @@ class _SensorState extends ConsumerState<Sensor> {
   /// rebuilds (no resubscribe storm) and a fresh stream after a
   /// `detectionKey` change.
   @visibleForTesting
-  Stream<bool>? get debugDetectionStream => _detectionStream;
+  Stream<DynamicValue>? get debugDetectionStream => _detectionStream;
 
   /// Per-kind painter dispatch — exhaustive switch (no `default` clause so
   /// adding a future SensorKind value is a compile error here, not a runtime
@@ -276,74 +428,160 @@ class _SensorState extends ConsumerState<Sensor> {
     }
   }
 
-  /// Opens the read-only details dialog (Plan 04-05 / SENS-01).
+  /// Opens the operator pane for this sensor (Plan 04-05 / SENS-01).
   ///
-  /// Operators tap the sensor at runtime to inspect current state — kind,
-  /// detection key, polarity, edge-delay keys, tag. The dialog is purely
-  /// informational: no PLC writes, no config edits. Configuration is
-  /// editor-only and routed through `page_editor.dart` →
-  /// `SensorConfig.configure(context)`. Mirrors the
-  /// `_ConveyorState._showDetailsDialog` precedent (conveyor.dart:902)
-  /// in spirit while staying simpler — sensors have no jog buttons or
-  /// other operator actions.
+  /// Two shapes, chosen from what the bound node actually carries:
   ///
-  /// Dialog content uses [_DetailRow] for label/value layout. The
-  /// "Detection state" row falls back to a placeholder string rather
-  /// than re-plumbing the live stream into the dialog (the painter glyph
-  /// already surfaces live state visually — wiring it twice is not worth
-  /// the complexity for a polish-phase feature).
+  ///  * `ST_Sensor_HMI` struct → [SensorFbPane]. Live signal state plus the
+  ///    two debounce setpoints, editable. This is the only surface on which
+  ///    a sensor writes to the PLC, and it writes exactly two members —
+  ///    `p_cfg_tOnDelay` and `p_cfg_tOffDelay`, both declared config members
+  ///    the FB reads back every scan.
+  ///  * anything else (empty key, still connecting, subscription error, or a
+  ///    plain BOOL node) → [_staticPane]: the read-only detail list this pane
+  ///    has always shown.
+  ///
+  /// Page *configuration* stays editor-only in both shapes — routed through
+  /// `page_editor.dart` → `SensorConfig.configure(context)`. Editing a PLC
+  /// setpoint is an operator action; editing the mimic is not.
   String get _paneId => 'sensor:${identityHashCode(widget.config)}';
 
+  /// The read-only detail list. [liveState] fills the "Detection state" row
+  /// when a value is in hand; `null` leaves it deferring to the glyph.
+  Widget _staticPane(PaneStatus status, bool? liveState) {
+    final config = widget.config;
+    return SidePane(
+      title: 'Sensor',
+      subtitle: config.kind.name,
+      icon: Icons.sensors,
+      status: status,
+      child: PaneSection(
+        title: 'Details',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PaneDetailRow(label: 'Kind', value: config.kind.name),
+            PaneDetailRow(
+              label: 'Detection key',
+              value: config.detectionKey.isEmpty ? '—' : config.detectionKey,
+            ),
+            PaneDetailRow(
+              label: 'Detection state',
+              value: config.detectionKey.isEmpty
+                  ? 'no key configured'
+                  : liveState == null
+                      ? '(see glyph)'
+                      : liveState
+                          ? 'true'
+                          : 'false',
+            ),
+            PaneDetailRow(
+              label: 'Active polarity inverted',
+              value: config.invertActivePolarity ? 'yes' : 'no',
+            ),
+            PaneDetailRow(
+              label: 'Rising edge delay key',
+              value: config.risingEdgeDelayKey.isEmpty
+                  ? '—'
+                  : config.risingEdgeDelayKey,
+            ),
+            PaneDetailRow(
+              label: 'Falling edge delay key',
+              value: config.fallingEdgeDelayKey.isEmpty
+                  ? '—'
+                  : config.fallingEdgeDelayKey,
+            ),
+            if (config.tag != null && config.tag!.isNotEmpty)
+              PaneDetailRow(label: 'Tag', value: config.tag!),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showDetailsPane(BuildContext context) {
+    final key = widget.config.detectionKey;
+    if (key.isEmpty) {
+      showSidePane(
+        context: context,
+        id: _paneId,
+        builder: (_) => _staticPane(const PaneStatus.unknown('No key'), null),
+      );
+      return;
+    }
+
+    // A second subscription, independent of the glyph's: it lives and dies
+    // with the pane, so closing the pane releases it (same lifetime contract
+    // as the conveyor pane). It is paired with the `StateMan` that produced
+    // it so the setpoint fields have something to write through.
     showSidePane(
       context: context,
       id: _paneId,
-      builder: (_) => SidePane(
-        title: 'Sensor',
-        subtitle: widget.config.kind.name,
-        icon: Icons.sensors,
-        status: widget.config.detectionKey.isEmpty
-            ? const PaneStatus.unknown('No key')
-            : const PaneStatus.running('Live'),
-        child: PaneSection(
-          title: 'Details',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              PaneDetailRow(label: 'Kind', value: widget.config.kind.name),
-              PaneDetailRow(
-                label: 'Detection key',
-                value: widget.config.detectionKey.isEmpty
-                    ? '—'
-                    : widget.config.detectionKey,
+      builder: (paneContext) => Consumer(
+        builder: (paneContext, ref, _) =>
+            StreamBuilder<(StateMan, DynamicValue)>(
+          stream: ref.watch(stateManProvider.future).asStream().switchMap(
+                (stateMan) => stateMan
+                    .subscribe(key)
+                    .asStream()
+                    .map(
+                      (stream) => Rx.combineLatest2(
+                        Stream.value(stateMan),
+                        stream,
+                        (StateMan sm, DynamicValue value) => (sm, value),
+                      ),
+                    )
+                    .switchMap((stream) => stream),
               ),
-              PaneDetailRow(
-                label: 'Detection state',
-                value: widget.config.detectionKey.isEmpty
-                    ? 'no key configured'
-                    : '(see glyph)',
-              ),
-              PaneDetailRow(
-                label: 'Active polarity inverted',
-                value: widget.config.invertActivePolarity ? 'yes' : 'no',
-              ),
-              PaneDetailRow(
-                label: 'Rising edge delay key',
-                value: widget.config.risingEdgeDelayKey.isEmpty
-                    ? '—'
-                    : widget.config.risingEdgeDelayKey,
-              ),
-              PaneDetailRow(
-                label: 'Falling edge delay key',
-                value: widget.config.fallingEdgeDelayKey.isEmpty
-                    ? '—'
-                    : widget.config.fallingEdgeDelayKey,
-              ),
-              if (widget.config.tag != null && widget.config.tag!.isNotEmpty)
-                PaneDetailRow(label: 'Tag', value: widget.config.tag!),
-            ],
-          ),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return _staticPane(const PaneStatus.fault('Error'), null);
+            }
+            if (!snapshot.hasData) {
+              return _staticPane(const PaneStatus.unknown('Connecting'), null);
+            }
+
+            final (stateMan, dynValue) = snapshot.data!;
+            final fb = SensorFbState.tryParse(dynValue);
+            if (fb == null) {
+              // Plain BOOL node — no FB behind this key, so no setpoints to
+              // offer. Show the detail list with the live bit filled in.
+              final raw = dynValue.asBool;
+              return _staticPane(
+                raw
+                    ? const PaneStatus.running('Detected')
+                    : const PaneStatus.stopped('Clear'),
+                raw,
+              );
+            }
+
+            return SensorFbPane(
+              config: widget.config,
+              state: fb,
+              // Copy-on-write, mirroring the conveyor pane: clone the struct,
+              // set one member, write the whole thing back. The `p_stat_*`
+              // members ride along unchanged and the FB overwrites them on the
+              // next scan.
+              //
+              // A rejected write is reported rather than swallowed. The only
+              // feedback a setpoint has is the field itself, and on the next
+              // PLC update that field snaps back to the old value — without
+              // this the operator sees their entry silently undone with no
+              // reason given. The messenger is resolved before the await so
+              // nothing reaches for a disposed context afterwards.
+              onWrite: (field, value) {
+                final messenger = ScaffoldMessenger.maybeOf(context);
+                final newValue = DynamicValue.from(dynValue);
+                newValue[field] = value;
+                stateMan.write(key, newValue).catchError((Object e) {
+                  messenger?.showSnackBar(
+                    SnackBar(content: Text('Write to $key failed: $e')),
+                  );
+                });
+              },
+            );
+          },
         ),
       ),
     );
@@ -406,18 +644,256 @@ class _SensorState extends ConsumerState<Sensor> {
       return _buildPaint(_createPainter(isActive: false, isStale: true));
     }
 
-    return StreamBuilder<bool>(
+    return StreamBuilder<DynamicValue>(
       stream: _detectionStream,
       builder: (context, snapshot) {
         // Stale path #2 + #3: stream emitted nothing yet, or errored.
         if (!snapshot.hasData || snapshot.hasError) {
           return _buildPaint(_createPainter(isActive: false, isStale: true));
         }
+        // Stale path #4: `q_xFault` — the FB sees neither the NO nor the NC
+        // contact, so the true state is unknowable. Grey is the honest
+        // rendering; painting "clear" would assert something the PLC does
+        // not know. Only reachable on the FB binding (a plain BOOL has no
+        // fault channel).
+        final fb = SensorFbState.tryParse(snapshot.data!);
+        if (fb != null && fb.fault) {
+          return _buildPaint(_createPainter(isActive: false, isStale: true));
+        }
+        // `p_stat_xOutput` — the debounced, delay-respected output the FB
+        // tells interlock chains to read — not `p_stat_xRaw`. The mimic and
+        // the interlocks must agree on what "detected" means.
         final isActive = sensorIsActive(
-          rawBool: snapshot.data!,
+          rawBool: fb?.output ?? snapshot.data!.asBool,
           invertActivePolarity: widget.config.invertActivePolarity,
         );
         return _buildPaint(_createPainter(isActive: isActive, isStale: false));
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FB_Sensor operator pane
+// ---------------------------------------------------------------------------
+
+/// The operator pane shown when the sensor is bound to an `FB_Sensor`.
+///
+/// Split out from `_SensorState` and driven by a plain [SensorFbState] +
+/// [onWrite] callback so it can be pumped in tests without a live `StateMan`
+/// behind it.
+///
+/// [onWrite] is called with a member name from [SensorFbFields] and the new
+/// value; only the two `p_cfg_*` members are ever passed — this pane offers no
+/// commands, because `FB_Sensor` has none.
+class SensorFbPane extends StatelessWidget {
+  final SensorConfig config;
+  final SensorFbState state;
+  final void Function(String field, Object? value) onWrite;
+
+  const SensorFbPane({
+    super.key,
+    required this.config,
+    required this.state,
+    required this.onWrite,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final (blockedValue, blockedUnit) = formatSensorElapsed(state.blockedFor);
+    final (clearValue, clearUnit) = formatSensorElapsed(state.clearFor);
+
+    return SidePane(
+      title: config.detectionKey,
+      subtitle: '${config.kind.name} · FB_Sensor',
+      icon: Icons.sensors,
+      // Fault outranks detection: with neither contact reporting, "clear"
+      // would be a guess. Matches the glyph, which goes grey on the same
+      // condition.
+      status: state.fault
+          ? const PaneStatus.fault('Signal fault')
+          : state.output
+              ? const PaneStatus.running('Blocked')
+              : const PaneStatus.stopped('Clear'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // --- Live signal ---------------------------------------------
+          PaneSection(
+            title: 'Signal',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PaneTileRow(
+                  children: [
+                    // Wider than the 108 default: only two tiles share the
+                    // row, and at the default "Blocked for" ellipsizes to
+                    // "Blocked …" — which is not a label.
+                    PaneMetricTile(
+                      label: 'Blocked for',
+                      value: blockedValue,
+                      unit: blockedUnit,
+                      icon: Icons.timer,
+                      width: 150,
+                    ),
+                    PaneMetricTile(
+                      label: 'Clear for',
+                      value: clearValue,
+                      unit: clearUnit,
+                      icon: Icons.timer_off,
+                      width: 150,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                PaneDetailRow(
+                  label: 'Output',
+                  // Under fault the FB's Q still follows the NO contact, but
+                  // that contact is the thing we cannot see — reporting
+                  // "clear" here would contradict the glyph, which greys out.
+                  value: state.fault
+                      ? 'unknown'
+                      : state.output
+                          ? 'blocked'
+                          : 'clear',
+                ),
+                PaneDetailRow(
+                  label: 'Raw NO',
+                  value: state.rawNO ? 'on' : 'off',
+                ),
+                // The NC row is noise on a single-contact sensor — it would
+                // read a permanent "off" that means nothing.
+                if (state.hasNC)
+                  PaneDetailRow(
+                    label: 'Raw NC',
+                    value: state.rawNC ? 'on' : 'off',
+                  ),
+                if (state.fault)
+                  const PaneDetailRow(
+                    label: 'Fault',
+                    value: 'NO and NC both inactive',
+                  ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+
+          // --- Setpoints -------------------------------------------------
+          //
+          // `p_cfg_tOnDelay` / `p_cfg_tOffDelay` are PERSISTENT RETAIN on the
+          // PLC, so a change here survives a restart without a download.
+          // Committed on submit (Enter / focus-out) only — a half-typed delay
+          // must not reach the FB. The field keys embed the current value so
+          // the box resets if the PLC reports a different one.
+          PaneSection(
+            title: 'Debounce',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: _DelayField(
+                        fieldKey: 'sensor_on_delay_field',
+                        label: 'On delay',
+                        value: state.onDelay,
+                        onSubmitted: (ms) =>
+                            onWrite(SensorFbFields.onDelay, ms),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _DelayField(
+                        fieldKey: 'sensor_off_delay_field',
+                        label: 'Off delay',
+                        value: state.offDelay,
+                        onSubmitted: (ms) =>
+                            onWrite(SensorFbFields.offDelay, ms),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'On delay holds a detection off until the input has been '
+                  'stable; off delay holds it on after the input drops.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+
+          // --- Binding ----------------------------------------------------
+          PaneSection(
+            title: 'Binding',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PaneDetailRow(label: 'Kind', value: config.kind.name),
+                PaneDetailRow(
+                  label: 'Detection key',
+                  value: config.detectionKey,
+                ),
+                PaneDetailRow(
+                  label: 'NO/NC pair',
+                  value: state.hasNC ? 'yes' : 'no',
+                ),
+                PaneDetailRow(
+                  label: 'Active polarity inverted',
+                  value: config.invertActivePolarity ? 'yes' : 'no',
+                ),
+                if (config.tag != null && config.tag!.isNotEmpty)
+                  PaneDetailRow(label: 'Tag', value: config.tag!),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A debounce setpoint field in milliseconds. Submits on Enter/focus-out only.
+///
+/// Milliseconds rather than a duration picker: `TIME` crosses the wire as a
+/// millisecond count, the values in play are tens to hundreds of ms, and the
+/// operators reading these panes think in the same unit the PLC does.
+class _DelayField extends StatelessWidget {
+  final String fieldKey;
+  final String label;
+  final Duration value;
+  final void Function(int milliseconds) onSubmitted;
+
+  const _DelayField({
+    required this.fieldKey,
+    required this.label,
+    required this.value,
+    required this.onSubmitted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      key: Key('$fieldKey-${value.inMilliseconds}'),
+      initialValue: value.inMilliseconds.toString(),
+      keyboardType: const TextInputType.numberWithOptions(decimal: false),
+      decoration: InputDecoration(
+        labelText: label,
+        suffixText: 'ms',
+        isDense: true,
+      ),
+      onFieldSubmitted: (text) {
+        final parsed = int.tryParse(text.trim());
+        // Negative rejected rather than clamped: `TIME` is unsigned, and
+        // silently turning -50 into 0 hides a typo from the operator.
+        if (parsed == null || parsed < 0) return;
+        onSubmitted(parsed);
       },
     );
   }
@@ -565,6 +1041,12 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
               initialValue: config.detectionKey,
               onChanged: (v) => setState(() => config.detectionKey = v),
             ),
+            const SizedBox(height: 4),
+            Text(
+              'Point at an FB_Sensor HMI struct for live state and editable '
+              'debounce in the side pane. A plain BOOL key also works.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 16),
 
             // -- Invert Active Polarity (locked subtitle copy contract) --
@@ -582,6 +1064,15 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             const SizedBox(height: 16),
 
             // -- Rising / Falling Edge Delay Keys (paired — 8px between) --
+            //
+            // Legacy pairing for plain-BOOL bindings. On an FB_Sensor these
+            // are ignored: the delays live in the bound struct and the side
+            // pane edits them in place.
+            Text(
+              'Edge delay keys (plain BOOL bindings only)',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
             KeyField(
               label: 'Rising Edge Delay Key',
               initialValue: config.risingEdgeDelayKey,
