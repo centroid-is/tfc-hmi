@@ -165,13 +165,12 @@ abstract final class SidePaneDefaults {
   /// Gap between the pane and the screen/chrome edges.
   static double margin = 12;
 
-  /// Width used the first time a pane is opened. Afterwards the operator's
-  /// last resized width is reused for the rest of the session.
+  /// Pane width. An app can widen this once at start-up; a caller can
+  /// override it per pane via `showSidePane(width: ...)`.
   static double width = 380;
 
-  /// Resize limits. The maximum is also capped at 60% of the window.
+  /// Floor for the width when the window is too narrow to honour it.
   static double minWidth = 300;
-  static double maxWidth = 640;
 }
 
 /// Opens [builder]'s pane docked to the right edge.
@@ -327,9 +326,6 @@ class _SidePaneShellState extends State<_SidePaneShell>
     reverseCurve: Curves.easeInCubic,
   );
 
-  /// Width of the resize grip along the pane's left edge.
-  static const double _gripWidth = 8;
-
   @override
   void initState() {
     super.initState();
@@ -363,21 +359,6 @@ class _SidePaneShellState extends State<_SidePaneShell>
   Future<void> dismiss() async {
     if (!mounted) return;
     await _controller.reverse();
-  }
-
-  void _resize(double dx, double screenWidth) {
-    final maxWidth = [
-      SidePaneDefaults.maxWidth,
-      screenWidth * 0.6,
-    ].reduce((a, b) => a < b ? a : b);
-    setState(() {
-      SidePaneHost._width = (SidePaneHost._width - dx).clamp(
-        SidePaneDefaults.minWidth,
-        maxWidth < SidePaneDefaults.minWidth
-            ? SidePaneDefaults.minWidth
-            : maxWidth,
-      );
-    });
   }
 
   @override
@@ -422,28 +403,10 @@ class _SidePaneShellState extends State<_SidePaneShell>
           ),
           color: Theme.of(context).colorScheme.surface,
           clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              Positioned.fill(child: widget.builder(context)),
-              // Left-edge grip: drag to widen/narrow. The width persists for
-              // the rest of the session so an operator sets it once.
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: _gripWidth,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeLeftRight,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onHorizontalDragUpdate: (d) =>
-                        _resize(d.delta.dx, screen.width),
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          // Not resizable: the pane is a fixed strip of the screen, and its
+          // content is built to fit that width. Only floating dialogs — which
+          // hold charts and grids sized to their content — resize.
+          child: widget.builder(context),
         ),
       ),
     );
