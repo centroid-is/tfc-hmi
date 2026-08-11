@@ -12,6 +12,10 @@ const IconData warehouse_open2 =
     IconData(0xe804, fontFamily: "TfcIcons", fontPackage: "tfc");
 const IconData warehouse_closed =
     IconData(0xe805, fontFamily: "TfcIcons", fontPackage: "tfc");
+const IconData pallet_top =
+    IconData(0xe806, fontFamily: "TfcIcons", fontPackage: "tfc");
+const IconData pallet_stack =
+    IconData(0xe807, fontFamily: "TfcIcons", fontPackage: "tfc");
 
 class IconDataConverter implements JsonConverter<IconData, String> {
   const IconDataConverter();
@@ -836,6 +840,12 @@ class IconDataConverter implements JsonConverter<IconData, String> {
         return FontAwesomeIcons.box.data;
       case 'boxes':
         return FontAwesomeIcons.boxesStacked.data;
+      case 'pallet':
+        return FontAwesomeIcons.pallet.data;
+      case 'pallet_top':
+        return pallet_top;
+      case 'pallet_stack':
+        return pallet_stack;
       case 'clipboard':
         return FontAwesomeIcons.clipboard.data;
       case 'clipboard_list':
@@ -1287,6 +1297,9 @@ class IconDataConverter implements JsonConverter<IconData, String> {
     if (iconData == FontAwesomeIcons.truckFast.data) return 'shipping_fast';
     if (iconData == FontAwesomeIcons.box.data) return 'box';
     if (iconData == FontAwesomeIcons.boxesStacked.data) return 'boxes';
+    if (iconData == FontAwesomeIcons.pallet.data) return 'pallet';
+    if (iconData == pallet_top) return 'pallet_top';
+    if (iconData == pallet_stack) return 'pallet_stack';
     if (iconData == FontAwesomeIcons.clipboard.data) return 'clipboard';
     if (iconData == FontAwesomeIcons.clipboardList.data) return 'clipboard_list';
     if (iconData == FontAwesomeIcons.listCheck.data) return 'tasks';
@@ -1737,6 +1750,7 @@ final List<IconData> iconList = <IconData>[
   FontAwesomeIcons.truckFast.data,
   FontAwesomeIcons.box.data,
   FontAwesomeIcons.boxesStacked.data,
+  FontAwesomeIcons.pallet.data,
   FontAwesomeIcons.clipboard.data,
   FontAwesomeIcons.clipboardList.data,
   FontAwesomeIcons.listCheck.data,
@@ -1758,4 +1772,6 @@ final List<IconData> iconList = <IconData>[
   warehouse_open1,
   warehouse_open2,
   warehouse_closed,
+  pallet_top,
+  pallet_stack,
 ];
