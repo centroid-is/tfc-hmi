@@ -19,6 +19,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_async_p
 import 'package:tfc_dart/core/preferences.dart';
 
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc/page_creator/page.dart';
 import 'package:tfc/pages/page_editor.dart';
 import 'package:tfc/providers/alarm.dart';
@@ -170,7 +171,7 @@ Future<Finder> _openMoveDialog(WidgetTester tester, String label) async {
   await tester.pumpAndSettle();
   final dialog = find.ancestor(
     of: find.text('Move "$label"'),
-    matching: find.byType(AlertDialog),
+    matching: find.byType(StandardDialogFrame),
   );
   expect(dialog, findsOneWidget);
   return dialog;

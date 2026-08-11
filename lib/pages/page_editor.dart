@@ -1633,7 +1633,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             width: 590,
             child: SizedBox(
               width: 550,
-              height: 550,
+              // StandardDialogFrame caps itself at 80% of the screen, so a
+              // taller fixed box pushes the drop zone and the add buttons off
+              // a short panel where they cannot be reached at all. Shrink to
+              // whatever the frame can actually give, minus its own header.
+              height: math.min(
+                  550, MediaQuery.sizeOf(context).height * 0.8 - 120),
               child: Column(
                 children: [
                   Text(
@@ -2345,54 +2350,39 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     showDialog(
       context: dialogContext,
-      builder: (ctx) => AlertDialog(
-        title: Text('Move "${page.menuItem.label}"'),
-        content: SizedBox(
-          width: 420,
-          height: 420,
-          child: Column(
-            children: [
-              Text(
-                'Pick the section it should live under. The address stays the '
-                'same, so links to it keep working.',
-                style: Theme.of(ctx).textTheme.bodySmall,
+      builder: (ctx) => StandardDialogFrame(
+        title: 'Move "${page.menuItem.label}"',
+        subtitle: 'Pick the section it should live under. The address stays '
+            'the same, so links to it keep working.',
+        icon: Icons.drive_file_move_outline,
+        width: 440,
+        height: 460,
+        // The list scrolls itself; an outer scroll would unbound its height.
+        scrollable: false,
+        closeLabel: 'Cancel',
+        child: ListView(
+          children: [
+            _buildMoveTarget(
+              ctx: ctx,
+              icon: Icons.north,
+              label: 'Top level',
+              depth: 0,
+              blockedReason: isRoot ? 'Already here' : null,
+              onMove: () => _movePage(pagePath, null, dialogSetState),
+            ),
+            if (targets.isNotEmpty) const Divider(height: 1),
+            for (final target in targets)
+              _buildMoveTarget(
+                ctx: ctx,
+                icon: target.icon,
+                label: target.label,
+                depth: target.depth,
+                blockedReason:
+                    _moveBlockedReason(pagePath, target.path, target.depth),
+                onMove: () => _movePage(pagePath, target.path, dialogSetState),
               ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: ListView(
-                  children: [
-                    _buildMoveTarget(
-                      ctx: ctx,
-                      icon: Icons.north,
-                      label: 'Top level',
-                      depth: 0,
-                      blockedReason: isRoot ? 'Already here' : null,
-                      onMove: () => _movePage(pagePath, null, dialogSetState),
-                    ),
-                    if (targets.isNotEmpty) const Divider(height: 1),
-                    for (final target in targets)
-                      _buildMoveTarget(
-                        ctx: ctx,
-                        icon: target.icon,
-                        label: target.label,
-                        depth: target.depth,
-                        blockedReason: _moveBlockedReason(
-                            pagePath, target.path, target.depth),
-                        onMove: () =>
-                            _movePage(pagePath, target.path, dialogSetState),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-        ],
       ),
     );
   }
