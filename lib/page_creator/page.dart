@@ -87,12 +87,32 @@ class AssetListConverter implements JsonConverter<List<Asset>, List<dynamic>> {
 
 class PageManager {
   static const String storageKey = 'page_editor_data';
+  static const String orderStorageKey = 'page_editor_top_level_order';
   Map<String, AssetPage> pages;
   final PreferencesApi prefs;
+
+  /// Paths of the app's top-level navigation destinations, in the order the
+  /// operator arranged them in the Pages dialog.
+  ///
+  /// [AssetPage.navigationPriority] only orders our own pages against each
+  /// other; the app also registers destinations of its own (Alarm View,
+  /// Advanced, ...) whose position is otherwise fixed by registration order.
+  /// This list covers both kinds so built-ins can be reordered too. Empty
+  /// means "never arranged" — [sortTopLevel] then leaves the registration
+  /// order alone.
+  List<String> topLevelOrder = [];
 
   PageManager({required this.pages, required this.prefs});
 
   Future<void> load() async {
+    final orderJson = await prefs.getString(orderStorageKey);
+    if (orderJson != null) {
+      try {
+        topLevelOrder = (jsonDecode(orderJson) as List).cast<String>();
+      } catch (_) {
+        topLevelOrder = [];
+      }
+    }
     String? jsonString = await prefs.getString(storageKey);
     final defaultPages = {
       '/': AssetPage(
@@ -249,6 +269,40 @@ class PageManager {
 
   Future<void> save() async {
     await prefs.setString(storageKey, toJson());
+    // An empty order is never worth writing: it only arises on a manager that
+    // was constructed without load(), and writing it would wipe an order some
+    // other session already stored.
+    if (topLevelOrder.isNotEmpty) {
+      await prefs.setString(orderStorageKey, jsonEncode(topLevelOrder));
+    }
+  }
+
+  /// Reorders [items] in place to match [topLevelOrder].
+  ///
+  /// Meant for the app's fully registered top-level menu list, after every
+  /// destination — pages and built-ins alike — has been added. Items the
+  /// stored order does not know (a page created since, a destination added in
+  /// an app update) keep their relative registration order at the end.
+  void sortTopLevel(List<MenuItem> items) {
+    if (topLevelOrder.isEmpty) return;
+    final rank = <String, int>{
+      for (var i = 0; i < topLevelOrder.length; i++) topLevelOrder[i]: i,
+    };
+    final decorated = [
+      for (var i = 0; i < items.length; i++)
+        (
+          item: items[i],
+          rank: rank[items[i].path] ?? topLevelOrder.length + i,
+          tie: i,
+        ),
+    ];
+    // sort() is not stable; the original index breaks ties deterministically.
+    decorated.sort((a, b) => a.rank != b.rank
+        ? a.rank.compareTo(b.rank)
+        : a.tie.compareTo(b.tie));
+    items
+      ..clear()
+      ..addAll(decorated.map((d) => d.item));
   }
 
   String toJson() {

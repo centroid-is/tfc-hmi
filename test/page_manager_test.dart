@@ -700,6 +700,85 @@ void main() {
     });
   });
 
+  group('top-level order', () {
+    List<MenuItem> registered() => [
+          _menuRef('Home', '/'),
+          _menuRef('Alarm View', '/alarm-view'),
+          _menuRef('Line', '/line'),
+          _menuRef('Advanced', '/advanced'),
+        ];
+
+    test('sortTopLevel leaves the registration order alone when never set',
+        () {
+      final mgr = _manager();
+      final items = registered();
+
+      mgr.sortTopLevel(items);
+
+      expect(items.map((i) => i.path).toList(),
+          ['/', '/alarm-view', '/line', '/advanced']);
+    });
+
+    test('sortTopLevel reorders built-ins and pages alike', () {
+      final mgr = _manager()
+        ..topLevelOrder = ['/line', '/', '/advanced', '/alarm-view'];
+      final items = registered();
+
+      mgr.sortTopLevel(items);
+
+      expect(items.map((i) => i.path).toList(),
+          ['/line', '/', '/advanced', '/alarm-view']);
+    });
+
+    test('items unknown to the stored order land last, in registration order',
+        () {
+      final mgr = _manager()..topLevelOrder = ['/alarm-view', '/'];
+      final items = registered();
+
+      mgr.sortTopLevel(items);
+
+      expect(items.map((i) => i.path).toList(),
+          ['/alarm-view', '/', '/line', '/advanced']);
+    });
+
+    test('the order survives save and load', () async {
+      final prefs = FakePreferences();
+      final mgr = PageManager(pages: {'/': _page('Home', '/')}, prefs: prefs)
+        ..topLevelOrder = ['/alarm-view', '/', '/advanced'];
+      await mgr.save();
+
+      final mgr2 = PageManager(pages: {}, prefs: prefs);
+      await mgr2.load();
+
+      expect(mgr2.topLevelOrder, ['/alarm-view', '/', '/advanced']);
+    });
+
+    test('saving without an order does not wipe a stored one', () async {
+      final prefs = FakePreferences();
+      final mgr = PageManager(pages: {'/': _page('Home', '/')}, prefs: prefs)
+        ..topLevelOrder = ['/alarm-view', '/'];
+      await mgr.save();
+
+      // A manager that never loaded — its empty order means "unknown", not
+      // "reset to registration order".
+      final blank = PageManager(pages: {'/': _page('Home', '/')}, prefs: prefs);
+      await blank.save();
+
+      final mgr2 = PageManager(pages: {}, prefs: prefs);
+      await mgr2.load();
+      expect(mgr2.topLevelOrder, ['/alarm-view', '/']);
+    });
+
+    test('garbage in the stored order is dropped, not fatal', () async {
+      final prefs = FakePreferences();
+      await prefs.setString(PageManager.orderStorageKey, 'not json');
+      final mgr = PageManager(pages: {}, prefs: prefs);
+      await mgr.load();
+
+      expect(mgr.topLevelOrder, isEmpty);
+    });
+  });
+
   group('isDescendantOf', () {
     final pages = {
       '/a': _page('A', '/a', children: [_menuRef('Sub', '/a/sub')]),

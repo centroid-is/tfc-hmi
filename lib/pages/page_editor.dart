@@ -16,6 +16,7 @@ import '../widgets/panes/pane_chrome.dart' show PaneAction;
 import '../widgets/panes/side_pane.dart';
 import '../page_creator/page.dart';
 import '../models/menu_item.dart';
+import '../route_registry.dart';
 import '../providers/current_page_assets.dart';
 import '../tech_docs/tech_doc_picker.dart';
 
@@ -500,6 +501,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   String? _copiedAssets;
   Map<String, AssetPage> _temporaryPages = {};
   String? _currentPage;
+
+  /// Working copy of [PageManager.topLevelOrder]: the full top level — pages
+  /// and app-registered destinations alike — as arranged in the Pages dialog.
+  List<String> _topLevelOrder = [];
+
+  /// True when [_topLevelOrder] differs from what was loaded. Tracked apart
+  /// from [_hasUnsavedChanges]'s JSON compare because app-registered items are
+  /// not part of the pages JSON at all.
+  bool _navOrderDirty = false;
   String _paletteSearchQuery = '';
   String _savedJson = '';
   String _currentJson = '';
@@ -575,6 +585,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     ref.read(pageManagerProvider.future).then((pageManager) {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
+        _topLevelOrder = List.of(pageManager.topLevelOrder);
         _currentPage = pageManager.pages.keys.firstOrNull;
 
         // Apply proposal data if present.
@@ -817,7 +828,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _temporaryPages.map((name, page) => MapEntry(name, page.toJson())));
   }
 
-  bool get _hasUnsavedChanges => _currentJson != _savedJson;
+  bool get _hasUnsavedChanges =>
+      _currentJson != _savedJson || _navOrderDirty;
 
   String _assetsToJson(List<Asset> theAssets) {
     return jsonEncode({
@@ -828,6 +840,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Future<void> _saveToPrefs() async {
     final pageManager = await ref.read(pageManagerProvider.future);
     pageManager.pages = PageManager.copyPages(_temporaryPages);
+    pageManager.topLevelOrder = List.of(_topLevelOrder);
     await pageManager.save();
     ref.invalidate(pageManagerProvider);
     if (!mounted) return;
@@ -842,6 +855,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     setState(() {
       _updateCurrentJson();
       _savedJson = _currentJson;
+      _navOrderDirty = false;
       _isProposal = false; // Proposal accepted and saved.
       _proposedAssets = {};
       _preProposalPages = null;
@@ -2131,12 +2145,55 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     return roots;
   }
 
+  /// Top-level items the app registered itself (Alarm View, Advanced, ...),
+  /// keyed by path. They are not pages, so the dialog can only reorder them.
+  Map<String, MenuItem> _appRegisteredTopLevel() {
+    return {
+      for (final item in RouteRegistry().menuItems)
+        if (item.path != null && !_temporaryPages.containsKey(item.path))
+          item.path!: item,
+    };
+  }
+
+  /// Every top-level row of the Pages dialog — root pages and the app's own
+  /// destinations — in navigation order.
+  ///
+  /// Rows the stored order does not know yet rank by the live registry order
+  /// (what the running app currently shows); pages absent from both — drafts
+  /// and pages created this session, which enter the registry only on restart
+  /// — go last, in priority order.
+  List<String> _getTopLevelPaths() {
+    final pageRoots = _getRootPageNames();
+    final externals = _appRegisteredTopLevel().keys.toList();
+
+    final registryPaths = [
+      for (final item in RouteRegistry().menuItems)
+        if (item.path != null) item.path!,
+    ];
+    final rank = <String, int>{};
+    for (final path in _topLevelOrder) {
+      rank.putIfAbsent(path, () => rank.length);
+    }
+    var next = rank.length;
+    for (final path in registryPaths) {
+      rank.putIfAbsent(path, () => next++);
+    }
+    for (final path in pageRoots) {
+      rank.putIfAbsent(path, () => next++);
+    }
+
+    final combined = [...pageRoots, ...externals];
+    combined.sort((a, b) => rank[a]!.compareTo(rank[b]!));
+    return combined;
+  }
+
   void _showPageManagerDialog() {
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, dialogSetState) {
-          final roots = _getRootPageNames();
+          final roots = _getTopLevelPaths();
+          final appItems = _appRegisteredTopLevel();
           return StandardDialogFrame(
             title: 'Pages',
             // The restart caveat belongs with the change, not buried in the
@@ -2172,13 +2229,19 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                       },
                       children: [
                         for (int i = 0; i < roots.length; i++)
-                          _buildTreeNode(
-                            roots[i],
-                            dialogSetState,
-                            dialogContext,
-                            depth: 0,
-                            reorderIndex: i,
-                          ),
+                          if (appItems.containsKey(roots[i]))
+                            _buildAppItemNode(
+                              appItems[roots[i]]!,
+                              reorderIndex: i,
+                            )
+                          else
+                            _buildTreeNode(
+                              roots[i],
+                              dialogSetState,
+                              dialogContext,
+                              depth: 0,
+                              reorderIndex: i,
+                            ),
                       ],
                     ),
                   ),
@@ -2497,6 +2560,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
+  /// A top-level destination the app registered itself. It has no page to
+  /// select, edit or publish here — the row exists to be dragged into order.
+  Widget _buildAppItemNode(MenuItem item, {required int reorderIndex}) {
+    return ListTile(
+      key: ValueKey('app-item-${item.path}'),
+      dense: true,
+      leading: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ReorderableDragStartListener(
+            index: reorderIndex,
+            child: const Icon(Icons.drag_handle, size: 20, color: Colors.grey),
+          ),
+          const SizedBox(width: 4),
+          Icon(item.icon),
+        ],
+      ),
+      title: Text(item.label),
+      subtitle: const Text('Built-in — drag to reorder'),
+    );
+  }
+
   void _onReorderRoots(
     List<String> roots,
     int oldIndex,
@@ -2508,9 +2593,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final movedName = roots[oldIndex];
       roots.removeAt(oldIndex);
       roots.insert(newIndex, movedName);
-      for (int i = 0; i < roots.length; i++) {
-        final page = _temporaryPages[roots[i]]!;
-        _temporaryPages[roots[i]] = page.copyWith(navigationPriority: i);
+      // The full mixed order is what gets persisted; the per-page priorities
+      // are kept in step so page-only consumers (getRootMenuItems) agree.
+      _topLevelOrder = List.of(roots);
+      _navOrderDirty = true;
+      var pageIndex = 0;
+      for (final path in roots) {
+        final page = _temporaryPages[path];
+        if (page == null) continue;
+        _temporaryPages[path] = page.copyWith(navigationPriority: pageIndex++);
       }
       _updateCurrentJson();
     });
