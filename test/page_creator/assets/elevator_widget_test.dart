@@ -89,6 +89,7 @@ import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/widgets/number_slider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -117,7 +118,8 @@ void main() {
   // helper below mirrors page_editor.dart:_showConfigDialog so the
   // editor-surface tests can still exercise `_ElevatorConfigEditor`
   // directly without going through the runtime tap path.
-  Future<void> openConfigEditor(WidgetTester tester, ElevatorConfig config) async {
+  Future<void> openConfigEditor(
+      WidgetTester tester, ElevatorConfig config) async {
     await tester.pumpWidget(ProviderScope(
       child: MaterialApp(
         home: Scaffold(
@@ -317,7 +319,8 @@ void main() {
       final config = ElevatorConfig(tweenDurationMs: 250);
       await openConfigEditor(tester, config);
 
-      final tweenField = find.widgetWithText(TextFormField, 'Tween Duration (ms)');
+      final tweenField =
+          find.widgetWithText(TextFormField, 'Tween Duration (ms)');
       expect(tweenField, findsOneWidget);
       await tester.enterText(tweenField, '500');
       await tester.pump();
@@ -350,8 +353,8 @@ void main() {
       final config = ElevatorConfig(positionKey: '/elev/01/position');
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       expect(state.debugPositionStream, isNotNull);
     });
 
@@ -360,8 +363,8 @@ void main() {
       final config = ElevatorConfig(positionKey: '/elev/01/position');
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       final streamA = state.debugPositionStream;
       for (int i = 0; i < 100; i++) {
         await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -378,15 +381,14 @@ void main() {
       final configB = ElevatorConfig(positionKey: '/elev/02/position');
       await tester.pumpWidget(wrap(Elevator(config: configA)));
       await tester.pump(Duration.zero);
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       final streamA = state.debugPositionStream;
       await tester.pumpWidget(wrap(Elevator(config: configB)));
       await tester.pump(Duration.zero);
       final streamB = state.debugPositionStream;
       expect(identical(streamA, streamB), isFalse,
-          reason:
-              'positionStream must be re-hoisted when positionKey changes');
+          reason: 'positionStream must be re-hoisted when positionKey changes');
     });
 
     testWidgets('unmount disposes ValueNotifier and cancels subscription',
@@ -443,8 +445,7 @@ void main() {
       expect(tab.duration, const Duration(milliseconds: 500));
     });
 
-    testWidgets('default tweenDurationMs=250 → duration=250ms',
-        (tester) async {
+    testWidgets('default tweenDurationMs=250 → duration=250ms', (tester) async {
       final config = ElevatorConfig();
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
@@ -478,8 +479,7 @@ void main() {
       final config = ElevatorConfig(
         positionKey: '',
         children: [
-          ElevatorChildEntry(
-              id: 'sensor-poly', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'sensor-poly', child: SensorConfig.preview()),
           ElevatorChildEntry(
               id: 'conveyor-poly', child: ConveyorConfig.preview()),
         ],
@@ -493,8 +493,7 @@ void main() {
       expect(find.byType(Conveyor), findsOneWidget);
     });
 
-    test(
-        'source has no runtime-type switching on elevator children (ELEV-11)',
+    test('source has no runtime-type switching on elevator children (ELEV-11)',
         () {
       // Source-level grep gate: elevator.dart must not use `is SensorConfig`,
       // `is ConveyorConfig`, `child.runtimeType ==`, or
@@ -509,13 +508,12 @@ void main() {
           .replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '')
           .split('\n')
           .map((line) {
-            // Strip trailing line comment, but only if the slashes are not
-            // inside a string. Naive approach is good enough for our
-            // own production source.
-            final idx = line.indexOf('//');
-            return idx >= 0 ? line.substring(0, idx) : line;
-          })
-          .join('\n');
+        // Strip trailing line comment, but only if the slashes are not
+        // inside a string. Naive approach is good enough for our
+        // own production source.
+        final idx = line.indexOf('//');
+        return idx >= 0 ? line.substring(0, idx) : line;
+      }).join('\n');
       final patterns = RegExp(
         r'is\s+SensorConfig|is\s+ConveyorConfig|'
         r'child\.runtimeType\s*==|'
@@ -523,8 +521,7 @@ void main() {
       );
       final matches = patterns.allMatches(stripped).toList();
       expect(matches, isEmpty,
-          reason:
-              'elevator.dart must dispatch children polymorphically via '
+          reason: 'elevator.dart must dispatch children polymorphically via '
               'entry.child.build(context) — no runtime-type switching '
               '(ELEV-11, ARCHITECTURE Anti-Pattern 1). Found: '
               '${matches.map((m) => m.group(0)).toList()}');
@@ -554,8 +551,7 @@ void main() {
         matching: find.byType(Sensor),
       );
       expect(descendantSensor, findsOneWidget,
-          reason:
-              'The ValueKey<String>(entry.id) wrapper must be an ancestor '
+          reason: 'The ValueKey<String>(entry.id) wrapper must be an ancestor '
               'of the rendered child widget so identity is preserved across '
               'rebuilds.');
     });
@@ -567,8 +563,7 @@ void main() {
       final config = ElevatorConfig(
         positionKey: '',
         children: [
-          ElevatorChildEntry(
-              id: 'counting-1', child: _CountingChildConfig()),
+          ElevatorChildEntry(id: 'counting-1', child: _CountingChildConfig()),
         ],
       );
       await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -589,30 +584,26 @@ void main() {
       }
 
       expect(_CountingChildState.initStateCount, 1,
-          reason:
-              '50 progress changes must NOT recreate the child State '
+          reason: '50 progress changes must NOT recreate the child State '
               '(Pitfall 1 — widget identity loss on position updates).');
     });
 
     testWidgets(
         'tap during translation lands on the child, opens child details dialog '
-        '(ELEV-19, Pitfall 7; Plan 04-05)',
-        (tester) async {
+        '(ELEV-19, Pitfall 7; Plan 04-05)', (tester) async {
       // SensorConfig with a generous size so the GestureDetector hit-target
       // is a comfortable rectangle rather than the 0.03×0.03 default tiny
       // box (which would leave the tap centre on a 6-pixel target — too
       // brittle). The test locks the hit-test-through-translation
       // contract — Plan 04-05 changes WHAT the gesture does (details
       // dialog) but NOT whether it survives translation.
-      final sensor = SensorConfig.preview()
-        ..detectionKey = 'sensor/01/det';
+      final sensor = SensorConfig.preview()..detectionKey = 'sensor/01/det';
       sensor.size = const RelativeSize(width: 0.4, height: 0.2);
 
       final config = ElevatorConfig(
         positionKey: '',
         children: [
-          ElevatorChildEntry(
-              id: 'sensor-tap', offsetX: 0.5, child: sensor),
+          ElevatorChildEntry(id: 'sensor-tap', offsetX: 0.5, child: sensor),
         ],
       );
       await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -636,25 +627,21 @@ void main() {
 
       // Sensor's details dialog surface (locked Plan 04-05 surface).
       expect(find.text('Detection key'), findsOneWidget,
-          reason:
-              'Tap on a child during translation must reach the child\'s '
+          reason: 'Tap on a child during translation must reach the child\'s '
               'GestureDetector and open its details dialog (ELEV-19 + '
               'Plan 04-05).');
       // The Elevator's own details dialog must NOT have opened — its
       // unique label "Position key" must not appear.
       expect(find.text('Position key'), findsNothing,
-          reason:
-              'Elevator details dialog must not steal taps that land on a '
+          reason: 'Elevator details dialog must not steal taps that land on a '
               'child (Plan 04-05).');
       // Editor surfaces from BOTH widgets must be absent — runtime tap
       // must NEVER open editor.
       expect(find.text('Detection State Key'), findsNothing,
-          reason:
-              'Runtime tap must not open the sensor config editor '
+          reason: 'Runtime tap must not open the sensor config editor '
               '(Plan 04-05).');
       expect(find.text('Position State Key (0-100%)'), findsNothing,
-          reason:
-              'Runtime tap must not open the elevator config editor '
+          reason: 'Runtime tap must not open the elevator config editor '
               '(Plan 04-05).');
     });
 
@@ -692,8 +679,7 @@ void main() {
 
       // Child rises (smaller `top`) as progress increases.
       expect(topAt0 > topAt1, isTrue,
-          reason:
-              'Child Positioned.top must decrease as platform rises '
+          reason: 'Child Positioned.top must decrease as platform rises '
               '(progress 0 → 1) — ELEV-10.');
 
       // Numerical: child's bottom edge sits on platform's top edge.
@@ -758,8 +744,7 @@ void main() {
           .first;
       final stack = tester.widget<Stack>(stackFinder);
       expect(stack.clipBehavior, Clip.none,
-          reason:
-              'Elevator Stack must use Clip.none so children may extend '
+          reason: 'Elevator Stack must use Clip.none so children may extend '
               'outside the elevator bbox during translation '
               '(D-CONTEXT §Child Layout & Identity).');
     });
@@ -830,8 +815,7 @@ void main() {
       final expectedTop =
           platformOffsetTop(0.5, bboxH, platformH, maxChildHeight) - childH;
       expect(top, closeTo(expectedTop, 1.0),
-          reason:
-              'offsetY=0 must reproduce the pre-260511-ehy formula '
+          reason: 'offsetY=0 must reproduce the pre-260511-ehy formula '
               'exactly (Plan 260511-dxa invariant).');
     });
 
@@ -970,18 +954,15 @@ void main() {
       final expectedTop =
           platformOffsetTop(1.0, bboxH, platformH, headroom) - childH;
       expect(top, closeTo(expectedTop, 1.0),
-          reason:
-              'travelRange=1.0 default must produce full headroom climb '
+          reason: 'travelRange=1.0 default must produce full headroom climb '
               '— platform top = 0 at progress=1, so child top = -childH '
               '(overhang permitted).');
       expect(top, closeTo(-40.0, 1.0),
-          reason:
-              'Numerical lock: progress=1 + travelRange=1.0 + 40px child → '
+          reason: 'Numerical lock: progress=1 + travelRange=1.0 + 40px child → '
               'child top = 0 - 40 = -40.');
     });
 
-    testWidgets(
-        'travelRange=0.5 → progress=1 puts platform halfway up',
+    testWidgets('travelRange=0.5 → progress=1 puts platform halfway up',
         (tester) async {
       // Effective travel = clamp(0.5 * 300, 0, 276) = 150.
       // platformY = 276 - 150 = 126. child top = 126 - 40 = 86.
@@ -1010,13 +991,11 @@ void main() {
       expect(positioned, findsOneWidget);
       final top = (tester.widget(positioned) as Positioned).top!;
       expect(top, closeTo(86.0, 1.0),
-          reason:
-              'travelRange=0.5: effectiveTravel=150 → platformY=126 → '
+          reason: 'travelRange=0.5: effectiveTravel=150 → platformY=126 → '
               'child top=86 (no overhang at default child height).');
     });
 
-    testWidgets(
-        'travelRange=0.0 → platform pinned at bottom for all progress',
+    testWidgets('travelRange=0.0 → platform pinned at bottom for all progress',
         (tester) async {
       // Effective travel = 0. platformY = 276 regardless of progress.
       // child top = 276 - 40 = 236.
@@ -1050,8 +1029,7 @@ void main() {
               'progress → child top = 276 - 40 = 236.');
     });
 
-    testWidgets(
-        'clamp: travelRange=1.5 behaves like 1.0 (defensive)',
+    testWidgets('clamp: travelRange=1.5 behaves like 1.0 (defensive)',
         (tester) async {
       // Defensive clamp: travelRange > 1.0 must not push the platform past
       // the bbox top. clamp(1.5, 0, 1) * 300 = 300, then clamp to headroom
@@ -1081,8 +1059,7 @@ void main() {
       expect(positioned, findsOneWidget);
       final top = (tester.widget(positioned) as Positioned).top!;
       expect(top, closeTo(-40.0, 1.0),
-          reason:
-              'travelRange=1.5 must be defensively clamped to 1.0 — same '
+          reason: 'travelRange=1.5 must be defensively clamped to 1.0 — same '
               'top=-40 as the default fixture.');
     });
   });
@@ -1159,8 +1136,7 @@ void main() {
           reason: 'Default offsetX is 0.5 per CONTEXT §specifics.');
     });
 
-    testWidgets(
-        'Selecting Conveyor appends a ConveyorConfig child',
+    testWidgets('Selecting Conveyor appends a ConveyorConfig child',
         (tester) async {
       final config = ElevatorConfig();
       await openConfigEditor(tester, config);
@@ -1230,8 +1206,7 @@ void main() {
       expect(config.children, isEmpty,
           reason: 'Remove must delete the entry from config.children.');
       expect(find.text('No children configured'), findsOneWidget,
-          reason:
-              'Empty children list must show the "No children configured" '
+          reason: 'Empty children list must show the "No children configured" '
               'graceful empty state (CONTEXT §Removing the last child).');
     });
 
@@ -1240,9 +1215,7 @@ void main() {
       final config = ElevatorConfig(
         children: [
           ElevatorChildEntry(
-              id: 'slider-test',
-              offsetX: 0.5,
-              child: SensorConfig.preview()),
+              id: 'slider-test', offsetX: 0.5, child: SensorConfig.preview()),
         ],
       );
       await openConfigEditor(tester, config);
@@ -1319,8 +1292,7 @@ void main() {
   // real time via setState. Mirrors the offsetY/offsetX slider precedents.
   // ---------------------------------------------------------------------------
   group('Travel range editor slider (260511-fd6)', () {
-    testWidgets(
-        'Travel range slider mutates config.travelRange in real time',
+    testWidgets('Travel range slider mutates config.travelRange in real time',
         (tester) async {
       // Construct a config with a non-default travelRange so the slider's
       // initial value is unambiguous. Locate the travel-range slider by its
@@ -1338,8 +1310,7 @@ void main() {
             (w.divisions ?? 0) == 100,
       );
       expect(sliderFinder, findsOneWidget,
-          reason:
-              'Editor must expose exactly one Slider with '
+          reason: 'Editor must expose exactly one Slider with '
               '(min=0, max=1, divisions=100) for travelRange (260511-fd6).');
 
       // Drive the slider's onChanged directly (mirrors the precedent in
@@ -1349,22 +1320,50 @@ void main() {
       slider.onChanged!(0.42);
       await tester.pump();
       expect(config.travelRange, closeTo(0.42, 1e-9),
-          reason: 'Slider.onChanged must mutate config.travelRange in real time.');
+          reason:
+              'Slider.onChanged must mutate config.travelRange in real time.');
     });
 
-    testWidgets(
-        'Travel range label reflects the slider value as a percentage',
+    testWidgets('Travel range shows the slider value as an editable percentage',
         (tester) async {
-      // After setting travelRange=0.42, the label above the slider must
-      // read "Travel range: 42% of bbox height" exactly — locks the
-      // formatter for grep stability.
+      // The requirement (260511-fd6) is that travelRange is readable as a
+      // percentage of bbox height. It used to be baked into the label text —
+      // "Travel range: 42% of bbox height" — which meant reading it was all
+      // you could do. The number now lives in a field beside the track, so
+      // the unit stays in the label and the value is both shown and typeable.
       final config = ElevatorConfig(travelRange: 0.42);
       await openConfigEditor(tester, config);
 
-      expect(find.text('Travel range: 42% of bbox height'), findsOneWidget,
-          reason:
-              'Editor must label the slider with the travelRange value as a '
-              'percentage of bbox height (260511-fd6).');
+      expect(find.text('Travel range (% of bbox height)'), findsOneWidget,
+          reason: 'the label must still say what unit the number is in');
+
+      final field = tester.widget<TextField>(find.descendant(
+        of: find.byType(NumberSlider),
+        matching: find.byType(TextField),
+      ));
+      expect(field.controller!.text, '42',
+          reason: 'Editor must show the travelRange value as a percentage of '
+              'bbox height (260511-fd6).');
+    });
+
+    testWidgets('Travel range can be typed instead of dragged', (tester) async {
+      // The reason the number moved into a field: 1% of the track is about a
+      // pixel on the narrow pane, so an exact value was not reachable by
+      // dragging.
+      final config = ElevatorConfig(travelRange: 0.42);
+      await openConfigEditor(tester, config);
+
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NumberSlider),
+          matching: find.byType(TextField),
+        ),
+        '75',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(config.travelRange, closeTo(0.75, 1e-9));
     });
   });
 
@@ -1444,8 +1443,7 @@ void main() {
       expect(upBtns, findsNWidgets(2));
       final firstBtn = tester.widget<IconButton>(upBtns.first);
       expect(firstBtn.onPressed, isNull,
-          reason:
-              'Topmost-paint child cannot be moved further forward — '
+          reason: 'Topmost-paint child cannot be moved further forward — '
               'its Move-forward button must be disabled.');
     });
 
@@ -1472,13 +1470,11 @@ void main() {
       expect(downBtns, findsNWidgets(2));
       final lastBtn = tester.widget<IconButton>(downBtns.last);
       expect(lastBtn.onPressed, isNull,
-          reason:
-              'Bottommost-paint child cannot be moved further backward — '
+          reason: 'Bottommost-paint child cannot be moved further backward — '
               'its Move-backward button must be disabled.');
     });
 
-    testWidgets(
-        'paint order in Stack matches list order; reordering swaps it',
+    testWidgets('paint order in Stack matches list order; reordering swaps it',
         (tester) async {
       final config = ElevatorConfig(
         positionKey: '',
@@ -1510,8 +1506,7 @@ void main() {
           .toList();
 
       expect(idOrder(), ['A', 'B'],
-          reason:
-              'Initially: child A at index 0 paints first (lowest z); '
+          reason: 'Initially: child A at index 0 paints first (lowest z); '
               'child B at index 1 paints last (highest z).');
 
       // Swap via direct list mutation — same effect the editor handler
@@ -1631,8 +1626,7 @@ void main() {
       final config = ElevatorConfig(
         positionKey: '',
         children: [
-          ElevatorChildEntry(
-              id: 'sensor-fixed', offsetX: 0.3, child: sensor),
+          ElevatorChildEntry(id: 'sensor-fixed', offsetX: 0.3, child: sensor),
           ElevatorChildEntry(
               id: 'conveyor-fixed', offsetX: 0.7, child: conveyor),
         ],
@@ -1760,8 +1754,7 @@ void main() {
               'value < 0 must still clamp progress to 0.0 (ELEV-15 / platformProgress).');
     });
 
-    testWidgets(
-        'stream value 50 yields progress 0.5 AND isOutOfRange=false',
+    testWidgets('stream value 50 yields progress 0.5 AND isOutOfRange=false',
         (tester) async {
       final config = ElevatorConfig(positionKey: '/elev/01/position');
       await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -1784,8 +1777,7 @@ void main() {
       expect(painter.progress.value, closeTo(0.5, 1e-9));
     });
 
-    testWidgets(
-        'stale state and out-of-range state are mutually exclusive',
+    testWidgets('stale state and out-of-range state are mutually exclusive',
         (tester) async {
       // Stale (no positionKey configured) must not also flag isOutOfRange —
       // the painter renders grey for stale and the amber outline only when
@@ -1917,8 +1909,7 @@ void main() {
       final config = ElevatorConfig(
         positionKey: '/elev/leak/position',
         children: [
-          ElevatorChildEntry(
-              id: 'leak-sensor', child: SensorConfig.preview()),
+          ElevatorChildEntry(id: 'leak-sensor', child: SensorConfig.preview()),
         ],
       );
       await tester.pumpWidget(wrap(Elevator(config: config)));
@@ -1930,13 +1921,11 @@ void main() {
       await tester.pumpWidget(wrap(const SizedBox()));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull,
-          reason:
-              'Mount/unmount must not throw or leak '
+          reason: 'Mount/unmount must not throw or leak '
               '(QUAL-07 — dispose contract on _progress, _animProgress, _streamSub).');
     });
 
-    test('elevator.dart dispose() cancels stream + disposes notifiers',
-        () {
+    test('elevator.dart dispose() cancels stream + disposes notifiers', () {
       // Source-level guard (QUAL-07 fallback): even if the runtime leak
       // tracker is not active, the dispose contract MUST be present in the
       // source. Verifies the literal dispose calls so the contract is
@@ -1944,8 +1933,7 @@ void main() {
       final src =
           File('lib/page_creator/assets/elevator.dart').readAsStringSync();
       expect(src, contains('_streamSub?.cancel()'),
-          reason:
-              'dispose() must cancel the position stream subscription '
+          reason: 'dispose() must cancel the position stream subscription '
               '(QUAL-07).');
       expect(src, contains('_progress.dispose()'),
           reason:
@@ -1968,8 +1956,7 @@ void main() {
       // Look at the dispose method body window for cancel/dispose calls.
       final tail = src.substring(disposeIdx);
       expect(tail.contains('cancel()') || tail.contains('.dispose()'), isTrue,
-          reason:
-              'sensor.dart dispose() must release stream subscription / '
+          reason: 'sensor.dart dispose() must release stream subscription / '
               'controllers (QUAL-07).');
     });
   });
@@ -1993,7 +1980,8 @@ void main() {
   // TDD discipline: tests RED first, implementation GREEN follows.
   // ---------------------------------------------------------------------------
   group('Simulation toggle (QUAL-08)', () {
-    testWidgets('editor exposes Simulate motion switch reflecting config.simulate',
+    testWidgets(
+        'editor exposes Simulate motion switch reflecting config.simulate',
         (tester) async {
       // Plan 04-05: editor opened via configure() directly — runtime tap
       // now opens the read-only details dialog (which has no SwitchListTile).
@@ -2032,12 +2020,12 @@ void main() {
               '(QUAL-08).');
       final tile = tester.widget<SwitchListTile>(switchTile);
       expect(tile.value, isTrue,
-          reason:
-              'SwitchListTile.value must reflect widget.config.simulate '
+          reason: 'SwitchListTile.value must reflect widget.config.simulate '
               '(simulate=true → switch ON).');
     });
 
-    testWidgets('Simulate motion switch defaults to OFF when config.simulate is null',
+    testWidgets(
+        'Simulate motion switch defaults to OFF when config.simulate is null',
         (tester) async {
       final config = ElevatorConfig();
       await openConfigEditor(tester, config);
@@ -2049,14 +2037,15 @@ void main() {
           reason: 'simulate=null must surface as switch OFF (default).');
     });
 
-    testWidgets('toggling simulate to true starts the sim timer (progress advances)',
+    testWidgets(
+        'toggling simulate to true starts the sim timer (progress advances)',
         (tester) async {
       final config = ElevatorConfig(simulate: false);
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
 
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       final progress = state.debugProgress as ValueNotifier<double>;
       progress.value = 0.0;
       expect(progress.value, 0.0);
@@ -2071,8 +2060,7 @@ void main() {
       // per tick the notifier should reach roughly 0.04.
       await tester.pump(const Duration(milliseconds: 200));
       expect(progress.value, greaterThan(0.0),
-          reason:
-              'Simulate ON must drive _progress upward via the periodic '
+          reason: 'Simulate ON must drive _progress upward via the periodic '
               'timer (QUAL-08).');
     });
 
@@ -2083,8 +2071,8 @@ void main() {
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
 
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       final progress = state.debugProgress as ValueNotifier<double>;
 
       // Let the simulation move a few ticks so we have a non-zero baseline.
@@ -2101,8 +2089,7 @@ void main() {
       final frozen = progress.value;
       await tester.pump(const Duration(milliseconds: 500));
       expect(progress.value, equals(frozen),
-          reason:
-              'Simulate OFF must cancel the periodic timer; _progress must '
+          reason: 'Simulate OFF must cancel the periodic timer; _progress must '
               'freeze (QUAL-08).');
     });
 
@@ -2116,8 +2103,8 @@ void main() {
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
 
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       final progress = state.debugProgress as ValueNotifier<double>;
 
       // Let the sim move forward.
@@ -2133,8 +2120,7 @@ void main() {
       // The simulation continued ticking (≥1 tick after inject), so
       // _progress must be >= the simulated baseline value, NOT 0.
       expect(progress.value, greaterThan(0.0),
-          reason:
-              'While simulating, PLC stream emissions MUST NOT overwrite '
+          reason: 'While simulating, PLC stream emissions MUST NOT overwrite '
               '_progress (QUAL-08 — simulation owns the notifier).');
     });
 
@@ -2144,8 +2130,8 @@ void main() {
       await tester.pumpWidget(wrap(Elevator(config: config)));
       await tester.pump(Duration.zero);
 
-      final state = tester.state<State<Elevator>>(find.byType(Elevator))
-          as dynamic;
+      final state =
+          tester.state<State<Elevator>>(find.byType(Elevator)) as dynamic;
       final progress = state.debugProgress as ValueNotifier<double>;
 
       // 0 → 1 takes ~5000ms (100 ticks of 50ms × 0.01 step).
@@ -2157,7 +2143,8 @@ void main() {
         if (progress.value > peak) peak = progress.value;
       }
       expect(peak, closeTo(1.0, 0.05),
-          reason: 'Simulation must reach approximately 1.0 at the top of the sweep.');
+          reason:
+              'Simulation must reach approximately 1.0 at the top of the sweep.');
 
       // Continue another 60 ticks (3000ms) — the value must now have
       // descended below the captured peak (i.e., the direction reversed).
@@ -2165,8 +2152,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
       expect(progress.value, lessThan(peak),
-          reason:
-              'Simulation must reverse direction at the top of the sweep '
+          reason: 'Simulation must reverse direction at the top of the sweep '
               '(QUAL-08 — oscillation contract).');
     });
 
@@ -2183,8 +2169,7 @@ void main() {
       await tester.pumpWidget(wrap(const SizedBox()));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull,
-          reason:
-              'Simulation timer must be cancelled in dispose (QUAL-07 + '
+          reason: 'Simulation timer must be cancelled in dispose (QUAL-07 + '
               'QUAL-08 — no leak on unmount).');
     });
   });

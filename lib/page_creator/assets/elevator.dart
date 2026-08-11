@@ -12,6 +12,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'elevator_layout.dart';
@@ -1107,16 +1108,15 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
             //   from child heights (Plan 260511-dxa). Sits between the
             //   position key and the simulate switch so it is visible
             //   without scrolling on the default 600px test viewport.
-            Text(
-              'Travel range: ${(config.travelRange * 100).round()}% of bbox height',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Slider(
+            NumberSlider(
+              labelAbove: true,
+              label: 'Travel range (% of bbox height)',
               min: 0.0,
               max: 1.0,
               divisions: 100,
+              displayScale: 100,
+              suffix: '%',
               value: config.travelRange.clamp(0.0, 1.0),
-              label: '${(config.travelRange * 100).round()}%',
               onChanged: (v) => setState(() => config.travelRange = v),
             ),
             Text(
@@ -1270,29 +1270,26 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
                           ],
                         ),
                         const SizedBox(height: 4),
-                        Text(
-                          'Lateral position: ${(entry.offsetX * 100).round()}%',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        Slider(
+                        NumberSlider(
+                          labelAbove: true,
+                          label: 'Lateral position',
                           min: 0.0,
                           max: 1.0,
                           divisions: 100,
+                          displayScale: 100,
+                          suffix: '%',
                           value: entry.offsetX,
-                          label: '${(entry.offsetX * 100).round()}%',
                           onChanged: (v) => setState(() => entry.offsetX = v),
                         ),
-                        Text(
-                          'Vertical offset: ${(entry.offsetY * 100).round()}% of child height',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                        Slider(
+                        NumberSlider(
+                          labelAbove: true,
+                          label: 'Vertical offset (% of child height)',
                           min: -1.0,
                           max: 1.0,
                           divisions: 200,
+                          displayScale: 100,
+                          suffix: '%',
                           value: entry.offsetY,
-                          label:
-                              'Vertical offset: ${(entry.offsetY * 100).round()}%',
                           onChanged: (v) => setState(() => entry.offsetY = v),
                         ),
                       ],

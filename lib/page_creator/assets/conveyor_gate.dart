@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:tfc/widgets/panes/color_picker_dialog.dart';
+import 'package:tfc/widgets/number_slider.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -733,43 +734,39 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
               contentPadding: EdgeInsets.zero,
             ),
             const SizedBox(height: 8),
-            Text(
-              'Lid Angle: ${config.sliderLidAngleDegrees.round()}\u00B0',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Slider(
+            NumberSlider(
+              labelAbove: true,
+              label: 'Lid Angle',
               min: -45,
               max: 45,
               divisions: 90,
+              suffix: '\u00B0',
               value: config.sliderLidAngleDegrees,
-              label: '${config.sliderLidAngleDegrees.round()}\u00B0',
               onChanged: (v) =>
                   setState(() => config.sliderLidAngleDegrees = v),
             ),
             const SizedBox(height: 8),
-            Text(
-              'Lid Length: ${(config.sliderLidLength * 100).round()}%',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Slider(
+            NumberSlider(
+              labelAbove: true,
+              label: 'Lid Length',
               min: 0.1,
               max: 1.0,
               divisions: 18,
+              displayScale: 100,
+              suffix: '%',
               value: config.sliderLidLength,
-              label: '${(config.sliderLidLength * 100).round()}%',
               onChanged: (v) => setState(() => config.sliderLidLength = v),
             ),
             const SizedBox(height: 8),
-            Text(
-              'Actuation Length: ${(config.sliderActuationLength * 100).round()}%',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Slider(
+            NumberSlider(
+              labelAbove: true,
+              label: 'Actuation Length',
               min: 0.1,
               max: 1.0,
               divisions: 18,
+              displayScale: 100,
+              suffix: '%',
               value: config.sliderActuationLength,
-              label: '${(config.sliderActuationLength * 100).round()}%',
               onChanged: (v) =>
                   setState(() => config.sliderActuationLength = v),
             ),
@@ -778,16 +775,14 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
 
           // -- Opening Angle (diverter only, Pitfall 4) --
           if (config.gateVariant == GateVariant.pneumatic) ...[
-            Text(
-              'Opening Angle: ${config.openAngleDegrees.round()}\u00B0',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            Slider(
+            NumberSlider(
+              labelAbove: true,
+              label: 'Opening Angle',
               min: 0,
               max: 90,
               divisions: 90,
+              suffix: '\u00B0',
               value: config.openAngleDegrees,
-              label: '${config.openAngleDegrees.round()}\u00B0',
               onChanged: (v) => setState(() => config.openAngleDegrees = v),
             ),
             const SizedBox(height: 8),

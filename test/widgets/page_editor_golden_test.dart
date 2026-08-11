@@ -142,6 +142,11 @@ Asset _busCoupler() => BeckhoffEK1100Config()
   ..coordinates = Coordinates(x: 0.22, y: 0.4)
   ..size = const RelativeSize(width: 0.22, height: 0.28);
 
+/// Dashed, so the dash-length and dash-spacing sliders are on show too.
+Asset _drawnBox() => DrawnBoxConfig.preview()
+  ..coordinates = Coordinates(x: 0.22, y: 0.4)
+  ..size = const RelativeSize(width: 0.18, height: 0.12);
+
 /// A labelled box at ([x], [y]).
 Asset _labelledBox(double x, double y, String label, {double? angle}) =>
     DrawnBoxConfig.preview()
@@ -222,6 +227,19 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/page_editor_config_pane_text_light.png'),
+      );
+    });
+
+    // Sliders now carry an editable field, because 1% of a track this narrow
+    // is about a pixel and an exact value was not reachable by dragging. The
+    // drawn box is the one to look at: three sliders, label beside the track,
+    // so the field has the least room to fit in.
+    testWidgets('sliders with typed values', (tester) async {
+      await _pumpEditor(tester, theme: dark, pages: _onePage([_drawnBox()]));
+      await _openConfigPane(tester, 0.22, 0.4);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_config_pane_sliders_dark.png'),
       );
     });
 
