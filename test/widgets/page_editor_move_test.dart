@@ -9,6 +9,7 @@ library;
 import 'dart:io' show Platform;
 
 import 'package:beamer/beamer.dart';
+import 'package:flutter/gestures.dart' show kLongPressTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -181,6 +182,24 @@ Finder _destination(Finder dialog, String label) => find.descendant(
       matching: find.widgetWithText(ListTile, label),
     );
 
+/// Holds the row for [label] until the drag starts, drops it on [target], and
+/// lets the resulting move settle.
+Future<void> _dragRowOnto(
+  WidgetTester tester,
+  String label,
+  Finder target,
+) async {
+  final gesture = await tester.startGesture(tester.getCenter(_treeNode(label)));
+  await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+  await gesture.moveTo(tester.getCenter(target));
+  await tester.pump();
+  await gesture.up();
+  await tester.pumpAndSettle();
+}
+
+/// The always-present "Top level" drop zone at the foot of the Pages dialog.
+Finder _topLevelDropZone() => find.byIcon(Icons.north);
+
 /// Closes the Pages dialog and presses Save, so the manager holds the result.
 Future<void> _closeAndSave(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(TextButton, 'Close'));
@@ -331,6 +350,81 @@ void main() {
         ),
         findsOneWidget,
       );
+    });
+
+    testWidgets('dragging a page onto a section moves it', (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = _manager();
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await _openPagesDialog(tester);
+
+      await _dragRowOnto(tester, 'Weigher', _treeNode('Freezer'));
+      await _closeAndSave(tester);
+
+      expect(_childrenOf(manager, '/packing'), ['/packing/lines']);
+      expect(_childrenOf(manager, '/freezer'), ['/packing/weigher']);
+    });
+
+    testWidgets('dragging a page onto the top level drop zone un-nests it',
+        (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = _manager();
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await _openPagesDialog(tester);
+
+      await _dragRowOnto(tester, 'Weigher', _topLevelDropZone());
+      await _closeAndSave(tester);
+
+      expect(_childrenOf(manager, '/packing'), ['/packing/lines']);
+      expect(manager.getRootMenuItems().map((r) => r.label).toList(),
+          ['Home', 'Packing', 'Freezer', 'Weigher']);
+    });
+
+    testWidgets('dragging a section into its own child is refused',
+        (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = _manager();
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await _openPagesDialog(tester);
+
+      await _dragRowOnto(tester, 'Packing', _treeNode('Lines'));
+      await _closeAndSave(tester);
+
+      expect(_childrenOf(manager, '/packing'),
+          ['/packing/weigher', '/packing/lines']);
+      expect(_childrenOf(manager, '/packing/lines'), isEmpty);
+      expect(manager.getRootMenuItems().map((r) => r.label).toList(),
+          ['Home', 'Packing', 'Freezer']);
+    });
+
+    testWidgets('dropping a page back on its own section changes nothing',
+        (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final manager = _manager();
+      await tester.pumpWidget(_buildEditor(manager));
+      await tester.pumpAndSettle();
+      await _openPagesDialog(tester);
+
+      await _dragRowOnto(tester, 'Weigher', _treeNode('Packing'));
+      await _closeAndSave(tester);
+
+      expect(_childrenOf(manager, '/packing'),
+          ['/packing/weigher', '/packing/lines']);
     });
 
     testWidgets('a move can be undone', (tester) async {

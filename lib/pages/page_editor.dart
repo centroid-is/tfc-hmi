@@ -322,6 +322,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   String _savedJson = '';
   String _currentJson = '';
 
+  /// Path of the tree row currently being dragged in the Pages dialog, so the
+  /// drop zones can show whether they would take it.
+  String? _dragPagePath;
+
   /// True when the editor was opened with AI proposal data that has not yet
   /// been saved by the operator.
   bool _isProposal = false;
@@ -1618,8 +1622,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 children: [
                   Text(
                     'Tap to select. Sections are navigation groups. Drag the '
-                    'handle to reorder, or use the move button to put an item '
-                    'under a different section.',
+                    'handle to reorder within a level; hold and drag a row '
+                    'onto a section — or onto "Top level" — to move it there.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 8),
@@ -1642,6 +1646,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                       ],
                     ),
                   ),
+                  _buildTopLevelDropZone(dialogSetState),
                   const Divider(),
                   _buildAddButtons(null, dialogSetState, dialogContext),
                 ],
@@ -1670,126 +1675,135 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // would render as a page and could never receive children.
     final isSection = page.menuItem.isNavigationSection;
 
+    final row = AiContextMenuWrapper(
+      menuItems: [
+        AiMenuItem(
+          label: 'Describe this page',
+          prefillText:
+              'Describe page "$displayName" (key: $pageName) — what assets does it contain and what is it monitoring?',
+        ),
+        AiMenuItem(
+          label: 'Improve layout',
+          prefillText:
+              'Review page "$displayName" (key: $pageName) and suggest layout improvements or missing assets.',
+        ),
+        AiMenuItem(
+          label: 'Duplicate with AI',
+          prefillText:
+              'Create a new page similar to "$displayName" (key: $pageName) but for [describe the target system].',
+        ),
+      ],
+      child: ListTile(
+        dense: true,
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ReorderableDragStartListener(
+              index: reorderIndex,
+              child: const Icon(Icons.drag_handle,
+                  size: 20, color: Colors.grey),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              page.menuItem.icon,
+              color: isSelected && !isSection
+                  ? Theme.of(dialogContext).colorScheme.primary
+                  : null,
+            ),
+          ],
+        ),
+        title: Text(
+          displayName,
+          style: TextStyle(
+            fontWeight: isSelected && !isSection
+                ? FontWeight.bold
+                : FontWeight.normal,
+            color: isSelected && !isSection
+                ? Theme.of(dialogContext).colorScheme.primary
+                : null,
+          ),
+        ),
+        subtitle: isSection ? const Text('Section') : null,
+        selected: isSelected && !isSection,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isSection && depth < 3)
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.add, size: 18),
+                tooltip: 'Add child',
+                onSelected: (value) {
+                  _addItem(
+                    parentName: pageName,
+                    isSection: value == 'section',
+                    dialogSetState: dialogSetState,
+                    dialogContext: dialogContext,
+                  );
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'page',
+                    child: Text('Add Page'),
+                  ),
+                  const PopupMenuItem(
+                    value: 'section',
+                    child: Text('Add Section'),
+                  ),
+                ],
+              )
+            else if (isSection)
+              IconButton(
+                icon: const Icon(Icons.add, size: 18),
+                tooltip: 'Add page',
+                onPressed: () => _addItem(
+                  parentName: pageName,
+                  isSection: false,
+                  dialogSetState: dialogSetState,
+                  dialogContext: dialogContext,
+                ),
+              ),
+            IconButton(
+              icon: const Icon(Icons.drive_file_move_outline, size: 18),
+              onPressed: () =>
+                  _showMoveDialog(pageName, dialogSetState, dialogContext),
+              tooltip: isSection ? 'Move section' : 'Move to section',
+            ),
+            IconButton(
+              icon: const Icon(Icons.edit, size: 18),
+              onPressed: () =>
+                  _editPage(pageName, page, dialogSetState, dialogContext),
+              tooltip: 'Edit',
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete, size: 18),
+              onPressed: () =>
+                  _deletePage(pageName, dialogSetState, dialogContext),
+              tooltip: 'Delete',
+            ),
+          ],
+        ),
+        onTap: isSection
+            ? null
+            : () {
+                setState(() => _currentPage = pageName);
+                Navigator.pop(dialogContext);
+              },
+      ),
+    );
+
     return Padding(
       key: ValueKey(pageName),
       padding: EdgeInsets.only(left: depth > 0 ? 20.0 : 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AiContextMenuWrapper(
-            menuItems: [
-              AiMenuItem(
-                label: 'Describe this page',
-                prefillText:
-                    'Describe page "$displayName" (key: $pageName) — what assets does it contain and what is it monitoring?',
-              ),
-              AiMenuItem(
-                label: 'Improve layout',
-                prefillText:
-                    'Review page "$displayName" (key: $pageName) and suggest layout improvements or missing assets.',
-              ),
-              AiMenuItem(
-                label: 'Duplicate with AI',
-                prefillText:
-                    'Create a new page similar to "$displayName" (key: $pageName) but for [describe the target system].',
-              ),
-            ],
-            child: ListTile(
-              dense: true,
-              leading: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ReorderableDragStartListener(
-                    index: reorderIndex,
-                    child: const Icon(Icons.drag_handle,
-                        size: 20, color: Colors.grey),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    page.menuItem.icon,
-                    color: isSelected && !isSection
-                        ? Theme.of(dialogContext).colorScheme.primary
-                        : null,
-                  ),
-                ],
-              ),
-              title: Text(
-                displayName,
-                style: TextStyle(
-                  fontWeight: isSelected && !isSection
-                      ? FontWeight.bold
-                      : FontWeight.normal,
-                  color: isSelected && !isSection
-                      ? Theme.of(dialogContext).colorScheme.primary
-                      : null,
-                ),
-              ),
-              subtitle: isSection ? const Text('Section') : null,
-              selected: isSelected && !isSection,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isSection && depth < 3)
-                    PopupMenuButton<String>(
-                      icon: const Icon(Icons.add, size: 18),
-                      tooltip: 'Add child',
-                      onSelected: (value) {
-                        _addItem(
-                          parentName: pageName,
-                          isSection: value == 'section',
-                          dialogSetState: dialogSetState,
-                          dialogContext: dialogContext,
-                        );
-                      },
-                      itemBuilder: (context) => [
-                        const PopupMenuItem(
-                          value: 'page',
-                          child: Text('Add Page'),
-                        ),
-                        const PopupMenuItem(
-                          value: 'section',
-                          child: Text('Add Section'),
-                        ),
-                      ],
-                    )
-                  else if (isSection)
-                    IconButton(
-                      icon: const Icon(Icons.add, size: 18),
-                      tooltip: 'Add page',
-                      onPressed: () => _addItem(
-                        parentName: pageName,
-                        isSection: false,
-                        dialogSetState: dialogSetState,
-                        dialogContext: dialogContext,
-                      ),
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.drive_file_move_outline, size: 18),
-                    onPressed: () =>
-                        _showMoveDialog(pageName, dialogSetState, dialogContext),
-                    tooltip: isSection ? 'Move section' : 'Move to section',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.edit, size: 18),
-                    onPressed: () => _editPage(
-                        pageName, page, dialogSetState, dialogContext),
-                    tooltip: 'Edit',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete, size: 18),
-                    onPressed: () =>
-                        _deletePage(pageName, dialogSetState, dialogContext),
-                    tooltip: 'Delete',
-                  ),
-                ],
-              ),
-              onTap: isSection
-                  ? null
-                  : () {
-                      setState(() => _currentPage = pageName);
-                      Navigator.pop(dialogContext);
-                    },
-            ),
+          _draggableRow(
+            pageName: pageName,
+            page: page,
+            depth: depth,
+            isSection: isSection,
+            row: row,
+            dialogSetState: dialogSetState,
           ),
           // Render children recursively with reordering
           if (hasChildren)
@@ -2075,6 +2089,120 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// How deep a section may sit and still take children, matching the limit
   /// the "Add Page / Add Section" buttons already enforce.
   static const int _maxSectionDepth = 3;
+
+  /// Makes a tree row draggable onto another section, and — when the row is a
+  /// section — a drop target for other rows.
+  ///
+  /// The drag starts on a long press rather than immediately: the row sits
+  /// inside the dialog's scrollable, and an immediate [Draggable] would eat
+  /// the vertical drags that scroll the list. The drag handle keeps its own
+  /// gesture, so it still reorders within the level.
+  Widget _draggableRow({
+    required String pageName,
+    required AssetPage page,
+    required int depth,
+    required bool isSection,
+    required Widget row,
+    required StateSetter dialogSetState,
+  }) {
+    void setDragging(String? path) {
+      setState(() => _dragPagePath = path);
+      dialogSetState(() {});
+    }
+
+    final draggable = LongPressDraggable<String>(
+      data: pageName,
+      onDragStarted: () => setDragging(pageName),
+      onDragEnd: (_) => setDragging(null),
+      onDraggableCanceled: (_, __) => setDragging(null),
+      feedback: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(page.menuItem.icon, size: 18),
+              const SizedBox(width: 8),
+              Text(page.menuItem.label),
+            ],
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: row),
+      child: row,
+    );
+
+    if (!isSection) return draggable;
+
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (details) =>
+          _moveBlockedReason(details.data, pageName, depth) == null,
+      onAcceptWithDetails: (details) =>
+          _movePage(details.data, pageName, dialogSetState),
+      builder: (context, candidate, rejected) {
+        final scheme = Theme.of(context).colorScheme;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: candidate.isEmpty ? null : scheme.primaryContainer,
+            border: candidate.isEmpty
+                ? null
+                : Border.all(color: scheme.primary, width: 2),
+          ),
+          child: draggable,
+        );
+      },
+    );
+  }
+
+  /// Drop area that un-nests an item.
+  ///
+  /// Always rendered, not just mid-drag: appearing on drag start would reflow
+  /// the tree and slide the row out from under the pointer.
+  Widget _buildTopLevelDropZone(StateSetter dialogSetState) {
+    final dragging = _dragPagePath;
+    final wouldTake = dragging != null && _findParentOf(dragging) != null;
+
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (details) => _findParentOf(details.data) != null,
+      onAcceptWithDetails: (details) =>
+          _movePage(details.data, null, dialogSetState),
+      builder: (context, candidate, rejected) {
+        final scheme = Theme.of(context).colorScheme;
+        final active = candidate.isNotEmpty;
+        return Container(
+          height: 40,
+          margin: const EdgeInsets.only(top: 4),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: active ? scheme.primaryContainer : null,
+            border: Border.all(
+              color:
+                  active || wouldTake ? scheme.primary : scheme.outlineVariant,
+              width: active ? 2 : 1,
+            ),
+          ),
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.north, size: 16, color: scheme.outline),
+                const SizedBox(width: 8),
+                Text(
+                  wouldTake || active
+                      ? 'Drop here to move to the top level'
+                      : 'Top level',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   /// Every section in the tree, in the order the Pages dialog renders them,
   /// with the depth used to indent them in the move picker.
