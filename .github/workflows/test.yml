@@ -165,3 +165,27 @@ jobs:
           packages/tfc_dart/coverage/
           packages/tfc_dart/test-results/
         retention-days: 30
+
+  # Windows runner C++ unit tests. The code under test (the GPU device-loss
+  # watchdog state machine) is deliberately free of Win32 and Flutter types, so
+  # it builds and runs on every platform — no Windows runner or GPU needed.
+  windows-runner-cpp-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      working-directory: centroid-hmi/windows/runner/test
+      run: cmake -S . -B build
+
+    - name: Build
+      working-directory: centroid-hmi/windows/runner/test
+      run: cmake --build build --config Debug
+
+    - name: Test
+      working-directory: centroid-hmi/windows/runner/test
+      run: ctest --test-dir build --build-config Debug --output-on-failure
