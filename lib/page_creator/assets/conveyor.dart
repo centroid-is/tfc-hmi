@@ -1342,6 +1342,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             ),
                           ],
                         ),
+                        const SizedBox(height: 6),
+                        // The speed those buttons jog at — it belongs with
+                        // them, not with the auto/cleaning setpoints.
+                        _FrequencyField(
+                          fieldKey: 'manual_freq_field',
+                          label: 'Manual frequency',
+                          value: dynValue['p_cfg_ManualFreq'],
+                          onSubmitted: (v) => write('p_cfg_ManualFreq', v),
+                        ),
                       ],
                     ),
                   ),
@@ -1405,9 +1414,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
                     title: 'Trend',
                     child: PaneGraphTile(
                       label: 'Frequency (Hz) · Current (A)',
-                      // Tall enough for a line chart with two axes to be
-                      // readable rather than decorative.
-                      height: 130,
+                      // Tall enough for a two-axis line chart to be readable
+                      // rather than decorative, and no taller — the setpoint
+                      // fields below it have to fit on the same screen.
+                      height: 100,
                       preview: _ConveyorStatsGraphLoader(
                         keyName: widget.config.key!,
                         showButtons: false,
@@ -1426,49 +1436,36 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
                   // --- Setpoints --------------------------------------------
                   //
-                  // Three frequency fields are a form, not a glance, so they
-                  // live in a floating dialog the operator can park anywhere.
+                  // Inline, not behind a dialog: there are only two of them
+                  // and an operator changing a frequency wants to see the
+                  // belt while doing it. Manual frequency is not here — it
+                  // belongs to jogging, so it sits in the Jog section next to
+                  // the buttons that use it.
+                  //
                   // Committed on submit (Enter / focus-out), never per
                   // keystroke — a half-typed frequency must not reach the
                   // drive. Keys embed the current value so a field resets when
                   // the PLC reports a different one.
                   PaneSection(
                     title: 'Setpoints',
-                    child: PaneExpandTile(
-                      label: 'Frequencies',
-                      summary:
-                          'Auto ${dynValue['p_cfg_AutoFreq'].asDouble.toStringAsFixed(2)} Hz · '
-                          'Cleaning ${dynValue['p_cfg_CleaningFreq'].asDouble.toStringAsFixed(2)} Hz · '
-                          'Manual ${dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2)} Hz',
-                      icon: Icons.tune,
-                      expandedTitle: '${widget.config.key!} — setpoints',
-                      expandedSize: const Size(420, 380),
-                      expandedBuilder: (context) => Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _FrequencyField(
-                            fieldKey: 'auto_freq_field',
-                            label: 'Auto frequency',
-                            value: dynValue['p_cfg_AutoFreq'],
-                            onSubmitted: (v) => write('p_cfg_AutoFreq', v),
-                          ),
-                          const SizedBox(height: 12),
-                          _FrequencyField(
-                            fieldKey: 'cleaning_freq_field',
-                            label: 'Cleaning frequency',
-                            value: dynValue['p_cfg_CleaningFreq'],
-                            onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
-                          ),
-                          const SizedBox(height: 12),
-                          _FrequencyField(
-                            fieldKey: 'manual_freq_field',
-                            label: 'Manual frequency',
-                            value: dynValue['p_cfg_ManualFreq'],
-                            onSubmitted: (v) => write('p_cfg_ManualFreq', v),
-                          ),
-                        ],
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _FrequencyField(
+                          fieldKey: 'auto_freq_field',
+                          label: 'Auto frequency',
+                          value: dynValue['p_cfg_AutoFreq'],
+                          onSubmitted: (v) => write('p_cfg_AutoFreq', v),
+                        ),
+                        const SizedBox(height: 10),
+                        _FrequencyField(
+                          fieldKey: 'cleaning_freq_field',
+                          label: 'Cleaning frequency',
+                          value: dynValue['p_cfg_CleaningFreq'],
+                          onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1963,6 +1960,27 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           maxFreq++;
         }
 
+        // Headroom above and below the data.
+        //
+        // Scaling each axis to the exact extremes pins the traces to the top
+        // and bottom edges of the plot, where they run into the tick labels —
+        // the top reading and the top of the line end up drawn on each other.
+        // A 10% margin keeps the line inside the frame and the labels clear
+        // of it, on both axes.
+        (double, double) withHeadroom(double min, double max) {
+          final margin = (max - min) * 0.1;
+          return (min - margin, max + margin);
+        }
+
+        (minFreq, maxFreq) = withHeadroom(minFreq, maxFreq);
+        (_, maxCurrent) = withHeadroom(minCurrent, maxCurrent);
+        // Current is framed from zero, not from its own minimum. Load tracks
+        // speed, so scaling both axes to their own extremes maps the two
+        // traces onto the same shape and the second one drawn simply hides
+        // the first. Anchoring current at zero separates them — and zero is
+        // the meaningful floor for a current reading anyway.
+        minCurrent = 0;
+
         // Time along the bottom, frequency on the LEFT axis and current on
         // the RIGHT — frequency is what an operator reads first, so it gets
         // the axis the eye lands on.
@@ -1988,12 +2006,21 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
         data.addAll(
             currentData.map((e) => {'x': e[0], 'y2': e[1], 's': 'Current'}));
 
+        // The compact preview needs its own gutters: at 130px tall the
+        // default padding lets tick labels print over the tile caption and
+        // the time row. Same theme otherwise, so both charts still match.
+        final theme = widget.compact
+            ? (Theme.of(context).brightness == Brightness.dark
+                ? darkChartTheme(padding: kCompactChartPadding)
+                : lightChartTheme(padding: kCompactChartPadding))
+            : ref.watch(chartThemeNotifierProvider);
+
         return Graph(
           config: graphConfig,
           data: data,
           showButtons: widget.showButtons,
           categoryColors: conveyorTrendColors,
-          chartTheme: ref.watch(chartThemeNotifierProvider),
+          chartTheme: theme,
           redraw: () {},
         ).build(context);
       },

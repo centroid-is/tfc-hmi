@@ -23,6 +23,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:tfc/page_creator/assets/conveyor.dart' show conveyorTrendColors;
+import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc/page_creator/assets/io_pane.dart';
+import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/theme.dart';
 import 'package:tfc/widgets/graph.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart';
@@ -238,8 +241,11 @@ class _TrendChart extends StatelessWidget {
       config: GraphConfig(
         type: GraphType.timeseries,
         xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
-        yAxis: GraphAxisConfig(unit: compact ? '' : 'Hz', min: 40, max: 50),
-        yAxis2: GraphAxisConfig(unit: compact ? '' : 'A', min: 2, max: 3.5),
+        // Mirrors the 10% headroom ConveyorStatsGraph applies, so the traces
+        // sit inside the frame instead of on the tick labels.
+        yAxis: GraphAxisConfig(unit: compact ? '' : 'Hz', min: 39, max: 51),
+        // Current is framed from zero — see ConveyorStatsGraph.
+        yAxis2: GraphAxisConfig(unit: compact ? '' : 'A', min: 0, max: 3.6),
         xRange: DateTimeRange(
           start: DateTime.fromMillisecondsSinceEpoch(_t0),
           end: DateTime.fromMillisecondsSinceEpoch(
@@ -251,53 +257,40 @@ class _TrendChart extends StatelessWidget {
       showButtons: showButtons,
       categoryColors: conveyorTrendColors,
       chartTheme: Theme.of(context).brightness == Brightness.dark
-          ? darkChartTheme()
-          : lightChartTheme(),
+          ? darkChartTheme(
+              padding: compact ? kCompactChartPadding : kChartPadding)
+          : lightChartTheme(
+              padding: compact ? kCompactChartPadding : kChartPadding),
       redraw: () {},
     ).build(context);
   }
 }
 
-/// The three frequency setpoints, as they appear in the floating dialog the
-/// pane's Setpoints tile opens. Mirrors `_FrequencyField` in conveyor.dart.
-class _SetpointForm extends StatelessWidget {
-  const _SetpointForm();
-
-  @override
-  Widget build(BuildContext context) {
-    Widget field(String label, String value, {bool focused = false}) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: TextFormField(
-          initialValue: value,
-          decoration: InputDecoration(
-            labelText: label,
-            suffixText: 'Hz',
-            isDense: true,
-            helperText: focused ? 'Enter to send to the drive' : null,
-            focusedBorder: focused
-                ? OutlineInputBorder(
-                    borderSide: BorderSide(
-                      color: Theme.of(context).colorScheme.primary,
-                      width: 2,
-                    ),
-                  )
-                : null,
-          ),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        field('Auto frequency', '50.00'),
-        field('Cleaning frequency', '27.50', focused: true),
-        field('Manual frequency', '30.00'),
-      ],
-    );
-  }
+/// A frequency setpoint field, mirroring `_FrequencyField` in conveyor.dart.
+///
+/// [focused] renders the mid-edit state — a typed-but-uncommitted value with
+/// the hint that Enter sends it, which is the whole interaction: nothing
+/// reaches the drive until the operator commits.
+Widget _freqField(String label, String value, {bool focused = false}) {
+  return Builder(
+    builder: (context) => TextFormField(
+      initialValue: value,
+      decoration: InputDecoration(
+        labelText: label,
+        suffixText: 'Hz',
+        isDense: true,
+        helperText: focused ? 'Enter to send to the drive' : null,
+        enabledBorder: focused
+            ? OutlineInputBorder(
+                borderSide: BorderSide(
+                  color: Theme.of(context).colorScheme.primary,
+                  width: 2,
+                ),
+              )
+            : null,
+      ),
+    ),
+  );
 }
 
 Widget _jogButton(BuildContext context, IconData icon, String label,
@@ -365,6 +358,8 @@ SidePane _conveyorPane(BuildContext context) {
                   Switch(value: true, onChanged: (_) {}),
                 ],
               ),
+              const SizedBox(height: 6),
+              _freqField('Manual frequency', '30.00'),
             ],
           ),
         ),
@@ -405,7 +400,7 @@ SidePane _conveyorPane(BuildContext context) {
           title: 'Trend',
           child: PaneGraphTile(
             label: 'Frequency (Hz) · Current (A)',
-            height: 130,
+            height: 100,
             preview: const _TrendChart(compact: true),
             expandedBuilder: (_) => const _TrendChart(showButtons: true),
           ),
@@ -413,11 +408,14 @@ SidePane _conveyorPane(BuildContext context) {
         const Divider(height: 1),
         PaneSection(
           title: 'Setpoints',
-          child: PaneExpandTile(
-            label: 'Frequencies',
-            summary: 'Auto 50.00 Hz · Cleaning 25.00 Hz · Manual 30.00 Hz',
-            icon: Icons.tune,
-            expandedBuilder: (_) => const SizedBox.shrink(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _freqField('Auto frequency', '50.00'),
+              const SizedBox(height: 10),
+              _freqField('Cleaning frequency', '27.50', focused: true),
+            ],
           ),
         ),
       ],
@@ -594,6 +592,10 @@ class _ChannelGridDemo extends StatelessWidget {
 }
 
 /// 3rd party equipment: a whole-module glance, detail behind a tile.
+///
+/// Only used as the backdrop for the floating-dialog golden — the module pane
+/// itself is captured by the real-helper goldens above, which run production
+/// code rather than this stand-in.
 SidePane _thirdPartyPane(BuildContext context) {
   return const SidePane(
     title: 'DI-3725-A',
@@ -640,6 +642,284 @@ SidePane _thirdPartyPane(BuildContext context) {
 }
 
 Widget _channelGridBuilder(BuildContext context) => const _ChannelGridDemo();
+
+/// Elevator/lift, analog module, drive, sensor and gate bodies.
+///
+/// These mirror the real pane bodies field-for-field; the I/O panes below go
+/// one better and run the production helper itself.
+
+/// Beckhoff EL3054 — four analog inputs and their history.
+SidePane _analogPane(BuildContext context) {
+  return const SidePane(
+    title: 'AI-3054',
+    subtitle: 'Beckhoff · 4 AI',
+    icon: Icons.linear_scale,
+    status: PaneStatus.running('Live'),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        PaneSection(
+          title: 'Inputs',
+          child: PaneTileRow(children: [
+            PaneMetricTile(
+                label: 'Infeed', value: '4.21', icon: Icons.input, width: 164),
+            PaneMetricTile(
+                label: 'Brine', value: '11.87', icon: Icons.input, width: 164),
+            PaneMetricTile(
+                label: 'Chill', value: '-1.40', icon: Icons.input, width: 164),
+            PaneMetricTile(
+                label: 'I4', value: '—', icon: Icons.input, width: 164),
+          ]),
+        ),
+        Divider(height: 1),
+        PaneSection(
+          title: 'Trend',
+          child: PaneGraphTile(
+            label: 'Infeed (mA)',
+            height: 100,
+            preview: _AnalogTrendChart(),
+            expandedBuilder: _analogTrendBuilder,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _analogTrendBuilder(BuildContext context) => const _AnalogTrendChart();
+
+/// A single-series analog trace, so the analog module's golden is not
+/// labelled with the conveyor's frequency/current legend.
+class _AnalogTrendChart extends StatelessWidget {
+  const _AnalogTrendChart();
+
+  static const List<double> _samples = [
+    3.90,
+    3.98,
+    4.12,
+    4.31,
+    4.28,
+    4.16,
+    4.05,
+    4.22,
+    4.44,
+    4.51,
+    4.38,
+    4.20,
+    4.09,
+    4.15,
+    4.26,
+    4.21,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final data = <Map<String, dynamic>>[
+      for (var i = 0; i < _samples.length; i++)
+        {
+          'x': (_TrendChart._t0 + i * _TrendChart._step).toDouble(),
+          'y': _samples[i],
+          's': 'Infeed',
+        },
+    ];
+    return Graph(
+      config: GraphConfig(
+        type: GraphType.timeseries,
+        xAxis: const GraphAxisConfig(unit: ''),
+        yAxis: const GraphAxisConfig(unit: '', min: 3.6, max: 4.8),
+        xRange: DateTimeRange(
+          start: DateTime.fromMillisecondsSinceEpoch(_TrendChart._t0),
+          end: DateTime.fromMillisecondsSinceEpoch(
+            _TrendChart._t0 + (_samples.length - 1) * _TrendChart._step,
+          ),
+        ),
+      ),
+      data: data,
+      showButtons: false,
+      categoryColors: const {'Infeed': Colors.blue},
+      chartTheme: Theme.of(context).brightness == Brightness.dark
+          ? darkChartTheme(padding: kCompactChartPadding)
+          : lightChartTheme(padding: kCompactChartPadding),
+      redraw: () {},
+    ).build(context);
+  }
+}
+
+/// Schneider ATV320 — drive parameters with an unwritten edit pending.
+SidePane _drivePane(BuildContext context) {
+  Widget param(String name, String value) => PaneDetailRow(
+        label: name,
+        value: value,
+      );
+  return SidePane(
+    title: 'ATV320',
+    subtitle: 'ST201.CN04.DRV.cfg',
+    icon: Icons.settings_input_component,
+    status: const PaneStatus.warning('Unwritten changes'),
+    actions: [
+      PaneAction.primary(label: 'Write', icon: Icons.upload, onPressed: () {}),
+    ],
+    child: PaneSection(
+      title: 'Parameters',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          param('ACC — acceleration', '3.0 s'),
+          param('DEC — deceleration', '3.0 s'),
+          param('LSP — low speed', '0.0 Hz'),
+          param('HSP — high speed', '50.0 Hz'),
+          param('ITH — motor thermal current', '4.20 A'),
+          param('UFR — IR compensation', '100'),
+        ],
+      ),
+    ),
+  );
+}
+
+/// A sensor's read-only details.
+SidePane _sensorPane(BuildContext context) {
+  return const SidePane(
+    title: 'Sensor',
+    subtitle: 'opticField',
+    icon: Icons.sensors,
+    status: PaneStatus.running('Live'),
+    child: PaneSection(
+      title: 'Details',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PaneDetailRow(label: 'Kind', value: 'opticField'),
+          PaneDetailRow(label: 'Detection key', value: 'ST101.CN04.SEN01'),
+          PaneDetailRow(label: 'Detection state', value: '(see glyph)'),
+          PaneDetailRow(label: 'Active polarity inverted', value: 'no'),
+          PaneDetailRow(label: 'Rising edge delay key', value: '—'),
+          PaneDetailRow(label: 'Falling edge delay key', value: '—'),
+          PaneDetailRow(label: 'Tag', value: 'CN04-S1'),
+        ],
+      ),
+    ),
+  );
+}
+
+/// A conveyor gate's force controls.
+SidePane _gatePane(BuildContext context) {
+  final scheme = Theme.of(context).colorScheme;
+  Widget forceButton(String label, IconData icon, {bool active = false}) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: OutlinedButton.icon(
+          onPressed: () {},
+          icon: Icon(icon, size: 18),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            foregroundColor: active ? scheme.tertiary : null,
+            side: active ? BorderSide(color: scheme.tertiary, width: 2) : null,
+          ),
+          label: Text(label),
+        ),
+      ),
+    );
+  }
+
+  return SidePane(
+    title: 'Gate',
+    subtitle: 'ST101.CN04.GATE01',
+    icon: Icons.swap_horiz,
+    status: const PaneStatus.warning('Forced open'),
+    child: PaneSection(
+      title: 'Force',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const PaneDetailRow(label: 'Gate state', value: 'Open'),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              forceButton('Force open', Icons.arrow_upward, active: true),
+              forceButton('Force close', Icons.arrow_downward),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Canned channel states for the I/O module goldens.
+const List<IOState> _sixteenChannelStates = [
+  IOState.high,
+  IOState.low,
+  IOState.forcedHigh,
+  IOState.high,
+  IOState.low,
+  IOState.low,
+  IOState.high,
+  IOState.low,
+  IOState.high,
+  IOState.high,
+  IOState.low,
+  IOState.forcedLow,
+  IOState.low,
+  IOState.high,
+  IOState.low,
+  IOState.low,
+];
+
+const List<IOState> _eightChannelStates = [
+  IOState.high,
+  IOState.low,
+  IOState.high,
+  IOState.high,
+  IOState.low,
+  IOState.forcedHigh,
+  IOState.low,
+  IOState.low,
+];
+
+/// Pumps a screen and opens the REAL `showIoModulePane` on canned data —
+/// the same call Beckhoff EL1008/EL2008 and Advantys DDI/DDO make.
+Future<void> _pumpIoPane(
+  WidgetTester tester, {
+  required ThemeData theme,
+  required String title,
+  required String subtitle,
+  required List<IOState> states,
+  String highLabel = 'High',
+}) async {
+  await tester.binding.setSurfaceSize(_screen);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  addTearDown(closeSidePane);
+
+  late BuildContext pageContext;
+  await tester.pumpWidget(_screenApp(
+    theme: theme,
+    body: Builder(builder: (context) {
+      pageContext = context;
+      return const _MockPlantView();
+    }),
+  ));
+  showIoModulePane(
+    context: pageContext,
+    id: 'golden-io',
+    title: title,
+    subtitle: subtitle,
+    highLabel: highLabel,
+    // One emission, then quiet — enough for the strip to render.
+    summaryStream: Stream<Map<String, DynamicValue>>.value(
+      const <String, DynamicValue>{},
+    ),
+    statesOf: (_) => states,
+    gridBuilder: (_) => const SizedBox.shrink(),
+  );
+  await tester.pumpAndSettle();
+}
 
 // ---------------------------------------------------------------------------
 // Goldens
@@ -709,42 +989,68 @@ void main() {
       );
     });
 
-    testWidgets('third party I/O — dark', (tester) async {
-      await _pumpWithPane(tester, theme: dark, pane: _thirdPartyPane);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('goldens/side_pane_third_party_dark.png'),
-      );
-    });
-  });
-
-  group('Setpoint editing goldens', () {
-    // How an operator changes a conveyor setpoint: the pane's Setpoints tile
-    // opens a floating dialog with the three frequency fields. It is floating
-    // rather than modal so the belt stays visible while the value is typed,
-    // and each field commits on Enter/focus-out — never per keystroke, so a
-    // half-typed frequency cannot reach the drive.
-    testWidgets('conveyor setpoints — floating form over the pane',
+    // The next four run the REAL production code, not a stand-in:
+    // `showIoModulePane` is what Beckhoff EL1008/EL2008 and Advantys
+    // DDI3725/DDO3705 call, fed a canned emission instead of a PLC.
+    testWidgets('I/O module — 16 inputs, two forced (real helper)',
         (tester) async {
-      await _pumpWithPane(
+      await _pumpIoPane(
         tester,
         theme: dark,
-        pane: _conveyorPane,
-        afterOpen: (context) => showFloatingDialog(
-          context: context,
-          id: 'golden-setpoints',
-          title: 'CN-04 — setpoints',
-          subtitle: 'Committed on Enter',
-          icon: Icons.tune,
-          size: const Size(420, 380),
-          position: const Offset(700, 260),
-          builder: (_) => const _SetpointForm(),
-        ),
+        title: 'DI-3725-A',
+        subtitle: 'Advantys STB · 16 DI',
+        states: _sixteenChannelStates,
       );
-      addTearDown(() => closeFloatingDialog('golden-setpoints'));
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFile('goldens/conveyor_setpoints_dark.png'),
+        matchesGoldenFile('goldens/side_pane_io_inputs_dark.png'),
+      );
+    });
+
+    testWidgets('I/O module — 8 outputs (real helper)', (tester) async {
+      await _pumpIoPane(
+        tester,
+        theme: dark,
+        title: 'EL2008',
+        subtitle: 'Beckhoff · 8 DO',
+        highLabel: 'On',
+        states: _eightChannelStates,
+      );
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_io_outputs_dark.png'),
+      );
+    });
+
+    testWidgets('analog module — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _analogPane);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_analog_dark.png'),
+      );
+    });
+
+    testWidgets('drive parameters — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _drivePane);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_drive_dark.png'),
+      );
+    });
+
+    testWidgets('sensor — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _sensorPane);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_sensor_dark.png'),
+      );
+    });
+
+    testWidgets('conveyor gate force — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _gatePane);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_gate_dark.png'),
       );
     });
   });
