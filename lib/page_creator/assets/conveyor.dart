@@ -1408,13 +1408,21 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   PaneSection(
                     title: 'Trend',
                     child: PaneGraphTile(
-                      label: '${widget.config.key!} statistics',
+                      label: 'Frequency (Hz) · Current (A)',
+                      // Tall enough for a line chart with two axes to be
+                      // readable rather than decorative.
+                      height: 130,
                       preview: _ConveyorStatsGraphLoader(
                         keyName: widget.config.key!,
+                        showButtons: false,
+                        compact: true,
+                        xSpan: const Duration(minutes: 5),
                       ),
-                      expandedTitle: '${widget.config.key!} — statistics',
+                      expandedTitle: '${widget.config.key!} — trend',
+                      expandedSize: const Size(820, 520),
                       expandedBuilder: (context) => _ConveyorStatsGraphLoader(
                         keyName: widget.config.key!,
+                        xSpan: const Duration(minutes: 30),
                       ),
                     ),
                   ),
@@ -1438,7 +1446,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
                           'Manual ${dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2)} Hz',
                       icon: Icons.tune,
                       expandedTitle: '${widget.config.key!} — setpoints',
-                      expandedSize: const Size(420, 320),
+                      expandedSize: const Size(420, 380),
                       expandedBuilder: (context) => Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         mainAxisSize: MainAxisSize.min,
@@ -1562,8 +1570,16 @@ class _FrequencyField extends StatelessWidget {
 /// two can never drift apart.
 class _ConveyorStatsGraphLoader extends ConsumerWidget {
   final String keyName;
+  final bool showButtons;
+  final Duration xSpan;
+  final bool compact;
 
-  const _ConveyorStatsGraphLoader({required this.keyName});
+  const _ConveyorStatsGraphLoader({
+    required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1576,6 +1592,9 @@ class _ConveyorStatsGraphLoader extends ConsumerWidget {
         return ConveyorStatsGraph(
           collector: snapshot.data,
           keyName: keyName,
+          showButtons: showButtons,
+          xSpan: xSpan,
+          compact: compact,
         );
       },
     );
@@ -1866,12 +1885,35 @@ class ConveyorPainter extends CustomPainter {
       !identical(oldDelegate.geometry, geometry);
 }
 
+/// Series colours for the conveyor trend, fixed so the small preview in the
+/// pane and the full chart in the floating dialog read as the same chart.
+const Map<String, Color> conveyorTrendColors = {
+  'Frequency': Colors.blue,
+  'Current': Colors.orange,
+};
+
 class ConveyorStatsGraph extends ConsumerStatefulWidget {
   final Collector? collector;
   final String keyName;
+
+  /// Pan/zoom/now buttons. Off in the pane preview, on in the floating chart.
+  final bool showButtons;
+
+  /// Visible window. The preview shows a short span so the line has shape;
+  /// the expanded chart shows more history.
+  final Duration xSpan;
+
+  /// Drops the units from the tick labels. In the pane preview there is only
+  /// ~20px of gutter, so "48.20 Hz" wraps to four lines and eats the plot —
+  /// the tile caption names the units instead.
+  final bool compact;
+
   const ConveyorStatsGraph({
     required this.collector,
     required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
     super.key,
   });
 
@@ -1925,26 +1967,36 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           maxFreq++;
         }
 
-        // Create graph configuration
+        // Time along the bottom, frequency on the LEFT axis and current on
+        // the RIGHT — frequency is what an operator reads first, so it gets
+        // the axis the eye lands on.
         final graphConfig = GraphConfig(
           type: GraphType.timeseries,
-          xAxis: GraphAxisConfig(unit: 'Time'),
-          yAxis: GraphAxisConfig(unit: 'A', min: minCurrent, max: maxCurrent),
-          yAxis2: GraphAxisConfig(unit: 'Hz', min: minFreq, max: maxFreq),
-          xSpan: const Duration(minutes: 5),
+          xAxis: GraphAxisConfig(unit: widget.compact ? '' : 'Time'),
+          yAxis: GraphAxisConfig(
+            unit: widget.compact ? '' : 'Hz',
+            min: minFreq,
+            max: maxFreq,
+          ),
+          yAxis2: GraphAxisConfig(
+            unit: widget.compact ? '' : 'A',
+            min: minCurrent,
+            max: maxCurrent,
+          ),
+          xSpan: widget.xSpan,
         );
 
-        // Create data for the graph
         final List<Map<String, dynamic>> data = [];
         data.addAll(
-            currentData.map((e) => {'x': e[0], 'y': e[1], 's': 'Current'}));
+            freqData.map((e) => {'x': e[0], 'y': e[1], 's': 'Frequency'}));
         data.addAll(
-            freqData.map((e) => {'x': e[0], 'y2': e[1], 's': 'Frequency'}));
+            currentData.map((e) => {'x': e[0], 'y2': e[1], 's': 'Current'}));
 
         return Graph(
           config: graphConfig,
           data: data,
-          showButtons: false,
+          showButtons: widget.showButtons,
+          categoryColors: conveyorTrendColors,
           chartTheme: ref.watch(chartThemeNotifierProvider),
           redraw: () {},
         ).build(context);

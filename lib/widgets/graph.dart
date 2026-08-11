@@ -320,12 +320,14 @@ class Graph {
         )
         .interaction(
           pan: panConfig,
-          tooltip: config.tooltip ? cs.TooltipConfig(
-            builder: tooltipBuilder ?? cs.DefaultTooltips.simple('y'),
-            showDelay: const Duration(milliseconds: 50),
-            hideDelay: const Duration(milliseconds: 500),
-            followPointer: false,
-          ) : null,
+          tooltip: config.tooltip
+              ? cs.TooltipConfig(
+                  builder: tooltipBuilder ?? cs.DefaultTooltips.simple('y'),
+                  showDelay: const Duration(milliseconds: 50),
+                  hideDelay: const Duration(milliseconds: 500),
+                  followPointer: false,
+                )
+              : null,
         )
         .animate(duration: Duration.zero)
         .legend(
@@ -605,81 +607,87 @@ class ChartThemeNotifier extends _$ChartThemeNotifier {
 
   cs.ChartTheme _createChartTheme(ThemeMode mode) {
     final isDark = mode == ThemeMode.dark;
-    return isDark ? _createDarkChartTheme() : _createLightChartTheme();
+    return isDark ? darkChartTheme() : lightChartTheme();
   }
+}
 
-  cs.ChartTheme _createDarkChartTheme() {
-    return cs.ChartTheme(
-      backgroundColor: Colors.transparent,
-      plotBackgroundColor: Colors.transparent,
-      primaryColor: SolarizedColors.blue,
-      borderColor: Colors.transparent,
-      gridColor: SolarizedColors.base01.withAlpha(75),
-      axisColor: SolarizedColors.base01,
-      gridWidth: 0.5,
-      axisWidth: 1.0,
-      pointSizeDefault: 0,
-      pointSizeMin: 0,
-      pointSizeMax: 0,
-      colorPalette: [
-        SolarizedColors.blue,
-        SolarizedColors.red,
-        SolarizedColors.green,
-        SolarizedColors.yellow,
-        SolarizedColors.orange,
-        SolarizedColors.magenta,
-        SolarizedColors.violet,
-        SolarizedColors.cyan,
-      ],
-      padding: const EdgeInsets.only(left: 20, right: 0, top: 0, bottom: 0),
-      axisTextStyle: const TextStyle(
-        color: SolarizedColors.base01,
-        fontSize: 12,
-        fontFamily: 'roboto-mono',
-      ),
-      axisLabelStyle: const TextStyle(
-        color: SolarizedColors.base00,
-        fontSize: 12,
-        fontFamily: 'roboto-mono',
-      ),
-    );
-  }
+/// The solarized-dark chart theme.
+///
+/// Top-level rather than a private notifier method so anything rendering a
+/// chart outside the provider graph — golden tests especially — draws the
+/// chart an operator actually sees instead of cristalyse's white default.
+cs.ChartTheme darkChartTheme() {
+  return cs.ChartTheme(
+    backgroundColor: Colors.transparent,
+    plotBackgroundColor: Colors.transparent,
+    primaryColor: SolarizedColors.blue,
+    borderColor: Colors.transparent,
+    gridColor: SolarizedColors.base01.withAlpha(75),
+    axisColor: SolarizedColors.base01,
+    gridWidth: 0.5,
+    axisWidth: 1.0,
+    pointSizeDefault: 0,
+    pointSizeMin: 0,
+    pointSizeMax: 0,
+    colorPalette: [
+      SolarizedColors.blue,
+      SolarizedColors.red,
+      SolarizedColors.green,
+      SolarizedColors.yellow,
+      SolarizedColors.orange,
+      SolarizedColors.magenta,
+      SolarizedColors.violet,
+      SolarizedColors.cyan,
+    ],
+    padding: const EdgeInsets.only(left: 20, right: 0, top: 0, bottom: 0),
+    axisTextStyle: const TextStyle(
+      color: SolarizedColors.base01,
+      fontSize: 12,
+      fontFamily: 'roboto-mono',
+    ),
+    axisLabelStyle: const TextStyle(
+      color: SolarizedColors.base00,
+      fontSize: 12,
+      fontFamily: 'roboto-mono',
+    ),
+  );
+}
 
-  cs.ChartTheme _createLightChartTheme() {
-    return cs.ChartTheme(
-      backgroundColor: Colors.transparent,
-      plotBackgroundColor: Colors.transparent,
-      primaryColor: SolarizedColors.green,
-      borderColor: Colors.transparent,
-      gridColor: SolarizedColors.base00.withAlpha(75),
-      axisColor: SolarizedColors.base00,
-      gridWidth: 0.5,
-      axisWidth: 1.0,
-      pointSizeDefault: 0,
-      pointSizeMin: 0,
-      pointSizeMax: 0,
-      colorPalette: [
-        SolarizedColors.green,
-        SolarizedColors.red,
-        SolarizedColors.blue,
-        SolarizedColors.orange,
-        SolarizedColors.magenta,
-        SolarizedColors.violet,
-        SolarizedColors.cyan,
-        SolarizedColors.yellow,
-      ],
-      // (Padding could be computed from label sizes if needed)
-      padding: const EdgeInsets.only(left: 20, right: 0, top: 0, bottom: 0),
-      axisTextStyle: const TextStyle(
-        color: SolarizedColors.base00,
-        fontSize: 12,
-        fontFamily: 'roboto-mono',
-      ),
-      axisLabelStyle: const TextStyle(
-        color: SolarizedColors.base01,
-        fontSize: 12,
-        fontFamily: 'roboto-mono',
-      ),
-    );
-  }
+/// The solarized-light counterpart of [darkChartTheme].
+cs.ChartTheme lightChartTheme() {
+  return cs.ChartTheme(
+    backgroundColor: Colors.transparent,
+    plotBackgroundColor: Colors.transparent,
+    primaryColor: SolarizedColors.green,
+    borderColor: Colors.transparent,
+    gridColor: SolarizedColors.base00.withAlpha(75),
+    axisColor: SolarizedColors.base00,
+    gridWidth: 0.5,
+    axisWidth: 1.0,
+    pointSizeDefault: 0,
+    pointSizeMin: 0,
+    pointSizeMax: 0,
+    colorPalette: [
+      SolarizedColors.green,
+      SolarizedColors.red,
+      SolarizedColors.blue,
+      SolarizedColors.orange,
+      SolarizedColors.magenta,
+      SolarizedColors.violet,
+      SolarizedColors.cyan,
+      SolarizedColors.yellow,
+    ],
+    // (Padding could be computed from label sizes if needed)
+    padding: const EdgeInsets.only(left: 20, right: 0, top: 0, bottom: 0),
+    axisTextStyle: const TextStyle(
+      color: SolarizedColors.base00,
+      fontSize: 12,
+      fontFamily: 'roboto-mono',
+    ),
+    axisLabelStyle: const TextStyle(
+      color: SolarizedColors.base01,
+      fontSize: 12,
+      fontFamily: 'roboto-mono',
+    ),
+  );
 }

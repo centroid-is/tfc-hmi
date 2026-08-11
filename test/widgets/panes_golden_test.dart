@@ -22,7 +22,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:tfc/page_creator/assets/conveyor.dart' show conveyorTrendColors;
 import 'package:tfc/theme.dart';
+import 'package:tfc/widgets/graph.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
@@ -57,7 +59,8 @@ class _MockPlantView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('INFEED — LINE 1', style: Theme.of(context).textTheme.labelLarge),
+          Text('INFEED — LINE 1',
+              style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 24),
           Row(children: [
             belt(220),
@@ -156,37 +159,142 @@ Future<void> _pumpWithPane(
 // Pane bodies — one per device shape
 // ---------------------------------------------------------------------------
 
-/// A stand-in sparkline, drawn from fixed points so goldens stay stable.
-class _Sparkline extends StatelessWidget {
-  const _Sparkline();
+/// The real conveyor trend chart, fed canned samples.
+///
+/// This is `Graph` itself — not a stand-in — so the golden shows what an
+/// operator sees: time along the bottom, frequency on the left axis and
+/// current on the right. Timestamps are fixed constants so the image is
+/// reproducible.
+class _TrendChart extends StatelessWidget {
+  const _TrendChart({this.showButtons = false, this.compact = false});
+
+  final bool showButtons;
+
+  /// Mirrors `ConveyorStatsGraph.compact` — bare tick labels for the pane
+  /// preview, units spelled out in the tile caption.
+  final bool compact;
+
+  /// 2026-08-11 09:00:00Z, then a sample a minute.
+  static const int _t0 = 1786532400000;
+  static const int _step = 60000;
+
+  static const List<double> _frequency = [
+    41.2,
+    43.8,
+    47.9,
+    48.1,
+    48.0,
+    48.2,
+    47.6,
+    48.2,
+    48.3,
+    48.1,
+    44.7,
+    41.0,
+    45.6,
+    48.0,
+    48.2,
+    48.1,
+  ];
+  static const List<double> _current = [
+    2.10,
+    2.44,
+    3.02,
+    3.10,
+    3.06,
+    3.14,
+    2.88,
+    3.12,
+    3.20,
+    3.08,
+    2.61,
+    2.05,
+    2.79,
+    3.05,
+    3.16,
+    3.14,
+  ];
 
   @override
   Widget build(BuildContext context) {
-    const samples = [
-      0.35, 0.42, 0.38, 0.55, 0.61, 0.58, 0.72, 0.68,
-      0.75, 0.71, 0.80, 0.77, 0.83, 0.79, 0.86, 0.84,
+    final data = <Map<String, dynamic>>[
+      for (var i = 0; i < _frequency.length; i++)
+        {
+          'x': (_t0 + i * _step).toDouble(),
+          'y': _frequency[i],
+          's': 'Frequency',
+        },
+      for (var i = 0; i < _current.length; i++)
+        {
+          'x': (_t0 + i * _step).toDouble(),
+          'y2': _current[i],
+          's': 'Current',
+        },
     ];
-    final color = Theme.of(context).colorScheme.primary;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        for (final s in samples)
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 1),
-              child: FractionallySizedBox(
-                heightFactor: s,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.75),
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(2),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+    // An explicit xRange, not xSpan: the live chart windows on
+    // DateTime.now(), which would slide the canned samples out of view and
+    // make this golden change every run.
+    return Graph(
+      config: GraphConfig(
+        type: GraphType.timeseries,
+        xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
+        yAxis: GraphAxisConfig(unit: compact ? '' : 'Hz', min: 40, max: 50),
+        yAxis2: GraphAxisConfig(unit: compact ? '' : 'A', min: 2, max: 3.5),
+        xRange: DateTimeRange(
+          start: DateTime.fromMillisecondsSinceEpoch(_t0),
+          end: DateTime.fromMillisecondsSinceEpoch(
+            _t0 + (_frequency.length - 1) * _step,
           ),
+        ),
+      ),
+      data: data,
+      showButtons: showButtons,
+      categoryColors: conveyorTrendColors,
+      chartTheme: Theme.of(context).brightness == Brightness.dark
+          ? darkChartTheme()
+          : lightChartTheme(),
+      redraw: () {},
+    ).build(context);
+  }
+}
+
+/// The three frequency setpoints, as they appear in the floating dialog the
+/// pane's Setpoints tile opens. Mirrors `_FrequencyField` in conveyor.dart.
+class _SetpointForm extends StatelessWidget {
+  const _SetpointForm();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget field(String label, String value, {bool focused = false}) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: TextFormField(
+          initialValue: value,
+          decoration: InputDecoration(
+            labelText: label,
+            suffixText: 'Hz',
+            isDense: true,
+            helperText: focused ? 'Enter to send to the drive' : null,
+            focusedBorder: focused
+                ? OutlineInputBorder(
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary,
+                      width: 2,
+                    ),
+                  )
+                : null,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        field('Auto frequency', '50.00'),
+        field('Cleaning frequency', '27.50', focused: true),
+        field('Manual frequency', '30.00'),
       ],
     );
   }
@@ -263,7 +371,8 @@ SidePane _conveyorPane(BuildContext context) {
         const Divider(height: 1),
         PaneSection(
           title: 'Status',
-          trailing: TextButton(onPressed: () {}, child: const Text('Reset hours')),
+          trailing:
+              TextButton(onPressed: () {}, child: const Text('Reset hours')),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
@@ -295,9 +404,10 @@ SidePane _conveyorPane(BuildContext context) {
         PaneSection(
           title: 'Trend',
           child: PaneGraphTile(
-            label: 'CN-04 statistics',
-            preview: const _Sparkline(),
-            expandedBuilder: (_) => const _Sparkline(),
+            label: 'Frequency (Hz) · Current (A)',
+            height: 130,
+            preview: const _TrendChart(compact: true),
+            expandedBuilder: (_) => const _TrendChart(showButtons: true),
           ),
         ),
         const Divider(height: 1),
@@ -381,8 +491,22 @@ class _ChannelStripDemo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const high = [
-      true, false, true, true, false, false, true, false,
-      true, true, false, true, false, true, false, false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
     ];
     const forced = {2, 11};
     final theme = Theme.of(context);
@@ -455,8 +579,8 @@ class _ChannelGridDemo extends StatelessWidget {
               const SizedBox(width: 12),
               const Expanded(
                 child: TextField(
-                  decoration: InputDecoration(
-                      labelText: 'Description', isDense: true),
+                  decoration:
+                      InputDecoration(labelText: 'Description', isDense: true),
                 ),
               ),
             ],
@@ -490,10 +614,7 @@ SidePane _thirdPartyPane(BuildContext context) {
               SizedBox(height: 10),
               PaneTileRow(children: [
                 PaneMetricTile(
-                    label: 'High',
-                    value: '8',
-                    unit: '/ 16',
-                    icon: Icons.input),
+                    label: 'High', value: '8', unit: '/ 16', icon: Icons.input),
                 PaneMetricTile(
                     label: 'Forced',
                     value: '2',
@@ -538,7 +659,8 @@ void main() {
           .load();
     }
 
-    await loadFont('roboto-mono', 'lib/fonts/roboto-mono/RobotoMono-Regular.ttf');
+    await loadFont(
+        'roboto-mono', 'lib/fonts/roboto-mono/RobotoMono-Regular.ttf');
 
     // Icons are load-bearing in these goldens (every header and tile carries
     // one), and the test environment does not register MaterialIcons. Pull it
@@ -592,6 +714,37 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/side_pane_third_party_dark.png'),
+      );
+    });
+  });
+
+  group('Setpoint editing goldens', () {
+    // How an operator changes a conveyor setpoint: the pane's Setpoints tile
+    // opens a floating dialog with the three frequency fields. It is floating
+    // rather than modal so the belt stays visible while the value is typed,
+    // and each field commits on Enter/focus-out — never per keystroke, so a
+    // half-typed frequency cannot reach the drive.
+    testWidgets('conveyor setpoints — floating form over the pane',
+        (tester) async {
+      await _pumpWithPane(
+        tester,
+        theme: dark,
+        pane: _conveyorPane,
+        afterOpen: (context) => showFloatingDialog(
+          context: context,
+          id: 'golden-setpoints',
+          title: 'CN-04 — setpoints',
+          subtitle: 'Committed on Enter',
+          icon: Icons.tune,
+          size: const Size(420, 380),
+          position: const Offset(700, 260),
+          builder: (_) => const _SetpointForm(),
+        ),
+      );
+      addTearDown(() => closeFloatingDialog('golden-setpoints'));
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/conveyor_setpoints_dark.png'),
       );
     });
   });
