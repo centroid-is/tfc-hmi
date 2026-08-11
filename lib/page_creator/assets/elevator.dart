@@ -3,6 +3,7 @@ import 'dart:math' show pi;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -1002,14 +1003,23 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
   Future<void> _onAddChildPressed(BuildContext context) async {
     final selected = await showDialog<String>(
       context: context,
-      builder: (dialogCtx) => SimpleDialog(
-        title: const Text('Add child'),
-        children: _allowedChildFactories.keys
-            .map((name) => SimpleDialogOption(
-                  onPressed: () => Navigator.of(dialogCtx).pop(name),
-                  child: Text(name),
-                ))
-            .toList(),
+      // A plain option list, in the standard frame. Kept findable by label
+      // (`find.text('Sensor')`) for the ELEV-07 tests.
+      builder: (dialogCtx) => StandardDialogFrame(
+        title: 'Add child',
+        icon: Icons.add,
+        width: 360,
+        closeLabel: 'Cancel',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: _allowedChildFactories.keys
+              .map((name) => ListTile(
+                    title: Text(name),
+                    onTap: () => Navigator.of(dialogCtx).pop(name),
+                  ))
+              .toList(),
+        ),
       ),
     );
     if (selected == null) return;
@@ -1030,9 +1040,11 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
   /// On dismissal, `setState` refreshes this editor in case the child's
   /// fields changed (ELEV-08).
   void _onEditChildPressed(BuildContext context, ElevatorChildEntry entry) {
-    showDialog<void>(
+    showStandardDialog<void>(
       context: context,
-      builder: (_) => Dialog(child: entry.child.configure(context)),
+      title: entry.child.displayName,
+      subtitle: 'Configuration',
+      builder: (_) => entry.child.configure(context),
     ).then((_) {
       if (mounted) setState(() {});
     });

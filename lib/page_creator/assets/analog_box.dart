@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
@@ -215,9 +216,9 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                 const SizedBox(height: 8),
                 KeyField(
                   initialValue: widget.config.errorKey,
-                  onChanged: (v) =>
-                      setState(() => widget.config.errorKey = v),
-                  label: 'Error key (optional, red border when true / non-zero)',
+                  onChanged: (v) => setState(() => widget.config.errorKey = v),
+                  label:
+                      'Error key (optional, red border when true / non-zero)',
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -677,20 +678,12 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
       );
     }
 
-    return AlertDialog(
-      title: FutureBuilder<StateMan>(
-        future: ref.watch(stateManProvider.future),
-        builder: (context, snapshot) {
-          final resolvedKey = snapshot.hasData
-              ? snapshot.data!.resolveKey(widget.config.analogKey)
-              : widget.config.analogKey;
-
-          return Text(widget.config.text?.isNotEmpty == true
-              ? widget.config.text!
-              : (resolvedKey ?? 'AnalogBox'));
-        },
-      ),
-      content: SingleChildScrollView(
+    return StandardDialogFrame(
+      title: widget.config.text?.isNotEmpty == true
+          ? widget.config.text!
+          : widget.config.analogKey,
+      icon: Icons.tune,
+      child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -967,12 +960,6 @@ class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
-        ),
-      ],
     );
   }
 }

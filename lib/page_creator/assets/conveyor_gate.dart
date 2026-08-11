@@ -1,8 +1,8 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
@@ -631,24 +631,10 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
     Color current,
     ValueChanged<Color> onChanged,
   ) {
-    showDialog(
+    showColorPickerDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: current,
-            onColorChanged: (color) => onChanged(color),
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
+      initialColor: current,
+      onChanged: onChanged,
     );
   }
 

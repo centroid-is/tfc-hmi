@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:rxdart/rxdart.dart';
@@ -393,65 +394,71 @@ class _ButtonState extends ConsumerState<Button> {
         customBorder: widget.config.buttonType == ButtonType.circle
             ? const CircleBorder()
             : const RoundedRectangleBorder(),
-        onTapDown: disabled ? null : (_) async {
-          if (!widget.config.isToggle) {
-            _setPressed(true);
-          }
-          if (isPreview) return;
+        onTapDown: disabled
+            ? null
+            : (_) async {
+                if (!widget.config.isToggle) {
+                  _setPressed(true);
+                }
+                if (isPreview) return;
 
-          if (widget.config.isToggle) {
-            // For toggle buttons, just handle the toggle
-            _handleToggle();
-          } else {
-            // For regular buttons, write true
-            final client = await ref.read(stateManProvider.future);
-            try {
-              await client.write(widget.config.key,
-                  DynamicValue(value: true, typeId: NodeId.boolean));
-              _log.d('Button ${widget.config.key} pressed');
-            } catch (e) {
-              _log.e('Error writing button press', error: e);
-            }
-          }
-        },
-        onTapUp: disabled ? null : (_) async {
-          if (!widget.config.isToggle) {
-            _setPressed(false);
-          }
-          if (isPreview) return;
+                if (widget.config.isToggle) {
+                  // For toggle buttons, just handle the toggle
+                  _handleToggle();
+                } else {
+                  // For regular buttons, write true
+                  final client = await ref.read(stateManProvider.future);
+                  try {
+                    await client.write(widget.config.key,
+                        DynamicValue(value: true, typeId: NodeId.boolean));
+                    _log.d('Button ${widget.config.key} pressed');
+                  } catch (e) {
+                    _log.e('Error writing button press', error: e);
+                  }
+                }
+              },
+        onTapUp: disabled
+            ? null
+            : (_) async {
+                if (!widget.config.isToggle) {
+                  _setPressed(false);
+                }
+                if (isPreview) return;
 
-          if (!widget.config.isToggle) {
-            // For regular buttons, write false
-            try {
-              if (!widget.config.serverWritesLow) {
-                final client = await ref.read(stateManProvider.future);
-                await client.write(widget.config.key,
-                    DynamicValue(value: false, typeId: NodeId.boolean));
-                _log.d('Button ${widget.config.key} released');
-              }
-            } catch (e) {
-              _log.e('Error writing button release', error: e);
-            }
-          }
-        },
-        onTapCancel: disabled ? null : () async {
-          if (!widget.config.isToggle) {
-            _setPressed(false);
-          }
-          if (isPreview) return;
+                if (!widget.config.isToggle) {
+                  // For regular buttons, write false
+                  try {
+                    if (!widget.config.serverWritesLow) {
+                      final client = await ref.read(stateManProvider.future);
+                      await client.write(widget.config.key,
+                          DynamicValue(value: false, typeId: NodeId.boolean));
+                      _log.d('Button ${widget.config.key} released');
+                    }
+                  } catch (e) {
+                    _log.e('Error writing button release', error: e);
+                  }
+                }
+              },
+        onTapCancel: disabled
+            ? null
+            : () async {
+                if (!widget.config.isToggle) {
+                  _setPressed(false);
+                }
+                if (isPreview) return;
 
-          if (!widget.config.isToggle) {
-            // For regular buttons, write false
-            final client = await ref.read(stateManProvider.future);
-            try {
-              await client.write(widget.config.key,
-                  DynamicValue(value: false, typeId: NodeId.boolean));
-              _log.d('Button ${widget.config.key} tap cancelled');
-            } catch (e) {
-              _log.e('Error writing button cancel', error: e);
-            }
-          }
-        },
+                if (!widget.config.isToggle) {
+                  // For regular buttons, write false
+                  final client = await ref.read(stateManProvider.future);
+                  try {
+                    await client.write(widget.config.key,
+                        DynamicValue(value: false, typeId: NodeId.boolean));
+                    _log.d('Button ${widget.config.key} tap cancelled');
+                  } catch (e) {
+                    _log.e('Error writing button cancel', error: e);
+                  }
+                }
+              },
         child: Stack(
           alignment: Alignment.center,
           fit: StackFit.expand,
@@ -622,9 +629,9 @@ class _ConfigContentState extends State<_ConfigContent> {
     // Ensure an icon exists to edit
     widget.config.icon ??= IconConfig.preview();
     // Reuse the icon asset's own configure UI in a dialog
-    await showDialog(
+    await showStandardDialog<void>(
       context: context,
-      barrierDismissible: true,
+      title: 'Button icon',
       builder: (ctx) => widget.config.icon!.configure(ctx),
     );
     setState(() {}); // Refresh after closing
@@ -1006,8 +1013,7 @@ class _ConfigContentState extends State<_ConfigContent> {
                 initialValue: widget.config.disabledKey ?? '',
                 onChanged: (value) {
                   setState(() {
-                    widget.config.disabledKey =
-                        value.isEmpty ? null : value;
+                    widget.config.disabledKey = value.isEmpty ? null : value;
                   });
                 },
               ),

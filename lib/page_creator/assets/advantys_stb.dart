@@ -32,6 +32,7 @@ import 'dart:collection' show LinkedHashMap;
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import 'package:rxdart/rxdart.dart';
@@ -1356,8 +1357,10 @@ class _STBNIP2311ConfigContentState extends State<_STBNIP2311ConfigContent> {
                               child: const Icon(Icons.drag_indicator),
                             ),
                             title: Text(sub.runtimeType.toString()),
-                            onTap: () => showDialog(
+                            onTap: () => showStandardDialog<void>(
                               context: context,
+                              title: sub.runtimeType.toString(),
+                              subtitle: 'Configuration',
                               builder: (_) => sub.configure(context),
                             ),
                             trailing: IconButton(

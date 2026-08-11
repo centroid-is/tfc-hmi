@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import '../widgets/base_scaffold.dart';
 import '../theme.dart';
 
@@ -69,11 +70,11 @@ class ViewTheme extends StatelessWidget {
                   padding: const EdgeInsets.all(8.0),
                   child: ElevatedButton(
                     onPressed: () {
-                      showDialog(
-                          context: context,
-                          builder: (context) {
-                            return const Dialog.fullscreen(child: Text('hi'));
-                          });
+                      showStandardDialog<void>(
+                        context: context,
+                        title: 'Sample dialog',
+                        builder: (context) => const Text('hi'),
+                      );
                     },
                     child: const Text('ElevatedButton'),
                   ),
@@ -82,10 +83,11 @@ class ViewTheme extends StatelessWidget {
                   padding: const EdgeInsets.all(8.0),
                   child: FilledButton(
                     onPressed: () {
-                      showDialog(
-                          context: context,
-                          builder: (context) =>
-                              const AlertDialog(content: Text("HEY!")));
+                      showStandardDialog<void>(
+                        context: context,
+                        title: 'Sample dialog',
+                        builder: (context) => const Text('HEY!'),
+                      );
                     },
                     child: const Text('Filled Button'),
                   ),
@@ -94,9 +96,11 @@ class ViewTheme extends StatelessWidget {
                   padding: const EdgeInsets.all(8.0),
                   child: OutlinedButton(
                     onPressed: () {
-                      showDialog(
-                          context: context,
-                          builder: (context) => const Text("HEY!"));
+                      showStandardDialog<void>(
+                        context: context,
+                        title: 'Sample dialog',
+                        builder: (context) => const Text('HEY!'),
+                      );
                     },
                     child: const Text('Outlined Button'),
                   ),
@@ -105,9 +109,11 @@ class ViewTheme extends StatelessWidget {
                   padding: const EdgeInsets.all(8.0),
                   child: TextButton(
                     onPressed: () {
-                      showDialog(
-                          context: context,
-                          builder: (context) => const Text("HEY!"));
+                      showStandardDialog<void>(
+                        context: context,
+                        title: 'Sample dialog',
+                        builder: (context) => const Text('HEY!'),
+                      );
                     },
                     child: const Text('Text Button'),
                   ),

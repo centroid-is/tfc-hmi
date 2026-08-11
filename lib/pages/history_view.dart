@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 import 'package:board_datetime_picker/board_datetime_picker.dart';
@@ -165,8 +167,6 @@ Icon _validityIcon(BuildContext context, PeriodValidity v) {
           size: 18, color: Theme.of(context).colorScheme.outline);
   }
 }
-
-
 
 // -----------------------------------------------------------------------------
 // Tree node model
@@ -672,14 +672,13 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                           border: OutlineInputBorder(),
                           filled: false,
                           isDense: true,
-                          contentPadding: EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
+                          contentPadding:
+                              EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<int>(
-                            value: dropdownValue != null
-                                ? dropdownValue.id
-                                : -1,
+                            value:
+                                dropdownValue != null ? dropdownValue.id : -1,
                             isExpanded: true,
                             isDense: true,
                             onChanged: (id) {
@@ -688,8 +687,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                                   _activeView = null;
                                   _activePeriod = null;
                                 } else {
-                                  final v = uniqueViews
-                                      .firstWhere((v) => v.id == id);
+                                  final v =
+                                      uniqueViews.firstWhere((v) => v.id == id);
                                   _activeView = v;
                                   _activePeriod = null;
                                   _selected
@@ -704,8 +703,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                               const DropdownMenuItem(
                                 value: -1,
                                 child: Text('None',
-                                    style: TextStyle(
-                                        fontStyle: FontStyle.italic)),
+                                    style:
+                                        TextStyle(fontStyle: FontStyle.italic)),
                               ),
                               for (final v in uniqueViews)
                                 DropdownMenuItem(
@@ -851,12 +850,10 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
           ),
 
           // ── Time parameters ──
-          if (_realtime)
-            _buildWindowChip(context, cs),
+          if (_realtime) _buildWindowChip(context, cs),
           if (!_realtime) ...[
             _buildDateRangeChip(context, cs),
-            if (_activeView != null)
-              _buildSavedPeriodsSection(context, cs),
+            if (_activeView != null) _buildSavedPeriodsSection(context, cs),
           ],
         ],
       ),
@@ -888,9 +885,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                _range == null
-                    ? 'Pick range…'
-                    : _rangeLabel(_range!),
+                _range == null ? 'Pick range…' : _rangeLabel(_range!),
                 style: TextStyle(fontSize: 12, color: cs.onSurface),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -905,7 +900,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60);
     final s = d.inSeconds.remainder(60);
-    if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m ${s.toString().padLeft(2, '0')}s';
+    if (h > 0)
+      return '${h}h ${m.toString().padLeft(2, '0')}m ${s.toString().padLeft(2, '0')}s';
     return '${m}m ${s.toString().padLeft(2, '0')}s';
   }
 
@@ -914,8 +910,12 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
       borderRadius: BorderRadius.circular(6),
       onTap: () async {
         final now = DateTime.now();
-        final initial = DateTime(now.year, now.month, now.day,
-            _realtimeWindow.inHours, _realtimeWindow.inMinutes.remainder(60),
+        final initial = DateTime(
+            now.year,
+            now.month,
+            now.day,
+            _realtimeWindow.inHours,
+            _realtimeWindow.inMinutes.remainder(60),
             _realtimeWindow.inSeconds.remainder(60));
 
         final result = await showBoardDateTimePicker(
@@ -972,8 +972,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
 
   Widget _buildSavedPeriodsSection(BuildContext context, ColorScheme cs) {
     return Consumer(builder: (context, ref, _) {
-      final periodsAsync =
-          ref.watch(savedPeriodsProvider(_activeView!.id));
+      final periodsAsync = ref.watch(savedPeriodsProvider(_activeView!.id));
       final horizonAsync = ref.watch(retentionHorizonProvider);
 
       return periodsAsync.when(
@@ -1002,18 +1001,19 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                   child: DropdownButton<SavedPeriod?>(
                     value: dropdownValue,
                     hint: Text('Periods…',
-                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                        style: TextStyle(
+                            fontSize: 12, color: cs.onSurfaceVariant)),
                     underline: const SizedBox.shrink(),
                     isDense: true,
                     isExpanded: true,
-                    icon: Icon(Icons.unfold_more, size: 16, color: cs.onSurfaceVariant),
+                    icon: Icon(Icons.unfold_more,
+                        size: 16, color: cs.onSurfaceVariant),
                     onChanged: (p) {
                       setState(() {
                         _activePeriod = p;
                         if (p != null) {
                           _realtime = false;
-                          _range = DateTimeRange(
-                              start: p.start, end: p.end);
+                          _range = DateTimeRange(start: p.start, end: p.end);
                         }
                       });
                     },
@@ -1035,8 +1035,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                               _validityIcon(
                                 context,
                                 validityForRange(
-                                  DateTimeRange(
-                                      start: p.start, end: p.end),
+                                  DateTimeRange(start: p.start, end: p.end),
                                   horizon,
                                 ),
                               ),
@@ -1053,15 +1052,15 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                   ),
                 ),
                 IconButton(
-                  onPressed: (_activeView != null &&
-                          !_realtime &&
-                          _range != null)
-                      ? _saveCurrentRangeAsPeriod
-                      : null,
+                  onPressed:
+                      (_activeView != null && !_realtime && _range != null)
+                          ? _saveCurrentRangeAsPeriod
+                          : null,
                   icon: const Icon(Icons.bookmark_add_outlined, size: 18),
                   tooltip: 'Save current range as period',
                   visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
                 ),
                 if (_activePeriod != null)
                   IconButton(
@@ -1075,7 +1074,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                     icon: const Icon(Icons.delete_outline, size: 18),
                     tooltip: 'Delete selected period',
                     visualDensity: VisualDensity.compact,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    constraints:
+                        const BoxConstraints(minWidth: 32, minHeight: 32),
                   ),
               ],
             ),
@@ -1174,47 +1174,37 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
   Future<String?> _askName(BuildContext context,
       {required String title, String initial = ''}) async {
     final ctrl = TextEditingController(text: initial);
-    return showDialog<String>(
+    return showStandardDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            labelText: 'Name',
-          ),
+      title: title,
+      icon: Icons.edit,
+      closeLabel: 'Cancel',
+      builder: (context) => TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(
+          border: OutlineInputBorder(),
+          labelText: 'Name',
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-              child: const Text('Save')),
-        ],
+        onSubmitted: (v) => Navigator.pop(context, v.trim()),
       ),
+      actionsBuilder: (dialogContext) => [
+        PaneAction.primary(
+          label: 'Save',
+          icon: Icons.check,
+          onPressed: () => Navigator.pop(dialogContext, ctrl.text.trim()),
+        ),
+      ],
     );
   }
 
-  Future<bool> _confirm(BuildContext context, String msg) async {
-    final res = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirm'),
-        content: Text(msg),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('No')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Yes')),
-        ],
-      ),
-    );
-    return res ?? false;
-  }
+  Future<bool> _confirm(BuildContext context, String msg) => showConfirmDialog(
+        context: context,
+        title: 'Confirm',
+        message: msg,
+        confirmLabel: 'Yes',
+        cancelLabel: 'No',
+      );
 
   void _toast(BuildContext context, String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -1350,8 +1340,8 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
 
   void _showGraphEditDialog(int graphIndex) {
     _updateGraphConfigs();
-    final graphConfig = _graphConfigs[graphIndex] ??
-        GraphDisplayConfig(index: graphIndex);
+    final graphConfig =
+        _graphConfigs[graphIndex] ?? GraphDisplayConfig(index: graphIndex);
     final nameCtrl = TextEditingController(text: graphConfig.name);
     final yUnitCtrl = TextEditingController(text: graphConfig.yAxisUnit);
     final y2UnitCtrl = TextEditingController(text: graphConfig.yAxis2Unit);
@@ -1369,9 +1359,54 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
           final sortedKeysOnGraph = keysOnGraph.toList()
             ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
-          return AlertDialog(
-            title: Text('Graph ${graphIndex + 1}'),
-            content: SizedBox(
+          return StandardDialogFrame(
+            title: 'Graph ${graphIndex + 1}',
+            icon: Icons.stacked_line_chart,
+            width: 520,
+            closeLabel: 'Cancel',
+            actions: [
+              // Remove graph (only if there are other graphs with keys)
+              if (keysOnGraph.isNotEmpty ||
+                  _keyConfigs.values.any((c) => c.graphIndex != graphIndex))
+                PaneAction.destructive(
+                  label: 'Remove graph',
+                  onPressed: () {
+                    final fallback = graphIndex == 0 ? 1 : 0;
+                    setState(() {
+                      // Move all keys from this graph to the fallback
+                      for (final key in keysOnGraph) {
+                        _keyConfigs[key] =
+                            _keyConfigs[key]!.copyWith(graphIndex: fallback);
+                      }
+                      // Reset display config
+                      _graphConfigs.remove(graphIndex);
+                      _updateGraphConfigs();
+                      if (_targetGraphIndex == graphIndex) {
+                        _targetGraphIndex = fallback;
+                      }
+                    });
+                    Navigator.pop(ctx);
+                    if (_activeView != null) _updateView();
+                  },
+                ),
+              PaneAction.primary(
+                label: 'Done',
+                icon: Icons.check,
+                onPressed: () {
+                  setState(() {
+                    _graphConfigs[graphIndex] = GraphDisplayConfig(
+                      index: graphIndex,
+                      name: nameCtrl.text.trim(),
+                      yAxisUnit: yUnitCtrl.text,
+                      yAxis2Unit: y2UnitCtrl.text,
+                    );
+                  });
+                  Navigator.pop(ctx);
+                  if (_activeView != null) _updateView();
+                },
+              ),
+            ],
+            child: SizedBox(
               width: 480,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1462,9 +1497,7 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                                           style: TextStyle(fontSize: 11)),
                                     ),
                                   ],
-                                  selected: {
-                                    config?.useSecondYAxis ?? false
-                                  },
+                                  selected: {config?.useSecondYAxis ?? false},
                                   onSelectionChanged: (v) {
                                     setState(() {
                                       _keyConfigs[key] = config!
@@ -1481,8 +1514,9 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                                 ),
                                 const SizedBox(width: 4),
                                 IconButton(
-                                  icon: Icon(Icons.close, size: 18,
-                                    color: Theme.of(ctx).colorScheme.error),
+                                  icon: Icon(Icons.close,
+                                      size: 18,
+                                      color: Theme.of(ctx).colorScheme.error),
                                   onPressed: () {
                                     setState(() {
                                       _selected.remove(key);
@@ -1505,54 +1539,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
                 ],
               ),
             ),
-            actions: [
-              // Remove graph (only if there are other graphs with keys)
-              if (keysOnGraph.isNotEmpty || _keyConfigs.values.any((c) => c.graphIndex != graphIndex))
-                TextButton(
-                  onPressed: () {
-                    final fallback = graphIndex == 0 ? 1 : 0;
-                    setState(() {
-                      // Move all keys from this graph to the fallback
-                      for (final key in keysOnGraph) {
-                        _keyConfigs[key] = _keyConfigs[key]!
-                            .copyWith(graphIndex: fallback);
-                      }
-                      // Reset display config
-                      _graphConfigs.remove(graphIndex);
-                      _updateGraphConfigs();
-                      if (_targetGraphIndex == graphIndex) {
-                        _targetGraphIndex = fallback;
-                      }
-                    });
-                    Navigator.pop(ctx);
-                    if (_activeView != null) _updateView();
-                  },
-                  style: TextButton.styleFrom(
-                    foregroundColor: Theme.of(ctx).colorScheme.error,
-                  ),
-                  child: const Text('Remove graph'),
-                ),
-              const SizedBox(width: 32),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _graphConfigs[graphIndex] = GraphDisplayConfig(
-                      index: graphIndex,
-                      name: nameCtrl.text.trim(),
-                      yAxisUnit: yUnitCtrl.text,
-                      yAxis2Unit: y2UnitCtrl.text,
-                    );
-                  });
-                  Navigator.pop(ctx);
-                  if (_activeView != null) _updateView();
-                },
-                child: const Text('Done'),
-              ),
-            ],
           );
         },
       ),
@@ -1807,6 +1793,3 @@ class _KeyTreeList extends StatelessWidget {
     );
   }
 }
-
-
-

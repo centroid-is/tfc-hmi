@@ -181,7 +181,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Should have a title
-      expect(find.text('Confirm Action'), findsOneWidget);
+      expect(find.text('Confirm action'), findsOneWidget);
       // Should have a warning/question icon
       expect(find.byIcon(Icons.help_outline), findsOneWidget);
     });

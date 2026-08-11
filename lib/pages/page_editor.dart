@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
 
@@ -614,8 +615,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // Reactively watch for new page/asset proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
       if (_isProposal) return; // Already showing a proposal.
-      final pageProposals = next.proposals.where((p) =>
-          p.proposalType == 'page' || p.proposalType == 'asset');
+      final pageProposals = next.proposals
+          .where((p) => p.proposalType == 'page' || p.proposalType == 'asset');
       if (pageProposals.isEmpty) return;
       final proposal = pageProposals.first;
       _applyProposalData(proposal.proposalJson);
@@ -662,7 +663,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           children: [
             if (_isProposal)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 color: Colors.amber.shade50,
                 child: Row(
                   children: [
@@ -688,7 +690,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                       onPressed: () {
                         if (_proposalId != null) {
                           try {
-                            ref.read(proposalStateProvider.notifier)
+                            ref
+                                .read(proposalStateProvider.notifier)
                                 .rejectProposal(_proposalId!);
                           } catch (_) {}
                         }
@@ -793,13 +796,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             bool hitAsset = assets.any((asset) {
                               return marqueeHitTestRotatedAsset(
                                 pointer: pointerEvent.localPosition,
-                                cx: asset.coordinates.x *
-                                    constraints.maxWidth,
-                                cy: asset.coordinates.y *
-                                    constraints.maxHeight,
-                                halfW: (asset.size.width *
-                                        constraints.maxWidth) /
-                                    2,
+                                cx: asset.coordinates.x * constraints.maxWidth,
+                                cy: asset.coordinates.y * constraints.maxHeight,
+                                halfW:
+                                    (asset.size.width * constraints.maxWidth) /
+                                        2,
                                 halfH: (asset.size.height *
                                         constraints.maxHeight) /
                                     2,
@@ -901,8 +902,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     Theme.of(context).colorScheme.primary,
                                 onPressed: () =>
                                     setState(() => _showPalette = true),
-                                child: const Icon(Icons.menu,
-                                    color: Colors.white),
+                                child:
+                                    const Icon(Icons.menu, color: Colors.white),
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -1153,12 +1154,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     _updateState(() {
       for (final assetToMove in assetsToMove) {
-        final newX = (assetToMove.coordinates.x +
-                canvasDelta.dx / constraints.maxWidth)
-            .clamp(0.0, 1.0);
-        final newY = (assetToMove.coordinates.y +
-                canvasDelta.dy / constraints.maxHeight)
-            .clamp(0.0, 1.0);
+        final newX =
+            (assetToMove.coordinates.x + canvasDelta.dx / constraints.maxWidth)
+                .clamp(0.0, 1.0);
+        final newY =
+            (assetToMove.coordinates.y + canvasDelta.dy / constraints.maxHeight)
+                .clamp(0.0, 1.0);
 
         assetToMove.coordinates =
             Coordinates(x: newX, y: newY, angle: assetToMove.coordinates.angle);
@@ -1184,9 +1185,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final displayName = currentPagePath != null
         ? (_temporaryPages[currentPagePath]?.menuItem.label ?? 'Empty')
         : 'Empty';
-    final currentPage = currentPagePath != null
-        ? _temporaryPages[currentPagePath]
-        : null;
+    final currentPage =
+        currentPagePath != null ? _temporaryPages[currentPagePath] : null;
 
     final selector = GestureDetector(
       onTap: _showPageManagerDialog,
@@ -1256,8 +1256,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         for (var i = 0; i < menuItems.length; i++) ...[
           // Add a divider after "Create New Page" to separate direct actions
           // from AI actions.
-          if (i == 1)
-            const PopupMenuDivider(),
+          if (i == 1) const PopupMenuDivider(),
           PopupMenuItem<int>(
             value: i,
             child: ListTile(
@@ -1354,9 +1353,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, dialogSetState) {
           final roots = _getRootPageNames();
-          return AlertDialog(
-            title: const Text('Pages'),
-            content: SizedBox(
+          return StandardDialogFrame(
+            title: 'Pages',
+            // The restart caveat belongs with the change, not buried in the
+            // button row it used to share with Close.
+            subtitle: 'Navigation changes require an app restart',
+            icon: Icons.menu_book,
+            width: 590,
+            child: SizedBox(
               width: 550,
               height: 550,
               child: Column(
@@ -1390,24 +1394,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 ],
               ),
             ),
-            actions: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Navigation changes require app restart.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.outline,
-                          ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogContext),
-                    child: const Text('Close'),
-                  ),
-                ],
-              ),
-            ],
           );
         },
       ),
@@ -1526,8 +1512,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     ),
                   IconButton(
                     icon: const Icon(Icons.edit, size: 18),
-                    onPressed: () =>
-                        _editPage(pageName, page, dialogSetState, dialogContext),
+                    onPressed: () => _editPage(
+                        pageName, page, dialogSetState, dialogContext),
                     tooltip: 'Edit',
                   ),
                   IconButton(
@@ -1733,9 +1719,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     showDialog(
       context: dialogContext,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit Page'),
-        content: SizedBox(
+      builder: (ctx) => StandardDialogFrame(
+        title: 'Edit page',
+        icon: Icons.edit,
+        width: 440,
+        child: SizedBox(
           width: 400,
           child: CreatePageWidget(
             initialPage: childPage,
@@ -1833,9 +1821,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }) {
     showDialog(
       context: dialogContext,
-      builder: (ctx) => AlertDialog(
-        title: Text(isSection ? 'Add Section' : 'Add Page'),
-        content: SizedBox(
+      builder: (ctx) => StandardDialogFrame(
+        title: isSection ? 'Add section' : 'Add page',
+        icon: isSection ? Icons.create_new_folder : Icons.note_add,
+        width: 440,
+        child: SizedBox(
           width: 400,
           child: CreatePageWidget(
             isSection: isSection,
@@ -1905,9 +1895,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final isSection = page.menuItem.isNavigationSection;
     showDialog(
       context: dialogContext,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit'),
-        content: SizedBox(
+      builder: (ctx) => StandardDialogFrame(
+        title: 'Edit',
+        icon: Icons.edit,
+        width: 440,
+        child: SizedBox(
           width: 400,
           child: CreatePageWidget(
             initialPage: page,
@@ -1995,36 +1987,25 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     BuildContext dialogContext,
   ) {
     final displayName = _temporaryPages[pagePath]?.menuItem.label ?? pagePath;
-    showDialog(
+    showConfirmDialog(
       context: dialogContext,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete'),
-        content: Text('Delete "$displayName"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              setState(() {
-                _temporaryPages.remove(pagePath);
-                // Remove from parent children lists
-                _removeChildFromParents(pagePath);
-                if (_currentPage == pagePath) {
-                  _currentPage = _temporaryPages.keys.firstOrNull;
-                }
-                _updateCurrentJson();
-              });
-              dialogSetState(() {});
-              Navigator.pop(ctx);
-            },
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
+      title: 'Delete',
+      message: 'Delete "$displayName"?',
+      confirmLabel: 'Delete',
+      destructive: true,
+    ).then((confirmed) {
+      if (!confirmed) return;
+      setState(() {
+        _temporaryPages.remove(pagePath);
+        // Remove from parent children lists
+        _removeChildFromParents(pagePath);
+        if (_currentPage == pagePath) {
+          _currentPage = _temporaryPages.keys.firstOrNull;
+        }
+        _updateCurrentJson();
+      });
+      dialogSetState(() {});
+    });
   }
 
   void _removeChildFromParents(String path) {

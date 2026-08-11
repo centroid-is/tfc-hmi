@@ -1,6 +1,8 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:logger/logger.dart';
 import 'package:beamer/beamer.dart';
 import 'common.dart';
@@ -803,29 +805,25 @@ class _ConfigContent extends ConsumerWidget {
   }
 
   void _deleteOption(BuildContext context, int index) {
-    showDialog(
+    showStandardDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Option'),
-        content: Text(
-            'Are you sure you want to delete "${config.options[index].label}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              config.options.removeAt(index);
-              Navigator.of(context).pop();
-              // Force rebuild
-              (context as Element).markNeedsBuild();
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      title: 'Delete option',
+      icon: Icons.delete_outline,
+      closeLabel: 'Cancel',
+      builder: (context) => Text(
+          'Are you sure you want to delete "${config.options[index].label}"?'),
+      actionsBuilder: (dialogContext) => [
+        PaneAction.destructive(
+          label: 'Delete',
+          icon: Icons.delete,
+          onPressed: () {
+            config.options.removeAt(index);
+            Navigator.of(dialogContext).pop();
+            // Force rebuild
+            (context as Element).markNeedsBuild();
+          },
+        ),
+      ],
     );
   }
 }
@@ -858,9 +856,20 @@ class _OptionsEditorDialogState extends State<_OptionsEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Edit Options'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Edit options',
+      icon: Icons.list,
+      width: 520,
+      height: 520,
+      closeLabel: 'Cancel',
+      actions: [
+        PaneAction.primary(
+          label: 'Save',
+          icon: Icons.check,
+          onPressed: _saveOptions,
+        ),
+      ],
+      child: SizedBox(
         width: 500,
         height: 400,
         child: Column(
@@ -957,16 +966,6 @@ class _OptionsEditorDialogState extends State<_OptionsEditorDialog> {
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _saveOptions,
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 
@@ -1035,9 +1034,18 @@ class _OptionEditDialogState extends State<_OptionEditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Edit Option ${widget.index + 1}'),
-      content: Column(
+    return StandardDialogFrame(
+      title: 'Edit option ${widget.index + 1}',
+      icon: Icons.edit,
+      closeLabel: 'Cancel',
+      actions: [
+        PaneAction.primary(
+          label: 'Save',
+          icon: Icons.check,
+          onPressed: _saveOption,
+        ),
+      ],
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           TextFormField(
@@ -1062,16 +1070,6 @@ class _OptionEditDialogState extends State<_OptionEditDialog> {
           ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _saveOption,
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 

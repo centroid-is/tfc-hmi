@@ -6,6 +6,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -15,7 +16,6 @@ import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
 
@@ -471,19 +471,25 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
         .switchMap((sm) =>
             sm.subscribe(widget.config.key).asStream().switchMap((s) => s));
 
-    return AlertDialog(
-      title: FutureBuilder<StateMan>(
-        future: ref.watch(stateManProvider.future),
-        builder: (context, snapshot) {
-          final resolvedKey = snapshot.hasData
-              ? snapshot.data!.resolveKey(widget.config.key)
-              : widget.config.key;
-          return Text(widget.config.text?.isNotEmpty == true
-              ? widget.config.text!
-              : (resolvedKey ?? 'Number'));
-        },
-      ),
-      content: StreamBuilder<DynamicValue>(
+    return StandardDialogFrame(
+      title: widget.config.text?.isNotEmpty == true
+          ? widget.config.text!
+          : widget.config.key,
+      subtitle: 'Write value',
+      icon: Icons.edit,
+      closeLabel: 'Cancel',
+      actions: [
+        PaneAction.primary(
+          label: 'Write',
+          icon: Icons.save,
+          onPressed: () async {
+            if (_formKey.currentState?.validate() == true) {
+              await _writeValue();
+            }
+          },
+        ),
+      ],
+      child: StreamBuilder<DynamicValue>(
         stream: value$,
         builder: (context, snap) {
           _hasValue =
@@ -620,21 +626,6 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
           );
         },
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton.icon(
-          icon: const Icon(Icons.save),
-          label: const Text('Write'),
-          onPressed: () async {
-            if (_formKey.currentState?.validate() == true) {
-              await _writeValue();
-            }
-          },
-        ),
-      ],
     );
   }
 }

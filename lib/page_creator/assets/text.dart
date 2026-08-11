@@ -1,7 +1,8 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 
@@ -653,33 +654,16 @@ class _ConfigContentState extends State<_ConfigContent> {
   }
 
   void _showColorPicker(BuildContext context) {
-    showDialog(
+    showColorPickerDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Text Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: _textColor ?? Colors.black,
-            onColorChanged: (color) {
-              setState(() {
-                _textColor = color;
-                widget.config.textColor = color;
-              });
-            },
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
+      title: 'Select text colour',
+      initialColor: _textColor ?? Colors.black,
+      onChanged: (color) {
+        setState(() {
+          _textColor = color;
+          widget.config.textColor = color;
+        });
+      },
     );
   }
 
@@ -769,9 +753,12 @@ class _KeyInsertionDialogState extends ConsumerState<_KeyInsertionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Insert OPC UA Key'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Insert OPC UA key',
+      icon: Icons.link,
+      width: 540,
+      closeLabel: 'Cancel',
+      child: SizedBox(
         width: 500,
         height: 400,
         child: Column(
@@ -819,12 +806,6 @@ class _KeyInsertionDialogState extends ConsumerState<_KeyInsertionDialog> {
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-      ],
     );
   }
 }

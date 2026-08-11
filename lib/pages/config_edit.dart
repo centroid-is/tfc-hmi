@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dbus/dbus.dart';
@@ -105,56 +107,56 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return AlertDialog(
-        clipBehavior: Clip.none,
-        title: const Text('Loading Config...'),
-        content: const SizedBox(
+      return StandardDialogFrame(
+        title: 'Loading config…',
+        width: 640,
+        showClose: false,
+        actions: [PaneAction(label: 'Cancel', onPressed: _cancel)],
+        child: const SizedBox(
           width: 600,
           height: 200,
           child: Center(child: CircularProgressIndicator()),
         ),
-        actions: [
-          TextButton(
-            onPressed: _cancel,
-            child: const Text('Cancel'),
-          ),
-        ],
       );
     }
 
     if (_errorMessage.isNotEmpty) {
-      return AlertDialog(
-        clipBehavior: Clip.none,
-        title: const Text('Error'),
-        content: Text(_errorMessage),
-        actions: [
-          TextButton(
-            onPressed: _cancel,
-            child: const Text('Close'),
-          )
-        ],
+      return StandardDialogFrame(
+        title: 'Error',
+        icon: Icons.error_outline,
+        showClose: false,
+        actions: [PaneAction(label: 'Close', onPressed: _cancel)],
+        child: SelectableText(_errorMessage),
       );
     }
 
     if (_schema == null) {
-      return AlertDialog(
-        clipBehavior: Clip.none,
-        title: const Text('No Schema'),
-        content: const Text('Schema not found or invalid.'),
-        actions: [
-          TextButton(
-            onPressed: _cancel,
-            child: const Text('Close'),
-          )
-        ],
+      return StandardDialogFrame(
+        title: 'No schema',
+        icon: Icons.help_outline,
+        showClose: false,
+        actions: [PaneAction(label: 'Close', onPressed: _cancel)],
+        child: const Text('Schema not found or invalid.'),
       );
     }
 
     // Normal case: show the dynamic form
-    return AlertDialog(
-      clipBehavior: Clip.none,
-      title: const Text('Configuration Editor'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Configuration editor',
+      icon: Icons.settings,
+      width: MediaQuery.of(context).size.width * 0.8,
+      height: MediaQuery.of(context).size.height * 0.8,
+      showClose: false,
+      scrollable: false,
+      actions: [
+        PaneAction(label: 'Cancel', onPressed: _cancel),
+        PaneAction.primary(
+          label: 'Save',
+          icon: Icons.save,
+          onPressed: _saveConfig,
+        ),
+      ],
+      child: SizedBox(
         width: MediaQuery.of(context).size.width * 0.8,
         height:
             MediaQuery.of(context).size.height * 0.8, // 80% of screen height
@@ -170,16 +172,6 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _cancel,
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _saveConfig,
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 
@@ -661,18 +653,11 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
               IconButton(
                 icon: const Icon(Icons.info_outline),
                 onPressed: () {
-                  showDialog(
+                  showStandardDialog<void>(
                     context: context,
-                    builder: (context) => AlertDialog(
-                      title: Text(fieldName),
-                      content: Text(description),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Close'),
-                        ),
-                      ],
-                    ),
+                    title: fieldName,
+                    icon: Icons.info_outline,
+                    builder: (context) => Text(description),
                   );
                 },
                 tooltip: description,
@@ -971,18 +956,11 @@ class _ConfigEditDialogState extends State<ConfigEditDialog> {
     return IconButton(
       icon: const Icon(Icons.info_outline),
       onPressed: () {
-        showDialog(
+        showStandardDialog<void>(
           context: context,
-          builder: (context) => AlertDialog(
-            title: Text(fieldName),
-            content: Text(description),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
-            ],
-          ),
+          title: fieldName,
+          icon: Icons.info_outline,
+          builder: (context) => Text(description),
         );
       },
       tooltip: description, // Shows on hover

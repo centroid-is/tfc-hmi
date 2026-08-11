@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:dbus/dbus.dart';
 import 'package:nm/nm.dart' as nm;
@@ -214,33 +215,14 @@ class _AboutLinuxPageState extends State<AboutLinuxPage> {
     required IconData icon,
     required Color iconColor,
   }) async {
-    final result = await showDialog<bool>(
+    // Powering off / rebooting a running line: destructive by definition.
+    return showConfirmDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(icon, color: iconColor),
-            const SizedBox(width: 12),
-            Text(title),
-          ],
-        ),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: iconColor,
-            ),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
+      title: title,
+      message: message,
+      icon: icon,
+      destructive: true,
     );
-    return result ?? false;
   }
 
   // Add this method for poweroff

@@ -1,4 +1,6 @@
 import 'package:file_picker/file_picker.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
@@ -53,8 +55,7 @@ class _DrawingUploadDialogState extends State<DrawingUploadDialog> {
         _selectedFilePath = pick.files.single.path!;
         // Pre-fill drawing name from filename without extension
         if (_nameController.text.isEmpty) {
-          _nameController.text =
-              p.basenameWithoutExtension(_selectedFilePath!);
+          _nameController.text = p.basenameWithoutExtension(_selectedFilePath!);
         }
       });
     }
@@ -89,9 +90,22 @@ class _DrawingUploadDialogState extends State<DrawingUploadDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Upload Drawing'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Upload drawing',
+      icon: Icons.upload_file,
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: 'Cancel',
+          onPressed: _isUploading ? null : () => Navigator.of(context).pop(),
+        ),
+        PaneAction.primary(
+          label: 'Upload',
+          icon: Icons.upload,
+          onPressed: _isUploading || _selectedFilePath == null ? null : _upload,
+        ),
+      ],
+      child: SizedBox(
         width: 400,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -132,18 +146,6 @@ class _DrawingUploadDialogState extends State<DrawingUploadDialog> {
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _isUploading ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _isUploading || _selectedFilePath == null
-              ? null
-              : _upload,
-          child: const Text('Upload'),
-        ),
-      ],
     );
   }
 }

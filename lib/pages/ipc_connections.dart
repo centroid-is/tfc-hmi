@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:dbus/dbus.dart';
 import 'dart:async';
 import '../dbus/ipc-ruler.dart';
@@ -453,19 +455,20 @@ class _AddSlotDialogState extends State<AddSlotDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Connect to Signal "${widget.signal.name}"'),
-          Text(
-            'Type: ${_typeLabels[widget.signal.sigType] ?? widget.signal.sigType}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
-      content: Column(
+    return StandardDialogFrame(
+      title: 'Connect to signal "${widget.signal.name}"',
+      subtitle:
+          'Type: ${_typeLabels[widget.signal.sigType] ?? widget.signal.sigType}',
+      icon: Icons.link,
+      closeLabel: 'Cancel',
+      actions: [
+        PaneAction.primary(
+          label: 'Connect',
+          icon: Icons.link,
+          onPressed: _filteredSlots.isEmpty ? null : _handleAdd,
+        ),
+      ],
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
@@ -503,16 +506,6 @@ class _AddSlotDialogState extends State<AddSlotDialog> {
             ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _filteredSlots.isEmpty ? null : _handleAdd,
-          child: Text('Connect'),
-        ),
-      ],
     );
   }
 }

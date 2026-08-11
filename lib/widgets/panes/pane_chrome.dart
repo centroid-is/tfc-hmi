@@ -144,23 +144,38 @@ class PaneAction {
   final VoidCallback? onPressed;
   final PaneActionStyle style;
 
+  /// Takes focus when the dialog opens, so Enter confirms without reaching
+  /// for the mouse — worth setting on the confirm action of a prompt the
+  /// operator answers repeatedly.
+  final bool autofocus;
+
+  /// Key applied to the rendered button, for tests and automation that
+  /// address a specific action.
+  final Key? buttonKey;
+
   const PaneAction({
     required this.label,
     this.onPressed,
     this.icon,
+    this.buttonKey,
     this.style = PaneActionStyle.plain,
+    this.autofocus = false,
   });
 
   const PaneAction.primary({
     required this.label,
     this.onPressed,
     this.icon,
+    this.buttonKey,
+    this.autofocus = false,
   }) : style = PaneActionStyle.primary;
 
   const PaneAction.destructive({
     required this.label,
     this.onPressed,
     this.icon,
+    this.buttonKey,
+    this.autofocus = false,
   }) : style = PaneActionStyle.destructive;
 
   Widget build(BuildContext context) {
@@ -170,23 +185,49 @@ class PaneAction {
     switch (style) {
       case PaneActionStyle.primary:
         return child == null
-            ? FilledButton(onPressed: onPressed, child: label)
+            ? FilledButton(
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                child: label)
             : FilledButton.icon(
-                onPressed: onPressed, icon: child, label: label);
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                icon: child,
+                label: label,
+              );
       case PaneActionStyle.destructive:
         final style = TextButton.styleFrom(foregroundColor: scheme.error);
         return child == null
-            ? TextButton(onPressed: onPressed, style: style, child: label)
+            ? TextButton(
+                key: buttonKey,
+                onPressed: onPressed,
+                style: style,
+                autofocus: autofocus,
+                child: label,
+              )
             : TextButton.icon(
                 onPressed: onPressed,
                 style: style,
+                autofocus: autofocus,
                 icon: child,
                 label: label,
               );
       case PaneActionStyle.plain:
         return child == null
-            ? TextButton(onPressed: onPressed, child: label)
-            : TextButton.icon(onPressed: onPressed, icon: child, label: label);
+            ? TextButton(
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                child: label)
+            : TextButton.icon(
+                key: buttonKey,
+                onPressed: onPressed,
+                autofocus: autofocus,
+                icon: child,
+                label: label,
+              );
     }
   }
 }

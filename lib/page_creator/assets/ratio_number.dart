@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -311,8 +312,7 @@ class _RatioNumberConfigEditorState
           ),
           SwitchListTile(
             title: const Text('Interactive Bars'),
-            subtitle:
-                const Text('Show tooltip on hover/tap in bar chart'),
+            subtitle: const Text('Show tooltip on hover/tap in bar chart'),
             value: widget.config.barsInteractive,
             onChanged: (value) =>
                 setState(() => widget.config.barsInteractive = value),
@@ -325,8 +325,7 @@ class _RatioNumberConfigEditorState
             spacing: 8,
             runSpacing: 4,
             children: [1, 5, 10, 30, 60, 240, 720, 1440].map((minutes) {
-              final selected =
-                  widget.config.intervalPresets.contains(minutes);
+              final selected = widget.config.intervalPresets.contains(minutes);
               return FilterChip(
                 label: Text(_formatIntervalMinutes(minutes)),
                 selected: selected,
@@ -410,7 +409,10 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
     final since = DateTime.now().subtract(_activeSinceMinutes);
     final c1 = tsCache.countSince(widget.config.key1, since);
     final c2 = tsCache.countSince(widget.config.key2, since);
-    setState(() { _count1 = c1; _count2 = c2; });
+    setState(() {
+      _count1 = c1;
+      _count2 = c2;
+    });
     tsScheduleExpiry(_activeSinceMinutes.inMinutes);
   }
 
@@ -438,7 +440,8 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
   @override
   Widget build(BuildContext context) {
     if (widget.config.key1 == "key1" && widget.config.key2 == "key2") {
-      return _buildDisplay(context, "${(75.0).toStringAsFixed(widget.config.decimalPlaces)}%",
+      return _buildDisplay(
+          context, "${(75.0).toStringAsFixed(widget.config.decimalPlaces)}%",
           activeSinceMinutes: _activeSinceMinutes);
     }
 
@@ -446,7 +449,8 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
     if (_count1 != null && _count2 != null) {
       final total = _count1! + _count2!;
       if (total > 0) {
-        displayValue = "${(_count1! / total * 100).toStringAsFixed(widget.config.decimalPlaces)}%";
+        displayValue =
+            "${(_count1! / total * 100).toStringAsFixed(widget.config.decimalPlaces)}%";
       } else {
         displayValue = "0.0%";
       }
@@ -488,15 +492,15 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
         : DateTime.now();
     try {
       return await db.queryTimeseriesData(
-          key,
-          endTime.subtract(sinceMinutes * widget.config.howMany),
+          key, endTime.subtract(sinceMinutes * widget.config.howMany),
           orderBy: 'time DESC');
     } catch (_) {
       return [];
     }
   }
 
-  void _showBarChartDialog(BuildContext context, Duration activeSinceMinutes) async {
+  void _showBarChartDialog(
+      BuildContext context, Duration activeSinceMinutes) async {
     final navigator = Navigator.of(context);
     final db = await ref.read(databaseProvider.future);
     if (db == null || !mounted) return;
@@ -508,46 +512,20 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
     final key1Queue = results[0];
     final key2Queue = results[1];
 
-    showDialog(
+    final size = MediaQuery.of(navigator.context).size;
+    showFloatingDialog(
       context: navigator.context,
-      builder: (context) {
-        final size = MediaQuery.of(context).size;
-        return Dialog(
-          child: Container(
-            width: size.width * 0.8,
-            height: size.height * 0.8,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      widget.config.graphHeader ??
-                          widget.config.text ??
-                          'Ratio Analysis',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: RatioAnalysisView(
-                    config: widget.config,
-                    key1Queue: key1Queue,
-                    key2Queue: key2Queue,
-                    initialInterval: activeSinceMinutes,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      id: 'ratio:${identityHashCode(widget.config)}',
+      title:
+          widget.config.graphHeader ?? widget.config.text ?? 'Ratio Analysis',
+      icon: Icons.percent,
+      size: Size(size.width * 0.7, size.height * 0.7),
+      builder: (context) => RatioAnalysisView(
+        config: widget.config,
+        key1Queue: key1Queue,
+        key2Queue: key2Queue,
+        initialInterval: activeSinceMinutes,
+      ),
     );
   }
 }
@@ -578,7 +556,9 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
   bool _isLoading = false;
 
   // Cache: interval → (key1Data, key2Data)
-  final Map<Duration, (List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>)> _cache = {};
+  final Map<Duration,
+          (List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>)>
+      _cache = {};
 
   @override
   void initState() {
@@ -595,9 +575,8 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
   Future<void> _prefetchAll() async {
     final db = await ref.read(databaseProvider.future);
     if (db == null || !mounted) return;
-    final presets = widget.config.intervalPresets
-        .map((m) => Duration(minutes: m))
-        .toList();
+    final presets =
+        widget.config.intervalPresets.map((m) => Duration(minutes: m)).toList();
     for (final interval in presets) {
       if (_cache.containsKey(interval)) continue;
       final data = await _fetchForInterval(db, interval);
@@ -620,6 +599,7 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
         return [];
       }
     }
+
     final results = await Future.wait([
       safeQuery(widget.config.key1),
       safeQuery(widget.config.key2),
@@ -671,9 +651,8 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
 
   @override
   Widget build(BuildContext context) {
-    final presets = widget.config.intervalPresets
-        .map((m) => Duration(minutes: m))
-        .toList();
+    final presets =
+        widget.config.intervalPresets.map((m) => Duration(minutes: m)).toList();
 
     return Column(
       children: [
@@ -688,12 +667,10 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
                 setState(() => _showChart = index == 0);
               },
               borderRadius: BorderRadius.circular(8),
-              constraints:
-                  const BoxConstraints(minHeight: 36, minWidth: 48),
+              constraints: const BoxConstraints(minHeight: 36, minWidth: 48),
               children: const [
                 Padding(
-                  padding:
-                      EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -704,8 +681,7 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
                   ),
                 ),
                 Padding(
-                  padding:
-                      EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1014,7 +990,8 @@ class RatioBarChart extends ConsumerWidget {
       config: GraphConfig(
         type: GraphType.barTimeseries,
         xAxis: GraphAxisConfig(unit: ''),
-        yAxis: GraphAxisConfig(unit: 'Count', integersOnly: config.integersOnly),
+        yAxis:
+            GraphAxisConfig(unit: 'Count', integersOnly: config.integersOnly),
         pan: false,
         tooltip: config.barsInteractive,
         width: 0.5,
@@ -1028,18 +1005,28 @@ class RatioBarChart extends ConsumerWidget {
         // Find both series for this time bucket
         final match1 = data.where((d) => d['x'] == x && d['s'] == key1Label);
         final match2 = data.where((d) => d['x'] == x && d['s'] == key2Label);
-        final v1 = match1.isNotEmpty ? (match1.first['y'] as double).round() : 0;
-        final v2 = match2.isNotEmpty ? (match2.first['y'] as double).round() : 0;
+        final v1 =
+            match1.isNotEmpty ? (match1.first['y'] as double).round() : 0;
+        final v2 =
+            match2.isNotEmpty ? (match2.first['y'] as double).round() : 0;
         final total = v1 + v2;
-        final pct = total > 0 ? (v1 / total * 100).toStringAsFixed(config.decimalPlaces) : (0.0).toStringAsFixed(config.decimalPlaces);
+        final pct = total > 0
+            ? (v1 / total * 100).toStringAsFixed(config.decimalPlaces)
+            : (0.0).toStringAsFixed(config.decimalPlaces);
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('$key1Label: $v1', style: const TextStyle(color: Colors.white, fontSize: 12)),
-            Text('$key2Label: $v2', style: const TextStyle(color: Colors.white, fontSize: 12)),
+            Text('$key1Label: $v1',
+                style: const TextStyle(color: Colors.white, fontSize: 12)),
+            Text('$key2Label: $v2',
+                style: const TextStyle(color: Colors.white, fontSize: 12)),
             const Divider(height: 8, color: Colors.white54),
-            Text('Ratio: $pct%', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+            Text('Ratio: $pct%',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold)),
           ],
         );
       },

@@ -89,6 +89,76 @@ class StandardDialog extends StatelessWidget {
   }
 }
 
+/// A [StandardDialog] in a modal frame, for widget classes that ARE the
+/// argument to `showDialog` rather than a call to [showStandardDialog].
+///
+/// This is the drop-in replacement for `AlertDialog` in a class whose
+/// `build` returns the dialog itself:
+///
+/// ```dart
+/// // was: AlertDialog(title: Text('Edit key'), content: body, actions: [...])
+/// StandardDialogFrame(title: 'Edit key', actions: [...], child: body)
+/// ```
+class StandardDialogFrame extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final IconData? icon;
+  final PaneStatus? status;
+  final List<PaneAction> actions;
+  final Widget child;
+  final String closeLabel;
+
+  /// Omit the automatic Close — for dialogs whose own actions already cover
+  /// dismissal (Cancel/Save), where a third button would just be noise.
+  final bool showClose;
+
+  final double width;
+  final double? height;
+  final bool scrollable;
+
+  const StandardDialogFrame({
+    super.key,
+    required this.title,
+    required this.child,
+    this.subtitle,
+    this.icon,
+    this.status,
+    this.actions = const [],
+    this.closeLabel = 'Close',
+    this.showClose = true,
+    this.width = 520,
+    this.height,
+    this.scrollable = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final maxHeight = height ?? MediaQuery.sizeOf(context).height * 0.8;
+    return Dialog(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: width, maxHeight: maxHeight),
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: StandardDialog(
+            title: title,
+            subtitle: subtitle,
+            icon: icon,
+            status: status,
+            actions: actions,
+            closeLabel: closeLabel,
+            scrollable: scrollable,
+            onClose: showClose ? () => Navigator.of(context).pop() : null,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Modal
 // ---------------------------------------------------------------------------
@@ -124,10 +194,15 @@ Future<T?> showStandardDialog<T>({
   double? height,
   bool barrierDismissible = true,
   String closeLabel = 'Close',
+
+  /// For callers that live ABOVE the app Navigator — overlay-hosted widgets
+  /// like the chat window, whose own context has no Navigator to push onto.
+  bool useRootNavigator = false,
 }) {
   return showDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
+    useRootNavigator: useRootNavigator,
     builder: (dialogContext) => Dialog(
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -153,6 +228,47 @@ Future<T?> showStandardDialog<T>({
       ),
     ),
   );
+}
+
+/// The confirm/cancel prompt, once.
+///
+/// Returns true only if the operator confirmed; a dismissed dialog is `false`,
+/// never null, so callers do not have to handle three outcomes for a
+/// two-outcome question.
+///
+/// Set [destructive] for anything that deletes, resets or stops something —
+/// it colours the confirm action with the error colour.
+Future<bool> showConfirmDialog({
+  required BuildContext context,
+  required String title,
+  required String message,
+  String confirmLabel = 'Confirm',
+  String cancelLabel = 'Cancel',
+  bool destructive = false,
+  IconData? icon,
+  bool autofocusConfirm = false,
+}) async {
+  final result = await showStandardDialog<bool>(
+    context: context,
+    title: title,
+    icon: icon ?? (destructive ? Icons.warning_amber : Icons.help_outline),
+    closeLabel: cancelLabel,
+    builder: (_) => Text(message),
+    actionsBuilder: (dialogContext) => [
+      destructive
+          ? PaneAction.destructive(
+              label: confirmLabel,
+              autofocus: autofocusConfirm,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+            )
+          : PaneAction.primary(
+              label: confirmLabel,
+              autofocus: autofocusConfirm,
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+            ),
+    ],
+  );
+  return result ?? false;
 }
 
 // ---------------------------------------------------------------------------

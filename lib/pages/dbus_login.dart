@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
@@ -81,18 +82,11 @@ class LoginCredentials {
     } catch (e) {
       logger.e('Error connecting to bus: $e');
       if (context.mounted) {
-        await showDialog(
+        await showStandardDialog<void>(
           context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Connection Error'),
-            content: Text(e.toString()),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
+          title: 'Connection error',
+          icon: Icons.error_outline,
+          builder: (context) => SelectableText(e.toString()),
         );
       }
       rethrow;

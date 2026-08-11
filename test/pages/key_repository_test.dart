@@ -336,7 +336,7 @@ void main() {
       await tester.tap(trashButtons.first);
       await tester.pumpAndSettle();
 
-      expect(find.text('Remove Key'), findsOneWidget);
+      expect(find.text('Remove key'), findsOneWidget);
       expect(find.text('Cancel'), findsOneWidget);
       expect(find.text('Remove'), findsOneWidget);
     });

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 
 import 'common.dart';
 import '../../providers/collector.dart';
@@ -702,24 +702,11 @@ class _TableConfigContentState extends State<_TableConfigContent> {
         OutlinedButton(
           child: const Text('Pick'),
           onPressed: () {
-            showDialog(
+            showColorPickerDialog(
               context: context,
-              builder: (context) => AlertDialog(
-                title: Text('Pick $label color'),
-                content: SingleChildScrollView(
-                  child: ColorPicker(
-                    pickerColor: color ?? Colors.black, // fallback when null
-                    onColorChanged: (c) => onChanged(c),
-                    pickerAreaHeightPercent: 0.8,
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('OK'),
-                  ),
-                ],
-              ),
+              title: 'Pick $label colour',
+              initialColor: color ?? Colors.black, // fallback when null
+              onChanged: onChanged,
             );
           },
         ),

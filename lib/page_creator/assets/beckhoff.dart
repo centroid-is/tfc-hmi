@@ -2,6 +2,7 @@ import 'dart:collection' show LinkedHashMap;
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -261,8 +262,10 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
                               child: const Icon(Icons.drag_indicator),
                             ),
                             title: Text(sub.runtimeType.toString()),
-                            onTap: () => showDialog(
+                            onTap: () => showStandardDialog<void>(
                               context: context,
+                              title: sub.runtimeType.toString(),
+                              subtitle: 'Configuration',
                               builder: (_) => sub.configure(context),
                             ),
                             trailing: IconButton(
@@ -481,8 +484,10 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
                               child: const Icon(Icons.drag_indicator),
                             ),
                             title: Text(sub.runtimeType.toString()),
-                            onTap: () => showDialog(
+                            onTap: () => showStandardDialog<void>(
                               context: context,
+                              title: sub.runtimeType.toString(),
+                              subtitle: 'Configuration',
                               builder: (_) => sub.configure(context),
                             ),
                             trailing: IconButton(

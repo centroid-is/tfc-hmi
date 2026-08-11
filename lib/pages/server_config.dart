@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
@@ -842,13 +844,11 @@ class _ServerSectionHeader extends StatelessWidget {
           children: [
             FaIcon(icon, size: 20),
             const SizedBox(width: 8),
-            Text(title,
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
             if (hasUnsavedChanges) ...[
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                     color: Colors.orange,
                     borderRadius: BorderRadius.circular(12)),
@@ -894,15 +894,12 @@ class _SaveConfigButton extends StatelessWidget {
           child: ElevatedButton.icon(
             onPressed: hasUnsavedChanges ? onSave : null,
             icon: FaIcon(FontAwesomeIcons.floppyDisk,
-                size: 16,
-                color: hasUnsavedChanges ? null : Colors.grey),
-            label: Text(hasUnsavedChanges
-                ? 'Save Configuration'
-                : 'All Changes Saved'),
+                size: 16, color: hasUnsavedChanges ? null : Colors.grey),
+            label: Text(
+                hasUnsavedChanges ? 'Save Configuration' : 'All Changes Saved'),
             style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor:
-                    hasUnsavedChanges ? null : Colors.grey),
+                backgroundColor: hasUnsavedChanges ? null : Colors.grey),
           ),
         ),
       ],
@@ -987,7 +984,8 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
   }
 
   void _addServer() {
-    setState(() => _config?.jbtm.add(M2400Config(host: 'localhost', port: 52211)));
+    setState(
+        () => _config?.jbtm.add(M2400Config(host: 'localhost', port: 52211)));
   }
 
   Widget _buildJbtmServerList(StateManConfig config) {
@@ -1082,7 +1080,8 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
                     child: _EmptyServersPlaceholder(
                       icon: FontAwesomeIcons.scaleBalanced,
                       title: 'No JBTM servers configured',
-                      subtitle: 'Add your first JBTM M2400 server to get started',
+                      subtitle:
+                          'Add your first JBTM M2400 server to get started',
                     ),
                   )
                 : _buildJbtmServerList(config),
@@ -1098,7 +1097,6 @@ class _JbtmServersSectionState extends ConsumerState<_JbtmServersSection> {
     );
   }
 }
-
 
 // ===================== JBTM Server Config Card =====================
 
@@ -1134,7 +1132,8 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
   void initState() {
     super.initState();
     _hostController = TextEditingController(text: widget.server.host);
-    _portController = TextEditingController(text: widget.server.port.toString());
+    _portController =
+        TextEditingController(text: widget.server.port.toString());
     _aliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
     _connectionStatus = widget.connectionStatus;
@@ -1182,7 +1181,8 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
       child: ExpansionTile(
         leading: const FaIcon(FontAwesomeIcons.scaleBalanced, size: 20),
         title: Text(
-          widget.server.serverAlias ?? '${widget.server.host}:${widget.server.port}',
+          widget.server.serverAlias ??
+              '${widget.server.host}:${widget.server.port}',
           style: const TextStyle(fontWeight: FontWeight.bold),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
@@ -1204,25 +1204,15 @@ class _JbtmServerConfigCardState extends State<_JbtmServerConfigCard> {
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {
-                showDialog(
+                showConfirmDialog(
                   context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Remove Server'),
-                    content: const Text(
-                        'Are you sure you want to remove this JBTM server?'),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Cancel')),
-                      TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            widget.onRemove();
-                          },
-                          child: const Text('Remove')),
-                    ],
-                  ),
-                );
+                  title: 'Remove server',
+                  message: 'Are you sure you want to remove this JBTM server?',
+                  confirmLabel: 'Remove',
+                  destructive: true,
+                ).then((confirmed) {
+                  if (confirmed) widget.onRemove();
+                });
               },
             ),
             const SizedBox(width: 8),
@@ -1400,7 +1390,9 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
           host: 'localhost',
           port: 502,
           unitId: 1,
-          pollGroups: [ModbusPollGroupConfig(name: 'default', intervalMs: 1000)],
+          pollGroups: [
+            ModbusPollGroupConfig(name: 'default', intervalMs: 1000)
+          ],
         )));
   }
 
@@ -1500,7 +1492,8 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
                     child: _EmptyServersPlaceholder(
                       icon: FontAwesomeIcons.networkWired,
                       title: 'No Modbus servers configured',
-                      subtitle: 'Add your first Modbus TCP server to get started',
+                      subtitle:
+                          'Add your first Modbus TCP server to get started',
                     ),
                   )
                 : _buildModbusServerList(config),
@@ -1516,7 +1509,6 @@ class _ModbusServersSectionState extends ConsumerState<_ModbusServersSection> {
     );
   }
 }
-
 
 // ===================== Modbus Server Config Card =====================
 
@@ -1691,7 +1683,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   }
 
   void _addPollGroup() {
-    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    final pollGroups =
+        List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups.add(ModbusPollGroupConfig(
       name: 'group_${widget.server.pollGroups.length}',
       intervalMs: 1000,
@@ -1700,17 +1693,20 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   }
 
   void _removePollGroup(int index) {
-    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    final pollGroups =
+        List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups.removeAt(index);
     widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
 
   void _updatePollGroup(int index) {
-    final pollGroups = List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
+    final pollGroups =
+        List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups[index] = ModbusPollGroupConfig(
       name: _pollGroupNameControllers[index].text,
-      intervalMs: (int.tryParse(_pollGroupIntervalControllers[index].text) ?? 1000)
-          .clamp(50, 999999),
+      intervalMs:
+          (int.tryParse(_pollGroupIntervalControllers[index].text) ?? 1000)
+              .clamp(50, 999999),
     );
     widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
@@ -1752,25 +1748,16 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {
-                showDialog(
+                showConfirmDialog(
                   context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Remove Server'),
-                    content: const Text(
-                        'Are you sure you want to remove this Modbus server?'),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Cancel')),
-                      TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            widget.onRemove();
-                          },
-                          child: const Text('Remove')),
-                    ],
-                  ),
-                );
+                  title: 'Remove server',
+                  message:
+                      'Are you sure you want to remove this Modbus server?',
+                  confirmLabel: 'Remove',
+                  destructive: true,
+                ).then((confirmed) {
+                  if (confirmed) widget.onRemove();
+                });
               },
             ),
             const SizedBox(width: 8),
@@ -1839,8 +1826,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                                 decoration: const InputDecoration(
                                   labelText: 'Host',
                                   hintText: 'localhost',
-                                  prefixIcon: FaIcon(FontAwesomeIcons.server,
-                                      size: 16),
+                                  prefixIcon:
+                                      FaIcon(FontAwesomeIcons.server, size: 16),
                                 ),
                                 onChanged: (_) => _updateServer(),
                               ),
@@ -1895,14 +1882,17 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                 ),
                 const Divider(height: 24),
                 ExpansionTile(
-                  title: Text('Poll Groups (${widget.server.pollGroups.length})'),
-                  leading: const FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
+                  title:
+                      Text('Poll Groups (${widget.server.pollGroups.length})'),
+                  leading:
+                      const FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
                   initiallyExpanded: false,
                   children: [
                     ...widget.server.pollGroups.asMap().entries.map((entry) {
                       final i = entry.key;
                       return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
                         child: Row(children: [
                           Expanded(
                             flex: 2,
@@ -1925,7 +1915,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                             ),
                           ),
                           IconButton(
-                            icon: const FaIcon(FontAwesomeIcons.trash, size: 14),
+                            icon:
+                                const FaIcon(FontAwesomeIcons.trash, size: 14),
                             onPressed: () => _removePollGroup(i),
                             tooltip: 'Remove poll group',
                           ),
@@ -1944,7 +1935,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                 ),
                 const Divider(height: 24),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Row(
                     children: [
                       Expanded(
@@ -1982,7 +1974,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                       const SizedBox(width: 8),
                       IconButton(
                         icon: const Icon(Icons.info_outline),
-                        tooltip: 'Byte order for 32-bit values (float, int32, etc.).\n'
+                        tooltip:
+                            'Byte order for 32-bit values (float, int32, etc.).\n'
                             'Most devices use ABCD (Big-Endian, Modbus standard).\n\n'
                             'Common vendor defaults:\n'
                             '\u2022 Schneider/Modicon: CDAB (Word Swap)\n'
@@ -2003,7 +1996,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                 ),
                 const Divider(height: 24),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Row(
                     children: [
                       Expanded(
@@ -2013,8 +2007,10 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                             labelText: 'Address Base',
                           ),
                           items: const [
-                            DropdownMenuItem(value: 0, child: Text('0 (Protocol Default)')),
-                            DropdownMenuItem(value: 1, child: Text('1 (Modicon/Schneider)')),
+                            DropdownMenuItem(
+                                value: 0, child: Text('0 (Protocol Default)')),
+                            DropdownMenuItem(
+                                value: 1, child: Text('1 (Modicon/Schneider)')),
                           ],
                           onChanged: (value) {
                             if (value != null) {
@@ -2042,8 +2038,8 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                 const Divider(height: 24),
                 CheckboxListTile(
                   title: const Text('Schneider UMAS'),
-                  subtitle: const Text(
-                      'Variable browsing via FC90 (M340/M580 only)'),
+                  subtitle:
+                      const Text('Variable browsing via FC90 (M340/M580 only)'),
                   value: _umasEnabled,
                   onChanged: (value) {
                     setState(() => _umasEnabled = value ?? false);
@@ -2206,9 +2202,11 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
       builder: (context) {
         final size = MediaQuery.of(context).size;
         final isSmallScreen = size.width < 600;
-        return AlertDialog(
-          title: const Text('Generate SSL Certificates'),
-          content: SizedBox(
+        return StandardDialogFrame(
+          title: 'Generate SSL certificates',
+          icon: Icons.verified_user,
+          width: isSmallScreen ? size.width * 0.85 : 640,
+          child: SizedBox(
             width: isSmallScreen ? size.width * 0.85 : 600,
             height: isSmallScreen ? size.height * 0.6 : 600,
             child: SingleChildScrollView(
@@ -2227,11 +2225,6 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
               ),
             ),
           ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close')),
-          ],
         );
       },
     );
@@ -2278,25 +2271,15 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
             IconButton(
               icon: const FaIcon(FontAwesomeIcons.trash, size: 16),
               onPressed: () {
-                showDialog(
+                showConfirmDialog(
                   context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Remove Server'),
-                    content: const Text(
-                        'Are you sure you want to remove this server?'),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Cancel')),
-                      TextButton(
-                          onPressed: () {
-                            Navigator.pop(context);
-                            widget.onRemove();
-                          },
-                          child: const Text('Remove')),
-                    ],
-                  ),
-                );
+                  title: 'Remove server',
+                  message: 'Are you sure you want to remove this server?',
+                  confirmLabel: 'Remove',
+                  destructive: true,
+                ).then((confirmed) {
+                  if (confirmed) widget.onRemove();
+                });
               },
             ),
             const SizedBox(width: 8),
@@ -2625,59 +2608,56 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
 
       // Show postfix/code
       // ignore: use_build_context_synchronously
-      await showDialog(
+      await showStandardDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Export Complete'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Encrypted file saved.'),
-                const SizedBox(height: 12),
-                const Text('Use this code to decrypt:'),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withAlpha(50),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey),
-                  ),
-                  child: SelectableText(
-                    postfix,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                    ),
+        title: 'Export complete',
+        icon: Icons.lock_outline,
+        actionsBuilder: (ctx) => [
+          PaneAction(
+            label: 'Copy code',
+            icon: Icons.copy,
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: postfix));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Code copied to clipboard')),
+              );
+            },
+          ),
+        ],
+        builder: (ctx) => SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Encrypted file saved.'),
+              const SizedBox(height: 12),
+              const Text('Use this code to decrypt:'),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.withAlpha(50),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey),
+                ),
+                child: SelectableText(
+                  postfix,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text('Location:',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                SelectableText(file.path,
-                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              ],
-            ),
+              ),
+              const SizedBox(height: 12),
+              Text('Location:',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              SelectableText(file.path,
+                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: postfix));
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Code copied to clipboard')),
-                );
-              },
-              child: const Text('Copy Code'),
-            ),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Close')),
-          ],
         ),
       );
     } catch (e) {
@@ -2708,40 +2688,38 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
 
       // Ask for code
       final ctrl = TextEditingController();
-      final postfix = await showDialog<String?>(
+      final postfix = await showStandardDialog<String?>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Enter Code to Decrypt'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Current server config will be overwritten!',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold, color: Colors.orange),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: ctrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Code',
-                    hintText: 'Enter the code shared with you',
-                  ),
-                  obscureText: true,
-                ),
-              ],
-            ),
+        title: 'Enter code to decrypt',
+        icon: Icons.key,
+        closeLabel: 'Cancel',
+        actionsBuilder: (ctx) => [
+          PaneAction.primary(
+            label: 'Decrypt',
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
           ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('Cancel')),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-                child: const Text('Decrypt')),
-          ],
+        ],
+        builder: (ctx) => SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Current server config will be overwritten!',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, color: Colors.orange),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(
+                  labelText: 'Code',
+                  hintText: 'Enter the code shared with you',
+                ),
+                obscureText: true,
+              ),
+            ],
+          ),
         ),
       );
       if (postfix == null || postfix.isEmpty) return;

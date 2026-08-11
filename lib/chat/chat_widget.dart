@@ -1,4 +1,6 @@
 import 'dart:io' as io;
+import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -333,49 +335,19 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
       context: navContext,
       useRootNavigator: true,
       builder: (dialogContext) {
-        return AlertDialog(
-          title: Text('${providerType.displayName} Settings'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                key: const ValueKey<String>('chat-api-key-field'),
-                controller: keyController,
-                obscureText: true,
-                decoration: InputDecoration(
-                  hintText: 'Enter your ${providerType.displayName} API key',
-                  labelText: 'API Key',
-                  border: const OutlineInputBorder(),
-                ),
-                onTap: () {
-                  // Clear masked placeholder on first tap
-                  if (keyController.text.contains('\u2022')) {
-                    keyController.clear();
-                  }
-                },
-              ),
-              if (supportsBaseUrl) ...[
-                const SizedBox(height: 12),
-                TextField(
-                  key: const ValueKey<String>('chat-base-url-field'),
-                  controller: urlController,
-                  decoration: InputDecoration(
-                    hintText: 'Default ($defaultUrl)',
-                    labelText: 'Endpoint URL (optional)',
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ],
-          ),
+        return StandardDialogFrame(
+          title: '${providerType.displayName} settings',
+          icon: Icons.key,
+          showClose: false,
           actions: [
-            TextButton(
-              key: const ValueKey<String>('chat-api-key-cancel'),
+            PaneAction(
+              label: 'Cancel',
+              buttonKey: const ValueKey<String>('chat-api-key-cancel'),
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
             ),
-            FilledButton(
-              key: const ValueKey<String>('chat-api-key-save'),
+            PaneAction.primary(
+              label: 'Save',
+              buttonKey: const ValueKey<String>('chat-api-key-save'),
               onPressed: () async {
                 final prefs = await ref.read(preferencesProvider.future);
 
@@ -442,9 +414,41 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
                   Navigator.of(dialogContext).pop();
                 }
               },
-              child: const Text('Save'),
             ),
           ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                key: const ValueKey<String>('chat-api-key-field'),
+                controller: keyController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  hintText: 'Enter your ${providerType.displayName} API key',
+                  labelText: 'API Key',
+                  border: const OutlineInputBorder(),
+                ),
+                onTap: () {
+                  // Clear masked placeholder on first tap
+                  if (keyController.text.contains('\u2022')) {
+                    keyController.clear();
+                  }
+                },
+              ),
+              if (supportsBaseUrl) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey<String>('chat-base-url-field'),
+                  controller: urlController,
+                  decoration: InputDecoration(
+                    hintText: 'Default ($defaultUrl)',
+                    labelText: 'Endpoint URL (optional)',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ],
+          ),
         );
       },
     );
@@ -612,8 +616,7 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
                 onPressed: isProcessing ? null : _pickAttachment,
                 tooltip: 'Attach PDF',
                 padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints(minWidth: 36, minHeight: 36),
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 iconSize: 22,
               ),
               const SizedBox(width: 4),
@@ -731,8 +734,8 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 14,
-                      color: theme.colorScheme.onSecondaryContainer),
+                  Icon(icon,
+                      size: 14, color: theme.colorScheme.onSecondaryContainer),
                   const SizedBox(width: 4),
                   Flexible(
                     child: Text(
@@ -751,7 +754,8 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
                       ref.read(chatContextProvider.notifier).state = null;
                     },
                     borderRadius: BorderRadius.circular(10),
-                    child: Icon(Icons.close, size: 14,
+                    child: Icon(Icons.close,
+                        size: 14,
                         color: theme.colorScheme.onSecondaryContainer),
                   ),
                 ],
@@ -845,9 +849,8 @@ class _ChatWidgetState extends ConsumerState<ChatWidget> {
 
     // Combine visible text with hidden context block (if attached)
     final chatContext = ref.read(chatContextProvider);
-    final messageToSend = chatContext != null
-        ? '$text\n\n${chatContext.contextBlock}'
-        : text;
+    final messageToSend =
+        chatContext != null ? '$text\n\n${chatContext.contextBlock}' : text;
 
     // Clear the context after sending
     if (chatContext != null) {

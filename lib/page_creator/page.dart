@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'assets/common.dart';
 import 'assets/registry.dart';
 import '../models/menu_item.dart';
@@ -214,8 +215,7 @@ class PageManager {
 
   String toJson() {
     // Key by path (the unique identifier)
-    return jsonEncode(
-        pages.map((path, page) => MapEntry(path, page.toJson())));
+    return jsonEncode(pages.map((path, page) => MapEntry(path, page.toJson())));
   }
 
   void fromJson(String jsonString) {
@@ -247,12 +247,10 @@ class PageManager {
     for (final entry in pages.entries) {
       collectChildPaths(entry.value.menuItem.children, childPaths, entry.key);
     }
-    final rootPaths = pages.keys
-        .where((path) => !childPaths.contains(path))
-        .toList();
-    rootPaths.sort((a, b) =>
-        (pages[a]?.navigationPriority ?? 0)
-            .compareTo(pages[b]?.navigationPriority ?? 0));
+    final rootPaths =
+        pages.keys.where((path) => !childPaths.contains(path)).toList();
+    rootPaths.sort((a, b) => (pages[a]?.navigationPriority ?? 0)
+        .compareTo(pages[b]?.navigationPriority ?? 0));
     return rootPaths.map((path) => _resolveMenuItem(path)).toList();
   }
 
@@ -301,9 +299,8 @@ class PageManager {
       final path = page.menuItem.path;
       // Use the path from menu_item as the key.
       // For backward compat: if path is empty (old sections), generate one.
-      final key = (path != null && path.isNotEmpty)
-          ? path
-          : '/${_slugify(entry.key)}';
+      final key =
+          (path != null && path.isNotEmpty) ? path : '/${_slugify(entry.key)}';
       // If the page had an empty path, update the menuItem with the generated path
       if (path == null || path.isEmpty) {
         result[key] = AssetPage(
@@ -354,7 +351,8 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
   }
 
   String _buildPath(String label) {
-    final slug = label.toLowerCase()
+    final slug = label
+        .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9\s]'), '')
         .replaceAll(RegExp(r'\s+'), '-');
     final base = widget.basePath;
@@ -440,8 +438,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                   final label = _labelController.text.trim();
                   if (label.isEmpty) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text('Name cannot be empty')),
+                      const SnackBar(content: Text('Name cannot be empty')),
                     );
                     return;
                   }
@@ -450,8 +447,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                     path: _buildPath(label),
                     icon: _selectedIcon,
                     // Preserve existing children from the tree structure
-                    children:
-                        widget.initialPage?.menuItem.children ?? const [],
+                    children: widget.initialPage?.menuItem.children ?? const [],
                     // Persist section-ness so an empty section stays a
                     // section instead of collapsing back into a page.
                     isSection: widget.isSection ||
@@ -524,9 +520,12 @@ class _IconPickerDialogState extends State<_IconPickerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Select Icon'),
-      content: SizedBox(
+    return StandardDialogFrame(
+      title: 'Select icon',
+      icon: Icons.emoji_symbols,
+      width: 400,
+      closeLabel: 'Cancel',
+      child: SizedBox(
         width: 350,
         height: 450,
         child: Column(
@@ -563,8 +562,7 @@ class _IconPickerDialogState extends State<_IconPickerDialog> {
                       itemCount: _filtered.length,
                       itemBuilder: (context, index) {
                         final entry = _filtered[index];
-                        final displayName =
-                            entry.name.replaceAll('_', ' ');
+                        final displayName = entry.name.replaceAll('_', ' ');
                         return Tooltip(
                           message: displayName,
                           child: InkWell(

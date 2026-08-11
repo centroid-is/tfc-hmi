@@ -1,7 +1,7 @@
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
@@ -471,24 +471,10 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
     Color current,
     ValueChanged<Color> onChanged,
   ) {
-    showDialog<void>(
+    showColorPickerDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Select Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: current,
-            onColorChanged: onChanged,
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
+      initialColor: current,
+      onChanged: onChanged,
     );
   }
 

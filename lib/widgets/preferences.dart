@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:postgres/postgres.dart';
@@ -776,30 +777,19 @@ class _PreferencesKeysWidgetState extends ConsumerState<PreferencesKeysWidget>
                           _loadData(prefs);
                         },
                         onDelete: () async {
-                          final confirmed = await showDialog<bool>(
+                          // `autofocusConfirm` keeps the behaviour from #127:
+                          // Enter confirms straight away when clearing out
+                          // several keys in a row. Escape still dismisses
+                          // without deleting.
+                          final confirmed = await showConfirmDialog(
                             context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Delete Preference'),
-                              content: Text('Delete "${e.key}"?'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, false),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  // Focused on open so Enter confirms straight
-                                  // away when clearing out several keys in a
-                                  // row. Escape still dismisses without
-                                  // deleting.
-                                  autofocus: true,
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: const Text('Delete'),
-                                ),
-                              ],
-                            ),
+                            title: 'Delete preference',
+                            message: 'Delete "${e.key}"?',
+                            confirmLabel: 'Delete',
+                            destructive: true,
+                            autofocusConfirm: true,
                           );
-                          if (confirmed == true) {
+                          if (confirmed) {
                             final isInDb = dbFlags[e.key] ?? false;
                             if (isInDb) {
                               await prefs.remove(e.key);

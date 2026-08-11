@@ -1,6 +1,7 @@
 import 'dart:ui' show PathMetric, Tangent;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/collector.dart';
@@ -542,20 +543,15 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                         IconButton(
                           icon: const Icon(Icons.edit, size: 20),
                           tooltip: 'Edit gate',
-                          onPressed: () => showDialog(
+                          onPressed: () => showStandardDialog<void>(
                             context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Edit Gate'),
-                              content: SizedBox(
-                                width: 300,
-                                child: entry.gate.configure(context),
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(context).pop(),
-                                  child: const Text('Done'),
-                                ),
-                              ],
+                            title: 'Edit gate',
+                            icon: Icons.swap_horiz,
+                            width: 360,
+                            closeLabel: 'Done',
+                            builder: (context) => SizedBox(
+                              width: 300,
+                              child: entry.gate.configure(context),
                             ),
                           ).then((_) => setState(() {})),
                         ),

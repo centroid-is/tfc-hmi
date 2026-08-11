@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:tfc_dart/core/alarm.dart';
@@ -113,12 +114,14 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
               // Show proposed alarm at top if present
               if (widget.proposedAlarm != null)
                 Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   decoration: proposalDecoration(),
                   child: ListTile(
                     leading: const ProposalBadge(),
                     title: Text(widget.proposedAlarm!.title),
-                    subtitle: Text('AI Proposed: ${widget.proposedAlarm!.description}'),
+                    subtitle: Text(
+                        'AI Proposed: ${widget.proposedAlarm!.description}'),
                     onTap: () => widget.onShow?.call(widget.proposedAlarm!),
                   ),
                 ),
@@ -142,7 +145,8 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                                   prefillText:
                                       'Create a new alarm similar to "${alarm.config.title}" '
                                       'but [describe what should be different]',
-                                  contextBlock: buildAlarmContextBlock(alarm.config),
+                                  contextBlock:
+                                      buildAlarmContextBlock(alarm.config),
                                   contextLabel: alarm.config.title,
                                   contextType: ChatContextType.alarm,
                                 ),
@@ -161,7 +165,8 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                                   prefillText:
                                       'Edit alarm "${alarm.config.title}" - '
                                       '[describe what you want to change]',
-                                  contextBlock: buildAlarmContextBlock(alarm.config),
+                                  contextBlock:
+                                      buildAlarmContextBlock(alarm.config),
                                   contextLabel: alarm.config.title,
                                   contextType: ChatContextType.alarm,
                                 ),
@@ -177,36 +182,18 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                               icon: const Icon(Icons.delete),
                               onPressed: () async {
                                 // Show confirmation dialog
-                                final shouldDelete = await showDialog<bool>(
+                                final shouldDelete = await showConfirmDialog(
                                   context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text('Delete Alarm'),
-                                    content: Text(
-                                        'Are you sure you want to delete alarm "${alarm.config.title}"?'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).pop(true),
-                                        child: Text(
-                                          'Delete',
-                                          style: TextStyle(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .error,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                                  title: 'Delete alarm',
+                                  message:
+                                      'Are you sure you want to delete alarm '
+                                      '"${alarm.config.title}"?',
+                                  confirmLabel: 'Delete',
+                                  destructive: true,
                                 );
 
                                 // If user confirmed deletion
-                                if (shouldDelete == true && context.mounted) {
+                                if (shouldDelete && context.mounted) {
                                   final alarmMan =
                                       await ref.read(alarmManProvider.future);
                                   alarmMan.removeAlarm(alarm.config);

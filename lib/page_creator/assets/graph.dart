@@ -3,10 +3,10 @@ import 'dart:math' as math;
 
 import 'package:cristalyse/cristalyse.dart' as cs;
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:intl/intl.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/converter/duration_converter.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -106,9 +106,8 @@ class GraphAssetConfig extends BaseAsset {
 
   GraphAssetConfig.preview({String? key})
       : graphType = GraphType.timeseries,
-        primarySeries = key != null
-            ? [GraphSeriesConfig(key: key, label: '')]
-            : [],
+        primarySeries =
+            key != null ? [GraphSeriesConfig(key: key, label: '')] : [],
         secondarySeries = [],
         xAxis = GraphAxisConfig(unit: 's'),
         yAxis = GraphAxisConfig(unit: ''),
@@ -545,36 +544,12 @@ class GraphContentConfigState extends State<GraphContentConfig> {
 
   void _showSeriesColorPicker(BuildContext context, Color? currentColor,
       ValueChanged<Color?> onColorChanged) {
-    showDialog(
+    showColorPickerDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Series Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: currentColor ?? Colors.blue,
-            onColorChanged: (color) => onColorChanged(color),
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          if (currentColor != null)
-            TextButton(
-              onPressed: () {
-                onColorChanged(null);
-                Navigator.of(context).pop();
-              },
-              child: const Text('Clear Color'),
-            ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
+      title: 'Select series colour',
+      initialColor: currentColor ?? Colors.blue,
+      onChanged: onColorChanged,
+      onCleared: currentColor != null ? () => onColorChanged(null) : null,
     );
   }
 }
@@ -656,7 +631,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     final end = DateTime.now();
     _dataMinX = start.millisecondsSinceEpoch.toInt();
     _dataMaxX = end.millisecondsSinceEpoch.toInt();
-    _lastFetchWindowMs = widget.config.timeWindowMinutes.inMilliseconds.toDouble();
+    _lastFetchWindowMs =
+        widget.config.timeWindowMinutes.inMilliseconds.toDouble();
     _addData(await _queryData(DateTimeRange(start: start, end: end)));
     _realTimeActive = true;
     _initRealtimeUpdates();
@@ -834,9 +810,8 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
           .format(DateTime.fromMillisecondsSinceEpoch(x.toInt()));
     } else {
       final unit = config.xAxis.unit;
-      xStr = x == x.roundToDouble()
-          ? x.round().toString()
-          : x.toStringAsFixed(2);
+      xStr =
+          x == x.roundToDouble() ? x.round().toString() : x.toStringAsFixed(2);
       if (unit.isNotEmpty) xStr = '$xStr $unit';
     }
 
@@ -955,10 +930,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       _lastFetchWindowMs = xWindowSize;
       final start = DateTime.fromMillisecondsSinceEpoch(
           (event.visibleMinX! - xWindowSize).toInt());
-      final end = DateTime.fromMillisecondsSinceEpoch(
-          math.min(event.visibleMaxX! + xWindowSize,
-                  DateTime.now().millisecondsSinceEpoch.toDouble())
-              .toInt());
+      final end = DateTime.fromMillisecondsSinceEpoch(math
+          .min(event.visibleMaxX! + xWindowSize,
+              DateTime.now().millisecondsSinceEpoch.toDouble())
+          .toInt());
       // Fetch new data at finer/coarser resolution in the background,
       // keeping old data visible until the new data arrives.
       final data = await _queryData(DateTimeRange(start: start, end: end));
