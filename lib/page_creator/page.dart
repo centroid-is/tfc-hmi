@@ -22,11 +22,49 @@ class AssetPage {
   @JsonKey(name: 'navigation_priority')
   int? navigationPriority;
 
+  /// Whether operators can reach this page.
+  ///
+  /// An unpublished page is a draft: it stays in the editor, keeps its assets
+  /// and its path, and is fully editable — but [PageManager.getRootMenuItems]
+  /// leaves it out, so it appears in neither the navigation menu nor the route
+  /// table. That is what lets a page be built over several shifts on the live
+  /// HMI without operators finding a half-finished screen.
+  ///
+  /// Unpublishing a section hides everything under it: the section is the only
+  /// way to those pages in the menu, so a published child of a draft section
+  /// would be unreachable anyway.
+  ///
+  /// Defaults to true, including for page data written before this existed.
+  @JsonKey(name: 'published', defaultValue: true)
+  bool published;
+
   AssetPage(
       {required this.menuItem,
       required this.assets,
       required this.mirroringDisabled,
-      this.navigationPriority});
+      this.navigationPriority,
+      this.published = true});
+
+  /// A copy with individual fields replaced.
+  ///
+  /// Rebuilding an [AssetPage] field by field is the pattern all over the
+  /// editor and it silently drops whatever field was added last; go through
+  /// here instead.
+  AssetPage copyWith({
+    MenuItem? menuItem,
+    List<Asset>? assets,
+    bool? mirroringDisabled,
+    int? navigationPriority,
+    bool? published,
+  }) {
+    return AssetPage(
+      menuItem: menuItem ?? this.menuItem,
+      assets: assets ?? this.assets,
+      mirroringDisabled: mirroringDisabled ?? this.mirroringDisabled,
+      navigationPriority: navigationPriority ?? this.navigationPriority,
+      published: published ?? this.published,
+    );
+  }
 
   factory AssetPage.fromJson(Map<String, dynamic> json) =>
       _$AssetPageFromJson(json);
@@ -242,13 +280,20 @@ class PageManager {
 
   /// Returns fully resolved root menu items with children looked up
   /// from the flat map so nested sections have their actual children.
+  ///
+  /// Unpublished pages are left out entirely — see [AssetPage.published]. This
+  /// is the single gate: the app builds both the navigation menu and the route
+  /// table from what this returns, so a draft page is neither listed nor
+  /// addressable until it is published.
   List<MenuItem> getRootMenuItems() {
     final childPaths = <String>{};
     for (final entry in pages.entries) {
       collectChildPaths(entry.value.menuItem.children, childPaths, entry.key);
     }
-    final rootPaths =
-        pages.keys.where((path) => !childPaths.contains(path)).toList();
+    final rootPaths = pages.keys
+        .where((path) => !childPaths.contains(path))
+        .where((path) => pages[path]?.published ?? true)
+        .toList();
     rootPaths.sort((a, b) => (pages[a]?.navigationPriority ?? 0)
         .compareTo(pages[b]?.navigationPriority ?? 0));
     return rootPaths.map((path) => _resolveMenuItem(path)).toList();
@@ -258,16 +303,26 @@ class PageManager {
   /// from the flat map to get its current children list.
   MenuItem _resolveMenuItem(String pagePath) {
     final page = pages[pagePath]!;
-    final resolvedChildren = page.menuItem.children.map((child) {
+    final resolvedChildren = <MenuItem>[];
+    for (final child in page.menuItem.children) {
       final childPath = child.path ?? '';
       // Don't recurse into self-references
-      if (childPath == pagePath) return child;
-      // Resolve from the flat map if the child exists there
-      if (pages.containsKey(childPath)) {
-        return _resolveMenuItem(childPath);
+      if (childPath == pagePath) {
+        resolvedChildren.add(child);
+        continue;
       }
-      return child;
-    }).toList();
+      // Resolve from the flat map if the child exists there
+      final childPage = pages[childPath];
+      if (childPage != null) {
+        // A draft child drops out of the menu, and its own subtree with it.
+        if (!childPage.published) continue;
+        resolvedChildren.add(_resolveMenuItem(childPath));
+        continue;
+      }
+      // A child that is not one of our pages belongs to whoever registered it
+      // (the app's own routes); publishing does not apply to those.
+      resolvedChildren.add(child);
+    }
     return page.menuItem.copyWith(children: resolvedChildren);
   }
 
@@ -291,11 +346,9 @@ class PageManager {
     MenuItem? menuItem,
     int? navigationPriority,
   }) {
-    return AssetPage(
-      menuItem: menuItem ?? page.menuItem,
-      assets: page.assets,
-      mirroringDisabled: page.mirroringDisabled,
-      navigationPriority: navigationPriority ?? page.navigationPriority,
+    return page.copyWith(
+      menuItem: menuItem,
+      navigationPriority: navigationPriority,
     );
   }
 
@@ -465,12 +518,7 @@ class PageManager {
           (path != null && path.isNotEmpty) ? path : '/${_slugify(entry.key)}';
       // If the page had an empty path, update the menuItem with the generated path
       if (path == null || path.isEmpty) {
-        result[key] = AssetPage(
-          menuItem: page.menuItem.copyWith(path: key),
-          assets: page.assets,
-          mirroringDisabled: page.mirroringDisabled,
-          navigationPriority: page.navigationPriority,
-        );
+        result[key] = page.copyWith(menuItem: page.menuItem.copyWith(path: key));
       } else {
         result[key] = page;
       }
@@ -501,6 +549,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
   late TextEditingController _labelController;
   late IconData _selectedIcon;
   late bool _mirroringDisabled;
+  late bool _published;
 
   @override
   void initState() {
@@ -510,6 +559,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
     _selectedIcon = widget.initialPage?.menuItem.icon ??
         (widget.isSection ? Icons.folder : Icons.pageview);
     _mirroringDisabled = widget.initialPage?.mirroringDisabled ?? false;
+    _published = widget.initialPage?.published ?? true;
   }
 
   String _buildPath(String label) {
@@ -588,6 +638,22 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
             ),
           ],
           const SizedBox(height: 16),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Published'),
+            subtitle: Text(
+              _published
+                  ? (widget.isSection
+                      ? 'Operators see this section in the menu.'
+                      : 'Operators can navigate to this page.')
+                  : 'Draft — hidden from the menu and not reachable by route. '
+                      '${widget.isSection ? 'Everything inside it is hidden too. ' : ''}'
+                      'It stays here in the editor.',
+            ),
+            value: _published,
+            onChanged: (value) => setState(() => _published = value),
+          ),
+          const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
@@ -620,6 +686,7 @@ class _CreatePageWidgetState extends State<CreatePageWidget> {
                     assets: widget.initialPage?.assets ?? [],
                     mirroringDisabled: _mirroringDisabled,
                     navigationPriority: widget.initialPage?.navigationPriority,
+                    published: _published,
                   );
                   widget.onSave(page);
                   Navigator.pop(context);

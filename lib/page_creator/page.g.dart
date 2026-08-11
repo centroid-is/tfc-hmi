@@ -11,6 +11,7 @@ AssetPage _$AssetPageFromJson(Map<String, dynamic> json) => AssetPage(
       assets: const AssetListConverter().fromJson(json['assets'] as List),
       mirroringDisabled: json['mirroring_disabled'] as bool,
       navigationPriority: (json['navigation_priority'] as num?)?.toInt(),
+      published: json['published'] as bool? ?? true,
     );
 
 Map<String, dynamic> _$AssetPageToJson(AssetPage instance) => <String, dynamic>{
@@ -18,4 +19,5 @@ Map<String, dynamic> _$AssetPageToJson(AssetPage instance) => <String, dynamic>{
       'assets': const AssetListConverter().toJson(instance.assets),
       'mirroring_disabled': instance.mirroringDisabled,
       'navigation_priority': instance.navigationPriority,
+      'published': instance.published,
     };

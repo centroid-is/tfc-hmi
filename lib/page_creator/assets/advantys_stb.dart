@@ -1279,18 +1279,14 @@ class _STBNIP2311ConfigContentState extends State<_STBNIP2311ConfigContent> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text('Subdevices',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    const Spacer(),
-                    FilledButton.icon(
-                      onPressed: () => Navigator.of(context).maybePop(),
-                      icon: const Icon(Icons.check),
-                      label: const Text('Done'),
-                    ),
-                  ],
-                ),
+                // No "Done" button here. It used to pop the navigator, which
+                // dismissed the config dialog this editor was shown in; the
+                // editor now embeds it in a side pane that is not a route, so
+                // the same tap would navigate out of the page editor
+                // altogether. The pane's own action bar owns dismissal.
+                Text('Subdevices',
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   isExpanded: true,
@@ -1299,7 +1295,8 @@ class _STBNIP2311ConfigContentState extends State<_STBNIP2311ConfigContent> {
                     labelText: 'Add Subdevice',
                   ),
                   initialValue: null,
-                  hint: const Text('Select a subdevice to add'),
+                  hint: const Text('Select a subdevice to add',
+                      overflow: TextOverflow.ellipsis),
                   items: _availableSTBSubdevices.keys
                       .map((k) => DropdownMenuItem(value: k, child: Text(k)))
                       .toList(),

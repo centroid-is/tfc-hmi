@@ -4,7 +4,6 @@ import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
@@ -293,12 +292,33 @@ class _ConfigContentState extends State<_ConfigContent> {
         ),
         const SizedBox(height: 16),
 
-        // Color picker
-        ColorPicker(
-          pickerColor:
-              widget.config.color ?? Theme.of(context).colorScheme.primary,
-          onColorChanged: (color) =>
-              setState(() => widget.config.color = color),
+        // Colour. Behind the shared picker dialog rather than inline: the
+        // full HSV picker lays out ~680px wide in landscape, which does not
+        // fit the editor's config pane — and this is how every other asset
+        // asks for a colour.
+        Row(
+          children: [
+            const Text('Icon Colour: '),
+            const SizedBox(width: 8),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: widget.config.color ??
+                    Theme.of(context).colorScheme.primary,
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: InkWell(onTap: _showIconColorPicker),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: _showIconColorPicker,
+                child: const Text('Change Colour'),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
 
@@ -532,6 +552,17 @@ class _ConfigContentState extends State<_ConfigContent> {
           },
         ),
       ),
+    );
+  }
+
+  void _showIconColorPicker() {
+    showColorPickerDialog(
+      context: context,
+      title: 'Select icon colour',
+      initialColor:
+          widget.config.color ?? Theme.of(context).colorScheme.primary,
+      onChanged: (color) => setState(() => widget.config.color = color),
+      onCleared: () => setState(() => widget.config.color = null),
     );
   }
 

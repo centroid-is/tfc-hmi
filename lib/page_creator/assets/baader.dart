@@ -2,8 +2,8 @@ import 'dart:math' as math;
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:beamer/beamer.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 
 import 'common.dart';
 import '../../widgets/baader.dart';
@@ -121,9 +121,31 @@ class _ConfigContentState extends State<_ConfigContent> {
           enableAngle: true,
         ),
         const SizedBox(height: 16),
-        ColorPicker(
-          pickerColor: widget.config.color,
-          onColorChanged: (color) => widget.config.color = color,
+        // Behind the shared picker dialog rather than inline: the full HSV
+        // picker lays out ~680px wide in landscape, which does not fit the
+        // editor's config pane.
+        Row(
+          children: [
+            const Text('Colour: '),
+            const SizedBox(width: 8),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: widget.config.color,
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: InkWell(onTap: _showColorPicker),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: _showColorPicker,
+                child: const Text('Change Colour'),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         Row(
@@ -168,6 +190,15 @@ class _ConfigContentState extends State<_ConfigContent> {
           ],
         ),
       ],
+    );
+  }
+
+  void _showColorPicker() {
+    showColorPickerDialog(
+      context: context,
+      title: 'Select colour',
+      initialColor: widget.config.color,
+      onChanged: (color) => setState(() => widget.config.color = color),
     );
   }
 }
