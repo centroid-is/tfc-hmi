@@ -51,6 +51,12 @@ class GpuWatchdog {
     // Ceiling for the post-recovery backoff, so a GPU that never comes back is
     // retried slowly instead of rebooting the engine every few seconds.
     unsigned int max_probe_interval_ms = 60000;
+
+    // Consecutive failed recoveries before the watchdog gives up for good.
+    // Restarting the engine restarts the Dart app with it, so a GPU that is
+    // never coming back would otherwise wipe the operator's UI on every
+    // backoff interval, forever. 0 means never give up.
+    int max_recovery_attempts = 5;
   };
 
   // What the host should do in response to an event.
@@ -85,6 +91,17 @@ class GpuWatchdog {
   // benign resolution change cannot reboot the engine on its own.
   Action OnDeviceLossHint();
 
+  // Stop watching, permanently. The host calls this when carrying out an
+  // action threw: the window procedure that drives the watchdog is noexcept,
+  // so an exception escaping it aborts the process. Failing safe here costs
+  // the recovery feature and leaves the app exactly as it behaved before the
+  // watchdog existed.
+  void Disable();
+
+  // True once the watchdog has stopped acting, whether from Disable() or from
+  // exhausting max_recovery_attempts.
+  bool has_given_up() const { return disabled_; }
+
   int missed_probes() const { return missed_probes_; }
   int recovery_attempts() const { return recovery_attempts_; }
   bool probe_outstanding() const { return probe_outstanding_; }
@@ -94,6 +111,7 @@ class GpuWatchdog {
   unsigned int BackoffMs() const;
 
   Config config_;
+  bool disabled_ = false;
   bool probe_outstanding_ = false;
   int missed_probes_ = 0;
   int recovery_attempts_ = 0;

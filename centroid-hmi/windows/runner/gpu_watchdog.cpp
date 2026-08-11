@@ -28,6 +28,9 @@ GpuWatchdog::GpuWatchdog(Config config) : config_(config) {}
 
 GpuWatchdog::Action GpuWatchdog::OnStarted() {
   Action action;
+  if (disabled_) {
+    return action;
+  }
   probe_outstanding_ = true;
   action.start_probe = true;
   action.set_timer_ms = config_.probe_interval_ms;
@@ -36,12 +39,23 @@ GpuWatchdog::Action GpuWatchdog::OnStarted() {
 
 GpuWatchdog::Action GpuWatchdog::OnTick() {
   Action action;
+  if (disabled_) {
+    return action;
+  }
 
   if (probe_outstanding_) {
     missed_probes_++;
     if (missed_probes_ >= config_.missed_probes_before_recovery) {
       recovery_attempts_++;
       missed_probes_ = 0;
+      if (config_.max_recovery_attempts > 0 &&
+          recovery_attempts_ >= config_.max_recovery_attempts) {
+        // Hand back this last restart, then stop: one more attempt is worth
+        // more than a tidy state machine, but an endless loop is not.
+        disabled_ = true;
+        action.restart_engine = true;
+        return action;
+      }
       // Recreating the controller issues its own ForceRedraw and arms the
       // next-frame callback, so the restart *is* the next probe. Leaving the
       // flag set means the following ticks judge the new engine.
@@ -61,6 +75,9 @@ GpuWatchdog::Action GpuWatchdog::OnTick() {
 
 GpuWatchdog::Action GpuWatchdog::OnFramePresented() {
   Action action;
+  if (disabled_) {
+    return action;
+  }
   probe_outstanding_ = false;
   missed_probes_ = 0;
 
@@ -78,6 +95,9 @@ GpuWatchdog::Action GpuWatchdog::OnFramePresented() {
 
 GpuWatchdog::Action GpuWatchdog::OnDeviceLossHint() {
   Action action;
+  if (disabled_) {
+    return action;
+  }
   // Deliberately does not touch missed_probes_: a flood of session-change
   // messages must not be able to hold the failure count at zero while frames
   // are actually missing.
@@ -85,6 +105,11 @@ GpuWatchdog::Action GpuWatchdog::OnDeviceLossHint() {
   action.start_probe = true;
   action.set_timer_ms = config_.probe_interval_ms;
   return action;
+}
+
+void GpuWatchdog::Disable() {
+  disabled_ = true;
+  probe_outstanding_ = false;
 }
 
 unsigned int GpuWatchdog::BackoffMs() const {

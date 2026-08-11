@@ -19,6 +19,9 @@ GpuWatchdog::Config TestConfig() {
   config.probe_interval_ms = 5000;
   config.missed_probes_before_recovery = 2;
   config.max_probe_interval_ms = 60000;
+  // Never give up, so tests about probing and backoff are not cut short by the
+  // give-up budget. Tests that are about giving up set this themselves.
+  config.max_recovery_attempts = 0;
   return config;
 }
 
@@ -143,9 +146,14 @@ TEST(recovery_backs_off_geometrically_and_caps) {
   const unsigned int expected[] = {5000, 10000, 20000, 40000, 60000, 60000};
   for (unsigned int want : expected) {
     GpuWatchdog::Action action;
+    // Bounded: a watchdog that stops asking for restarts would otherwise spin
+    // this loop forever and hang CI with no failure to read.
+    int guard = 0;
     do {
       action = watchdog.OnTick();
-    } while (!action.restart_engine);
+      guard++;
+    } while (!action.restart_engine && guard < 100);
+    CHECK(action.restart_engine);
     CHECK_EQ(action.set_timer_ms, want);
   }
 }
@@ -235,6 +243,127 @@ TEST(probe_interval_falls_back_when_absent_or_nonsensical) {
   CHECK_EQ(tfc::ParseProbeIntervalMs("250", 5000), 5000u);
   CHECK_EQ(tfc::ParseProbeIntervalMs("1000", 5000), 1000u);
   CHECK_EQ(tfc::ParseProbeIntervalMs("30000", 5000), 30000u);
+}
+
+// --- Giving up --------------------------------------------------------------
+
+TEST(stops_restarting_after_the_configured_number_of_consecutive_recoveries) {
+  GpuWatchdog::Config config = TestConfig();
+  config.max_recovery_attempts = 3;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+
+  int restarts = 0;
+  for (int tick = 0; tick < 100; tick++) {
+    if (watchdog.OnTick().restart_engine) {
+      restarts++;
+    }
+  }
+
+  // Rebooting the engine forever on a GPU that is never coming back means
+  // rebooting the Dart app forever: the operator gets a UI that wipes itself
+  // every backoff interval instead of one that has visibly given up.
+  CHECK_EQ(restarts, 3);
+  CHECK(watchdog.has_given_up());
+}
+
+TEST(a_healthy_frame_makes_the_give_up_budget_whole_again) {
+  GpuWatchdog::Config config = TestConfig();
+  config.max_recovery_attempts = 3;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+
+  watchdog.OnTick();
+  CHECK(watchdog.OnTick().restart_engine);  // recovery 1
+  watchdog.OnFramePresented();              // ...which worked
+
+  // The budget is for *consecutive* failures. A device that drops out once an
+  // hour must not exhaust it over a week of uptime.
+  CHECK_EQ(watchdog.recovery_attempts(), 0);
+  CHECK(!watchdog.has_given_up());
+}
+
+TEST(zero_max_recovery_attempts_means_never_give_up) {
+  GpuWatchdog::Config config = TestConfig();
+  config.max_recovery_attempts = 0;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+
+  int restarts = 0;
+  for (int tick = 0; tick < 100; tick++) {
+    if (watchdog.OnTick().restart_engine) restarts++;
+  }
+
+  CHECK(restarts > 10);
+  CHECK(!watchdog.has_given_up());
+}
+
+// --- Disabling --------------------------------------------------------------
+
+TEST(a_disabled_watchdog_does_nothing_at_all) {
+  GpuWatchdog watchdog(TestConfig());
+  watchdog.OnStarted();
+
+  watchdog.Disable();
+
+  // Disable is what the host reaches for when executing an action threw. If
+  // any event still asked for work, the very next tick would re-enter the code
+  // that just failed — and in a noexcept window proc that is a hard abort.
+  GpuWatchdog::Action tick = watchdog.OnTick();
+  CHECK(!tick.start_probe);
+  CHECK(!tick.restart_engine);
+  CHECK_EQ(tick.set_timer_ms, 0u);
+
+  GpuWatchdog::Action hint = watchdog.OnDeviceLossHint();
+  CHECK(!hint.start_probe);
+  CHECK(!hint.restart_engine);
+  CHECK_EQ(hint.set_timer_ms, 0u);
+
+  GpuWatchdog::Action frame = watchdog.OnFramePresented();
+  CHECK(!frame.start_probe);
+  CHECK(!frame.restart_engine);
+  CHECK_EQ(frame.set_timer_ms, 0u);
+}
+
+TEST(a_disabled_watchdog_ignores_a_late_frame_even_after_a_recovery) {
+  GpuWatchdog watchdog(TestConfig());
+  watchdog.OnStarted();
+  watchdog.OnTick();
+  CHECK(watchdog.OnTick().restart_engine);
+  CHECK_EQ(watchdog.recovery_attempts(), 1);
+
+  watchdog.Disable();
+
+  // A frame can still land after the host has given up — the engine callback
+  // is already in flight. Re-arming the timer here would resurrect a watchdog
+  // that was disabled precisely because acting on it threw, sending the next
+  // tick straight back into the code that aborted.
+  GpuWatchdog::Action frame = watchdog.OnFramePresented();
+  CHECK_EQ(frame.set_timer_ms, 0u);
+  CHECK(watchdog.has_given_up());
+}
+
+TEST(disabling_survives_any_number_of_missed_probes) {
+  GpuWatchdog watchdog(TestConfig());
+  watchdog.OnStarted();
+  watchdog.Disable();
+
+  for (int tick = 0; tick < 50; tick++) {
+    CHECK(!watchdog.OnTick().restart_engine);
+  }
+}
+
+TEST(giving_up_is_reported_as_disabled) {
+  GpuWatchdog::Config config = TestConfig();
+  config.max_recovery_attempts = 1;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+
+  watchdog.OnTick();
+  CHECK(watchdog.OnTick().restart_engine);  // the one and only attempt
+
+  CHECK(watchdog.has_given_up());
+  CHECK(!watchdog.OnTick().start_probe);
 }
 
 int main() {
