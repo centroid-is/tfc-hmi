@@ -873,7 +873,7 @@ void main() {
       });
 
       stubPort = await completer.future.timeout(
-        const Duration(seconds: 10),
+        const Duration(seconds: 30),
         onTimeout: () => throw StateError('Stub server did not start'),
       );
     }
@@ -1024,7 +1024,7 @@ void main() {
       });
 
       stubPort = await completer.future.timeout(
-        const Duration(seconds: 10),
+        const Duration(seconds: 30),
         onTimeout: () => throw StateError('M580 stub server did not start'),
       );
     }

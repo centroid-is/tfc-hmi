@@ -73,7 +73,7 @@ Future<void> _startStub() async {
     }
   });
 
-  _stubPort = await completer.future.timeout(const Duration(seconds: 5),
+  _stubPort = await completer.future.timeout(const Duration(seconds: 30),
       onTimeout: () => throw StateError(
           'Stub server did not start (python=$python, '
           'script=$stubScript, stderr=$stderrBuf)'));
