@@ -35,24 +35,25 @@ class RouteRegistry {
 
   void _mergeMenuItemRecursive(List<MenuItem> targetList, MenuItem newItem) {
     // Check if item with same path already exists
-    bool exists = false;
-    for (var existingItem in targetList) {
+    for (var i = 0; i < targetList.length; i++) {
+      final existingItem = targetList[i];
       if (existingItem.path == newItem.path) {
-        exists = true;
-        // If it exists, merge its children recursively
+        // If it exists, merge its children recursively. Merge into a copy:
+        // MenuItems are routinely const-constructed, and adding to a const
+        // children list throws.
         if (newItem.children.isNotEmpty) {
+          final mergedChildren = List<MenuItem>.of(existingItem.children);
           for (var child in newItem.children) {
-            _mergeMenuItemRecursive(existingItem.children, child);
+            _mergeMenuItemRecursive(mergedChildren, child);
           }
+          targetList[i] = existingItem.copyWith(children: mergedChildren);
         }
-        break;
+        return;
       }
     }
 
     // If not found, add it
-    if (!exists) {
-      targetList.add(newItem);
-    }
+    targetList.add(newItem);
   }
 
   int? getNodeIndex(MenuItem nodeItem) {
