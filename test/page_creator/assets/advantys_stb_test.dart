@@ -807,22 +807,20 @@ void main() {
   //   - `_fromJsonFactories`: drives `AssetRegistry.parse(saveJson)` —
   //     missing entry = legacy JSON crashes on load.
   //   - `defaultFactories`: drives the page-editor palette via
-  //     `AssetRegistry.createDefaultAssetByName(name)` — missing entry =
+  //     `AssetRegistry.createDefaultAsset(type)` — missing entry =
   //     palette doesn't list the asset.
   //
-  // Both maps key on `Type` and the resolution code compares
+  // Both maps key on `Type`; parse resolution compares
   // `factory.key.toString()` against the JSON `asset_name` (i.e. the Dart
   // class name string). The dual-map convention is the PITFALL §9.2 lock.
   // ---------------------------------------------------------------------------
   group('STBDDI3725Config registry resolution', () {
-    test('createDefaultAssetByName returns a typed STBDDI3725Config', () {
-      final asset =
-          AssetRegistry.createDefaultAssetByName('STBDDI3725Config');
-      expect(asset, isNotNull,
+    test('createDefaultAsset returns a typed STBDDI3725Config', () {
+      final asset = AssetRegistry.createDefaultAsset(STBDDI3725Config);
+      expect(asset, isA<STBDDI3725Config>(),
           reason:
               'defaultFactories must register STBDDI3725Config (palette wiring).');
-      expect(asset, isA<STBDDI3725Config>());
-      final cfg = asset! as STBDDI3725Config;
+      final cfg = asset as STBDDI3725Config;
       expect(cfg.nameOrId, '1');
       expect(cfg.rawStateKey, isNull);
     });
@@ -1893,14 +1891,12 @@ void main() {
   // Registry resolution + JSON back-compat (DDO-07).
   // ---------------------------------------------------------------------------
   group('STBDDO3705Config registry resolution', () {
-    test('createDefaultAssetByName returns a typed STBDDO3705Config', () {
-      final asset =
-          AssetRegistry.createDefaultAssetByName('STBDDO3705Config');
-      expect(asset, isNotNull,
+    test('createDefaultAsset returns a typed STBDDO3705Config', () {
+      final asset = AssetRegistry.createDefaultAsset(STBDDO3705Config);
+      expect(asset, isA<STBDDO3705Config>(),
           reason:
               'defaultFactories must register STBDDO3705Config (palette wiring).');
-      expect(asset, isA<STBDDO3705Config>());
-      final cfg = asset! as STBDDO3705Config;
+      final cfg = asset as STBDDO3705Config;
       expect(cfg.nameOrId, '1');
       expect(cfg.rawStateKey, isNull);
     });
@@ -2205,14 +2201,12 @@ void main() {
   // Registry resolution + JSON back-compat (NIP-04).
   // ---------------------------------------------------------------------------
   group('STBNIP2311Config registry resolution', () {
-    test('createDefaultAssetByName returns a typed STBNIP2311Config', () {
-      final asset =
-          AssetRegistry.createDefaultAssetByName('STBNIP2311Config');
-      expect(asset, isNotNull,
+    test('createDefaultAsset returns a typed STBNIP2311Config', () {
+      final asset = AssetRegistry.createDefaultAsset(STBNIP2311Config);
+      expect(asset, isA<STBNIP2311Config>(),
           reason:
               'defaultFactories must register STBNIP2311Config (palette wiring).');
-      expect(asset, isA<STBNIP2311Config>());
-      final cfg = asset! as STBNIP2311Config;
+      final cfg = asset as STBNIP2311Config;
       expect(cfg.nameOrId, '1');
     });
 
@@ -2637,14 +2631,12 @@ void main() {
   // Registry resolution + JSON back-compat (PDT-01, PDT-03).
   // ---------------------------------------------------------------------------
   group('STBPDT3100Config registry resolution', () {
-    test('createDefaultAssetByName returns a typed STBPDT3100Config', () {
-      final asset =
-          AssetRegistry.createDefaultAssetByName('STBPDT3100Config');
-      expect(asset, isNotNull,
+    test('createDefaultAsset returns a typed STBPDT3100Config', () {
+      final asset = AssetRegistry.createDefaultAsset(STBPDT3100Config);
+      expect(asset, isA<STBPDT3100Config>(),
           reason:
               'defaultFactories must register STBPDT3100Config (palette wiring).');
-      expect(asset, isA<STBPDT3100Config>());
-      final cfg = asset! as STBPDT3100Config;
+      final cfg = asset as STBPDT3100Config;
       expect(cfg.nameOrId, '1');
       expect(cfg.inputOkKey, isNull);
     });

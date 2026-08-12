@@ -20,8 +20,6 @@ import '../providers/current_page_assets.dart';
 import '../tech_docs/tech_doc_picker.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
-import '../widgets/proposal_visual.dart';
-import '../providers/proposal_state.dart';
 import 'package:flutter/services.dart';
 
 /// Hit-tests whether a pointer position falls inside an asset's rotated
@@ -453,12 +451,7 @@ Offset projectDragDeltaToCanvas({
 }
 
 class PageEditor extends ConsumerStatefulWidget {
-  /// Optional proposal JSON passed via Beamer route data.
-  /// When non-null, the editor pre-populates from the proposal instead of
-  /// loading only from [pageManagerProvider].
-  final String? proposalData;
-
-  const PageEditor({super.key, this.proposalData});
+  const PageEditor({super.key});
 
   @override
   ConsumerState<PageEditor> createState() => _PageEditorState();
@@ -509,18 +502,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Timer? _autoScrollTimer;
   double _autoScrollStep = 0;
 
-  /// True when the editor was opened with AI proposal data that has not yet
-  /// been saved by the operator.
-  bool _isProposal = false;
-  String? _proposalTitle;
-  int? _proposalId;
-
-  /// Assets that were added by the AI proposal (for visual indicators).
-  Set<Asset> _proposedAssets = {};
-
-  /// Snapshot of pages before proposal was applied (for reject/revert).
-  Map<String, AssetPage>? _preProposalPages;
-
   /// The asset whose configuration pane is docked open, if any. The pane is
   /// non-modal, so the canvas keeps taking taps and drags while it is up and
   /// tapping another asset just re-points the pane at it.
@@ -570,12 +551,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _temporaryPages = pageManager.copyWith().pages;
         _currentPage = pageManager.pages.keys.firstOrNull;
 
-        // Apply proposal data if present.
-        _applyProposalData(widget.proposalData);
-
         _updateCurrentJson();
-        _savedJson =
-            _isProposal ? '' : _currentJson; // Mark unsaved if proposal
+        _savedJson = _currentJson;
       });
     });
   }
@@ -584,225 +561,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void dispose() {
     _stopAutoScroll();
     // The pane lives in the root overlay, so nothing else tears it down when
-    // the editor goes away (an MCP proposal can navigate out from under it).
+    // the editor goes away.
     _configWatch?.cancel();
     _configWatch = null;
     final configAsset = _configAsset;
     if (configAsset != null) closeSidePane(id: _configPaneId(configAsset));
     _treeScrollController.dispose();
     super.dispose();
-  }
-
-  /// Parses proposal JSON and merges it into [_temporaryPages].
-  ///
-  /// For `_proposal_type: 'page'`: expects keys like `title`, `key`, `assets`,
-  /// `mirroring_disabled`. Creates or replaces a page entry.
-  ///
-  /// For `_proposal_type: 'asset'`: expects `key`, `title`, `children` (list
-  /// of asset JSON). Adds assets to the page identified by `key`, or creates
-  /// a new page.
-  void _applyProposalData(String? proposalJson) {
-    if (proposalJson == null) return;
-
-    // Store pre-proposal snapshot for reject/revert.
-    _preProposalPages = PageManager.copyPages(_temporaryPages);
-
-    try {
-      final Map<String, dynamic> proposal;
-      final decoded = jsonDecode(proposalJson);
-      if (decoded is Map<String, dynamic>) {
-        proposal = decoded;
-      } else {
-        return;
-      }
-
-      final type = proposal['_proposal_type'] as String?;
-      if (type == null) return;
-
-      // Try to match proposal to universal state for ID tracking.
-      try {
-        final state = ref.read(proposalStateProvider);
-        for (final p in state.proposals) {
-          if (p.proposalJson == proposalJson) {
-            _proposalId = p.id;
-            break;
-          }
-        }
-      } catch (_) {}
-
-      if (type == 'page') {
-        _applyPageProposal(proposal);
-      } else if (type == 'asset') {
-        _applyAssetProposal(proposal);
-      }
-    } catch (_) {
-      // Best-effort: if proposal JSON is malformed, ignore it.
-    }
-  }
-
-  void _applyPageProposal(Map<String, dynamic> proposal) {
-    final title = proposal['title'] as String? ?? 'AI Proposal';
-    final key = proposal['key'] as String? ?? '/$title';
-    final mirroringDisabled = proposal['mirroring_disabled'] as bool? ?? false;
-
-    List<Asset> assets = [];
-    if (proposal['assets'] is List) {
-      final items = proposal['assets'] as List;
-      // Try full parse first (works when JSON has all required fields).
-      try {
-        final parsed = AssetRegistry.parse({'assets': items});
-        if (parsed.isNotEmpty) {
-          assets = parsed;
-        }
-      } catch (_) {}
-      // Fallback: create default assets by type name for minimal MCP JSON.
-      if (assets.isEmpty) {
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          final assetName =
-              item['asset_name'] as String? ?? item['asset_type'] as String?;
-          if (assetName == null) continue;
-          final asset = AssetRegistry.createDefaultAssetByName(assetName);
-          if (asset == null) continue;
-          if (item['key'] is String) {
-            try {
-              (asset as dynamic).key = item['key'] as String;
-            } catch (_) {}
-          }
-          final label = item['title'] as String? ??
-              item['label'] as String? ??
-              item['text'] as String?;
-          if (label != null) {
-            asset.text = label;
-            asset.textPos ??= TextPos.below;
-          }
-          if (item['coordinates'] is Map<String, dynamic>) {
-            final c = item['coordinates'] as Map<String, dynamic>;
-            asset.coordinates = Coordinates(
-              x: (c['x'] as num?)?.toDouble() ?? 0.0,
-              y: (c['y'] as num?)?.toDouble() ?? 0.0,
-            );
-          } else if (item['x'] is num || item['y'] is num) {
-            asset.coordinates = Coordinates(
-              x: (item['x'] as num?)?.toDouble() ?? 0.1,
-              y: (item['y'] as num?)?.toDouble() ?? 0.1,
-            );
-          }
-          assets.add(asset);
-        }
-      }
-    }
-
-    final page = AssetPage(
-      menuItem: MenuItem(label: title, path: key, icon: Icons.auto_awesome),
-      assets: assets,
-      mirroringDisabled: mirroringDisabled,
-    );
-
-    _temporaryPages[key] = page;
-    _currentPage = key;
-    _isProposal = true;
-    _proposalTitle = title;
-    _proposedAssets = Set.of(assets);
-  }
-
-  void _applyAssetProposal(Map<String, dynamic> proposal) {
-    final title = proposal['title'] as String? ?? 'AI Asset Proposal';
-    // Use page_key to find the target page; fall back to current page.
-    // proposal['key'] is the asset identifier, not a page key.
-    final targetPage = proposal['page_key'] as String? ?? _currentPage;
-
-    List<Asset> newAssets = [];
-    for (final sourceKey in ['children', 'assets']) {
-      if (proposal[sourceKey] is! List) continue;
-      final items = proposal[sourceKey] as List;
-      // First, try full parse (works when the JSON has all required fields).
-      try {
-        final parsed = AssetRegistry.parse({'assets': items});
-        if (parsed.isNotEmpty) {
-          newAssets.addAll(parsed);
-          continue;
-        }
-      } catch (_) {}
-      // Fallback: create default assets by type name and apply key/title/
-      // coordinates from the proposal. This handles MCP proposals that only
-      // provide minimal fields (asset_type, key, title).
-      for (final item in items) {
-        if (item is! Map<String, dynamic>) continue;
-        final assetName =
-            item['asset_name'] as String? ?? item['asset_type'] as String?;
-        if (assetName == null) continue;
-        final asset = AssetRegistry.createDefaultAssetByName(assetName);
-        if (asset == null) continue;
-        // Apply key — most asset types store it as a direct `key` field.
-        if (item['key'] is String) {
-          try {
-            (asset as dynamic).key = item['key'] as String;
-          } catch (_) {}
-        }
-        // Apply display text.
-        final label = item['title'] as String? ?? item['text'] as String?;
-        if (label != null) {
-          asset.text = label;
-          asset.textPos ??= TextPos.below;
-        }
-        // Apply coordinates.
-        if (item['coordinates'] is Map<String, dynamic>) {
-          final c = item['coordinates'] as Map<String, dynamic>;
-          asset.coordinates = Coordinates(
-            x: (c['x'] as num?)?.toDouble() ?? 0.0,
-            y: (c['y'] as num?)?.toDouble() ?? 0.0,
-          );
-        } else if (item['x'] is num || item['y'] is num) {
-          asset.coordinates = Coordinates(
-            x: (item['x'] as num?)?.toDouble() ?? 0.1,
-            y: (item['y'] as num?)?.toDouble() ?? 0.1,
-          );
-        }
-        // Apply config overrides: merge LLM-provided config into the
-        // default asset's JSON representation, then re-parse to get a
-        // fully configured asset with all type-safe fields.
-        final config = item['config'];
-        if (config is Map<String, dynamic> && config.isNotEmpty) {
-          try {
-            final baseJson = asset.toJson();
-            baseJson.addAll(config);
-            // Ensure asset_name survives the merge so parse() finds it.
-            baseJson[constAssetName] = assetName;
-            final reparsed =
-                AssetRegistry.parse({constAssetName: assetName, ...baseJson});
-            if (reparsed.isNotEmpty) {
-              newAssets.add(reparsed.first);
-              continue;
-            }
-          } catch (_) {
-            // If re-parse fails, fall through and use the default asset.
-          }
-        }
-        newAssets.add(asset);
-      }
-    }
-
-    _proposedAssets = Set.of(newAssets);
-
-    if (targetPage != null && _temporaryPages.containsKey(targetPage)) {
-      // Add assets to existing page.
-      _temporaryPages[targetPage]!.assets.addAll(newAssets);
-      _currentPage = targetPage;
-    } else {
-      // Create a new page with the proposed assets.
-      final pageKey = targetPage ?? '/$title';
-      _temporaryPages[pageKey] = AssetPage(
-        menuItem:
-            MenuItem(label: title, path: pageKey, icon: Icons.auto_awesome),
-        assets: newAssets,
-        mirroringDisabled: false,
-      );
-      _currentPage = pageKey;
-    }
-
-    _isProposal = true;
-    _proposalTitle = title;
   }
 
   void _updateCurrentJson() {
@@ -825,19 +590,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     ref.invalidate(pageManagerProvider);
     if (!mounted) return;
 
-    // Update universal proposal state if this was a proposal accept.
-    if (_isProposal && _proposalId != null) {
-      try {
-        ref.read(proposalStateProvider.notifier).acceptProposal(_proposalId!);
-      } catch (_) {}
-    }
-
     setState(() {
       _updateCurrentJson();
       _savedJson = _currentJson;
-      _isProposal = false; // Proposal accepted and saved.
-      _proposedAssets = {};
-      _preProposalPages = null;
     });
   }
 
@@ -1189,9 +944,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
 
     if (choice == null) return;
-    // The editor can be torn down while the menu is open — proposal events
-    // arriving over MCP navigate on their own — and both branches below touch
-    // State (setState / ref) that is invalid after dispose.
+    // The editor can be torn down while the menu is open, and both branches
+    // below touch State (setState / ref) that is invalid after dispose.
     if (!mounted) return;
 
     if (choice == _editAction) {
@@ -1218,21 +972,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   @override
   Widget build(BuildContext context) {
-    // Reactively watch for new page/asset proposals arriving via MCP.
-    ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
-      if (_isProposal) return; // Already showing a proposal.
-      final pageProposals = next.proposals
-          .where((p) => p.proposalType == 'page' || p.proposalType == 'asset');
-      if (pageProposals.isEmpty) return;
-      final proposal = pageProposals.first;
-      _applyProposalData(proposal.proposalJson);
-      if (_isProposal) {
-        _updateCurrentJson();
-        _savedJson = ''; // Mark unsaved for proposal.
-        setState(() {});
-      }
-    });
-
     return Focus(
       autofocus: true,
       // A window switch or a click into the palette can swallow the key up,
@@ -1288,64 +1027,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         return KeyEventResult.ignored;
       },
       child: BaseScaffold(
-        title: _isProposal ? 'Page Editor — AI Proposal' : 'Page Editor',
+        title: 'Page Editor',
         body: Column(
           children: [
-            if (_isProposal)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                color: Colors.amber.shade50,
-                child: Row(
-                  children: [
-                    const Icon(Icons.auto_awesome, color: Colors.amber),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'AI Proposal: ${_proposalTitle ?? "Untitled"}. '
-                        'Review the proposed layout.',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: _saveToPrefs,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text('Accept'),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: () {
-                        if (_proposalId != null) {
-                          try {
-                            ref
-                                .read(proposalStateProvider.notifier)
-                                .rejectProposal(_proposalId!);
-                          } catch (_) {}
-                        }
-                        setState(() {
-                          if (_preProposalPages != null) {
-                            _temporaryPages = _preProposalPages!;
-                            _currentPage = _temporaryPages.keys.firstOrNull;
-                          }
-                          _isProposal = false;
-                          _proposedAssets = {};
-                          _preProposalPages = null;
-                          _updateCurrentJson();
-                          _savedJson = _currentJson;
-                        });
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red,
-                        side: const BorderSide(color: Colors.red),
-                      ),
-                      child: const Text('Reject'),
-                    ),
-                  ],
-                ),
-              ),
             Expanded(
                 child: ZoomableCanvas(
               scaleEnabled: !_showPalette,
@@ -1430,7 +1114,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     asset, globalPosition, constraints),
                             absorb: true,
                             selectedAssets: _selectedAssets,
-                            proposedAssets: _proposedAssets,
                             mirroringDisabled: _temporaryPages[_currentPage]
                                     ?.mirroringDisabled ??
                                 false,

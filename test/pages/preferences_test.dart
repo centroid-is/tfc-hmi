@@ -4,16 +4,16 @@ import 'package:flutter_test/flutter_test.dart';
 /// Regression test for Bug 9: Preferences page layout overflow.
 ///
 /// The preferences page uses multiple ExpansionTile widgets (Database,
-/// MCP Server, Preferences Keys). When several tiles are expanded
-/// simultaneously, the content exceeds screen height.
+/// Preferences Keys). When several tiles are expanded simultaneously,
+/// the content exceeds screen height.
 ///
 /// Fix: Replace Column with ListView so the page scrolls. The
 /// PreferencesKeysWidget gets a SizedBox(height: 600) wrapper instead
 /// of Expanded (which cannot be a child of ListView).
 ///
 /// Because PreferencesPage depends on a deep provider chain (database,
-/// preferences, alarmMan, stateMan, MCP bridge, tech docs), we test the
-/// scrolling layout pattern in isolation with equivalent widget structure.
+/// preferences, alarmMan, stateMan, tech docs), we test the scrolling
+/// layout pattern in isolation with equivalent widget structure.
 void main() {
   group('Preferences page layout overflow (Bug 9)', () {
     testWidgets('ListView layout scrolls without overflow', (tester) async {
@@ -34,7 +34,7 @@ void main() {
                 // Simulate DatabaseConfigWidget expanded
                 const SizedBox(height: 200, child: Placeholder()),
                 const SizedBox(height: 16),
-                // Simulate McpServerSection expanded
+                // Simulate a second expanded section
                 const SizedBox(height: 200, child: Placeholder()),
                 const SizedBox(height: 16),
                 // Simulate PreferencesKeysWidget with fixed height

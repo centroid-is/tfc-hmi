@@ -9,7 +9,6 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
-import '../widgets/proposal_visual.dart';
 import '../providers/page_manager.dart';
 import '../providers/state_man.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
@@ -130,10 +129,6 @@ class AssetStack extends ConsumerStatefulWidget {
   final Set<Asset> selectedAssets;
   final bool mirroringDisabled;
 
-  /// Assets that were proposed by AI. When non-empty, these assets are
-  /// rendered with a dashed amber border and AI sparkle badge.
-  final Set<Asset> proposedAssets;
-
   const AssetStack({
     Key? key,
     required this.assets,
@@ -145,7 +140,6 @@ class AssetStack extends ConsumerStatefulWidget {
     this.absorb = false,
     required this.selectedAssets,
     required this.mirroringDisabled,
-    this.proposedAssets = const {},
   }) : super(key: key);
 
   @override
@@ -231,8 +225,6 @@ class _AssetStackState extends ConsumerState<AssetStack> {
             )..layout();
             textSize = tp.size;
           }
-
-          final isProposed = widget.proposedAssets.contains(asset);
 
           // A) add the asset widget itself
           //
@@ -380,35 +372,6 @@ class _AssetStackState extends ConsumerState<AssetStack> {
               ),
             ),
           );
-
-          // Proposal visual indicators: dashed border + AI badge
-          if (isProposed) {
-            positionedChildren.add(
-              Positioned(
-                left: cx - halfW,
-                top: cy - halfH,
-                child: IgnorePointer(
-                  child: SizedBox(
-                    width: assetW,
-                    height: assetH,
-                    child: Stack(
-                      children: [
-                        CustomPaint(
-                          size: Size(assetW, assetH),
-                          painter: DashedBorderPainter(color: Colors.amber),
-                        ),
-                        const Positioned(
-                          top: 2,
-                          right: 2,
-                          child: ProposalBadge(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }
 
           // B) add the label (if any)
           if (asset.text != null && asset.text!.isNotEmpty) {

@@ -193,8 +193,7 @@ Offset _pointOn(WidgetTester tester, double fx, double fy) {
 }
 
 /// Guards the wiring the unit tests above cannot reach: the host-supplied
-/// context menu must take precedence over the AI-only one, so "Send to back"
-/// is reachable whether or not MCP chat is available.
+/// context menu must be used, so "Send to back" is reachable.
 void _secondaryTapTests() {
   group('AssetStack secondary tap', () {
     setUp(() {

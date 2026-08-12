@@ -8,7 +8,6 @@ import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
 import 'fuzzy_search_bar.dart';
-import 'proposal_visual.dart';
 
 extension AlarmNotificationColors on AlarmNotification {
   /// Returns the background and text colors for this alarm level
@@ -39,16 +38,12 @@ class ListAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmConfig)? onDelete;
   final void Function(AlarmConfig?)? onCreate;
 
-  /// Optional AI-proposed alarm to display at the top of the list.
-  final AlarmConfig? proposedAlarm;
-
   const ListAlarms({
     super.key,
     this.onEdit,
     this.onShow,
     this.onDelete,
     this.onCreate,
-    this.proposedAlarm,
   });
 
   @override
@@ -97,20 +92,6 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                   ],
                 ),
               ),
-              // Show proposed alarm at top if present
-              if (widget.proposedAlarm != null)
-                Container(
-                  margin:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  decoration: proposalDecoration(),
-                  child: ListTile(
-                    leading: const ProposalBadge(),
-                    title: Text(widget.proposedAlarm!.title),
-                    subtitle: Text(
-                        'AI Proposed: ${widget.proposedAlarm!.description}'),
-                    onTap: () => widget.onShow?.call(widget.proposedAlarm!),
-                  ),
-                ),
               Expanded(
                 child: ListView.builder(
                   itemCount: alarms.length,

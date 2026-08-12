@@ -60,11 +60,6 @@ dependencies:
     path: packages/tfc_mcp_server
   jbtm:
     path: packages/jbtm
-  # Pinned: newer mcp_dart (2.4.0 observed, 2026-08) removes server-initiated
-  # elicitation ("elicitation/create is a legacy server-initiated
-  # interaction"), which ElicitationRiskGate depends on. Migrate to stateless
-  # elicitation before unpinning.
-  mcp_dart: 2.0.0
   pdfrx: ^2.2.24
   desktop_drop: ^0.7.0
 dev_dependencies:

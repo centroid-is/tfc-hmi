@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
@@ -37,12 +36,8 @@ import 'package:tfc/page_creator/page.dart';
 import 'package:tfc/theme.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
-import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:tfc/drawings/drawing_overlay.dart';
-import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/navigator_key.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
-import 'package:tfc/providers/proposal_state.dart';
 import 'package:tfc/providers/scaffold_messenger_key.dart';
 
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
@@ -50,7 +45,6 @@ import 'package:tfc_dart/core/log_config.dart';
 import 'package:tfc/core/secure_storage/other.dart';
 import 'package:pdfrx/pdfrx.dart';
 
-import 'package:tfc/widgets/proposal_banner.dart';
 import 'package:tfc/marionette/route_logger.dart';
 
 import 'marionette_init.dart';
@@ -75,9 +69,9 @@ void _debugPrint(Zone self, ZoneDelegate parent, Zone zone, String line) {
 
 void main() {
   // Ignore SIGPIPE so broken-pipe writes become IOExceptions instead of
-  // killing the process.  The MCP HTTP server, OPC UA client, and pdfium
-  // background isolate all perform native socket/pipe IO that can trigger
-  // SIGPIPE when the remote end closes unexpectedly.
+  // killing the process.  The OPC UA client and pdfium background isolate
+  // both perform native socket/pipe IO that can trigger SIGPIPE when the
+  // remote end closes unexpectedly.
   if (Platform.isLinux || Platform.isMacOS) {
     try {
       ProcessSignal.sigpipe.watch().listen((_) {
@@ -326,19 +320,19 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         ),
     '/advanced/page-editor': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/page-editor'), title: 'Page Editor',
-                 child: PageEditor(proposalData: args is String ? args : null)),
+                 child: PageEditor()),
     '/advanced/preferences': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/preferences'), title: 'Preferences', child: PreferencesPage()),
     '/advanced/alarm-editor': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/alarm-editor'), title: 'Alarm Editor',
-                 child: AlarmEditorPage(proposalData: args is String ? args : null)),
+                 child: AlarmEditorPage()),
     '/advanced/history-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
     '/advanced/server-config': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
     '/advanced/key-repository': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/key-repository'), title: 'Key Repository',
-        child: KeyRepositoryPage(proposalData: args is String ? args : null)),
+        child: KeyRepositoryPage()),
     '/advanced/knowledge-base': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage()),
     AppRoutes.alarmView: (context, state, args) =>
@@ -394,9 +388,6 @@ class MyApp extends ConsumerWidget {
     final themeAsync = ref.watch(themeNotifierProvider);
     final (light, dark) = solarized();
 
-    // Initialize MCP server lifecycle management
-    ref.watch(mcpServerLifecycleProvider);
-
     // Expose the BeamerDelegate's navigator key so overlay widgets
     // (drawings, FAB) can show dialogs / access Navigator.
     // Defer to avoid modifying provider state during build.
@@ -420,73 +411,11 @@ class MyApp extends ConsumerWidget {
         return Consumer(
           builder: (context, ref, _) {
             final drawingVisible = ref.watch(drawingVisibleProvider);
-            // Use select() to only rebuild when the SSE server running
-            // state or port changes, NOT on every McpBridgeNotifier
-            // notification (tool list updates, connection state
-            // transitions, etc.).
-            final mcpRunning = ref.watch(mcpBridgeProvider.select(
-              (b) => b.isRunning,
-            ));
-            final mcpPort = ref.watch(mcpBridgeProvider.select(
-              (b) => b.currentState.port,
-            ));
-
-            // Feed new MCP proposals into universal state provider.
-            ref.listen<ProposalWatcher?>(proposalWatcherProvider, (prev, next) {
-              if (next == null) return;
-              final stateNotifier = ref.read(proposalStateProvider.notifier);
-              for (final p in next.pending) {
-                stateNotifier.addProposal(p);
-                next.markNotified(p.id);
-              }
-            });
 
             return Stack(
               children: [
                 navigatorChild!, // existing HMI content
-                const ProposalBanner(),
                 if (drawingVisible) const DrawingOverlay(),
-                // MCP indicator — hidden when a nav dropdown popup is
-                // open so it does not render on top of the menu (it
-                // lives above the Navigator's Overlay in the widget
-                // tree).
-                ValueListenableBuilder<bool>(
-                  valueListenable: NavDropdown.isAnyMenuOpen,
-                  builder: (context, navMenuOpen, _) {
-                    return Stack(
-                      children: [
-                        // MCP server status indicator (debug only)
-                        if (kDebugMode && mcpRunning && !navMenuOpen)
-                          Positioned(
-                            bottom: 8,
-                            right: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.green.withValues(alpha: 0.9),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.hub, color: Colors.white, size: 14),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'MCP :${mcpPort ?? '?'}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
               ],
             );
           },

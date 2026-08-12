@@ -469,9 +469,9 @@ void main() {
           ThirdPartyEquipmentKind.speedBatcher);
     });
 
-    test('the asset palette can create one by name', () {
+    test('the asset palette can create a default one', () {
       final asset =
-          AssetRegistry.createDefaultAssetByName('ThirdPartyEquipmentConfig');
+          AssetRegistry.createDefaultAsset(ThirdPartyEquipmentConfig);
       expect(asset, isA<ThirdPartyEquipmentConfig>());
     });
   });

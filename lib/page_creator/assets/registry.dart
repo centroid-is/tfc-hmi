@@ -185,19 +185,4 @@ class AssetRegistry {
     }
     return factory();
   }
-
-  /// Creates a default asset by its string name (e.g., "ButtonConfig").
-  ///
-  /// Returns null if no factory matches the given name. This is used by the
-  /// proposal system where asset type names arrive as strings from the MCP
-  /// server, and the full JSON for [parse] is not available (missing required
-  /// fields like colors, sizes, etc.).
-  static Asset? createDefaultAssetByName(String assetName) {
-    for (final entry in defaultFactories.entries) {
-      if (entry.key.toString() == assetName) {
-        return entry.value();
-      }
-    }
-    return null;
-  }
 }
