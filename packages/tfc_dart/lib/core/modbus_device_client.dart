@@ -540,6 +540,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       if (keys == null || keys.isEmpty) return;
       for (final key in keys) {
         try {
+          wrapper.recordRequest();
           await readUmasVariable(key);
         } catch (e) {
           _log.w('UMAS fallback poll for key "$key" in group "$group" '
@@ -550,6 +551,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
       return;
     }
     try {
+      wrapper.recordRequest();
       final values = await umas.monitorReadAll();
       _demuxUmasReadAll(values);
     } catch (e) {

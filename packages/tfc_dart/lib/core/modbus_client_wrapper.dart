@@ -6,6 +6,7 @@ import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
 import 'package:rxdart/rxdart.dart';
 
+import 'conn_meta.dart' show RollingRate;
 import 'state_man.dart' show ConnectionStatus;
 
 // =============================================================================
@@ -147,6 +148,51 @@ class ModbusClientWrapper {
   static const _initialBackoff = Duration(milliseconds: 500);
   static const _maxBackoff = Duration(seconds: 5);
   Duration _backoff = _initialBackoff;
+
+  // ---------------------------------------------------------------------------
+  // Connection-metadata instrumentation (additive, null-safe)
+  // ---------------------------------------------------------------------------
+
+  /// Rolling requests-per-second, incremented at each poll/UMAS send.
+  final RollingRate _requestRate = RollingRate();
+
+  /// Timestamp of the most recent transition to `connected`.
+  DateTime? _connectedSince;
+
+  /// Whether a first connection has ever succeeded (so the initial connect is
+  /// not counted as a reconnect).
+  bool _everConnected = false;
+
+  /// Number of times the connection has been re-established after the first.
+  int _reconnectCount = 0;
+
+  /// Last error string captured at a connection/poll failure site ('' = none).
+  String _lastError = '';
+
+  /// Records one Modbus request for the requests-per-second rate. Called at
+  /// each classic poll send and each UMAS poll read.
+  void recordRequest() => _requestRate.increment();
+
+  /// Rolling requests-per-second over the recent window.
+  double get requestsPerSec => _requestRate.ratePerSec;
+
+  /// Seconds since the last successful connect (0 when not connected).
+  double get uptimeSec {
+    final since = _connectedSince;
+    if (since == null || connectionStatus != ConnectionStatus.connected) {
+      return 0;
+    }
+    return DateTime.now().difference(since).inMilliseconds / 1000.0;
+  }
+
+  /// Number of reconnects since the first successful connect.
+  int get reconnectCount => _reconnectCount;
+
+  /// Last captured error string ('' when none).
+  String get lastError => _lastError;
+
+  /// The local TCP source port, or null when disconnected.
+  int? get sourcePort => _client?.localPort;
 
   static final _log = Logger(
     printer: SimplePrinter(),
@@ -494,6 +540,11 @@ class ModbusClientWrapper {
 
         // Connected successfully
         _log.i('ModbusClientWrapper($host:$port) connected');
+        if (_everConnected) {
+          _reconnectCount++;
+        }
+        _everConnected = true;
+        _connectedSince = DateTime.now();
         if (!_status.isClosed) {
           _status.add(ConnectionStatus.connected);
         }
@@ -508,11 +559,13 @@ class ModbusClientWrapper {
         await _awaitDisconnect();
         _log.i('ModbusClientWrapper($host:$port) connection lost');
       } catch (e) {
+        _lastError = e.toString();
         _log.i('ModbusClientWrapper($host:$port) connection error: $e');
       }
 
       // Socket is gone -- clean up
       _stopHeartbeat();
+      _connectedSince = null;
       await _cleanupClientInstance();
       if (!_stopped && !_status.isClosed) {
         _status.add(ConnectionStatus.disconnected);
@@ -632,14 +685,17 @@ class ModbusClientWrapper {
           final request = elemGroup.getReadRequest(
             responseTimeout: group.responseTimeout,
           );
+          recordRequest();
           final result = await _client!.send(request);
 
           if (result != ModbusResponseCode.requestSucceed) {
+            _lastError = 'Poll group "${group.name}": ${result.name}';
             _log.w(
                 'Poll group "${group.name}" batch read failed: ${result.name}');
             // Last-known values remain in BehaviorSubjects (SCADA behavior)
           }
         } catch (e) {
+          _lastError = e.toString();
           _log.w(
               'Poll group "${group.name}" batch read error: $e');
           // Continue to next group
