@@ -31,6 +31,7 @@ import 'conveyor_gate.dart';
 import 'elevator.dart';
 import 'sensor.dart';
 import '../../core/feature_flags.dart';
+import 'connection_info.dart';
 import 'drawing_viewer.dart';
 import 'third_party.dart';
 
@@ -44,6 +45,7 @@ class AssetRegistry {
     ConveyorConfig: ConveyorConfig.fromJson,
     ConveyorGateConfig: ConveyorGateConfig.fromJson,
     SensorConfig: SensorConfig.fromJson,
+    ConnectionInfoConfig: ConnectionInfoConfig.fromJson,
     ElevatorConfig: ElevatorConfig.fromJson,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.fromJson,
     ArrowConfig: ArrowConfig.fromJson,
@@ -93,6 +95,7 @@ class AssetRegistry {
     ConveyorConfig: ConveyorConfig.preview,
     ConveyorGateConfig: ConveyorGateConfig.preview,
     SensorConfig: SensorConfig.preview,
+    ConnectionInfoConfig: ConnectionInfoConfig.preview,
     ElevatorConfig: ElevatorConfig.preview,
     ConveyorColorPaletteConfig: ConveyorColorPaletteConfig.preview,
     NumberConfig: NumberConfig.preview,
