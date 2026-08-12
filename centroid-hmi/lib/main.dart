@@ -38,11 +38,7 @@ import 'package:tfc/theme.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
-import 'package:mcp_dart/mcp_dart.dart' show ElicitResult;
-import 'package:tfc/chat/chat_overlay.dart';
-import 'package:tfc/chat/elicitation_dialog.dart';
 import 'package:tfc/drawings/drawing_overlay.dart';
-import 'package:tfc/providers/chat.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/navigator_key.dart';
 import 'package:tfc/providers/proposal_watcher.dart';
@@ -375,34 +371,6 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
   return RoutesLocationBuilder(routes: routes);
 }
 
-/// Wires the elicitation UI handler into the MCP bridge so that write-tool
-/// proposals trigger a confirm/deny dialog instead of auto-accepting.
-///
-/// The handler uses [navigatorKeyProvider] to obtain a valid [BuildContext]
-/// below the app [Navigator], then shows an [ElicitationDialog] and
-/// returns the user's response as an [ElicitResult].
-void _wireElicitationHandler(WidgetRef ref) {
-  final bridge = ref.read(mcpBridgeProvider);
-  // Only set once — avoid replacing on every rebuild.
-  if (bridge.elicitationHandler != null) return;
-
-  bridge.elicitationHandler = (request) async {
-    final navKey = ref.read(navigatorKeyProvider);
-    final ctx = navKey?.currentContext;
-    if (ctx == null || !ctx.mounted) {
-      // No navigator context available — fall back to auto-accept.
-      return const ElicitResult(action: 'accept', content: {'confirm': true});
-    }
-    final completer = Completer<ElicitResult>();
-    showElicitationDialog(
-      context: ctx,
-      request: request,
-      completer: completer,
-    );
-    return completer.future;
-  };
-}
-
 class MyApp extends ConsumerWidget {
   MyApp({super.key, required RoutesLocationBuilder locationBuilder})
       : routerDelegate = BeamerDelegate(
@@ -429,19 +397,12 @@ class MyApp extends ConsumerWidget {
     // Initialize MCP server lifecycle management
     ref.watch(mcpServerLifecycleProvider);
 
-    // Initialize chat lifecycle management (MCP bridge connect/disconnect)
-    ref.watch(chatLifecycleProvider);
-
     // Expose the BeamerDelegate's navigator key so overlay widgets
-    // (chat, drawings, FAB) can show dialogs / access Navigator.
+    // (drawings, FAB) can show dialogs / access Navigator.
     // Defer to avoid modifying provider state during build.
     Future.microtask(() {
       ref.read(navigatorKeyProvider.notifier).state = routerDelegate.navigatorKey;
     });
-
-    // Wire elicitation UI dialog into MCP bridge so write-tool proposals
-    // show a confirm/deny dialog instead of auto-accepting.
-    _wireElicitationHandler(ref);
 
     final app = MaterialApp.router(
       title: 'CentroidX',
@@ -459,7 +420,6 @@ class MyApp extends ConsumerWidget {
         return Consumer(
           builder: (context, ref, _) {
             final drawingVisible = ref.watch(drawingVisibleProvider);
-            final chatVisible = ref.watch(chatVisibleProvider);
             // Use select() to only rebuild when the SSE server running
             // state or port changes, NOT on every McpBridgeNotifier
             // notification (tool list updates, connection state
@@ -470,10 +430,8 @@ class MyApp extends ConsumerWidget {
             final mcpPort = ref.watch(mcpBridgeProvider.select(
               (b) => b.currentState.port,
             ));
-            final chatEnabled = ref.watch(mcpChatEnabledProvider).valueOrNull ?? false;
 
             // Feed new MCP proposals into universal state provider.
-            // Proposals are surfaced inline in chat via the embedded proposal card.
             ref.listen<ProposalWatcher?>(proposalWatcherProvider, (prev, next) {
               if (next == null) return;
               final stateNotifier = ref.read(proposalStateProvider.notifier);
@@ -488,40 +446,20 @@ class MyApp extends ConsumerWidget {
                 navigatorChild!, // existing HMI content
                 const ProposalBanner(),
                 if (drawingVisible) const DrawingOverlay(),
-                if (chatEnabled && chatVisible) const ChatOverlay(),
-                // Chat FAB and MCP indicator — hidden when a nav
-                // dropdown popup is open so the FAB does not render
-                // on top of the menu (the FAB lives above the
-                // Navigator's Overlay in the widget tree).
+                // MCP indicator — hidden when a nav dropdown popup is
+                // open so it does not render on top of the menu (it
+                // lives above the Navigator's Overlay in the widget
+                // tree).
                 ValueListenableBuilder<bool>(
                   valueListenable: NavDropdown.isAnyMenuOpen,
                   builder: (context, navMenuOpen, _) {
                     return Stack(
                       children: [
-                        // Chat FAB (when chat enabled but overlay closed)
-                        if (chatEnabled && !chatVisible && !navMenuOpen)
-                          Positioned(
-                            bottom: 90,
-                            right: 16,
-                            child: FloatingActionButton(
-                              key: const ValueKey<String>('chat-fab'),
-                              onPressed: () => ref.read(chatVisibleProvider.notifier).state = true,
-                              // tooltip removed: MaterialApp.builder is above
-                              // Navigator's Overlay, so Tooltip crashes with
-                              // "No Overlay widget found".
-                              tooltip: null,
-                              // heroTag disabled: Hero requires a Navigator
-                              // ancestor, but this FAB is above the Navigator
-                              // in the widget tree (MaterialApp.builder Stack).
-                              heroTag: null,
-                              child: const Icon(Icons.chat),
-                            ),
-                          ),
                         // MCP server status indicator (debug only)
                         if (kDebugMode && mcpRunning && !navMenuOpen)
                           Positioned(
-                            bottom: chatEnabled && !chatVisible ? 82 : 8,
-                            right: chatEnabled && !chatVisible ? 76 : 8,
+                            bottom: 8,
+                            right: 8,
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(

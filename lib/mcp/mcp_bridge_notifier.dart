@@ -17,8 +17,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         TechDocIndex,
         McpToolToggles;
 
-import '../llm/llm_models.dart';
-import '../llm/llm_provider.dart';
 import 'mcp_sse_server.dart';
 
 /// The single preference key for the consolidated MCP config JSON.
@@ -103,10 +101,9 @@ class McpBridgeNotifier extends ChangeNotifier {
   /// (create_alarm, create_page, etc.) successfully wraps a proposal.
   ///
   /// This fires from inside the MCP server process -- both the in-process
-  /// bridge and the SSE HTTP server. The chat UI listens to this stream
-  /// to inject proposal messages, ensuring proposals are visible even when
-  /// tool execution does not go through [ChatNotifier]'s tool loop
-  /// (e.g., when an external Agent SDK proxy executes tools via SSE).
+  /// bridge and the SSE HTTP server. The proposal watcher listens to this
+  /// stream to surface proposals in the UI (e.g., when an external Agent
+  /// SDK proxy executes tools via SSE).
   final StreamController<String> _proposalController =
       StreamController<String>.broadcast();
 
@@ -205,7 +202,6 @@ class McpBridgeNotifier extends ChangeNotifier {
   /// [database] is the server database for queries and audit logging.
   /// [stateReader] provides live tag values from StateMan subscriptions.
   /// [alarmReader] provides alarm configs from AlarmMan.
-  /// [llmProvider] is optionally wired to handle sampling requests.
   /// [drawingIndex] provides optional drawing search capability.
   /// [plcCodeIndex] provides optional PLC code search capability.
   Future<void> connectInProcess({
@@ -213,7 +209,6 @@ class McpBridgeNotifier extends ChangeNotifier {
     required McpDatabase database,
     required StateReader stateReader,
     required AlarmReader alarmReader,
-    LlmProvider? llmProvider,
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
@@ -267,14 +262,10 @@ class McpBridgeNotifier extends ChangeNotifier {
         const Implementation(name: 'tfc-hmi', version: '1.0.0'),
         options: McpClientOptions(
           capabilities: ClientCapabilities(
-            sampling: const ClientCapabilitiesSampling(),
             elicitation: const ClientElicitation.formOnly(),
           ),
         ),
       );
-
-      // Wire sampling request handler to route to LlmProvider
-      _wireSamplingHandler(llmProvider);
 
       // Wire elicitation handler: delegates to UI dialog when available,
       // falls back to auto-accept for backwards compatibility.
@@ -310,12 +301,10 @@ class McpBridgeNotifier extends ChangeNotifier {
   ///
   /// [operatorId] is the TFC_USER identity for the subprocess.
   /// [dbEnv] contains CENTROID_PG* database connection variables.
-  /// [llmProvider] is optionally wired to handle sampling requests.
   /// [envProvider] is injectable for testing (defaults to Platform.environment).
   Future<void> connect({
     required String operatorId,
     required Map<String, String> dbEnv,
-    LlmProvider? llmProvider,
     String Function(String)? envProvider,
   }) async {
     if (_state.connectionState == McpConnectionState.connected ||
@@ -344,14 +333,10 @@ class McpBridgeNotifier extends ChangeNotifier {
         const Implementation(name: 'tfc-hmi', version: '1.0.0'),
         options: McpClientOptions(
           capabilities: ClientCapabilities(
-            sampling: const ClientCapabilitiesSampling(),
             elicitation: const ClientElicitation.formOnly(),
           ),
         ),
       );
-
-      // Wire sampling request handler to route to LlmProvider
-      _wireSamplingHandler(llmProvider);
 
       // Wire elicitation handler: delegates to UI dialog when available,
       // falls back to auto-accept for backwards compatibility.
@@ -380,34 +365,6 @@ class McpBridgeNotifier extends ChangeNotifier {
       } catch (_) {}
       _transport = null;
     }
-  }
-
-  /// Wire the sampling request handler to route to [LlmProvider].
-  void _wireSamplingHandler(LlmProvider? llmProvider) {
-    if (llmProvider == null || _client == null) return;
-
-    _client!.onSamplingRequest = (request) async {
-      final messages = <ChatMessage>[];
-      if (request.systemPrompt != null) {
-        messages.add(ChatMessage.system(request.systemPrompt!));
-      }
-      for (final msg in request.messages) {
-        final content = msg.content;
-        final text = content is SamplingTextContent ? content.text : '';
-        if (msg.role == SamplingMessageRole.user) {
-          messages.add(ChatMessage.user(text));
-        } else if (msg.role == SamplingMessageRole.assistant) {
-          messages.add(ChatMessage.assistant(text));
-        }
-      }
-      final response = await llmProvider.complete(messages);
-      return CreateMessageResult(
-        model: llmProvider.providerType.name,
-        role: SamplingMessageRole.assistant,
-        content: SamplingTextContent(text: response.content),
-        stopReason: response.stopReason,
-      );
-    };
   }
 
   /// Builds the elicitation callback for [McpClient.onElicitRequest].

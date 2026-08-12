@@ -198,7 +198,7 @@ void main() {
       () async {
     final notifier = ProposalStateNotifier(db);
 
-    // Simulate ChatNotifier._surfaceProposalFromToolResult adding inline proposals
+    // Simulate the proposal watcher surfacing inline proposals
     // (negative IDs, as the real code does)
     for (var i = 1; i <= 5; i++) {
       notifier.addProposal(PendingProposal(

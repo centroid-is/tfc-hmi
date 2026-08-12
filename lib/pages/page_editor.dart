@@ -20,13 +20,6 @@ import '../providers/current_page_assets.dart';
 import '../tech_docs/tech_doc_picker.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
-import '../chat/ai_context_action.dart';
-import '../chat/asset_context_menu.dart' show buildEditorAssetMenuItems;
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
-import '../chat/chat_overlay.dart' show ChatContext;
-import '../chat/hamburger_context_menu.dart';
-import '../chat/page_context_menu.dart';
-import '../chat/palette_context_menu.dart';
 import '../widgets/proposal_visual.dart';
 import '../providers/proposal_state.dart';
 import 'package:flutter/services.dart';
@@ -1074,19 +1067,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   /// Right-click menu for an asset on the canvas.
   ///
-  /// Editing actions are always available; the AI entries are appended only
-  /// when MCP chat is up, preserving what the AI-only menu used to offer.
-  ///
   /// [constraints] are the canvas's, needed by the rotate entries.
   Future<void> _showAssetContextMenu(
     Asset asset,
     Offset globalPosition,
     BoxConstraints constraints,
   ) async {
-    final aiItems = isMcpChatAvailable()
-        ? buildEditorAssetMenuItems(asset)
-        : const <AiMenuItem>[];
-
     final targets = _actionTargets(asset);
     final canSendToBack = _canSendToBack(targets);
     final canAlignHorizontal = _canAlign(targets, AlignAxis.horizontal);
@@ -1199,16 +1185,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             enabled: canSendToBack,
           ),
         ),
-        if (aiItems.isNotEmpty) const PopupMenuDivider(),
-        for (var i = 0; i < aiItems.length; i++)
-          PopupMenuItem<int>(
-            value: i,
-            child: ListTile(
-              leading: Icon(aiItems[i].icon),
-              title: Text(aiItems[i].label),
-              dense: true,
-            ),
-          ),
       ],
     );
 
@@ -1237,8 +1213,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _alignAssets(targets, AlignAxis.horizontal);
     } else if (choice == _alignVerticalAction) {
       _alignAssets(targets, AlignAxis.vertical);
-    } else {
-      await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
     }
   }
 
@@ -1578,21 +1552,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         bottom: 16,
                         child: Row(
                           children: [
-                            AiContextMenuWrapper(
-                              menuItems: buildHamburgerMenuItems(
-                                pageName: _currentPage ?? 'Untitled',
-                                assets: assets,
-                              ),
-                              child: FloatingActionButton(
-                                mini: true,
-                                heroTag: 'hamburger',
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.primary,
-                                onPressed: () =>
-                                    setState(() => _showPalette = true),
-                                child:
-                                    const Icon(Icons.menu, color: Colors.white),
-                              ),
+                            FloatingActionButton(
+                              mini: true,
+                              heroTag: 'hamburger',
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.primary,
+                              onPressed: () =>
+                                  setState(() => _showPalette = true),
+                              child:
+                                  const Icon(Icons.menu, color: Colors.white),
                             ),
                             const SizedBox(width: 8),
                             FloatingActionButton(
@@ -1728,16 +1696,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             itemBuilder: (context, index) {
               final entry = entries[index];
               final previewAsset = entry.value();
-              return AiContextMenuWrapper(
-                menuItems: buildPaletteItemMenuItems(
-                  asset: previewAsset,
-                  pageName: _currentPage,
-                  existingAssetSummary: summarizeExistingAssets(assets),
-                ),
-                child: _PaletteItem(
-                  assetType: entry.key,
-                  asset: previewAsset,
-                ),
+              return _PaletteItem(
+                assetType: entry.key,
+                asset: previewAsset,
               );
             },
           ),
@@ -1992,22 +1953,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       ),
     );
 
-    // Wrap with right-click context menu that includes both direct actions
-    // (Create New Page) and AI chat actions when page data is available.
-    if (currentPagePath != null && currentPage != null) {
-      return GestureDetector(
-        onSecondaryTapUp: (details) {
-          _showPageSelectorContextMenu(
-            details.globalPosition,
-            currentPagePath,
-            currentPage,
-          );
-        },
-        child: selector,
-      );
-    }
-
-    // No page selected -- still allow right-click to create a new page.
+    // Wrap with right-click context menu offering "Create New Page".
     return GestureDetector(
       onSecondaryTapUp: (details) {
         _showCreateNewPageContextMenu(details.globalPosition);
@@ -2016,75 +1962,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     );
   }
 
-  /// Shows a context menu for the page selector with "Create New Page" and
-  /// AI actions. Intercepts the [kCreateNewPageAction] sentinel to open the
-  /// page manager dialog instead of chat.
-  Future<void> _showPageSelectorContextMenu(
-    Offset position,
-    String pagePath,
-    AssetPage page,
-  ) async {
-    final menuItems = buildPageSelectorMenuItems(pagePath, page);
-
-    final result = await showMenu<int>(
-      context: context,
-      useRootNavigator: true,
-      clipBehavior: Clip.antiAlias,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx,
-        position.dy,
-      ),
-      items: [
-        for (var i = 0; i < menuItems.length; i++) ...[
-          // Add a divider after "Create New Page" to separate direct actions
-          // from AI actions.
-          if (i == 1) const PopupMenuDivider(),
-          PopupMenuItem<int>(
-            value: i,
-            child: ListTile(
-              leading: Icon(menuItems[i].icon),
-              title: Text(menuItems[i].label),
-              dense: true,
-            ),
-          ),
-        ],
-      ],
-    );
-
-    if (result == null || !mounted) return;
-
-    final item = menuItems[result];
-
-    // Intercept "Create New Page" -- open the page manager dialog directly.
-    if (item.prefillText == kCreateNewPageAction) {
-      _showPageManagerDialog();
-      return;
-    }
-
-    // Otherwise delegate to AI chat action.
-    if (item.sendImmediately) {
-      AiContextAction.openChatAndSend(ref: ref, message: item.prefillText);
-    } else {
-      ChatContext? chatContext;
-      if (item.contextBlock != null) {
-        chatContext = ChatContext(
-          label: item.contextLabel ?? item.label,
-          type: item.contextType,
-          contextBlock: item.contextBlock!,
-        );
-      }
-      AiContextAction.openChat(
-        ref: ref,
-        prefillText: item.prefillText,
-        context: chatContext,
-      );
-    }
-  }
-
-  /// Shows a minimal context menu with just "Create New Page" when no page
-  /// is currently selected.
+  /// Shows a context menu with just "Create New Page".
   Future<void> _showCreateNewPageContextMenu(Offset position) async {
     final result = await showMenu<String>(
       context: context,
@@ -2244,25 +2122,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final isSection = page.menuItem.isNavigationSection;
     final isDraft = !page.published;
 
-    final row = AiContextMenuWrapper(
-      menuItems: [
-        AiMenuItem(
-          label: 'Describe this page',
-          prefillText:
-              'Describe page "$displayName" (key: $pageName) — what assets does it contain and what is it monitoring?',
-        ),
-        AiMenuItem(
-          label: 'Improve layout',
-          prefillText:
-              'Review page "$displayName" (key: $pageName) and suggest layout improvements or missing assets.',
-        ),
-        AiMenuItem(
-          label: 'Duplicate with AI',
-          prefillText:
-              'Create a new page similar to "$displayName" (key: $pageName) but for [describe the target system].',
-        ),
-      ],
-      child: ListTile(
+    final row = ListTile(
         dense: true,
         leading: Row(
           mainAxisSize: MainAxisSize.min,
@@ -2373,7 +2233,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 setState(() => _currentPage = pageName);
                 Navigator.pop(dialogContext);
               },
-      ),
     );
 
     return Padding(

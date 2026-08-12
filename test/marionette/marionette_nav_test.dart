@@ -30,12 +30,6 @@ void main() {
         reason: 'NavDropdown should generate ValueKeys from menu item labels',
       );
     });
-
-    test('chat-fab key exists in main.dart', () {
-      final source = File(projectFile('centroid-hmi/lib/main.dart'))
-          .readAsStringSync();
-      expect(source, contains("ValueKey<String>('chat-fab')"));
-    });
   });
 
   group('NavRoutes match route registrations in main.dart', () {

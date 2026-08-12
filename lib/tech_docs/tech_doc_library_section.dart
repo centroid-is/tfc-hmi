@@ -14,31 +14,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
 
-import '../chat/ai_context_action.dart';
 import '../plc/plc_code_upload_dialog.dart';
 import '../plc/plc_detail_panel.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/plc.dart';
 import '../providers/scaffold_messenger_key.dart';
 import '../providers/tech_doc.dart';
 import 'tech_doc_audit.dart';
 import 'tech_doc_section_detail_panel.dart';
 import 'tech_doc_upload_service.dart';
-
-/// Builds a structured prompt for the LLM to discuss a tech document.
-///
-/// The message instructs the AI copilot to retrieve and summarise the
-/// document's contents, sections, and any related assets or drawings.
-String buildChatAboutDocMessage(String docName) {
-  return '''Chat about document: $docName
-
-Please gather all available information about this technical document including:
-- Document sections and table of contents (use search_tech_docs to find it, then get_tech_doc_section for key sections)
-- Any related assets or equipment mentioned in the document (use list_assets to cross-reference)
-- Related electrical drawings if applicable (use search_drawings)
-- Related PLC code blocks if applicable (use search_plc_code)
-Then provide a summary of what this document covers and how it relates to the system.''';
-}
 
 final _logger = Logger(printer: SimplePrinter(printTime: false));
 
@@ -83,7 +66,8 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     super.dispose();
   }
 
-  bool get _isWriteEnabled => isMcpChatAvailable();
+  // TFC_USER gates write operations (upload, rename, delete, replace).
+  bool get _isWriteEnabled => io.Platform.environment.containsKey('TFC_USER');
 
   String get _currentUser => io.Platform.environment['TFC_USER'] ?? 'operator';
 
@@ -439,20 +423,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
   ) async {
     final items = <PopupMenuEntry<String>>[];
 
-    // "Chat about this" — only when MCP chat is available.
-    if (isMcpChatAvailable()) {
-      items.add(const PopupMenuItem(
-        value: 'chat',
-        child: ListTile(
-          leading: Icon(Icons.chat),
-          title: Text('Chat about this'),
-          dense: true,
-        ),
-      ));
-    }
-
     if (_isWriteEnabled) {
-      if (items.isNotEmpty) items.add(const PopupMenuDivider());
       items.addAll([
         const PopupMenuItem(
           value: 'rename',
@@ -481,7 +452,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       ]);
     }
 
-    // Nothing to show (no MCP, no write access).
+    // Nothing to show (no write access).
     if (items.isEmpty) return;
 
     final value = await showMenu<String>(
@@ -498,8 +469,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
 
     if (value == null || !mounted) return;
     switch (value) {
-      case 'chat':
-        _chatAboutDocument(doc);
       case 'rename':
         setState(() {
           _editingDocId = doc.id;
@@ -510,15 +479,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       case 'delete':
         _confirmDelete(context, doc);
     }
-  }
-
-  /// Opens the chat overlay and sends a message asking the LLM about [doc].
-  ///
-  /// Uses [AiContextAction.openChatAndSend] to properly create a new
-  /// conversation before sending the structured prompt.
-  void _chatAboutDocument(TechDocSummary doc) {
-    final message = buildChatAboutDocMessage(doc.name);
-    AiContextAction.openChatAndSend(ref: ref, message: message);
   }
 
   Future<void> _pickAndUpload() async {
@@ -955,20 +915,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
   ) async {
     final items = <PopupMenuEntry<String>>[];
 
-    // "Chat about this" — only when MCP chat is available.
-    if (isMcpChatAvailable()) {
-      items.add(const PopupMenuItem(
-        value: 'chat',
-        child: ListTile(
-          leading: Icon(Icons.chat),
-          title: Text('Chat about this'),
-          dense: true,
-        ),
-      ));
-    }
-
     if (_isWriteEnabled) {
-      if (items.isNotEmpty) items.add(const PopupMenuDivider());
       items.addAll([
         const PopupMenuItem(
           value: 'rename',
@@ -1013,8 +960,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
 
     if (value == null || !mounted) return;
     switch (value) {
-      case 'chat':
-        _chatAboutPlcAsset(plc);
       case 'rename':
         setState(() {
           _editingPlcAssetKey = plc.assetKey;
@@ -1025,20 +970,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       case 'delete':
         _confirmDeletePlcAsset(context, plc);
     }
-  }
-
-  /// Opens the chat overlay and sends a message asking the LLM about a PLC asset.
-  void _chatAboutPlcAsset(PlcAssetSummary plc) {
-    final message = '''Chat about PLC code: ${plc.assetKey}
-
-Please gather all available information about this PLC project including:
-- List the code blocks and their types (use search_plc_code with asset filter "${plc.assetKey}")
-- Summarize the main program structure and function blocks
-- Identify key variables and their purposes
-- Any related assets or equipment (use list_assets to cross-reference)
-- Related electrical drawings if applicable (use search_drawings)
-Then provide a summary of what this PLC code controls and how it is structured.''';
-    AiContextAction.openChatAndSend(ref: ref, message: message);
   }
 
   /// Re-indexes a PLC asset by re-parsing the stored source code.

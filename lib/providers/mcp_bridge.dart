@@ -68,12 +68,6 @@ String getMcpOperatorId() {
   return io.Platform.environment['TFC_USER'] ?? 'operator';
 }
 
-/// Whether the MCP chat feature is available.
-bool isMcpChatAvailable() {
-  return io.Platform.environment.containsKey('TFC_USER');
-}
-
-
 /// Mutable state for the MCP server lifecycle provider.
 final _serverLifecycle = McpLifecycleState();
 
@@ -87,12 +81,6 @@ final mcpConfigProvider = FutureProvider<McpConfig>((ref) async {
 final mcpEnabledProvider = FutureProvider<bool>((ref) async {
   final config = await ref.watch(mcpConfigProvider.future);
   return config.serverEnabled;
-});
-
-/// Provider for the in-app chat bubble preference.
-final mcpChatEnabledProvider = FutureProvider<bool>((ref) async {
-  final config = await ref.watch(mcpConfigProvider.future);
-  return config.chatEnabled;
 });
 
 /// Provider for the MCP server port preference.

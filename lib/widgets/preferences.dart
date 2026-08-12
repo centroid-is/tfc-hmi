@@ -122,19 +122,6 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
             },
           ),
 
-          // Chat bubble toggle (only when server enabled)
-          if (_config.serverEnabled)
-            SwitchListTile(
-              title: const Text('Show Chat Bubble'),
-              subtitle: const Text(
-                  'Display AI copilot chat button on the main screen'),
-              value: _config.chatEnabled,
-              onChanged: (value) async {
-                setState(() => _config = _config.copyWith(chatEnabled: value));
-                await _saveConfig(prefs);
-              },
-            ),
-
           // Port field
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

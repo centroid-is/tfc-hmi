@@ -71,12 +71,12 @@ void main() {
       final firstToolGroupMeta = McpToolToggles.toolGroupMeta.first;
       expect(find.text(firstToolGroupMeta.title), findsOneWidget);
 
-      // Switches: [0] enable, [1] chat bubble, [2+] tool groups
+      // Switches: [0] enable, [1+] tool groups
       final switches = find.byType(Switch);
-      expect(switches, findsAtLeast(3));
+      expect(switches, findsAtLeast(2));
 
-      // Toggle the third switch (first tool group)
-      await tester.tap(switches.at(2));
+      // Toggle the second switch (first tool group)
+      await tester.tap(switches.at(1));
       await tester.pumpAndSettle();
 
       // ExpansionTile must still be expanded

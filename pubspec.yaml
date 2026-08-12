@@ -65,8 +65,6 @@ dependencies:
   # interaction"), which ElicitationRiskGate depends on. Migrate to stateless
   # elicitation before unpinning.
   mcp_dart: 2.0.0
-  anthropic_sdk_dart: ^1.2.0
-  openai_dart: ^1.1.0
   pdfrx: ^2.2.24
   desktop_drop: ^0.7.0
 dev_dependencies:

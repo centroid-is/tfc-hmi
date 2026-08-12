@@ -9,9 +9,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
-import '../chat/asset_context_menu.dart';
 import '../widgets/proposal_visual.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
 import '../providers/state_man.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
@@ -126,8 +124,7 @@ class AssetStack extends ConsumerStatefulWidget {
   final void Function(Asset asset, DragStartDetails details)? onPanStart;
 
   /// Secondary tap (right-click) on an asset in edit mode. When supplied the
-  /// host builds the whole context menu, so it can offer editing actions
-  /// alongside the AI ones. Falls back to the AI-only menu when null.
+  /// host builds the whole context menu with editing actions.
   final void Function(Asset asset, Offset globalPosition)? onSecondaryTap;
   final bool absorb;
   final Set<Asset> selectedAssets;
@@ -362,44 +359,19 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                                     ? (details) =>
                                         widget.onPanStart!(asset, details)
                                     : null,
-                                // The host's menu wins when supplied: it
-                                // carries editing actions that must be
-                                // reachable whether or not MCP chat is
-                                // available, and folds the AI entries in
-                                // itself.
+                                // The host builds the context menu with
+                                // editing actions when supplied.
                                 onSecondaryTapUp: widget.onSecondaryTap != null
                                     ? (details) => widget.onSecondaryTap!(
                                           asset,
                                           details.globalPosition,
                                         )
-                                    : isMcpChatAvailable()
-                                        ? (details) {
-                                            showEditorAssetContextMenu(
-                                              context,
-                                              ref,
-                                              details.globalPosition,
-                                              asset,
-                                            );
-                                          }
-                                        : null,
-                              )
-                            : GestureDetector(
-                                // Runtime view: only secondary tap is
-                                // handled here (chat context menu). Primary
-                                // taps must pass through to the asset's
-                                // own GestureDetectors. translucent keeps
-                                // us from swallowing them.
-                                behavior: HitTestBehavior.translucent,
-                                onSecondaryTapUp: isMcpChatAvailable()
-                                    ? (details) {
-                                        showAssetContextMenu(
-                                          context,
-                                          details.globalPosition,
-                                          () => debugAsset(ref, asset),
-                                        );
-                                      }
                                     : null,
-                              ),
+                              )
+                            // Runtime view: no editor chrome. Primary taps
+                            // must pass through to the asset's own
+                            // GestureDetectors.
+                            : const SizedBox.shrink(),
                         ),
                       ),
                     ),
@@ -461,33 +433,11 @@ class _AssetStackState extends ConsumerState<AssetStack> {
             // menu) — otherwise an asset whose label overlaps its body
             // can't be moved.
             //
-            // In runtime mode (`absorb=false`) we keep the secondary-tap
-            // (right-click → AI context menu) binding so operators can
-            // open the AI menu by right-clicking the label, but we wrap
-            // the underlying Text in `IgnorePointer` so it does not
-            // hit-test for primary taps. Combined with
-            // `HitTestBehavior.translucent` on the wrapping
-            // GestureDetector, primary taps on the label fall through to
-            // the asset body below (Stack hit-testing visits earlier
-            // children when a translucent detector reports a hit but has
-            // no matching gesture handler).
-            final labelWidget = widget.absorb
-                ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
-                : GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onSecondaryTapUp: isMcpChatAvailable()
-                        ? (details) {
-                            showAssetContextMenu(
-                              context,
-                              details.globalPosition,
-                              () => debugAsset(ref, asset),
-                            );
-                          }
-                        : null,
-                    child: IgnorePointer(
-                      child: Text(asset.text!, style: labelStyle),
-                    ),
-                  );
+            // In runtime mode (`absorb=false`) the label likewise must not
+            // hit-test for primary taps, so those fall through to the asset
+            // body below.
+            final labelWidget =
+                IgnorePointer(child: Text(asset.text!, style: labelStyle));
             positionedChildren.add(
               Positioned(
                 left: labelOff.dx,

@@ -11,26 +11,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         ReferenceKind,
         VariableReference;
 
-import '../chat/ai_context_action.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/plc.dart';
-
-/// Builds a structured prompt for the LLM to explain a PLC code block.
-///
-/// The message instructs the AI copilot to retrieve and explain the given
-/// code block, its variables, and how it relates to the system.
-String buildChatAboutBlockMessage(
-    String blockName, String blockType, String assetKey) {
-  return '''Explain the PLC code block '$blockName' ($blockType) from asset '$assetKey'
-
-Please gather all available information about this code block including:
-- Retrieve the full block source (use search_plc_code with query "$blockName" and asset filter "$assetKey", then get_plc_code_block for the full code)
-- Explain what this $blockType does based on its structured text implementation
-- List its input/output variables and their purposes
-- Identify any related assets or tags (use list_tags filtered by variable names)
-- Cross-reference with technical documentation if available (use search_tech_docs)
-Then provide a clear explanation of this code block's purpose and behavior.''';
-}
 
 // ---------------------------------------------------------------------------
 // Sort order helpers
@@ -495,7 +476,6 @@ class _TopLevelBlockTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final chatAvailable = isMcpChatAvailable();
 
     // Count referenced function blocks.
     final referencedCount = findReferencedBlocks(block, allBlocks).length;
@@ -520,28 +500,10 @@ class _TopLevelBlockTile extends ConsumerWidget {
               : block.blockType,
           style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (chatAvailable)
-              IconButton(
-                icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                tooltip: 'Chat about this block',
-                onPressed: () => _chatAboutBlock(ref),
-              ),
+        trailing:
             const Icon(Icons.chevron_right, size: 20, color: Colors.grey),
-          ],
-        ),
         onTap: onTap,
       ),
-    );
-  }
-
-  void _chatAboutBlock(WidgetRef ref) {
-    AiContextAction.openChatAndSend(
-      ref: ref,
-      message: buildChatAboutBlockMessage(
-          block.blockName, block.blockType, assetKey),
     );
   }
 }
@@ -698,7 +660,6 @@ class _ReferencedBlockTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final chatAvailable = isMcpChatAvailable();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 4),
@@ -718,18 +679,8 @@ class _ReferencedBlockTile extends ConsumerWidget {
           '${block.blockType} \u00b7 ${block.variables.length} vars',
           style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (chatAvailable)
-              IconButton(
-                icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                tooltip: 'Chat about this block',
-                onPressed: () => _chatAboutBlock(ref),
-              ),
+        trailing:
             const Icon(Icons.chevron_right, size: 20, color: Colors.grey),
-          ],
-        ),
         children: [
           // Inline source code preview
           Padding(
@@ -761,14 +712,6 @@ class _ReferencedBlockTile extends ConsumerWidget {
           ),
         ],
       ),
-    );
-  }
-
-  void _chatAboutBlock(WidgetRef ref) {
-    AiContextAction.openChatAndSend(
-      ref: ref,
-      message: buildChatAboutBlockMessage(
-          block.blockName, block.blockType, assetKey),
     );
   }
 }

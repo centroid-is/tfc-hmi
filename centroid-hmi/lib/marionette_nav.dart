@@ -41,39 +41,6 @@ class NavKeys {
   /// This is a [NavDropdown] with a [ValueKey].
   static const advanced = 'nav-advanced';
 
-  /// Chat floating action button.
-  static const chatFab = 'chat-fab';
-
-  /// Chat overlay close button.
-  static const chatClose = 'chat-close-button';
-
-  /// Chat overflow menu button.
-  static const chatOverflow = 'chat-overflow-menu';
-
-  /// Chat provider dropdown.
-  static const chatProviderDropdown = 'chat-provider-dropdown';
-
-  /// Chat message input field.
-  static const chatMessageInput = 'chat-message-input';
-
-  /// Chat send button.
-  static const chatSendButton = 'chat-send-button';
-
-  /// Chat API key indicator.
-  static const chatApiKeyIndicator = 'chat-api-key-indicator';
-
-  /// Chat API key text field.
-  static const chatApiKeyField = 'chat-api-key-field';
-
-  /// Chat base URL text field.
-  static const chatBaseUrlField = 'chat-base-url-field';
-
-  /// Chat API key cancel button.
-  static const chatApiKeyCancel = 'chat-api-key-cancel';
-
-  /// Chat API key save button.
-  static const chatApiKeySave = 'chat-api-key-save';
-
   /// Drawing overlay close button.
   static const drawingClose = 'drawing-close-button';
 }
@@ -170,14 +137,6 @@ class NavPaths {
   /// Verify: [ROUTE] /
   static const home = [
     NavStep.tapText('Home'),
-  ];
-
-  /// Open Chat overlay.
-  /// Single tap: chat-fab (key)
-  /// Verify: chat overlay widget appears (use interactiveElements or
-  /// check for chat-close-button key)
-  static const openChat = [
-    NavStep.tapKey(NavKeys.chatFab),
   ];
 }
 
