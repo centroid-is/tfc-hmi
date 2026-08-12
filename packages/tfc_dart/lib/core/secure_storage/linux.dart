@@ -9,6 +9,12 @@ import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 import 'interface.dart';
 
 class AwsSecureStorage implements MySecureStorage {
+  // NOTE: no namespace is configured, so amplify_secure_storage_dart falls
+  // back to its default of 'com.amplify.<scope>', i.e. the stored service
+  // name is "com.amplify.awsCognitoAuthPlugin". That is ugly branding, but
+  // every deployed Linux/eLinux install has its secrets stored under that
+  // name — changing it would orphan those secrets (configs would silently
+  // reset to defaults). Do not change it without a migration path.
   final _storage = AmplifySecureStorageDart.factoryFrom(
       macOSOptions: MacOSSecureStorageOptions(
     useDataProtection: false, // todo

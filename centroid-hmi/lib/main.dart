@@ -51,6 +51,7 @@ import 'package:tfc/providers/scaffold_messenger_key.dart';
 
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc_dart/core/log_config.dart';
+import 'package:tfc/core/secure_storage/macos.dart';
 import 'package:tfc/core/secure_storage/other.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -147,8 +148,17 @@ Future<void> _startApp([bool debugMode = false]) async {
 
   pdfrxFlutterInitialize();
   AmplifySecureStorageDart.registerWith();
-  if (Platform.isWindows) {
-    SecureStorage.setInstance(OtherSecureStorage());
+  if (Platform.isWindows || Platform.isMacOS) {
+    // Use the properly branded flutter_secure_storage implementation on
+    // Windows and macOS; AwsSecureStorage (amplify, keychain service name
+    // "com.amplify.awsCognitoAuthPlugin") remains only the Linux/eLinux
+    // fallback inside SecureStorage.getInstance(). On macOS existing
+    // installs have their secrets under the amplify service name, so wrap
+    // the new storage in a one-time migration that falls back to (and
+    // copies from) the old storage on a read miss.
+    SecureStorage.setInstance(Platform.isMacOS
+        ? MacOsMigratingSecureStorage()
+        : OtherSecureStorage());
   }
 
   // Register your custom asset type

@@ -113,6 +113,12 @@ class LoginForm extends ConsumerStatefulWidget {
 class _LoginFormState extends ConsumerState<LoginForm> {
   LoginCredentials? _currentCredentials;
 
+  /// Loaded once per State. Passing `_loadSavedCredentials()` directly to
+  /// the FutureBuilder would re-read the password from the OS keychain on
+  /// every widget rebuild.
+  late final Future<LoginCredentials> _savedCredentialsFuture =
+      _loadSavedCredentials();
+
   Future<void> _saveCredentials(LoginCredentials creds) async {
     logger.d('Saving credentials: $creds');
     final prefs = await SharedPreferences.getInstance();
@@ -201,7 +207,7 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     return SizedBox(
       width: widget.width ?? 300,
       child: FutureBuilder<LoginCredentials>(
-        future: _loadSavedCredentials(),
+        future: _savedCredentialsFuture,
         builder: (context, savedCredsSnapshot) {
           // Wait for credentials to load
           if (!savedCredsSnapshot.hasData) {

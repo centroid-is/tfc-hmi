@@ -42,6 +42,9 @@ Future<Preferences> createTestPreferences({
   KeyMappings? keyMappings,
   StateManConfig? stateManConfig,
 }) async {
+  // The secret cache is static (process-wide) so stale entries from a
+  // previous test would shadow this test's fresh FakeSecureStorage contents.
+  Preferences.clearSecretCache();
   final secureStorage = FakeSecureStorage();
   final prefs = Preferences(database: null, secureStorage: secureStorage);
 

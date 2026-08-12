@@ -153,6 +153,48 @@ class Preferences implements PreferencesApi {
   final StreamController<String> _onPreferencesChanged =
       StreamController<String>.broadcast();
 
+  /// In-memory write-through cache for secret values.
+  ///
+  /// Secret reads go to the OS keychain (macOS Keychain, Windows Credential
+  /// Manager, libsecret, ...). The riverpod provider chain re-creates
+  /// [Preferences] and re-reads secret configs (e.g. `state_man_config`)
+  /// whenever it rebuilds — which happens repeatedly while the database is
+  /// unreachable — and some pages re-read secrets on every widget rebuild.
+  /// Without a cache every one of those reads hits the keychain, which on
+  /// macOS can mean a user-visible permission prompt.
+  ///
+  /// The cache is static so it survives [Preferences] re-creation: each
+  /// secret key touches the keychain at most once per process. Reads
+  /// populate it (a missing key is cached as null), writes update it, and
+  /// [remove] evicts it. Note: this assumes all secret access in the process
+  /// goes through [Preferences] against a single [MySecureStorage] backend;
+  /// writing to secure storage directly behind its back leaves the cache
+  /// stale (call [clearSecretCache] if you must do that, e.g. in tests).
+  static final Map<String, String?> _secretCache = {};
+
+  /// Clears the process-wide secret cache. Intended for tests, which create
+  /// independent [Preferences] instances backed by fresh fake storages.
+  static void clearSecretCache() => _secretCache.clear();
+
+  Future<String?> _readSecret(String key) async {
+    if (_secretCache.containsKey(key)) {
+      return _secretCache[key];
+    }
+    final value = await secureStorage.read(key: key);
+    _secretCache[key] = value;
+    return value;
+  }
+
+  Future<void> _writeSecret(String key, String value) async {
+    await secureStorage.write(key: key, value: value);
+    _secretCache[key] = value;
+  }
+
+  Future<void> _deleteSecret(String key) async {
+    await secureStorage.delete(key: key);
+    _secretCache.remove(key);
+  }
+
   Preferences(
       {required this.database,
       required this.secureStorage,
@@ -220,7 +262,7 @@ class Preferences implements PreferencesApi {
   @override
   Future<bool?> getBool(String key, {bool secret = false}) async {
     if (secret) {
-      final value = await secureStorage.read(key: key);
+      final value = await _readSecret(key);
       return value == null ? null : value == 'true';
     } else {
       return await _memoryCache.getBool(key);
@@ -230,7 +272,7 @@ class Preferences implements PreferencesApi {
   @override
   Future<int?> getInt(String key, {bool secret = false}) async {
     if (secret) {
-      final value = await secureStorage.read(key: key);
+      final value = await _readSecret(key);
       return value == null ? null : int.parse(value);
     } else {
       return await _memoryCache.getInt(key);
@@ -240,7 +282,7 @@ class Preferences implements PreferencesApi {
   @override
   Future<double?> getDouble(String key, {bool secret = false}) async {
     if (secret) {
-      final value = await secureStorage.read(key: key);
+      final value = await _readSecret(key);
       return value == null ? null : double.parse(value);
     } else {
       return await _memoryCache.getDouble(key);
@@ -250,7 +292,7 @@ class Preferences implements PreferencesApi {
   @override
   Future<String?> getString(String key, {bool secret = false}) async {
     if (secret) {
-      return await secureStorage.read(key: key);
+      return await _readSecret(key);
     } else {
       return await _memoryCache.getString(key);
     }
@@ -259,7 +301,7 @@ class Preferences implements PreferencesApi {
   @override
   Future<List<String>?> getStringList(String key, {bool secret = false}) async {
     if (secret) {
-      final value = await secureStorage.read(key: key);
+      final value = await _readSecret(key);
       return value?.split(',');
     } else {
       return await _memoryCache.getStringList(key);
@@ -280,7 +322,7 @@ class Preferences implements PreferencesApi {
   Future<void> setBool(String key, bool value,
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
-      await secureStorage.write(key: key, value: value.toString());
+      await _writeSecret(key, value.toString());
       // Secret values are never persisted to Postgres in plaintext.
       _onPreferencesChanged.add(key);
       return;
@@ -297,7 +339,7 @@ class Preferences implements PreferencesApi {
   Future<void> setInt(String key, int value,
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
-      await secureStorage.write(key: key, value: value.toString());
+      await _writeSecret(key, value.toString());
       // Secret values are never persisted to Postgres in plaintext.
       _onPreferencesChanged.add(key);
       return;
@@ -314,7 +356,7 @@ class Preferences implements PreferencesApi {
   Future<void> setDouble(String key, double value,
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
-      await secureStorage.write(key: key, value: value.toString());
+      await _writeSecret(key, value.toString());
       // Secret values are never persisted to Postgres in plaintext.
       _onPreferencesChanged.add(key);
       return;
@@ -331,7 +373,7 @@ class Preferences implements PreferencesApi {
   Future<void> setString(String key, String value,
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
-      await secureStorage.write(key: key, value: value);
+      await _writeSecret(key, value);
       // Secret values are never persisted to Postgres in plaintext.
       _onPreferencesChanged.add(key);
       return;
@@ -348,7 +390,7 @@ class Preferences implements PreferencesApi {
   Future<void> setStringList(String key, List<String> value,
       {bool saveToDb = true, bool secret = false}) async {
     if (secret) {
-      await secureStorage.write(key: key, value: value.join(','));
+      await _writeSecret(key, value.join(','));
       // Secret values are never persisted to Postgres in plaintext.
       _onPreferencesChanged.add(key);
       return;
@@ -364,7 +406,7 @@ class Preferences implements PreferencesApi {
   @override
   Future<void> remove(String key, {bool secret = false}) async {
     if (secret) {
-      await secureStorage.delete(key: key);
+      await _deleteSecret(key);
     } else {
       await _memoryCache.remove(key);
       await localCache?.remove(key);
