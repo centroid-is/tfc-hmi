@@ -4,7 +4,19 @@ import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 
 class OtherSecureStorage implements MySecureStorage {
   final _storage = FlutterSecureStorage(
-    mOptions: MacOsOptions(accountName: 'CentroidX'),
+    // useDataProtectionKeyChain MUST stay false on macOS: the
+    // data-protection keychain (kSecUseDataProtectionKeychain) requires
+    // provisioned code signing (a real Apple Development identity with an
+    // application-identifier), and every keychain call fails with
+    // errSecMissingEntitlement (-34018) on ad-hoc/unprovisioned builds —
+    // which is what dev-machine and release builds are. The file-based
+    // login keychain works without provisioning (this is also why the
+    // amplify storage sets useDataProtection: false). Windows ignores
+    // mOptions entirely, so this is macOS-only in effect.
+    mOptions: MacOsOptions(
+      accountName: 'CentroidX',
+      useDataProtectionKeyChain: false,
+    ),
   );
 
   @override
