@@ -5,11 +5,24 @@
 /// wire all lean on. No clock, no I/O, no FFI anywhere in this file.
 library;
 
+import 'dart:convert';
+
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/src/dynamic_value.dart';
 import 'package:tfc_relay_protocol/src/quality.dart';
 
 void main() {
+  /// Same helper as messages_test.dart:6-11 — every shape must survive
+  /// encode → jsonEncode → jsonDecode → decode with an unknown field planted
+  /// in it, or a newer server rolls out and every older client falls over.
+  Map<String, Object?> viaJson(Map<String, Object?> json,
+          {Map<String, Object?> extra = const {'futureField': 123}}) =>
+      jsonDecode(jsonEncode({...json, ...extra})) as Map<String, Object?>;
+
+  Map<String, Object?> full(DynamicValue v) => v.toJson() as Map<String, Object?>;
+
+  DynamicValue roundTrip(DynamicValue v) => DynamicValue.fromJson(viaJson(full(v)));
+
   group('coercions never return null and never throw', () {
     test('a double answers every scalar question', () {
       final v = DynamicValue(value: 3.5);
@@ -279,6 +292,164 @@ void main() {
           isNot(equals(const LocalizedText('Hraði'))));
       expect(const EnumField(value: 1, name: 'Stopped'),
           equals(const EnumField(value: 1, name: 'Stopped')));
+    });
+  });
+
+  group('JSON round-trips tolerantly', () {
+    test('every shape survives encode → jsonEncode → jsonDecode → decode', () {
+      final shapes = <DynamicValue>[
+        DynamicValue(value: null),
+        DynamicValue(value: true),
+        DynamicValue(value: 42),
+        DynamicValue(value: 42.5),
+        DynamicValue(value: 'x'),
+        DynamicValue(value: const [1, 'two', false]),
+        DynamicValue(value: {
+          'run': true,
+          'nested': {'deep': 1.5},
+        }),
+      ];
+      for (final shape in shapes) {
+        expect(roundTrip(shape), equals(shape),
+            reason: 'a shape that does not round-trip is a value the client '
+                'and the server disagree about');
+      }
+    });
+
+    test('metadata, quality and source time round-trip with the value', () {
+      final v = DynamicValue(
+        value: 2,
+        quality: Quality.uncertainLastKnown,
+        sourceTime: DateTime.utc(2026, 8, 13, 12, 30, 15, 250),
+        typeId: ValueType.integer,
+        sourceTypeId: 'ns=2;s=X',
+        displayName: const LocalizedText('Staða', locale: 'is'),
+        description: const LocalizedText('state of the line'),
+        enumFields: const {
+          1: EnumField(value: 1, name: 'Stopped'),
+          2: EnumField(value: 2, name: 'Running'),
+        },
+      );
+      final decoded = roundTrip(v);
+      expect(decoded, equals(v));
+      expect(decoded.typeId, ValueType.integer,
+          reason: 'typeId crosses as the ValueType name');
+      expect(decoded.sourceTypeId, 'ns=2;s=X',
+          reason: 'the opaque source id is round-tripped, never parsed — the '
+              'wire shape the existing converter uses does not change');
+      expect(decoded.quality, Quality.uncertainLastKnown);
+      expect(decoded.sourceTime, v.sourceTime);
+    });
+
+    test('an unknown field is ignored, not an error', () {
+      final decoded = DynamicValue.fromJson(viaJson(
+          full(DynamicValue(value: 1)),
+          extra: const {'futureField': 123, 'anotherOne': 'x'}));
+      expect(decoded.asInt, 1,
+          reason: 'a newer server must be able to add a field without '
+              'breaking every deployed panel');
+    });
+
+    test('toJson omits absent optionals and empty collections', () {
+      expect(full(DynamicValue(value: 1)).keys.toSet(), {'type', 'value'},
+          reason: 'metadata is cached at subscribe time; repeating it on '
+              'every push is bytes on a slow plant link');
+      expect(full(DynamicValue(value: 1, enumFields: const {})).keys.toSet(),
+          {'type', 'value'});
+    });
+
+    test('the type tag is one of the eight the converter already emits', () {
+      String tagOf(Object? v) => full(DynamicValue(value: v))['type'] as String;
+      expect(tagOf(null), 'null');
+      expect(tagOf(true), 'boolean');
+      expect(tagOf(1), 'integer');
+      expect(tagOf(1.5), 'double');
+      expect(tagOf('x'), 'string');
+      expect(tagOf(const [1]), 'array');
+      expect(tagOf(const {'a': 1}), 'object');
+      expect(tagOf(DateTime.utc(2026)), 'unknown');
+    });
+
+    test('slim mode returns the bare value with no metadata', () {
+      final v = DynamicValue(value: 12.5, displayName: const LocalizedText('Speed'));
+      expect(v.toJson(slim: true), 12.5,
+          reason: 'slim values are what UpdateParams pushes; metadata rides '
+              'once in SubscribeResult.meta');
+      expect(
+          DynamicValue(value: const {'a': 1}).toJson(slim: true), {'a': 1});
+    });
+
+    test('numbers decode through num — JSON 1.0 for an integer does not crash',
+        () {
+      final decoded = DynamicValue.fromJson(
+          jsonDecode('{"type":"integer","value":1.0}') as Map<String, Object?>);
+      expect(decoded.asInt, 1);
+      expect(decoded.isInteger, isTrue);
+    });
+  });
+
+  group('poison values are defused at the boundary', () {
+    test('1e999 arriving as Infinity decodes to null with badNonFinite', () {
+      final json = jsonDecode('{"type":"double","value":1e999}')
+          as Map<String, Object?>;
+      expect(json['value'], double.infinity,
+          reason: 'jsonDecode really does hand us Infinity — this is the '
+              'poison the re-sanitize on decode exists for');
+      final decoded = DynamicValue.fromJson(json);
+      expect(decoded.value, isNull);
+      expect(decoded.quality, Quality.badNonFinite);
+      expect(() => jsonEncode(decoded.toJson()), returnsNormally,
+          reason: 're-encoding a decoded poison value must not detonate the '
+              'batch for every other client');
+    });
+
+    test('jsonEncode of a NaN-sourced value does not throw', () {
+      expect(() => jsonEncode(DynamicValue.of(double.nan).toJson()),
+          returnsNormally);
+      expect(
+          () => jsonEncode(
+              DynamicValue(value: {'rate': double.nan}).toJson()),
+          returnsNormally);
+    });
+
+    test("'Þorskflök í raspi' survives the full round-trip unchanged", () {
+      const name = 'Þorskflök í raspi';
+      final v = DynamicValue(
+        value: name,
+        displayName: const LocalizedText(name, locale: 'is'),
+      );
+      final decoded = roundTrip(v);
+      expect(decoded.asString, name);
+      expect(decoded.displayName?.value, name);
+    });
+  });
+
+  group('hostile nesting is refused, not survived by luck', () {
+    Map<String, Object?> nest(int depth) {
+      Map<String, Object?> node = {'type': 'integer', 'value': 1};
+      for (var i = 0; i < depth; i++) {
+        node = {
+          'type': 'object',
+          'value': {'child': node},
+        };
+      }
+      return node;
+    }
+
+    test('nesting within the limit decodes', () {
+      final decoded = DynamicValue.fromJson(nest(10));
+      expect(decoded.isObject, isTrue);
+    });
+
+    test('nesting past maxDepth throws a FormatException naming the limit',
+        () {
+      expect(DynamicValue.maxDepth, 64);
+      expect(
+          () => DynamicValue.fromJson(nest(DynamicValue.maxDepth + 5)),
+          throwsA(isA<FormatException>().having(
+              (e) => e.message, 'message', contains('64'))),
+          reason: 'the recursive decoder is new code receiving untrusted '
+              'bytes; a stack overflow would take the whole gateway down');
     });
   });
 }
