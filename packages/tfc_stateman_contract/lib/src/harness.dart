@@ -14,6 +14,16 @@
 /// where they overlap, the ones Phase 2's fault proxy will pull. A case written
 /// against this interface transfers to the fault legs unchanged.
 ///
+/// The surface also carries the two *observables* the wire interface
+/// deliberately does not expose — [StateManHarness.roundTrips] and
+/// [StateManHarness.statusNotifications] — and the freshness deadline the
+/// implementation declares ([StateManHarness.staleAfter]). They live here for
+/// the same reason the levers do: "fifty keys cost one round trip" and "a mass
+/// degradation is announced once" are promises about a *count*, and a count
+/// nothing can read is not a promise at all. Putting them on `StateManApi`
+/// instead would make them things a connected client may invoke, which is an
+/// access-control decision and not a testing convenience.
+///
 /// [Notifications] is the other half: rebuild counting. Most of what this phase
 /// promises operators is a *count* — k changed keys cost k rebuilds, an
 /// unchanged value costs none, a disposed source costs none ever again — and a
@@ -64,6 +74,58 @@ abstract interface class StateManHarness {
   /// transient — waiting does not fix it, so the value must not keep rendering
   /// as a plausible last-known number.
   void dropKey(String key);
+
+  /// The freshness deadline this implementation declares: how long a value may
+  /// go unheard-of before it must stop claiming to be current.
+  ///
+  /// A case cannot assert "a value nobody has heard about recently is visibly
+  /// stale" without knowing when that becomes true, and the answer is a
+  /// property of the implementation, not of the suite — a gateway polling a
+  /// slow serial line and an in-memory fake do not owe the operator the same
+  /// number. Every freshness case reads its budget from here, so one
+  /// implementation can be judged at 100 ms and another at 5 s by the same
+  /// unmodified check.
+  ///
+  /// Deliberately a declared deadline rather than an injectable clock. CONTEXT
+  /// restricts injected clocks to pure state-machine unit tests, and the
+  /// freshness watchdog is exactly the machinery an injected clock would stop
+  /// testing: a source that never runs its sweep passes every fake-clock case
+  /// and shows a frozen-fresh page in the plant.
+  Duration get staleAfter;
+
+  /// The upstream device link is down.
+  ///
+  /// Every key this source serves from that link must degrade to
+  /// [Quality.badCommFault] and the loss must be announced **once** — see
+  /// [statusNotifications]. Corresponds to Phase 2's `flap(down)` proxy mode,
+  /// so a case written against this lever transfers to the fault legs
+  /// unchanged.
+  void disconnectUpstream();
+
+  /// The upstream link is back, and a snapshot with it.
+  ///
+  /// Recovery is always a snapshot and never a delta replay, so keys that have
+  /// values come back at their real quality rather than staying degraded until
+  /// they next happen to change. Corresponds to `flap(up)`.
+  void reconnectUpstream();
+
+  /// How many round trips this source has made upstream since it was created.
+  ///
+  /// The observable behind the cheapness half of the read contract: `read` is
+  /// documented as never a round trip and `readMany` as one round trip for
+  /// many keys, and neither promise is enforceable without a counter. It is on
+  /// the *test-only* surface precisely because it is not something a connected
+  /// client may ask for.
+  int get roundTrips;
+
+  /// How many times this source has announced a change in the link's state.
+  ///
+  /// One per mass-degradation, never one per key. At 1500 keys on one page a
+  /// per-key fan-out is 1500 events for one event, delivered in the instant
+  /// the client is trying to redraw — a denial of service against the
+  /// operator's own screen. Sparkplug sends one NDEATH for a whole node for
+  /// this reason.
+  int get statusNotifications;
 }
 
 /// The [StateManHarness] side of [api], or a failure saying what is missing.
