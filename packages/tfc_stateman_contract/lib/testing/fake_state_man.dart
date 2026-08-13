@@ -16,6 +16,17 @@
 /// client packages import it — a Phase 3 test that needs a state source with a
 /// known value in it should not have to build one.
 ///
+/// It runs a real freshness watchdog on the wall clock rather than on an
+/// injected one. That costs the freshness cases a real `staleAfter` of runtime
+/// each, and it is worth it: a sweep that only advances when a test advances a
+/// fake clock is precisely the machinery that then fails to run in the plant,
+/// and this fake exists to prove a case is satisfiable by something a real
+/// implementation resembles.
+///
+/// The five reserved `PIPE.` health keys are served through the ordinary value
+/// path (design §4.7, HLTH-01) — there is no health method here because there
+/// is none on the wire — and are excluded from the freshness sweep (HLTH-02).
+///
 /// Members outside this plan's slice throw [UnimplementedError] naming the plan
 /// that fills them. That is deliberate: an area nobody has contracted yet must
 /// fail loudly if something starts depending on it, rather than return a
@@ -30,7 +41,10 @@ import '../src/harness.dart';
 
 /// An in-memory state source with a lever for everything the plant would do.
 class FakeStateMan implements StateManApi, StateManHarness {
-  FakeStateMan({this.staleAfter = const Duration(milliseconds: 300)});
+  FakeStateMan({this.staleAfter = const Duration(milliseconds: 300)}) {
+    _seedHealthKeys();
+    _watchdog = Timer.periodic(_sweepInterval, (_) => sweepFreshness());
+  }
 
   /// How long a value may go unheard-of before it must stop claiming to be
   /// current.
@@ -41,6 +55,23 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// The freshness driver passes a shorter one still.
   @override
   final Duration staleAfter;
+
+  /// The reserved namespace the pipe reports on itself through (design §4.7,
+  /// HLTH-01). There is no health method on the wire; these are ordinary
+  /// subscribable keys, served through the same store and the same qualities
+  /// as a temperature.
+  static const healthPrefix = 'PIPE.';
+
+  /// The five health keys, seeded at construction so a client can read them
+  /// before anything has happened — a health indicator that reads "unknown"
+  /// until the first fault is no indicator at all.
+  static const healthKeys = [
+    '${healthPrefix}connected',
+    '${healthPrefix}rtt_ms',
+    '${healthPrefix}data_age_ms',
+    '${healthPrefix}reconnects',
+    '${healthPrefix}epoch',
+  ];
 
   /// One map, one batch entry point — the same store the real implementations
   /// use, so the notification-count promises are satisfied by production code
@@ -57,7 +88,44 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// themselves: nothing here needs to hold a controller once it is wired up.
   final _closeHandedOutStreams = <Future<void> Function()>[];
 
+  /// When each key last had a value *arrive* for it.
+  ///
+  /// Deliberately not the value's own `sourceTime`: the harness leaves that
+  /// null unless a case sets one, and a source that dated freshness from a
+  /// field the upstream may not fill would consider every value it has ever
+  /// received to be infinitely old.
+  final _lastArrival = <String, DateTime>{};
+
+  /// The freshness watchdog. Wall clock, not an injected one — a sweep that
+  /// only runs when a test advances a fake clock is exactly the machinery that
+  /// then fails to run in the plant.
+  late final Timer _watchdog;
+
+  /// Whether the upstream device link is up. Health keys are served regardless;
+  /// plant keys are not.
+  var _connected = true;
+
+  var _roundTrips = 0;
+  var _statusNotifications = 0;
+
   var _disposed = false;
+
+  /// How often the watchdog re-evaluates ages.
+  ///
+  /// A quarter of the deadline, so a value is reported stale within 125% of it
+  /// rather than within 200% — the contract cases allow three times the
+  /// deadline, and the margin between those two numbers is what keeps them
+  /// green on a loaded machine. Floored at 5 ms so an implausibly short
+  /// deadline cannot turn the sweep into a busy loop.
+  Duration get _sweepInterval {
+    final quarter = staleAfter ~/ 4;
+    return quarter < const Duration(milliseconds: 5)
+        ? const Duration(milliseconds: 5)
+        : quarter;
+  }
+
+  /// Health keys are excluded from the freshness sweep (HLTH-02).
+  static bool isHealthKey(String key) => key.startsWith(healthPrefix);
 
   // ------------------------------------------------------------- value path
 
@@ -110,10 +178,16 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// Drops every listener and closes every stream handed out. Idempotent: a
   /// second call is harmless, because the suite disposes in `addTearDown` and a
   /// case that disposes deliberately must not be punished for it.
+  ///
+  /// Cancelling the watchdog is the part that matters most here: a timer that
+  /// outlives its source keeps the whole test isolate alive and keeps sweeping
+  /// a store nobody is watching, so a leak in one case surfaces as an
+  /// inexplicable notification in the next one.
   @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _watchdog.cancel();
     _store.dispose();
     for (final close in _closeHandedOutStreams) {
       await close();
@@ -177,40 +251,241 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// method — a variant that had to reimplement each lever would drift from the
   /// honest fake in ways nobody intended, and "the sabotage is surgical" would
   /// stop being true.
-  void applyChanges(Map<String, DynamicValue> changes) {
+  ///
+  /// Everything routed here counts as a value *arriving*, so it resets the
+  /// freshness clock. Degradations do not go through it — see [_degrade].
+  void applyChanges(Map<String, DynamicValue> changes) =>
+      _apply(changes, arrived: true);
+
+  /// Applies a quality change without pretending a value arrived.
+  ///
+  /// The distinction is the whole freshness story: marking a value stale must
+  /// not make it fresh again, and losing the upstream link is not news from
+  /// upstream. A single seam that reset the clock on everything would produce
+  /// a source that goes stale exactly once and never again.
+  void _degrade(Map<String, DynamicValue> changes) =>
+      _apply(changes, arrived: false);
+
+  void _apply(Map<String, DynamicValue> changes, {required bool arrived}) {
     final live = <String, DynamicValue>{
       for (final entry in changes.entries)
         if (!_retiredKeys.contains(entry.key)) entry.key: entry.value,
     };
     if (live.isEmpty) return;
+    if (arrived) {
+      final now = DateTime.now();
+      for (final key in live.keys) {
+        _lastArrival[key] = now;
+      }
+    }
     _store.applyBatch(live);
   }
 
+  // ------------------------------------------------------------------- reads
+
+  /// Answers from the cache after forcing one round trip upstream.
+  ///
+  /// The round trip is the point: this is the call a diagnostics page and a
+  /// readback check use precisely when the cache is the thing under suspicion.
+  @override
+  Future<DynamicValue> readFresh(String key) async {
+    _roundTrips++;
+    return _answerFromUpstream([key])[key]!;
+  }
+
+  /// One round trip for however many keys are asked for.
+  ///
+  /// [_roundTrips] is incremented once, before any key is looked at, because
+  /// that is the promise: reading fifty keys over a link with 200 ms of
+  /// latency costs 200 ms, not ten seconds.
+  @override
+  Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
+    _roundTrips++;
+    return _answerFromUpstream(keys);
+  }
+
+  @override
+  int get roundTrips => _roundTrips;
+
+  @override
+  int get statusNotifications => _statusNotifications;
+
+  /// What one round trip comes back with, and what it does to the cache.
+  ///
+  /// An answer for **every** key asked about, including keys nothing is known
+  /// about — as a bad-quality value rather than a missing entry, so the caller
+  /// renders a fault instead of a blank. Keys the round trip genuinely reached
+  /// are also applied to the store, which is what makes a forced read reset
+  /// the freshness clock and clear a staleness the watchdog had applied.
+  Map<String, DynamicValue> _answerFromUpstream(Iterable<String> keys) {
+    final answers = <String, DynamicValue>{};
+    final reached = <String, DynamicValue>{};
+    for (final key in keys) {
+      final cached = _store.peek(key);
+      if (cached == null) {
+        // Nothing is known and nothing can be: notYetKnown carries
+        // errorConfig, which renders as a fault rather than as a good null.
+        answers[key] = notYetKnown;
+        continue;
+      }
+      if (_retiredKeys.contains(key) || !_reachable(key)) {
+        // The tag is gone, or the link is down. Either way the answer is the
+        // degraded value already in the cache — inventing a good one here is
+        // the `LiesAboutQuality` sabotage.
+        answers[key] = cached;
+        continue;
+      }
+      final answer = _isLinkDegraded(cached.quality)
+          ? cached.copyWith(quality: Quality.good)
+          : cached;
+      answers[key] = answer;
+      reached[key] = answer;
+    }
+    if (reached.isNotEmpty) applyChanges(reached);
+    return answers;
+  }
+
+  /// Whether a round trip for [key] can get an answer at all.
+  bool _reachable(String key) => _connected || isHealthKey(key);
+
+  /// Whether [quality] is one the freshness and link machinery applied.
+  ///
+  /// Only these two clear on a successful round trip. A source that reset
+  /// *any* bad quality to good on a read would launder a genuine upstream
+  /// fault — a non-finite reading, a bad string encoding — into a healthy
+  /// number, which is the same lie as a stale value with better manners.
+  static bool _isLinkDegraded(Quality quality) =>
+      quality == Quality.badStale || quality == Quality.badCommFault;
+
+  // -------------------------------------------------------------- freshness
+
+  /// Re-evaluates every key's age and degrades the ones past [staleAfter].
+  ///
+  /// Overridable because it is the single behavior `ServesStaleReads` removes:
+  /// a source whose sweep never runs delivers a page that looks exactly like a
+  /// healthy one and has not been true for an hour.
+  ///
+  /// Two rules the loop encodes. Health keys are skipped (HLTH-02): they change
+  /// only when the pipe's state changes, so on a healthy pipe they are
+  /// *always* older than the deadline, and staling them would grey out the one
+  /// indicator that says whether to believe the rest. And a key is only
+  /// degraded if `badStale` is genuinely worse than what it already carries —
+  /// band comparison, not [Quality.worst], because worst-wins resets to `good`
+  /// within a band and would erase a write-pending badge an operator is
+  /// watching.
+  void sweepFreshness() {
+    final now = DateTime.now();
+    final stale = <String, DynamicValue>{};
+    for (final key in _store.keys) {
+      if (isHealthKey(key)) continue;
+      final cached = _store.peek(key);
+      if (cached == null) continue;
+      final arrived = _lastArrival[key];
+      if (arrived == null || now.difference(arrived) < staleAfter) continue;
+      if (Quality.badStale.band <= cached.quality.band) continue;
+      stale[key] = cached.copyWith(quality: Quality.badStale);
+    }
+    if (stale.isEmpty) return;
+    _degrade(stale);
+  }
+
+  // ------------------------------------------------------------- link levers
+
+  /// The upstream device link is down (Phase 2's `flap(down)`).
+  ///
+  /// Idempotent: a second call while already down changes nothing and announces
+  /// nothing, because it is not a second event.
+  @override
+  void disconnectUpstream() {
+    if (!_connected) return;
+    _connected = false;
+    applyLinkLoss();
+    announceLinkState();
+  }
+
+  /// The upstream link is back, with a snapshot (Phase 2's `flap(up)`).
+  ///
+  /// Recovery is a snapshot and never a delta replay, so every key that has a
+  /// value comes back at once rather than waiting until it next happens to
+  /// change — otherwise a slow-moving tank level would stay greyed for an hour
+  /// after the link healed.
+  @override
+  void reconnectUpstream() {
+    if (_connected) return;
+    _connected = true;
+    applyLinkRestored();
+    announceLinkState();
+  }
+
+  /// One pass over the store: every plant key degrades, the health keys record
+  /// what happened, all in a single batch.
+  ///
+  /// One batch, not one per key — the store's promise is that a batch costs
+  /// one pass and k notifications, and a link loss is the largest batch this
+  /// source will ever apply.
+  void applyLinkLoss() {
+    final batch = <String, DynamicValue>{};
+    for (final key in _store.keys) {
+      if (isHealthKey(key)) continue;
+      final cached = _store.peek(key);
+      if (cached == null) continue;
+      if (Quality.badCommFault.band <= cached.quality.band) continue;
+      batch[key] = cached.copyWith(quality: Quality.badCommFault);
+    }
+    batch['${healthPrefix}connected'] = DynamicValue(value: false);
+    _degrade(batch);
+  }
+
+  /// The snapshot that follows a reconnect: link-degraded keys come back good,
+  /// the health counters record the reconnection.
+  void applyLinkRestored() {
+    final batch = <String, DynamicValue>{};
+    for (final key in _store.keys) {
+      if (isHealthKey(key)) continue;
+      final cached = _store.peek(key);
+      if (cached == null || !_isLinkDegraded(cached.quality)) continue;
+      batch[key] = cached.copyWith(quality: Quality.good);
+    }
+    batch['${healthPrefix}connected'] = DynamicValue(value: true);
+    batch['${healthPrefix}reconnects'] =
+        DynamicValue(value: _healthCount('${healthPrefix}reconnects') + 1);
+    // The epoch changes on every reconnect so a client can tell "the same
+    // session, still running" from "a new session that may have missed
+    // updates" — the distinction that decides between resuming and resyncing.
+    batch['${healthPrefix}epoch'] =
+        DynamicValue(value: _healthCount('${healthPrefix}epoch') + 1);
+    applyChanges(batch);
+  }
+
+  /// Announces that the link's state changed — once, however many keys it cost.
+  ///
+  /// Kept separate from [applyLinkLoss] so a variant can fan it out per key
+  /// without touching the degradation itself, which is exactly what
+  /// `AnnouncesPerKey` does. Sparkplug sends one NDEATH for a whole node for
+  /// the same reason: at 1500 keys, one event per key is 1500 events arriving
+  /// in the instant the client is trying to redraw the page they are about.
+  void announceLinkState() => _statusNotifications++;
+
+  /// Seeds the five reserved health keys so they are readable before anything
+  /// happens. A health indicator that reads "unknown" until the first fault
+  /// tells an operator nothing at the moment they most need telling.
+  ///
+  /// `data_age_ms` and `rtt_ms` are seeded and left alone: a fake that
+  /// refreshed them on a timer would notify every listener on every sweep and
+  /// quietly wreck the notification-count promises the rest of the suite
+  /// makes. A real gateway updates them on a slow cadence, which is a
+  /// behaviour Phase 3 owns and no contract case here depends on.
+  void _seedHealthKeys() => applyChanges({
+        '${healthPrefix}connected': DynamicValue(value: true),
+        '${healthPrefix}rtt_ms': DynamicValue(value: 0),
+        '${healthPrefix}data_age_ms': DynamicValue(value: 0),
+        '${healthPrefix}reconnects': DynamicValue(value: 0),
+        '${healthPrefix}epoch': DynamicValue(value: 1),
+      });
+
+  int _healthCount(String key) => _store.peek(key)?.asInt ?? 0;
+
   // ----------------------------------------------------- other slices' areas
-
-  @override
-  Future<DynamicValue> readFresh(String key) =>
-      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
-
-  @override
-  Future<Map<String, DynamicValue>> readMany(List<String> keys) =>
-      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
-
-  @override
-  int get roundTrips =>
-      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
-
-  @override
-  int get statusNotifications =>
-      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
-
-  @override
-  void disconnectUpstream() =>
-      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
-
-  @override
-  void reconnectUpstream() =>
-      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
 
   @override
   Future<WriteResult> write(String key, Object? value, {Object? expect}) =>
