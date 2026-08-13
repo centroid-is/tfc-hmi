@@ -4,8 +4,8 @@ import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/src/history_view.dart';
 import 'package:tfc_relay_protocol/src/timeseries.dart';
 
-/// The data-service surfaces exchange plain records, never drift rows and
-/// never untyped map bags. Every shape must survive
+/// The data-service surfaces exchange plain records, never ORM-generated rows
+/// and never untyped map bags. Every shape must survive
 /// encode → jsonEncode → jsonDecode → decode with unknown fields ignored.
 void main() {
   Map<String, Object?> viaJson(Map<String, Object?> json,
@@ -127,8 +127,8 @@ void main() {
           HistoryViewKeyRecord.fromJson(const {'key': 'ST101.CN01.Speed'});
 
       expect(decoded.alias, 'ST101.CN01.Speed',
-          reason: 'matches database_drift.dart:493 (row.alias ?? row.key) — a '
-              'key with no alias still needs a legend label');
+          reason: "matches getHistoryViewKeys's row.alias ?? row.key — a key "
+              'with no alias still needs a legend label');
       expect(decoded.useSecondYAxis, isFalse);
       expect(decoded.graphIndex, 0);
     });
@@ -161,8 +161,8 @@ void main() {
       expect(decoded.name, '');
       expect(decoded.yAxisUnit, '');
       expect(decoded.yAxis2Unit, '',
-          reason: 'matches database_drift.dart:512 — an unnamed axis renders '
-              'blank, it does not crash the chart');
+          reason: "matches getHistoryViewGraphs's ?? '' — an unnamed axis "
+              'renders blank, it does not crash the chart');
       expect(decoded.graphIndex, 1);
     });
 
