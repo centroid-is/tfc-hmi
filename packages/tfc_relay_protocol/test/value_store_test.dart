@@ -10,8 +10,9 @@
 library;
 
 import 'package:test/test.dart';
-import 'package:tfc_relay_protocol/src/value_listenable.dart';
-import 'package:tfc_relay_protocol/src/value_store.dart';
+// Through the barrel on purpose: if the export is ever dropped, the store
+// stops being reachable from the package's public entry point and this file
+// stops compiling.
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 /// 100 keys, small enough to run instantly and large enough that a per-key

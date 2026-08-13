@@ -13,3 +13,5 @@ export 'src/messages.dart';
 export 'src/write_result.dart';
 export 'src/send_buffer.dart';
 export 'src/hello_gate.dart';
+export 'src/value_listenable.dart';
+export 'src/value_store.dart';
