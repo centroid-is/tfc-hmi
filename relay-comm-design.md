@@ -1,0 +1,456 @@
+# Relay pipe — communication design
+
+**Status:** designed, not implemented. Companion to `relay-websocket-notes.md`
+(survey, measurements, and the §7 test plan, which is this design's
+verification suite).
+**Date:** 2026-08-13
+**Based on:** five research passes (transport options, RPC/message layer,
+industrial HMI/SCADA precedent, Dart/Flutter ecosystem, practitioner-forum
+edge cases), all internet-sourced and cited in the reports; local benchmarks
+in `relay-bench/`; two locally-verified Dart hazards.
+
+---
+
+## 0. The decision, in one table
+
+| Layer | Decision |
+|---|---|
+| Transport | **WebSocket (`wss://`), one connection per client**, everything multiplexed on it |
+| Envelope | **JSON-RPC 2.0** with a strict conventions layer (§3) |
+| Values | JSON, `DynamicValueConverter` slim mode + **integer key handles**; metadata once at subscribe |
+| Batching | server tick (50–100 ms), one `u` notification per tick per subscription; last-value-wins conflation per client |
+| Liveness | server `pingInterval` **and** app-level heartbeat both ways; per-subscription sequence numbers; client-side freshness watchdog |
+| Reconnect | epoch + seq; resync = fresh snapshot, never delta replay; jittered exponential backoff, reset only after resync completes |
+| Writes | three-state outcome (`applied` / `rejected` / `unknown`), client-generated idempotency id, `writeStatus` re-query on reconnect, never auto-retried |
+| Quality | four-band quality code + timestamp travels with every value; worst-quality-wins composition |
+| TLS | private CA; native clients pin the root (`withTrustedRoots: false`); server cert from the CA; keys as mounted files, never in config |
+| Server | Dart, `shelf` + `shelf_web_socket`, one isolate, encode-once fan-out |
+| Client | `WsDeviceClient implements DeviceClient`; `web_socket_channel` behind a thin adapter; `json_rpc_2` `Peer`, fresh per connection |
+| Compression | permessage-deflate **off** initially; config flag to enable per deployment (§6.4) |
+
+Everything below is the reasoning and the exact shapes.
+
+---
+
+## 1. Requirements this design answers
+
+- N Flutter clients (5–20 real, 100 stress-tested): Windows/macOS desktops,
+  eLinux panels now; **Flutter web later — hard constraint**.
+- One backend is the only thing talking to PLCs (ST101/ST201/ST301 + Baader)
+  and TimescaleDB. ~1556 keys, 10 Hz worst case (which cannot actually occur).
+- Bidirectional: dominant server→client telemetry push + request/response
+  (write/read/browse, ~14 timeseries/history methods, preferences,
+  LISTEN/NOTIFY-style notifications).
+- Safety: PLC writes are never silently retried, and their outcome is never
+  silently ambiguous.
+- The feared failure is stale-but-plausible data. TLS from day one.
+
+## 1a. Architecture: StateMan is the abstraction (decided 2026-08-13)
+
+Everything is built from scratch; #93/#107 and the existing code are
+reference only. The organizing idea:
+
+```
+        widgets / providers            (unchanged — they already speak StateMan)
+              │
+        StateManApi                    (one interface: subscribe/read/write/browse
+              │                         + timeseries + history-view + prefs + health)
+      ┌───────┴────────┐
+ RemoteStateMan    LocalStateMan       (client: protocol over one WS)
+      │                 │              (server: DeviceClients + TimescaleDB)
+  relay pipe       PLCs + DB
+```
+
+- **Server**: `LocalStateMan` composes the DeviceClients (OPC UA, M2400,
+  Modbus) *and* the database surface (timeseries queries, history-view CRUD,
+  preferences, notifications) behind one interface. The WS front-end is a
+  thin projection of that interface — method-for-method, nothing else. The
+  protocol cannot drift from what the app needs because it *is* the app's
+  interface.
+- **Client**: `RemoteStateMan` implements the same interface over the pipe.
+  Widgets and providers do not change.
+- **TDD consequence (the reason this shape wins)**: one **contract test
+  suite** written against `StateManApi`, run three ways —
+  1. against `LocalStateMan` with fake device clients (server correctness),
+  2. against `RemoteStateMan` wired to a real server over an in-memory
+     `StreamChannelController` (protocol correctness, no sockets),
+  3. against `RemoteStateMan` through the `TcpProxy` fault harness
+     (fault-tolerance: every F-scenario from the notes §7.5–7.9 asserts the
+     *contract* still holds — values converge, writes reach exactly one
+     terminal state, staleness is visible).
+  Fault tolerance is therefore not a feature of the transport code; it is a
+  property the contract suite enforces on every implementation, forever.
+- **Simplicity rule**: if a client capability isn't a `StateManApi` method,
+  it doesn't go on the wire. (This is also what kills `query(sql)` forever.)
+- **Speed rule**: the hot path (value push → widget) touches exactly one
+  map update and one `ValueNotifier` per changed key; everything else
+  (encode-once fan-out, conflation, handles) exists to keep that path flat.
+
+## 2. Transport: WebSocket, and why the alternatives lost
+
+Full matrix in the transport report; scores /65 against the requirements:
+**WebSocket 56**, gRPC-bidi 47, Socket.IO 47, SSE+POST 45, MQTT/WS 44, NATS
+43, WebTransport 36, gRPC-web 35.
+
+- **gRPC**: gRPC-Web still cannot do client/bidi streaming from a browser in
+  2026 (official roadmap defers to WebTransport and explicitly rejects
+  WebSocket), and needs an Envoy translator. Native-only bidi would work —
+  until web arrives, then it's two transports plus Envoy.
+- **SSE + POST**: no binary, HTTP/1.1 6-connection limit without HTTP/2,
+  proxy buffering surprises, two half-connections to keep alive. One idea
+  stolen: `Last-Event-ID` → our sequence-number resume.
+- **MQTT/broker**: a second process, cert chain, and ACL model — and QoS 1 is
+  an *auto-retry mechanism with unreliable dedup*, directly hostile to the
+  write-safety rule (Sparkplug B itself mandates QoS 0). Retained messages ≈
+  a hashmap we already hold. The browser path would be MQTT-over-WebSocket
+  anyway.
+- **WebTransport/HTTP3**: no Dart server exists or is planned
+  (dart-lang/sdk#38595); private-CA story worse than WSS; plant firewalls
+  drop UDP/443. Kept swappable by keeping the protocol frame-oriented.
+- **Precedent**: Ignition Perspective, Grafana Live, Home Assistant, TrueNAS
+  all run one multiplexed WebSocket. Nobody puts a control protocol in the
+  browser; `opc.wss` is specified and dead (open62541 closed it without
+  implementation).
+
+`wss://` (not `ws://`) is also the proxy-traversal decision: TLS makes the
+tunnel opaque to middleboxes that would otherwise strip `Connection: Upgrade`.
+
+## 3. Envelope: JSON-RPC 2.0 + conventions
+
+JSON-RPC 2.0 buys id correlation, a peer model, notifications, and one error
+shape — the settled 15%. LSP, Ethereum, MCP, and TrueNAS (appliance UI ↔
+control daemon, our exact shape) all chose it; a wire capture reads like LSP
+to anyone who has debugged one. The conventions layer is where the design
+actually lives:
+
+1. **No batch.** JSON-RPC batch is unordered by spec and inconsistently
+   implemented (geth silently drops). Telemetry batching is one notification
+   with an array payload, not a JSON-RPC batch.
+2. **Notifications only for telemetry, status, and heartbeat.** Anything
+   needing an outcome is a request. Never a write as a notification.
+3. **Ids are monotonic integers**, never null.
+4. **`error` means "definitively no effect".** Malformed, unauthorized,
+   unroutable — the PLC never saw it, retry is safe. Anything that *may* have
+   had effect is a successful `result` with an `outcome` field (§5). This
+   inverts the naive instinct and is the highest-value rule in the document.
+5. **Error taxonomy in `data.kind` (string) + `data.retryable` (bool)**,
+   codes stay in -32000..-32099. Strings grep; booleans stop callers
+   switching over codes.
+6. **Ordering is TCP's, not the protocol's** — per-subscription sequence
+   numbers make gaps detectable rather than assumed absent.
+
+**Implementation hedge (from the RPC report, adopted):** the client write API
+is designed first as a three-state sealed result with no `throw` on the
+unknown path. `json_rpc_2`'s `sendRequest` returns-or-throws; the wrapper
+maps channel-death to `outcome: unknown`. If that wrapper ever fights the
+package, we hand-roll the peer (~200 lines) and keep the wire format — the
+wire format is the contract, the library is disposable.
+
+## 4. Protocol
+
+Date-stamped protocol version, MCP-style negotiation (client sends latest it
+supports; server echoes or counter-offers; client disconnects if
+incompatible). Capability object exists from day one, nearly empty, with an
+`experimental` section — LSP's scar tissue says everything predating the
+capability system becomes mandatory forever.
+
+### 4.1 `hello` (first message; server rejects everything else until it)
+
+```jsonc
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{
+    "protocol":"2026-08-13","supported":["2026-08-13"],
+    "client":{"name":"centroid-hmi","version":"1.4.0"},
+    "capabilities":{"deltaPush":true,"keyHandles":true},
+    "session":{"id":"01J8…","epoch":"01J7…","lastSeq":{"s1":4210}}}}
+← result: {"protocol":"2026-08-13","server":{…},
+    "capabilities":{…},
+    "session":{"id":"01J8…","epoch":"01J9…","resumed":false},
+    "clock":{"serverTime":1786000000123}}
+```
+
+- `session.epoch` identifies this server subscription-state instance;
+  changes on server restart/state loss. `resumed:false` ⇒ client discards
+  its cache and resubscribes from scratch (Centrifugo's
+  `wasRecovering && !recovered`, with the policy inverted: **we never replay
+  missed deltas — an HMI wants the current value, not a 40-second-old one**).
+- `clock` establishes the client↔server offset so staleness is measured
+  against one clock (§7.9 of the notes: no-RTC panels boot at 1970).
+
+### 4.2 `subscribe` / `unsubscribe`
+
+```jsonc
+→ {"id":7,"method":"subscribe","params":{
+    "sub":"s1","keys":["ST101.CN01.MOT01.speed", …],
+    "mode":"slim","maxRateHz":10}}
+← result: {"sub":"s1","epoch":"01J9…","seq":0,
+    "handles":{"ST101.CN01.MOT01.speed":1, …},
+    "meta":{"1":{…full DynamicValue metadata…}},
+    "snapshot":{"1":{"v":1450,"q":192,"t":1786000000100}},
+    "rejected":{"BOGUS.KEY":{"kind":"unknown_key"}}}
+```
+
+- Snapshot inline: one round trip, atomic with `seq:0`, and the explicit
+  "initial state complete" signal every surveyed protocol needed.
+- Partial failure per key in `rejected` — one bad key never blanks a page.
+- **Per-key subscriptions with a client-side aggregator**, not per-page: the
+  client unions the visible widgets' key sets and diffs on navigation
+  (leased-subscription behavior falls out: off-screen keys get unsubscribed,
+  which is Ignition's answer to 1556 tags at 10 Hz — most load never leaves
+  the PLC once deadband + visible-set scoping are in place).
+- Keymappings stay server-side; clients speak key space only.
+
+### 4.3 Value push (notification, hot path)
+
+```jsonc
+← {"method":"u","params":{
+    "sub":"s1","seq":4211,"t":1786000000123,
+    "c":{"1":{"v":1450.2},"2":{"v":312,"q":192}},
+    "q":{"3":{"q":516}},
+    "r":[7]}}
+```
+
+- `c` changed values (slim), `q` quality-only transitions, `r` keys removed
+  from availability. Single-character keys on the hot path only (HA's
+  compressed-state precedent).
+- `seq` increments per subscription per message. A gap ⇒ client requests
+  resync. A periodic keyframe (full values, OPC UA `KeyFrameCount` idea)
+  self-heals missed gap detection; the server sends a keyframe whenever the
+  delta would exceed one.
+- Quality codes are a four-band model (good / uncertain / bad / error with
+  subcodes), adopted from Ignition's — the two states that matter are
+  distinct: **uncertain-holding-last-known-value** vs
+  **bad-stale-past-deadline**. Composition is worst-quality-wins.
+  A connection-level event mass-degrades value quality (Sparkplug NDEATH
+  rule): upstream PLC drop ⇒ all its keys go stale in one `q` sweep + one
+  status notification, and the alarm system master-inhibits dependents.
+
+### 4.4 Liveness (two layers + per-subscription)
+
+- **Server** sets WebSocket `pingInterval` (~20 s): dead-client reaping and
+  NAT keepalive. Browsers auto-pong per RFC 6455; Chrome never sends its own
+  pings, so this is the only frame-level liveness that works for web.
+- **App-level heartbeat**: server emits a `tick` notification (with `seq`,
+  server time, and per-subscription last-evaluated stamps) every 2–5 s *even
+  when nothing changed* — OPC UA's keep-alive insight: silence is never
+  ambiguous. Client-side death deadline = 3× tick interval (OPC UA's
+  LifetimeCount ratio). Client sends `ping` requests on its own timer for
+  the reverse direction (browsers cannot see pongs; Ignition's reliance on
+  idle timeouts is a documented 2.5-minute stale-data hole — the fix is a
+  client-side watchdog, since the server structurally cannot report its own
+  death).
+- **Any inbound frame resets the client's freshness clock**; `readyState` is
+  never trusted (lies after OS sleep). On web the grace period is
+  visibility-aware (hidden tabs throttle timers to 1/min) and the client
+  probes immediately on resume or a monotonic-clock jump.
+- **Per-subscription staleness is distinct from link staleness**: the tick's
+  last-evaluated stamps catch the dead-subscription-on-live-socket failure
+  (Home Assistant wall-dashboard case), with its own UI state.
+
+### 4.5 Resync
+
+```jsonc
+← {"method":"resync","params":{"sub":"s1","epoch":"01JA…","reason":"epoch_changed"}}
+```
+
+Reasons: `epoch_changed`, `server_restart`, `overrun`,
+`permissions_changed`, `gateway_stalled` (the gateway announces its own
+event-loop stalls ≥ the freshness deadline, so clients and the historian can
+distinguish "the plant view was frozen for 42 s" from "my link dropped").
+Client re-issues `subscribe`; the response snapshot is the resync.
+
+There is a **second epoch at the gateway↔PLC boundary**: per-PLC, keyed on
+OPC UA `ServerStatus.StartTime`. A PLC program download rebuilds the NodeId
+space and cached-handle reads *succeed with the wrong tag's value* — on
+StartTime change the gateway drops its NodeId cache, re-browses, and marks
+affected keys bad until re-established. Tags resolve by browse path, never by
+cached numeric NodeId across a session boundary.
+
+### 4.6 Writes (the safety path)
+
+```jsonc
+→ {"id":88,"method":"write","params":{
+    "cmd":"01J8XW3K9P…",          // client ULID, minted when the operator ACTS
+    "key":"ST101.CN01.MOT01.setpoint","value":{…},
+    "expect":{"value":1450},       // optional compare-and-set
+    "ttlMs":15000}}
+← result: {"cmd":"…","outcome":"applied","readback":1500,"at":…}
+← result: {"cmd":"…","outcome":"rejected","reason":{"kind":"interlocked","status":"Bad_NotWritable",…}}
+← result: {"cmd":"…","outcome":"unknown","reason":{"kind":"plc_timeout",…}}
+```
+
+- **Three-state outcome.** `rejected` is a *successful RPC carrying bad
+  news* (interlock, range, mode) — not an error. `unknown` is first-class:
+  OPC UA itself says `Bad_Timeout` does not guarantee nothing changed.
+- **`cmd` idempotency id** is minted at operator action, not send time; the
+  server keeps a short-lived outcome log (~60 s). `writeStatus {cmds:[…]}`
+  returns the same result objects; on every reconnect the client re-queries
+  its unresolved ids. A `cmd` the server never received (within TTL) returns
+  `not_received` — the only case that is definitively safe to re-send, and
+  even then re-sending is an operator decision.
+- **Readback in the ack**: "applied" means applied *and read back*. The UI
+  displays the readback, never the locally-typed value (the IGN-2441 lesson:
+  local edit state must never be the confirmation).
+- Socket death with a write in flight ⇒ UI shows "outcome unknown — verify",
+  requiring dismissal. Client code cannot represent this as failure: the
+  write API is a sealed three-state type with no throw on the unknown path.
+- **Momentary/hold-to-run controls never use set-on-press/clear-on-release.**
+  Hold-to-run is a rolling-counter deadman streamed while held; the PLC runs
+  only while the counter advances. Discrete commands: HMI sets, PLC clears.
+  `onTapCancel`, app-lifecycle changes, and connection loss all count as
+  release.
+- Reads/RPCs (timeseries, history-view, preferences) are ordinary requests —
+  ~14 named methods mapped verbatim from the drift API. **No `query(sql)`
+  RPC, ever.**
+
+### 4.7 Status channel & pipeline health
+
+Per-PLC link state is its own notification (`status`), never smuggled inside
+tag values, and doubles as the source for the `PIPE.upstream.<alias>.*` keys
+(notes §7.7) so AlarmMan and diagnostics pages consume pipeline health as
+ordinary keys — including `PIPE.link_degraded`, `PIPE.data_age_ms`, the
+gateway's event-loop-lag gauge, and cert days-to-expiry (a plant alarm, so
+rotation is a Tuesday ticket, not a Sunday outage).
+
+## 5. Backpressure and slow links
+
+Design rule from notes §7.6, confirmed by every precedent (Lightstreamer,
+DraftKings, Ignition) and forced by Dart itself — `dart:io` WebSocket has no
+`bufferedAmount` and no `flush()` and buffers unboundedly:
+
+- Per-client **conflating send map** (key → latest value), drained only when
+  the previous sink write's future completes. Slow clients get the newest
+  value at whatever cadence the link sustains; memory is bounded by
+  subscription size; recovery has no backlog to flush.
+- RPC responses, write acks, status, and ticks ride a small **priority queue
+  that is never conflated** and flushes first — a degraded link must still
+  deliver the news that it is degraded.
+- A watchdog closes any connection exceeding a bounded pending count —
+  converting a silent heap leak into a visible reconnect.
+- **Encode once per tick, fan the same object out to every sink.** One
+  isolate; no isolate sharding (sockets are isolate-bound; fan-out across
+  isolates multiplies boundary crossings).
+- Message size cap enforced at the encoder (Ignition drops sessions on
+  oversized frames; Grafana caps at 64 KiB) — oversized deltas become
+  keyframes, oversized keyframes get chunked.
+
+## 6. Wire format rules
+
+1. **JSON, UTF-8 bytes end to end.** Decode with `JsonUtf8Decoder` fused on
+   the socket's `Uint8List` (the measured 3.5 ns/byte path); never
+   String-then-parse. Send binary frames as `Uint8List` (a `List<int>` takes
+   the text path on legacy web).
+2. **Integer key handles** assigned at subscribe; slim values thereafter. At
+   ~36 bytes/update the tag name is most of the bytes — handles beat any
+   codec change. Debug flag restores full names for captures.
+3. **Non-finite doubles never reach `jsonEncode`.** Dart *throws* on
+   NaN/±Infinity (locally verified) — one open-circuit 4–20 mA input would
+   otherwise kill the batch for every client. Sanitized at the OPC UA
+   boundary: value `null` + quality `non-finite`. The decoder is fuzzed with
+   `1e999` (silently becomes Infinity — a poison value), deep nesting,
+   duplicate keys.
+4. **PLC strings decode with per-server encoding config** (`utf8`|`latin1`),
+   default `allowMalformed: true`, S7 NUL padding stripped. Fixtures use
+   "Þorskflök í raspi", not "test string 1" (locally verified:
+   `utf8.decode` throws on Latin-1 þ/ý/æ bytes).
+5. **Binary stays available but unused.** If ever needed: CBOR (RFC 8949 +
+   typed arrays; the Dart msgpack ecosystem is dead). The measured JSON cost
+   — 0.42% of one core at the impossible worst case — says never bother;
+   with the client at 10 Hz the real cost is widget rebuilds, not parsing.
+6. **Timestamps are UTC epoch ms on the wire**, `timestamptz` in the DB,
+   local only at render. CI runs under `TZ=Pacific/Chatham` because
+   Iceland's UTC+0/no-DST hides every timezone bug on dev machines.
+
+### 6.4 permessage-deflate: off, with a flag
+
+The reports split (transport: off — ~300 KB/connection, breaks encode-once,
+CVE history; RPC + industry: on — closes most of the JSON-vs-binary gap).
+Resolution from our own numbers: worst case at 10 clients is 5.5 Mbit/s on a
+gigabit LAN — bandwidth is not the constraint at SVN scale, and
+delta-push + handles already removed the redundancy deflate would compress.
+So: **off by default**, preserving encode-once byte fan-out and
+debuggability; a per-deployment config flag enables it if a saturated VLAN
+or the web phase measurably needs it. Revisit with data, not taste.
+
+## 7. TLS and auth
+
+- **Private CA**, generated once, key on the backend host. Server presents a
+  leaf; **native clients ship the root as an asset and pin it**:
+  `SecurityContext(withTrustedRoots: false)..setTrustedCertificatesBytes(...)`.
+  Never `badCertificateCallback` (it disables hostname/expiry/issuer checks
+  together, and pre-Dart-3.13 it receives the wrong certificate —
+  sdk#39425).
+- **Keys are mounted files** (like `timescale_certs`), never persisted into
+  config/prefs — #93's trap.
+- **Web trust story is a deployment decision made now** (browsers give a
+  failed `wss://` no interstitial and no error detail, by design): root
+  pushed via provisioning/GPO — Chrome/Edge ≥133 can scope it to the plant
+  CIDR via `CACertificatesWithConstraints` — or a real domain with DNS-01
+  ACME. Either way the **web bundle is served from the same origin as the
+  WS endpoint** (turns silent socket failure into a debuggable page-level
+  error, kills CORS, one port).
+- **Auth on connect** (token in the `hello`, reusing #93's `users[]`/admin
+  model), `allowedOrigins` set on the server (browser clients can't send
+  `Authorization`; unset origins = CSWSH). Read broadly permitted, writes
+  individually authorized. Sessions **degrade to view-only on inactivity,
+  never to a login prompt** — re-auth per privileged write (PIN/badge on the
+  confirm dialog), which also fixes audit under shared operator accounts.
+  mTLS stays an option for the centrally-managed eLinux panels only
+  (read the client cert before `WebSocketTransformer.upgrade`; enforcement
+  in app code — `bindSecure` can't require it).
+- Close codes: **4000–4999 only** (4001 auth expired, 4002 draining, 4003
+  heartbeat timeout) — standard codes other than 1000 throw in
+  `web_socket_channel`, and `closeCode` is unreliable for self-initiated
+  closes; the client tracks its own.
+
+## 8. Implementation stack (Dart specifics)
+
+| Piece | Choice | Notes |
+|---|---|---|
+| Server HTTP/WS | `shelf` + `shelf_web_socket` 3.x | `allowedOrigins`, `pingInterval`, same-origin static bundle |
+| Client socket | `web_socket_channel` 3.x behind a thin adapter | 3.x wraps `package:web_socket` anyway; adapter isolates its 12 open bugs and keeps a fork/migration one file |
+| RPC | `json_rpc_2` `Peer` over `stream.cast<String>()` | fresh `Peer` per connection; no queue/retry is a *feature* — in-flight writes fail loudly at channel death |
+| Reconnect | hand-rolled (~30 lines) | exponential + full jitter, cap 30 s, **backoff resets only after resync completes**; wrappers with "message queuing" are disqualified by the write rule |
+| Protocol types | hand-written sealed classes in a **pure-Dart `protocol` package** (pub workspace) | ~20–40 message types; exhaustive `switch`; no codegen in the shared package (freezed has twice been the repo-wide analyzer blocker under workspaces' one-resolution rule) |
+| Rendering | one `ValueNotifier` per key in a long-lived store | equal values skip notification → an unchanged reading costs zero rebuilds |
+| Testing | `StreamChannelController` for in-memory protocol tests; `TcpProxy` for everything in notes §7.5–7.9 | plus DraftKings' rule, adopted: the gateway **kills connections on a schedule in staging** so resync is exercised weekly, not discovered in an incident |
+
+Known-bug workarounds baked into the adapter: own close-code tracking
+(#1698), 4000-range codes only (#1690), `Uint8List` sends (#1648), never
+trust `ready`/`readyState` (#1693, OS-sleep lies), no reliance on
+`bufferedAmount` (doesn't exist on IO, unreachable on web 3.x).
+
+Operational hardening from the risk list: 72 h client soak with RSS sampling
++ `leak_tracker` (multi-day Flutter desktop uptime is publicly unvalidated);
+pinned Flutter version with soak-before-bump (a stable release shipped a
+120→40 fps Windows regression); `ca-certificates` in the backend image
+before Dart 3.13; gateway event-loop lag monitor exposed as a `PIPE.` key;
+own dart2wasm smoke test when the web phase starts.
+
+## 9. What this design deliberately does not do
+
+- No broker, no Envoy, no second wire protocol for native vs web.
+- No delta *replay* after reconnect — snapshot resync only.
+- No client-side write queue, no retry wrapper, no "reliable delivery" layer
+  over the write path — unreliability is surfaced, not hidden.
+- No protobuf/msgpack — measured JSON cost doesn't justify losing wire
+  readability; CBOR is the designated escape hatch if that ever changes.
+- No isolate sharding of the fan-out; no `MultiChannel`.
+- No per-page server-side subscriptions — the wire stays UI-layout-agnostic.
+
+## 10. Open decisions (carried from the notes, updated)
+
+- [x] **#93: rewrite fresh** (decided 2026-08-13). The design diverges enough
+      (no OPC UA server front-end, key-based, conflation) that harvesting
+      costs more than rewriting ~600 lines with tests. #93 stays as
+      reference reading.
+- [x] **Web trust story: private CA, provisioned root** (decided
+      2026-08-13). Root installed on plant machines via provisioning/GPO;
+      no reverse proxy required; no internet dependency; no CT-logged
+      internal hostnames. Native clients pin the same root as an asset.
+- [ ] mTLS for eLinux panels: yes/no (token-only is the default posture).
+- [ ] Timestamp provenance: SourceTimestamp vs ServerTimestamp vs gateway
+      receive time — which drives history, staleness, operator display.
+- [ ] Quality-code numeric values: adopt Ignition's numbers or define our
+      own four-band mapping onto OPC UA StatusCodes.
+- [ ] Heartbeat/death intervals: proposed 2–5 s tick, 3× death — confirm
+      against real plant VLAN behavior during the on-site soak.
