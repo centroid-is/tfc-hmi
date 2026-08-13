@@ -1,0 +1,8 @@
+# Declaring tags here is what makes `--tags` / `--exclude-tags` usable without
+# the "unknown tag" warning package:test prints for undeclared tags.
+tags:
+  contract:
+    # Cases every StateManApi implementation must pass, run against a factory.
+  meta:
+    # Cases that test the harness itself: that a check bites a deliberately
+    # broken implementation, and that the helpers fail the way they promise.
