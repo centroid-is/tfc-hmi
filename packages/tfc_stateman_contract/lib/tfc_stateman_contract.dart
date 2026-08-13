@@ -11,11 +11,22 @@
 /// `tfc_relay_protocol` — that package is imported by the Flutter app, and
 /// `test` pulls `analyzer` into the app's version solve.
 ///
-/// Today this exports only the two helpers every check is built from. Plan 11
-/// fills in the sub-suites (`runSubscribeContract`, `runWriteContract`,
-/// `runFreshnessContract`, ...) and the `runStateManContract` umbrella.
+/// Exported here: the helpers every check is built from (`within`,
+/// `expectContractViolation`), the test-only control surface an implementation
+/// must expose for a case to be able to make a value arrive
+/// (`StateManHarness`), and the sub-suites written so far. The remaining
+/// sub-suites (`runFreshnessContract`, `runWriteContract`, ...) and the
+/// `runStateManContract` umbrella arrive with the plans that contract those
+/// areas.
+///
+/// The reference implementation is deliberately **not** exported from here:
+/// `package:tfc_stateman_contract/testing/fake_state_man.dart` is a separate
+/// import path, so nothing can acquire an implementation by depending on the
+/// contract.
 library;
 
-// Nothing else is exported until plan 11 adds the sub-suites.
 export 'src/check.dart';
+export 'src/harness.dart';
 export 'src/meta.dart';
+export 'src/store_contract.dart';
+export 'src/subscribe_contract.dart';
