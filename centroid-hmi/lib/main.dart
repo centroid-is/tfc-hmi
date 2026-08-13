@@ -214,6 +214,22 @@ Future<void> _startApp([bool debugMode = false]) async {
     pagePaths: pageManager.pages.keys,
   );
 
+  // Paths at which Beamer should clear its beaming history. Landing on a
+  // top-level destination means there is nowhere to go "back" to, so we drop
+  // the accumulated history there — otherwise `canBeamBack` stays true and the
+  // app-bar keeps a stale back-arrow on Home. The Advanced *section* item
+  // ('/advanced') is a menu grouping, not a routable destination, so it is
+  // excluded; its sub-pages are nested (not in this top-level list), which
+  // keeps back navigation WITHIN Advanced working. Membership matches
+  // isTopLevelDestinationPath, not a string prefix — a top-level page that
+  // happens to slug to '/advanced-line' still clears. `/` is always
+  // included so a deleted Home still clears.
+  final topLevelPaths = <String>{
+    '/',
+    for (final item in topLevelMenuItems)
+      if (item.path != null && item.path != '/advanced') item.path!,
+  };
+
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
       onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
@@ -238,7 +254,10 @@ Future<void> _startApp([bool debugMode = false]) async {
         );
         return false;
       },
-      child: MyApp(locationBuilder: locationBuilder),
+      child: MyApp(
+        locationBuilder: locationBuilder,
+        clearHistoryOn: topLevelPaths,
+      ),
     ),
   ));
 }
@@ -452,10 +471,14 @@ void _wireElicitationHandler(WidgetRef ref) {
 }
 
 class MyApp extends ConsumerWidget {
-  MyApp({super.key, required RoutesLocationBuilder locationBuilder})
-      : routerDelegate = BeamerDelegate(
+  MyApp({
+    super.key,
+    required RoutesLocationBuilder locationBuilder,
+    Set<String> clearHistoryOn = const <String>{},
+  }) : routerDelegate = BeamerDelegate(
           notFoundPage: const BeamPage(child: PageNotFound()),
           transitionDelegate: MyNoAnimationTransitionDelegate(),
+          clearBeamingHistoryOn: clearHistoryOn,
           locationBuilder: (routeInformation, context) => locationBuilder(routeInformation, context),
         ) {
     // Marionette route logger: emits [ROUTE] /path log entries so agents
