@@ -56,6 +56,32 @@ jobs:
         dart pub get
         dart test
 
+  # The relay pipe's pure-Dart packages. tfc_relay_protocol had no CI job at
+  # all until now — its tests existed but never ran here.
+  relay-packages-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    - name: Test tfc_relay_protocol
+      working-directory: packages/tfc_relay_protocol
+      run: |
+        dart pub get
+        dart analyze
+        dart test
+
+    - name: Test tfc_stateman_contract
+      working-directory: packages/tfc_stateman_contract
+      run: |
+        dart pub get
+        dart analyze
+        dart test
+
   tfc-dart-test:
     strategy:
       fail-fast: false
