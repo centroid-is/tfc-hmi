@@ -8,8 +8,7 @@ library;
 import 'dart:convert';
 
 import 'package:test/test.dart';
-import 'package:tfc_relay_protocol/src/dynamic_value.dart';
-import 'package:tfc_relay_protocol/src/quality.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 void main() {
   /// Same helper as messages_test.dart:6-11 — every shape must survive
