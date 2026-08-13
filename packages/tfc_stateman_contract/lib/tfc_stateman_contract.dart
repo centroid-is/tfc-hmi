@@ -18,3 +18,4 @@ library;
 
 // Nothing else is exported until plan 11 adds the sub-suites.
 export 'src/check.dart';
+export 'src/meta.dart';
