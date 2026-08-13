@@ -14,8 +14,9 @@
 /// Exported here: the helpers every check is built from (`within`,
 /// `expectContractViolation`), the test-only control surface an implementation
 /// must expose for a case to be able to make a value arrive
-/// (`StateManHarness`), and the sub-suites written so far. The remaining
-/// sub-suites (`runWriteContract`, `runDataServicesContract`) and the
+/// (`StateManHarness`), the write-side control surface (`StateManWriteHarness`,
+/// declared alongside the cases that need it), and the sub-suites written so
+/// far. The remaining sub-suite (`runDataServicesContract`) and the
 /// `runStateManContract` umbrella arrive with the plans that contract those
 /// areas.
 ///
@@ -32,3 +33,4 @@ export 'src/meta.dart';
 export 'src/read_contract.dart';
 export 'src/store_contract.dart';
 export 'src/subscribe_contract.dart';
+export 'src/write_contract.dart';
