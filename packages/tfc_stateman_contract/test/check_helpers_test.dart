@@ -10,6 +10,12 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 /// cases. Nothing ever completes this completer.
 Future<T> neverCompletes<T>() => Completer<T>().future;
 
+/// Stands in for the implementation under test. The helpers are generic, so
+/// the meta-tests need nothing more than an object to pass through.
+final class _DummyApi {
+  const _DummyApi();
+}
+
 void main() {
   group('within', () {
     test('returns the value when the future is already done', () async {
@@ -73,6 +79,74 @@ void main() {
       }
       sw.stop();
       expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
+    });
+  });
+
+  group('expectContractViolation', () {
+    test('completes when the check reports the violation', () async {
+      await expectContractViolation<_DummyApi>(
+        (api) async => fail('subscribe dropped the key'),
+        const _DummyApi(),
+      );
+    });
+
+    test('fails when the check PASSED a deliberately broken implementation',
+        () async {
+      await expectLater(
+        () => expectContractViolation<_DummyApi>(
+          (api) async {},
+          const _DummyApi(),
+        ),
+        throwsA(
+          isA<TestFailure>().having(
+            (f) => f.message,
+            'message',
+            contains('PASSED a deliberately broken implementation'),
+          ),
+        ),
+      );
+    });
+
+    test('fails within its budget when the check hangs instead of failing',
+        () async {
+      final sw = Stopwatch()..start();
+      await expectLater(
+        () => expectContractViolation<_DummyApi>(
+          (api) => neverCompletes<void>(),
+          const _DummyApi(),
+          budget: const Duration(milliseconds: 100),
+        ),
+        throwsA(
+          isA<TestFailure>()
+              .having((f) => f.message, 'message', contains('hung')),
+        ),
+      );
+      sw.stop();
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    });
+
+    test('a raw error reads differently from a hang and names its type',
+        () async {
+      // A check that throws instead of reporting through expect/fail produces
+      // a failure message with no property name in it. That is a defect in the
+      // check, and the meta-assertion has to say so rather than accept it.
+      await expectLater(
+        () => expectContractViolation<_DummyApi>(
+          (api) async => throw StateError('boom'),
+          const _DummyApi(),
+        ),
+        throwsA(
+          isA<TestFailure>().having(
+            (f) => f.message,
+            'message',
+            allOf(
+              contains('StateError'),
+              contains('through expect'),
+              isNot(contains('hung')),
+            ),
+          ),
+        ),
+      );
     });
   });
 }
