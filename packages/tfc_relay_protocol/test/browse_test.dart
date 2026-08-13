@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import 'package:test/test.dart';
-import 'package:tfc_relay_protocol/src/browse.dart';
+// The browse shapes now reach consumers through the barrel (plan 01-05), so
+// the direct src/ import they needed before is gone: a test that reaches past
+// the barrel is a test that can pass while the public surface is broken.
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 /// Every browse shape must survive encode → jsonEncode → jsonDecode → decode,
