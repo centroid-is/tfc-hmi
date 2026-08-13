@@ -15,7 +15,7 @@
 /// `expectContractViolation`), the test-only control surface an implementation
 /// must expose for a case to be able to make a value arrive
 /// (`StateManHarness`), and the sub-suites written so far. The remaining
-/// sub-suites (`runFreshnessContract`, `runWriteContract`, ...) and the
+/// sub-suites (`runWriteContract`, `runDataServicesContract`) and the
 /// `runStateManContract` umbrella arrive with the plans that contract those
 /// areas.
 ///
@@ -26,7 +26,9 @@
 library;
 
 export 'src/check.dart';
+export 'src/freshness_contract.dart';
 export 'src/harness.dart';
 export 'src/meta.dart';
+export 'src/read_contract.dart';
 export 'src/store_contract.dart';
 export 'src/subscribe_contract.dart';

@@ -30,7 +30,17 @@ import '../src/harness.dart';
 
 /// An in-memory state source with a lever for everything the plant would do.
 class FakeStateMan implements StateManApi, StateManHarness {
-  FakeStateMan();
+  FakeStateMan({this.staleAfter = const Duration(milliseconds: 300)});
+
+  /// How long a value may go unheard-of before it must stop claiming to be
+  /// current.
+  ///
+  /// 300 ms by default: long enough that the subscribe and store cases, which
+  /// finish in single-digit milliseconds, never trip it, short enough that a
+  /// freshness case waiting the deadline out on the wall clock stays cheap.
+  /// The freshness driver passes a shorter one still.
+  @override
+  final Duration staleAfter;
 
   /// One map, one batch entry point — the same store the real implementations
   /// use, so the notification-count promises are satisfied by production code
@@ -180,11 +190,27 @@ class FakeStateMan implements StateManApi, StateManHarness {
 
   @override
   Future<DynamicValue> readFresh(String key) =>
-      throw UnimplementedError('freshness and reads: plan 01-07');
+      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
 
   @override
   Future<Map<String, DynamicValue>> readMany(List<String> keys) =>
-      throw UnimplementedError('freshness and reads: plan 01-07');
+      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
+
+  @override
+  int get roundTrips =>
+      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
+
+  @override
+  int get statusNotifications =>
+      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
+
+  @override
+  void disconnectUpstream() =>
+      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
+
+  @override
+  void reconnectUpstream() =>
+      throw UnimplementedError('freshness and reads: plan 01-07 task 2');
 
   @override
   Future<WriteResult> write(String key, Object? value, {Object? expect}) =>
