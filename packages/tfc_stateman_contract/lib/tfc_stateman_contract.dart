@@ -16,5 +16,5 @@
 /// `runFreshnessContract`, ...) and the `runStateManContract` umbrella.
 library;
 
-// The exports land with the helpers themselves: `src/check.dart` and
-// `src/meta.dart`. Nothing else is exported until plan 11 adds the sub-suites.
+// Nothing else is exported until plan 11 adds the sub-suites.
+export 'src/check.dart';
