@@ -135,6 +135,14 @@ final class DynamicValue {
   /// `description`, not just replace them.
   static const Object _unset = Object();
 
+  /// Maximum nesting [DynamicValue.fromJson] will decode.
+  ///
+  /// The decoder is recursive and reads untrusted bytes from a peer, so an
+  /// attacker-supplied 100k-deep object would exhaust the stack and take the
+  /// gateway down for every client. 64 is far deeper than any real PLC
+  /// structure.
+  static const int maxDepth = 64;
+
   final Object? value;
   final Quality quality;
   final DateTime? sourceTime;
@@ -214,6 +222,140 @@ final class DynamicValue {
             ? null
             : Map<int, EnumField>.from(other.enumFields!),
       );
+
+  /// Tolerant decode: unknown fields are ignored (a newer server must be able
+  /// to add one without breaking deployed panels) and every read is an
+  /// explicit cast through `num` / `Map` / `List`.
+  factory DynamicValue.fromJson(Map<String, Object?> json) =>
+      _fromJson(json, 1);
+
+  /// Full encoding is `{typeId?, sourceTypeId?, displayName?, description?,
+  /// enumFields?, q?, t?, type, value}` — the shape the existing converter
+  /// already puts on the wire. With [slim] the bare value is returned instead:
+  /// metadata rides once in the subscribe result, not on every push.
+  Object? toJson({bool slim = false}) {
+    final v = value;
+    final String type;
+    final Object? serialized;
+    if (v == null) {
+      type = 'null';
+      serialized = null;
+    } else if (v is Map<Object, DynamicValue>) {
+      type = 'object';
+      serialized = {
+        for (final entry in v.entries)
+          '${entry.key}': entry.value.toJson(slim: slim),
+      };
+    } else if (v is List<DynamicValue>) {
+      type = 'array';
+      serialized = [for (final child in v) child.toJson(slim: slim)];
+    } else if (v is String) {
+      type = 'string';
+      serialized = v;
+    } else if (v is int) {
+      type = 'integer';
+      serialized = v;
+    } else if (v is double) {
+      type = 'double';
+      serialized = v;
+    } else if (v is bool) {
+      type = 'boolean';
+      serialized = v;
+    } else {
+      type = 'unknown';
+      serialized = v.toString();
+    }
+
+    if (slim) return serialized;
+
+    return {
+      if (typeId != null) 'typeId': typeId!.name,
+      if (sourceTypeId != null) 'sourceTypeId': sourceTypeId,
+      if (displayName != null) 'displayName': displayName!.toJson(),
+      if (description != null) 'description': description!.toJson(),
+      if (enumFields != null && enumFields!.isNotEmpty)
+        'enumFields': _stringKeyed(enumFields!, (f) => f.toJson()),
+      if (quality != Quality.good) 'q': quality.code,
+      if (sourceTime != null) 't': sourceTime!.millisecondsSinceEpoch,
+      'type': type,
+      'value': serialized,
+    };
+  }
+
+  static DynamicValue _fromJson(Map<String, Object?> json, int depth) {
+    if (depth > maxDepth) {
+      throw FormatException(
+          'DynamicValue JSON nested deeper than maxDepth ($maxDepth)');
+    }
+    final type = json['type'] as String? ?? 'unknown';
+    final raw = json['value'];
+    final Object? decoded = switch (type) {
+      'null' => null,
+      'object' => {
+          for (final entry
+              in (raw as Map? ?? const {}).cast<String, Object?>().entries)
+            entry.key: _childFromJson(entry.value, depth + 1),
+        },
+      'array' => [
+          for (final element in (raw as List? ?? const []))
+            _childFromJson(element, depth + 1),
+        ],
+      'integer' => _asInteger(raw),
+      'double' => (raw as num?)?.toDouble(),
+      'boolean' => raw as bool?,
+      'string' => raw as String?,
+      _ => raw,
+    };
+
+    // Construction re-sanitizes: `1e999` in incoming JSON silently parses to
+    // Infinity and would detonate on the next encode.
+    return DynamicValue(
+      value: decoded,
+      quality: json.containsKey('q')
+          ? Quality((json['q'] as num).toInt())
+          : Quality.good,
+      sourceTime: json['t'] == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch((json['t'] as num).toInt(),
+              isUtc: true),
+      typeId: _valueTypeNamed(json['typeId'] as String?),
+      sourceTypeId: json['sourceTypeId'] as String?,
+      displayName: json['displayName'] == null
+          ? null
+          : LocalizedText.fromJson(
+              (json['displayName'] as Map).cast<String, Object?>()),
+      description: json['description'] == null
+          ? null
+          : LocalizedText.fromJson(
+              (json['description'] as Map).cast<String, Object?>()),
+      enumFields: json['enumFields'] == null
+          ? null
+          : _intKeyed(json['enumFields'],
+              (v) => EnumField.fromJson((v as Map).cast<String, Object?>())),
+    );
+  }
+
+  static DynamicValue _childFromJson(Object? raw, int depth) => raw is Map
+      ? _fromJson(raw.cast<String, Object?>(), depth)
+      : DynamicValue(value: raw);
+
+  /// A non-finite `num` under an `integer` tag is left as a double so
+  /// [sanitize] can null it: `Infinity.toInt()` throws.
+  static Object? _asInteger(Object? raw) {
+    final n = raw as num?;
+    if (n == null || (n is double && !n.isFinite)) return n;
+    return n.toInt();
+  }
+
+  /// An unrecognised tag from a newer peer is treated as absent, not as an
+  /// error — forward compatibility, same rule as unknown fields.
+  static ValueType? _valueTypeNamed(String? name) {
+    if (name == null) return null;
+    for (final candidate in ValueType.values) {
+      if (candidate.name == name) return candidate;
+    }
+    return null;
+  }
 
   // ---------------------------------------------------------------- coercion
 
@@ -530,3 +672,15 @@ final class DynamicValue {
     return Object.hash(acc, fields.length);
   }
 }
+
+// JSON objects key by String; enum codes are ints. Convert at the boundary.
+Map<int, V> _intKeyed<V>(Object? raw, V Function(Object?) decode) {
+  if (raw == null) return const {};
+  return (raw as Map).cast<String, Object?>().map(
+        (k, v) => MapEntry(int.parse(k), decode(v)),
+      );
+}
+
+Map<String, Object?> _stringKeyed<V>(
+        Map<int, V> map, Object? Function(V) encode) =>
+    map.map((k, v) => MapEntry('$k', encode(v)));
