@@ -1,0 +1,14 @@
+name: tfc_relay_protocol
+description: >-
+  Wire protocol for the relay pipe: message shapes, quality codes, and value
+  sanitization shared by the backend gateway and the Flutter clients.
+  Pure Dart — no Flutter, no transport, no codegen. See relay-comm-design.md.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0
