@@ -101,6 +101,22 @@ final class ValueStoreNode implements ValueListenable<DynamicValue> {
     }
   }
 
+  /// How many listeners are attached right now.
+  ///
+  /// An **observation surface for teardown assertions**, and it exists because
+  /// the alternative is worse. "The session detached everything it attached"
+  /// is a property of the *source*, not of the session's own bookkeeping — a
+  /// session that emptied its own listener map while leaving the callbacks on
+  /// the node would satisfy every count it kept about itself and still hold a
+  /// dead panel's values flowing into a buffer nobody will drain. The relay's
+  /// kill-cycle test (`teardown_test.dart`) reads this, because this is the
+  /// only place the truth lives.
+  ///
+  /// Read-only by construction: exposing the list would let an inspection
+  /// become a mutation, and a teardown test that could detach the listeners it
+  /// is counting is not a test.
+  int get listenerCount => _listeners.length;
+
   void _dropListeners() => _listeners.clear();
 
   @override
