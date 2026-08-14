@@ -60,6 +60,7 @@ const _landedModes = <String, String>{
   'latency': 'test/faults/latency_test.dart',
   'throttle': 'test/faults/throttle_test.dart',
   'cutMidFrame': 'test/faults/cut_mid_frame_test.dart',
+  'killOnce': 'test/faults/kill_once_test.dart',
 };
 
 final _levers = <String, void Function(FaultProxy)>{

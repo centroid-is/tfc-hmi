@@ -26,9 +26,9 @@
 /// through `errnoOf` instead, and its value is never asserted because it is a
 /// platform's business which number means "reset".
 ///
-/// **The reset assertions are gated on a runtime probe**, never on
-/// `Platform.isWindows` (Assumptions Log A3): whether this kernel accepts the
-/// 8-byte `struct linger` is a question the kernel answers, and `setRawOption`
+/// **The reset assertions are gated on a runtime probe**, never on which
+/// operating system this is (Assumptions Log A3): whether this kernel accepts
+/// the 8-byte `struct linger` is a question it answers itself, and `setRawOption`
 /// rejects a wrong-size struct loudly. The surgical half — that the connection
 /// after the killed one is forwarded end to end — is ungated, because it holds
 /// whichever way the cut was made.
