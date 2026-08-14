@@ -801,7 +801,204 @@ void main() {
           reason: 'a dropped entry that nobody records is a page that goes '
               'half-blank with nothing in the log');
     });
+
+    test('writeStatus answers in the order it was asked', () async {
+      // The public member, asked directly rather than through the reconnect
+      // recovery that shares its one request-building seam. Element *i*
+      // answers `cmds[i]`: a caller reconciling a reconnect must not have to
+      // trust a map key round trip to know which command it is being told
+      // about.
+      final gateway = await statusGateway(
+          (cmds) => [for (final cmd in cmds) applied(cmd, cmds.indexOf(cmd))]);
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final answers = await client
+          .writeStatus(const ['01ONE', '01TWO', '01THREE']).timeout(_recovery);
+
+      expect(answers.map((a) => a.cmd).toList(), ['01ONE', '01TWO', '01THREE']);
+      expect(answers.every((a) => a is WriteApplied), isTrue);
+    });
   });
+
+  group('the hold-to-run path', () {
+    /// A gateway that answers the handshake, the page, and every write as
+    /// applied — so an engage takes and the handle that comes back is live.
+    Future<_FakeGateway> holdGateway() =>
+        _FakeGateway.start((link, method, id, params) {
+          switch (method) {
+            case Methods.hello:
+              link.hello(id);
+            case Methods.subscribe:
+              link.snapshot(id, defaultPageSubscription);
+            case Methods.write:
+              link.result(
+                  id,
+                  WriteApplied('${params['cmd']}',
+                          readback: params['value'],
+                          at: DateTime.now().millisecondsSinceEpoch)
+                      .toJson());
+            default:
+              break;
+          }
+        });
+
+    List<Map<String, Object?>> framesOf(_FakeGateway gateway, String method) =>
+        [
+          for (final frame in gateway.frames)
+            if (frame['method'] == method)
+              ((frame['params'] as Map?) ?? const {}).cast<String, Object?>(),
+        ];
+
+    Future<(_FakeGateway, RemoteStateMan)> engaged() async {
+      final gateway = await holdGateway();
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+      return (gateway, client);
+    }
+
+    test('an engage is an ordinary write frame carrying the hold flag',
+        () async {
+      // D-P5-C. The engage stays a write — that is what buys it a three-state
+      // outcome, an entry in the gateway's outcome log, and `writeStatus`
+      // reconciliation across a reconnect with no new code. The flag is the
+      // one bit that tells the gateway to take a handle for it.
+      final (gateway, client) = await engaged();
+
+      final hold = await client.holdToRun(_seededKey).timeout(_recovery);
+
+      expect(hold.isHeld, isTrue);
+      expect(hold.engagement, isA<WriteApplied>());
+      final engage = framesOf(gateway, Methods.write).single;
+      expect(engage['hold'], true);
+      expect(engage['value'], 1);
+      expect(engage['key'], _seededKey);
+      expect(engage['cmd'], isA<String>(),
+          reason: 'an engage is a real operator action, so it carries the id '
+              'writeStatus reconciles it under');
+      expect(client.debugWritesSent, 1);
+    });
+
+    test('a tick is one notification carrying the key and the counter and no '
+        'cmd', () async {
+      final (gateway, client) = await engaged();
+      final hold = await client.holdToRun(_seededKey).timeout(_recovery);
+
+      hold.tick();
+      hold.tick();
+
+      await _until('both ticks to reach the gateway',
+          () => framesOf(gateway, Methods.holdTick).length == 2);
+      await _settle();
+      expect(framesOf(gateway, Methods.holdTick), [
+        {'k': _seededKey, 'n': 2},
+        {'k': _seededKey, 'n': 3},
+      ], reason: 'the engage already wrote 1, and a tick carries no cmd: it '
+          'has no outcome to correlate, and giving it one would invite '
+          'somebody to await it');
+      expect(client.debugHoldTicksSent, 2);
+    });
+
+    test('a tick on a dead link is not sent and is not swallowed', () async {
+      // Two arms, and the second is the one that bites.
+      //
+      // The behavioural arm can only say that nothing was sent and nothing
+      // threw — which a `try`/`catch` around the send would also satisfy,
+      // because leaving `ready` has already released the handle by then.
+      // The structural arm is what tells the two apart, and the difference
+      // matters: `classifyFailure` (`failure_taxonomy.dart:143-148`) rethrows
+      // unrecognised `StateError`s on purpose, so a catch here would swallow
+      // a real defect in this process along with the one it meant to ignore.
+      final (gateway, client) = await engaged();
+      final hold = await client.holdToRun(_seededKey).timeout(_recovery);
+      hold.tick();
+      await _until('the first tick', () => client.debugHoldTicksSent == 1);
+
+      // Shut down rather than drop: a reconnect racing the assertion would
+      // make the case a coin toss about backoff timing.
+      await gateway.shutdown();
+      await _until('the client to notice the link is gone',
+          () => !client.isReady);
+      final sent = client.debugHoldTicksSent;
+
+      expect(hold.tick, returnsNormally);
+      await _settle();
+      expect(client.debugHoldTicksSent, sent,
+          reason: 'nothing may be handed to a socket nobody is reading: the '
+              'dart:io sink buffers without bound and has no flush(), so a '
+              'pump that kept ticking would build exactly the queue this '
+              'project forbids');
+
+      final pump = _sourceOf('void _sendHoldTick(');
+      expect(pump.where((line) => line.contains('try')), isEmpty,
+          reason: 'the pump gates, it does not catch. Lines checked:\n'
+              '${pump.join('\n')}');
+      expect(pump.any((line) => line.contains('LinkState.ready')), isTrue,
+          reason: 'the gate on link readiness is the whole mechanism; '
+              'sendNotification on a closed peer throws StateError '
+              'synchronously (measured, 05-RESEARCH §B.1 #5)');
+    });
+
+    test('losing the link releases the hold with reason disconnect', () async {
+      // A dead link *is* a release trigger. Waiting for a write deadline
+      // would leave the counter advancing into a socket nobody is reading for
+      // up to two budgets.
+      final (gateway, client) = await engaged();
+      final hold = await client.holdToRun(_seededKey).timeout(_recovery);
+      expect(hold.isHeld, isTrue);
+
+      await gateway.shutdown();
+
+      expect(await hold.onReleased.timeout(_recovery), HoldEnded.disconnect);
+      expect(hold.isHeld, isFalse);
+    });
+
+    test('disposing the client releases every live hold', () async {
+      final (gateway, client) = await engaged();
+      final hold = await client.holdToRun(_seededKey).timeout(_recovery);
+
+      await client.dispose();
+
+      expect(await hold.onReleased.timeout(_recovery), HoldEnded.disposed,
+          reason: 'a panel that closed while a button was held must not leave '
+              'a counter advancing behind it');
+      expect(hold.isHeld, isFalse);
+      expect(framesOf(gateway, Methods.holdTick), isEmpty);
+    });
+  });
+}
+
+/// The source lines of the member whose declaration begins [member], in
+/// `lib/src/remote_state_man.dart`.
+///
+/// [member] is the start of the *declaration* — `'void _sendHoldTick('` and
+/// not `'_sendHoldTick'` — because a bare name matches the call site that
+/// installs it as a callback first, and the range walked from there is
+/// somebody else's method.
+///
+/// Reading the implementation as text is `client_config_test.dart:202-222`'s
+/// shape and `no_retry_test.dart`'s, and it is here for the same reason it is
+/// there: the property is about a seam that does not exist yet — a `try` some
+/// future refactor wraps around a send — and no behavioural case can see the
+/// absence of something nobody has written.
+List<String> _sourceOf(String member) {
+  final file = File('lib/src/remote_state_man.dart');
+  expect(file.existsSync(), isTrue,
+      reason: 'the file this sweep reads has moved; ${file.path} is relative '
+          'to the package root, which is where dart test runs');
+  final lines = file.readAsLinesSync();
+  final start = lines.indexWhere((line) => line.trimLeft().startsWith(member));
+  expect(start, isNot(-1), reason: '$member is not in ${file.path}');
+  final end = lines.indexWhere((line) => line == '  }', start);
+  expect(end, isNot(-1), reason: '$member has no closing brace at top level');
+  return lines.sublist(start, end + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -829,6 +1026,15 @@ final class _FakeGateway {
   final HttpServer _http;
   final _Script _script;
   final List<_FakeLink> _links = <_FakeLink>[];
+
+  /// Every frame this gateway has been sent, in order, decoded.
+  ///
+  /// Recorded rather than scripted because the hold cases assert on frames
+  /// the script never sees: a tick carries no id, so [_script] is never
+  /// called for one, and "exactly one notification per tick, with no cmd on
+  /// it" is a claim about what left the client rather than about what was
+  /// answered.
+  final List<Map<String, Object?>> frames = <Map<String, Object?>>[];
 
   int get port => _http.port;
 
@@ -863,6 +1069,7 @@ final class _FakeGateway {
         (Object? data) {
           final frame = jsonDecode('$data');
           if (frame is! Map) return;
+          frames.add(frame.cast<String, Object?>());
           final id = frame['id'];
           final method = frame['method'];
           if (id is! int || method is! String) return;

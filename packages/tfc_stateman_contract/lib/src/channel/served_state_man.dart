@@ -59,6 +59,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../data_services_contract.dart';
 import '../harness.dart';
+import '../hold_harness.dart';
 import '../write_contract.dart';
 import 'rpc_names.dart';
 
@@ -91,6 +92,11 @@ final class ServedStateMan {
   /// pulls a write lever, naming what to add, which is the same bargain
   /// [writeHarnessOf] already strikes.
   late final StateManWriteHarness writePlant = writeHarnessOf(api);
+
+  /// The hold seam, resolved on first use for the same bargain: a source that
+  /// serves no deadman is a legitimate thing to serve, and the failure should
+  /// arrive when a case first feeds one, naming what to add.
+  late final StateManHoldHarness holdPlant = holdHarnessOf(api);
 
   /// The JSON-RPC endpoint. Exposed so a test can assert on its state; nothing
   /// in the ordinary path needs it.
@@ -138,6 +144,8 @@ final class ServedStateMan {
     _on(HarnessMethods.readMany, _readMany);
     _on(HarnessMethods.keys, (rpc.Parameters _) => api.keys);
     _on(HarnessMethods.write, _write);
+    _on(HarnessMethods.writeStatus, _writeStatus);
+    _on(HarnessMethods.holdTick, _holdTick);
     _on(HarnessMethods.setValue, _setValue);
     _on(HarnessMethods.setValues, _setValues);
     _on(HarnessMethods.setQuality, _setQuality);
@@ -237,6 +245,46 @@ final class ServedStateMan {
 
     final result = await api.write(key, value, expect: expected);
     return result.toJson();
+  }
+
+  /// Re-asks the source what became of a list of commands.
+  ///
+  /// Request-shaped, unlike the levers below, because it has an answer and
+  /// the answer is the whole point: it is positionally aligned with the
+  /// question, and a caller reconciling a reconnect reads element *i* as the
+  /// verdict on `cmds[i]`.
+  Future<Object?> _writeStatus(rpc.Parameters params) async {
+    final cmds = [for (final cmd in params['cmds'].asList) '$cmd'];
+    final results = await api.writeStatus(cmds);
+    return {'results': [for (final result in results) result.toJson()]};
+  }
+
+  /// One feed of a hold-to-run deadman, applied to the plant.
+  ///
+  /// Notification-shaped and `void`, matching the real wire: a tick has no
+  /// outcome to correlate, and json_rpc_2 sends nothing back for a
+  /// notification anyway.
+  ///
+  /// **It must never throw.** A notification handler that throws does not
+  /// answer the caller — the error goes to `onUnhandledError` (measured,
+  /// 05-RESEARCH §B.1 #2) — so at ten frames a second a malformed or
+  /// unrecognised tick would become a log flood that tells nobody anything.
+  /// A tick for a hold this side does not know about is an ordinary,
+  /// expected condition: the operator let go a moment ago, or the engage was
+  /// refused. Drop it.
+  void _holdTick(rpc.Parameters params) {
+    final HoldTickParams tick;
+    try {
+      tick = HoldTickParams.fromJson({
+        'k': params['k'].valueOr(null),
+        'n': params['n'].valueOr(null),
+      });
+    } on FormatException {
+      // Deliberately swallowed — see above. The machine's safety does not
+      // depend on this frame arriving; it depends on the counter stopping.
+      return;
+    }
+    _afterLever(() => holdPlant.applyHoldTick(tick.key, tick.counter));
   }
 
   // ----------------------------------------------------------------- levers
