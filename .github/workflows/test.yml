@@ -282,7 +282,31 @@ jobs:
       run: |
         dart pub get
         dart analyze
-        dart test
+        dart test --exclude-tags oslevel
+
+    # The kernel traffic-shaping leg (tc netem). Excluded from the step above
+    # because those tests need root and iproute2: left in, they would run and
+    # skip on all three OSes, and a skip that appears on every run of every
+    # platform is noise people learn to scroll past.
+    #
+    # Ubuntu is the only leg that can actually install a qdisc, so it is the
+    # only leg that runs them, and a failure here fails the job like any other
+    # step. What this step deliberately does NOT do is treat a skip as a
+    # failure. The capability probe is two-part — the binary exists *and* a
+    # privileged invocation succeeds — so if a hosted runner ever stops
+    # offering passwordless sudo, the tests report named skips and this job
+    # stays green. That is the assumption (RESEARCH A2) making itself
+    # self-correcting rather than turning into a red build about something
+    # other than the code.
+    - name: Test tfc_stateman_contract OS-level faults
+      if: runner.os == 'Linux'
+      working-directory: packages/tfc_stateman_contract
+      run: |
+        if ! command -v tc > /dev/null; then
+          sudo apt-get update
+          sudo apt-get install -y iproute2
+        fi
+        dart test --tags oslevel
 
   tfc-dart-test:
     strategy:
