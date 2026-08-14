@@ -248,7 +248,11 @@ final class RelayServer {
     // After the bind, so a server that failed to bind has no timer running
     // against an empty registry, and one engine for the whole process — see
     // `tick_engine.dart` on why this is never per session.
-    _engine = TickEngine(registry: _sessions, config: config)..start();
+    _engine = TickEngine(
+      registry: _sessions,
+      config: config,
+      onSessionError: onError,
+    )..start();
   }
 
   /// Builds one session for one upgraded connection.

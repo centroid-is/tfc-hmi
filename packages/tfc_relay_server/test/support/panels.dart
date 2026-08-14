@@ -39,9 +39,20 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 import 'counting_encoder.dart';
 import 'fake_clock.dart';
 
+/// Whether this panel's socket has been broken by a case.
+///
+/// A mutable holder rather than a `connect` flag, because a panel that threw
+/// from its very first write could never complete its own hello — and the
+/// failure CR-03 is about is a socket that dies *between* two ticks, on a
+/// session that is fully established.
+final class SocketFault {
+  bool broken = false;
+}
+
 /// One connected panel, and every frame the tick engine wrote to it.
 final class Panel {
-  Panel(this.sub, this.session, this.client, this.buffer, this.frames);
+  Panel(this.sub, this.session, this.client, this.buffer, this.frames,
+      this._fault);
 
   final String sub;
   final RelaySession session;
@@ -76,6 +87,12 @@ final class Panel {
           if (methodOf(frame) == Methods.resync)
             ResyncParams.fromJson(paramsOf(frame)),
       ];
+
+  final SocketFault _fault;
+
+  /// Makes every subsequent write to this panel throw, as a socket that died
+  /// since the last tick does.
+  void breakSocket() => _fault.broken = true;
 
   /// Where the first frame carrying [method] sits on this wire, or -1.
   /// Frame *order* is the assertion in every lane case, so it is read by
@@ -117,7 +134,16 @@ final class Plant {
       thresholdMs: config.stallThreshold.inMilliseconds,
     ),
     clock: clock.now,
+    onSessionError: (error, stack, where) =>
+        errors.add((where: where, error: error)),
   );
+
+  /// Every error the engine reported, as `(where, error)`.
+  ///
+  /// The engine's containment is only half a fix without somewhere for the
+  /// error to land: a tick that swallowed a session's throw would look exactly
+  /// like a tick that contained it (03-REVIEW CR-03 / WR-10).
+  final errors = <({String where, Object error})>[];
 
   final _panels = <Panel>[];
 
@@ -147,6 +173,7 @@ final class Plant {
     final pair = channelPair();
     final lane = buffer ?? ConflatingSendBuffer(maxPending: config.maxPending);
     final frames = <String>[];
+    final fault = SocketFault();
     final session = RelaySession.serve(
       channel: StreamChannel<String>(pair.server.stream, SessionSink(lane)),
       api: api,
@@ -159,12 +186,13 @@ final class Plant {
       emitFrame: (frame) {
         frames.add(frame);
         pair.server.sink.add(frame);
+        if (fault.broken) throw StateError('socket is gone');
       },
     );
     registry.add(session);
     final client = rpc.Client(pair.client);
     unawaited(client.listen());
-    final panel = Panel(sub, session, client, lane, frames);
+    final panel = Panel(sub, session, client, lane, frames, fault);
     _panels.add(panel);
 
     await ask(

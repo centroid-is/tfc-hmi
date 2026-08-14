@@ -54,6 +54,7 @@ import 'dart:convert';
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'error_reporter.dart';
 import 'frame_encoder.dart';
 import 'lag_monitor.dart';
 import 'relay_server.dart' show SessionRegistry;
@@ -75,6 +76,7 @@ final class TickEngine {
     LagMonitor? lag,
     int Function()? clock,
     void Function(int nowMs)? sweep,
+    this.onSessionError,
   })  : encoder = encoder ?? FrameEncoder(),
         lag = lag ??
             LagMonitor(
@@ -107,6 +109,14 @@ final class TickEngine {
   /// so. Absent — which is every production path — the step is [reap], so the
   /// liveness deadline is not something a server has to be configured into.
   final void Function(int nowMs)? _sweep;
+
+  /// Where a session that threw inside the tick is reported.
+  ///
+  /// Supplied by [RelayServer] from its own `onError`. Without it the throw
+  /// went to the ambient zone, which for a package that logs nothing means it
+  /// went nowhere: the symptom was "half the plant's panels went still" with
+  /// no server-side trace of why.
+  final RelayErrorHandler? onSessionError;
 
   /// The default clock: monotonic, and not the timer's own tick count.
   ///
@@ -157,9 +167,39 @@ final class TickEngine {
     // gone cannot be picked up halfway through its own dismantling
     // (Finding 9's ordered teardown).
     for (final session in registry.sessions) {
-      _tickSession(session, nowMs, drift);
+      // **One client's dead socket is one client's problem.**
+      //
+      // Without this catch the tick had no containment anywhere:
+      // `_tickSession` reaches `session.emit` → `_Connection.write` →
+      // `writeFrame` → `ws.sink.add`, which is a `dart:io` socket write on a
+      // connection that may have died between the last `_transportEnded` and
+      // this tick. `registry.sessions` preserves connection order, so the
+      // *same* session throws first on every subsequent tick — permanent
+      // starvation of every session registered after it, plus a reaper
+      // (below) that never runs, so nothing ever reaps the dead session
+      // causing it. The timer itself survives, which is what made this quiet.
+      //
+      // The evicted session is closed with [CloseCodes.serverDraining]:
+      // within the existing vocabulary that is the code whose meaning is
+      // "reconnect, do not alarm", which is the right instruction to a panel
+      // the server can no longer write to. It is deliberately not 4004 —
+      // nothing here measured a backlog — and not 4003, which would claim the
+      // client stopped talking when it may well not have.
+      try {
+        _tickSession(session, nowMs, drift);
+      } catch (error, stack) {
+        onSessionError?.call(error, stack, 'tick');
+        unawaited(session.close(CloseCodes.serverDraining,
+            'this session could not be served: $error'));
+      }
     }
-    (_sweep ?? reap)(nowMs);
+    // And the sweep separately, because a sweep that threw would take down the
+    // tick from the other end — every session served, none of them reaped.
+    try {
+      (_sweep ?? reap)(nowMs);
+    } catch (error, stack) {
+      onSessionError?.call(error, stack, 'reap');
+    }
   }
 
   /// Step 4 of the tick: close every session that has gone silent past
