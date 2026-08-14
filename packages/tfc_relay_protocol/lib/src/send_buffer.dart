@@ -124,7 +124,12 @@ final class ConflatingSendBuffer {
   /// deliver the news that it is degraded.
   void putPriority(Object? message) => _priority.add(message);
 
-  /// Disconnect policy. Call once per tick with a monotonic timestamp.
+  /// Disconnect policy. Call once per tick with a monotonic timestamp,
+  /// **before** [drain].
+  ///
+  /// [poll] — not [drain] — is the only thing that decides a client has
+  /// recovered, and it decides it on the count it measured before the drain
+  /// emptied the buffer. See [drain] for why that used to be untrue.
   BufferVerdict poll(int nowMs) {
     final pending = pendingCount;
     if (pending > maxPending) {
@@ -149,6 +154,18 @@ final class ConflatingSendBuffer {
 
   /// Drains everything pending. The buffer is empty afterwards — recovery
   /// never has a backlog to flush.
+  ///
+  /// **Draining is not evidence that the client caught up** (03-REVIEW WR-02).
+  /// This used to clear `_peakSinceMs` whenever it drained anything, and the
+  /// tick engine drains every tick — so [poll] could only ever see
+  /// `_peakSinceMs == null` or `== nowMs`, the window never accumulated, and
+  /// the soft verdict was unreachable in production. Only `maxPending` bit.
+  /// On `dart:io` WebSockets `sink.add` never blocks and tells us nothing, so
+  /// a completed drain says only that the frames left this process. What
+  /// [poll] measures across ticks is therefore the *production* rate for one
+  /// client staying above the soft ceiling continuously — see
+  /// `server_config.dart`'s `peakThreshold`, which says so in the same words a
+  /// reader will find at the other end.
   DrainedFrame drain() {
     final priority = List<Object?>.of(_priority);
     _priority.clear();
@@ -163,7 +180,6 @@ final class ConflatingSendBuffer {
       );
     });
     _subs.clear();
-    if (priority.isNotEmpty || subs.isNotEmpty) _peakSinceMs = null;
     return DrainedFrame(priority, subs);
   }
 }

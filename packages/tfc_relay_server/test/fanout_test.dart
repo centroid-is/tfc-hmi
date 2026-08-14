@@ -197,8 +197,14 @@ void main() {
           reason: 'conflation keeps the latest reading; shipping the older one '
               'would put a number on the screen the plant has already left '
               'behind');
-      expect(
-          panel.frames.where((frame) => frame.contains('41')), isEmpty,
+      // Decoded values, never a substring of the raw frames (03-REVIEW WR-01).
+      // `panel.frames` includes the hello answer, which carries two random
+      // ULIDs and a 13-digit serverTime, so grepping every frame for the two
+      // characters "41" failed whenever either happened to contain them —
+      // measured at roughly one run in three, on the job this phase added to
+      // CI. An intermittently red gateway job trains everyone to re-run it.
+      expect(panel.updates.expand((u) => u.changes.values).map((v) => v.v),
+          isNot(contains(41)),
           reason: 'the intermediate value must never reach the client — a '
               'queue that replays it is the backlog conflation exists to '
               'refuse');
