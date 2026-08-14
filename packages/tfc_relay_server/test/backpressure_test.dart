@@ -41,6 +41,7 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
 import 'support/bands.dart';
 import 'support/fake_clock.dart';
+import 'support/panels.dart';
 import 'support/ws_harness.dart';
 
 /// How long the throttled arm observes the link for.
@@ -268,6 +269,58 @@ void main() {
           reason: 'the window restarts when the client recovers. Carrying the '
               'old one forward would evict a panel that was briefly busy two '
               'shifts ago, which reads to an operator as a random disconnect');
+    });
+  });
+
+  group('F20 end to end — the soft verdict fires through the engine', () {
+    // 03-REVIEW WR-02. The three arms above construct a `ConflatingSendBuffer`
+    // by hand and call `poll`/`drain` themselves; they would pass unchanged
+    // whether the engine drains every tick or never, which is why the soft
+    // verdict could be dead in production while STATE.md recorded it as
+    // "pinned in a named test". These two are engine-driven: the buffer is
+    // polled and drained by `tickOnce`, on the pacing the server actually
+    // uses, so the whole path is what is being asserted.
+    ConflatingSendBuffer peaky() => ConflatingSendBuffer(
+        maxPending: 1000, peakThreshold: 2, peakWindowMs: 200);
+
+    test('a client held above the soft ceiling every tick is evicted', () async {
+      final plant = Plant();
+      final keys = plant.seed(5, prefix: 'CN02.LOAD');
+      final panel = await plant.connect('page-1', keys, buffer: peaky());
+
+      // Well under maxPending on every tick — this is the soft ceiling's
+      // territory and nothing else's — and above the soft one continuously.
+      var value = 0;
+      for (var tick = 0; tick < 12; tick++) {
+        plant.api.setValues({for (final key in keys) key: ++value});
+        plant.tick();
+      }
+
+      expect(panel.session.sentCloseCode, CloseCodes.backpressureOverrun,
+          reason: 'the soft ceiling exists to catch the client the hard one '
+              'never will. With drain() clearing the peak window this could '
+              'not fire on any tick pacing at all, and the only test of it '
+              'called poll() by hand — so nothing in the suite failed whether '
+              'the verdict worked or not');
+    });
+
+    test('a client under the soft ceiling is never evicted for a long run',
+        () async {
+      final plant = Plant();
+      final keys = plant.seed(1, prefix: 'CN02.QUIET');
+      final panel = await plant.connect('page-1', keys, buffer: peaky());
+
+      var value = 0;
+      for (var tick = 0; tick < 40; tick++) {
+        plant.api.setValues({keys.single: ++value});
+        plant.tick();
+      }
+
+      expect(panel.session.sentCloseCode, isNull,
+          reason: 'one changed handle a tick is a healthy panel on a steady '
+              'line, for as long as it likes. A window that accumulated '
+              'without a recovery signal would evict every panel eventually, '
+              'which is the opposite failure and just as bad');
     });
   });
 

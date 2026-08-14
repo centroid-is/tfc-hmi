@@ -159,13 +159,39 @@ void main() {
       expect(buf.poll(16_001), isA<BufferDisconnect>());
     });
 
-    test('a brief spike that drains inside the window never disconnects', () {
+    test('a spike that ends inside the window never disconnects', () {
       final buf = make();
       for (var t = 0; t < 100_000; t += 1000) {
+        // Busy tick, then a quiet one. The quiet tick is what closes the
+        // window, and it is the *poll* that reads it: a count under the
+        // threshold is the only recovery signal there is.
         fill(buf, 6);
         expect(buf.poll(t), isA<BufferOk>());
-        buf.drain(); // every tick the writes complete
+        buf.drain();
+        fill(buf, 2);
+        expect(buf.poll(t + 500), isA<BufferOk>());
+        buf.drain();
       }
+    });
+
+    test('draining every tick does not reset the window (03-REVIEW WR-02)',
+        () {
+      // The falsification of the dead soft verdict. `drain()` used to clear
+      // `_peakSinceMs` whenever it drained anything, so this loop — which is
+      // exactly what the tick engine does — could run forever without ever
+      // producing a verdict, and the soft ceiling was decorative.
+      final buf = make();
+      BufferVerdict? verdict;
+      for (var t = 0; t <= 20_000 && verdict is! BufferDisconnect; t += 1000) {
+        fill(buf, 6);
+        verdict = buf.poll(t);
+        buf.drain();
+      }
+      expect(verdict, isA<BufferDisconnect>(),
+          reason: 'a client held above the soft ceiling on every tick for '
+              'longer than the whole window must eventually be judged, and a '
+              'drain the server performed on its own schedule is not the '
+              'client saying it caught up');
     });
   });
 }
