@@ -115,9 +115,11 @@ final class ConnectionSupervisor {
     void Function(StatusParams status)? onStatus,
     void Function(String reason)? onBye,
     int Function()? now,
+    Future<ConnectAttempt> Function(Uri uri)? dial,
   })  : _onStatus = onStatus,
         _onBye = onBye,
-        _now = now ?? _wallClock {
+        _now = now ?? _wallClock,
+        _dial = dial ?? connect {
     _resync = ResyncEngine(
       storeFor: storeFor,
       subscribe: _subscribe,
@@ -154,6 +156,21 @@ final class ConnectionSupervisor {
   final void Function(StatusParams status)? _onStatus;
   final void Function(String reason)? _onBye;
   final int Function() _now;
+
+  /// How one attempt reaches the gateway. Defaults to [connect], the real
+  /// dial, and is overridden only by a harness.
+  ///
+  /// The seam exists because the shared contract suite calls
+  /// `StateManApi Function() make` **synchronously** (04-RESEARCH Finding 6)
+  /// while a `RelayServer` only learns its port from an asynchronous
+  /// ephemeral bind (`relay_server.dart:219-247`, port 0 on purpose). Without
+  /// this, a contract leg would have to guess a port number before anything
+  /// was listening on it, and a guessed port that collides is a flaky suite
+  /// blaming the client. Overriding the dial rather than the [uri] keeps the
+  /// retry policy exactly where the operator can see it: this is one attempt
+  /// in, one [ConnectAttempt] out, same as the real one, so backoff, the
+  /// generation counter and the health line are all unchanged.
+  final Future<ConnectAttempt> Function(Uri uri) _dial;
 
   final StreamController<LinkState> _states =
       StreamController<LinkState>.broadcast();
@@ -274,7 +291,7 @@ final class ConnectionSupervisor {
 
     final ConnectAttempt attempt;
     try {
-      attempt = await connect(uri);
+      attempt = await _dial(uri);
     } catch (error) {
       // `connect` reports a refused dial as a value, so a throw here is
       // something else entirely — a bad URI, a DNS failure. Same answer: the
