@@ -40,6 +40,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'delay_line.dart';
 import 'socket_ops.dart';
@@ -91,6 +92,27 @@ final class FaultProxy {
   bool _shutDown = false;
   int? _lastUpstreamConnectErrno;
 
+  /// Where jitter is drawn from.
+  ///
+  /// Not seeded: the property under test is that successive round trips
+  /// *differ* and all land inside the band, which a fixed seed would turn into
+  /// a check that one particular sequence of draws still lands there.
+  final Random _jitterSource = Random();
+
+  Duration? _latency;
+  Duration? _jitter;
+  int? _throttleBytesPerSec;
+
+  /// The high-water reading of every pair that has already closed.
+  int _retiredPeakPendingBytes = 0;
+
+  /// The per-chunk delay every line gets, rebuilt when [latency] or [jitter]
+  /// changes and handed to pairs accepted afterwards.
+  ///
+  /// Null when neither lever is set, which is how a line goes back to the
+  /// undelayed write path rather than to a closure returning zero.
+  Duration Function()? _perChunkDelay;
+
   /// The port this proxy is listening on.
   ///
   /// Throws [StateError] before [start] has completed, rather than the
@@ -115,6 +137,28 @@ final class FaultProxy {
   /// that ends with a live pair has leaked two descriptors, and this says so
   /// before the fd count does.
   int get livePairs => _pairs.length;
+
+  /// The most any one direction of any one pair has ever held.
+  ///
+  /// The bounded-memory criterion restated at the proxy, where a test can
+  /// reach it: `DelayLine.peakPendingBytes` is the real observable, but the
+  /// lines belong to pairs this class owns and a test has no other handle on
+  /// them. Sampling RSS instead would measure the whole test host, including
+  /// the payload the firehose is generating, and could not tell a bounded
+  /// queue from a lucky garbage collection.
+  ///
+  /// Retired pairs are remembered. A pair whose peak vanished when its
+  /// connection closed would let a test that tore its client down first read
+  /// zero and pass, which is the worst kind of green: the run that actually
+  /// grew is the one that ends with a closed connection.
+  int get peakPendingBytes {
+    var peak = _retiredPeakPendingBytes;
+    for (final pair in _pairs) {
+      final pairPeak = pair.peakPendingBytes;
+      if (pairPeak > peak) peak = pairPeak;
+    }
+    return peak;
+  }
 
   /// The errno of the last failed upstream connection, or null if none failed.
   ///
@@ -181,25 +225,57 @@ final class FaultProxy {
 
   /// One-way delay applied to every chunk in both directions.
   ///
-  /// Deliberately setter-only until plan 02-04 lands: a getter answering "off"
-  /// would be answering on behalf of a mode nobody has written.
+  /// Applied per direction, so an application round trip through the proxy
+  /// costs `2 * value`. Overhead is a small constant, 1–2.5 ms per direction
+  /// (Finding 6), so tests assert `inInclusiveRange(2 * d, 2 * d + 20ms)`
+  /// rather than a percentage band — the constant is bigger than a percentage
+  /// allows at 50 ms and smaller than one allows at 500 ms.
   ///
-  /// Overhead is a small constant, 1–2.5 ms per direction (Finding 6), so
-  /// tests assert `inInclusiveRange(2 * d, 2 * d + 20ms)` rather than a
-  /// percentage band.
-  set latency(Duration? value) => _notYet('latency', '02-04');
+  /// Live: setting it reaches the pairs that are already open as well as the
+  /// ones accepted later. A lever that only worked before connect could not
+  /// express "the link degrades while the client is connected", which is the
+  /// only shape the slow-link scenarios come in. Null turns it off.
+  ///
+  /// Setter-only. A getter would answer with the configured number, and the
+  /// question worth asking — what did the connection actually experience — is
+  /// answered by measuring a round trip, which is what `latency_test.dart`
+  /// does.
+  set latency(Duration? value) {
+    _latency = value;
+    _applyDelay();
+  }
 
   /// Random extra delay added on top of [latency], redrawn per chunk.
   ///
-  /// Part of the `latency` mode rather than a ninth one, which is why the
-  /// failure below names latency: there is no separate jitter test to write.
-  set jitter(Duration? value) => _notYet('latency', '02-04');
+  /// Part of the `latency` mode rather than a ninth one — hence no separate
+  /// entry in [faultModes] and no separate test file. Drawn uniformly from
+  /// zero to this value, independently per chunk and per direction, so a round
+  /// trip lands in `[2d, 2d + 2 * jitter + overhead]`.
+  set jitter(Duration? value) {
+    _jitter = value;
+    _applyDelay();
+  }
 
-  /// Bytes per second the proxy will forward.
+  /// Bytes per second the proxy will forward, **per direction**.
   ///
-  /// Measured over a window of at least 3 s with a ±5% band (Assumption A5),
-  /// because the interesting failure is a sustained rate, not an instant one.
-  set throttleBytesPerSec(int? value) => _notYet('throttle', '02-04');
+  /// Per direction and not shared, because that is how a link is specified: a
+  /// 1 Mbit/s line carries a megabit each way, and a shared budget would make
+  /// a chatty client slow its own downloads for a reason no scenario asked
+  /// for.
+  ///
+  /// Measured over a window of at least 3 s with a band of one twentieth
+  /// (Assumption A5), because the interesting failure is a sustained rate and
+  /// not an instant one — and because the bucket may bank up to a second of
+  /// burst, which dominates anything shorter than about two.
+  ///
+  /// Live, like [latency]: it reaches the pairs that are already open. Null
+  /// means unmetered.
+  set throttleBytesPerSec(int? value) {
+    _throttleBytesPerSec = value;
+    for (final pair in _pairs) {
+      pair.applyThrottle(value);
+    }
+  }
 
   /// The link goes silent while the sockets stay up — a true half-open.
   ///
@@ -241,6 +317,31 @@ final class FaultProxy {
   set bufferServerToClient(bool value) =>
       _notYet('bufferServerToClient', '02-09');
 
+  /// Rebuilds the per-chunk delay and pushes it to every live pair.
+  ///
+  /// Both directions of every pair get the *same* closure, and it redraws its
+  /// jitter on each call, so the two directions of one round trip draw
+  /// independently rather than sharing one number.
+  void _applyDelay() {
+    _perChunkDelay = _buildDelay();
+    for (final pair in _pairs) {
+      pair.applyChunkDelay(_perChunkDelay);
+    }
+  }
+
+  /// The delay function the current [latency] and [jitter] describe.
+  Duration Function()? _buildDelay() {
+    final base = _latency ?? Duration.zero;
+    final spread = _jitter ?? Duration.zero;
+    if (base <= Duration.zero && spread <= Duration.zero) return null;
+    if (spread <= Duration.zero) return () => base;
+    // `+ 1` because `nextInt` is exclusive at the top and the spread reads as
+    // an inclusive maximum everywhere it is written down.
+    final spreadMicros = spread.inMicroseconds;
+    return () =>
+        base + Duration(microseconds: _jitterSource.nextInt(spreadMicros + 1));
+  }
+
   Never _notYet(String mode, String plan) => throw UnimplementedError(
       'mode $mode lands in plan $plan; the lever is declared now and throws '
       'rather than accepting the setting silently, because a mode that can be '
@@ -272,8 +373,22 @@ final class FaultProxy {
       return;
     }
     final pair = _ProxiedPair(client, upstream);
+    // Before `start`, so the first chunk of a connection accepted while a
+    // lever is set is already subject to it. A pair that picked its settings
+    // up one event loop later would deliver the opening bytes of every
+    // connection unmodified, which is exactly the traffic a handshake test
+    // cares about.
+    pair.applyChunkDelay(_perChunkDelay);
+    pair.applyThrottle(_throttleBytesPerSec);
     _pairs.add(pair);
-    pair.start(_pairs.remove);
+    pair.start(_retire);
+  }
+
+  /// Drops a closed pair, keeping the one number that outlives it.
+  void _retire(_ProxiedPair pair) {
+    final peak = pair.peakPendingBytes;
+    if (peak > _retiredPeakPendingBytes) _retiredPeakPendingBytes = peak;
+    _pairs.remove(pair);
   }
 }
 
@@ -297,6 +412,33 @@ final class _ProxiedPair {
   final DelayLine toUpstream;
   final DelayLine toClient;
   bool _closed = false;
+
+  /// The most either direction of this pair has ever held.
+  int get peakPendingBytes => toUpstream.peakPendingBytes > toClient.peakPendingBytes
+      ? toUpstream.peakPendingBytes
+      : toClient.peakPendingBytes;
+
+  /// Applies a per-chunk delay to **both** directions.
+  ///
+  /// Both, because `latency` is documented as a one-way delay and a round trip
+  /// crosses the proxy twice: setting it on one direction would halve the
+  /// number every test measures, and the failure would read as a scheduler
+  /// problem rather than as a missing line here.
+  void applyChunkDelay(Duration Function()? delay) {
+    toUpstream.chunkDelay = delay;
+    toClient.chunkDelay = delay;
+  }
+
+  /// Applies a byte budget to **each** direction.
+  ///
+  /// Each direction gets its own bucket at the full rate, which is what "a
+  /// 1 Mbit/s link" means. Sharing one bucket between them would make the two
+  /// directions compete, so a test measuring a download would read a rate that
+  /// depended on how talkative its own client was.
+  void applyThrottle(int? bytesPerSecond) {
+    toUpstream.bytesPerSecond = bytesPerSecond;
+    toClient.bytesPerSecond = bytesPerSecond;
+  }
 
   void start(void Function(_ProxiedPair pair) onClosed) {
     // A destroyed socket completes `done` with an error nobody is waiting for,
