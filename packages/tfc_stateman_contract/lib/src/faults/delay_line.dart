@@ -226,6 +226,33 @@ final class DelayLine {
   /// why it must live behind the same high-water mark as everything else.
   bool withholdUntilReleased = false;
 
+  /// Bytes this line may still forward before the cut fires. Null means none
+  /// is armed.
+  ///
+  /// The seat `cutMidFrame` takes (plan 02-07), and it counts **bytes**: the
+  /// head chunk is split at the boundary using the same `_headWritten`
+  /// remainder the throttle already needed, because a cut that rounded up to
+  /// the end of whichever chunk happened to straddle n would deliver a number
+  /// nobody asked for and would vary with the peer's write sizes.
+  ///
+  /// Counts down as bytes leave. The countdown lives on the line rather than
+  /// in the proxy because this is the only place that knows how many bytes
+  /// actually reached the socket — bytes still queued here have not been
+  /// delivered, and a mode promising "exactly n at the peer" cannot count what
+  /// it merely accepted.
+  int? cutAfterBytes;
+
+  /// Invoked once, after the last byte before the cut has been **flushed**.
+  ///
+  /// Called from inside the writer, after its `flush()` has completed, so the
+  /// n bytes have left this process before whatever the callback does to the
+  /// socket. Cleared as it fires: a cut is one event, and a second call would
+  /// tear down a connection the proxy may have replaced by then.
+  ///
+  /// What it must not do is reset the socket. See `fault_proxy.dart`: the FIN
+  /// is the mode.
+  Future<void> Function()? onCutReached;
+
   /// Bytes this line has accepted and not yet delivered.
   ///
   /// Includes the chunk currently in flight: it has left the queue but the
@@ -332,6 +359,15 @@ final class DelayLine {
     _writing = true;
     try {
       while (!_closed && _pending.isNotEmpty) {
+        // Read once per iteration and use that reading for both the clamp and
+        // the countdown. Re-reading after the awaits below would let a cut
+        // re-armed mid-write have `take` subtracted from a budget those bytes
+        // were never spent against.
+        final untilCut = cutAfterBytes;
+        if (untilCut != null && untilCut <= 0) {
+          await _fireCut();
+          return;
+        }
         final queued = _pending.first;
         final waitMicros = queued.releaseAtMicros - _clock.elapsedMicroseconds;
         if (waitMicros > 0) {
@@ -347,6 +383,10 @@ final class DelayLine {
         }
         final chunk = queued.bytes;
         var take = chunk.length - _headWritten;
+        // Before the throttle, so the two clamps compose the only way that
+        // makes sense: a cut of 40 bytes on a line handing out 2500-byte
+        // slices delivers 40, not a slice.
+        if (untilCut != null && take > untilCut) take = untilCut;
         final rate = _bytesPerSecond;
         if (rate != null && rate > 0) {
           take = await _spendBudget(take, rate);
@@ -377,6 +417,17 @@ final class DelayLine {
           _pending.removeFirst();
           _headWritten = 0;
         }
+        if (untilCut != null) {
+          // After the flush above, which is what makes the promise "n bytes
+          // have left this process" rather than "n bytes were handed to the
+          // sink". A cut that fired before the flush would close the socket
+          // with its own send buffer still holding some of the n.
+          cutAfterBytes = untilCut - take;
+          if (untilCut - take <= 0) {
+            await _fireCut();
+            return;
+          }
+        }
         if (_paused && _pendingBytes <= lowWaterBytes) {
           _paused = false;
           _source?.resume();
@@ -389,6 +440,18 @@ final class DelayLine {
     if (_sourceDone && _pending.isEmpty && !_finished.isCompleted) {
       _finished.complete();
     }
+  }
+
+  /// Hands the connection to [onCutReached], once.
+  ///
+  /// Disarms first and calls second, so a callback that closes this line — and
+  /// they all do — cannot come back round through a pump that still thinks a
+  /// cut is pending.
+  Future<void> _fireCut() async {
+    final onCut = onCutReached;
+    cutAfterBytes = null;
+    onCutReached = null;
+    if (onCut != null) await onCut();
   }
 
   /// Waits until the bucket can pay for a slice, then spends it.
