@@ -64,12 +64,18 @@ final class ResyncEngine {
   /// carries ~1500 hand-edited keys and one typo must cost one tag.
   final List<String> complaints = <String>[];
 
+  /// Told when a subscription stops being established, so whoever keeps
+  /// per-subscription state elsewhere can drop it. The freshness watchdog's
+  /// `forgetSubscription` is the caller this exists for.
+  final void Function(String subId)? forget;
+
   String? _lastKnownEpoch;
 
   ResyncEngine({
     required this.storeFor,
     required this.subscribe,
     required this.subscriptions,
+    this.forget,
   });
 
   /// The epoch of the session the client currently believes it is in.
@@ -98,17 +104,34 @@ final class ResyncEngine {
   /// subscription's own the frame is dropped **silently** and the sequence
   /// does not move — a late frame from the previous session must not advance
   /// a chain the next live frame will be measured against.
+  ///
+  /// [generation] is the same rule one level finer, and it is the one that
+  /// actually bites (04-REVIEW CR-04). The hazard is a frame in flight from
+  /// *before* a resync on the **same socket**: the epoch has not changed,
+  /// because a server-announced resync or a gap-triggered resubscribe rebuilds
+  /// one subscription while the session stays put. Applied, that frame lands
+  /// as an in-sequence batch and takes the baseline, after which the genuine
+  /// frame at the same sequence is discarded as a replay — the mimic keeps the
+  /// old number, under good quality, and the new one is gone. Not advancing
+  /// [SubscriptionState.lastSeq] is the half of the drop that stops that.
   Future<void> onUpdate(
     String sub, {
     required int seq,
     required Map<String, DynamicValue> changes,
     String? epoch,
+    int? generation,
   }) async {
     final state = subscriptions[sub];
     // A subscription the client never opened is never auto-registered off an
     // inbound frame: that is a page appearing because a peer said so.
     if (state == null) return;
     if (epoch != null && state.epoch.isNotEmpty && epoch != state.epoch) {
+      return;
+    }
+    if (generation != null && generation != state.generation) {
+      // Silently, and without touching the sequence. Not a complaint either: a
+      // frame crossing a re-establish is the ordinary shape of recovery, not a
+      // configuration problem anyone can act on.
       return;
     }
 
@@ -122,12 +145,12 @@ final class ResyncEngine {
       case BatchSeqGap():
         // The values in hand were applied by the store; the snapshot is what
         // makes the cache whole again.
-        await _resubscribe(state);
+        await _recover(state);
       case BatchReplay():
         // The values were discarded by the store. The resubscribe is not about
         // them — a duplicate on the wire means the stream is not what the
         // client thought it was.
-        await _resubscribe(state);
+        await _recover(state);
     }
   }
 
@@ -135,7 +158,7 @@ final class ResyncEngine {
   Future<void> onResync(String sub) async {
     final state = subscriptions[sub];
     if (state == null) return;
-    await _resubscribe(state);
+    await _recover(state);
   }
 
   /// Re-establishes every subscription, rolling the whole pass back if any of
@@ -161,8 +184,57 @@ final class ResyncEngine {
     }
   }
 
+  /// One subscription, re-established from a snapshot — and if that cannot be
+  /// done, said out loud and left unestablished.
+  ///
+  /// The recovery paths ([onUpdate], [onResync]) have nowhere to throw: they
+  /// are driven from notification handlers, where an exception unwinds into
+  /// `json_rpc_2` on a message that has no reply, and is dropped. So a refused
+  /// recovery used to be invisible — nothing logged, nothing in [complaints]
+  /// (04-REVIEW CR-03).
+  ///
+  /// [_unestablish] rather than leaving the baseline standing, for the reason
+  /// that method's own doc gives: a surviving `lastSeq` makes the next frame a
+  /// false gap, which triggers the next failed recovery, for as long as the
+  /// socket lives.
+  ///
+  /// [_resubscribeAll] deliberately does **not** come through here — it needs
+  /// the throw, because its whole shape is "roll the pass back and let the
+  /// supervisor treat the connection as failed".
+  Future<void> _recover(SubscriptionState sub) async {
+    try {
+      await _resubscribe(sub);
+    } catch (error) {
+      complaints.add('"${sub.subId}" could not be re-established and is now '
+          'unestablished: $error. Its values are gone from the cache rather '
+          'than left on screen under good quality');
+      _unestablish(sub);
+    }
+  }
+
   /// One subscription, re-established from a snapshot.
-  Future<void> _resubscribe(SubscriptionState sub) async {
+  ///
+  /// **One at a time per subscription** (04-REVIEW WR-04). [onUpdate] (gap or
+  /// replay), [onResync] and [onHello] can each start one for the same name
+  /// with no coordination between them, and two re-establishes racing
+  /// interleave `store.clear()`, `adopt` and `applyBatch` — blanking a
+  /// snapshot that has just been applied and leaving `lastSeq` describing a
+  /// generation that is already gone. A second caller gets the first's future,
+  /// which is also the right answer semantically: it asked for the page to be
+  /// current, and it is about to be.
+  /// The cleanup is a **block** body, and that is not a style preference:
+  /// `Map.remove` returns the value it removed, `whenComplete` waits on a
+  /// callback that returns a future, and the value removed here *is* the
+  /// future `whenComplete` is attached to. An arrow body deadlocks every
+  /// resubscribe this client will ever make.
+  Future<void> _resubscribe(SubscriptionState sub) =>
+      _inFlight[sub.subId] ??= _establish(sub).whenComplete(() {
+        _inFlight.remove(sub.subId);
+      });
+
+  final _inFlight = <String, Future<void>>{};
+
+  Future<void> _establish(SubscriptionState sub) async {
     final result = await subscribe(sub.subId, sub.keys);
     final store = storeFor(sub.subId);
 
@@ -183,10 +255,21 @@ final class ResyncEngine {
   /// Returns a subscription to "not established": no cache, no handles, no
   /// baseline. A surviving baseline would turn the next attempt's first frame
   /// into a false gap.
+  ///
+  /// The generation goes back to zero with the rest of it. That is not a
+  /// number any live gateway mints — [SubscriptionRegistry.nextGeneration]
+  /// starts at one — so an in-flight frame from the establishment being
+  /// abandoned cannot match on the way past.
   void _unestablish(SubscriptionState sub) {
     storeFor(sub.subId).clear();
     sub.handles = <int, String>{};
     sub.lastSeq = null;
     sub.epoch = '';
+    sub.generation = 0;
+    // The freshness watchdog keeps an `evaluatedAt` per subscription id, and
+    // an id nobody re-establishes goes on raising a fault about a value no
+    // screen displays (04-REVIEW WR-10). This is the one place a subscription
+    // stops being live, so it is the one place that can say so.
+    forget?.call(sub.subId);
   }
 }

@@ -164,6 +164,9 @@ final class RelayServer {
   /// argument in full is in `write_outcome_log.dart`.
   late final WriteOutcomeLog writeOutcomes;
 
+  /// The last subscription generation this gateway minted.
+  int _generations = 0;
+
   /// Where this server reports an error nobody asked for: an unhandled peer
   /// error, a session that threw inside the tick, a sweep that failed.
   ///
@@ -327,6 +330,10 @@ final class RelayServer {
         // One log for the whole gateway: a reconnecting panel is a new session
         // asking about a write the previous one issued.
         writeOutcomes: writeOutcomes,
+        // One counter for the gateway, so no two establishments anywhere on it
+        // share a generation — including across the reconnect that replaces
+        // one session with another (04-REVIEW CR-04).
+        mintGeneration: () => ++_generations,
         now: _now,
         closeChannel: connection.closeSocket,
         emitFrame: connection.write,

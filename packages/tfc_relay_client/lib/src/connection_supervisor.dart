@@ -124,6 +124,7 @@ final class ConnectionSupervisor {
       storeFor: storeFor,
       subscribe: _subscribe,
       subscriptions: subscriptions,
+      forget: watchdog.forgetSubscription,
     );
   }
 
@@ -402,15 +403,23 @@ final class ConnectionSupervisor {
   rpc.Peer? _peerFor(int gen) => gen == _generation ? _peer : null;
 
   /// The subscribe the resync engine calls, deadline-wrapped.
+  ///
+  /// Through [_peerFor] like every other call in this file (04-REVIEW WR-05).
+  /// This was the one place reading the bare `_peer`, and the invariant it
+  /// skipped is the file's own: a call that started before a reconnect must
+  /// not be retargeted at the replacement socket. The liveness reset below is
+  /// guarded by the same capture, because a reply belonging to a retired
+  /// connection must not tell the watchdog that *this* one is alive.
   Future<DecodedSubscribeResult> _subscribe(String sub, Set<String> keys) async {
+    final gen = _generation;
     final raw = await callWithDeadline(
-      () => _peer,
+      () => _peerFor(gen),
       Methods.subscribe,
       params: SubscribeParams(sub: sub, keys: keys.toList(growable: false))
           .toJson(),
       deadline: config.controlDeadline,
     );
-    watchdog.sawFrame(InboundFrame.rpcResponse);
+    if (gen == _generation) watchdog.sawFrame(InboundFrame.rpcResponse);
     return decodeSubscribeResult(raw);
   }
 
@@ -433,7 +442,8 @@ final class ConnectionSupervisor {
       }
       changes[key] = entry.value.toDynamicValue();
     }
-    await _resync.onUpdate(update.sub, seq: update.seq, changes: changes);
+    await _resync.onUpdate(update.sub,
+        seq: update.seq, changes: changes, generation: update.generation);
   }
 
   /// A tick: the link is alive, and every subscription is re-judged against

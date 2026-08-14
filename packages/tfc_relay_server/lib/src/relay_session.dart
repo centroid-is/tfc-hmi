@@ -76,6 +76,7 @@ final class RelaySession {
     this._emitFrame,
     this._onClosing,
     this._writeOutcomes,
+    this._mintGeneration,
   );
 
   /// Serves [api] over [channel] and starts listening immediately.
@@ -109,6 +110,7 @@ final class RelaySession {
     TokenValidator validator = const PermissiveTokenValidator(),
     List<String> serverSupported = const [protocolVersion],
     WriteOutcomeLog? writeOutcomes,
+    int Function()? mintGeneration,
     Future<void> Function(int code, String reason)? closeChannel,
     void Function(String frame)? emitFrame,
     void Function(RelaySession session)? onClosing,
@@ -147,6 +149,7 @@ final class RelaySession {
       onClosing,
       writeOutcomes ??
           WriteOutcomeLog(ttl: config.writeOutcomeTtl, now: clock),
+      mintGeneration,
     ).._start();
   }
 
@@ -237,7 +240,12 @@ final class RelaySession {
   /// is only true of a registry something can look into, and because the tick
   /// engine and the reaper both read it from outside the session.
   late final SubscriptionRegistry subscriptions = SubscriptionRegistry(
-      maxSubscriptions: config.maxSubscriptionsPerSession);
+      maxSubscriptions: config.maxSubscriptionsPerSession,
+      mintGeneration: _mintGeneration);
+
+  /// The gateway's subscription-generation counter, shared with every other
+  /// session on this server. See [SubscriptionRegistry._mint].
+  final int Function()? _mintGeneration;
 
   final TokenValidator validator;
 

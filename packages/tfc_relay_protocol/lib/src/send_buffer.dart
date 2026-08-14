@@ -156,6 +156,17 @@ final class ConflatingSendBuffer {
     s.removed.add(handle);
   }
 
+  /// Forgets everything pending for [sub].
+  ///
+  /// For a subscription being **re-established** under the same name: the
+  /// snapshot the client is about to be handed was read from the source a
+  /// moment ago, and anything still in this lane was put there before it. Left
+  /// alone, that older reading is emitted on the next tick with the new
+  /// generation and a sequence the client accepts, so the mimic goes backwards
+  /// under good quality — which is the same failure the generation exists to
+  /// stop, arriving by a different door.
+  void dropSub(String sub) => _subs.remove(sub);
+
   /// RPC responses, write acks, status, ticks: appended verbatim, flushed
   /// ahead of telemetry, never conflated — a degraded link must still
   /// deliver the news that it is degraded.

@@ -53,6 +53,7 @@ final class SubscriptionState {
     required this.sub,
     required this.epoch,
     this.maxRateHz,
+    this.generation = 0,
   });
 
   /// The client-chosen name. Unique per session — two subscriptions under one
@@ -62,6 +63,15 @@ final class SubscriptionState {
   /// The epoch this subscription's sequence is counted within. A client that
   /// sees a new epoch knows its cached handles are from a previous life.
   final String epoch;
+
+  /// Which establishment of this name the entry is, from
+  /// [SubscriptionRegistry.nextGeneration].
+  ///
+  /// Stamped on every `u` frame this subscription produces. The epoch cannot
+  /// stand in for it: a re-establish on the *same* session leaves the epoch
+  /// untouched, and the frame that poisons a client's cache is exactly the one
+  /// still in flight across that boundary (04-REVIEW CR-04).
+  final int generation;
 
   /// The rate the client asked to be pushed at, if it asked.
   ///
@@ -172,13 +182,35 @@ final class SubscriptionLimitExceeded implements Exception {
 
 /// Every subscription one session holds.
 final class SubscriptionRegistry {
-  SubscriptionRegistry({required this.maxSubscriptions});
+  SubscriptionRegistry({
+    required this.maxSubscriptions,
+    int Function()? mintGeneration,
+  }) : _mint = mintGeneration ?? _localGenerations();
+
+  /// Where a fresh generation comes from.
+  ///
+  /// **Server-wide in production, and that is the point** (04-REVIEW CR-04).
+  /// A counter that restarted with each session would hand the first
+  /// subscription of a *new* session the same number the first subscription of
+  /// the old one had — so a frame captured before a reconnect would match the
+  /// establishment that replaced it, which is half of what the generation
+  /// exists to prevent. `RelayServer` therefore passes one counter for the
+  /// whole gateway; the default is a local one, so a registry built on its own
+  /// in a test is still monotonic.
+  final int Function() _mint;
+
+  static int Function() _localGenerations() {
+    var next = 0;
+    return () => ++next;
+  }
 
   /// The ceiling from `ServerConfig` (threat T-03-14: one authenticated client
   /// opening subscriptions until the server's memory is gone).
   final int maxSubscriptions;
 
   final _bySub = <String, SubscriptionState>{};
+
+
 
   /// How many subscriptions are live.
   int get count => _bySub.length;
@@ -204,6 +236,15 @@ final class SubscriptionRegistry {
   /// key's identity and not the subscription's.
   Set<int> get handles =>
       Set.unmodifiable({for (final s in _bySub.values) ...s.handles});
+
+  /// A generation no establishment on this gateway has used before.
+  ///
+  /// Called by the subscribe handler when it builds the entry — minting is the
+  /// gateway's job, because the client is the one thing that cannot tell a
+  /// stale frame from a live one. Never zero: zero is what a client holds for
+  /// a subscription it has no snapshot for, so a frame arriving before one
+  /// cannot match.
+  int nextGeneration() => _mint();
 
   /// Records [state]. Throws [SubscriptionLimitExceeded] at the ceiling and
   /// [StateError] on a name collision — a silent replace would strand the

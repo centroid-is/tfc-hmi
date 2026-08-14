@@ -21,20 +21,21 @@
 /// on). Each case carries its F-number in its name so the gate in Phase 7 can
 /// find what already exists.
 ///
-/// **What F18 here does not cover, measured rather than assumed.** F18's other
-/// half is a frame from the session *before* a reconnect. It is not asserted
-/// here because on this wire the client cannot yet tell one: `UpdateParams`
-/// carries `sub`, `seq` and `t` and no epoch, and a resync restarts the
+/// **F18's other half, and what it took to assert it.** A frame from *before*
+/// a reconnect used to be untestable here, and the reason was recorded as a
+/// deviation: `UpdateParams` carried `sub`, `seq` and `t` and nothing that
+/// identified which establishment it belonged to, and a resync restarts the
 /// sequence at the gateway's snapshot — so a frame captured before a drop
-/// (`seq: 1`) is byte-indistinguishable from the first frame of the session
-/// that replaced it. Driving it measured exactly that: the old value was
-/// applied as an in-sequence batch, and the genuine frame behind it was then
-/// discarded as a replay. `ResyncEngine.onUpdate` already takes an `epoch` and
-/// drops on it — `resync_test.dart`'s `an old-epoch frame is dropped` proves
-/// the engine — but nothing on the wire supplies one, so
-/// `connection_supervisor.dart`'s update handler has none to pass. Closing
-/// that is a protocol change; it is written up in the 04-11 SUMMARY rather
-/// than half-asserted here.
+/// (`seq: 1`) was byte-indistinguishable from the first frame of the session
+/// that replaced it. Driving it measured exactly that: the old value applied
+/// as an in-sequence batch, and the genuine frame behind it discarded as a
+/// replay.
+///
+/// 04-REVIEW CR-04 closed it with a per-subscription generation minted by the
+/// gateway from a counter that spans the whole server — `g` on every `u`
+/// frame, and in the subscribe result the client adopts. `an old-generation
+/// frame after a reconnect is dropped` below is the deviation converted into
+/// an assertion.
 ///
 /// **Every timing assertion is a window.** STATE's Phase 2 handoff measured a
 /// connect attempt completing on the far side of a proxy state transition —
@@ -634,6 +635,54 @@ void main() {
               'down with it');
       expect(fixture.client.isReady, isTrue,
           reason: 'the panel left ready over a link that never closed');
+    });
+
+    test('F18: an old-generation frame after a reconnect is dropped', () async {
+      final fixture = await faultFixture(
+        keys: const {_key},
+        withProxy: true,
+        seed: (plant) => plant.setValue(_key, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      // A real frame from *this* establishment, captured off the wire.
+      fixture.served.setValue(_key, 1300);
+      await until('an update frame from the first session',
+          () => fixture.client.read(_key)?.value == 1300);
+      final beforeTheDrop = fixture.seam.lastMatching(
+          (message) => message.contains('"method":"${Methods.update}"'));
+      expect(beforeTheDrop, isNotNull,
+          reason: 'nothing was captured, so the injection below delivers '
+              'nothing and this case passes by doing nothing');
+
+      // The link dies and comes back: a new session, a new epoch, a new
+      // subscription — and, because the counter spans the gateway rather than
+      // the socket, a generation the captured frame cannot match.
+      fixture.proxy.killOnce();
+      await until('the reconnect', () => fixture.client.isReady,
+          budget: _recovery);
+      fixture.served.setValue(_key, 1500);
+      await until('the current value after the reconnect',
+          () => fixture.client.read(_key)?.value == 1500,
+          budget: _recovery);
+
+      fixture.seam.inject(beforeTheDrop!);
+      await Future<void>.delayed(_settle);
+
+      expect(fixture.client.read(_key)?.value, 1500,
+          reason: 'a reading from the session before the drop went onto the '
+              'mimic under good quality. Worse than the number itself: it '
+              'takes the sequence baseline with it, so the genuine frame at '
+              'that seq is then discarded as a replay and the operator keeps '
+              'the old number until the tag next changes');
+      expect(
+          fixture.client.complaints
+              .where((complaint) => complaint.contains('never announced')),
+          isEmpty,
+          reason: 'handles are server-global and never released, so the '
+              'captured frame names a handle this session does know. If it '
+              'did not, the frame would have been dropped for the wrong '
+              'reason and the assertion above would be vacuous');
     });
   });
 }

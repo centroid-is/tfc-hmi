@@ -255,24 +255,88 @@ void main() {
             'message instead of a blank page');
   });
 
-  test('a duplicate subscription name is refused', () async {
+  // 04-REVIEW CR-03. This used to be `a duplicate subscription name is
+  // refused`, and the refusal wedged the one client move it was refusing: a
+  // page whose sequence gapped can only ask for the page again. The refusal
+  // threw before the client's `store.clear()` could rebase its baseline, so the
+  // next frame was another gap, which asked again, for as long as the socket
+  // lived — pre-gap values on screen under good quality with the link
+  // indicator reading ready.
+  test('a subscribe naming a live subscription re-establishes it', () async {
     final link = _link();
     addTearDown(link.dispose);
     link.api.setValue('CN01.MOT01.speed', 1);
     await _sayHello(link);
 
-    await _subscribe(link, sub: 'page-1', keys: ['CN01.MOT01.speed']);
-    final refusal = await _refusal(
-        link.client.sendRequest(
-            Methods.subscribe,
-            const SubscribeParams(sub: 'page-1', keys: ['CN01.MOT01.speed'])
-                .toJson()),
-        'a second subscribe under a live name');
+    final first =
+        await _subscribe(link, sub: 'page-1', keys: ['CN01.MOT01.speed']);
+    // Move the sequence off its baseline, the way a few ticks of a live plant
+    // would, so "rebased" is a claim about something.
+    link.session.subscriptions.get('page-1')!.nextSeq();
+    link.api.setValue('CN01.MOT01.speed', 2);
 
-    expect(refusal.message, contains('page-1'));
+    final again =
+        await _subscribe(link, sub: 'page-1', keys: ['CN01.MOT01.speed']);
+
     expect(link.session.subscriptions.count, 1,
         reason: 'two subscriptions under one name make seq ambiguous, and an '
-            'ambiguous seq is a permanent resync loop');
+            'ambiguous seq is a permanent resync loop. Re-establishing keeps '
+            'exactly one, which is what the old refusal was protecting');
+    expect(again.seq, 0,
+        reason: 'the answer is a snapshot, and a snapshot is a new baseline; '
+            'a client that rebased onto a mid-stream seq would read the next '
+            'frame as a gap');
+    expect(again.snapshot.values.single.v, 2,
+        reason: 'the snapshot is read now, not remembered from the first '
+            'establishment');
+    expect(again.generation, greaterThan(first.generation),
+        reason: 'the generation is how the client tells a frame from the '
+            'establishment just torn down from one belonging to this snapshot '
+            '— on the same socket, where the epoch has not moved');
+    expect(link.session.subscriptions.listenerCount, 1,
+        reason: 'the old establishment\'s listener came off the source. Left '
+            'on, every re-establish would double the work one changed tag '
+            'costs, and the leak is per recovery, forever');
+  });
+
+  test('re-establishing at the subscription ceiling is not refused', () async {
+    final link = _link(config: ServerConfig(maxSubscriptionsPerSession: 1));
+    addTearDown(link.dispose);
+    link.api.setValue('CN01.MOT01.speed', 1);
+    await _sayHello(link);
+
+    await _subscribe(link, sub: 'page-1', keys: ['CN01.MOT01.speed']);
+    final again =
+        await _subscribe(link, sub: 'page-1', keys: ['CN01.MOT01.speed']);
+
+    expect(again.sub, 'page-1',
+        reason: 'a panel holding its ceiling in live pages still has to be '
+            'able to recover one of them; counting the entry it is replacing '
+            'against the limit would make the last page unrecoverable');
+    expect(link.session.subscriptions.count, 1);
+  });
+
+  test('a refused re-establish leaves the live subscription alone', () async {
+    final link = _link();
+    addTearDown(link.dispose);
+    link.api.setValue('CN01.MOT01.speed', 1);
+    await _sayHello(link);
+    await _subscribe(link, sub: 'page-1', keys: ['CN01.MOT01.speed']);
+
+    // A shape refusal: the teardown must sit behind every check that can say
+    // no, or a malformed retry costs the operator a working page.
+    await _refusal(
+        link.client.sendRequest(
+            Methods.subscribe,
+            const SubscribeParams(
+                    sub: 'page-1', keys: ['CN01.MOT01.speed'], maxRateHz: 0)
+                .toJson()),
+        'a re-establish with an impossible rate');
+
+    expect(link.session.subscriptions.count, 1);
+    expect(link.session.subscriptions.listenerCount, 1,
+        reason: 'the page that was working is still working; a refusal is not '
+            'a reason to take it down');
   });
 
   test('a key list over the ceiling is refused naming the limit', () async {

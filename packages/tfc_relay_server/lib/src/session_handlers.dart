@@ -36,12 +36,17 @@
 /// `KeyReject(kind, message)` — the kind for the client to branch on, the
 /// message for whoever reads the log at three in the morning.
 ///
-/// The two *call*-level refusals are the denial-of-service ceilings (T-03-13,
-/// T-03-14) and the shape errors: an empty key list, and a duplicate `sub`
-/// name. An empty subscription is a name the client waits on forever; a
-/// duplicated name would put two subscriptions behind one `seq`, and an
-/// ambiguous `seq` reads to the client as a permanent gap, which is a permanent
-/// resync loop.
+/// The call-level refusals are the denial-of-service ceilings (T-03-13,
+/// T-03-14) and the shape errors: an empty `sub` name, an empty key list, a
+/// non-positive `maxRateHz`. An empty subscription is a name the client waits
+/// on forever.
+///
+/// A *duplicate* name is not among them, and used to be. Two subscriptions
+/// behind one `seq` would indeed read to the client as a permanent gap — so
+/// this handler keeps exactly one, by re-establishing the name rather than by
+/// refusing it (04-REVIEW CR-03; the argument is at the call site). The
+/// refusal's cost was that a client whose only recovery move is "ask for the
+/// page again" could never complete one.
 ///
 /// ## Per-key authorization is not here
 ///
@@ -131,12 +136,6 @@ final class SessionHandlers {
           'limit of ${config.maxKeysPerSubscribe}; split the page or raise '
           'maxKeysPerSubscribe');
     }
-    if (subscriptions.contains(request.sub)) {
-      throw rpc.RpcException.invalidParams(
-          'subscription "${request.sub}" already exists on this session; two '
-          'subscriptions under one name would share a seq, and an ambiguous '
-          'seq reads to the client as a permanent gap');
-    }
     final rate = request.maxRateHz;
     if (rate != null && !(rate > 0)) {
       throw rpc.RpcException.invalidParams(
@@ -144,6 +143,37 @@ final class SessionHandlers {
           '"$rate" would ask the gateway either for everything at once or '
           'for nothing ever, and the client could not tell which it got');
     }
+
+    // **A subscribe naming a live subscription re-establishes it** (04-REVIEW
+    // CR-03): one entry, one seq, a fresh snapshot, a new generation.
+    //
+    // This used to be a refusal, on the grounds that two subscriptions under
+    // one name would share a `seq`. Re-establishing keeps exactly one, so that
+    // reason is satisfied rather than overridden — and the refusal wedged the
+    // client's own gap recovery permanently. A client whose sequence gapped
+    // asks for the page again; the refusal threw before its `store.clear()`
+    // could rebase `lastSeq`, so the next frame was another gap, which
+    // triggered another refused resubscribe, for as long as the socket lived.
+    // The page held pre-gap values under good quality with the link indicator
+    // reading ready.
+    //
+    // The alternative — client `unsubscribe` then `subscribe` — is worse on the
+    // axis this project optimises: two round trips on the recovery path, and a
+    // failure between them leaves the page silently unsubscribed with its cache
+    // intact, which renders as a healthy screen receiving nothing.
+    //
+    // After every validation that can refuse, so a refused re-establish never
+    // destroys a subscription that was working; and before the capacity check,
+    // so re-establishing at the ceiling cannot trip it.
+    if (subscriptions.contains(request.sub)) {
+      // Detaches its listeners, exactly as `unsubscribe` does.
+      subscriptions.remove(request.sub);
+      // And drops what the old establishment had queued. The snapshot below is
+      // read from the source now; a pending change from before it is older
+      // than the snapshot and would walk the mimic backwards on the next tick.
+      buffer.dropSub(request.sub);
+    }
+
     if (subscriptions.atCapacity) {
       throw rpc.RpcException.invalidParams(
           'this session already holds ${subscriptions.count} subscriptions, '
@@ -167,6 +197,11 @@ final class SessionHandlers {
       sub: request.sub,
       epoch: epochOf(),
       maxRateHz: request.maxRateHz,
+      // Minted here and nowhere else, from a counter that spans the whole
+      // gateway — so a frame from the establishment just torn down can never
+      // match the one that replaced it, whether the two share a socket or a
+      // reconnect separates them.
+      generation: subscriptions.nextGeneration(),
     );
     final minted = handles.handlesFor(accepted);
     final meta = <int, Object?>{};
@@ -238,6 +273,7 @@ final class SessionHandlers {
       sub: state.sub,
       epoch: state.epoch,
       seq: state.seq,
+      generation: state.generation,
       handles: minted,
       meta: meta,
       snapshot: snapshot,

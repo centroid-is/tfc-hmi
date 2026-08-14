@@ -162,6 +162,21 @@ final class SubscribeResult {
   final String epoch;
   final int seq;
 
+  /// Which establishment of this `sub` the answer belongs to, minted by the
+  /// gateway and bumped every time the name is (re-)established.
+  ///
+  /// **The epoch is not enough, and neither is a client-side connection
+  /// counter** (04-REVIEW CR-04). Both change per *session*, and the frame that
+  /// poisons a cache is the one still in flight from before a resync on the
+  /// **same socket** — a server-announced resync or a gap-triggered
+  /// resubscribe rebuilds one subscription while the session epoch stays put.
+  /// The stale frame is then applied as an in-sequence batch and takes the
+  /// baseline, after which the genuine frame at the same `seq` is discarded as
+  /// a replay: the mimic shows the old number, under good quality, and the new
+  /// one is gone. One integer per subscription covers that case and the
+  /// cross-reconnect case with one mechanism.
+  final int generation;
+
   /// key → integer handle used in every subsequent push.
   final Map<String, int> handles;
 
@@ -183,6 +198,7 @@ final class SubscribeResult {
     this.meta = const {},
     required this.snapshot,
     this.rejected = const {},
+    this.generation = 0,
   });
 
   factory SubscribeResult.fromJson(Map<String, Object?> json) =>
@@ -190,6 +206,10 @@ final class SubscribeResult {
         sub: json['sub'] as String,
         epoch: json['epoch'] as String,
         seq: (json['seq'] as num).toInt(),
+        // Absent from a gateway that predates the generation: zero, which is
+        // the same value every frame from such a gateway carries, so the
+        // client's comparison passes rather than dropping everything.
+        generation: (json['generation'] as num?)?.toInt() ?? 0,
         handles: (json['handles'] as Map? ?? const {}).cast<String, int>(),
         meta: _intKeyed(json['meta'], (v) => v),
         snapshot: _intKeyed(json['snapshot'],
@@ -204,6 +224,7 @@ final class SubscribeResult {
         'sub': sub,
         'epoch': epoch,
         'seq': seq,
+        'generation': generation,
         'handles': handles,
         if (meta.isNotEmpty) 'meta': _stringKeyed(meta, (v) => v),
         'snapshot': _stringKeyed(snapshot, (v) => v.toJson()),
@@ -219,6 +240,16 @@ final class UpdateParams {
 
   /// Per-subscription, increments by one per message. A gap ⇒ resync.
   final int seq;
+
+  /// Which establishment of [sub] this frame belongs to — `g` on the wire,
+  /// one character, because this is the hot path.
+  ///
+  /// A frame carrying any other generation than the one the client's last
+  /// snapshot came with is from before that snapshot, and applying it puts a
+  /// reading from a subscription that no longer exists onto a mimic under good
+  /// quality. See [SubscribeResult.generation] for why the epoch cannot do
+  /// this job.
+  final int generation;
 
   /// Batch timestamp (UTC epoch ms) applying to values without their own.
   final int t;
@@ -236,6 +267,7 @@ final class UpdateParams {
     required this.sub,
     required this.seq,
     required this.t,
+    this.generation = 0,
     this.changes = const {},
     this.qualities = const {},
     this.removed = const [],
@@ -245,6 +277,7 @@ final class UpdateParams {
         sub: json['sub'] as String,
         seq: (json['seq'] as num).toInt(),
         t: (json['t'] as num).toInt(),
+        generation: (json['g'] as num?)?.toInt() ?? 0,
         changes: _intKeyed(
             json['c'], (v) => WireValue.fromJson((v as Map).cast())),
         qualities: _intKeyed(json['q'], Quality.fromWire),
@@ -255,6 +288,7 @@ final class UpdateParams {
         'sub': sub,
         'seq': seq,
         't': t,
+        'g': generation,
         if (changes.isNotEmpty)
           'c': _stringKeyed(changes, (v) => v.toJson()),
         if (qualities.isNotEmpty)

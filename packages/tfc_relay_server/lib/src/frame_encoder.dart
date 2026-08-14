@@ -122,13 +122,18 @@ final class FrameEncoder {
     required String sub,
     required int seq,
     required int t,
+    required int generation,
     required String body,
   }) {
     assert(sub.length >= 2 && sub.startsWith('"') && sub.endsWith('"'),
         'sub must come from subLiteral(); a raw name produces invalid JSON');
     final tail = body.isEmpty ? '' : ',$body';
+    // `g` alongside `sub`/`seq`/`t` in the envelope rather than in the shared
+    // body: it is per subscription, so two clients whose changed-handle sets
+    // match still share one encoded body. One integer written by
+    // concatenation costs nothing the envelope was not already paying.
     return '{"jsonrpc":"2.0","method":"${Methods.update}",'
-        '"params":{"sub":$sub,"seq":$seq,"t":$t$tail}}';
+        '"params":{"sub":$sub,"seq":$seq,"t":$t,"g":$generation$tail}}';
   }
 
   /// A cheap identity for a changed-handle set: the three collections' handles
