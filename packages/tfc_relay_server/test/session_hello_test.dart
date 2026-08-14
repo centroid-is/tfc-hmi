@@ -253,12 +253,20 @@ void main() {
         reason: 'the substitution is what keeps the answer sendable');
   });
 
-  test('the handler table is exactly hello and ping', () async {
+  test('the handler table is exactly hello, ping, subscribe and unsubscribe',
+      () async {
     final link = _link();
     addTearDown(link.dispose);
 
-    expect(link.session.registeredMethods, {Methods.hello, Methods.ping},
-        reason: 'the wire surface is a closed set: 03-05 adds subscribe and '
+    expect(
+        link.session.registeredMethods,
+        {
+          Methods.hello,
+          Methods.ping,
+          Methods.subscribe,
+          Methods.unsubscribe,
+        },
+        reason: 'the wire surface is a closed set: 03-05 added subscribe and '
             'unsubscribe, 03-08 freezes it. A handler nobody counted is '
             'surface nobody reviewed');
   });
