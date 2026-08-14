@@ -1,0 +1,224 @@
+/// Whether the panel is still hearing from the gateway at all — one deadline
+/// for the whole link, restarted by anything that arrives on it.
+///
+/// Source: 04-RESEARCH Finding 5. The gateway's fan-out was measured at a dead
+/// flat **50.0 ms** — 121 tick notifications in 7001 ms, inter-tick deltas
+/// `[51, 50, 50, 49, 50, 51, …]`, no drift, no outliers — with a production
+/// default period of 100 ms, and **zero update frames** in that window because
+/// nothing in the plant changed. The tick alone is the liveness signal.
+///
+/// **Why no number here is derived from that measurement.** Reading CLI-04's
+/// "3× tick" literally against the measured cadence gives a 150–300 ms
+/// deadline, and then one garbage collection pause on the panel, or one Wi-Fi
+/// retransmit on the plant WAN, greys every value on the screen at once while
+/// the gateway is perfectly healthy. Grey that cries wolf is grey the operator
+/// stops reading. So the deadline is [ClientConfig.freshnessDeadline] — a
+/// configured duration, default 3 s — and this file contains no arithmetic on
+/// the transport cadence. The client could not learn it anyway: `HelloResult`
+/// carries no tick field and the live handshake returned `capabilities: {}`.
+///
+/// **One timer, not one per subscription** (Finding 5's timer discipline). N
+/// timers on a 1500-key page is N cancellations to get right on every
+/// reconnect, and the one that is missed fires into a torn-down page. And the
+/// reset comes from frames, never from socket state: `readyState` lies after
+/// an OS sleep (STACK), so liveness is what arrived, not what the socket says
+/// about itself.
+///
+/// What breaks in the plant without this file: silence is ambiguous. A socket
+/// half-opened over a sleeping NAT looks exactly like a quiet plant, and the
+/// operator reads a five-minute-old tank level as current. Freshness is the
+/// product.
+///
+/// ---
+///
+/// **The second half — the subscriptions, and no timers at all.** [sawTick]
+/// records each `SubTick.evaluatedAt` and subtracts; nothing in that half
+/// schedules anything. It exists for F25 (04-RESEARCH Finding 3), the dead
+/// subscription on a live socket: ticks keep arriving, the link is provably
+/// up, and one subscription's plant-side source has stopped evaluating. The
+/// link watchdog above cannot see that — every frame it needs is still
+/// landing — so a value the PLC stopped producing would render as current
+/// forever.
+///
+/// That fault is **the plant's, not the stream's** (the 04-CONTEXT ruling), so
+/// per-subscription staleness never triggers a resync. This class has no
+/// collaborator it could ask and no way to express the request: tearing down a
+/// healthy subscription set because one tag went quiet is how a single dead
+/// PLC point takes out an entire panel, repeatedly, for as long as the tag
+/// stays dead.
+///
+/// The two halves keep separate state and separate methods because CLI-04's
+/// entire point is that the operator can tell three states apart: the link is
+/// gone, this one value is not being evaluated, everything is fine.
+///
+/// **Whose clock.** Per-subscription age is measured in the *gateway's* time,
+/// never the panel's. On a tick that is free — `TickParams.serverTime` and
+/// `SubTick.evaluatedAt` are both server wall-clock epoch ms, verified live in
+/// 04-RESEARCH Finding 5b. Between ticks, [FreshnessWatchdog.staleSubscriptionsAt]
+/// converts the caller's local instant into server time with the offset
+/// captured at hello (`ClockOffset` in `clock_offset.dart`, whose `toServer`
+/// this mirrors: `offset = localNow - hello.serverTime`). A panel whose own
+/// clock is ten minutes wrong is a panel with a wrong clock, not a plant with
+/// 1500 dead tags — CLI-05 says warn and keep showing values.
+library;
+
+import 'dart:async';
+
+import 'package:tfc_relay_client/src/client_config.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+
+/// What arrived from the gateway.
+///
+/// A vocabulary rather than a bare `sawFrame()` because the distinction is
+/// exactly the one the watchdog must *not* make: every one of these proves the
+/// link is alive, and an implementation that rescheduled on ticks only would
+/// call a plant dead precisely when it was busiest.
+enum InboundFrame {
+  /// The fixed-cadence heartbeat. On an idle plant it is the only traffic.
+  tick,
+
+  /// A subscription update: values actually changed.
+  update,
+
+  /// A reply to something this panel asked for.
+  rpcResponse,
+}
+
+/// Announced when the whole view flips between fresh and stale, and only then.
+typedef ViewFreshnessChanged = void Function(bool stale);
+
+/// One deadline for the link, restarted by any inbound frame.
+final class FreshnessWatchdog {
+  /// Where the deadline comes from. Nothing here invents a duration.
+  final ClientConfig config;
+
+  /// Called on transitions only — an indicator that repaints twenty times a
+  /// second is an indicator nobody sees change.
+  final ViewFreshnessChanged onViewFreshnessChanged;
+
+  /// The one timer. Not `late`, not a list: the type is the design.
+  Timer? _deadline;
+
+  bool _viewIsStale = false;
+  bool _disposed = false;
+
+  /// Last known `evaluatedAt` per subscription id, in the gateway's clock.
+  final Map<String, int> _evaluatedAt = <String, int>{};
+
+  /// The verdict from the most recent tick.
+  Set<String> _staleSubs = const <String>{};
+
+  FreshnessWatchdog({
+    required this.config,
+    required this.onViewFreshnessChanged,
+  });
+
+  /// Whether the link has gone [ClientConfig.freshnessDeadline] without a
+  /// single frame of any kind.
+  bool get viewIsStale => _viewIsStale;
+
+  /// 0 before the first frame and after [dispose], 1 while armed — never more,
+  /// whatever else the client is tracking. The suite asserts this because the
+  /// count is the design, not an implementation detail.
+  int get debugTimerCount => _deadline == null ? 0 : 1;
+
+  /// Records an inbound frame of any [kind] and restarts the link deadline.
+  ///
+  /// Runs on every frame — twenty times a second on the measured cadence — so
+  /// it stays a cancel and a reschedule and nothing else.
+  void sawFrame(InboundFrame kind) {
+    if (_disposed) return;
+    _deadline?.cancel();
+    _deadline = Timer(config.freshnessDeadline, _linkWentQuiet);
+    _becomeFresh();
+  }
+
+  /// ---------------------------------------------------------------------
+  /// Part two: the subscriptions. Arithmetic only — nothing below this line
+  /// schedules anything, and nothing below it can ask the stream to be torn
+  /// down and rebuilt. See the library doc: the fault is the plant's.
+  /// ---------------------------------------------------------------------
+
+  /// Records a tick: restarts the link deadline **and** re-judges every
+  /// subscription against the gateway's own clock.
+  ///
+  /// It calls [sawFrame] itself rather than trusting the caller to make two
+  /// calls per tick. A caller that had to remember both would eventually
+  /// forget one, and the forgotten one greys a running plant.
+  void sawTick(TickParams tick) {
+    if (_disposed) return;
+    sawFrame(InboundFrame.tick);
+    for (final entry in tick.subs.entries) {
+      _evaluatedAt[entry.key] = entry.value.evaluatedAt;
+    }
+    // `tick.serverTime` and `evaluatedAt` are both the gateway's wall clock
+    // (Finding 5b), so this comparison never touches the panel's clock.
+    _staleSubs = _staleAt(tick.serverTime);
+  }
+
+  /// Subscriptions whose plant-side source had stopped evaluating as of the
+  /// last tick.
+  ///
+  /// Distinct from [viewIsStale] on purpose: this set can be non-empty while
+  /// the link is provably healthy, which is the whole of F25 — the gateway is
+  /// fine, one PLC tag is not, and the operator needs to be told which.
+  Set<String> get staleSubscriptions => _staleSubs;
+
+  /// The same verdict for the one id a widget renders.
+  bool isSubscriptionStale(String subId) => _staleSubs.contains(subId);
+
+  /// The same verdict between ticks, for a caller holding a local instant.
+  ///
+  /// [localNowMs] is converted into the gateway's clock with [clockOffsetMs] —
+  /// `ClockOffset.offsetMs`, captured at hello as `localNow - serverTime`, so
+  /// subtracting it is that type's `toServer`. A panel whose clock is ten
+  /// minutes fast has an offset ten minutes large and every verdict here is
+  /// unchanged: a disagreement about what time it is is not a disagreement
+  /// about the process, and CLI-05 says warn, never grey the plant.
+  Set<String> staleSubscriptionsAt(int localNowMs, {required int clockOffsetMs}) =>
+      _staleAt(localNowMs - clockOffsetMs);
+
+  /// Forgets a subscription — an unsubscribe, or a snapshot that dropped it.
+  ///
+  /// Without this, an id that came and went keeps its last `evaluatedAt`
+  /// forever and goes on raising a fault about a value no screen displays.
+  void forgetSubscription(String subId) {
+    _evaluatedAt.remove(subId);
+    _staleSubs = _staleSubs.where((id) => id != subId).toSet();
+  }
+
+  /// Ages every recorded subscription against an instant in the gateway's
+  /// clock. One pass of subtraction; no per-subscription timer exists to
+  /// cancel, which is why a 1500-key page costs one timer in total.
+  Set<String> _staleAt(int serverNowMs) {
+    final limitMs = config.freshnessDeadline.inMilliseconds;
+    final stale = <String>{};
+    for (final entry in _evaluatedAt.entries) {
+      if (serverNowMs - entry.value > limitMs) stale.add(entry.key);
+    }
+    return stale;
+  }
+
+  /// Drops the deadline. Nothing fires afterwards, and later frames are
+  /// ignored rather than re-arming a watchdog whose page is gone.
+  void dispose() {
+    _disposed = true;
+    _deadline?.cancel();
+    _deadline = null;
+    _evaluatedAt.clear();
+    _staleSubs = const <String>{};
+  }
+
+  void _linkWentQuiet() {
+    _deadline = null;
+    if (_viewIsStale) return;
+    _viewIsStale = true;
+    onViewFreshnessChanged(true);
+  }
+
+  void _becomeFresh() {
+    if (!_viewIsStale) return;
+    _viewIsStale = false;
+    onViewFreshnessChanged(false);
+  }
+}
