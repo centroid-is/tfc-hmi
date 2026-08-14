@@ -101,6 +101,7 @@ final class FaultProxy {
 
   Duration? _latency;
   Duration? _jitter;
+  int? _throttleBytesPerSec;
 
   /// The high-water reading of every pair that has already closed.
   int _retiredPeakPendingBytes = 0;
@@ -255,11 +256,26 @@ final class FaultProxy {
     _applyDelay();
   }
 
-  /// Bytes per second the proxy will forward.
+  /// Bytes per second the proxy will forward, **per direction**.
   ///
-  /// Measured over a window of at least 3 s with a ±5% band (Assumption A5),
-  /// because the interesting failure is a sustained rate, not an instant one.
-  set throttleBytesPerSec(int? value) => _notYet('throttle', '02-04');
+  /// Per direction and not shared, because that is how a link is specified: a
+  /// 1 Mbit/s line carries a megabit each way, and a shared budget would make
+  /// a chatty client slow its own downloads for a reason no scenario asked
+  /// for.
+  ///
+  /// Measured over a window of at least 3 s with a band of one twentieth
+  /// (Assumption A5), because the interesting failure is a sustained rate and
+  /// not an instant one — and because the bucket may bank up to a second of
+  /// burst, which dominates anything shorter than about two.
+  ///
+  /// Live, like [latency]: it reaches the pairs that are already open. Null
+  /// means unmetered.
+  set throttleBytesPerSec(int? value) {
+    _throttleBytesPerSec = value;
+    for (final pair in _pairs) {
+      pair.applyThrottle(value);
+    }
+  }
 
   /// The link goes silent while the sockets stay up — a true half-open.
   ///
@@ -363,6 +379,7 @@ final class FaultProxy {
     // connection unmodified, which is exactly the traffic a handshake test
     // cares about.
     pair.applyChunkDelay(_perChunkDelay);
+    pair.applyThrottle(_throttleBytesPerSec);
     _pairs.add(pair);
     pair.start(_retire);
   }
@@ -410,6 +427,17 @@ final class _ProxiedPair {
   void applyChunkDelay(Duration Function()? delay) {
     toUpstream.chunkDelay = delay;
     toClient.chunkDelay = delay;
+  }
+
+  /// Applies a byte budget to **each** direction.
+  ///
+  /// Each direction gets its own bucket at the full rate, which is what "a
+  /// 1 Mbit/s link" means. Sharing one bucket between them would make the two
+  /// directions compete, so a test measuring a download would read a rate that
+  /// depended on how talkative its own client was.
+  void applyThrottle(int? bytesPerSecond) {
+    toUpstream.bytesPerSecond = bytesPerSecond;
+    toClient.bytesPerSecond = bytesPerSecond;
   }
 
   void start(void Function(_ProxiedPair pair) onClosed) {
