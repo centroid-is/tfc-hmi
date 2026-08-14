@@ -23,170 +23,21 @@
 /// `Timer.periodic` would be measuring the runner; the ordering case still
 /// wants a real socket, because "the client received A before B" is a property
 /// of the wire.
+///
+/// The in-memory panels come from `support/panels.dart`, shared with
+/// `tick_test.dart`: both files assert on what one tick wrote to one client,
+/// and two harnesses that drifted apart would eventually disagree about what
+/// a tick is.
 library;
 
-import 'dart:async';
-import 'dart:convert';
-
-import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
-import 'package:stream_channel/stream_channel.dart';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
-import 'package:tfc_relay_server/src/frame_encoder.dart';
-import 'package:tfc_relay_server/src/handle_table.dart';
-import 'package:tfc_relay_server/src/lag_monitor.dart';
-import 'package:tfc_relay_server/src/relay_server.dart';
-import 'package:tfc_relay_server/src/relay_session.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
-import 'package:tfc_relay_server/src/session_sink.dart';
-import 'package:tfc_relay_server/src/tick_engine.dart';
-import 'package:tfc_stateman_contract/channel_harness.dart';
-import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
-import 'support/counting_encoder.dart';
 import 'support/fake_clock.dart';
+import 'support/panels.dart';
 import 'support/ws_harness.dart';
-
-/// One in-memory panel: a real session in its production shape, and every
-/// frame the tick engine wrote to it.
-///
-/// The channel's sink is a [SessionSink] — the shape `relay_server.dart`
-/// builds — so an RPC answer lands in the priority lane and reaches the client
-/// only when a tick drains it. That is the property this file asserts on, so
-/// it would be self-defeating to test it through a channel that bypassed it.
-final class _Panel {
-  _Panel(this.sub, this.session, this.client, this.frames);
-
-  final String sub;
-  final RelaySession session;
-  final rpc.Client client;
-
-  /// Everything [RelaySession.emit] wrote, in order — this session's wire.
-  final List<String> frames;
-
-  /// The `u` notifications received, decoded through the DTO so a hand-spliced
-  /// envelope that drifted from `UpdateParams` fails here rather than on a
-  /// panel.
-  List<UpdateParams> get updates => [
-        for (final frame in frames)
-          if (_methodOf(frame) == Methods.update)
-            UpdateParams.fromJson(_paramsOf(frame)),
-      ];
-
-  void clear() => frames.clear();
-}
-
-String? _methodOf(String frame) =>
-    (jsonDecode(frame) as Map)['method'] as String?;
-
-Map<String, Object?> _paramsOf(String frame) =>
-    ((jsonDecode(frame) as Map)['params'] as Map).cast<String, Object?>();
-
-/// A plant, a handle table, a registry and one tick engine — the server's
-/// wiring without the sockets.
-final class _Plant {
-  _Plant() {
-    addTearDown(dispose);
-  }
-
-  final api = FakeStateMan();
-  final handles = HandleTable();
-  final registry = SessionRegistry();
-  final counter = CountingEncoder();
-  final clock = FakeClock(start: 1_000_000);
-  final config = ServerConfig(tick: ServerConfig.minTick);
-
-  late final TickEngine engine = TickEngine(
-    registry: registry,
-    config: config,
-    encoder: FrameEncoder(encode: counter.call),
-    lag: LagMonitor(
-      periodMs: config.tick.inMilliseconds,
-      thresholdMs: config.stallThreshold.inMilliseconds,
-    ),
-    clock: clock.now,
-  );
-
-  final _panels = <_Panel>[];
-
-  /// Seeds [count] keys with a value, so the source will serve them:
-  /// `FakeStateMan.keys` filters to keys a value has arrived for, on purpose.
-  List<String> seed(int count, {String prefix = 'CN01.MOT'}) {
-    final keys = [for (var i = 0; i < count; i++) '$prefix$i.speed'];
-    api.setValues({for (final key in keys) key: 0});
-    return keys;
-  }
-
-  /// One tick at the next timestamp, exactly as the timer would have.
-  int tick() {
-    clock.advance(config.tick.inMilliseconds);
-    engine.tickOnce(clock.nowMs);
-    return clock.nowMs;
-  }
-
-  /// A connected, helloed, subscribed panel.
-  Future<_Panel> connect(String sub, List<String> keys) async {
-    final pair = channelPair();
-    final buffer = ConflatingSendBuffer(maxPending: config.maxPending);
-    final frames = <String>[];
-    final session = RelaySession.serve(
-      channel: StreamChannel<String>(pair.server.stream, SessionSink(buffer)),
-      api: api,
-      config: config,
-      handles: handles,
-      buffer: buffer,
-      // Two destinations for one frame: the list this file asserts on, and the
-      // far end, so the client's `Peer` can complete the request it is waiting
-      // for. Both are what a socket would have done.
-      emitFrame: (frame) {
-        frames.add(frame);
-        pair.server.sink.add(frame);
-      },
-    );
-    registry.add(session);
-    final client = rpc.Client(pair.client);
-    unawaited(client.listen());
-    final panel = _Panel(sub, session, client, frames);
-    _panels.add(panel);
-
-    await ask(
-        panel,
-        Methods.hello,
-        HelloParams(
-          protocol: protocolVersion,
-          supported: const [protocolVersion],
-          client: const PeerInfo('panel-under-test', '0.1.0'),
-        ).toJson());
-    await ask(panel, Methods.subscribe,
-        SubscribeParams(sub: sub, keys: keys).toJson());
-    return panel;
-  }
-
-  /// Sends a request and drains the tick that carries its answer.
-  ///
-  /// The tick is not an implementation detail leaking into the harness: in the
-  /// production shape the answer sits in the priority lane until something
-  /// drains it, and that something is the engine.
-  Future<Object?> ask(_Panel panel, String method, Object? params) async {
-    final pending = panel.client.sendRequest(method, params);
-    await pumpEventQueue();
-    tick();
-    return within(pending, 'the $method answer, which reaches a client only '
-        'because a tick drained the priority lane');
-  }
-
-  Future<void> dispose() async {
-    for (final panel in _panels) {
-      await panel.client.close();
-      await panel.session.close(1000, 'test over');
-    }
-    _panels.clear();
-    await engine.stop();
-    await registry.dispose();
-    await api.dispose();
-  }
-}
 
 /// Pumps the event queue until [ready] is true, then returns.
 ///
@@ -207,7 +58,7 @@ void main() {
   group('encode-once fan-out', () {
     test('one client and two hundred changed handles cost one encode',
         () async {
-      final plant = _Plant();
+      final plant = Plant();
       final keys = plant.seed(200);
       final panel = await plant.connect('page-1', keys);
 
@@ -234,7 +85,7 @@ void main() {
     });
 
     test('fifty clients sharing a key set cost one encode', () async {
-      final plant = _Plant();
+      final plant = Plant();
       final keys = plant.seed(200);
       final panels = [
         for (var i = 0; i < 50; i++) await plant.connect('page-$i', keys),
@@ -261,7 +112,7 @@ void main() {
     test(
         'fifty clients with disjoint key sets cost one encode per distinct '
         'changed-key set', () async {
-      final plant = _Plant();
+      final plant = Plant();
       final sets = [
         for (var i = 0; i < 50; i++) plant.seed(4, prefix: 'CN$i.MOT'),
       ];
@@ -290,7 +141,7 @@ void main() {
 
   group('what one client gets around the shared body', () {
     test('every client gets its own sub name and its own seq', () async {
-      final plant = _Plant();
+      final plant = Plant();
       final keys = plant.seed(3);
       final panels = [
         for (var i = 0; i < 3; i++) await plant.connect('page-$i', keys),
@@ -313,7 +164,7 @@ void main() {
     });
 
     test('a subscription whose keys did not change gets no u frame', () async {
-      final plant = _Plant();
+      final plant = Plant();
       final watched = plant.seed(2, prefix: 'CN01.PUMP');
       final quiet = plant.seed(2, prefix: 'CN02.PUMP');
       final busy = await plant.connect('busy', watched);
@@ -332,7 +183,7 @@ void main() {
 
     test('two changes to one key in a tick ship once, carrying the latest',
         () async {
-      final plant = _Plant();
+      final plant = Plant();
       final keys = plant.seed(1, prefix: 'CN01.VALVE');
       final panel = await plant.connect('page-1', keys);
       final handle = plant.handles.handleFor(keys.single);
