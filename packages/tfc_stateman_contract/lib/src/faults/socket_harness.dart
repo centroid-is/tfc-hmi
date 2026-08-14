@@ -246,12 +246,12 @@ final class _SocketWiring {
 
     await ready;
 
-    await proxy?.shutdown();
-
     for (final session in _sessions) {
       await session.close();
     }
     _sessions.clear();
+
+    await proxy?.shutdown();
 
     await _accepts?.cancel();
     await _server?.close();
