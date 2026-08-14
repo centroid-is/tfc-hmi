@@ -222,7 +222,11 @@ void main() {
       final registered = _session().registeredMethods;
       final widened = {...registered, 'dropDatabase'};
 
-      final found = undeclared(widened, expectedHandlerTable);
+      // Against the union, exactly as the real closure check above compares:
+      // a falsification arm has to feed the comparison a deliberately wrong
+      // *input* while keeping the baseline right, or it stops falsifying the
+      // check that ships and starts falsifying a different one.
+      final found = undeclared(widened, everyRegisterableName);
 
       expect(found, {'dropDatabase'},
           reason: 'direction two must name the offending method, because the '
