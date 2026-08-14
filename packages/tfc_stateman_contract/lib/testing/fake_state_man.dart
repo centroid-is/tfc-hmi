@@ -38,10 +38,16 @@ import 'dart:async';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../src/harness.dart';
+import '../src/write_contract.dart';
 
 /// An in-memory state source with a lever for everything the plant would do.
-class FakeStateMan implements StateManApi, StateManHarness {
-  FakeStateMan({this.staleAfter = const Duration(milliseconds: 300)}) {
+class FakeStateMan
+    implements StateManApi, StateManHarness, StateManWriteHarness {
+  FakeStateMan({
+    this.staleAfter = const Duration(milliseconds: 300),
+    Set<String> readOnlyKeys = const {},
+    this.writeLatency = Duration.zero,
+  }) : _readOnlyKeys = {...readOnlyKeys} {
     _seedHealthKeys();
     _watchdog = Timer.periodic(_sweepInterval, (_) => sweepFreshness());
   }
@@ -55,6 +61,15 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// The freshness driver passes a shorter one still.
   @override
   final Duration staleAfter;
+
+  /// How long an upstream write takes to answer.
+  ///
+  /// Zero by default, so the ordinary write cases cost nothing. A case that
+  /// needs to look *into* the in-flight window uses [stallWrites] instead,
+  /// which holds it open until something says otherwise — a duration would
+  /// make the case a race against a timer, which is the shape of test that
+  /// passes on a laptop and flakes on CI.
+  final Duration writeLatency;
 
   /// The reserved namespace the pipe reports on itself through (design §4.7,
   /// HLTH-01). There is no health method on the wire; these are ordinary
@@ -100,6 +115,43 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// only runs when a test advances a fake clock is exactly the machinery that
   /// then fails to run in the plant.
   late final Timer _watchdog;
+
+  /// Keys the device will not take a write for.
+  ///
+  /// Mutable, and seeded from the constructor: read-only devices are real
+  /// (`M2400DeviceClientAdapter.write` throws `UnsupportedError` today), and
+  /// which keys are read-only is a property of the device, not of the pipe.
+  final Set<String> _readOnlyKeys;
+
+  /// How many upstream attempts each `cmd` has cost.
+  ///
+  /// The observable the no-auto-retry property is enforced through. Every
+  /// entry here must stay at 1 forever; a 2 is a machine having decided, on an
+  /// operator's behalf, to actuate the plant a second time.
+  final _writeAttempts = <String, int>{};
+
+  /// Every `cmd` minted, in mint order.
+  final _mintedCmds = <String>[];
+
+  /// Writes that went upstream and have had no answer.
+  final _stalledWrites = <_StalledWrite>[];
+
+  /// What each key's quality was before a write put a pending badge on it, so
+  /// a refusal can put it back rather than inventing a fresh `good`.
+  final _pendingRestore = <String, Quality>{};
+
+  /// Whether writes currently vanish upstream (Phase 2's `blackhole`).
+  var _writesStalled = false;
+
+  /// The answer the device has been told to give the next write only.
+  WriteReason? _nextWriteReason;
+  var _nextWriteUnknown = false;
+
+  /// The value the device will end up holding for the next write, when that
+  /// differs from the one written (a clamp). Kept as a flag plus a slot
+  /// because null is a legitimate readback.
+  Object? _nextReadback;
+  var _hasNextReadback = false;
 
   /// Whether the upstream device link is up. Health keys are served regardless;
   /// plant keys are not.
@@ -183,11 +235,20 @@ class FakeStateMan implements StateManApi, StateManHarness {
   /// outlives its source keeps the whole test isolate alive and keeps sweeping
   /// a store nobody is watching, so a leak in one case surfaces as an
   /// inexplicable notification in the next one.
+  ///
+  /// Writes still in flight are settled as unknown rather than abandoned. A
+  /// future nobody completes does not fail a test — it hangs it, for the full
+  /// 30-second runner timeout, on every CI run for as long as the case exists,
+  /// and reports a file name rather than a property. Unknown is also the
+  /// honest answer: a source going away is not evidence the device did not
+  /// take the write.
   @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
     _watchdog.cancel();
+    _loseTrackOfWritesInFlight(const WriteReason('link_lost',
+        message: 'the source was disposed while the write was in flight'));
     _store.dispose();
     for (final close in _closeHandedOutStreams) {
       await close();
@@ -395,10 +456,16 @@ class FakeStateMan implements StateManApi, StateManHarness {
   ///
   /// Idempotent: a second call while already down changes nothing and announces
   /// nothing, because it is not a second event.
+  /// Writes still out are settled first, and that ordering is load-bearing:
+  /// settling one restores the quality its key had before the pending badge,
+  /// so doing it after [applyLinkLoss] would paint a good quality back over a
+  /// key whose link is down.
   @override
   void disconnectUpstream() {
     if (!_connected) return;
     _connected = false;
+    _loseTrackOfWritesInFlight(const WriteReason('link_lost',
+        message: 'the upstream link dropped while the write was in flight'));
     applyLinkLoss();
     announceLinkState();
   }
@@ -485,11 +552,265 @@ class FakeStateMan implements StateManApi, StateManHarness {
 
   int _healthCount(String key) => _store.peek(key)?.asInt ?? 0;
 
-  // ----------------------------------------------------- other slices' areas
+  // ------------------------------------------------------------------ writes
+
+  /// Writes [value] to [key] and reports what became of it.
+  ///
+  /// Three things happen here and nowhere else, in this order. The `cmd` is
+  /// minted — at call time, because the call *is* the operator action
+  /// (CONTEXT D-04), so a re-send of the same action can carry the same id.
+  /// The value picks up a pending badge, so the in-flight window is visible on
+  /// the value a widget is already watching rather than on a handle object
+  /// somebody has to remember to hold. And then exactly one upstream attempt
+  /// is made, through [attemptUpstreamWrite] and through nothing else.
+  ///
+  /// It never throws to report an outcome. The [StateError] below is a
+  /// programmer error — calling this after [dispose] — and is the only throw
+  /// on the write path. A throw that meant "the write failed" would collapse
+  /// "the PLC may have applied this" into "this definitely did not happen",
+  /// which is the anti-pattern [WriteResult] exists to make unrepresentable.
+  @override
+  Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
+    if (_disposed) {
+      throw StateError('write($key) on a disposed source: the store and the '
+          'upstream link are both gone, so no outcome reported here could be '
+          'true. This is a lifecycle bug in the caller, not a write outcome.');
+    }
+    final cmd = newUlid();
+    _mintedCmds.add(cmd);
+    _markWritePending(key);
+    return attemptUpstreamWrite(cmd, key, value, expected: expect);
+  }
+
+  /// The single seam every upstream write attempt passes through.
+  ///
+  /// [_attempt] is called here and in no other place, which is the whole
+  /// design: a retry added anywhere in a future implementation has to come
+  /// back through this method to reach the device, so it becomes visible to
+  /// [upstreamWriteAttempts] and therefore to the contract. A retry that could
+  /// route around the counter would be a retry no test could see, and a write
+  /// re-sent invisibly is a machine actuated twice on one operator decision.
+  ///
+  /// Overridable for the same reason [applyChanges] is: a variant that
+  /// demonstrates what a well-meaning retry wrapper costs should have to break
+  /// exactly this one method and inherit everything else.
+  Future<WriteResult> attemptUpstreamWrite(
+    String cmd,
+    String key,
+    Object? value, {
+    Object? expected,
+  }) async {
+    _attempt(cmd);
+
+    if (_readOnlyKeys.contains(key)) {
+      return _refuse(
+          cmd,
+          key,
+          const WriteReason('not_writable',
+              message: 'the device does not accept writes to this key',
+              status: 'Bad_NotWritable'));
+    }
+
+    // Compare-and-set. A stale expectation is a refusal, not a failure: the
+    // value moved under the operator while the dialog was open, which is
+    // ordinary and worth telling them about in those words.
+    final cached = _store.peek(key);
+    if (expected != null && cached?.value != expected) {
+      return _refuse(
+          cmd,
+          key,
+          WriteReason('value_changed',
+              message: 'expected $expected, the key holds ${cached?.value}'));
+    }
+
+    final reason = _nextWriteReason;
+    if (reason != null) {
+      final unknown = _nextWriteUnknown;
+      _nextWriteReason = null;
+      _nextWriteUnknown = false;
+      return unknown ? _loseTrack(cmd, key, reason) : _refuse(cmd, key, reason);
+    }
+
+    if (_writesStalled) {
+      // It has gone upstream — that is why the attempt is already counted —
+      // and nothing has come back. The badge stays on until something settles
+      // it.
+      final parked = _StalledWrite(cmd, key, value);
+      _stalledWrites.add(parked);
+      return parked.settled.future;
+    }
+
+    if (writeLatency > Duration.zero) await Future<void>.delayed(writeLatency);
+    return _applyWrite(cmd, key, value);
+  }
+
+  /// Records one upstream attempt for [cmd].
+  ///
+  /// Deliberately trivial and deliberately private: the count only means
+  /// anything if there is exactly one thing that can increment it.
+  void _attempt(String cmd) =>
+      _writeAttempts[cmd] = (_writeAttempts[cmd] ?? 0) + 1;
+
+  /// The device took the write; the store shows what it now holds.
+  ///
+  /// The readback, not the written value, and they differ whenever the device
+  /// has an opinion — a PLC clamping a setpoint to its configured maximum is
+  /// the ordinary case. Construction sanitizes, so an infinity typed into a
+  /// setpoint box becomes a null carrying [Quality.badNonFinite] here instead
+  /// of an exception in whichever frame it would have travelled in, which
+  /// `jsonEncode` would have failed for every other client on the pipe.
+  ///
+  /// The readback is applied through [applyChanges], so it counts as an
+  /// arrival and resets the freshness clock: the number on screen after a
+  /// write is as young as the write.
+  WriteResult _applyWrite(String cmd, String key, Object? value) {
+    final readback = _hasNextReadback ? _nextReadback : value;
+    _hasNextReadback = false;
+    _nextReadback = null;
+
+    final held = DynamicValue(value: readback);
+    _pendingRestore.remove(key);
+    applyChanges({key: held});
+    return WriteApplied(cmd,
+        readback: held.value, at: DateTime.now().millisecondsSinceEpoch);
+  }
+
+  /// The device said no. A successful call carrying bad news.
+  WriteResult _refuse(String cmd, String key, WriteReason reason) {
+    _clearWritePending(key);
+    return WriteRejected(cmd, reason,
+        at: DateTime.now().millisecondsSinceEpoch);
+  }
+
+  /// Nobody knows. The PLC may have applied it.
+  WriteResult _loseTrack(String cmd, String key, WriteReason reason) {
+    _clearWritePending(key);
+    return WriteUnknown(cmd, reason);
+  }
+
+  /// Puts the in-flight badge on [key]'s current value.
+  ///
+  /// Band comparison rather than an unconditional set, and never
+  /// [Quality.worst]: the badge is a *good*-band code, so stamping it onto a
+  /// stale or comm-faulted value would launder a value nobody has heard about
+  /// into a healthy one — a write would then be a way of making a dead tag
+  /// look alive. Where the value is already worse than good, the worse fact
+  /// stays on screen and the write proceeds regardless.
+  ///
+  /// Applied through [_degrade] rather than [applyChanges]: a write starting
+  /// is not news from upstream, and resetting the freshness clock here would
+  /// let a page keep itself looking current by writing to itself.
+  void _markWritePending(String key) {
+    final cached = _store.peek(key);
+    if (cached == null) return;
+    if (cached.quality.band > Quality.goodWritePending.band) return;
+    _pendingRestore[key] = cached.quality;
+    _degrade({key: cached.copyWith(quality: Quality.goodWritePending)});
+  }
+
+  /// Takes the in-flight badge back off, restoring what was there before.
+  ///
+  /// Only when the badge is still the thing on the value: something else may
+  /// have degraded the key while the write was out — a link loss, the
+  /// freshness sweep — and putting the pre-write quality back over that would
+  /// report a dead link as healthy.
+  void _clearWritePending(String key) {
+    final previous = _pendingRestore.remove(key);
+    if (previous == null) return;
+    final cached = _store.peek(key);
+    if (cached == null || cached.quality != Quality.goodWritePending) return;
+    _degrade({key: cached.copyWith(quality: previous)});
+  }
+
+  /// Settles every write that is still out as an outcome nobody knows.
+  ///
+  /// Used by both endings a write in flight can meet: the link dropping and
+  /// the source being disposed. Neither is evidence the PLC did not take it.
+  void _loseTrackOfWritesInFlight(WriteReason reason) {
+    if (_stalledWrites.isEmpty) return;
+    final parked = List<_StalledWrite>.of(_stalledWrites);
+    _stalledWrites.clear();
+    for (final write in parked) {
+      write.settled.complete(_loseTrack(write.cmd, write.key, reason));
+    }
+  }
+
+  // ------------------------------------------------------------ write levers
+
+  /// The device refuses the next write, for [reason].
+  ///
+  /// With [unknown] it instead loses track of it — a PLC timeout. The two are
+  /// separate arguments rather than separate methods because the difference
+  /// between them is the single most consequential distinction on this path,
+  /// and a call site that has to name it is a call site that has thought about
+  /// it.
+  @override
+  void failNextWrite(WriteReason reason, {bool unknown = false}) {
+    _nextWriteReason = reason;
+    _nextWriteUnknown = unknown;
+  }
+
+  /// The next write is taken, but the device ends up holding [readback].
+  ///
+  /// A setpoint clamped to a configured maximum. This is what makes "applied
+  /// means applied *and read back*" a testable difference rather than a
+  /// slogan: with the readback always equal to the written value, a source
+  /// that merely echoes is indistinguishable from one that confirms.
+  @override
+  void clampNextWrite(Object? readback) {
+    _nextReadback = readback;
+    _hasNextReadback = true;
+  }
+
+  /// Writes go upstream and no answer comes back — Phase 2's `blackhole`.
+  ///
+  /// The in-flight window held open, so a case can look at it without racing
+  /// a timer. Idempotent.
+  @override
+  void stallWrites() => _writesStalled = true;
+
+  /// Ends the stall and settles everything parked by it.
+  ///
+  /// Corresponds to the proxy's `flush`, with one deliberate divergence: this
+  /// also ends the stall, where `flush` empties the buffer and leaves the mode
+  /// armed. A lever that silently stays on is how a later case fails for a
+  /// reason three cases away; a case that wants to stall again says so.
+  ///
+  /// No second [_attempt]: these writes were counted when they went out. They
+  /// are being answered, not re-sent.
+  @override
+  void releaseWrites({bool applied = true}) {
+    _writesStalled = false;
+    final parked = List<_StalledWrite>.of(_stalledWrites);
+    _stalledWrites.clear();
+    for (final write in parked) {
+      write.settled.complete(applied
+          ? _applyWrite(write.cmd, write.key, write.value)
+          : _loseTrack(
+              write.cmd,
+              write.key,
+              const WriteReason('plc_timeout',
+                  message: 'the device never answered the write')));
+    }
+  }
+
+  /// Whether the device permits writes to [key].
+  @override
+  void setReadOnly(String key, bool readOnly) {
+    if (readOnly) {
+      _readOnlyKeys.add(key);
+    } else {
+      _readOnlyKeys.remove(key);
+    }
+  }
 
   @override
-  Future<WriteResult> write(String key, Object? value, {Object? expect}) =>
-      throw UnimplementedError('writes: plan 01-08');
+  int upstreamWriteAttempts(String cmd) => _writeAttempts[cmd] ?? 0;
+
+  @override
+  List<String> get mintedCmds => List<String>.unmodifiable(_mintedCmds);
+
+  // ----------------------------------------------------- other slices' areas
 
   @override
   BrowseApi get browse => throw UnimplementedError('data services: plan 01-09');
@@ -505,4 +826,19 @@ class FakeStateMan implements StateManApi, StateManHarness {
   @override
   PreferencesApi get preferences =>
       throw UnimplementedError('data services: plan 01-09');
+}
+
+/// A write that has gone upstream and had no answer.
+///
+/// It carries what it needs to be settled later — by [FakeStateMan.releaseWrites],
+/// by a link drop, or by disposal — and nothing else. In particular it does
+/// not carry an attempt count: the attempt was made and counted when the write
+/// went out, and settling it is an answer arriving, not a second send.
+final class _StalledWrite {
+  final String cmd;
+  final String key;
+  final Object? value;
+  final settled = Completer<WriteResult>();
+
+  _StalledWrite(this.cmd, this.key, this.value);
 }
