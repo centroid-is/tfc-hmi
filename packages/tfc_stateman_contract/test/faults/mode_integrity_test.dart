@@ -318,6 +318,14 @@ void main() {
         Platform.resolvedExecutable,
         ['test', _faultsDir, '--exclude-tags', 'meta || oslevel'],
         workingDirectory: Directory.current.path,
+        // Cleared in the child, because the child inherits this process's
+        // environment and would otherwise still see the variable that turned
+        // this arm on. The only thing stopping it running this arm again is
+        // the `meta` tag being excluded above — so dropping or renaming that
+        // tag would turn one CI job into an unbounded recursion of `dart
+        // test` processes rather than into a failing assertion. Two guards,
+        // and neither of them alone.
+        environment: {_laneBudgetEnvVar: ''},
       );
       lane.stop();
 
