@@ -218,7 +218,28 @@ final class RelaySession {
   /// The heartbeat reaper (03-11) sweeps on this. A tap on the read side
   /// rather than a touch in each handler, because a frame the peer *rejects*
   /// is still evidence the client is alive.
+  ///
+  /// **WebSocket pongs deliberately do not move it.** `dart:io` answers the
+  /// server's pings inside the socket and surfaces nothing on the stream, so
+  /// only frames the *application* sent land here. That is the whole
+  /// distinction Finding 7 rests on: a panel whose process is wedged while its
+  /// kernel still answers pings is exactly the client the ping cannot see, and
+  /// a liveness field that counted pongs would be the ping wearing the
+  /// heartbeat's name.
   int get lastSeenMs => _lastSeen.at;
+
+  /// How long this session has been silent, **on its own clock**.
+  ///
+  /// The reaper asks the session rather than doing the arithmetic itself, and
+  /// that is not a stylistic preference — it is the only spelling that cannot
+  /// be wrong. `TickEngine`'s clock is an uptime `Stopwatch` (it measures
+  /// callback *arrivals*, so it must not move when NTP steps the machine)
+  /// while this one is wall-clock epoch milliseconds (`HelloResult.serverTime`
+  /// is what a client derives its offset from, so it must be). Subtracting one
+  /// from the other in the sweep would yield a silence of roughly negative
+  /// fifty-five years, no session would ever exceed the deadline, and the
+  /// reaper would look implemented and reap nothing.
+  int silentForMs() => _now() - _lastSeen.at;
 
   /// The close code this session sent, recorded by the session itself.
   ///
@@ -279,12 +300,29 @@ final class RelaySession {
     _on(Methods.ping, _ping);
     _on(Methods.subscribe, handlers.subscribe);
     _on(Methods.unsubscribe, handlers.unsubscribe);
-    unawaited(peer.listen().then((_) {
-      if (!_done.isCompleted) _done.complete();
-    }, onError: (Object _) {
-      if (!_done.isCompleted) _done.complete();
-    }));
+    unawaited(peer.listen().then(
+        (_) => _transportEnded(),
+        onError: (Object _) => _transportEnded()));
   }
+
+  /// The client's end vanished — a graceful close, a reset, a yanked cable.
+  ///
+  /// **This is a teardown, not just a completion, and that is the 03-11 fix.**
+  /// Before it, the peer's listen completing merely completed [closed] and the
+  /// server released the connection; nothing ever called [close], so
+  /// `subscriptions.clear()` never ran and every listener the session had
+  /// attached to the backing source stayed attached. `teardown_test.dart`
+  /// measured the consequence at 2.50 leaked listeners per kill cycle — one
+  /// per subscribed key — which over a day of flapping plant network is a
+  /// gateway pushing values for panels that went home.
+  ///
+  /// **With no close code, deliberately.** A code recorded here would be a
+  /// code the server never sent, and `ConnectionClose` distinguishes "we
+  /// evicted it" from "it left" by exactly that field. A ledger that invented
+  /// one would make every disconnect look deliberate, and "it left" and "we
+  /// evicted it for backpressure" call for opposite operator responses.
+  void _transportEnded() =>
+      unawaited(_teardown(null, 'the client\'s transport ended'));
 
   /// Applies the handshake gate to [method] before [work] runs.
   ///
@@ -457,18 +495,67 @@ final class RelaySession {
   /// leave a window in which the server is still selecting a client it has
   /// already given up on: the next tick fans out to it, the reaper sweeps it,
   /// and the frames go to a socket that is halfway through closing.
-  Future<void> close(int code, String reason) async {
+  Future<void> close(int code, String reason) => _teardown(code, reason);
+
+  /// The one teardown, and the only thing in this class that releases
+  /// anything.
+  ///
+  /// **Four callers, one body.** The heartbeat sweep, a backpressure verdict
+  /// (`applyVerdict`), a protocol refusal (`_requestClose`) and an explicit
+  /// server drain all arrive here through [close]; a dead transport arrives
+  /// through [_transportEnded]. Five paths and one guard is what makes
+  /// "released exactly once" a property of the class rather than a rule each
+  /// caller has to remember — and the fifth path is the one that was missing,
+  /// which is precisely why it leaked.
+  ///
+  /// [code] is null when the *client* ended the connection: see
+  /// [_transportEnded]. A null code skips step 6 — there is no socket left to
+  /// carry it and no decision of ours to announce.
+  ///
+  /// **Finding 9's order, and every step of it is load-bearing:**
+  ///
+  ///  1. the close code is recorded *first*, so it is readable even if the
+  ///     transport is already gone (Finding 6 / `web_socket_channel` #1698);
+  ///  2. the registry entry comes out next, synchronously — see below;
+  ///  3. every subscription is detached from the backing `StateManApi`, because
+  ///     a listener still attached keeps pushing this client's values into a
+  ///     buffer that will never be drained again;
+  ///  4. `await peer.close()`, which is what stops handlers from running;
+  ///  5. the transport closes last, *with* the code, because a socket closed
+  ///     before the peer swallows the peer's final frames — including the
+  ///     refusal that explains the close;
+  ///  6. the buffer is released, and only now: `_Connection.closeSocket`
+  ///     flushes the priority lane on its way out, so a buffer emptied before
+  ///     step 5 would throw away the very frame that tells the client why it
+  ///     was disconnected. Handles are **not** released — permanence is the
+  ///     03-CONTEXT ruling, and `teardown_test.dart` asserts the table's size
+  ///     is constant across two hundred cycles rather than returning to
+  ///     baseline.
+  ///
+  /// **Everything before the first `await` is the synchronous half, and that
+  /// is deliberate.** A close decided inside a tick — a backpressure eviction,
+  /// the heartbeat reaper — must take the session out of the registry in the
+  /// same turn it was decided in. This method is a `Future` because it has to
+  /// await the peer, and a caller that only `unawaited`s it would otherwise
+  /// leave a window in which the server is still selecting a client it has
+  /// already given up on: the next tick fans out to it, the reaper sweeps it,
+  /// and the frames go to a socket that is halfway through closing.
+  Future<void> _teardown(int? code, String reason) async {
     if (_closed) return;
     _closed = true;
-    _sentCloseCode ??= code;
+    if (code != null) _sentCloseCode ??= code;
     _onClosing?.call(this);
-    // Detach before the peer goes: a listener still attached to the upstream
-    // store keeps pushing this client's values into a buffer that will never
-    // be drained again, and a hundred of those is a shift's worth of memory
-    // held for panels that went home (Finding 9's checklist, step 2).
     subscriptions.clear();
     await peer.close();
-    await _closeChannel?.call(code, reason);
+    if (code != null) await _closeChannel?.call(code, reason);
+    // Step 6. `drain()` is the only release the buffer offers — it empties
+    // both lanes and hands back what it held, which is discarded here because
+    // by this line there is nowhere left to send it. The reference itself is
+    // final and cannot be nulled; it does not need to be, because the session
+    // left the registry at step 2 and the buffer goes wherever the session
+    // goes. What must not survive is the *contents*: a conflated frame per
+    // subscribed handle, held for a client that is gone.
+    buffer.drain();
     if (!_done.isCompleted) _done.complete();
   }
 }

@@ -75,12 +75,17 @@ const Map<int, String> exemptCodes = {
   4001: 'authExpired — Phase 6 supplies the producer (token expiry mid-session). '
       'The server records it today in session_hello_test via sentCloseCode, '
       'which is an intention, not an observation.',
-  4003: 'heartbeatTimeout — 03-09 lands the reaper that emits it, together '
-      'with the client-side case that watches the close arrive.',
   // 4004 was exempt until 03-09 wired the buffer's verdicts into the session's
   // close path. `backpressure_test.dart` now watches a real client observe it
   // over a real socket, so the debt is paid and the line is gone — which is
   // exactly the way this list is meant to empty.
+  //
+  // 4003 was exempt until 03-11 landed the heartbeat reaper. `liveness_test.dart`
+  // now watches a real client observe it after going silent — and watches the
+  // reap arrive sooner than a ping timeout could account for, which is the
+  // property the code exists to carry. Same debt, same way of paying it.
+  //
+  // 4001 is the last one left, and Phase 6 owes it.
 };
 
 /// The marker that distinguishes a client-observed close from a server-recorded
