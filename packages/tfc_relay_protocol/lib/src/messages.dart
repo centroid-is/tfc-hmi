@@ -404,6 +404,23 @@ final class WriteParams {
   final Object? expect;
   final int? ttlMs;
 
+  /// Marks this write as the engage or the release of a hold-to-run deadman
+  /// (D-P5-C).
+  ///
+  /// Engage and release are ordinary writes — that is what buys them a
+  /// three-state outcome, an entry in the outcome log, and `writeStatus`
+  /// reconciliation across a reconnect with no new code. This flag is the one
+  /// bit the gateway needs to tell an engage from any other write to the same
+  /// tag, so that it can take a [HoldHandle] and accept ticks for it. A hold
+  /// write carrying anything but 1 or 0 is refused before the plant is
+  /// touched.
+  ///
+  /// It lives here, on the wire DTO, and **not** on `StateManApi.write`: the
+  /// interface already has `holdToRun`, and a second way to say the same
+  /// thing on the same interface is the ambiguity the surface test exists to
+  /// prevent.
+  final bool hold;
+
   /// Refuses a non-finite [value] or [expect] rather than sanitizing it.
   ///
   /// Sanitizing is right for telemetry, where the alternative is a frame that
@@ -420,7 +437,8 @@ final class WriteParams {
       required String key,
       required Object? value,
       Object? expect,
-      int? ttlMs}) {
+      int? ttlMs,
+      bool hold = false}) {
     final v = sanitize(value);
     final e = sanitize(expect);
     if (v.hadNonFinite || e.hadNonFinite) {
@@ -432,12 +450,21 @@ final class WriteParams {
               'nulling an expect would turn a guarded write into an '
               'unconditional one');
     }
-    return WriteParams._(cmd, key, v.value, e.value, ttlMs);
+    return WriteParams._(cmd, key, v.value, e.value, ttlMs, hold);
   }
 
-  const WriteParams._(this.cmd, this.key, this.value, this.expect, this.ttlMs);
+  const WriteParams._(
+      this.cmd, this.key, this.value, this.expect, this.ttlMs, this.hold);
 
   factory WriteParams.fromJson(Map<String, Object?> json) {
+    final hold = json['hold'];
+    if (hold != null && hold is! bool) {
+      // Not coerced: a truthy string would turn an ordinary write into a hold
+      // engage, and a falsy one would turn an engage into a write the gateway
+      // takes no handle for — a machine that jogs with nothing feeding it.
+      throw FormatException('write params carry a non-boolean hold flag: '
+          '$hold');
+    }
     try {
       return WriteParams(
         cmd: json['cmd'] as String,
@@ -445,6 +472,7 @@ final class WriteParams {
         value: json['value'],
         expect: json['expect'],
         ttlMs: (json['ttlMs'] as num?)?.toInt(),
+        hold: hold as bool? ?? false,
       );
     } on ArgumentError catch (e) {
       // `1e999` decodes silently to Infinity, so a peer can reach the refusal
@@ -461,7 +489,68 @@ final class WriteParams {
         'value': value,
         if (expect != null) 'expect': expect,
         if (ttlMs != null) 'ttlMs': ttlMs,
+        if (hold) 'hold': hold,
       };
+}
+
+/// One feed of a hold-to-run deadman: the tag, and the counter value on it.
+///
+/// Sent as a client→server notification under [Methods.holdTick] and never
+/// answered — a tick has no outcome to correlate, so it carries no `cmd`
+/// (D-P5-C). Slim wire keys (`k`, `n`) for the same reason `update` is `u`:
+/// this is the hot path while a button is held.
+final class HoldTickParams {
+  /// The tag being fed. The same key the engage write named.
+  final String key;
+
+  /// The monotonic counter: 1 at engage, +1 per tick, 0 at release, wrapping
+  /// to 1 rather than going negative (D-P5-E).
+  final int counter;
+
+  /// Refuses a tick that names no tag, for the same reason the write path
+  /// refuses a non-finite value: the alternative is a frame that reads as
+  /// valid and feeds nothing.
+  factory HoldTickParams({required String key, required int counter}) {
+    if (key.isEmpty) {
+      throw ArgumentError.value(
+          key, 'key', 'a tick must name the tag whose deadman it feeds');
+    }
+    return HoldTickParams._(key, counter);
+  }
+
+  const HoldTickParams._(this.key, this.counter);
+
+  /// Refuses a missing or empty key, a non-numeric counter, a fractional one
+  /// and a non-finite one, all as a [FormatException].
+  ///
+  /// The non-finite arm is not theoretical: `1e999` decodes to `Infinity`
+  /// without complaint, and `Infinity.toInt()` throws an `UnsupportedError`
+  /// that nothing at this boundary is catching — the same poison
+  /// [WriteParams.fromJson] defuses.
+  factory HoldTickParams.fromJson(Map<String, Object?> json) {
+    final key = json['k'];
+    if (key is! String || key.isEmpty) {
+      throw FormatException('hold tick names no tag: $json');
+    }
+    final counter = json['n'];
+    if (counter is! num) {
+      throw FormatException('hold tick counter is not a number: $counter');
+    }
+    if (counter is double) {
+      if (!counter.isFinite) {
+        throw const FormatException(
+            'hold tick counter is not finite: 1e999 decodes to Infinity, and '
+            'a deadman counter that is not a whole number is nonsense');
+      }
+      if (counter != counter.truncateToDouble()) {
+        throw FormatException(
+            'hold tick counter is not a whole number: $counter');
+      }
+    }
+    return HoldTickParams(key: key, counter: counter.toInt());
+  }
+
+  Map<String, Object?> toJson() => {'k': key, 'n': counter};
 }
 
 final class WriteStatusParams {

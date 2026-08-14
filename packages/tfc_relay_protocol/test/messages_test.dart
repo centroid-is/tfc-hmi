@@ -165,6 +165,83 @@ void main() {
     });
   });
 
+  group('WriteParams carries the hold flag', () {
+    // D-P5-C: engage and release are ordinary write frames carrying an
+    // optional hold flag, so the request table stays at nine names and the
+    // three-state outcome comes for free.
+
+    test('a hold engage round-trips with the flag set', () {
+      final w = WriteParams(cmd: '01J8', key: 'ST101.jog', value: 1, hold: true);
+      expect(w.hold, isTrue);
+      expect(w.toJson()['hold'], true);
+      expect(WriteParams.fromJson(viaJson(w.toJson())).hold, isTrue);
+    });
+
+    test('an ordinary write omits the flag from the frame', () {
+      final w = WriteParams(cmd: '01J8', key: 'ST101.sp', value: 5);
+      expect(w.hold, isFalse);
+      expect(w.toJson().containsKey('hold'), isFalse,
+          reason: 'the hot path pays nothing for a field it does not use');
+    });
+
+    test('a frame with no hold key decodes to false', () {
+      final decoded = jsonDecode('{"cmd":"c","key":"k","value":1}')
+          as Map<String, Object?>;
+      expect(WriteParams.fromJson(decoded).hold, isFalse);
+    });
+
+    test('a non-boolean hold flag is a malformed frame, not a coerced true',
+        () {
+      final decoded = jsonDecode('{"cmd":"c","key":"k","value":1,"hold":"yes"}')
+          as Map<String, Object?>;
+      expect(() => WriteParams.fromJson(decoded), throwsFormatException,
+          reason: 'coercing would turn an ordinary write into a hold engage, '
+              'or the reverse, and the gateway routes on this flag');
+    });
+  });
+
+  group('HoldTickParams', () {
+    test('round-trips through the slim wire keys', () {
+      final t = HoldTickParams(key: 'ST101.CN01.jog', counter: 42);
+      expect(t.toJson(), {'k': 'ST101.CN01.jog', 'n': 42});
+      final r = HoldTickParams.fromJson(viaJson(t.toJson()));
+      expect(r.key, 'ST101.CN01.jog');
+      expect(r.counter, 42);
+    });
+
+    test('a tick with no key names no tag and is refused', () {
+      expect(() => HoldTickParams.fromJson(const {'n': 1}),
+          throwsFormatException);
+      expect(() => HoldTickParams.fromJson(const {'k': '', 'n': 1}),
+          throwsFormatException);
+    });
+
+    test('a non-numeric counter is refused', () {
+      expect(() => HoldTickParams.fromJson(const {'k': 'x', 'n': 'two'}),
+          throwsFormatException);
+      expect(() => HoldTickParams.fromJson(const {'k': 'x'}),
+          throwsFormatException);
+    });
+
+    test('a fractional counter is refused', () {
+      expect(() => HoldTickParams.fromJson(const {'k': 'x', 'n': 1.5}),
+          throwsFormatException);
+    });
+
+    test('a 1e999 counter decodes to Infinity and is refused', () {
+      // The same poison the write path refuses: jsonDecode turns 1e999 into
+      // Infinity without complaint, and `Infinity.toInt()` throws something
+      // nobody at the boundary is catching.
+      final decoded =
+          jsonDecode('{"k":"ST101.jog","n":1e999}') as Map<String, Object?>;
+      expect(() => HoldTickParams.fromJson(decoded), throwsFormatException);
+    });
+
+    test('a tick that names no tag cannot be constructed either', () {
+      expect(() => HoldTickParams(key: '', counter: 1), throwsArgumentError);
+    });
+  });
+
   test('Icelandic strings survive every shape they can appear in', () {
     const name = 'Þorskflök í raspi';
     final u = UpdateParams(
