@@ -168,9 +168,14 @@ final class WriteOutcomeLog {
     return _entries[cmd];
   }
 
-  /// Whether [cmd] currently has an entry — used by the duplicate-cmd refusal
-  /// (04-REVIEW CR-05), which must not prune-and-forget its way into allowing
-  /// one id to cover two actuations inside the window.
+  /// Whether [cmd] currently has an entry — the presence half of the
+  /// duplicate-cmd question (04-REVIEW CR-05), which must not prune-and-forget
+  /// its way into allowing one id to cover two actuations inside the window.
+  ///
+  /// The handler asks [entryFor] instead, because since 05-03 presence is only
+  /// half the question: the other half is whether the entry is *this* write
+  /// ([WriteOutcomeEntry.matches]), and a caller that could only ask "is
+  /// something there" would have to answer a genuine replay with a refusal.
   bool holds(String cmd) => entryFor(cmd) != null;
 
   /// Whether this log was recording when [mintedAtMs] was minted, and whether
