@@ -36,7 +36,8 @@
 /// twenty-attempt arm prints the split so a run that quietly collapses onto
 /// one arm is visible rather than reassuring.
 ///
-/// **And no `Future.delayed`.** The original slept 100 ms inside `reject()`, a
+/// **And nothing sleeps here.** A grep of this file for a delayed future finds
+/// none, deliberately. The original slept 100 ms inside `reject()`, a
 /// guess about someone else's scheduler that is simultaneously too slow for
 /// every ordinary run and too short for a loaded CI box. `within()` with an
 /// explicit budget replaces it, here and in the implementation.
