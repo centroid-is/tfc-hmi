@@ -297,7 +297,29 @@ final class DelayLine {
   /// actually reached the socket — bytes still queued here have not been
   /// delivered, and a mode promising "exactly n at the peer" cannot count what
   /// it merely accepted.
-  int? cutAfterBytes;
+  ///
+  /// Arming or disarming it moves [_cutGeneration], which is how the writer
+  /// tells its own countdown from one somebody replaced while it was awaiting
+  /// a flush.
+  int? get cutAfterBytes => _cutAfterBytes;
+
+  set cutAfterBytes(int? value) {
+    _cutAfterBytes = value;
+    _cutGeneration++;
+  }
+
+  int? _cutAfterBytes;
+
+  /// How many times the cut has been armed or disarmed.
+  ///
+  /// [_pump] reads the countdown once per iteration and writes it back after
+  /// its awaits, and a `cutMidFrame(null)` landing in between would otherwise
+  /// be undone by that write-back — the disarm this field's doc promises would
+  /// not hold while a write was in flight, and the resurrected countdown would
+  /// later expire with no callback left to hand the connection to. The writer
+  /// carries the generation it read across the awaits and only writes back
+  /// while it still matches.
+  int _cutGeneration = 0;
 
   /// Invoked once, after the last byte before the cut has been **flushed**.
   ///
@@ -443,10 +465,15 @@ final class DelayLine {
         // the countdown. Re-reading after the awaits below would let a cut
         // re-armed mid-write have `take` subtracted from a budget those bytes
         // were never spent against.
-        final untilCut = cutAfterBytes;
+        final untilCut = _cutAfterBytes;
+        final cutGeneration = _cutGeneration;
         if (untilCut != null && untilCut <= 0) {
-          await _fireCut();
-          return;
+          // Only the hand-off ends the pump. A cut that fires with no
+          // callback — which is what a disarm leaves behind — has nobody to
+          // give the connection to, so ending here would drop out of the loop
+          // with bytes still queued and strand them on a quiet source.
+          if (await _fireCut()) return;
+          continue;
         }
         final queued = _pending.first;
         final waitMicros = queued.releaseAtMicros - _clock.elapsedMicroseconds;
@@ -506,16 +533,18 @@ final class DelayLine {
           _pending.removeFirst();
           _headWritten = 0;
         }
-        if (untilCut != null) {
+        if (untilCut != null && _cutGeneration == cutGeneration) {
           // After the flush above, which is what makes the promise "n bytes
           // have left this process" rather than "n bytes were handed to the
           // sink". A cut that fired before the flush would close the socket
           // with its own send buffer still holding some of the n.
-          cutAfterBytes = untilCut - take;
-          if (untilCut - take <= 0) {
-            await _fireCut();
-            return;
-          }
+          //
+          // Guarded on the generation because the awaits above are exactly
+          // where a `cutMidFrame(null)` lands: writing the countdown back
+          // unconditionally would resurrect a cut the caller had taken away,
+          // and the connection would be cut after all.
+          _cutAfterBytes = untilCut - take;
+          if (untilCut - take <= 0 && await _fireCut()) return;
         }
         if (_paused && _pendingBytes <= lowWaterBytes) {
           _paused = false;
@@ -553,11 +582,18 @@ final class DelayLine {
   /// Disarms first and calls second, so a callback that closes this line — and
   /// they all do — cannot come back round through a pump that still thinks a
   /// cut is pending.
-  Future<void> _fireCut() async {
+  ///
+  /// Returns whether there was a callback to hand it to. False means the cut
+  /// was disarmed under a countdown already in flight, so nothing happened to
+  /// the connection and the writer must go on draining rather than treat this
+  /// as the end of the direction.
+  Future<bool> _fireCut() async {
     final onCut = onCutReached;
     cutAfterBytes = null;
     onCutReached = null;
-    if (onCut != null) await onCut();
+    if (onCut == null) return false;
+    await onCut();
+    return true;
   }
 
   /// Waits until the bucket can pay for a slice, then spends it.

@@ -91,7 +91,86 @@ const _chunkBytes = 64 * 1024;
 /// the paused arm, with [received] empty.
 typedef _Outcome = ({Uint8List sent, Uint8List received, Object? error});
 
+/// The rate the disarm arm throttles at, in bytes per second.
+///
+/// A throttle is what makes the disarm land *inside* a write rather than
+/// between two of them: a metered line spends almost all of its time awaiting
+/// the next slice of budget, which is exactly the window `cutMidFrame(null)`
+/// has to survive. Fast enough that the arm costs well under a second.
+const _disarmRate = 1024 * 1024;
+
+/// The cut the disarm arm arms and then takes back.
+const _disarmCut = 64 * 1024;
+
+/// How much the disarm arm sends, comfortably past [_disarmCut].
+///
+/// Past it on purpose: the resurrected countdown only reaches zero after
+/// [_disarmCut] bytes, and what it does there — fire with no callback, and end
+/// the pump with bytes still queued — is the second-order failure.
+const _disarmPayloadBytes = 256 * 1024;
+
+/// How much must have arrived before the disarm is pulled.
+///
+/// Enough that slices are being handed out, small enough that the disarm lands
+/// long before the countdown would have expired on its own.
+const _disarmAfterBytes = 4096;
+
 void main() {
+  test('a disarm that lands mid-write stays disarmed, and the direction keeps '
+      'draining', () async {
+    final proxy = await _proxyToEcho();
+    final client = await _connect(proxy.port);
+    final peer = _Counted(client);
+    final payload = _pattern(_disarmPayloadBytes);
+
+    // The whole payload is parked in the server→client queue first, and the
+    // upstream then goes quiet. That is what makes the second-order failure
+    // visible: while the echo is still arriving, every chunk re-enters the
+    // pump and drains what the aborted one left, so a stranded queue is only
+    // observable on a direction whose source has stopped.
+    proxy.bufferServerToClient = true;
+    unawaited(_write(client, payload));
+    final queueing = Stopwatch()..start();
+    while (proxy.peakPendingBytes < _disarmPayloadBytes &&
+        queueing.elapsed < _endBudget) {
+      // A poll on a real condition with a budget, not a sleep standing in for
+      // an event: `peakPendingBytes` is a counter with no stream behind it.
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(proxy.peakPendingBytes, greaterThanOrEqualTo(_disarmPayloadBytes),
+        reason: 'the withheld direction never took the whole payload, so the '
+            'arm below would be draining a queue the upstream is still '
+            'feeding — and a queue with a live source is drained by the next '
+            'chunk to arrive whatever the pump did');
+
+    proxy.throttleBytesPerSec = _disarmRate;
+    proxy.cutMidFrame(_disarmCut);
+    proxy.bufferServerToClient = false;
+
+    await within(peer.atLeast(_disarmAfterBytes),
+        'the throttled cut was handing out slices before the disarm',
+        budget: _endBudget);
+    proxy.cutMidFrame(null);
+
+    await within(peer.atLeast(_disarmPayloadBytes),
+        'the whole payload came back after the cut was disarmed mid-write',
+        budget: _endBudget);
+
+    expect(peer.received, _disarmPayloadBytes,
+        reason: 'the cut was disarmed while a slice was in flight, and the '
+            'doc says null disarms it. A pump that reads the countdown before '
+            'its awaits and writes it back afterwards puts the disarmed cut '
+            'back, so the connection is cut anyway — and when the resurrected '
+            'countdown expires there is no callback left to hand the '
+            'connection to, so the pump drops out of its loop with bytes '
+            'still queued and the direction stalls for good');
+    expect(peer.hasEnded, isFalse,
+        reason: 'a disarmed cut must not end the connection: every scenario '
+            'that arms a cut and changes its mind — which the composition '
+            'rules require to be possible, since they are state checks and '
+            'not latches — would otherwise lose the link it kept');
+  });
+
   group('the peer is actively reading', () {
     for (final n in _cutSizes) {
       test('cutMidFrame($n) delivers exactly $n bytes and then ends', () async {
@@ -260,6 +339,47 @@ Future<Socket> _connect(int port) async {
   addTearDown(socket.destroy);
   unawaited(socket.done.catchError((Object _) => socket));
   return socket;
+}
+
+/// A peer that counts what arrives and can be awaited for a byte count.
+///
+/// The disarm arm needs both halves: a point mid-transfer to pull the lever
+/// at, and a total to wait for afterwards. Reading a count rather than the
+/// bytes themselves is deliberate — the integrity of the stream is the other
+/// arms' subject, and this one is about whether the direction keeps moving.
+final class _Counted {
+  _Counted(Socket socket) {
+    socket.listen(
+      (data) {
+        _received += data.length;
+        _serveWaiter();
+      },
+      onDone: () => _ended = true,
+      onError: (Object _) => _ended = true,
+    );
+  }
+
+  int _received = 0;
+  bool _ended = false;
+  ({int want, Completer<void> completer})? _waiter;
+
+  int get received => _received;
+
+  bool get hasEnded => _ended;
+
+  Future<void> atLeast(int bytes) {
+    if (_received >= bytes) return Future<void>.value();
+    final completer = Completer<void>();
+    _waiter = (want: bytes, completer: completer);
+    return completer.future;
+  }
+
+  void _serveWaiter() {
+    final waiter = _waiter;
+    if (waiter == null || _received < waiter.want) return;
+    _waiter = null;
+    waiter.completer.complete();
+  }
 }
 
 /// A deterministic pattern whose shifts are visible.
