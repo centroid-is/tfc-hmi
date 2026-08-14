@@ -104,6 +104,15 @@ final class FaultProxy {
   int? _throttleBytesPerSec;
   int? _cutAfterBytes;
 
+  /// Whether both directions are currently swallowing traffic.
+  bool _blackholed = false;
+
+  /// Whether the server→client direction is currently being withheld.
+  bool _bufferServerToClient = false;
+
+  /// Whether accepted connections are cut instead of being served.
+  bool _rejecting = false;
+
   /// Whether the next connection accepted is to be reset on sight.
   ///
   /// Set only when [killOnce] found nothing open, and cleared the moment it
@@ -286,11 +295,42 @@ final class FaultProxy {
 
   /// The link goes silent while the sockets stay up — a true half-open.
   ///
-  /// The proxy counterpart of `StateManHarness.disconnectUpstream`. This is
-  /// the fault the whole project is built against: a peer that has not closed
-  /// anything and has simply stopped answering, which no `onDone` will ever
-  /// report.
-  void blackhole() => _notYet('blackhole', '02-09');
+  /// The proxy counterpart of `StateManHarness.disconnectUpstream`, which
+  /// names this mode from the other side (`harness.dart:96-110`), and the
+  /// counterpart of `reconnectUpstream` when called with [enabled] false. This
+  /// is the fault the whole project is built against: a peer that has not
+  /// closed anything and has simply stopped answering, which no `onDone` will
+  /// ever report.
+  ///
+  /// **Read-the-bytes-and-drop-them, in both directions.** Not a paused read
+  /// subscription: that would stall the sender's `flush()` within one socket
+  /// buffer, which is *backpressure*, a different fault with different
+  /// client-side code paths. RESEARCH Finding 4 measured this implementation
+  /// producing `echoed=0 event=none write completed`, which is the shape
+  /// F5/F7/F17 need — the sender keeps writing happily into nothing. A "the
+  /// sender stalls too" variant is a separate lever with its own name and its
+  /// own entry in [faultModes]; it is not a setting on this one.
+  ///
+  /// **Blackholed bytes are lost, not replayed.** Finding 4's third line —
+  /// `recovered: echoed=100`, not 200. Recovery that flushed what had been
+  /// swallowed would deliver a value from before the outage to a client that
+  /// has just recovered, with nothing marking its age, which is the one
+  /// outcome this project's core value forbids: never a stale reading
+  /// rendered as current.
+  ///
+  /// Recovery is `blackhole(enabled: false)` rather than a lever of its own,
+  /// so that the mode's on and off states cannot drift apart in [faultModes]
+  /// — a `recover()` naming no mode would be reachable without any mode being
+  /// named, which is exactly what the registry exists to prevent. Live in both
+  /// directions: it reaches open pairs and the ones accepted afterwards, and
+  /// the connection survives, because a half-open that required a reconnect
+  /// to end would not be one.
+  void blackhole({bool enabled = true}) {
+    _blackholed = enabled;
+    for (final pair in _pairs) {
+      pair.applyBlackhole(enabled);
+    }
+  }
 
   /// Deliver exactly [n] bytes of the next response, then end the connection.
   ///
@@ -362,15 +402,85 @@ final class FaultProxy {
   /// is POSIX determinism — Finding 8 measured the handshake racing the reset,
   /// so a client sees either a failed connect or a connect that is immediately
   /// reset. Tests assert a terminal failure within a budget, never an errno.
-  Future<void> reject() => _notYet('reject', '02-09');
+  ///
+  /// **Correcting the original's doc.** `tfc_dart/test/proxy.dart:11-14`
+  /// describes this as sending a refusal the client will see as one. It does
+  /// not: on POSIX `destroy()` is a clean FIN except by coincidence (Finding
+  /// 1), and because the listener is still bound the kernel can complete the
+  /// handshake out of the accept queue before this method's teardown reaches
+  /// the new socket. Finding 8 measured both outcomes from consecutive
+  /// attempts against one proxy — connect failing in 7 ms, and connect
+  /// succeeding in 2 ms and then being reset. Both are the mode working. A
+  /// caller that needs one specific outcome wants a closed listener, which is
+  /// a different mode and is slow on the platform this one is for.
+  ///
+  /// **No sleep.** The original waited 100 ms here before returning, a guess
+  /// about someone else's scheduler: too slow for every ordinary run and too
+  /// short for a loaded CI box. This awaits the teardown of the pairs it is
+  /// actually tearing down, so when it returns there are none — which is the
+  /// property the sleep was approximating, stated exactly.
+  ///
+  /// Rejection is a state, not an event: `reject(enabled: false)` leaves it,
+  /// and the connection after it is forwarded normally on the same port.
+  Future<void> reject({bool enabled = true}) async {
+    _rejecting = enabled;
+    if (!enabled) return;
+    // The reset goes to the client before the pair's lines are closed, for the
+    // reason `_ProxiedPair.killWithReset` documents: closing first wakes the
+    // teardown, which destroys the socket out from under the linger option and
+    // degrades this mode's reset to a FIN, intermittently.
+    for (final pair in List.of(_pairs)) {
+      pair.killWithReset();
+      await pair.close();
+      // Retired here rather than left to `_closeWhenEitherEnds`, which runs a
+      // microtask or two later: a caller that awaits this method and then asks
+      // `livePairs` is asking whether the teardown finished, and an answer
+      // that is briefly wrong is worse than a slow one.
+      _retire(pair);
+    }
+  }
 
   /// Withhold server→client traffic while still forwarding client→server.
   ///
   /// The asymmetry is the point, and it is why this is one mode rather than
   /// half of [blackhole]: forwarding client→server keeps the server side alive
   /// and answering, so the peer does not time out while its replies are held.
-  set bufferServerToClient(bool value) =>
-      _notYet('bufferServerToClient', '02-09');
+  /// Carried over from `tfc_dart/test/proxy.dart:118-154`, whose comment is
+  /// the source of that reason — hold both directions and the upstream falls
+  /// idle, times out, and the scenario becomes an ordinary disconnect instead
+  /// of a client hearing nothing from a server that is demonstrably fine.
+  ///
+  /// **Withheld, not discarded, and not off to the side.** The bytes wait in
+  /// the server→client [DelayLine]'s own queue and go on counting toward its
+  /// `pendingBytes`, so a firehose into a withheld direction pauses its source
+  /// at the high-water mark like any other traffic (T-02-24). Clearing this
+  /// flag releases everything held; so does [flush], which releases and leaves
+  /// the lever armed.
+  ///
+  /// Live, like the other levers: it reaches the pairs that are already open
+  /// and the ones accepted afterwards.
+  set bufferServerToClient(bool value) {
+    _bufferServerToClient = value;
+    for (final pair in _pairs) {
+      pair.applyWithhold(value);
+    }
+  }
+
+  /// Releases what [bufferServerToClient] is holding, keeping it armed.
+  ///
+  /// The original proxy's `flushBuffer()`. Deliberately not a disarm: a
+  /// release that also turned the mode off could only ever say "the fault is
+  /// over", where this can say "a batch got through and the stall continues",
+  /// which is the shape of a store-and-forward peer and the reason the mode
+  /// has a release at all.
+  ///
+  /// A no-op when nothing is withheld, including when the lever was never
+  /// pulled — teardown paths and scenario scripts both call it unconditionally.
+  void flush() {
+    for (final pair in _pairs) {
+      pair.releaseWithheld();
+    }
+  }
 
   /// Rebuilds the per-chunk delay and pushes it to every live pair.
   ///
@@ -407,6 +517,15 @@ final class FaultProxy {
       client.destroy();
       return;
     }
+    if (_rejecting) {
+      // Answered here and not by closing the listener, which is the whole
+      // mode: the SYN is accepted, so Windows gets an immediate answer instead
+      // of a connect timeout, and the socket is cut before anything upstream
+      // is touched — a rejecting proxy must not open a connection to the
+      // server for a client it is about to refuse.
+      forceReset(client);
+      return;
+    }
     final Socket upstream;
     try {
       upstream = await Socket.connect(
@@ -436,6 +555,8 @@ final class FaultProxy {
     pair.applyChunkDelay(_perChunkDelay);
     pair.applyThrottle(_throttleBytesPerSec);
     pair.armCutMidFrame(_cutAfterBytes);
+    pair.applyBlackhole(_blackholed);
+    pair.applyWithhold(_bufferServerToClient);
     _pairs.add(pair);
     pair.start(_retire);
     if (_killOnceArmed) {
@@ -505,6 +626,30 @@ final class _ProxiedPair {
     toUpstream.bytesPerSecond = bytesPerSecond;
     toClient.bytesPerSecond = bytesPerSecond;
   }
+
+  /// Swallows — or stops swallowing — traffic in **both** directions.
+  ///
+  /// Both, because a half-open in one direction only is a different fault: the
+  /// scenarios this serves (F5, F7, F17) include the case where the client's
+  /// requests vanish as well as the case where the answers do, and a mode that
+  /// silently only did one of them would report the other as covered.
+  void applyBlackhole(bool swallowing) {
+    toUpstream.discardInsteadOfForward = swallowing;
+    toClient.discardInsteadOfForward = swallowing;
+  }
+
+  /// Withholds the **server→client** direction only.
+  ///
+  /// Only that one. Withholding both would starve the upstream of the
+  /// client's traffic, and an upstream that stops hearing from its peer stops
+  /// answering — which turns "the server is fine and the client hears
+  /// nothing" into a mutual silence indistinguishable from [applyBlackhole].
+  void applyWithhold(bool withholding) {
+    toClient.withholdUntilReleased = withholding;
+  }
+
+  /// Lets the withheld server→client bytes out, leaving the lever armed.
+  void releaseWithheld() => toClient.releaseWithheld();
 
   /// Arms — or disarms, with null — the server→client byte cut.
   ///

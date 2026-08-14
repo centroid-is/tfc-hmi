@@ -217,14 +217,71 @@ final class DelayLine {
   ///
   /// The seat `blackhole` takes in plan 02-09 — a true half-open, where the
   /// socket stays up and the bytes stop arriving.
+  ///
+  /// **Read-and-drop, and specifically not a paused subscription.** The bytes
+  /// are taken off the source and discarded in [_onData], so nothing
+  /// accumulates and no backpressure reaches the sender: its `add` and
+  /// `flush()` complete exactly as they did before the switch was thrown
+  /// (RESEARCH Finding 4, the `write completed` clause). Pausing the source
+  /// instead would stall the sender inside one socket buffer, which is
+  /// backpressure — a different fault, with different client-side code paths,
+  /// wearing this one's name. See `fault_proxy.dart`'s `blackhole` for the
+  /// same statement from the lever's side.
+  ///
+  /// Dropping happens on arrival *and* at the head of the queue, because the
+  /// switch can be thrown while chunks are already waiting — under a latency
+  /// or a throttle they may be waiting for some time, and a blackhole that
+  /// delivered them anyway would let bytes cross a link that is supposed to
+  /// have gone silent.
   bool discardInsteadOfForward = false;
 
   /// Hold queued chunks back until released. False means forward.
   ///
   /// The seat `bufferServerToClient` takes in plan 02-09. Withholding differs
   /// from [discardInsteadOfForward] in that the bytes are still owed, which is
-  /// why it must live behind the same high-water mark as everything else.
-  bool withholdUntilReleased = false;
+  /// why it must live behind the same high-water mark as everything else:
+  /// they stay in [_pending] and keep counting toward [pendingBytes], so a
+  /// server firehosing into a withheld direction pauses its source instead of
+  /// growing the process (T-02-24). A holding area of its own would be the
+  /// unbounded sink RESEARCH Finding 7 measured at 4463 MB, reintroduced by
+  /// the one mode whose job is to hold bytes.
+  ///
+  /// Clearing it releases what is held — the lever is a withhold, not a
+  /// discard — which is why this is a setter rather than a bare field: the
+  /// pump has nothing to wake it once the queue has stopped moving, so the
+  /// transition to false has to kick it.
+  bool get withholdUntilReleased => _withholdUntilReleased;
+
+  set withholdUntilReleased(bool value) {
+    if (value == _withholdUntilReleased) return;
+    _withholdUntilReleased = value;
+    if (!value) unawaited(_pump());
+  }
+
+  bool _withholdUntilReleased = false;
+
+  /// Bytes that may pass despite [withholdUntilReleased].
+  ///
+  /// How [releaseWithheld] lets a batch out while the lever stays armed. A
+  /// byte count rather than a queue marker because the head chunk can be split
+  /// — by a throttle, or by a cut — and the release has to be able to stop
+  /// mid-chunk at exactly the boundary it was given.
+  int _releasableBytes = 0;
+
+  /// Lets everything currently held go, leaving the lever armed.
+  ///
+  /// The behaviour of the original proxy's `flushBuffer()`
+  /// (`tfc_dart/test/proxy.dart:145-154`), and the reason it is worth keeping:
+  /// releasing a batch and going on withholding is what a store-and-forward
+  /// stall looks like from the client's side, and a release that disarmed
+  /// could only ever express "the fault is over".
+  ///
+  /// Bytes that arrive after this call are withheld again, because they are
+  /// not part of the batch that was released — the count is taken now, once.
+  void releaseWithheld() {
+    _releasableBytes = _pendingBytes;
+    unawaited(_pump());
+  }
 
   /// Bytes this line may still forward before the cut fires. Null means none
   /// is armed.
@@ -317,6 +374,7 @@ final class DelayLine {
     _pending.clear();
     _pendingBytes = 0;
     _headWritten = 0;
+    _releasableBytes = 0;
     _paused = false;
     await source?.cancel();
     if (!_pauseChanges.isClosed) await _pauseChanges.close();
@@ -325,6 +383,13 @@ final class DelayLine {
 
   void _onData(List<int> chunk) {
     if (_closed || chunk.isEmpty) return;
+    if (discardInsteadOfForward) {
+      // Read and dropped. Returning before the queue is touched is what keeps
+      // the sender unstalled: nothing is counted toward the high-water mark,
+      // so the source is never paused and the peer's `flush()` keeps
+      // completing while its bytes go nowhere.
+      return;
+    }
     final delay = chunkDelay?.call();
     final releaseAtMicros = delay == null || delay <= Duration.zero
         ? 0
@@ -359,6 +424,21 @@ final class DelayLine {
     _writing = true;
     try {
       while (!_closed && _pending.isNotEmpty) {
+        if (discardInsteadOfForward) {
+          // Chunks that were already queued when the switch was thrown. Break
+          // rather than return, so a source that has already ended still
+          // completes `done` below — a blackholed direction whose peer went
+          // away must still be collectable, or the pair outlives both its
+          // sockets.
+          _dropQueued();
+          break;
+        }
+        if (_withholdUntilReleased && _releasableBytes <= 0) {
+          // Held, not dropped. The chunks stay in `_pending` and stay counted,
+          // which is what puts the withhold behind the high-water mark rather
+          // than beside it.
+          break;
+        }
         // Read once per iteration and use that reading for both the clamp and
         // the countdown. Re-reading after the awaits below would let a cut
         // re-armed mid-write have `take` subtracted from a budget those bytes
@@ -387,6 +467,12 @@ final class DelayLine {
         // makes sense: a cut of 40 bytes on a line handing out 2500-byte
         // slices delivers 40, not a slice.
         if (untilCut != null && take > untilCut) take = untilCut;
+        // A release stops at the boundary it was given, mid-chunk if that is
+        // where the batch ended: bytes that arrived after `releaseWithheld`
+        // were never part of it.
+        if (_withholdUntilReleased && take > _releasableBytes) {
+          take = _releasableBytes;
+        }
         final rate = _bytesPerSecond;
         if (rate != null && rate > 0) {
           take = await _spendBudget(take, rate);
@@ -413,6 +499,9 @@ final class DelayLine {
         if (_closed) return;
         _headWritten += take;
         _pendingBytes -= take;
+        if (_releasableBytes > 0) {
+          _releasableBytes = _releasableBytes > take ? _releasableBytes - take : 0;
+        }
         if (_headWritten >= chunk.length) {
           _pending.removeFirst();
           _headWritten = 0;
@@ -439,6 +528,23 @@ final class DelayLine {
     }
     if (_sourceDone && _pending.isEmpty && !_finished.isCompleted) {
       _finished.complete();
+    }
+  }
+
+  /// Throws away everything queued, and lets the source run again.
+  ///
+  /// Resuming matters as much as clearing: a line that hit the high-water mark
+  /// before it was blackholed has a paused source, and a blackhole is defined
+  /// by the sender never noticing. Leaving it paused would deliver
+  /// backpressure to a peer that is supposed to be writing into silence.
+  void _dropQueued() {
+    _pending.clear();
+    _pendingBytes = 0;
+    _headWritten = 0;
+    if (_paused) {
+      _paused = false;
+      _source?.resume();
+      _announce(false);
     }
   }
 
