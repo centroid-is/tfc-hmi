@@ -31,14 +31,44 @@ extension type const Quality(int code) {
   /// replacement characters were substituted.
   static const uncertainEncoding = Quality(260);
 
+  /// A peer sent a code outside the four bands. This side cannot judge how
+  /// far the value may be trusted, and "cannot judge" is exactly what the
+  /// uncertain band means — not a band-less code that answers no to every
+  /// question a widget can ask.
+  static const uncertainUnknownCode = Quality(259);
+
   /// The key no longer exists upstream (tag deleted / renamed): a
   /// configuration error, not a transient — waiting will not fix it.
   static const errorConfig = Quality(770);
 
+  /// Highest representable code. The four bands are 0–1023; anything above
+  /// belongs to no band, so [worst] would never select it and every band
+  /// predicate would answer false.
+  static const int maxCode = 1023;
+
+  /// Decodes a peer-supplied code.
+  ///
+  /// The wire is treated as hostile for exactly this class of hazard — the
+  /// `1e999` decode poison is defused at the same boundary — and the quality
+  /// code is the field that decides whether an operator may believe the
+  /// number. The realistic trigger is a version-skewed peer or a proxy rather
+  /// than an attacker; the consequence is the same either way.
+  ///
+  /// An absent (or explicitly null) code means good: quality is omitted from
+  /// the wire when there is nothing to report.
+  factory Quality.fromWire(Object? raw) {
+    if (raw == null) return good;
+    if (raw is! num) return uncertainUnknownCode;
+    // `1e999` decodes to Infinity, and Infinity.toInt() throws.
+    if (raw is double && !raw.isFinite) return uncertainUnknownCode;
+    final code = raw.toInt();
+    return code < 0 || code > maxCode ? uncertainUnknownCode : Quality(code);
+  }
+
   bool get isGood => code >= 0 && code < 256;
   bool get isUncertain => code >= 256 && code < 512;
   bool get isBad => code >= 512 && code < 768;
-  bool get isError => code >= 768;
+  bool get isError => code >= 768 && code <= maxCode;
 
   /// Band severity for worst-wins composition (higher is worse).
   int get band => code >> 8;

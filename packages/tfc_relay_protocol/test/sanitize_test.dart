@@ -133,6 +133,106 @@ void main() {
           isNot(Quality.badStale.band));
     });
 
+    test('every code answers exactly one band question', () {
+      // CR-05. A code belonging to no band answers no to every question a
+      // widget can ask, so what it renders as depends on which predicate the
+      // widget happens to test first.
+      for (final q in [
+        Quality.good,
+        Quality.goodWritePending,
+        Quality.uncertainLastKnown,
+        Quality.uncertainEncoding,
+        Quality.uncertainUnknownCode,
+        Quality.badStale,
+        Quality.badCommFault,
+        Quality.badNonFinite,
+        Quality.errorConfig,
+      ]) {
+        final answers =
+            [q.isGood, q.isUncertain, q.isBad, q.isError].where((b) => b);
+        expect(answers, hasLength(1), reason: 'code ${q.code}');
+      }
+    });
+
+    group('fromWire clamps a peer-supplied code', () {
+      test('an out-of-range code reads as uncertain, not as nothing', () {
+        for (final raw in [-1, 1024, 99999, -100000]) {
+          final q = Quality.fromWire(raw);
+          expect(q, Quality.uncertainUnknownCode, reason: 'code $raw');
+          expect(q.isUncertain, isTrue,
+              reason: 'a value whose trustworthiness cannot be judged must '
+                  'read as untrustworthy, not as unclassifiable');
+        }
+      });
+
+      test('an out-of-range code survives worst-wins composition', () {
+        // The hazard the band predicates alone do not catch: a band-less
+        // code can never be selected by worst(), so it composes into a
+        // parent that reports good.
+        expect(Quality.worst([Quality.good, Quality.fromWire(-1)]).isUncertain,
+            isTrue);
+      });
+
+      test('a code that is not a number at all', () {
+        expect(Quality.fromWire('bad'), Quality.uncertainUnknownCode);
+        expect(Quality.fromWire(const {}), Quality.uncertainUnknownCode);
+      });
+
+      test('a non-finite code does not detonate on toInt()', () {
+        // `{"q": 1e999}` decodes to Infinity, on which toInt() throws.
+        final decoded = jsonDecode('{"q":1e999}') as Map<String, Object?>;
+        expect(Quality.fromWire(decoded['q']), Quality.uncertainUnknownCode);
+      });
+
+      test('an absent or null code is good — quality is omitted when good',
+          () {
+        expect(Quality.fromWire(null), Quality.good);
+      });
+
+      test('in-band codes pass through exactly', () {
+        for (final q in [
+          Quality.good,
+          Quality.goodWritePending,
+          Quality.badStale,
+          Quality.errorConfig,
+          const Quality(0),
+          const Quality(1023),
+        ]) {
+          expect(Quality.fromWire(q.code), q);
+        }
+      });
+    });
+
+    test('every decoder routes its quality through fromWire', () {
+      // dynamic_value.dart, wire_value.dart and messages.dart each built
+      // Quality straight from the wire; one that did not would reintroduce
+      // the band-less value on its own path.
+      expect(
+          DynamicValue.fromJson(
+                  {'type': 'integer', 'value': 5, 'q': -1}).quality,
+          Quality.uncertainUnknownCode);
+      expect(WireValue.fromJson({'v': 5, 'q': 5000}).q,
+          Quality.uncertainUnknownCode);
+      expect(
+          UpdateParams.fromJson({
+            'sub': 's',
+            'seq': 1,
+            't': 2,
+            'q': {'7': -1}
+          }).qualities[7],
+          Quality.uncertainUnknownCode);
+    });
+
+    test('an explicit null quality decodes rather than throwing', () {
+      // json.containsKey('q') is true for "q": null, and the old cast then
+      // threw a _TypeError on the notification path.
+      expect(
+          DynamicValue.fromJson(
+                  {'q': null, 'type': 'null', 'value': null}).quality,
+          Quality.good);
+      expect(WireValue.fromJson({'v': 1, 'q': null}).q, Quality.good);
+    });
+
     test('worst-wins composition: derived values never look healthier '
         'than their worst input', () {
       expect(
