@@ -99,6 +99,38 @@ void main() {
     await _expectRate(_hundredKilobit, 'F20 / 100 kbit/s');
   });
 
+  test('refuses a rate of zero rather than reading as armed and shaping '
+      'nothing', () async {
+    final rig = await _Rig.open();
+
+    for (final rate in [0, -1, -_oneMegabit]) {
+      expect(() => rig.proxy.throttleBytesPerSec = rate, throwsArgumentError,
+          reason: 'a rate of $rate is stored, makes the composition table '
+              'report throttle armed, and is then skipped by the bucket, '
+              'which only meters a positive rate. That is the third state '
+              'fault_proxy.dart:20-27 forbids: the lever is set, the mode '
+              'test passes, and the traffic goes through at full speed. Every '
+              'neighbouring lever refuses its own impossible value at set '
+              'time — flap a zero half, cutMidFrame a negative count — so a '
+              'rate of zero is a gap in the rule, not an exception to it');
+    }
+
+    // `reject` excludes `throttle`, so it is the observable for whether a
+    // throttle is armed — the lever itself is setter-only, and "armed" is a
+    // claim about the composition table rather than about a stored number.
+    await rig.proxy.reject();
+    await rig.proxy.reject(enabled: false);
+
+    rig.proxy.throttleBytesPerSec = _hundredKilobit;
+    expect(() => rig.proxy.reject(), throwsStateError,
+        reason: 'a positive rate must still arm the mode, or the refusal '
+            'above was bought by disarming the lever entirely');
+
+    rig.proxy.throttleBytesPerSec = null;
+    await rig.proxy.reject();
+    await rig.proxy.reject(enabled: false);
+  });
+
   test('holds its queue under the bound while a firehose runs into a slow '
       'throttle', () async {
     final rig = await _Rig.open();
