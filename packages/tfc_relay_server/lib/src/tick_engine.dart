@@ -172,5 +172,34 @@ final class TickEngine {
       // wrong rather than every tick.
       session.emit(message is String ? message : jsonEncode(message));
     }
+
+    _fanOut(session, frame, nowMs);
+  }
+
+  /// Writes this session's conflated telemetry: one `u` frame per subscription
+  /// that changed, each spliced around a body the whole tick shares.
+  ///
+  /// The two halves of Finding 3 meet here. [FrameEncoder.bodyFor] is keyed by
+  /// the changed-*handle* set and handles are server-global, so fifty panels
+  /// watching one line hand it one signature and pay one encode between them;
+  /// the `sub` and `seq` that make the frame this client's own are
+  /// concatenated around it, never encoded. Building a map per client and
+  /// encoding that is the 7 639 µs strategy, and it is arrived at by accident
+  /// rather than by choice.
+  void _fanOut(RelaySession session, DrainedFrame frame, int nowMs) {
+    frame.subs.forEach((sub, pending) {
+      final state = session.subscriptions.get(sub);
+      // Unsubscribed between the change and this tick. Dropping it is the
+      // point of `unsubscribe`: a client that released a page must not be
+      // handed one more frame for it, and there is no seq to advance.
+      if (state == null) return;
+      session.emit(encoder.updateFrame(
+        sub: state.literal(encoder.subLiteral),
+        seq: state.nextSeq(),
+        t: nowMs,
+        body: encoder.bodyFor(
+            pending.changes, pending.qualities, pending.removed),
+      ));
+    });
   }
 }
