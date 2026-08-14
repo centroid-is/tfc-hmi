@@ -28,6 +28,38 @@
 /// half-opened over a sleeping NAT looks exactly like a quiet plant, and the
 /// operator reads a five-minute-old tank level as current. Freshness is the
 /// product.
+///
+/// ---
+///
+/// **The second half — the subscriptions, and no timers at all.** [sawTick]
+/// records each `SubTick.evaluatedAt` and subtracts; nothing in that half
+/// schedules anything. It exists for F25 (04-RESEARCH Finding 3), the dead
+/// subscription on a live socket: ticks keep arriving, the link is provably
+/// up, and one subscription's plant-side source has stopped evaluating. The
+/// link watchdog above cannot see that — every frame it needs is still
+/// landing — so a value the PLC stopped producing would render as current
+/// forever.
+///
+/// That fault is **the plant's, not the stream's** (the 04-CONTEXT ruling), so
+/// per-subscription staleness never triggers a resync. This class has no
+/// collaborator it could ask and no way to express the request: tearing down a
+/// healthy subscription set because one tag went quiet is how a single dead
+/// PLC point takes out an entire panel, repeatedly, for as long as the tag
+/// stays dead.
+///
+/// The two halves keep separate state and separate methods because CLI-04's
+/// entire point is that the operator can tell three states apart: the link is
+/// gone, this one value is not being evaluated, everything is fine.
+///
+/// **Whose clock.** Per-subscription age is measured in the *gateway's* time,
+/// never the panel's. On a tick that is free — `TickParams.serverTime` and
+/// `SubTick.evaluatedAt` are both server wall-clock epoch ms, verified live in
+/// 04-RESEARCH Finding 5b. Between ticks, [FreshnessWatchdog.staleSubscriptionsAt]
+/// converts the caller's local instant into server time with the offset
+/// captured at hello (`ClockOffset` in `clock_offset.dart`, whose `toServer`
+/// this mirrors: `offset = localNow - hello.serverTime`). A panel whose own
+/// clock is ten minutes wrong is a panel with a wrong clock, not a plant with
+/// 1500 dead tags — CLI-05 says warn and keep showing values.
 library;
 
 import 'dart:async';
@@ -70,6 +102,12 @@ final class FreshnessWatchdog {
   bool _viewIsStale = false;
   bool _disposed = false;
 
+  /// Last known `evaluatedAt` per subscription id, in the gateway's clock.
+  final Map<String, int> _evaluatedAt = <String, int>{};
+
+  /// The verdict from the most recent tick.
+  Set<String> _staleSubs = const <String>{};
+
   FreshnessWatchdog({
     required this.config,
     required this.onViewFreshnessChanged,
@@ -95,26 +133,71 @@ final class FreshnessWatchdog {
     _becomeFresh();
   }
 
-  /// Records a tick and re-judges every subscription. Declared here so the
-  /// per-subscription cases fail by name; implemented in the GREEN step.
-  void sawTick(TickParams tick) =>
-      throw UnimplementedError('freshness watchdog: sawTick');
+  /// ---------------------------------------------------------------------
+  /// Part two: the subscriptions. Arithmetic only — nothing below this line
+  /// schedules anything, and nothing below it can ask the stream to be torn
+  /// down and rebuilt. See the library doc: the fault is the plant's.
+  /// ---------------------------------------------------------------------
 
-  /// Subscriptions whose source had stopped evaluating as of the last tick.
-  Set<String> get staleSubscriptions =>
-      throw UnimplementedError('freshness watchdog: staleSubscriptions');
+  /// Records a tick: restarts the link deadline **and** re-judges every
+  /// subscription against the gateway's own clock.
+  ///
+  /// It calls [sawFrame] itself rather than trusting the caller to make two
+  /// calls per tick. A caller that had to remember both would eventually
+  /// forget one, and the forgotten one greys a running plant.
+  void sawTick(TickParams tick) {
+    if (_disposed) return;
+    sawFrame(InboundFrame.tick);
+    for (final entry in tick.subs.entries) {
+      _evaluatedAt[entry.key] = entry.value.evaluatedAt;
+    }
+    // `tick.serverTime` and `evaluatedAt` are both the gateway's wall clock
+    // (Finding 5b), so this comparison never touches the panel's clock.
+    _staleSubs = _staleAt(tick.serverTime);
+  }
 
-  /// The same verdict for one subscription id.
-  bool isSubscriptionStale(String subId) =>
-      throw UnimplementedError('freshness watchdog: isSubscriptionStale');
+  /// Subscriptions whose plant-side source had stopped evaluating as of the
+  /// last tick.
+  ///
+  /// Distinct from [viewIsStale] on purpose: this set can be non-empty while
+  /// the link is provably healthy, which is the whole of F25 — the gateway is
+  /// fine, one PLC tag is not, and the operator needs to be told which.
+  Set<String> get staleSubscriptions => _staleSubs;
 
-  /// The same verdict between ticks, from a local instant plus the offset.
+  /// The same verdict for the one id a widget renders.
+  bool isSubscriptionStale(String subId) => _staleSubs.contains(subId);
+
+  /// The same verdict between ticks, for a caller holding a local instant.
+  ///
+  /// [localNowMs] is converted into the gateway's clock with [clockOffsetMs] —
+  /// `ClockOffset.offsetMs`, captured at hello as `localNow - serverTime`, so
+  /// subtracting it is that type's `toServer`. A panel whose clock is ten
+  /// minutes fast has an offset ten minutes large and every verdict here is
+  /// unchanged: a disagreement about what time it is is not a disagreement
+  /// about the process, and CLI-05 says warn, never grey the plant.
   Set<String> staleSubscriptionsAt(int localNowMs, {required int clockOffsetMs}) =>
-      throw UnimplementedError('freshness watchdog: staleSubscriptionsAt');
+      _staleAt(localNowMs - clockOffsetMs);
 
-  /// Forgets a subscription that is no longer displayed.
-  void forgetSubscription(String subId) =>
-      throw UnimplementedError('freshness watchdog: forgetSubscription');
+  /// Forgets a subscription — an unsubscribe, or a snapshot that dropped it.
+  ///
+  /// Without this, an id that came and went keeps its last `evaluatedAt`
+  /// forever and goes on raising a fault about a value no screen displays.
+  void forgetSubscription(String subId) {
+    _evaluatedAt.remove(subId);
+    _staleSubs = _staleSubs.where((id) => id != subId).toSet();
+  }
+
+  /// Ages every recorded subscription against an instant in the gateway's
+  /// clock. One pass of subtraction; no per-subscription timer exists to
+  /// cancel, which is why a 1500-key page costs one timer in total.
+  Set<String> _staleAt(int serverNowMs) {
+    final limitMs = config.freshnessDeadline.inMilliseconds;
+    final stale = <String>{};
+    for (final entry in _evaluatedAt.entries) {
+      if (serverNowMs - entry.value > limitMs) stale.add(entry.key);
+    }
+    return stale;
+  }
 
   /// Drops the deadline. Nothing fires afterwards, and later frames are
   /// ignored rather than re-arming a watchdog whose page is gone.
@@ -122,6 +205,8 @@ final class FreshnessWatchdog {
     _disposed = true;
     _deadline?.cancel();
     _deadline = null;
+    _evaluatedAt.clear();
+    _staleSubs = const <String>{};
   }
 
   void _linkWentQuiet() {
