@@ -25,12 +25,15 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:json_rpc_2/error_code.dart' as rpc_errors;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'error_codes.dart';
+import 'error_reporter.dart';
 import 'handle_table.dart';
 import 'server_config.dart';
 import 'session_handlers.dart';
@@ -105,13 +108,24 @@ final class RelaySession {
     Future<void> Function(int code, String reason)? closeChannel,
     void Function(String frame)? emitFrame,
     void Function(RelaySession session)? onClosing,
+    RelayErrorHandler? onError,
     int Function()? now,
   }) {
     final clock = now ?? () => DateTime.now().millisecondsSinceEpoch;
     final lastSeen = _LastSeen(clock);
     return RelaySession._(
       rpc.Peer(
-          StreamChannel<String>(channel.stream.map(lastSeen.touch), channel.sink)),
+          StreamChannel<String>(
+              channel.stream.map(lastSeen.touch).map(_defuse), channel.sink),
+          onUnhandledError: onError == null
+              ? null
+              // `ErrorCallback`'s two parameters are `dynamic`
+              // (json_rpc_2/src/server.dart:18), so they are narrowed here
+              // rather than at every call site of ours.
+              : (dynamic error, dynamic stack) => onError(
+                  error as Object,
+                  stack is StackTrace ? stack : StackTrace.current,
+                  'session peer')),
       api,
       config,
       handles,
@@ -124,6 +138,43 @@ final class RelaySession {
       emitFrame,
       onClosing,
     ).._start();
+  }
+
+  /// Takes the poison out of one inbound frame before the `Peer` ever sees it.
+  ///
+  /// **The one place `1e999` is disarmed for paths this class does not own.**
+  /// `_answer` and the fallback below can only armor errors that pass through
+  /// them. Two shapes never do: an envelope json_rpc_2 itself rejects (missing
+  /// `method`, wrong `jsonrpc`, a non-object `params` — every throw in
+  /// `Server._validateRequest`), and an `id` that is itself non-finite, which
+  /// `RpcException.serialize` copies into the response before any of our code
+  /// runs (`exception.dart:60` accepts any `num` as an id, and Infinity is
+  /// one). Both produce a response `jsonEncode` refuses; json_rpc_2 discards
+  /// the refusal inside the Peer and the client waits forever on a healthy
+  /// link. That is the 02-05 hang, reachable by anything that can open a
+  /// socket.
+  ///
+  /// So the frame is decoded, sanitized and re-encoded here, at the boundary,
+  /// which is where CLAUDE.md says wire hazards belong. The cost is one extra
+  /// `jsonDecode` per **inbound** frame — requests only, never the telemetry
+  /// fan-out, which is the path Finding 2 measured — and the re-encode is paid
+  /// only by a frame that actually carried a non-finite number.
+  ///
+  /// **Anything that goes wrong here leaves the frame exactly as it was.** A
+  /// frame that is not JSON at all is json_rpc_2's parse error to answer (its
+  /// echo is the source *text*, a String, which encodes); one nested past
+  /// [maxValueDepth] makes `sanitize` throw, and today that is a per-request
+  /// refusal from the handler's own sanitize rather than a dead session.
+  /// Turning either into a stream error would close the session over a frame
+  /// the server currently answers.
+  static String _defuse(String frame) {
+    try {
+      final sanitized = sanitize(jsonDecode(frame));
+      if (!sanitized.hadNonFinite) return frame;
+      return jsonEncode(sanitized.value);
+    } catch (_) {
+      return frame;
+    }
   }
 
   /// The source being served. Untouched by this plan's two methods; 03-05's
@@ -300,6 +351,22 @@ final class RelaySession {
     _on(Methods.ping, _ping);
     _on(Methods.subscribe, handlers.subscribe);
     _on(Methods.unsubscribe, handlers.unsubscribe);
+    // Method-not-found, answered by us rather than by json_rpc_2.
+    //
+    // Left to the library, `Server._tryFallbacks` throws
+    // `RpcException.methodNotFound(name)` — constructed with no `data`
+    // (`exception.dart:33-34`) — and the serializer then echoes the raw
+    // request into the response. A registered fallback puts that refusal back
+    // inside `_answer`'s armor, so an unknown method name is answered the same
+    // way every known one's refusal is. It does not gate: an unknown name is
+    // unknown whether or not the client has said hello, and answering
+    // "unknown method" before the handshake tells an attacker nothing it could
+    // not learn by reading this file.
+    peer.registerFallback((rpc.Parameters params) async {
+      throw rpc.RpcException(rpc_errors.METHOD_NOT_FOUND,
+          'Unknown method "${params.method}".',
+          data: _substitute(params.method));
+    });
     unawaited(peer.listen().then(
         (_) => _transportEnded(),
         onError: (Object _) => _transportEnded()));
@@ -382,8 +449,17 @@ final class RelaySession {
   Future<Object?> _answer(String method, Future<Object?> Function() work) async {
     try {
       return await work();
-    } on rpc.RpcException {
-      rethrow;
+    } on rpc.RpcException catch (error) {
+      // A handler that supplied its own `data` has already thought about the
+      // echo; one that did not must not be allowed to make that choice by
+      // omission. Six refusals in `session_handlers.dart` did exactly that,
+      // and each of them was a hang waiting for a request that carried
+      // `1e999` in any sibling field. Substituting *here* — at the choke point
+      // every handler's failure passes through — is what makes the property
+      // structural instead of a rule each future handler has to remember.
+      if (error.data != null) rethrow;
+      throw rpc.RpcException(error.code, error.message,
+          data: _substitute(method));
     } on TypeError catch (error) {
       throw rpc.RpcException(ServerErrorCodes.typeMismatch, '$error',
           data: _substitute(method));

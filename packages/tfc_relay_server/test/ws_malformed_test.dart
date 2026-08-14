@@ -56,6 +56,7 @@ import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 // `subscriptionCount` is an extension on `SessionRegistry`; the registry
 // itself arrives through the harness.
+import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/subscription_registry.dart';
 // The catalogue and `oversizeBytes` live behind the channel-harness entry, not
 // the contract barrel.
@@ -238,6 +239,164 @@ void main() {
       expect(sessions.subscriptionCount, 0,
           reason: 'a rejected frame must not have changed any state on the '
               'way to being rejected');
+    });
+  });
+
+  // ## The sibling-field arm (03-REVIEW CR-01 / CR-02)
+  //
+  // The `poison-1` case above puts `1e999` where a *String* belongs, so the
+  // typed decode throws a TypeError and `_answer`'s TypeError arm — which
+  // always substituted — catches it. That is one arm of the trap and it was
+  // the only one covered, which is why six handler refusals and two whole
+  // json_rpc_2-owned paths shipped able to hang a client.
+  //
+  // These cases put the poison in a sibling field the refusal never reads. The
+  // request is therefore *valid* right up to the point where the server
+  // refuses it for an unrelated reason, and the refusal is the frame that
+  // cannot be encoded. Every one of them was reproduced against the real
+  // server over a real socket before the fix; each `delivered=false` was a
+  // client waiting forever on a healthy link.
+  group('a refusal whose request carries 1e999 in a field it never reads '
+      'still reaches the client', () {
+    Future<void> arrives(RelayFixture fixture, String id, String frame,
+        {required String refusal}) async {
+      fixture.client.sink.add(frame);
+      expect(await _untilFrame(fixture, '"$id"', budget: _poisonBudget), isTrue,
+          reason: 'the $refusal never reached the client. The refusal itself '
+              'is encodable; what is not is the raw request json_rpc_2 echoes '
+              'into `error.data` when the thrower supplied no `data` of its '
+              'own (exception.dart:46-57). The echo is discarded inside the '
+              'Peer and the caller waits forever — relay_session.dart\'s '
+              '_answer rebuild, its registered fallback and its ingress '
+              '_defuse are the three mitigations, and this is what notices '
+              'when one of them is gone');
+      expect(await _stillAnswers(fixture), isTrue,
+          reason: 'a poisoned request must cost one request, not the session');
+    }
+
+    test('subscribe refuses an empty "sub"', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      await arrives(
+          fixture,
+          'sibling-empty-sub',
+          '{"jsonrpc":"2.0","id":"sibling-empty-sub",'
+              '"method":"${Methods.subscribe}","params":{"sub":"",'
+              '"keys":["$_key"],"maxRateHz":1e999}}',
+          refusal: 'empty-"sub" refusal');
+    });
+
+    test('subscribe refuses a duplicate "sub"', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      await fixture.request(Methods.subscribe,
+          params: {'sub': 'page-1', 'keys': [_key]});
+      await arrives(
+          fixture,
+          'sibling-duplicate',
+          '{"jsonrpc":"2.0","id":"sibling-duplicate",'
+              '"method":"${Methods.subscribe}","params":{"sub":"page-1",'
+              '"keys":["$_key"],"maxRateHz":1e999}}',
+          refusal: 'duplicate-"sub" refusal');
+    });
+
+    test('subscribe refuses more keys than the ceiling allows', () async {
+      final fixture = relayFixture(
+          config: ServerConfig(
+              tick: ServerConfig.minTick, maxKeysPerSubscribe: 1));
+      await fixture.ready;
+      await fixture.hello();
+      await arrives(
+          fixture,
+          'sibling-too-many-keys',
+          '{"jsonrpc":"2.0","id":"sibling-too-many-keys",'
+              '"method":"${Methods.subscribe}","params":{"sub":"page-2",'
+              '"keys":["$_key","CN01.MOT01.running"],"maxRateHz":1e999}}',
+          refusal: 'over-limit-keys refusal');
+    });
+
+    test('subscribe refuses a session already at its subscription ceiling',
+        () async {
+      final fixture = relayFixture(
+          config: ServerConfig(
+              tick: ServerConfig.minTick, maxSubscriptionsPerSession: 1));
+      await fixture.ready;
+      await fixture.hello();
+      await fixture.request(Methods.subscribe,
+          params: {'sub': 'page-1', 'keys': [_key]});
+      await arrives(
+          fixture,
+          'sibling-at-capacity',
+          '{"jsonrpc":"2.0","id":"sibling-at-capacity",'
+              '"method":"${Methods.subscribe}","params":{"sub":"page-2",'
+              '"keys":["$_key"],"maxRateHz":1e999}}',
+          refusal: 'at-capacity refusal');
+    });
+
+    test('unsubscribe refuses a name it has never heard of', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      await arrives(
+          fixture,
+          'sibling-unknown-sub',
+          '{"jsonrpc":"2.0","id":"sibling-unknown-sub",'
+              '"method":"${Methods.unsubscribe}",'
+              '"params":{"sub":"never-existed","junk":1e999}}',
+          refusal: 'unknown-subscription refusal');
+    });
+
+    // The two paths with no handler at all. Before the fix neither had any
+    // armor: the session registered no fallback, so `Server._tryFallbacks`
+    // threw a data-less methodNotFound, and nothing at all stands between a
+    // client and `Server._validateRequest`.
+    test('an unknown method name is refused rather than swallowed', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      await arrives(
+          fixture,
+          'sibling-unknown-method',
+          '{"jsonrpc":"2.0","id":"sibling-unknown-method",'
+              '"method":"nope.notAMethod","params":{"x":1e999}}',
+          refusal: 'method-not-found refusal');
+    });
+
+    test('an envelope json_rpc_2 itself rejects is refused rather than '
+        'swallowed', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      // Deliberately no hello: this shape needs no valid method name and no
+      // gated handler, so it is reachable by anything that can open a socket.
+      // That is what made it the widest of the four reproductions.
+      await arrives(
+          fixture,
+          'sibling-no-method',
+          '{"jsonrpc":"2.0","id":"sibling-no-method","params":{"x":1e999}}',
+          refusal: 'invalid-request refusal');
+    });
+
+    test('an id that is itself non-finite still produces an answer', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      // `RpcException.serialize` copies the request's `id` into the response
+      // and accepts any `num` (exception.dart:60) — Infinity is one. No
+      // amount of care about `data` helps here; only defusing the frame before
+      // the Peer decodes it does. The id arrives as null, so the needle is the
+      // error code rather than the id.
+      fixture.client.sink.add('{"jsonrpc":"2.0","id":1e999,'
+          '"method":"nope.notAMethod","params":{}}');
+      expect(
+          await _untilFrame(fixture, '"error"', budget: _poisonBudget), isTrue,
+          reason: 'a request whose own id is Infinity must still be answered: '
+              'the id is sanitized to null at the boundary, which is the only '
+              'place it can be, and a null id is what JSON-RPC says an error '
+              'with an unusable id carries');
+      expect(await _stillAnswers(fixture), isTrue,
+          reason: 'a poisoned id must cost one request, not the session');
     });
   });
 }

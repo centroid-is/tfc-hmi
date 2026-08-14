@@ -37,6 +37,7 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'error_reporter.dart';
 import 'handle_table.dart';
 import 'relay_session.dart';
 import 'server_config.dart';
@@ -137,8 +138,18 @@ final class RelayServer {
     HandleTable? handles,
     this.validator = const PermissiveTokenValidator(),
     this.serverSupported = const [protocolVersion],
+    this.onError = reportToStderr,
   })  : config = config ?? ServerConfig(),
         handles = handles ?? HandleTable();
+
+  /// Where this server reports an error nobody asked for: an unhandled peer
+  /// error, a session that threw inside the tick, a sweep that failed.
+  ///
+  /// Defaults to [reportToStderr] rather than to null, because the alternative
+  /// is the state this package shipped in — every failure swallowed, and a
+  /// gateway that cannot say what went wrong. A test supplies a collector and
+  /// asserts on it; an embedder supplies its own logger.
+  final RelayErrorHandler onError;
 
   /// The subprotocol this gateway answers to, when a client asks for one.
   ///
@@ -288,6 +299,7 @@ final class RelayServer {
         // `remove` is idempotent and fires `gone` once, so the two paths
         // meeting is not a double report.
         onClosing: _sessions.remove,
+        onError: onError,
       );
       connection.session = session;
       _sessions.add(session);
