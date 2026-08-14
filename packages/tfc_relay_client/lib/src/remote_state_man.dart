@@ -488,7 +488,20 @@ final class RemoteStateMan implements StateManApi {
   ///  * a non-finite **expect** is refused outright. See the [ArgumentError].
   @override
   Future<WriteResult> write(String key, Object? value,
-      {Object? expect, String? cmd}) async {
+          {Object? expect, String? cmd}) =>
+      _write(key, value, expect: expect, cmd: cmd);
+
+  /// [write], plus the one thing a caller may not ask for: the hold flag.
+  ///
+  /// The flag is not on the public member and must not be put there. The
+  /// interface already has [holdToRun], and a second way to say the same
+  /// thing on the same interface is the ambiguity the surface test exists to
+  /// prevent (D-P5-C). It lives here so that an engage and a release are
+  /// built by the one request-building body every other write goes through —
+  /// one deadline, one `_unresolved` entry, one `writeStatus` recovery, and
+  /// exactly one place [Methods.write] is named.
+  Future<WriteResult> _write(String key, Object? value,
+      {Object? expect, String? cmd, bool hold = false}) async {
     final sanitizedValue = sanitize(value);
     final sanitizedExpect = sanitize(expect);
     if (sanitizedExpect.hadNonFinite) {
@@ -547,6 +560,7 @@ final class RemoteStateMan implements StateManApi {
           'key': key,
           'value': sanitizedValue.value,
           if (expect != null) 'expect': sanitizedExpect.value,
+          if (hold) 'hold': true,
         },
         deadline: config.writeDeadline,
         onSend: () {
@@ -664,6 +678,156 @@ final class RemoteStateMan implements StateManApi {
     });
   }
 
+  // -------------------------------------------------------- hold-to-run
+
+  /// Every hold this client is feeding, keyed by the tag it feeds.
+  ///
+  /// Small on purpose and holding no schedule: the cadence belongs to
+  /// `HoldToRunController` (05-07), and a `Timer` in this file would be a
+  /// second thing deciding when a machine is still wanted.
+  ///
+  /// A second engage on a key that already has a live hold replaces the entry.
+  /// The displaced handle is still releasable by whoever holds it, and its
+  /// ticks still gate on link readiness, so nothing it does can outlive the
+  /// link — but it will not be released by [dispose] or by a disconnect.
+  /// Two concurrent holds on one tag are a contradiction at the operator's
+  /// end, not a state this client can resolve on its own.
+  final _holds = <String, HoldHandle>{};
+
+  var _holdTicksSent = 0;
+
+  /// How many deadman ticks reached the wire — the observable 05-07's cadence
+  /// cases are written against, in the style of [debugWritesSent].
+  ///
+  /// Counted after the gate, so it measures ticks the link actually carried
+  /// rather than ticks somebody asked for.
+  int get debugHoldTicksSent => _holdTicksSent;
+
+  /// Engages a hold-to-run deadman on [key] over the pipe.
+  ///
+  /// The engage is an ordinary write carrying the hold flag, so it gets the
+  /// three-state outcome, the deadline and the `writeStatus` recovery every
+  /// other write gets; the release is the same write with 0 on it. Only the
+  /// feed in between is a notification, and only because a tick has no
+  /// outcome to correlate.
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await _write(key, 1, cmd: newUlid(), hold: true);
+    final hold = HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) => _sendHoldTick(key, counter),
+      onRelease: (counter) => _write(key, counter, cmd: newUlid(), hold: true),
+    );
+    if (hold.isHeld && !_disposed) {
+      _holds[key] = hold;
+      unawaited(hold.onReleased.then((_) {
+        if (identical(_holds[key], hold)) _holds.remove(key);
+      }));
+    } else if (hold.isHeld) {
+      // Engaged into a client that closed while the write was out. Nothing is
+      // watching the counter and nothing will feed it; say so at once rather
+      // than hand back a handle that looks live.
+      unawaited(hold
+          .release(reason: HoldEnded.disposed)
+          .then((_) {}, onError: (Object _) {}));
+    }
+    return hold;
+  }
+
+  /// Hands one counter value to the link, or drops it.
+  ///
+  /// **A gate, not a `try`/`catch`.** `sendNotification` on a closed peer
+  /// throws `StateError` synchronously (measured, 05-RESEARCH §B.1 #5), and
+  /// `classifyFailure` (`failure_taxonomy.dart:143-148`) rethrows
+  /// unrecognised `StateError`s on purpose — so a catch here would swallow a
+  /// real defect in this process along with the one it meant to ignore.
+  ///
+  /// **And no queue behind it.** `_WsSink.add` goes straight to the `dart:io`
+  /// sink, which buffers without bound and offers no `bufferedAmount` and no
+  /// `flush()` (flutter#103306). A pump that kept ticking into a stalled
+  /// socket would build exactly the queue this project forbids; the gate is
+  /// what prevents it, and a dropped tick costs nothing the next one 100 ms
+  /// later does not fix.
+  void _sendHoldTick(String key, int counter) {
+    if (_disposed || _supervisor.state != LinkState.ready) return;
+    final peer = _supervisor.peer;
+    if (peer == null) return;
+    peer.sendNotification(
+        Methods.holdTick, HoldTickParams(key: key, counter: counter).toJson());
+    _holdTicksSent++;
+  }
+
+  /// Ends every live hold, without waiting for the release writes.
+  ///
+  /// Not awaited: on a link that has just gone, the release write resolves
+  /// `WriteUnknown(link_down)` a deadline later, and a teardown that waited
+  /// for it would hold a closing page open for a write whose outcome is
+  /// informational anyway. The counter stops the moment this is called, which
+  /// is the whole safety property — the PLC's deadman does the rest.
+  void _releaseHolds(HoldEnded reason) {
+    if (_holds.isEmpty) return;
+    for (final hold in List<HoldHandle>.of(_holds.values)) {
+      unawaited(
+          hold.release(reason: reason).then((_) {}, onError: (Object _) {}));
+    }
+    _holds.clear();
+  }
+
+  /// Re-asks the gateway what became of [cmds], in the order asked.
+  ///
+  /// The one place a `writeStatus` frame is built, for both callers: the
+  /// public member and the reconnect recovery below. A second frame-building
+  /// site would be a second thing to keep aligned with the wire, and this one
+  /// is already the seam the no-re-actuation property is asserted against
+  /// (`debugWriteStatusQueries`).
+  ///
+  /// **Every element answers the command at the same index**, including the
+  /// ones nothing legible came back for: a malformed entry becomes a
+  /// [WriteUnknown] about the command it was asked under rather than being
+  /// dropped, because dropping it would shift every later answer onto the
+  /// wrong command — and one of those answers could be the `not_received`
+  /// that invites an operator to move a machine again. The complaint is still
+  /// recorded, so a page that goes half-blank has a line in the log.
+  ///
+  /// It never re-sends a write. That is the whole of the recovery story: the
+  /// client asks what became of the command, it does not send it again.
+  @override
+  Future<List<WriteResult>> writeStatus(List<String> cmds) async {
+    if (cmds.isEmpty) return const <WriteResult>[];
+    _record(_writeStatusQueries, cmds);
+    final raw = _asJson(await _request(Methods.writeStatus, {'cmds': cmds}));
+    final results = raw['results'];
+    return [
+      for (var i = 0; i < cmds.length; i++)
+        if (results is List && i < results.length)
+          _answerFor(cmds[i], results[i])
+        else
+          WriteUnknown(
+              cmds[i],
+              const WriteReason('malformed_result:writeStatus',
+                  message: 'the gateway answered without an entry for this '
+                      'command, so nothing about it can be ruled out')),
+    ];
+  }
+
+  /// One entry of a `writeStatus` answer, decoded or accounted for.
+  WriteResult _answerFor(String cmd, Object? entry) {
+    try {
+      return WriteResult.fromJson(_asJson(entry));
+    } catch (error) {
+      // One entry, not the batch (04-REVIEW WR-03). Decoding the whole list at
+      // once was letting a malformed entry at index 0 discard the settled
+      // outcomes of every other command in it, and on a 1500-key panel the
+      // batch is not small. One typo costs one tag, here as everywhere.
+      _supervisor.resync.complaints.add(
+          'a writeStatus entry could not be read and was answered as unknown '
+          'rather than taken as an answer about some other command: $error');
+      return WriteUnknown(
+          cmd, WriteReason('malformed_result:writeStatus', message: '$error'));
+    }
+  }
+
   /// Asks the gateway what became of every command still in flight.
   ///
   /// Invoked on entry to `ready` and nowhere else. This is the whole of the
@@ -686,25 +850,8 @@ final class RemoteStateMan implements StateManApi {
     final cmds = List<String>.of(_unresolved);
     if (cmds.isEmpty) return;
     _requerying = true;
-    _record(_writeStatusQueries, cmds);
     try {
-      final raw = _asJson(await _request(Methods.writeStatus, {'cmds': cmds}));
-      final results = raw['results'];
-      if (results is! List) return;
-      for (final entry in results) {
-        final WriteResult outcome;
-        try {
-          outcome = WriteResult.fromJson(_asJson(entry));
-        } catch (error) {
-          // One entry, not the batch (04-REVIEW WR-03). Decoding inside the
-          // loop was letting a malformed entry at index 0 discard the settled
-          // outcomes of every other command in it, and on a 1500-key panel the
-          // batch is not small. One typo costs one tag, here as everywhere.
-          _supervisor.resync.complaints.add(
-              'a writeStatus entry could not be read and was dropped rather '
-              'than taken as an answer about some other command: $error');
-          continue;
-        }
+      for (final outcome in await writeStatus(cmds)) {
         _record(_writeStatusAnswers, outcome);
         if (outcome is WriteUnknown) continue;
         _settle(outcome);
@@ -763,6 +910,10 @@ final class RemoteStateMan implements StateManApi {
   @override
   Future<void> dispose() async {
     if (_disposed) return;
+    // Before the flag, so each release is an ordinary write with an honest
+    // outcome rather than a refusal from [_refuseIfDisposed]. Not awaited: a
+    // panel closing must not wait on a link that may already be gone.
+    _releaseHolds(HoldEnded.disposed);
     _disposed = true;
 
     for (final close in List.of(_closeHandedOutStreams)) {
@@ -854,14 +1005,35 @@ final class RemoteStateMan implements StateManApi {
         'that would not be invented');
   }
 
+  /// Whether the last transition seen was into `ready`.
+  ///
+  /// Held because *leaving* `ready` is a release trigger and a stream of
+  /// states carries no memory of the one before. Without it there is no way
+  /// to tell "the link just went down under a live hold" from "the link has
+  /// been down since boot", and only the first of those has a machine
+  /// attached to it.
+  var _wasReady = false;
+
   /// One transition. Everything that belongs to *entering* a state rather than
   /// to the code path that got there lives here.
   void _onLinkState(LinkState state) {
     if (_disposed) return;
+    final isReady = state == LinkState.ready;
+
+    // Leaving `ready` releases every hold at once, and does not wait for a
+    // write deadline to say so: the counter has already stopped reaching the
+    // plant, so the machine is stopping regardless, and waiting would leave
+    // the UI showing a live hold for up to two budgets. The release write is
+    // still attempted — it resolves `WriteUnknown(link_down)` through
+    // `_request`'s `LinkDown` path, which is the honest answer and costs
+    // nothing.
+    if (_wasReady && !isReady) _releaseHolds(HoldEnded.disconnect);
+    _wasReady = isReady;
+
     // Entry to `ready` and nowhere else: `resyncing` means the socket answered
     // the phone, and a re-query issued then races the snapshot it is competing
     // with for the same link.
-    if (state != LinkState.ready) return;
+    if (!isReady) return;
     if (_unresolved.isEmpty) return;
     unawaited(_requeryWriteStatus());
   }
