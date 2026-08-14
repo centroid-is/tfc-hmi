@@ -70,6 +70,11 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+// No `tfc_relay_protocol` import, and its absence is the point: group 3 names
+// no `WriteResult` variant. It reads `outcome.cmd` and two counters, so the
+// case cannot be quietly disarmed by 05-03 changing which variant comes back.
+import 'support/fault_fixture.dart';
+
 // ---------------------------------------------------------------------------
 // The sweep.
 // ---------------------------------------------------------------------------
@@ -236,6 +241,30 @@ final List<_Seam> _seams = <_Seam>[
 /// The one file group 2 reads, relative to the package root.
 const _remoteStateManPath = 'lib/src/remote_state_man.dart';
 
+// ---------------------------------------------------------------------------
+// The behavioural arm.
+// ---------------------------------------------------------------------------
+
+/// The tag group 3 drives. Seeded before the gateway starts, because
+/// `FakeStateMan.keys` does not name a tag until a value has been set on it
+/// and a key seeded later is rejected as a typo (`fault_fixture.dart:103-109`).
+const _flapKey = 'ST101.CN01.MOT01.setpoint';
+
+/// The budget for "the panel came back": a capped backoff draw, a dial, a
+/// handshake and a snapshot. `fault_contract_test.dart:200-204`'s number and
+/// its argument — a liveness budget, never a latency measurement.
+const Duration _recovery = Duration(seconds: 5);
+
+/// Long enough for anything that was going to happen to have happened.
+///
+/// Used at exactly one place and only for the one shape a poll cannot
+/// establish — that *nothing* further occurred. Polling for a second upstream
+/// attempt would pass the instant it did not find one, which is every instant
+/// before the retry a well-meaning wrapper is about to make.
+/// `fault_contract_test.dart:206-211` is the same constant for the same
+/// reason.
+const Duration _settle = Duration(milliseconds: 400);
+
 void main() {
   group('the write path has one call site per seam', () {
     // Anti-vacuity, and the reason it comes first: every count case below is
@@ -338,4 +367,112 @@ void main() {
       }
     });
   });
+
+  group('a link flap with a write in flight costs the plant one attempt', () {
+    // The half groups 1 and 2 cannot reach. A `for` loop around the one
+    // existing call site adds no call site and no timer, and it is the second
+    // most likely way this property dies (the first is a library doing it for
+    // us, which is why `_seams` spans three packages). Control flow is
+    // invisible to a text sweep and unmissable at the plant: the counter
+    // increments whatever the loop looked like.
+    test('a write in flight across a link flap reaches the plant exactly once',
+        () async {
+      // **Why this asserts the counter and not the outcome kind**
+      // (05-RESEARCH §D.2 arm 2). The obvious version of this case asserts
+      // `WriteUnknown(gateway_lost_track)` at the end. It would pass today and
+      // stop testing anything the moment 05-03 lands the idempotency window:
+      // a same-fingerprint replay is then answered from the gateway's outcome
+      // log and never reaches the plant at all, so the outcome stays exactly
+      // as expected while the property it stood for goes unmeasured. The
+      // plant's own attempt counter survives that change, because it is
+      // counting the thing the requirement is about — actuations, not
+      // answers.
+      //
+      // **Both ends, and neither alone.** `debugWritesSent` is the client's
+      // account of how many times it offered bytes to a socket;
+      // `upstreamWriteAttempts` is the plant's account of how many times a
+      // command reached it. A retry in the client moves the first; a retry in
+      // the gateway or in the source moves only the second. The pair reads
+      // "sent once, arrived once", and either on its own is half a claim —
+      // which is precisely the asymmetry the sabotage arm for this case
+      // exercises.
+      //
+      // The fixture is imported from `support/fault_fixture.dart` rather than
+      // rebuilt, because the teardown ordering it documents is easy to get
+      // wrong and a fifth copy would be a fifth place to get it wrong in.
+      final fixture = await faultFixture(
+        keys: const {_flapKey},
+        withProxy: true,
+        seed: (plant) => plant.setValue(_flapKey, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      // Anti-vacuity: the page has to have been live before the flap, or the
+      // whole case is a statement about a client that never worked.
+      expect(fixture.client.read(_flapKey)?.value, 1200,
+          reason: 'the subscription was not carrying the seeded value before '
+              'the write, so nothing below is about a live panel');
+
+      // Stalled at the plant so the cut lands while the write is genuinely
+      // out — not before it left, not after it came back.
+      fixture.served.stallWrites();
+      final pending = fixture.client.write(_flapKey, 1500);
+      await until('the write to reach the plant',
+          () => fixture.served.writesInFlight > 0,
+          budget: _recovery);
+
+      // The flap: cut, and let the client's own reconnect loop bring it back.
+      fixture.proxy.killOnce();
+
+      final outcome = await pending.timeout(_recovery);
+
+      // Anti-vacuity for the counter read below. `upstreamWriteAttempts`
+      // answers 0 for an id it has never heard of, so an assertion of 1
+      // against the wrong id would fail — but an assertion of 1 against the
+      // right id only means "one attempt" if the plant is keyed by the id the
+      // client minted. The gateway forwards the client's cmd rather than
+      // minting its own (`value_handlers.dart:295-311`), and this is the case
+      // that notices if that ever changes.
+      expect(fixture.served.mintedCmds, contains(outcome.cmd),
+          reason: 'the plant never saw the command id the client minted, so '
+              'the attempt count read below is about some other write — or '
+              'about no write at all');
+      expect(fixture.client.debugWritesSent, 1,
+          reason: 'the client offered the write to a socket '
+              '${fixture.client.debugWritesSent} times for one operator '
+              'action');
+
+      // The recovery has to have actually run before "it did not re-send"
+      // means anything: a client still down has not had the opportunity.
+      await until('the link to come back after the flap',
+          () => fixture.client.isReady,
+          budget: _recovery);
+      await until('the writeStatus re-query to be answered',
+          () => fixture.client.debugWriteStatusAnswers.isNotEmpty,
+          budget: _recovery);
+
+      // The plant finally answers, and it answers "I never got a reply from
+      // the device" — the non-applied outcome, which is the only kind anybody
+      // ever writes a retry for. A source-side retry wrapper fires here, on
+      // this line, after every client-side assertion above has already passed.
+      fixture.served.releaseWrites(applied: false);
+      await Future<void>.delayed(_settle);
+
+      expect(fixture.served.upstreamWriteAttempts(outcome.cmd), 1,
+          reason: 'the operator pressed the button once and the command '
+              'reached the plant '
+              '${fixture.served.upstreamWriteAttempts(outcome.cmd)} times. '
+              'On a setpoint that is a value written twice and nobody the '
+              'wiser; on a jog or a start it is the machine moving twice. '
+              'Everything between the client and the plant — the send seam, '
+              'the reconnect, the writeStatus recovery, the gateway\'s '
+              'forward — has to be a pass-through for this number to stay at '
+              '1, which is why this arm is worth its wall-clock seconds even '
+              'with four grep pins above it');
+      expect(fixture.client.debugWritesSent, 1,
+          reason: 'the recovery re-sent the write instead of asking about it. '
+              'The reconnect path\'s only legitimate move for an unresolved '
+              'command is writeStatus');
+    });
+  }, tags: 'faults');
 }
