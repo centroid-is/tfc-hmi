@@ -115,6 +115,19 @@ jobs:
         FAULT_LANE_BUDGET: "1"
       run: dart test test/faults/mode_integrity_test.dart
 
+    # The gateway, after the contract package it is judged against. A step in
+    # this job rather than a job of its own, on purpose: steps run
+    # sequentially, and STATE.md's operational rule is that analyze/test never
+    # run in two packages at once. This package binds ephemeral ports and
+    # measures milliseconds, so a neighbour doing the same is a different
+    # machine.
+    - name: Test tfc_relay_server
+      working-directory: packages/tfc_relay_server
+      run: |
+        dart pub get
+        dart analyze
+        dart test
+
   tfc-dart-test:
     strategy:
       fail-fast: false
