@@ -118,7 +118,13 @@ void main() {
       barrier.rearm();
 
       var laterCallerArrived = false;
-      unawaited(barrier.ready.then((_) => laterCallerArrived = true));
+      // Still pending when the tear-down disposes the barrier under it, which
+      // is the ordinary shutdown path: a call waiting for a link that never
+      // came back. Its error is the subject of the `at shutdown` group, so it
+      // is answered rather than left to the ambient handler here.
+      unawaited(barrier.ready
+          .then((_) => laterCallerArrived = true)
+          .catchError((Object _) => false));
       await pumpEventQueue();
 
       expect(
