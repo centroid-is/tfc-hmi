@@ -104,6 +104,12 @@ final class FaultProxy {
   int? _throttleBytesPerSec;
   int? _cutAfterBytes;
 
+  /// Whether the next connection accepted is to be reset on sight.
+  ///
+  /// Set only when [killOnce] found nothing open, and cleared the moment it
+  /// fires. One flag rather than a counter: the mode is "once".
+  bool _killOnceArmed = false;
+
   /// The high-water reading of every pair that has already closed.
   int _retiredPeakPendingBytes = 0;
 
@@ -325,7 +331,29 @@ final class FaultProxy {
   /// The reset half of the pair [cutMidFrame] is the FIN half of:
   /// `SO_LINGER{1,0}` then `destroy()`, via `forceReset` in `socket_ops.dart`,
   /// which measured a genuine RST in 50 of 50 runs.
-  void killOnce() => _notYet('killOnce', '02-07');
+  ///
+  /// **The one-sentence contrast:** [cutMidFrame] ends a connection so the
+  /// bytes already delivered survive at the peer, and this ends one so they do
+  /// not — a reset makes the kernel discard the peer's unread receive queue,
+  /// which is what a crashed process or a yanked cable looks like and what
+  /// `StateManHarness.disconnectUpstream` names from the other side.
+  ///
+  /// Fires once and disarms. If a connection is open it is reset now; if none
+  /// is, the next one is reset as it is accepted, because a lever pulled a
+  /// moment before the client connects must not evaporate. Either way the
+  /// connection after it is forwarded normally, which is the half
+  /// `test/faults/kill_once_test.dart` calls "and then normal service" — a
+  /// mode that stayed armed would fail every scenario that follows the fault.
+  void killOnce() {
+    final live = List.of(_pairs);
+    if (live.isEmpty) {
+      _killOnceArmed = true;
+      return;
+    }
+    for (final pair in live) {
+      pair.killWithReset();
+    }
+  }
 
   /// Destroy live connections and refuse new ones, keeping the listener open.
   ///
@@ -410,6 +438,14 @@ final class FaultProxy {
     pair.armCutMidFrame(_cutAfterBytes);
     _pairs.add(pair);
     pair.start(_retire);
+    if (_killOnceArmed) {
+      // After `start`, so the pair owns its sockets before one of them is
+      // destroyed: resetting a pair that had not begun would leave the
+      // upstream socket with nothing watching it, which is the shape of the
+      // descriptor leak Finding 11 measured.
+      _killOnceArmed = false;
+      pair.killWithReset();
+    }
   }
 
   /// Drops a closed pair, keeping the one number that outlives it.
@@ -500,6 +536,25 @@ final class _ProxiedPair {
     _cutFired = true;
     unawaited(client.close().catchError((Object _) => client));
     await toClient.close();
+  }
+
+  /// Cuts the client with a genuine **RST**, then tears the pair down.
+  ///
+  /// `forceReset` — `SO_LINGER{1, 0}` then `destroy()` — and not `close()`,
+  /// which ignores linger and sends a FIN (verified both ways in
+  /// `socket_ops_test.dart`), and not a bare `destroy()`, which is a FIN in
+  /// every state but a coincidental one (Finding 1).
+  ///
+  /// The reset goes out **before** the lines are closed, and synchronously.
+  /// Closing them first completes `toClient.done`, which wakes
+  /// [_closeWhenEitherEnds] and destroys this socket from under the linger
+  /// option — the mode would then degrade to the FIN it exists not to send,
+  /// intermittently, depending on which task ran first.
+  void killWithReset() {
+    if (_clientDestroyed) return;
+    forceReset(client);
+    _clientDestroyed = true;
+    unawaited(close());
   }
 
   void start(void Function(_ProxiedPair pair) onClosed) {
