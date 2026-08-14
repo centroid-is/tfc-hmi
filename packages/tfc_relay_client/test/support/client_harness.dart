@@ -53,6 +53,11 @@ import 'package:tfc_relay_client/src/remote_state_man.dart';
 import 'package:tfc_relay_client/src/ws_transport.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
+// The socket fault kit, for the `withProxy` seam. A second library entry of the
+// contract package on purpose (`faults.dart:1-16`): everything behind it
+// reaches for `dart:io`, so an implementation being judged does not acquire it
+// by being judged. A test fixture may.
+import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/testing/fake_data_services.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
@@ -261,7 +266,8 @@ final class _PlantAddressSpace implements StateManApi {
 /// needs to reach past the client — to close the server, to count sessions —
 /// takes the fixture.
 final class RelayFixture {
-  RelayFixture._(this.served, this.server, this.client, this.api, this.ready);
+  RelayFixture._(this.served, this.server, this.client, this.api, this.ready,
+      this._proxyOf);
 
   /// The reference implementation the gateway is serving. Driveable directly,
   /// which is what lets a case apply a lever no client can see.
@@ -276,10 +282,34 @@ final class RelayFixture {
   /// [client] wearing the contract's control surfaces.
   final RelayServedFake api;
 
-  /// Completes when the gateway has bound its port. The client does not wait
-  /// for it — the readiness barrier does that — but a case that wants the
+  /// Completes when the gateway has bound its port — and, when one was asked
+  /// for, when the proxy in front of it has bound too. The client does not
+  /// wait for it — the readiness barrier does that — but a case that wants the
   /// port can.
   final Future<void> ready;
+
+  /// Reads the proxy out of the wiring, which only exists once [ready] has
+  /// completed.
+  ///
+  /// A closure rather than a field because the proxy binds asynchronously and
+  /// this object is constructed synchronously — the same bind-happens-later
+  /// constraint the dial seam exists for, one level up.
+  final FaultProxy? Function() _proxyOf;
+
+  /// The fault proxy between this client and the gateway.
+  ///
+  /// Throws rather than answering null, as `ws_harness.dart:284-291` does: a
+  /// case that forgot `withProxy: true` should be told that, not shown a
+  /// null-check failure on a line that looks like a lever.
+  FaultProxy get proxy {
+    final proxy = _proxyOf();
+    if (proxy == null) {
+      throw StateError('this fixture was built without a proxy; pass '
+          '`withProxy: true` to relayFixture before pulling a lever — and '
+          'await `ready` first, because the proxy binds asynchronously');
+    }
+    return proxy;
+  }
 
   /// The close the client's socket has observed so far.
   ///
@@ -297,8 +327,15 @@ final class RelayFixture {
   /// The order is `ws_harness.dart:359-384`'s read from the inside out: the
   /// client (which owns the socket and both its timers), then the server
   /// (whose `close` drains its sessions with a code and then stops its
-  /// listener), then the fake, whose freshness watchdog must outlive anything
-  /// still draining through it.
+  /// listener), then the proxy — shutting it down destroys both halves of
+  /// every pair it carries, so it cannot go first — then the fake, whose
+  /// freshness watchdog must outlive anything still draining through it.
+  ///
+  /// The client goes before the server for a reason of its own that the
+  /// gateway's fixture does not have: this client *reconnects*. A server
+  /// closed under a live client leaves it dialling a dead port for the rest of
+  /// the run, and those attempts land as noise on whichever case is unlucky
+  /// enough to be running then.
   Future<void> teardown() async {
     if (_torn) return;
     _torn = true;
@@ -310,6 +347,7 @@ final class RelayFixture {
 
     await client.dispose();
     await server.close();
+    await _proxyOf()?.shutdown();
     await served.dispose();
   }
 }
@@ -323,6 +361,13 @@ final class RelayFixture {
 /// so a defaults difference between them reads as a *transport* difference and
 /// sends someone hunting a socket bug that is really a `staleAfter` of 300 ms
 /// against one of 500.
+///
+/// [withProxy] puts a `FaultProxy` between the client and the gateway, exactly
+/// as `ws_harness.dart:214` does on the server side and with the same default:
+/// off, because a proxy in the path of every leg would make every timing
+/// assertion in the package a statement about two extra loopback hops. On, the
+/// dial goes to the proxy's port instead of the server's and [proxy] is the
+/// lever.
 RelayFixture relayFixture({
   Duration staleAfter = const Duration(milliseconds: 300),
   Set<String> readOnlyKeys = const {},
@@ -333,6 +378,7 @@ RelayFixture relayFixture({
   FakePreferences? preferences,
   ServerConfig? config,
   ClientConfig? clientConfig,
+  bool withProxy = false,
 }) {
   final served = FakeStateMan(
     staleAfter: staleAfter,
@@ -356,7 +402,17 @@ RelayFixture relayFixture({
     onError: (_, __, ___) {},
   );
 
-  final ready = server.start();
+  // The proxy binds after the server, because it needs the port it forwards
+  // to, and both binds are inside `ready` so the dial waits for the whole
+  // path rather than for half of it.
+  FaultProxy? proxy;
+  final ready = Future<void>(() async {
+    await server.start();
+    if (!withProxy) return;
+    final started = FaultProxy(targetPort: server.port);
+    await started.start();
+    proxy = started;
+  });
   // Handled here so a fixture nobody awaited cannot surface as an unhandled
   // async error in an unrelated case, and still delivered to whoever does
   // await `ready`, because `catchError` returns a new future
@@ -378,14 +434,17 @@ RelayFixture relayFixture({
     keys: page,
     dial: (_) async {
       await ready;
-      final attempt = await connect(Uri.parse('ws://127.0.0.1:${server.port}'));
+      // The proxy's port when there is one, so every reconnect after a fault
+      // goes back through the fault path rather than around it.
+      final port = proxy?.port ?? server.port;
+      final attempt = await connect(Uri.parse('ws://127.0.0.1:$port'));
       fixture._lastAttempt = attempt;
       return attempt;
     },
   );
 
   final api = RelayServedFake._(served, client);
-  fixture = RelayFixture._(served, server, client, api, ready);
+  fixture = RelayFixture._(served, server, client, api, ready, () => proxy);
   // The suite disposes what `make` returned; that has to release the gateway
   // and the plant too, not just the socket.
   api._teardown = fixture.teardown;
