@@ -20,11 +20,23 @@ final class WriteReason {
 
   const WriteReason(this.kind, {this.message, this.status});
 
-  factory WriteReason.fromJson(Map<String, Object?> json) => WriteReason(
-        json['kind'] as String,
-        message: json['message'] as String?,
-        status: json['status'] as String?,
-      );
+  /// Tolerant: a peer that omits `kind`, or sends it as something other than
+  /// a string, still produces a reason. The alternative is a throw on the
+  /// write path, and a throw there reads to the operator as "the write
+  /// failed" — the one thing a malformed answer does not prove.
+  factory WriteReason.fromJson(Map<String, Object?> json) {
+    final kind = json['kind'];
+    final message = json['message'];
+    final status = json['status'];
+    return WriteReason(
+      kind is String && kind.isNotEmpty ? kind : unspecified,
+      message: message is String ? message : null,
+      status: status is String ? status : null,
+    );
+  }
+
+  /// The kind used when a peer gave no usable one.
+  static const String unspecified = 'unspecified';
 
   Map<String, Object?> toJson() => {
         'kind': kind,
@@ -41,31 +53,47 @@ sealed class WriteResult {
 
   const WriteResult(this.cmd);
 
+  /// Total over every payload that carries a usable [cmd]. A truncated or
+  /// version-skewed answer is a write whose fate this side cannot establish,
+  /// which is precisely [WriteUnknown] — decoding it must never throw, or the
+  /// operator is told the write failed and re-sends it.
   factory WriteResult.fromJson(Map<String, Object?> json) {
-    final cmd = json['cmd'] as String;
-    final outcome = json['outcome'] as String;
-    return switch (outcome) {
-      'applied' => WriteApplied(
+    final cmd = json['cmd'];
+    if (cmd is! String || cmd.isEmpty) {
+      // No id means nothing can be reconciled through `writeStatus` later.
+      // That is a protocol error, not a write outcome.
+      throw FormatException('write result without a cmd: $json');
+    }
+    final at = json['at'];
+    return switch (json['outcome']) {
+      'applied' when at is num => WriteApplied(
           cmd,
           readback: json['readback'],
-          at: (json['at'] as num).toInt(),
+          at: at.toInt(),
         ),
+      // "Applied" without the instant it happened at is not an audit record,
+      // and half of one is not proof of application.
+      'applied' =>
+        WriteUnknown(cmd, const WriteReason('malformed_result:applied')),
       'rejected' => WriteRejected(
           cmd,
-          WriteReason.fromJson((json['reason'] as Map).cast()),
-          at: (json['at'] as num?)?.toInt(),
+          _reasonOf(json['reason']),
+          at: at is num ? at.toInt() : null,
         ),
-      'unknown' => WriteUnknown(
-          cmd,
-          WriteReason.fromJson((json['reason'] as Map).cast()),
-        ),
+      'unknown' => WriteUnknown(cmd, _reasonOf(json['reason'])),
       'not_received' => WriteNotReceived(cmd),
       // Forward compatibility: an outcome this client doesn't know is by
       // definition not proof of application — treat as unknown, never
       // throw on the write path.
-      _ => WriteUnknown(cmd, WriteReason('unrecognized_outcome:$outcome')),
+      final other => WriteUnknown(cmd, WriteReason('unrecognized_outcome:$other')),
     };
   }
+
+  /// A reason a peer omitted, or sent as something other than an object,
+  /// still has to produce one — see [WriteReason.fromJson].
+  static WriteReason _reasonOf(Object? raw) => raw is Map
+      ? WriteReason.fromJson(raw.cast<String, Object?>())
+      : const WriteReason(WriteReason.unspecified);
 
   Map<String, Object?> toJson();
 }
