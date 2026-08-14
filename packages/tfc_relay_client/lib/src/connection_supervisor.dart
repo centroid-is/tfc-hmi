@@ -257,13 +257,21 @@ final class ConnectionSupervisor {
   List<Duration> get debugScheduledWaits =>
       List<Duration>.unmodifiable(_waits);
 
-  /// Every timer this client owns: the watchdog's one deadline, plus the one
-  /// pending reconnect when an attempt is scheduled.
+  /// Every timer this supervisor *schedules*: the watchdog's one deadline,
+  /// plus the one pending reconnect when an attempt is scheduled.
   ///
-  /// Never more than two, whatever else is going on. The count is the design —
-  /// a panel that flaps all shift accumulates one orphaned timer per cycle if
-  /// the teardown misses one, and the one that is missed fires into a
-  /// connection that no longer exists.
+  /// Never more than two, and the count is the design — a panel that flaps all
+  /// shift accumulates one orphaned timer per cycle if the teardown misses
+  /// one, and the one that is missed fires into a connection that no longer
+  /// exists.
+  ///
+  /// It does **not** count the per-call timers `Future.timeout` allocates
+  /// (04-REVIEW IN-01), so a panel with ten calls out owns twelve and this
+  /// still reads two. That is not a gap in the count: those timers belong to
+  /// the call and are cancelled when it settles either way, which is the
+  /// property actually being asserted — no timer outlives the thing it belongs
+  /// to. A registry of them is exactly what `deadline.dart` argues against
+  /// owning.
   int get debugTimerCount =>
       watchdog.debugTimerCount + (_retry == null ? 0 : 1);
 

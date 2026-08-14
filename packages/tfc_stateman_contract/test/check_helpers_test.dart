@@ -149,4 +149,38 @@ void main() {
       );
     });
   });
+
+  group('expectUnreachableMethod', () {
+    test('a method-not-found failure is what the excuse is for', () async {
+      await expectUnreachableMethod(
+        'a property behind a handler nobody has written',
+        () async => throw StateError('JSON-RPC error -32601: Unknown method.'),
+      );
+    });
+
+    test('the code has to stand on its own, not merely appear', () async {
+      // 04-REVIEW IN-03. A bare `contains` excused any failure whose text
+      // happened to hold the digits — inside a nested `data` echo of the
+      // request, inside a larger number, inside a timestamp. An excused
+      // failure is worse than a red one: the report shows the gap everyone
+      // already knew about, and the new defect leaves no trace at all.
+      await expectLater(
+        () => expectUnreachableMethod(
+          'a property behind a handler nobody has written',
+          () async => throw StateError('the value was -326013 at t=1732601000'),
+        ),
+        throwsA(isA<TestFailure>()),
+      );
+    });
+
+    test('a check that starts passing is reported, not quietly excused',
+        () async {
+      await expectLater(
+        () => expectUnreachableMethod(
+            'a property whose handler has just landed', () async {}),
+        throwsA(isA<TestFailure>().having(
+            (f) => f.message, 'message', contains('delete this check'))),
+      );
+    });
+  });
 }
