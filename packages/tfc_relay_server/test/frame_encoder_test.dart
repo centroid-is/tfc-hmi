@@ -50,7 +50,7 @@ void main() {
 
       subject.beginTick();
       final body = subject.bodyFor(changesOver(200), const {}, const []);
-      subject.updateFrame(sub: sub, seq: 1, t: 1000, body: body);
+      subject.updateFrame(sub: sub, seq: 1, t: 1000, generation: 1, body: body);
 
       expect(encoder.calls, 1,
           reason: 'a single client with 200 changed keys must cost exactly '
@@ -67,7 +67,7 @@ void main() {
       subject.beginTick();
       for (var i = 0; i < subs.length; i++) {
         final body = subject.bodyFor(changesOver(200), const {}, const []);
-        subject.updateFrame(sub: subs[i], seq: i + 1, t: 1000, body: body);
+        subject.updateFrame(sub: subs[i], seq: i + 1, t: 1000, generation: 1, body: body);
       }
 
       expect(encoder.calls, 1,
@@ -86,7 +86,7 @@ void main() {
       for (var i = 0; i < subs.length; i++) {
         final body =
             subject.bodyFor(changesOver(4, from: i * 4 + 1), const {}, const []);
-        subject.updateFrame(sub: subs[i], seq: 1, t: 1000, body: body);
+        subject.updateFrame(sub: subs[i], seq: 1, t: 1000, generation: 1, body: body);
       }
 
       expect(encoder.calls, 50,
@@ -146,8 +146,8 @@ void main() {
       subject.beginTick();
       final body = subject.bodyFor(changesOver(3), const {}, const []);
 
-      final frameA = subject.updateFrame(sub: a, seq: 7, t: 1700, body: body);
-      final frameB = subject.updateFrame(sub: b, seq: 42, t: 1700, body: body);
+      final frameA = subject.updateFrame(sub: a, seq: 7, t: 1700, generation: 1, body: body);
+      final frameB = subject.updateFrame(sub: b, seq: 42, t: 1700, generation: 1, body: body);
 
       final pa = UpdateParams.fromJson(paramsOf(frameA));
       final pb = UpdateParams.fromJson(paramsOf(frameB));
@@ -165,7 +165,7 @@ void main() {
         {3: Quality.uncertainLastKnown},
         const [4],
       );
-      final frame = subject.updateFrame(sub: sub, seq: 9, t: 1234, body: body);
+      final frame = subject.updateFrame(sub: sub, seq: 9, t: 1234, generation: 1, body: body);
 
       final decoded = jsonDecode(frame) as Map;
       expect(decoded['jsonrpc'], '2.0');
@@ -177,6 +177,10 @@ void main() {
       expect(params.sub, 'line1');
       expect(params.seq, 9);
       expect(params.t, 1234);
+      expect(params.generation, 1,
+          reason: 'the generation is what lets a client drop a frame from the '
+              'establishment before its last snapshot; a frame that carries '
+              'none is one it has to guess about');
       expect(params.changes[1]?.v, 12.5);
       expect(params.changes[2]?.v, 'running');
       expect(params.qualities[3], Quality.uncertainLastKnown);
@@ -188,7 +192,7 @@ void main() {
       subject.beginTick();
       final body = subject.bodyFor(const {}, const {}, const []);
       final params = UpdateParams.fromJson(
-          paramsOf(subject.updateFrame(sub: sub, seq: 1, t: 5, body: body)));
+          paramsOf(subject.updateFrame(sub: sub, seq: 1, t: 5, generation: 1, body: body)));
 
       expect(params.changes, isEmpty);
       expect(params.removed, isEmpty);
@@ -201,7 +205,7 @@ void main() {
       final sub = subject.subLiteral(nasty);
       subject.beginTick();
       final body = subject.bodyFor(changesOver(1), const {}, const []);
-      final frame = subject.updateFrame(sub: sub, seq: 3, t: 9, body: body);
+      final frame = subject.updateFrame(sub: sub, seq: 3, t: 9, generation: 1, body: body);
 
       final params = UpdateParams.fromJson(paramsOf(frame));
       expect(params.sub, nasty,
@@ -209,6 +213,26 @@ void main() {
               'frame we build by hand; unescaped, a client could write its own '
               'JSON-RPC message into our output stream');
       expect(params.seq, 3);
+    });
+
+    test('each client\'s frame carries its own subscription generation', () {
+      final a = subject.subLiteral('line1');
+      final b = subject.subLiteral('line2');
+      subject.beginTick();
+      final body = subject.bodyFor(changesOver(3), const {}, const []);
+
+      // The same tick, the same body, two subscriptions at different points in
+      // their own lives — one of them has just been re-established.
+      final frameA =
+          subject.updateFrame(sub: a, seq: 1, t: 1, generation: 1, body: body);
+      final frameB =
+          subject.updateFrame(sub: b, seq: 1, t: 1, generation: 4, body: body);
+
+      expect(UpdateParams.fromJson(paramsOf(frameA)).generation, 1);
+      expect(UpdateParams.fromJson(paramsOf(frameB)).generation, 4,
+          reason: 'the generation is per subscription, so it belongs in the '
+              'envelope with sub and seq and not in the shared body — where it '
+              'would split the encode cache two panels are meant to share');
     });
 
     test('escaping a subscription name is once-per-session work', () {
@@ -219,7 +243,7 @@ void main() {
       encoder.reset();
 
       for (var i = 0; i < 10; i++) {
-        subject.updateFrame(sub: sub, seq: i, t: 1, body: body);
+        subject.updateFrame(sub: sub, seq: i, t: 1, generation: 1, body: body);
       }
 
       expect(encoder.calls, 0,

@@ -479,6 +479,7 @@ final class TickEngine {
         sub: state.literal(encoder.subLiteral),
         seq: state.nextSeq(),
         t: wallAt(nowMs),
+        generation: state.generation,
         body: encoder.bodyFor(
             pending.changes, pending.qualities, pending.removed),
       ));

@@ -44,6 +44,14 @@ final class DecodedSubscribeResult {
   /// counts from. Zero on a fresh subscribe.
   final int seq;
 
+  /// Which establishment of this subscription the snapshot belongs to.
+  ///
+  /// Minted by the gateway and bumped on every (re-)establish, so a frame
+  /// still in flight from before this snapshot can be told apart from a live
+  /// one — including when the two share a socket, which is the case no epoch
+  /// and no client-side connection counter can see (04-REVIEW CR-04).
+  final int generation;
+
   /// handle → key. Inverted from the wire's key → handle, because every later
   /// frame arrives holding handles and has to answer with keys.
   final Map<int, String> handles;
@@ -71,6 +79,7 @@ final class DecodedSubscribeResult {
     required this.sub,
     required this.epoch,
     required this.seq,
+    this.generation = 0,
     required this.handles,
     required this.values,
     required this.meta,
@@ -172,10 +181,16 @@ DecodedSubscribeResult decodeSubscribeResult(Object? raw) {
   }
 
   final seq = envelope['seq'];
+  // Absent from a gateway that predates the generation, and zero is then what
+  // every one of its frames carries too — so the client's comparison passes
+  // rather than silently dropping the whole stream.
+  final generation = envelope['generation'];
   return DecodedSubscribeResult(
     sub: '${envelope['sub']}',
     epoch: '${envelope['epoch']}',
     seq: seq is num && seq.isFinite ? seq.toInt() : 0,
+    generation:
+        generation is num && generation.isFinite ? generation.toInt() : 0,
     handles: handles,
     values: values,
     meta: meta,
@@ -207,13 +222,19 @@ final class SubscriptionState {
   /// handle → key, from the last snapshot.
   Map<int, String> handles;
 
-  /// When this subscription's own tick last said it had been evaluated.
+  /// The generation the last accepted snapshot carried; zero until one has.
   ///
-  /// Held here and read by the freshness watchdog. It is deliberately *not*
-  /// read by the resync engine: a subscription whose `evaluatedAt` stops
-  /// advancing while ticks keep arriving is a plant-side fault the client
-  /// reports, not a stream fault the client heals (04-RESEARCH Finding 3).
-  int? lastEvaluatedAt;
+  /// Every update frame is measured against it. A frame from an earlier
+  /// establishment is dropped without advancing [lastSeq] — advancing it would
+  /// be the poisoning itself, because the genuine frame at that sequence then
+  /// reads as a replay and is discarded.
+  ///
+  /// There is deliberately no `lastEvaluatedAt` beside it. The field used to
+  /// exist and claimed in its own doc to be "read by the freshness watchdog",
+  /// which was false in both halves — nothing assigned it and the watchdog
+  /// keeps its own map (04-REVIEW WR-09). Two homes for one fact is what the
+  /// class doc above says this object exists to avoid.
+  int generation;
 
   SubscriptionState({
     required this.subId,
@@ -221,7 +242,7 @@ final class SubscriptionState {
     this.epoch = '',
     this.lastSeq,
     Map<int, String>? handles,
-    this.lastEvaluatedAt,
+    this.generation = 0,
   }) : handles = handles ?? <int, String>{};
 
   /// Takes on the epoch, baseline sequence and handle map from a fresh
@@ -230,10 +251,11 @@ final class SubscriptionState {
     epoch = result.epoch;
     lastSeq = result.seq;
     handles = result.handles;
+    generation = result.generation;
   }
 
   @override
   String toString() =>
-      'SubscriptionState($subId, epoch: $epoch, lastSeq: $lastSeq, '
-      '${keys.length} keys)';
+      'SubscriptionState($subId, epoch: $epoch, generation: $generation, '
+      'lastSeq: $lastSeq, ${keys.length} keys)';
 }

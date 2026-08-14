@@ -19,6 +19,8 @@
 /// carries an anti-vacuity check that the other page held values at all.
 library;
 
+import 'dart:async';
+
 import 'package:tfc_relay_client/src/resync_engine.dart';
 import 'package:tfc_relay_client/src/subscription_state.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -49,8 +51,20 @@ final class _ScriptedSubscribe {
         epochs = epochs ?? {},
         failing = failing ?? {};
 
+  /// sub → the generation the *next* answer carries. Bumped on every call, as
+  /// the gateway bumps it on every establish.
+  final _generations = <String, int>{};
+
+  /// The generation this script last handed out for [sub].
+  int generationOf(String sub) => _generations[sub] ?? 0;
+
+  /// Held open until [release] is called, for the concurrency arm.
+  Completer<void>? gate;
+
   Future<DecodedSubscribeResult> call(String sub, Set<String> keys) async {
     calls.add(sub);
+    final held = gate;
+    if (held != null) await held.future;
     if (failing.contains(sub)) {
       throw StateError('subscribe($sub) refused');
     }
@@ -59,6 +73,7 @@ final class _ScriptedSubscribe {
       sub: sub,
       epoch: epochs[sub] ?? 'E1',
       seq: 0,
+      generation: _generations[sub] = generationOf(sub) + 1,
       handles: {
         for (final (index, key) in keys.indexed) index + 1: key,
       },
@@ -228,6 +243,123 @@ void main() {
       expect(script.calls, isEmpty,
           reason: 'dropped in silence: the epoch already changed, and the '
               'hello path is what heals that');
+    });
+  });
+
+  // 04-REVIEW CR-04. The epoch cannot do this job: a server-announced resync
+  // or a gap-triggered resubscribe rebuilds one subscription while the session
+  // — and therefore the epoch — stays exactly where it was. The frame in
+  // flight across that boundary is the one that poisons the cache, and it is
+  // 04-11's measured F18 deviation.
+  group('generation', () {
+    test('a frame from the establishment before a resubscribe is dropped',
+        () async {
+      final s1 = register('s1', {'PACK.rate': 10});
+      await engine.onHello('E1');
+      final stale = script.generationOf('s1');
+
+      // The page is rebuilt on the same socket. Nothing about the session
+      // changed; only this subscription did.
+      await engine.onResync('s1');
+      final live = script.generationOf('s1');
+      expect(live, greaterThan(stale));
+      final seqBefore = s1.lastSeq;
+
+      await engine.onUpdate('s1',
+          seq: 1, generation: stale, changes: {'PACK.rate': _v(99)});
+
+      expect(storeFor('s1').peek('PACK.rate')?.value, 10,
+          reason: 'the frame belongs to a subscription that no longer exists; '
+              'applied, it is a reading from before the rebuild sitting on a '
+              'mimic under good quality');
+      expect(s1.lastSeq, seqBefore,
+          reason: 'not advancing the sequence is the half that stops the '
+              'poisoning — a stale frame that takes the baseline makes the '
+              'genuine frame at the same seq read as a replay, and the store '
+              'discards it');
+    });
+
+    test('the genuine frame at that sequence is still applied afterwards',
+        () async {
+      final s1 = register('s1', {'PACK.rate': 10});
+      await engine.onHello('E1');
+      final stale = script.generationOf('s1');
+      await engine.onResync('s1');
+      final live = script.generationOf('s1');
+
+      await engine.onUpdate('s1',
+          seq: 1, generation: stale, changes: {'PACK.rate': _v(99)});
+      await engine.onUpdate('s1',
+          seq: 1, generation: live, changes: {'PACK.rate': _v(42)});
+
+      expect(storeFor('s1').peek('PACK.rate')?.value, 42,
+          reason: 'this is the value the plant actually has. The whole cost of '
+              'letting the stale frame through is that this one is then '
+              'thrown away as a duplicate and never seen again');
+      expect(s1.lastSeq, 1);
+    });
+
+    test('a frame carrying the current generation is applied', () async {
+      // Anti-vacuity: a guard that dropped everything would pass both arms
+      // above.
+      final s1 = register('s1', {'PACK.rate': 10});
+      await engine.onHello('E1');
+
+      await engine.onUpdate('s1',
+          seq: 1,
+          generation: script.generationOf('s1'),
+          changes: {'PACK.rate': _v(11)});
+
+      expect(storeFor('s1').peek('PACK.rate')?.value, 11);
+      expect(s1.lastSeq, 1);
+    });
+  });
+
+  // 04-REVIEW WR-04 and CR-03's client half.
+  group('recovery that cannot complete', () {
+    test('two gaps on one subscription cost one subscribe', () async {
+      register('s1', {'PACK.rate': 10});
+      await engine.onHello('E1');
+      script.calls.clear();
+      script.gate = Completer<void>();
+
+      // Two frames, both gaps, neither awaited: `onUpdate` from the
+      // notification handler, `onResync` from a server announcement.
+      final first =
+          engine.onUpdate('s1', seq: 9, changes: {'PACK.rate': _v(11)});
+      final second = engine.onResync('s1');
+      await pumpEventQueue();
+
+      expect(script.calls, ['s1'],
+          reason: 'two re-establishes racing interleave store.clear(), adopt '
+              'and applyBatch — blanking a snapshot that has just been '
+              'applied and leaving lastSeq describing a generation that is '
+              'already gone');
+
+      script.gate!.complete();
+      await Future.wait([first, second]);
+    });
+
+    test('a refused recovery is recorded and leaves the page unestablished',
+        () async {
+      final s1 = register('s1', {'PACK.rate': 10});
+      await engine.onHello('E1');
+      script.failing.add('s1');
+
+      // From a notification handler, where a throw unwinds into json_rpc_2 on
+      // a message that has no reply and is dropped in silence.
+      await engine.onUpdate('s1', seq: 9, changes: {'PACK.rate': _v(11)});
+
+      expect(engine.complaints, isNotEmpty,
+          reason: 'a recovery that cannot complete is the one thing the '
+              'operator needs told, and it was reaching nobody at all');
+      expect(s1.lastSeq, isNull,
+          reason: 'a surviving baseline makes the next frame another gap, '
+              'which asks again, for as long as the socket lives');
+      expect(s1.generation, 0);
+      expect(storeFor('s1').peek('PACK.rate'), isNull,
+          reason: 'values from a page the client can no longer establish must '
+              'not stay on screen under good quality');
     });
   });
 
