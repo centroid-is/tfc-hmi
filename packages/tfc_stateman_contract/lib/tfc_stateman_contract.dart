@@ -38,7 +38,7 @@
 /// A flag the umbrella fails to forward is a capability that stops being
 /// judged, silently, for every implementation. `test/suite_integrity_test.dart`
 /// asserts by reflection that the named parameters here and the named
-/// parameters of the seven `run…Contract` functions are the same set, so
+/// parameters of the eight `run…Contract` functions are the same set, so
 /// dropping one is a test failure rather than a discovery three phases later.
 ///
 /// ## Two things that are deliberately *not* parameters here
@@ -70,6 +70,7 @@ import 'src/browse_contract.dart';
 import 'src/check.dart';
 import 'src/data_services_contract.dart';
 import 'src/freshness_contract.dart';
+import 'src/hold_contract.dart';
 import 'src/read_contract.dart';
 import 'src/store_contract.dart';
 import 'src/subscribe_contract.dart';
@@ -80,6 +81,7 @@ export 'src/check.dart';
 export 'src/data_services_contract.dart';
 export 'src/freshness_contract.dart';
 export 'src/harness.dart';
+export 'src/hold_contract.dart';
 export 'src/hold_harness.dart';
 export 'src/meta.dart';
 export 'src/read_contract.dart';
@@ -90,10 +92,16 @@ export 'src/write_contract.dart';
 /// Every sub-suite's registry, keyed by the group name the umbrella runs it
 /// under.
 ///
-/// The one place that knows the suite has seven parts. `allContractChecks`
+/// The one place that knows the suite has eight parts. `allContractChecks`
 /// merges it, the integrity tests iterate it, and a new sub-suite becomes
 /// visible to both by being added here — which is the whole reason it exists
-/// as data rather than as seven references scattered through this file.
+/// as data rather than as eight references scattered through this file.
+///
+/// `hold` is the eighth, added in Phase 5 with the deadman it judges
+/// (05-RESEARCH §C.3 recommends a registry of its own rather than five more
+/// entries in `write`: a source can take writes and still have nothing to
+/// hold, and `supportsWrites` should not be the flag that switches a deadman
+/// off).
 const contractRegistries = <String, Map<String, Check<StateManApi>>>{
   'subscribe': subscribeChecks,
   'store': storeChecks,
@@ -102,6 +110,7 @@ const contractRegistries = <String, Map<String, Check<StateManApi>>>{
   'write': writeChecks,
   'browse': browseChecks,
   'data services': dataServicesChecks,
+  'hold': holdChecks,
 };
 
 /// Every registered check in the suite, keyed by the property it asserts.
@@ -136,6 +145,7 @@ Map<String, Check<StateManApi>> contractCases({
   String? readOnlyKey,
   bool supportsBrowse = true,
   bool supportsDataServices = true,
+  bool supportsHoldToRun = true,
 }) =>
     {
       ...subscribeChecks,
@@ -153,6 +163,7 @@ Map<String, Check<StateManApi>> contractCases({
             entry.key: entry.value,
       if (supportsBrowse) ...browseChecks,
       if (supportsDataServices) ...dataServicesChecks,
+      if (supportsHoldToRun) ...holdChecks,
     };
 
 /// How many cases every [runStateManContract] call in this test file has
@@ -196,6 +207,11 @@ var _casesRegistered = 0;
 /// [supportsDataServices] — `false` for a source with no historian and no
 /// preference store behind it: a gateway deployed without TimescaleDB, or a
 /// panel talking to one.
+///
+/// [supportsHoldToRun] — `false` for a source with no deadman to offer: an
+/// adapter over a read-only device protocol (the M2400 weigher speaks one) has
+/// no tag to hold. A flag of its own rather than a corner of [supportsWrites],
+/// because a source can take writes and still have nothing to hold.
 ///
 /// ### Harness hooks
 ///
@@ -244,6 +260,7 @@ void runStateManContract(
   bool supportsDataServices = true,
   void Function(StateManApi api, String tableName, List<TimeseriesData> points)?
       seedTimeseries,
+  bool supportsHoldToRun = true,
   Set<String> expectUnreachable = const {},
 }) {
   // At registration, not inside a case: a name that matches nothing would
@@ -288,6 +305,7 @@ void runStateManContract(
       seedTimeseries: seedTimeseries,
       expectUnreachable: expectUnreachable,
     );
+    runHoldContract(make, supportsHoldToRun: supportsHoldToRun);
   });
 
   _casesRegistered += contractCases(
@@ -295,5 +313,6 @@ void runStateManContract(
     readOnlyKey: readOnlyKey,
     supportsBrowse: supportsBrowse,
     supportsDataServices: supportsDataServices,
+    supportsHoldToRun: supportsHoldToRun,
   ).length;
 }

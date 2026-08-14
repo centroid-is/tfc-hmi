@@ -1,7 +1,7 @@
 /// The write sub-suite, run across a message boundary.
 ///
 /// The most load-bearing driver in the phase. Everything else in the suite is
-/// about showing a number honestly; these ten cases are about *changing the
+/// about showing a number honestly; these eleven cases are about *changing the
 /// plant*, and every one of their promises is a promise about something that
 /// crosses a link:
 ///
