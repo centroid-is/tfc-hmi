@@ -52,6 +52,10 @@ Future<void> checkUnchangedValueNotifiesNobody(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValue(_speedKey, 1450);
+  // Counting cannot start until the seed has landed: an in-flight seed arrives
+  // *after* the observer attaches and is then indistinguishable from the
+  // re-delivery this case is asserting costs nothing.
+  await arrived(api, _speedKey);
   final node = api.listen(_speedKey);
   final seen = observe(node);
 
@@ -89,6 +93,16 @@ Future<void> checkBatchNotifiesOnlyChangedKeys(StateManApi api) async {
     for (var i = 0; i < _batchSize; i++) keys[i]: 1000 + i,
   };
   plant.setValues(initial);
+
+  // Every seeded key, not just one: the promise under test is about a count, so
+  // a single seed value still in flight when the observers attach is counted
+  // against the batch under test. Waiting per key rather than on the last one
+  // costs nothing in-process and does not assume the seed arrived as one batch,
+  // which is a promise about the *source*, not something this case may lean on
+  // while measuring the source.
+  for (final key in keys) {
+    await arrived(api, key);
+  }
 
   final watched = [for (final key in keys) observe(api.listen(key))];
 

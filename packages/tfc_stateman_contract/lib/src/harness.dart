@@ -36,6 +36,8 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'check.dart';
+
 /// The test-only control surface: what stands in for the plant.
 ///
 /// An implementation under test implements this alongside `StateManApi`. It is
@@ -202,3 +204,41 @@ final class Notifications {
 /// Starts counting notifications from [node].
 Notifications observe(ValueListenable<DynamicValue> node) =>
     Notifications._(node);
+
+/// Waits until a value has genuinely arrived for [key], if one has not already.
+///
+/// The barrier a case needs *before* it starts counting. Every case that seeds
+/// a value and then asserts something about the notifications that follow has
+/// to know when the seed landed, and there are only two possible answers: it
+/// landed synchronously inside the lever, or it is still in flight.
+/// [Notifications.count] cannot tell them apart, and a case that guesses gets
+/// the seed's own notification folded into the count it is making a promise
+/// about.
+///
+/// That is not hypothetical. Phase 2's channel harness — the same
+/// `Check<StateManApi>` functions, run against a source whose values cross a
+/// message boundary — reported 103 notifications for a 100-key batch carrying
+/// three real changes, and blamed the implementation for the case's impatience.
+/// The implementation was correct. Three cases were not, and the same three
+/// would have failed against `RemoteStateMan` in Phase 4, where the boundary is
+/// a socket and there is no version of the case that could be written without
+/// this.
+///
+/// Free on a source that delivers in-process: the fast path is a synchronous
+/// [StateManApi.read], and nothing is attached or awaited. Re-checked after the
+/// listener goes on, because the value may land between the two.
+Future<void> arrived(
+  StateManApi api,
+  String key, {
+  Duration budget = const Duration(milliseconds: 200),
+}) async {
+  if (api.read(key) != null) return;
+  final seen = observe(api.listen(key));
+  try {
+    if (api.read(key) != null) return;
+    await within(seen.next, 'the seeded value for $key arriving',
+        budget: budget);
+  } finally {
+    seen.stop();
+  }
+}
