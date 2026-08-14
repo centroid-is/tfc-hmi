@@ -57,13 +57,16 @@ final class _Link {
   }
 }
 
-_Link _link({TokenValidator? validator, List<String>? serverSupported}) {
+_Link _link(
+    {TokenValidator? validator,
+    List<String>? serverSupported,
+    ServerConfig? config}) {
   final pair = channelPair();
   final api = FakeStateMan();
   final session = RelaySession.serve(
     channel: pair.server,
     api: api,
-    config: ServerConfig(),
+    config: config ?? ServerConfig(),
     handles: HandleTable(),
     buffer: ConflatingSendBuffer(maxPending: 4096),
     validator: validator ?? const PermissiveTokenValidator(),
@@ -253,7 +256,28 @@ void main() {
         reason: 'the substitution is what keeps the answer sendable');
   });
 
-  test('the handler table is exactly hello, ping, subscribe and unsubscribe',
+  test('hello reports the tick this server actually runs at', () async {
+    // A non-default tick, deliberately: a capability that happened to equal
+    // the default would pass against a hard-coded constant, which is the exact
+    // coupling this key exists to remove. The client's per-subscription
+    // staleness arithmetic is derived from this number (04-RESEARCH Finding
+    // 5), and a client constant that has to match a server config nobody diffs
+    // is a mismatch that surfaces a year later as values the operator believes
+    // are fresh.
+    final link = _link(config: ServerConfig(tick: ServerConfig.minTick));
+    addTearDown(link.dispose);
+
+    final raw = await within(
+        link.client.sendRequest(Methods.hello, _hello()), 'the hello result');
+    final result = HelloResult.fromJson((raw as Map).cast());
+
+    expect(result.capabilities['tickMs'], ServerConfig.minTick.inMilliseconds,
+        reason: 'the handshake is the only place a client can learn the '
+            'gateway\'s cadence; anything else is a constant on the client '
+            'that nobody diffs against the server');
+  });
+
+  test('the handler table is exactly the nine names a client may call',
       () async {
     final link = _link();
     addTearDown(link.dispose);
@@ -265,9 +289,15 @@ void main() {
           Methods.ping,
           Methods.subscribe,
           Methods.unsubscribe,
+          Methods.write,
+          Methods.writeStatus,
+          Methods.read,
+          Methods.readFresh,
+          Methods.readMany,
         },
         reason: 'the wire surface is a closed set: 03-05 added subscribe and '
-            'unsubscribe, 03-08 freezes it. A handler nobody counted is '
-            'surface nobody reviewed');
+            'unsubscribe, 03-08 froze it, and 04-02 added the five value '
+            'methods the contract leg cannot run without. A handler nobody '
+            'counted is surface nobody reviewed');
   });
 }
