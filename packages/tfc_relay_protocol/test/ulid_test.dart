@@ -66,9 +66,14 @@ void main() {
       if (previous != null && _isSuccessorOf(id, previous)) adjacent++;
       previous = id;
     }
-    expect(adjacent, 0,
+    // A random step of exactly 1 is legitimate (~1/65536 per pair, so ~0.76%
+    // of 499-pair runs see one) — the property WR-03 guards is that steps are
+    // not PREDICTABLY +1. Standard-ULID monotonicity would make all 499
+    // adjacent; a handful by chance is expected noise.
+    expect(adjacent, lessThan(10),
         reason: 'the step between two ids in one millisecond is a secure '
-            'random delta, so the next id cannot be computed from this one');
+            'random delta, so the next id cannot be computed from this one — '
+            'all-adjacent (499) is the standard-ULID regression this forbids');
   });
 
   test('10,000 ULIDs from a tight loop are all distinct', () {
