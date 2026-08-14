@@ -92,6 +92,23 @@ final class ClientConfig {
   /// disagreement about wall time is not a disagreement about the process.
   final Duration implausibleClockThreshold;
 
+  /// How many gateway fan-out periods a subscription may go without being
+  /// re-evaluated before it is reported stale.
+  ///
+  /// A *ratio*, not a duration, and that is the point (04-REVIEW WR-08). The
+  /// per-subscription verdict answers "has the plant stopped evaluating this
+  /// page", which is a question about the gateway's cadence — advertised at
+  /// `hello` as `capabilities.tickMs` — and not about the socket. Reusing
+  /// [freshnessDeadline] for it marked every slowly-evaluated page permanently
+  /// stale, which is the grey that cries wolf.
+  ///
+  /// 30 against the measured 50 ms fan-out is 1.5 s, and against a 1 s
+  /// production tick is 30 s: the limit follows the plant rather than the
+  /// panel. `FreshnessWatchdog` floors it at [freshnessDeadline], so it can
+  /// never fire before "the link is gone" and send somebody to look at a
+  /// sensor when the problem is a switch.
+  final double subscriptionStalenessMultiple;
+
   /// The smallest deadline any of the three above may be set to.
   ///
   /// A parameter rather than a constant on purpose; see the library doc.
@@ -112,7 +129,15 @@ final class ClientConfig {
     this.backoffCap = maxBackoffCap,
     this.implausibleClockThreshold = const Duration(minutes: 5),
     this.deadlineFloor = defaultDeadlineFloor,
+    this.subscriptionStalenessMultiple = 30,
   }) {
+    if (!(subscriptionStalenessMultiple > 1)) {
+      throw ArgumentError('subscriptionStalenessMultiple '
+          '($subscriptionStalenessMultiple) must be greater than 1: at one '
+          'period or less every subscription is stale again immediately after '
+          'the refresh that cleared it, and a page that is always grey is a '
+          'page nobody reads');
+    }
     _positive('deadlineFloor', deadlineFloor);
     _atLeastFloor('controlDeadline', controlDeadline);
     _atLeastFloor('writeDeadline', writeDeadline);

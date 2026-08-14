@@ -12,10 +12,17 @@
 /// deadline, and then one garbage collection pause on the panel, or one Wi-Fi
 /// retransmit on the plant WAN, greys every value on the screen at once while
 /// the gateway is perfectly healthy. Grey that cries wolf is grey the operator
-/// stops reading. So the deadline is [ClientConfig.freshnessDeadline] — a
-/// configured duration, default 3 s — and this file contains no arithmetic on
-/// the transport cadence. The client could not learn it anyway: `HelloResult`
-/// carries no tick field and the live handshake returned `capabilities: {}`.
+/// stops reading. So the *link* deadline is [ClientConfig.freshnessDeadline] —
+/// a configured duration, default 3 s — and nothing derives it from the
+/// transport cadence.
+///
+/// The cadence itself the client does now learn: `hello` advertises
+/// `capabilities.tickMs` (it returned `capabilities: {}` when Finding 5
+/// measured it; the gateway has sent it since 04-06). [learnedTickMs] takes
+/// it, and it is consumed in exactly one place for exactly one purpose — the
+/// *per-subscription* limit, which is a statement about how often the plant
+/// re-evaluates a page rather than about how long the socket may go quiet.
+/// Confusing the two is what 04-REVIEW WR-08 was.
 ///
 /// **One timer, not one per subscription** (Finding 5's timer discipline). N
 /// timers on a 1500-key page is N cancellations to get right on every
@@ -95,6 +102,38 @@ final class FreshnessWatchdog {
   /// Called on transitions only — an indicator that repaints twenty times a
   /// second is an indicator nobody sees change.
   final ViewFreshnessChanged onViewFreshnessChanged;
+
+  /// What to *do* about a link that has gone quiet, as opposed to what to
+  /// display about it.
+  ///
+  /// Assigned by the supervisor after construction, because this object is
+  /// built by the client above and handed down (04-07's ownership rule). Left
+  /// null the watchdog only observes, which is the state 04-REVIEW CR-06
+  /// found: the expiry flipped a bool, nothing closed the peer, nothing
+  /// touched `LinkState`, and a half-open socket read `ready` with frozen
+  /// values for as long as the panel stayed on.
+  void Function()? onQuiet;
+
+  /// The gateway's advertised fan-out period, from `hello`'s capabilities.
+  ///
+  /// Null until a handshake has answered, and null forever against a gateway
+  /// that advertises none. See [_subscriptionLimitMs] for what it buys.
+  int? get tickMs => _tickMs;
+  int? _tickMs;
+
+  /// Records the cadence the gateway announced at [tickMs].
+  ///
+  /// **The link deadline is deliberately not derived from it** and never will
+  /// be — that is the 04-CONTEXT ruling this file's doc argues at length. What
+  /// the cadence is for is the *per-subscription* limit, which is a statement
+  /// about how often the plant re-evaluates a page and has nothing to do with
+  /// how long the socket may go quiet (04-REVIEW WR-06, WR-08).
+  void learnedTickMs(Object? advertised) {
+    final ms = advertised is num && advertised.isFinite && advertised > 0
+        ? advertised.toInt()
+        : null;
+    _tickMs = ms;
+  }
 
   /// The one timer. Not `late`, not a list: the type is the design.
   Timer? _deadline;
@@ -187,11 +226,36 @@ final class FreshnessWatchdog {
     _staleSubs = _staleSubs.where((id) => id != subId).toSet();
   }
 
+  /// How long a subscription may go without being re-evaluated before it is
+  /// reported stale.
+  ///
+  /// **Not the link deadline** (04-REVIEW WR-08). This used to be
+  /// [ClientConfig.freshnessDeadline], which `client_config.dart` documents as
+  /// the horizon for the *socket*: one number for the whole link. A
+  /// subscription is a page of tags whose plant-side evaluation cadence has
+  /// nothing to do with the socket's, so a 3 s limit marks every
+  /// slowly-evaluated page permanently stale — the grey that cries wolf this
+  /// file argues against two paragraphs above its own line.
+  ///
+  /// So it is the gateway's own advertised cadence times
+  /// [ClientConfig.subscriptionStalenessMultiple], which is the only thing
+  /// about the plant's evaluation rate the client can actually learn. Floored
+  /// at the link deadline, because a per-subscription verdict that fired
+  /// sooner than "the link is gone" would report a dead tag on a dead link and
+  /// send someone to look at the wrong thing.
+  int get _subscriptionLimitMs {
+    final linkMs = config.freshnessDeadline.inMilliseconds;
+    final tick = _tickMs;
+    if (tick == null) return linkMs;
+    final derived = (tick * config.subscriptionStalenessMultiple).round();
+    return derived > linkMs ? derived : linkMs;
+  }
+
   /// Ages every recorded subscription against an instant in the gateway's
   /// clock. One pass of subtraction; no per-subscription timer exists to
   /// cancel, which is why a 1500-key page costs one timer in total.
   Set<String> _staleAt(int serverNowMs) {
-    final limitMs = config.freshnessDeadline.inMilliseconds;
+    final limitMs = _subscriptionLimitMs;
     final stale = <String>{};
     for (final entry in _evaluatedAt.entries) {
       if (serverNowMs - entry.value > limitMs) stale.add(entry.key);
@@ -211,9 +275,15 @@ final class FreshnessWatchdog {
 
   void _linkWentQuiet() {
     _deadline = null;
-    if (_viewIsStale) return;
-    _viewIsStale = true;
-    onViewFreshnessChanged(true);
+    if (!_viewIsStale) {
+      _viewIsStale = true;
+      onViewFreshnessChanged(true);
+    }
+    // And then something is done about it. A link that has gone a whole
+    // freshness deadline without a frame of any kind is a link this client
+    // should stop believing in — the "detected in seconds" half of CLAUDE.md's
+    // first constraint, which a bool nobody reads does not satisfy.
+    onQuiet?.call();
   }
 
   void _becomeFresh() {

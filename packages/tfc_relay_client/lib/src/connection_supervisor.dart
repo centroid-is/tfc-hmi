@@ -120,6 +120,10 @@ final class ConnectionSupervisor {
         _onBye = onBye,
         _now = now ?? _wallClock,
         _dial = dial ?? connect {
+    // The watchdog is built by the client above and handed down, so what it
+    // *does* about an expiry is wired here, where the peer and the schedule
+    // are (04-REVIEW CR-06).
+    watchdog.onQuiet = _linkWentQuiet;
     _resync = ResyncEngine(
       storeFor: storeFor,
       subscribe: _subscribe,
@@ -365,6 +369,10 @@ final class ConnectionSupervisor {
 
       final hello =
           HelloResult.fromJson(_asJson(sanitize(raw).value));
+      // The gateway's fan-out cadence, for the per-subscription staleness
+      // limit and nothing else (04-REVIEW WR-06). The *link* deadline stays
+      // configured and independent, as 04-CONTEXT rules.
+      watchdog.learnedTickMs(hello.capabilities['tickMs']);
       _clockOffset = ClockOffset.fromHello(
         hello.serverTime,
         _now(),
@@ -500,6 +508,29 @@ final class ConnectionSupervisor {
 
   /// The peer's `listen()` finished, either way. Same teardown for both.
   void _transportEnded(int gen) => _down(gen, 'the transport ended');
+
+  /// [FreshnessWatchdog.freshnessDeadline] passed with no frame of any kind.
+  ///
+  /// **A half-open socket is not a connection** (04-REVIEW CR-06). Nothing
+  /// below the application layer will say so — `readyState` lies after an OS
+  /// sleep (STACK), and a NAT that dropped the flow sends nothing at all — so
+  /// the only end of this the client controls is to stop believing in the peer
+  /// and dial again. Routed through [_down] rather than through a bespoke
+  /// path, so the barrier is re-armed, `LinkState` leaves `ready`, and the
+  /// backoff schedule is the same one every other kind of drop uses. Without
+  /// it the panel read `ready`, `isReady == true` and `Quality.good` over
+  /// values that had stopped moving.
+  void _linkWentQuiet() {
+    if (_disposed || _stopped) return;
+    // Only a connection that thinks it is up can go quiet. In `down` or
+    // `connecting` there is a reconnect already scheduled, and a second one
+    // here would halve the backoff the schedule just chose.
+    if (_state != LinkState.ready && _state != LinkState.resyncing) return;
+    _down(_generation,
+        'no frame of any kind for ${config.freshnessDeadline.inMilliseconds} '
+        'ms: the socket is open and the gateway has stopped speaking, which '
+        'is the half-open case a close code never arrives for');
+  }
 
   /// This connection is over: retire it, re-arm, and schedule the next.
   void _down(int gen, String why) {
