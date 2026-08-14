@@ -14,14 +14,17 @@
 /// (Finding 1: on POSIX it is a clean FIN except by coincidence — see
 /// `socket_ops.dart`).
 ///
-/// **Every mode is declared before any is implemented.** [faultModes] names
-/// all eight, each has its lever on this class today, and the levers whose
-/// behaviour has not landed throw [UnimplementedError] naming the plan. The
-/// alternative — adding levers as the modes arrive — means a test written
-/// against a mode that does not exist yet fails to compile, which is fine, but
-/// a lever that exists and quietly does nothing is not: the mode test passes,
-/// the fault was never injected, and CI reports coverage of precisely the
-/// property that is missing.
+/// **Every mode was declared before any was implemented.** [faultModes] names
+/// all eight, each has its lever on this class, and until 02-11 the ones whose
+/// behaviour had not landed threw [UnimplementedError] naming the plan they
+/// would land in. All eight have landed now, so nothing here throws that any
+/// more — but the rule the scaffolding enforced still holds for a ninth: a
+/// lever that exists and quietly does nothing is worse than one that does not
+/// compile, because the mode test passes, the fault was never injected, and CI
+/// reports coverage of precisely the property that is missing.
+/// `test/faults/proxy_core_test.dart` keeps that gate, and it re-arms by
+/// itself the moment a name is added to [faultModes] without a test file
+/// beside it.
 ///
 /// **Loopback only.** The listener binds [InternetAddress.loopbackIPv4] and
 /// there is no option to widen it. A process whose whole purpose is to sever
@@ -65,6 +68,72 @@ const faultModes = <String>[
   'reject',
   'bufferServerToClient',
 ];
+
+/// Two modes that cannot be set at the same time, and the reason.
+///
+/// [why] is printed by the exception, so it is a sentence a caller reads at
+/// the moment they are surprised, not a note to whoever maintains this file.
+typedef ModeConflict = ({String a, String b, String why});
+
+/// The pairs of modes that contradict each other, as data.
+///
+/// Declared here rather than left implicit in the setters, for the reason the
+/// mode registry itself exists: a rule that lives in eight `if` statements is
+/// a rule nobody can enumerate, and `composition_test.dart` iterates this list
+/// in both orders and asserts its own case count against the length — so a
+/// pair added below without a test is a failing suite rather than a silent
+/// gap.
+///
+/// **Where the line is.** Modes compose wherever the combination describes a
+/// link that could physically exist: latency, throttle and flap together are
+/// an ordinary bad radio link, and Finding 7's single flush-gated delay line
+/// per direction is what lets all three apply as gates on one queue. A pair is
+/// listed here only when the combination has no behaviour anybody could have
+/// intended — one mode discarding what the other withholds, or a mode shaping
+/// traffic on a connection another mode guarantees does not exist. In those
+/// cases a proxy that accepted both and behaved as one of them would produce a
+/// test that passes for a reason its author did not choose, which costs more
+/// than the refusal does.
+///
+/// The refusal is thrown **at set time**, by the lever being pulled. Deferring
+/// it to forward time would report the contradiction from inside a socket
+/// callback, with a stack that names neither of the two calls that caused it.
+const exclusiveModePairs = <ModeConflict>[
+  (
+    a: 'blackhole',
+    b: 'bufferServerToClient',
+    why: 'blackhole discards the server→client bytes and '
+        'bufferServerToClient holds the same bytes to release later, so the '
+        'pair asks for a release of what was thrown away'
+  ),
+  (
+    a: 'cutMidFrame',
+    b: 'killOnce',
+    why: 'both end the same connection by different means — cutMidFrame with '
+        'a FIN so the delivered bytes survive at the peer, killOnce with an '
+        'RST so they do not — and whichever fired first would decide what the '
+        'other one meant'
+  ),
+  (a: 'reject', b: 'latency', why: _nothingToShape),
+  (a: 'reject', b: 'throttle', why: _nothingToShape),
+  (a: 'reject', b: 'flap', why: _nothingToShape),
+  (a: 'reject', b: 'blackhole', why: _nothingToShape),
+  (a: 'reject', b: 'cutMidFrame', why: _nothingToShape),
+  (a: 'reject', b: 'killOnce', why: _nothingToShape),
+  (a: 'reject', b: 'bufferServerToClient', why: _nothingToShape),
+];
+
+/// Why `reject` excludes every other mode.
+///
+/// One sentence shared by seven rows rather than seven near-identical ones:
+/// they are the same contradiction, and writing it once is what makes it
+/// obvious that the rule is "reject excludes the rest" and not a list somebody
+/// assembled by hand and may have left a hole in.
+const _nothingToShape =
+    'reject refuses connections and destroys the ones that exist, so there is '
+    'no traffic left for another mode to delay, meter, withhold, discard or '
+    'cut — a scenario that wants a fault applied to a live connection wants '
+    'reject off';
 
 /// How long the proxy waits for the upstream server before giving up.
 const _upstreamConnectTimeout = Duration(seconds: 5);
@@ -118,6 +187,26 @@ final class FaultProxy {
   /// Set only when [killOnce] found nothing open, and cleared the moment it
   /// fires. One flag rather than a counter: the mode is "once".
   bool _killOnceArmed = false;
+
+  /// Whether a flap cycle is running.
+  bool _flapping = false;
+
+  /// Whether the flap cycle is currently in its down half.
+  ///
+  /// Separate from [_blackholed] on purpose: a blackhole keeps the sockets up
+  /// and swallows, and a dropout takes the sockets away. They are different
+  /// faults with different client code paths, and sharing one flag would make
+  /// `flap` silently mean "blackhole, periodically".
+  bool _flapDown = false;
+
+  /// The timer carrying the cycle to its next transition.
+  ///
+  /// One chained [Timer] rather than a `Timer.periodic`, because up and down
+  /// have different lengths and a periodic timer can only carry one interval.
+  Timer? _flapTimer;
+
+  /// How many times the flap cycle has changed half.
+  int _flapTransitions = 0;
 
   /// The high-water reading of every pair that has already closed.
   int _retiredPeakPendingBytes = 0;
@@ -176,6 +265,22 @@ final class FaultProxy {
     return peak;
   }
 
+  /// How many times [flap] has changed half since the cycle started.
+  ///
+  /// The observable behind the timer-hygiene criterion. A cancelled timer is
+  /// not otherwise visible from a test — `Timer` exposes nothing and package:
+  /// test does not fail a case for leaving one behind; it simply keeps the
+  /// isolate alive until the runner gives up, with no failure to attribute. So
+  /// the counter is incremented at the *top* of the timer callback, ahead of
+  /// the shutdown guard, and a test compares it across a shutdown: a timer
+  /// that survived moves this number even though the transition it would have
+  /// made is refused (T-02-31).
+  ///
+  /// Also worth printing in a soak: a minute of `flap(1s, 1s)` should be
+  /// around 59 transitions, and a number far off that says the cycle drifted
+  /// before any client-side aggregate does.
+  int get flapTransitions => _flapTransitions;
+
   /// The errno of the last failed upstream connection, or null if none failed.
   ///
   /// Read through `errnoOf` because `Socket.connect` throws a bare [OSError]
@@ -206,6 +311,15 @@ final class FaultProxy {
   Future<void> shutdown() async {
     if (_shutDown) return;
     _shutDown = true;
+    // The mode primitives go first, before anything starts closing lines. A
+    // timer left running past this point fires against a half-torn-down proxy
+    // — and, worse, keeps the isolate alive after the test that owned it has
+    // passed, so the runner hangs at the end of the suite with no failure to
+    // point at (T-02-31).
+    _flapTimer?.cancel();
+    _flapTimer = null;
+    _flapping = false;
+    _flapDown = false;
     final accepts = _accepts;
     _accepts = null;
     final server = _server;
@@ -235,9 +349,93 @@ final class FaultProxy {
   ///
   /// Assertions about a flapping proxy must be about windows, not instants:
   /// RESEARCH Finding 10 measured a connect attempt completing on the far side
-  /// of a state transition, so the flag read at assertion time did not
-  /// describe what the connection experienced.
-  void flap(Duration up, Duration down) => _notYet('flap', '02-11');
+  /// of a state transition — `t=1204ms forwarding=false connect OK in 189ms`
+  /// — so the flag read at assertion time did not describe what the
+  /// connection experienced. `test/faults/flap_test.dart` therefore counts
+  /// dropouts, retries and escaped errors over a window and never reads a
+  /// state at an instant, and a test "improved" into an instantaneous check
+  /// here is measuring something other than what it names.
+  ///
+  /// **The down half is a dropout, not a blackhole.** Live pairs are reset and
+  /// retired, and connections arriving during the down half are cut on sight,
+  /// so a client experiences the link going away and has to reconnect —
+  /// [blackhole] is the other fault, where the sockets stay up and the traffic
+  /// vanishes. A flap built on blackholing would never exercise a reconnect
+  /// path, which is the entire content of F2.
+  ///
+  /// **Real timers.** CONTEXT restricts injected clocks to pure state
+  /// machines, and a cycle whose whole subject is wall-clock behaviour against
+  /// live sockets is not one. The cycle starts in the up half, so a client
+  /// that connects immediately gets a connection.
+  ///
+  /// Off is `flap(up, down, enabled: false)` — the same one-lever shape as
+  /// [blackhole] and [reject], for the same reason: an off switch with its own
+  /// name would be reachable without any entry in [faultModes] naming it. Off
+  /// leaves the proxy **forwarding**, not in whichever half the cycle had
+  /// reached, because every scenario that follows a flap needs a working link
+  /// and none of them should have to ask which half it stopped in.
+  void flap(Duration up, Duration down, {bool enabled = true}) {
+    // Every refusal happens before anything is touched. A validation that ran
+    // after the timer was cancelled would leave a rejected call having stopped
+    // the cycle it refused to change — the caller handles an exception and the
+    // proxy is in a third state neither of them asked for.
+    if (enabled) {
+      if (up <= Duration.zero || down <= Duration.zero) {
+        throw ArgumentError('flap needs a positive duration for each half; '
+            'got up=$up down=$down. A zero half is not a fast flap — it is a '
+            'timer that fires in a loop for ever and starves the event loop '
+            'the sockets run on');
+      }
+      _refuseConflict('flap');
+    }
+    _flapTimer?.cancel();
+    _flapTimer = null;
+    if (!enabled) {
+      _flapping = false;
+      _flapDown = false;
+      return;
+    }
+    _flapping = true;
+    _flapDown = false;
+    _flapTimer = Timer(up, () => _onFlapTimer(up, down));
+  }
+
+  /// One transition of the cycle, and the scheduling of the next.
+  void _onFlapTimer(Duration up, Duration down) {
+    // Ahead of every guard, deliberately: this counter is how a test sees a
+    // timer that outlived `shutdown()`. Counting after the guard would make a
+    // leaked timer invisible to precisely the assertion written to catch it.
+    _flapTransitions++;
+    if (_shutDown || !_flapping) return;
+    _flapDown = !_flapDown;
+    if (_flapDown) {
+      // Unawaited because a timer callback cannot await, and guarded because
+      // an error on a future nobody holds is reported against whichever test
+      // is running when it lands (T-02-33) — during a soak, that is never
+      // this one.
+      unawaited(_dropForFlap().catchError((Object _) {}));
+    }
+    _flapTimer = Timer(_flapDown ? down : up, () => _onFlapTimer(up, down));
+  }
+
+  /// Takes the link down: every live pair reset, then retired.
+  ///
+  /// Reset rather than closed, and in the order [reject] documents — the RST
+  /// goes out before the lines are closed, because closing first wakes the
+  /// teardown and destroys the socket out from under the linger option, which
+  /// degrades the reset to a FIN intermittently. A dropout that arrived as a
+  /// clean FIN would be an orderly shutdown, which is a different event on the
+  /// client's side and the one thing this mode must not look like.
+  Future<void> _dropForFlap() async {
+    for (final pair in List.of(_pairs)) {
+      pair.killWithReset();
+      await pair.close();
+      // Retired here rather than left to `_closeWhenEitherEnds`, for the same
+      // reason `reject` does it: thirty cycles a minute means thirty chances
+      // for a pair to be counted alive after it is gone.
+      _retire(pair);
+    }
+  }
 
   /// One-way delay applied to every chunk in both directions.
   ///
@@ -257,6 +455,7 @@ final class FaultProxy {
   /// answered by measuring a round trip, which is what `latency_test.dart`
   /// does.
   set latency(Duration? value) {
+    if (value != null) _refuseConflict('latency');
     _latency = value;
     _applyDelay();
   }
@@ -268,6 +467,10 @@ final class FaultProxy {
   /// zero to this value, independently per chunk and per direction, so a round
   /// trip lands in `[2d, 2d + 2 * jitter + overhead]`.
   set jitter(Duration? value) {
+    // Checked as `latency`, because it is that mode's second dial rather than
+    // a mode of its own — a rule that excluded latency but let jitter through
+    // would be a hole in the table with no row to fix.
+    if (value != null) _refuseConflict('latency');
     _jitter = value;
     _applyDelay();
   }
@@ -287,6 +490,7 @@ final class FaultProxy {
   /// Live, like [latency]: it reaches the pairs that are already open. Null
   /// means unmetered.
   set throttleBytesPerSec(int? value) {
+    if (value != null) _refuseConflict('throttle');
     _throttleBytesPerSec = value;
     for (final pair in _pairs) {
       pair.applyThrottle(value);
@@ -326,6 +530,7 @@ final class FaultProxy {
   /// the connection survives, because a half-open that required a reconnect
   /// to end would not be one.
   void blackhole({bool enabled = true}) {
+    if (enabled) _refuseConflict('blackhole');
     _blackholed = enabled;
     for (final pair in _pairs) {
       pair.applyBlackhole(enabled);
@@ -354,12 +559,18 @@ final class FaultProxy {
   /// after its own n bytes. A one-shot would need a way to say "the next one",
   /// and every scenario that wants a partial frame wants it on the connection
   /// it is holding.
-  void cutMidFrame(int n) {
-    if (n < 0) {
+  ///
+  /// Null disarms it. The mode is sticky, and the composition rules are state
+  /// checks rather than latches, so there has to be a way back — without one,
+  /// a proxy that had ever been told to cut could never be told to reset, and
+  /// the pair with [killOnce] would be a latch wearing a state check's name.
+  void cutMidFrame(int? n) {
+    if (n != null && n < 0) {
       throw ArgumentError.value(n, 'n',
           'a cut delivers a byte count, so it cannot be negative; 0 cuts '
-              'before the first byte of the response');
+              'before the first byte of the response, and null disarms');
     }
+    if (n != null) _refuseConflict('cutMidFrame');
     _cutAfterBytes = n;
     for (final pair in _pairs) {
       pair.armCutMidFrame(n);
@@ -385,6 +596,7 @@ final class FaultProxy {
   /// `test/faults/kill_once_test.dart` calls "and then normal service" — a
   /// mode that stayed armed would fail every scenario that follows the fault.
   void killOnce() {
+    _refuseConflict('killOnce');
     final live = List.of(_pairs);
     if (live.isEmpty) {
       _killOnceArmed = true;
@@ -422,9 +634,23 @@ final class FaultProxy {
   ///
   /// Rejection is a state, not an event: `reject(enabled: false)` leaves it,
   /// and the connection after it is forwarded normally on the same port.
-  Future<void> reject({bool enabled = true}) async {
+  ///
+  /// **Not an `async` function, on purpose.** The composition check has to
+  /// reach the caller as a synchronous throw at the moment the lever is
+  /// pulled. Inside an `async` body every throw becomes an error on the
+  /// returned future, so a caller who wrote `proxy.reject()` without awaiting
+  /// it — which every other lever here allows — would get the refusal as an
+  /// unhandled async error, attributed to whichever test was running when it
+  /// landed rather than to the line that caused it.
+  Future<void> reject({bool enabled = true}) {
+    if (enabled) _refuseConflict('reject');
     _rejecting = enabled;
-    if (!enabled) return;
+    if (!enabled) return Future<void>.value();
+    return _tearDownForReject();
+  }
+
+  /// The awaited half of [reject]: every live pair reset, then retired.
+  Future<void> _tearDownForReject() async {
     // The reset goes to the client before the pair's lines are closed, for the
     // reason `_ProxiedPair.killWithReset` documents: closing first wakes the
     // teardown, which destroys the socket out from under the linger option and
@@ -460,6 +686,7 @@ final class FaultProxy {
   /// Live, like the other levers: it reaches the pairs that are already open
   /// and the ones accepted afterwards.
   set bufferServerToClient(bool value) {
+    if (value) _refuseConflict('bufferServerToClient');
     _bufferServerToClient = value;
     for (final pair in _pairs) {
       pair.applyWithhold(value);
@@ -481,6 +708,56 @@ final class FaultProxy {
       pair.releaseWithheld();
     }
   }
+
+  /// Throws if switching [mode] on would contradict a mode already set.
+  ///
+  /// Called by every lever, and only on the way **on**: an off switch is never
+  /// refused. A proxy that would not let a scenario clear a mode because of
+  /// what else was set would be a proxy a scenario can drive into a corner,
+  /// and the corner would be reported as whichever fault the scenario was
+  /// about.
+  void _refuseConflict(String mode) {
+    for (final conflict in exclusiveModePairs) {
+      final String other;
+      if (conflict.a == mode) {
+        other = conflict.b;
+      } else if (conflict.b == mode) {
+        other = conflict.a;
+      } else {
+        continue;
+      }
+      if (!_isActive(other)) continue;
+      throw StateError('$mode cannot be set while $other is: ${conflict.why}. '
+          'Clear $other first — the rule is a state check, not a latch, so '
+          'this proxy is usable for $mode the moment $other is off');
+    }
+  }
+
+  /// Whether [mode] is switched on right now.
+  ///
+  /// The one place the eight modes' state is named uniformly. It throws on an
+  /// unknown name rather than answering false: a ninth mode added to
+  /// [exclusiveModePairs] without a line here would otherwise read as
+  /// permanently off, and every exclusion naming it would quietly never fire —
+  /// a rule that exists in the table, has a passing test generated from the
+  /// table, and does nothing.
+  bool _isActive(String mode) => switch (mode) {
+        'flap' => _flapping,
+        // Jitter is part of the latency mode rather than a ninth one, so it
+        // makes the same mode active.
+        'latency' => _latency != null || _jitter != null,
+        'throttle' => _throttleBytesPerSec != null,
+        'blackhole' => _blackholed,
+        'cutMidFrame' => _cutAfterBytes != null,
+        // Armed only while it is waiting for a connection to fire at; once it
+        // has fired the mode is over, which is what "once" means.
+        'killOnce' => _killOnceArmed,
+        'reject' => _rejecting,
+        'bufferServerToClient' => _bufferServerToClient,
+        _ => throw StateError('no state predicate for mode "$mode"; it is '
+            'named in exclusiveModePairs, so every rule mentioning it is '
+            'inert until one is added here'),
+      };
 
   /// Rebuilds the per-chunk delay and pushes it to every live pair.
   ///
@@ -507,11 +784,6 @@ final class FaultProxy {
         base + Duration(microseconds: _jitterSource.nextInt(spreadMicros + 1));
   }
 
-  Never _notYet(String mode, String plan) => throw UnimplementedError(
-      'mode $mode lands in plan $plan; the lever is declared now and throws '
-      'rather than accepting the setting silently, because a mode that can be '
-      'switched on and does nothing makes its own test pass');
-
   Future<void> _accept(Socket client) async {
     if (_shutDown) {
       client.destroy();
@@ -523,6 +795,14 @@ final class FaultProxy {
       // of a connect timeout, and the socket is cut before anything upstream
       // is touched — a rejecting proxy must not open a connection to the
       // server for a client it is about to refuse.
+      forceReset(client);
+      return;
+    }
+    if (_flapDown) {
+      // The link is away for this half of the cycle. Cut on sight and never
+      // touch the upstream: a proxy that opened a server connection for a
+      // client it is about to drop would make the *server* see a connection
+      // storm during an outage, which is the opposite of what a dropout does.
       forceReset(client);
       return;
     }

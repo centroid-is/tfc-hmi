@@ -56,7 +56,13 @@ const _arrivalBudget = Duration(seconds: 30);
 /// it. What must never exist is the third state — a lever that accepts a
 /// setting and does nothing — which is why a name is only allowed to leave the
 /// group below by arriving here with a test file beside it.
+/// With `flap` below, the group is empty for the first time since the proxy
+/// was scaffolded — every declared mode has a test file beside it. The group
+/// is not deleted for that: it is conditional on being non-empty, so a ninth
+/// mode declared in `faultModes` before it lands brings it straight back,
+/// which is the state the declare-before-implement rule was written for.
 const _landedModes = <String, String>{
+  'flap': 'test/faults/flap_test.dart',
   'latency': 'test/faults/latency_test.dart',
   'throttle': 'test/faults/throttle_test.dart',
   'cutMidFrame': 'test/faults/cut_mid_frame_test.dart',
@@ -163,29 +169,54 @@ void main() {
     }
   });
 
-  group('a lever whose mode has not landed throws by name', () {
-    for (final mode in faultModes.where((m) => !_landedModes.containsKey(m))) {
-      test(mode, () async {
-        final proxy = await _proxyToEcho();
-        final lever = _levers[mode];
-        expect(lever, isNotNull,
-            reason: '$mode is in faultModes with no lever in this test, so '
-                'nothing proves a caller can even reach it');
+  final notLanded =
+      faultModes.where((m) => !_landedModes.containsKey(m)).toList();
 
-        expect(
-          () => lever!(proxy),
-          throwsA(isA<UnimplementedError>()
-              .having((e) => e.message, 'message', contains(mode))
-              .having((e) => e.message, 'message', contains('02-'))),
-          reason: 'setting $mode must fail loudly naming the plan it lands '
-              'in. A lever that accepts the setting and does nothing lets a '
-              'mode test pass against a proxy that never injected the fault, '
-              'which reads on CI as coverage of exactly the property that is '
-              'missing',
-        );
-      });
+  test('every declared mode has a test file that proves it bites', () {
+    // The other half of the boundary `_landedModes` documents. The group below
+    // holds the un-landed names to a loud failure; this holds the landed ones
+    // to an existing file, so a name cannot leave that group by being written
+    // here beside a path nobody wrote — which is the cheapest way to make a
+    // mode read as delivered.
+    for (final entry in _landedModes.entries) {
+      expect(File(entry.value).existsSync(), isTrue,
+          reason: '${entry.key} is recorded as landed with its proof in '
+              '${entry.value}, and that file does not exist. The record is '
+              'what exempts the mode from the throws-by-name group, so a '
+              'wrong path here is a mode with neither a failing lever nor a '
+              'test');
     }
   });
+
+  // Conditional, because a group whose loop body never runs declares no cases
+  // and reads on CI as a group that was deliberately emptied. With all eight
+  // modes landed this is currently skipped entirely; a ninth declared name
+  // brings it back with no edit here.
+  if (notLanded.isNotEmpty) {
+    group('a lever whose mode has not landed throws by name', () {
+      for (final mode in notLanded) {
+        test(mode, () async {
+          final proxy = await _proxyToEcho();
+          final lever = _levers[mode];
+          expect(lever, isNotNull,
+              reason: '$mode is in faultModes with no lever in this test, so '
+                  'nothing proves a caller can even reach it');
+
+          expect(
+            () => lever!(proxy),
+            throwsA(isA<UnimplementedError>()
+                .having((e) => e.message, 'message', contains(mode))
+                .having((e) => e.message, 'message', contains('02-'))),
+            reason: 'setting $mode must fail loudly naming the plan it lands '
+                'in. A lever that accepts the setting and does nothing lets a '
+                'mode test pass against a proxy that never injected the '
+                'fault, which reads on CI as coverage of exactly the property '
+                'that is missing',
+          );
+        });
+      }
+    });
+  }
 
   test('names its eight modes as data', () {
     expect(faultModes, hasLength(8),
