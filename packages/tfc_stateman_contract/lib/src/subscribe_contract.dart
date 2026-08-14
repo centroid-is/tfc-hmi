@@ -81,6 +81,11 @@ Future<void> checkListenDeliversSubsequentChanges(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValue(_speedKey, 1450);
+  // The seed has to be *there* before a listener attaches, or the first
+  // notification this case sees is the seed's own and the assertion below reads
+  // 1450 against an implementation that delivered 1600 perfectly. Free
+  // in-process; a real wait only where the value crosses a boundary.
+  await arrived(api, _speedKey);
   final node = api.listen(_speedKey);
   final seen = observe(node);
 
