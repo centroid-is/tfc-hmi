@@ -297,10 +297,33 @@ final class RemoteStateMan implements StateManApi {
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
     final raw = _asJson(await _request(Methods.readMany, {'keys': keys}));
     final values = raw['values'];
-    if (values is! Map) return const <String, DynamicValue>{};
-    return {
-      for (final entry in values.entries) '${entry.key}': _value(entry.value),
+    final answer = <String, DynamicValue>{
+      if (values is Map)
+        for (final entry in values.entries) '${entry.key}': _value(entry.value),
     };
+
+    // A key the gateway refused is still a key the caller asked about, and it
+    // comes back as a value that renders rather than as an absence that does
+    // not. A missing map entry is indistinguishable from a key nobody
+    // requested, so a diagnostics page writes a blank cell exactly where it
+    // needed to write a fault — and a renamed PLC tag then survives on a page
+    // for months looking like a tag that is merely quiet.
+    //
+    // `errorConfig` rather than a bad-comms code: nothing is broken upstream,
+    // the page is asking for a tag this source does not serve, and that is a
+    // sentence an engineer can act on. Whatever the gateway put in `rejected`
+    // is the diagnosis; the quality is what makes it visible.
+    final rejected = raw['rejected'];
+    if (rejected is Map) {
+      for (final entry in rejected.entries) {
+        final key = '${entry.key}';
+        // Never over a real reading: if the gateway somehow answered both, the
+        // reading is the more specific fact.
+        answer.putIfAbsent(
+            key, () => DynamicValue(quality: Quality.errorConfig));
+      }
+    }
+    return answer;
   }
 
   // -------------------------------------------------------- the sub-APIs
@@ -368,7 +391,8 @@ final class RemoteStateMan implements StateManApi {
   ///    the operator sees a fault rather than a blank box.
   ///  * a non-finite **expect** is refused outright. See the [ArgumentError].
   @override
-  Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
+  Future<WriteResult> write(String key, Object? value,
+      {Object? expect, String? cmd}) async {
     final sanitizedValue = sanitize(value);
     final sanitizedExpect = sanitize(expect);
     if (sanitizedExpect.hadNonFinite) {
@@ -380,15 +404,19 @@ final class RemoteStateMan implements StateManApi {
               'write would silently become an unconditional one');
     }
 
-    final cmd = newUlid();
-    _unresolved.add(cmd);
+    // Minted here when this client *is* the operator action, carried through
+    // when it is relaying one already minted upstream of it. Either way there
+    // is exactly one id for one action, which is what `writeStatus` reconciles
+    // against after a reconnect.
+    final id = cmd ?? newUlid();
+    _unresolved.add(id);
 
     WriteResult result;
     try {
       final raw = await _request(
         Methods.write,
         {
-          'cmd': cmd,
+          'cmd': id,
           'key': key,
           'value': sanitizedValue.value,
           if (expect != null) 'expect': sanitizedExpect.value,
@@ -401,15 +429,58 @@ final class RemoteStateMan implements StateManApi {
       // One seam decides whether this means "we do not know" or "the server
       // said no", and it rethrows anything that is a defect in this process
       // rather than a condition of the plant (`failure_taxonomy.dart`).
-      result = writeOutcomeFor(cmd, error);
+      result = writeOutcomeFor(id, error);
     }
 
     // Only an established outcome settles the command. `WriteUnknown` is the
     // one verdict that does not, which is exactly what makes it re-queryable.
-    if (result is! WriteUnknown) _unresolved.remove(cmd);
+    if (result is! WriteUnknown) _unresolved.remove(id);
 
+    _adoptReadback(key, result);
     if (sanitizedValue.hadNonFinite) _markNonFinite(key);
     return result;
+  }
+
+  /// Puts an applied write's readback into the store before the write resolves.
+  ///
+  /// **This closes a race the caller cannot see and cannot work around.** The
+  /// gateway answers the write on the RPC path and pushes the new reading on
+  /// the subscription path, and the subscription path is tick-quantised and
+  /// conflated — so the response routinely wins. For the caller that means
+  /// `await write(...)` returns `WriteApplied(readback: 1500)` while
+  /// `read(key)` still says 1200 and the value still wears the pending badge
+  /// the plant stamped on it when the write went upstream. A mimic redrawn on
+  /// that turn shows the operator the setpoint they typed over, still amber,
+  /// after the confirmation has already arrived — and if the tick that would
+  /// have corrected it is the one lost to a reconnect, it shows it until the
+  /// next change on that key.
+  ///
+  /// The readback is not a guess: it is what the device reported holding, and
+  /// `WriteResult`'s whole design is that the readback is the only confirmation
+  /// there is. Adopting it is applying the confirmation, not predicting it —
+  /// which is exactly why the *typed* value is never adopted, and why nothing
+  /// is adopted for a rejected, unknown or never-received outcome. Those leave
+  /// the last confirmed reading standing, which is the honest thing to show
+  /// when nobody upstream has agreed to anything.
+  ///
+  /// The push that follows carries the same reading, so `applyBatch`'s equality
+  /// guard makes it free: one notification for one write, not two.
+  void _adoptReadback(String key, WriteResult result) {
+    if (_disposed) return;
+    if (result is! WriteApplied) return;
+    // A clamped write reports what the device took; an unclamped one reports
+    // the value back unchanged. Both are the device's word, and both clear the
+    // pending badge that the write itself put on.
+    _storeOf(key).applyBatch({
+      key: DynamicValue(
+        value: result.readback,
+        quality: Quality.good,
+        // `at` is epoch milliseconds on the wire; UTC here for the same reason
+        // `WireValue.toDynamicValue` uses it — a local-time stamp would be
+        // compared against gateway stamps that are not.
+        sourceTime: DateTime.fromMillisecondsSinceEpoch(result.at, isUtc: true),
+      ),
+    });
   }
 
   /// Records, locally, that the value written to [key] was not a number.
@@ -555,10 +626,8 @@ final class RemoteStateMan implements StateManApi {
   }
 
   /// A wire value, sanitized and quality-composed by [WireValue.fromJson].
-  static DynamicValue _value(Object? raw) {
-    final wire = WireValue.fromJson(_asJson(raw));
-    return DynamicValue(value: wire.v, quality: wire.q);
-  }
+  static DynamicValue _value(Object? raw) =>
+      WireValue.fromJson(_asJson(raw)).toDynamicValue();
 
   /// Narrows a decoded JSON value to the map shape the protocol decoders take.
   ///

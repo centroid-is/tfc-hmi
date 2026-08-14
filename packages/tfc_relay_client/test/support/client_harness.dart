@@ -110,6 +110,27 @@ const Set<String> contractKeys = <String>{
   'ST999.CN99.MOT99.setpoint',
 };
 
+/// The keys on the page the plant deliberately does **not** serve.
+///
+/// Every other key in the page is declared to the gateway as servable before
+/// the client subscribes (see [_PlantAddressSpace]); these two are held back
+/// because the contract needs them unserved:
+///
+///  * `ST301.CN17.VLV02.stat` is `store_contract.dart:37`'s `_neverDeliveredKey`
+///    and `read_contract.dart:43`'s `_missingKey` — the key whose absence
+///    `keys lists what the source can serve and nothing else` asserts, and the
+///    one `a batched read answers for every key asked of it` requires an answer
+///    for *without* the source ever serving it.
+///  * `ST999.CN99.MOT99.setpoint` is the unknown tag the subscribe contract
+///    writes to; a source that served it would delete that case's point.
+///
+/// Declaring either would turn a case that currently passes into a case that
+/// passes for the wrong reason, so the exclusion is named rather than implied.
+const Set<String> unservedKeys = <String>{
+  'ST301.CN17.VLV02.stat',
+  'ST999.CN99.MOT99.setpoint',
+};
+
 /// The station tags the batch cases generate, which no literal sweep can find.
 ///
 /// `store_contract.dart:88-91`, `read_contract.dart:52-55` and
@@ -148,6 +169,91 @@ ClientConfig contractClientConfig() => ClientConfig(
       backoffCap: const Duration(milliseconds: 200),
       deadlineFloor: const Duration(milliseconds: 50),
     );
+
+/// The plant, wearing the address space a real source declares up front.
+///
+/// **The one thing this changes is `keys`, and it is not a convenience.** The
+/// gateway classifies every key on a subscribe against `api.keys`
+/// (`session_handlers.dart:154-164`): a key the source lists but has no reading
+/// for is accepted and snapshotted as `uncertainNotYetKnown` — "not known yet
+/// is a value state, not a rejection", asserted in the server's own
+/// `subscribe_test.dart:173-197` — while a key the source does not list is
+/// rejected `unknownKey`, because on a real source that is a typo in a page
+/// config and costing the page one tag is the point.
+///
+/// `FakeStateMan.keys` is `_store.keys` filtered to those with a reading
+/// (`fake_state_man.dart:274-277`), so it does not name a tag until a value has
+/// been set on it. That is right for the reference implementation, which is
+/// driven directly and has no subscribe step to classify anything at. Behind a
+/// gateway it collides with the suite's own shape: `relayServedFake` returns a
+/// client that has already sent its subscribe by the time a case body runs, so
+/// every key the case seeds *afterwards* was unknown at classification time,
+/// was rejected as a typo, never got a listener, and is invisible for the rest
+/// of the case no matter what the plant does with it.
+///
+/// That is not a defect in `RemoteStateMan` and it is not one in the gateway —
+/// it is the harness handing the gateway a source with no address space.
+/// `LocalStateMan` over configured DeviceClients names its tag list at
+/// construction; so does this. [declared] is the page minus [unservedKeys], and
+/// the values still arrive exactly when the case sets them.
+///
+/// Everything except [keys] delegates, and the levers do not come through here
+/// at all — they go straight to the `FakeStateMan` (see [RelayServedFake]), so
+/// this cannot become a second place where plant state lives.
+final class _PlantAddressSpace implements StateManApi {
+  _PlantAddressSpace(this._plant, this.declared);
+
+  final FakeStateMan _plant;
+
+  /// The tags this source admits to serving, whether or not it has a reading
+  /// for them yet.
+  final Set<String> declared;
+
+  /// What the plant serves, plus what it has declared it will serve.
+  ///
+  /// A union rather than a replacement: a case that sets a value on a key
+  /// nobody declared must still see it in the list, which is the half of
+  /// `keys lists what the source can serve and nothing else` that is about
+  /// presence rather than absence.
+  @override
+  List<String> get keys => <String>{..._plant.keys, ...declared}.toList();
+
+  @override
+  ValueListenable<DynamicValue> listen(String key) => _plant.listen(key);
+
+  @override
+  Stream<DynamicValue> subscribe(String key) => _plant.subscribe(key);
+
+  @override
+  DynamicValue? read(String key) => _plant.read(key);
+
+  @override
+  Future<DynamicValue> readFresh(String key) => _plant.readFresh(key);
+
+  @override
+  Future<Map<String, DynamicValue>> readMany(List<String> keys) =>
+      _plant.readMany(keys);
+
+  @override
+  Future<WriteResult> write(String key, Object? value,
+          {Object? expect, String? cmd}) =>
+      _plant.write(key, value, expect: expect, cmd: cmd);
+
+  @override
+  BrowseApi get browse => _plant.browse;
+
+  @override
+  TimeseriesApi get timeseries => _plant.timeseries;
+
+  @override
+  HistoryViewApi get historyViews => _plant.historyViews;
+
+  @override
+  PreferencesApi get preferences => _plant.preferences;
+
+  @override
+  Future<void> dispose() => _plant.dispose();
+}
 
 /// A real gateway, a real socket, a real client, and the plant behind it all.
 ///
@@ -237,8 +343,12 @@ RelayFixture relayFixture({
     historyViews: historyViews,
     preferences: preferences,
   );
+  // The page, computed once: it is both what the client subscribes to and what
+  // the plant declares it can serve, and the two drifting apart is precisely
+  // the failure [_PlantAddressSpace] exists to prevent.
+  final page = <String>{...contractKeys, ..._stationKeys(), ...served.keys};
   final server = RelayServer(
-    api: served,
+    api: _PlantAddressSpace(served, page.difference(unservedKeys)),
     config: config ?? ServerConfig(tick: ServerConfig.minTick),
     // Discards rather than `reportToStderr`: several contract cases provoke
     // errors on purpose, and a suite that printed a stack per provoked error
@@ -265,7 +375,7 @@ RelayFixture relayFixture({
     // The page. Seeded keys included so a subscribe answers with a real
     // snapshot; the contract's own vocabulary so a `setValue` mid-case
     // reaches a key this client is actually watching.
-    keys: {...contractKeys, ..._stationKeys(), ...served.keys},
+    keys: page,
     dial: (_) async {
       await ready;
       final attempt = await connect(Uri.parse('ws://127.0.0.1:${server.port}'));
@@ -285,6 +395,45 @@ RelayFixture relayFixture({
   // Idempotent, so the suite's own per-case `dispose` is not a problem.
   addTearDown(fixture.teardown);
   return fixture;
+}
+
+/// Cuts the plant's upstream link at the moment a write is actually parked on
+/// it, rather than at the moment the case asked for the cut.
+///
+/// **What this fixes is a precondition, not the property.** The case says
+/// "a write in flight when the link drops is unknown, never a failure": it
+/// stalls writes, calls `write`, and cuts the link on the next line. Driven
+/// directly that ordering is exact — `api.write(...)` has run inside the plant
+/// before the next statement — so `disconnectUpstream` finds the write parked
+/// and settles it unknown.
+///
+/// Behind a gateway the write is still crossing a socket on that next line. The
+/// default lever therefore disconnects an upstream with *nothing* in flight,
+/// settles nothing, and the write arrives afterwards to park against a stall
+/// that no longer has a link-loss coming to release it. The case then fails on
+/// a 200 ms budget having never once created the situation it is named for.
+///
+/// So the cut is deferred until [FakeStateMan.writesInFlight] says the write is
+/// genuinely out. Nothing about the assertion is relaxed — the outcome must
+/// still come back `WriteUnknown` with a reason kind, and a client that
+/// answered `WriteRejected`, threw, or never resolved still fails. The bounded
+/// number of attempts is there so a client that never sends the write at all
+/// fails on the case's own budget rather than leaving a timer running.
+void dropUpstreamUnderAWriteInFlight(StateManApi api) {
+  final plant = (api as RelayServedFake).plant;
+  // ~150 ms of 1 ms polls: comfortably inside the 200 ms the case allows, so a
+  // write that never lands still fails the case rather than this helper.
+  var attemptsLeft = 150;
+  late final Timer timer;
+  timer = Timer.periodic(const Duration(milliseconds: 1), (_) {
+    if (plant.writesInFlight > 0) {
+      timer.cancel();
+      plant.disconnectUpstream();
+      return;
+    }
+    if (--attemptsLeft <= 0) timer.cancel();
+  });
+  addTearDown(timer.cancel);
 }
 
 /// The driver-facing factory: one gateway-served `StateManApi`, per case.
@@ -336,6 +485,12 @@ final class RelayServedFake
   /// The client, for a case that wants its link state or its debug counters.
   RemoteStateMan get client => _client;
 
+  /// The plant, for the one lever that has to be timed against it.
+  ///
+  /// Not a general escape hatch — every other lever on this class forwards to
+  /// it already. [dropUpstreamUnderAWriteInFlight] is the caller.
+  FakeStateMan get plant => _served;
+
   // ------------------------------------------------ the wire surface, forwarded
 
   @override
@@ -355,8 +510,9 @@ final class RelayServedFake
       _client.readMany(keys);
 
   @override
-  Future<WriteResult> write(String key, Object? value, {Object? expect}) =>
-      _client.write(key, value, expect: expect);
+  Future<WriteResult> write(String key, Object? value,
+          {Object? expect, String? cmd}) =>
+      _client.write(key, value, expect: expect, cmd: cmd);
 
   @override
   List<String> get keys => _client.keys;

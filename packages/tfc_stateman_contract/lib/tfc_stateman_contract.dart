@@ -210,6 +210,27 @@ var _casesRegistered = 0;
 /// [stallWrites] — hold writes open, so the in-flight window can be observed.
 /// [dropLinkWithWritesInFlight] — cut the link under a write that is out.
 /// [seedTimeseries] — record samples, as the gateway's recorder would.
+///
+/// ### Proving a gap instead of hiding it
+///
+/// [expectUnreachable] names checks whose *methods this peer does not have
+/// yet*. Each named case still registers and still runs — so the counts a
+/// driver asserts on stay whole — but it passes by failing with exactly
+/// JSON-RPC -32601, and fails if it succeeds, fails with any other code, or
+/// fails with no code at all. See [expectUnreachableMethod] for why that is
+/// the only one of the four available options that does not rot.
+///
+/// This is **not** a way to excuse a red case. It is the opposite of lowering
+/// [supportsBrowse] or [supportsDataServices]: those delete the cases and leave
+/// the properties unjudged, while this one keeps them running and pins the
+/// reason they cannot pass to a single wire code that stops being true the day
+/// the handler lands.
+///
+/// Only browse and data-services checks may be named. The core groups —
+/// subscribe, store, read, freshness, write — reach an implementation over
+/// methods any peer serving this interface at all must have, so a
+/// method-not-found there is a broken peer rather than an unbuilt one, and
+/// excusing it would be exactly the rot this parameter exists to avoid.
 void runStateManContract(
   StateManApi Function() make, {
   bool supportsWrites = true,
@@ -222,7 +243,25 @@ void runStateManContract(
   bool supportsDataServices = true,
   void Function(StateManApi api, String tableName, List<TimeseriesData> points)?
       seedTimeseries,
+  Set<String> expectUnreachable = const {},
 }) {
+  // At registration, not inside a case: a name that matches nothing would
+  // otherwise be silently ignored, the driver's arithmetic would still add up,
+  // and the leg would report a gap it was no longer proving.
+  final nameable = {...browseChecks.keys, ...dataServicesChecks.keys};
+  final unnameable = expectUnreachable.difference(nameable);
+  if (unnameable.isNotEmpty) {
+    throw ArgumentError.value(
+        unnameable.toList(),
+        'expectUnreachable',
+        'these are not browse or data-services checks. Only those two groups '
+            'may be declared unreachable — every other check reaches the '
+            'implementation over a method any peer serving StateManApi must '
+            'already have, so -32601 there is a broken peer, not an unbuilt '
+            'one. A name matching no check at all is the other possibility, '
+            'and it means the gap list has gone stale');
+  }
+
   group('StateManApi contract', () {
     runSubscribeContract(make);
     runStoreContract(make);
@@ -240,11 +279,13 @@ void runStateManContract(
       make,
       fixture: browseFixture,
       supportsBrowse: supportsBrowse,
+      expectUnreachable: expectUnreachable,
     );
     runDataServicesContract(
       make,
       supportsDataServices: supportsDataServices,
       seedTimeseries: seedTimeseries,
+      expectUnreachable: expectUnreachable,
     );
   });
 

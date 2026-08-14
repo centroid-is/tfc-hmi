@@ -48,50 +48,63 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 
 /// What this leg passes today. Measured, not chosen.
 ///
-/// See [unreachableChecks] for the other 23 and why each one is there. The
-/// number goes **up** as the gateway grows handlers and as the observables in
-/// [unreachableChecks]'s third group get their side channel; it must never go
-/// down without the gap list growing to match, which the arithmetic case below
-/// enforces.
-const int reachableChecks = 21;
+/// See [unreachableChecks] for the other 13 and why every one of them is a
+/// missing *handler* rather than a missing behaviour. The number goes **up** as
+/// the gateway grows those handlers; it must never go down without the gap list
+/// growing to match, which the arithmetic case below enforces.
+///
+/// It was 21 when this leg was first measured (04-09). The other ten were
+/// closed rather than excused, and what each of them turned out to be is worth
+/// keeping here because the causes were not what the count suggested:
+///
+///  * **Two** were a real write-safety defect in the gateway. It minted its own
+///    `cmd` when forwarding a write, so the id the operator's action was minted
+///    under never reached the plant and no attempt count could ever be
+///    attributed to it. Fixed in `value_handlers.dart` by forwarding the
+///    client's id; `StateManApi.write` grew the `cmd` parameter that lets a
+///    relay say "this action already has a name".
+///  * **Five** were defects in this package. `WireValue.t` was dropped at all
+///    three decode sites, so every value reached the store with no source time
+///    and nothing downstream could age it. `readMany` discarded the gateway's
+///    `rejected` map, so a key the source cannot serve came back as an absence
+///    instead of a fault. And an applied write's readback was left to arrive on
+///    the tick-quantised push path, so `await write(...)` routinely returned
+///    while the store still held the old value under a pending badge.
+///  * **Three** were the harness lying to the gateway rather than either of
+///    them misbehaving: it handed the server a source with no address space, so
+///    every key a case seeded after construction was classified as a typo and
+///    silently never delivered. See `_PlantAddressSpace`.
+const int reachableChecks = 31;
 
-/// Every check this leg does not yet pass, by name, grouped by cause.
+/// Every check this leg does not pass, by name — all of them for one cause.
 ///
-/// Three distinct causes, and only the third is a defect in this package:
+/// **The gateway has no handler.** `browse.*`, `timeseries.*`, `historyViews.*`
+/// and `preferences.*` all answer -32601 method-not-found. Phase 10 owns them.
+/// Nothing on the client side can close these: the client's sub-APIs
+/// (`client_sub_apis.dart`) already send the right methods and get told the
+/// server has never heard of them.
 ///
-///  1. **The gateway has no handler** (13). `browse.*`, `timeseries.*`,
-///     `historyViews.*` and `preferences.*` all answer -32601 method-not-found.
-///     Phase 10 owns them. Nothing on the client side can close these; the
-///     client's sub-APIs (`client_sub_apis.dart`) already send the right
-///     methods and get told the server has never heard of them.
+/// These are **not** skipped and **not** red. Each one is handed to
+/// `runStateManContract`'s `expectUnreachable`, which runs it and asserts it
+/// fails with exactly -32601 — so the suite is green *because* the gap is
+/// precisely what this list claims, and any of three things breaks it: the
+/// handler landing (the case now passes, and must be deleted from here and
+/// judged properly), the case failing some other way (a real defect wearing a
+/// known gap's clothes), or the name going stale (the last accounting case).
 ///
-///  2. **The observable does not survive the gateway** (2). The plant's
-///     `upstreamWriteAttempts` and `mintedCmds` are keyed by the `cmd` the
-///     *plant* saw, and the gateway mints its own when it forwards a write —
-///     so a client-minted id can never be correlated against the plant's
-///     counter from this side. `client_harness.dart` throws `UnsupportedError`
-///     rather than returning the 0 that would make the no-auto-retry check
-///     pass vacuously, which is why these two are red instead of falsely
-///     green. Closing them needs the side channel 04-RESEARCH Finding 4
-///     describes, or a `upstreamWriteAttempts:` hook wired to a correlation
-///     the gateway publishes.
-///
-///  3. **A real behavioural gap between the two implementations** (8). These
-///     are the ones worth chasing: a readback that does not reach the client's
-///     store, a pending write that is not visible on the value, a `readMany`
-///     that does not answer for every key asked of it, a forced read that
-///     comes back null, a quality that improves on its own after an upstream
-///     drop, and two notification-count cases whose anti-vacuity arm never
-///     sees its changed key. Each one is a property an operator depends on and
-///     each has a named check waiting for it.
+/// The two `cmd`-correlation entries that used to sit here were a genuine
+/// write-safety defect and are fixed, not excused; the eight behavioural
+/// entries were closed the same way. [reachableChecks] records what each was.
 const List<String> unreachableChecks = <String>[
-  // 1 — no handler on the gateway (Phase 10).
+  // browse — six checks, no `browse.*` handler on the gateway.
   'the address space has a top level, and every root is identifiable',
   "expanding a folder yields that folder's children, not another's",
   "a node's detail carries its data type, and a variable's carries a reading",
   'a resolved path runs root to leaf, and every step is a real edge',
   'a target that does not exist resolves to null, not empty and not a throw',
   'folders and variables expand; methods do not',
+  // data services — seven checks: no `timeseries.*`, `historyViews.*` or
+  // `preferences.*` handler either.
   'a recorded series comes back inside the window, oldest first',
   'every requested series gets an entry, including the silent ones',
   'a downsampled series is bounded and still reaches both ends of the window',
@@ -99,18 +112,6 @@ const List<String> unreachableChecks = <String>[
   'a saved time window survives add, list and delete',
   'every typed preference round-trips and containsKey agrees',
   'a preference change reaches a second listener',
-  // 2 — the observable does not survive the gateway (04-RESEARCH Finding 4).
-  'exactly one upstream attempt per cmd — nothing re-sends an operator write',
-  'every write mints its own 26-character cmd',
-  // 3 — a real behavioural gap in RemoteStateMan or the gateway's forwarding.
-  'an unchanged value notifies nobody',
-  'a synchronous read costs no round trip',
-  'a forced read costs exactly one round trip and is never older than the cache',
-  'a batched read answers for every key asked of it, including empty ones',
-  'quality never improves on its own',
-  'a write in flight when the link drops is unknown, never a failure',
-  'a write in flight is visible as pending on the value',
-  'the store shows the readback, not the value that was typed',
 ];
 
 void main() {
@@ -123,6 +124,15 @@ void main() {
       relayServedFake,
       readOnlyKey: _readOnlyKey,
       browseFixture: defaultBrowseFixture,
+      // The only override this leg takes, and it changes *when* the link is
+      // cut, never what is asserted afterwards. See
+      // `dropUpstreamUnderAWriteInFlight`: over a socket the default lever
+      // disconnects before the write has reached the plant, so the case never
+      // reaches the state it is named for.
+      dropLinkWithWritesInFlight: dropUpstreamUnderAWriteInFlight,
+      // Proven, not skipped: each of these runs and must fail with exactly
+      // -32601. See [unreachableChecks].
+      expectUnreachable: unreachableChecks.toSet(),
     );
   });
   final registered = contractCasesRegistered - before;

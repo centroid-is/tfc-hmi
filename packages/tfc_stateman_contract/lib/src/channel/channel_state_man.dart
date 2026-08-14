@@ -226,7 +226,21 @@ final class ChannelStateMan
   /// That split is the shape Phase 4 inherits, recorded in STATE.md's Phase 1
   /// handoff before either end of it existed.
   @override
-  Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
+  Future<WriteResult> write(String key, Object? value,
+      {Object? expect, String? cmd}) async {
+    if (cmd != null) {
+      // Refused rather than ignored. `HarnessMethods.write` carries no cmd
+      // field, so the served side would mint its own and this call would
+      // return an outcome under an id the caller has never seen — the exact
+      // unreconcilable write `state_man_api.dart` describes. A relay that
+      // needs this leg must widen the harness protocol first; until then,
+      // failing loudly beats losing the correlation quietly.
+      throw UnsupportedError(
+          'ChannelStateMan cannot relay a caller-minted cmd ("$cmd"): the '
+          'harness write protocol has no field to carry it, so the outcome '
+          'would come back under an id nothing could reconcile against. This '
+          'implementation originates writes; it does not forward them');
+    }
     final sanitizedValue = sanitize(value);
     final sanitizedExpect = sanitize(expect);
     if (sanitizedExpect.hadNonFinite) {

@@ -154,8 +154,9 @@ DecodedSubscribeResult decodeSubscribeResult(Object? raw) {
     // `WireValue.fromJson` sanitizes the value and composes
     // `Quality.badNonFinite` over `Quality.fromWire`'s clamp, so neither the
     // poison nor an out-of-band code is range-checked by hand here.
-    final wire = WireValue.fromJson(_asJson(v));
-    return DynamicValue(value: wire.v, quality: wire.q);
+    // `toDynamicValue` carries the source timestamp across; building the
+    // `DynamicValue` by hand here is how it used to get dropped.
+    return WireValue.fromJson(_asJson(v)).toDynamicValue();
   });
 
   final meta = byKey<Object?>(envelope['meta'], 'meta', (v) => v);
