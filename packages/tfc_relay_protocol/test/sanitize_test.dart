@@ -246,5 +246,20 @@ void main() {
       );
       expect(Quality.worst([]), Quality.good);
     });
+
+    test('worst does not discard a good-band code that is not plain good', () {
+      // WR-01. Seeding the accumulator with `good` made every good-band
+      // input invisible, so three call sites compared bands by hand and
+      // documented why they could not use this.
+      expect(Quality.worst([Quality.goodWritePending]),
+          Quality.goodWritePending);
+      expect(Quality.worst([Quality.goodWritePending, Quality.good]),
+          Quality.goodWritePending,
+          reason: 'ties break by position, and callers pass their own '
+              'quality first');
+      expect(Quality.worst([Quality.goodWritePending, Quality.badStale]),
+          Quality.badStale,
+          reason: 'a worse band still wins outright');
+    });
   });
 }

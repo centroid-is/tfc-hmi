@@ -172,8 +172,9 @@ final class DynamicValue {
   /// Nested maps and lists are normalized into `Map<Object, DynamicValue>` /
   /// `List<DynamicValue>`; non-finite doubles anywhere become `null` and force
   /// [Quality.badNonFinite]; a parent's quality is worst-wins over its own and
-  /// all of its children's, so a healthy-looking header can never hide a dead
-  /// member.
+  /// all of its children's — across bands and, against a plain-good parent,
+  /// within one — so a healthy-looking header can never hide a dead member
+  /// nor a member with a write in flight.
   factory DynamicValue({
     Object? value,
     Quality quality = Quality.good,
@@ -597,12 +598,24 @@ final class DynamicValue {
   static DynamicValue _wrap(Object? raw) =>
       raw is DynamicValue ? raw : DynamicValue(value: raw);
 
-  /// Worst-wins over children, but never launders the value's own quality down
-  /// to plain good: `Quality.worst` resets to `good` within a band, which would
-  /// erase the write-pending badge an operator is watching.
+  /// Worst-wins over own and children, and within a band the more specific
+  /// code beats plain `good`.
+  ///
+  /// The band rule alone made a struct whose member carries
+  /// [Quality.goodWritePending] report plain `good`, so a widget bound to the
+  /// struct rather than to the leaf showed no pending badge while a write to
+  /// one of its members was in flight — the case CONTEXT D-04 exists to make
+  /// visible.
   static Quality _compose(Quality own, Iterable<Quality> children) {
-    final worst = Quality.worst([own, ...children]);
-    return worst.band > own.band ? worst : own;
+    var result = own;
+    for (final q in children) {
+      if (q.band > result.band) {
+        result = q;
+      } else if (q.band == result.band && result == Quality.good) {
+        result = q;
+      }
+    }
+    return result;
   }
 
   /// Timestamps are normalized to UTC milliseconds — the precision the wire

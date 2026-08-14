@@ -453,9 +453,9 @@ class FakeStateMan
   /// *always* older than the deadline, and staling them would grey out the one
   /// indicator that says whether to believe the rest. And a key is only
   /// degraded if `badStale` is genuinely worse than what it already carries —
-  /// band comparison, not [Quality.worst], because worst-wins resets to `good`
-  /// within a band and would erase a write-pending badge an operator is
-  /// watching.
+  /// a comparison rather than [Quality.worst] so that a key needing no change
+  /// stages no change at all, and so the sweep never notifies a page whose
+  /// values are already worse news than stale.
   void sweepFreshness() {
     final now = DateTime.now();
     final stale = <String, DynamicValue>{};
