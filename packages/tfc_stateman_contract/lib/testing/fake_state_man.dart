@@ -27,27 +27,44 @@
 /// path (design §4.7, HLTH-01) — there is no health method here because there
 /// is none on the wire — and are excluded from the freshness sweep (HLTH-02).
 ///
-/// Members outside this plan's slice throw [UnimplementedError] naming the plan
-/// that fills them. That is deliberate: an area nobody has contracted yet must
-/// fail loudly if something starts depending on it, rather than return a
-/// plausible empty answer.
+/// Every member of `StateManApi` is now genuinely implemented: the four
+/// data-service sub-APIs are the in-memory implementations in
+/// `fake_data_services.dart`, injectable through the constructor so a driver
+/// can seed a browse tree or a recorded series without subclassing. No member
+/// is left throwing to name a plan that has not been written yet, and that
+/// absence is the property saying the interface has been contracted end to
+/// end — every area of the surface now has a case judging it.
 library;
 
 import 'dart:async';
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import '../src/data_services_contract.dart';
 import '../src/harness.dart';
 import '../src/write_contract.dart';
+import 'fake_data_services.dart';
 
 /// An in-memory state source with a lever for everything the plant would do.
 class FakeStateMan
-    implements StateManApi, StateManHarness, StateManWriteHarness {
+    implements
+        StateManApi,
+        StateManHarness,
+        StateManWriteHarness,
+        StateManDataHarness {
   FakeStateMan({
     this.staleAfter = const Duration(milliseconds: 300),
     Set<String> readOnlyKeys = const {},
     this.writeLatency = Duration.zero,
-  }) : _readOnlyKeys = {...readOnlyKeys} {
+    FakeBrowse? browse,
+    FakeTimeseries? timeseries,
+    FakeHistoryViews? historyViews,
+    FakePreferences? preferences,
+  })  : _readOnlyKeys = {...readOnlyKeys},
+        _browse = browse ?? FakeBrowse(),
+        _timeseries = timeseries ?? FakeTimeseries(),
+        _historyViews = historyViews ?? FakeHistoryViews(),
+        _preferences = preferences ?? FakePreferences() {
     _seedHealthKeys();
     _watchdog = Timer.periodic(_sweepInterval, (_) => sweepFreshness());
   }
@@ -242,6 +259,10 @@ class FakeStateMan
   /// and reports a file name rather than a property. Unknown is also the
   /// honest answer: a source going away is not evidence the device did not
   /// take the write.
+  ///
+  /// The preferences change stream is closed here for the same reason the
+  /// watchdog is cancelled: a broadcast controller nobody closes keeps the test
+  /// isolate alive, so a leak in one case surfaces as a hang three cases later.
   @override
   Future<void> dispose() async {
     if (_disposed) return;
@@ -254,6 +275,7 @@ class FakeStateMan
       await close();
     }
     _closeHandedOutStreams.clear();
+    await _preferences.dispose();
   }
 
   // --------------------------------------------------------- control surface
@@ -810,22 +832,40 @@ class FakeStateMan
   @override
   List<String> get mintedCmds => List<String>.unmodifiable(_mintedCmds);
 
-  // ----------------------------------------------------- other slices' areas
+  // ---------------------------------------------------------- data services
+
+  /// The four sub-APIs, each a real in-memory implementation.
+  ///
+  /// Held as their concrete types so [seedTimeseries] can reach the one lever
+  /// the wire surface deliberately lacks, and exposed below as the interface
+  /// types — which is what lets a sabotage variant override a getter with a
+  /// wrapper without having to reimplement the service it damages.
+  final FakeBrowse _browse;
+  final FakeTimeseries _timeseries;
+  final FakeHistoryViews _historyViews;
+  final FakePreferences _preferences;
 
   @override
-  BrowseApi get browse => throw UnimplementedError('data services: plan 01-09');
+  BrowseApi get browse => _browse;
 
   @override
-  TimeseriesApi get timeseries =>
-      throw UnimplementedError('data services: plan 01-09');
+  TimeseriesApi get timeseries => _timeseries;
 
   @override
-  HistoryViewApi get historyViews =>
-      throw UnimplementedError('data services: plan 01-09');
+  HistoryViewApi get historyViews => _historyViews;
 
   @override
-  PreferencesApi get preferences =>
-      throw UnimplementedError('data services: plan 01-09');
+  PreferencesApi get preferences => _preferences;
+
+  /// Records samples, as the gateway's recorder would.
+  ///
+  /// Routed to the seeded store rather than through [timeseries], so a variant
+  /// that wraps the query path in something dishonest is still seeded with the
+  /// truth — otherwise a sabotage would be judged against data it had already
+  /// had a chance to alter.
+  @override
+  void seedTimeseries(String tableName, List<TimeseriesData> points) =>
+      _timeseries.seed(tableName, points);
 }
 
 /// A write that has gone upstream and had no answer.
