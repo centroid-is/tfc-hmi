@@ -240,6 +240,11 @@ Future<_StalledRun> _measureStalledRun(Duration window) async {
   rig.firehose.destroy();
   final offered = await firehose;
   await rig.line.close();
+  // Printed, not merely asserted: RESEARCH's table is a pair of numbers per
+  // window, and a future regression is far easier to read as "the peak tripled
+  // when the window tripled" than as one failed comparison.
+  print('stalled consumer, ${window.inSeconds} s: peak pending $peak bytes, '
+      '$offered bytes offered');
   return (peakPendingBytes: peak, bytesOffered: offered);
 }
 
