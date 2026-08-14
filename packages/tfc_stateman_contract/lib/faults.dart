@@ -23,5 +23,7 @@
 library;
 
 export 'src/faults/capabilities.dart';
+export 'src/faults/delay_line.dart';
+export 'src/faults/fault_proxy.dart';
 export 'src/faults/fd_count.dart';
 export 'src/faults/socket_ops.dart';
