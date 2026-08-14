@@ -477,14 +477,10 @@ Future<void> installDummynetLoopbackDelay({
 
   // The pipe now exists on the machine. Everything after this point is undone
   // by the teardown, including its own failures.
-  registerTeardown(() async {
-    await _mustRun(dnctlFlushArgv(), 'flush the dummynet pipes');
-    await _mustRun(pfctlLoadArgv(_systemPfConf), 'restore $_systemPfConf');
-    if (!wasEnabled) {
-      await _mustRun(pfctlDisableArgv(), 'disable pf again, as it was found');
-    }
-    await directory.delete(recursive: true);
-  });
+  registerTeardown(() => restoreFromDummynet(
+        wasEnabled: wasEnabled,
+        directory: directory,
+      ));
 
   await _mustRun(pfctlLoadArgv(rules.path), 'load the dummynet pf rules');
   // `pfctl -e` exits non-zero when pf is already enabled, which is a success
@@ -494,11 +490,73 @@ Future<void> installDummynetLoopbackDelay({
   }
 }
 
+/// Undoes [installDummynetLoopbackDelay], one independent step at a time.
+///
+/// **Every step is attempted, and the ruleset goes back first.** The obvious
+/// shape — four sequential awaits on a function that throws — makes the whole
+/// restoration hostage to its first step: a `dnctl -f flush` that fails
+/// because a concurrent run already flushed, or because sudo's credential
+/// cache expired between install and teardown, would abort before
+/// `/etc/pf.conf` is reloaded and leave a developer's Mac running the spike's
+/// ruleset with `dummynet in/out quick on lo0` classifying every loopback
+/// packet, and `pf` enabled when it was found disabled. That is threat T-02-17
+/// arriving through the code written to prevent it. So the reload — the step
+/// whose omission is the residue — runs first, nothing is gated on anything
+/// else, and the failures are collected and reported together at the end.
+///
+/// [run] is a seam, for the same reason the argv builders are public and pure:
+/// what this function does when a step *fails* is its whole subject, every
+/// step needs root, and a test that could not substitute the runner could only
+/// re-run the happy path on the one kind of machine where the residue does not
+/// matter.
+///
+/// Throws [StateError] naming every step that failed and the commands that
+/// finish the job by hand.
+Future<void> restoreFromDummynet({
+  required bool wasEnabled,
+  required Directory directory,
+  PrivilegedRunner run = _mustRun,
+}) async {
+  final failures = <String>[];
+  Future<void> attempt(List<String> argv, String what) async {
+    try {
+      await run(argv, what);
+    } catch (error) {
+      failures.add('$error');
+    }
+  }
+
+  await attempt(pfctlLoadArgv(_systemPfConf), 'restore $_systemPfConf');
+  await attempt(dnctlFlushArgv(), 'flush the dummynet pipes');
+  if (!wasEnabled) {
+    await attempt(pfctlDisableArgv(), 'disable pf again, as it was found');
+  }
+  try {
+    await directory.delete(recursive: true);
+  } catch (error) {
+    failures.add('could not delete ${directory.path}: $error');
+  }
+
+  if (failures.isEmpty) return;
+  throw StateError('the dummynet teardown did not fully restore this machine. '
+      'THE MACHINE MAY STILL BE SHAPED — run '
+      '`${pfctlLoadArgv(_systemPfConf).join(' ')}` and '
+      '`${dnctlFlushArgv().join(' ')}` by hand.\n${failures.join('\n')}');
+}
+
 /// Whether pf reports itself enabled right now.
 Future<bool> _pfEnabled() async {
   final result = await Process.run('sudo', ['-n', 'pfctl', '-s', 'info']);
   return (result.stdout as String).contains('Status: Enabled');
 }
+
+/// Runs one privileged command, throwing when it does not succeed.
+///
+/// The shape of [_mustRun], named so [restoreFromDummynet] can take it as a
+/// parameter — see that function for why substituting it is the only way its
+/// behaviour can be judged without root.
+typedef PrivilegedRunner = Future<void> Function(
+    List<String> argv, String what);
 
 /// Runs [argv], turning a non-zero exit into a [StateError] that says what was
 /// being attempted and how to finish it by hand.

@@ -336,6 +336,86 @@ Future<void> main() async {
   });
 
   // ---------------------------------------------------------------------
+  // What the teardown does on a bad day. Every step needs root, so the
+  // runner is substituted: the property under test is the *ordering and
+  // independence* of the steps, which is a property of this function and not
+  // of pf, and a test that could only run with sudo would be exercising the
+  // happy path on the one machine where the residue does not matter.
+  // ---------------------------------------------------------------------
+  group('dummynet teardown', () {
+    test('restores the ruleset first, and attempts every step even after one '
+        'fails', () async {
+      final attempted = <List<String>>[];
+      final directory =
+          await Directory.systemTemp.createTemp('dummynet_teardown_test');
+
+      Future<void> failEverything(List<String> argv, String what) async {
+        attempted.add(argv);
+        throw StateError('could not $what (exit 1): deliberate');
+      }
+
+      final failure = await restoreFromDummynet(
+        wasEnabled: false,
+        directory: directory,
+        run: failEverything,
+      ).then<Object?>((_) => null, onError: (Object error) => error);
+
+      expect(attempted.first, pfctlLoadArgv('/etc/pf.conf'),
+          reason: 'the pf.conf reload is the step whose omission leaves a '
+              'developer Mac running the spike ruleset with pf enabled '
+              '(threat T-02-17), so it cannot be gated on the flush '
+              'succeeding — it goes first, and every other step goes after it '
+              'whatever it did');
+      expect(attempted, [
+        pfctlLoadArgv('/etc/pf.conf'),
+        dnctlFlushArgv(),
+        pfctlDisableArgv(),
+      ],
+          reason: 'a teardown of sequential throwing calls stops at the first '
+              'failure and leaves the machine shaped in exactly the way this '
+              'function documents it will not. Each step has to be attempted '
+              'on its own');
+      expect(directory.existsSync(), isFalse,
+          reason: 'the temp ruleset outlived a failing teardown, so a run '
+              'that fails leaves a directory of pf rules behind every time');
+
+      expect(failure, isA<StateError>(),
+          reason: 'a teardown that swallowed three root-level failures would '
+              'report a restored machine that is still shaped, which is worse '
+              'than the failure it hid');
+      final report = failure.toString();
+      expect(report, contains('MAY STILL BE SHAPED'));
+      expect(report, contains(pfctlLoadArgv('/etc/pf.conf').join(' ')),
+          reason: 'the person reading this is the one who has to finish the '
+              'restoration by hand, so the message carries the commands');
+      expect(report, contains(dnctlFlushArgv().join(' ')));
+      expect('MAY STILL BE SHAPED'.allMatches(report).length, 1,
+          reason: 'the three failures are collected into one report rather '
+              'than one exception each: a teardown throwing from inside a '
+              'teardown loses the ones that came after it');
+    });
+
+    test('leaves pf enabled when it was found enabled, and says nothing when '
+        'every step worked', () async {
+      final attempted = <List<String>>[];
+      final directory =
+          await Directory.systemTemp.createTemp('dummynet_teardown_test');
+
+      await restoreFromDummynet(
+        wasEnabled: true,
+        directory: directory,
+        run: (argv, what) async => attempted.add(argv),
+      );
+
+      expect(attempted, [pfctlLoadArgv('/etc/pf.conf'), dnctlFlushArgv()],
+          reason: 'pf was enabled before the spike, so switching it off would '
+              'be this harness changing a machine it did not shape — the '
+              'teardown restores what was found, it does not impose a state');
+      expect(directory.existsSync(), isFalse);
+    });
+  });
+
+  // ---------------------------------------------------------------------
   // The kernel arms. One probe, declared once, carried into every group as a
   // named skip (RESEARCH Finding 13).
   // ---------------------------------------------------------------------
