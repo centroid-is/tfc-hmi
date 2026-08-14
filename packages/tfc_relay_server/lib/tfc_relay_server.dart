@@ -17,5 +17,6 @@
 /// chokepoint for every plan in the phase.
 library;
 
+export 'src/relay_server.dart';
 export 'src/server_config.dart';
 export 'src/token_validator.dart';
