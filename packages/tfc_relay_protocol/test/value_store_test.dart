@@ -252,16 +252,54 @@ void main() {
               'thereafter');
     });
 
-    test('a replayed old batch is a gap and does not rewind the expectation',
-        () {
+    test('a replayed old batch is reported and does not rewind the '
+        'expectation', () {
       final store = ValueStore();
       store.applyBatch(const {}, seq: 4);
-      final replay = store.applyBatch(const {}, seq: 2) as BatchSeqGap;
-      expect([replay.expected, replay.received], [5, 2],
-          reason: 'a replayed batch is as suspect as a lost one');
+      final replay = store.applyBatch(const {}, seq: 2) as BatchReplay;
+      expect([replay.lastApplied, replay.received], [4, 2],
+          reason: 'a re-delivery is a re-delivery of 2, not a batch that is '
+              'late for 5');
       expect(store.applyBatch(const {}, seq: 5), isA<BatchOk>(),
           reason: 'the replay must not turn the next legitimate batch into a '
-              'second false gap');
+              'false gap');
+    });
+
+    test('a replayed batch does not overwrite newer cached values', () {
+      // CR-02. The operator reads the number off the mimic, not the verdict.
+      // A duplicate frame carrying seq 1 after seq 2 was applied used to put
+      // a reading from two batches ago back on screen under good quality.
+      final store = ValueStore();
+      store.applyBatch({'k': DynamicValue.of(10)}, seq: 1);
+      store.applyBatch({'k': DynamicValue.of(20)}, seq: 2);
+
+      final verdict = store.applyBatch({'k': DynamicValue.of(10)}, seq: 1);
+
+      expect(verdict, isA<BatchReplay>());
+      expect(store.peek('k')!.asInt, 20,
+          reason: 'the cached value is newer than the replayed one; the '
+              'F18 rule discards the old frame rather than displaying it');
+    });
+
+    test('a replayed batch notifies nobody', () {
+      final store = ValueStore();
+      store.applyBatch({'k': DynamicValue.of(20)}, seq: 2);
+      var count = 0;
+      store.node('k').addListener(() => count++);
+
+      store.applyBatch({'k': DynamicValue.of(10)}, seq: 1);
+
+      expect(count, 0,
+          reason: 'a discarded batch changes nothing, so no widget rebuilds');
+    });
+
+    test('a duplicate of the batch just applied is a replay', () {
+      // The common case: the same frame delivered twice, not an old one.
+      final store = ValueStore();
+      store.applyBatch({'k': DynamicValue.of(1)}, seq: 3);
+      expect(store.applyBatch({'k': DynamicValue.of(1)}, seq: 3),
+          isA<BatchReplay>(),
+          reason: 'seq 3 was already applied; re-applying it is not progress');
     });
 
     test('batches without a seq never report a gap', () {
