@@ -390,7 +390,7 @@ void main() {
     expect(link.session.subscriptions.count, 0);
   });
 
-  test('the wire surface is exactly the four methods this phase declares',
+  test('the wire surface is exactly the nine methods declared today',
       () async {
     final link = _link();
     addTearDown(link.dispose);
@@ -400,9 +400,17 @@ void main() {
       Methods.ping,
       Methods.subscribe,
       Methods.unsubscribe,
+      Methods.write,
+      Methods.writeStatus,
+      Methods.read,
+      Methods.readFresh,
+      Methods.readMany,
     }, reason: 'a declared name with no handler answers METHOD_NOT_FOUND from '
         'a table claiming to carry it; a handler nobody declared is surface '
-        'nobody counted. 03-08 freezes this set');
+        'nobody counted. 03-08 freezes this set and 04-02 added the five '
+        'value methods to it. This is the third file spelling the table out — '
+        '`surface_test.dart` holds the canonical literal, and the fact that '
+        'three copies had to be edited in lockstep is itself worth the note');
   });
 
   group('a partial subscribe leaves nothing attached', () {
