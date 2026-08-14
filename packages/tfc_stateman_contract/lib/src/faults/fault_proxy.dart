@@ -40,6 +40,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'delay_line.dart';
 import 'socket_ops.dart';
@@ -90,6 +91,23 @@ final class FaultProxy {
   final Set<_ProxiedPair> _pairs = <_ProxiedPair>{};
   bool _shutDown = false;
   int? _lastUpstreamConnectErrno;
+
+  /// Where jitter is drawn from.
+  ///
+  /// Not seeded: the property under test is that successive round trips
+  /// *differ* and all land inside the band, which a fixed seed would turn into
+  /// a check that one particular sequence of draws still lands there.
+  final Random _jitterSource = Random();
+
+  Duration? _latency;
+  Duration? _jitter;
+
+  /// The per-chunk delay every line gets, rebuilt when [latency] or [jitter]
+  /// changes and handed to pairs accepted afterwards.
+  ///
+  /// Null when neither lever is set, which is how a line goes back to the
+  /// undelayed write path rather than to a closure returning zero.
+  Duration Function()? _perChunkDelay;
 
   /// The port this proxy is listening on.
   ///
@@ -181,19 +199,36 @@ final class FaultProxy {
 
   /// One-way delay applied to every chunk in both directions.
   ///
-  /// Deliberately setter-only until plan 02-04 lands: a getter answering "off"
-  /// would be answering on behalf of a mode nobody has written.
+  /// Applied per direction, so an application round trip through the proxy
+  /// costs `2 * value`. Overhead is a small constant, 1–2.5 ms per direction
+  /// (Finding 6), so tests assert `inInclusiveRange(2 * d, 2 * d + 20ms)`
+  /// rather than a percentage band — the constant is bigger than a percentage
+  /// allows at 50 ms and smaller than one allows at 500 ms.
   ///
-  /// Overhead is a small constant, 1–2.5 ms per direction (Finding 6), so
-  /// tests assert `inInclusiveRange(2 * d, 2 * d + 20ms)` rather than a
-  /// percentage band.
-  set latency(Duration? value) => _notYet('latency', '02-04');
+  /// Live: setting it reaches the pairs that are already open as well as the
+  /// ones accepted later. A lever that only worked before connect could not
+  /// express "the link degrades while the client is connected", which is the
+  /// only shape the slow-link scenarios come in. Null turns it off.
+  ///
+  /// Setter-only. A getter would answer with the configured number, and the
+  /// question worth asking — what did the connection actually experience — is
+  /// answered by measuring a round trip, which is what `latency_test.dart`
+  /// does.
+  set latency(Duration? value) {
+    _latency = value;
+    _applyDelay();
+  }
 
   /// Random extra delay added on top of [latency], redrawn per chunk.
   ///
-  /// Part of the `latency` mode rather than a ninth one, which is why the
-  /// failure below names latency: there is no separate jitter test to write.
-  set jitter(Duration? value) => _notYet('latency', '02-04');
+  /// Part of the `latency` mode rather than a ninth one — hence no separate
+  /// entry in [faultModes] and no separate test file. Drawn uniformly from
+  /// zero to this value, independently per chunk and per direction, so a round
+  /// trip lands in `[2d, 2d + 2 * jitter + overhead]`.
+  set jitter(Duration? value) {
+    _jitter = value;
+    _applyDelay();
+  }
 
   /// Bytes per second the proxy will forward.
   ///
@@ -241,6 +276,31 @@ final class FaultProxy {
   set bufferServerToClient(bool value) =>
       _notYet('bufferServerToClient', '02-09');
 
+  /// Rebuilds the per-chunk delay and pushes it to every live pair.
+  ///
+  /// Both directions of every pair get the *same* closure, and it redraws its
+  /// jitter on each call, so the two directions of one round trip draw
+  /// independently rather than sharing one number.
+  void _applyDelay() {
+    _perChunkDelay = _buildDelay();
+    for (final pair in _pairs) {
+      pair.applyChunkDelay(_perChunkDelay);
+    }
+  }
+
+  /// The delay function the current [latency] and [jitter] describe.
+  Duration Function()? _buildDelay() {
+    final base = _latency ?? Duration.zero;
+    final spread = _jitter ?? Duration.zero;
+    if (base <= Duration.zero && spread <= Duration.zero) return null;
+    if (spread <= Duration.zero) return () => base;
+    // `+ 1` because `nextInt` is exclusive at the top and the spread reads as
+    // an inclusive maximum everywhere it is written down.
+    final spreadMicros = spread.inMicroseconds;
+    return () =>
+        base + Duration(microseconds: _jitterSource.nextInt(spreadMicros + 1));
+  }
+
   Never _notYet(String mode, String plan) => throw UnimplementedError(
       'mode $mode lands in plan $plan; the lever is declared now and throws '
       'rather than accepting the setting silently, because a mode that can be '
@@ -272,6 +332,12 @@ final class FaultProxy {
       return;
     }
     final pair = _ProxiedPair(client, upstream);
+    // Before `start`, so the first chunk of a connection accepted while a
+    // lever is set is already subject to it. A pair that picked its settings
+    // up one event loop later would deliver the opening bytes of every
+    // connection unmodified, which is exactly the traffic a handshake test
+    // cares about.
+    pair.applyChunkDelay(_perChunkDelay);
     _pairs.add(pair);
     pair.start(_pairs.remove);
   }
@@ -297,6 +363,17 @@ final class _ProxiedPair {
   final DelayLine toUpstream;
   final DelayLine toClient;
   bool _closed = false;
+
+  /// Applies a per-chunk delay to **both** directions.
+  ///
+  /// Both, because `latency` is documented as a one-way delay and a round trip
+  /// crosses the proxy twice: setting it on one direction would halve the
+  /// number every test measures, and the failure would read as a scheduler
+  /// problem rather than as a missing line here.
+  void applyChunkDelay(Duration Function()? delay) {
+    toUpstream.chunkDelay = delay;
+    toClient.chunkDelay = delay;
+  }
 
   void start(void Function(_ProxiedPair pair) onClosed) {
     // A destroyed socket completes `done` with an error nobody is waiting for,

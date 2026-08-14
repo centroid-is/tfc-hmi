@@ -62,6 +62,14 @@ const defaultHighWaterBytes = 1024 * 1024;
 /// backpressure signal.
 const defaultLowWaterBytes = 256 * 1024;
 
+/// One queued chunk and the earliest moment it may be written.
+///
+/// [releaseAtMicros] is a reading of the owning line's monotonic clock, and
+/// zero means "already due": with no delay configured the comparison is
+/// against a deadline in the past, so the pump never awaits and the write path
+/// is exactly the flush-gated one that was measured before latency existed.
+typedef _Queued = ({List<int> bytes, int releaseAtMicros});
+
 /// A flush-gated, bounded, one-directional byte pipe.
 final class DelayLine {
   DelayLine({
@@ -80,9 +88,18 @@ final class DelayLine {
   final int lowWaterBytes;
 
   final Socket _destination;
-  final Queue<List<int>> _pending = Queue<List<int>>();
+  final Queue<_Queued> _pending = Queue<_Queued>();
   final StreamController<bool> _pauseChanges = StreamController<bool>.broadcast();
   final Completer<void> _finished = Completer<void>();
+
+  /// The line's own monotonic clock, for release deadlines.
+  ///
+  /// A `Stopwatch` rather than `DateTime.now()`: release times are compared
+  /// across an await, and a wall clock that steps — NTP, a suspended laptop —
+  /// would release a chunk early or hold it for the length of the step. The
+  /// deadline is an elapsed-microsecond reading, so nothing outside this
+  /// object can move it.
+  final Stopwatch _clock = Stopwatch()..start();
 
   StreamSubscription<List<int>>? _source;
   int _pendingBytes = 0;
@@ -95,10 +112,9 @@ final class DelayLine {
   // ---------------------------------------------------------------------
   // Mode seats.
   //
-  // Declared now, read by nothing in this file. Each mode plan fills its own
-  // seat without restructuring the line, which is the point: the queue that
-  // enforces the memory bound and the queue the modes act on have to be the
-  // same object, or the bound proved here is not the bound they inherit.
+  // Seats the mode plans fill one at a time. The queue that enforces the
+  // memory bound and the queue the modes act on have to be the same object,
+  // or the bound proved here is not the bound they inherit.
   //
   // These are not silent no-ops in disguise. The only public way to reach
   // them is a `FaultProxy` lever, and every lever whose mode has not landed
@@ -108,8 +124,17 @@ final class DelayLine {
 
   /// Per-chunk delay before a queued chunk is forwarded. Null means no delay.
   ///
-  /// The seat `latency` and `jitter` take in plan 02-04. A function rather
-  /// than a `Duration` so jitter can be redrawn per chunk.
+  /// The seat `latency` and `jitter` take (plan 02-04). A function rather than
+  /// a `Duration` because jitter is redrawn per chunk, and live-mutable
+  /// because a scenario that degrades a link at minute three sets it on a
+  /// connection that is already open.
+  ///
+  /// **Drawn at arrival, honoured at the head of the queue.** The draw happens
+  /// in [_onData] so the delay is a property of the chunk; the wait happens in
+  /// [_pump] so a chunk that came in behind a slower one cannot overtake it.
+  /// Head-of-line waiting is what makes this a delay rather than a reordering
+  /// fault — and the chunk waits *inside* [_pending], so its bytes still count
+  /// toward the high-water mark while they are held.
   Duration Function()? chunkDelay;
 
   /// Bytes per second this line may forward. Null means unmetered.
@@ -201,7 +226,11 @@ final class DelayLine {
 
   void _onData(List<int> chunk) {
     if (_closed || chunk.isEmpty) return;
-    _pending.addLast(chunk);
+    final delay = chunkDelay?.call();
+    final releaseAtMicros = delay == null || delay <= Duration.zero
+        ? 0
+        : _clock.elapsedMicroseconds + delay.inMicroseconds;
+    _pending.addLast((bytes: chunk, releaseAtMicros: releaseAtMicros));
     _pendingBytes += chunk.length;
     if (_pendingBytes > _peakPendingBytes) _peakPendingBytes = _pendingBytes;
     if (!_paused && _pendingBytes >= highWaterBytes) {
@@ -231,7 +260,20 @@ final class DelayLine {
     _writing = true;
     try {
       while (!_closed && _pending.isNotEmpty) {
-        final chunk = _pending.first;
+        final queued = _pending.first;
+        final waitMicros = queued.releaseAtMicros - _clock.elapsedMicroseconds;
+        if (waitMicros > 0) {
+          // A `Future.delayed` that is the mode itself, not a guess about
+          // someone else's scheduler: the phase forbids sleeping *as
+          // synchronisation*, and this is the delay being injected. The chunk
+          // stays in `_pending` for the wait, so a line holding bytes back
+          // still counts them against the high-water mark — a latency mode
+          // that parked its chunks somewhere else would be an unbounded queue
+          // wearing the bounded one's name.
+          await Future<void>.delayed(Duration(microseconds: waitMicros));
+          if (_closed) return;
+        }
+        final chunk = queued.bytes;
         try {
           _destination.add(chunk);
           await _destination.flush();
