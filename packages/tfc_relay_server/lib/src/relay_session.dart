@@ -316,6 +316,9 @@ final class RelaySession {
   String? get epoch => _epoch;
   String? _epoch;
 
+  /// STUB (05-05 task 2 RED): declared so the cases can fail by name.
+  int get droppedHoldTicks => 0;
+
   /// When the last inbound frame arrived, on the session's clock.
   ///
   /// The heartbeat reaper (03-11) sweeps on this. A tap on the read side

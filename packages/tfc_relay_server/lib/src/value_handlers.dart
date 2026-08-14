@@ -112,6 +112,12 @@ final class ValueHandlers {
   /// of it, no cmd, no outcome and no refusal path.
   final _holds = <String, HoldHandle>{};
 
+  /// STUB (05-05 task 2 RED): declared so the cases can fail by name.
+  int get droppedHoldTicks => 0;
+
+  /// STUB (05-05 task 2 RED): declared so the cases can fail by name.
+  Future<Object?> holdTick(rpc.Parameters params) async => null;
+
   /// `read`: the cached value, no round trip.
   ///
   /// **Why it stays on the table even though `RemoteStateMan` never sends it**
