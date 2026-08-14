@@ -603,9 +603,10 @@ const writeChecks = <String, Check<StateManApi>>{
 /// in what they can do, and the alternative — a second suite, or a check that
 /// quietly passes when it cannot run — is how a capability becomes untested
 /// everywhere. [supportsWrites] `false` skips the whole group with a reason on
-/// the record; [readOnlyKey] `null` skips the read-only case alone, because an
-/// implementation with nothing read-only about it has no way to satisfy it
-/// honestly.
+/// the record; [readOnlyKey] `null` skips the read-only case alone, with its
+/// own reason, because an implementation with nothing read-only about it has
+/// no way to satisfy it honestly. Both are *skips*, never omissions: a case
+/// absent from the run report is a capability nobody can see went unjudged.
 ///
 /// The three hook parameters exist for an implementation whose harness cannot
 /// answer for itself — a remote source whose upstream attempt count lives on
@@ -636,21 +637,34 @@ void runWriteContract(
     if (dropLinkWithWritesInFlight != null)
       _linkLostCase: (api) => checkLostLinkYieldsUnknownNeverFailure(api,
           dropLinkWithWritesInFlight: dropLinkWithWritesInFlight),
-    if (readOnlyKey != null)
-      _readOnlyCase: (api) =>
-          checkReadOnlyKeyIsRejectedNotThrown(api, readOnlyKey: readOnlyKey),
+    // Registered unconditionally so it can be *skipped* below rather than
+    // vanish; `checkReadOnlyKeyIsRejectedNotThrown` falls back to a key of
+    // its own when none is named.
+    _readOnlyCase: (api) =>
+        checkReadOnlyKeyIsRejectedNotThrown(api, readOnlyKey: readOnlyKey),
   };
-  // Nothing read-only to write to: the case cannot be satisfied honestly, so
-  // it is removed rather than passed vacuously.
-  if (readOnlyKey == null) cases.remove(_readOnlyCase);
 
   group('write', () {
     cases.forEach((property, check) {
-      test(property, () async {
-        final api = make();
-        addTearDown(api.dispose);
-        await check(api);
-      });
+      test(
+        property,
+        () async {
+          final api = make();
+          addTearDown(api.dispose);
+          await check(api);
+        },
+        // Nothing read-only to write to: the case cannot be satisfied
+        // honestly. Skipped with a reason rather than dropped, matching every
+        // other declined capability — a case that is simply absent leaves no
+        // trace at all, so an implementation registered through
+        // `runStateManContract(MyStateMan.new)` runs nine write cases instead
+        // of ten and nothing says so.
+        skip: property == _readOnlyCase && readOnlyKey == null
+            ? 'no readOnlyKey was declared, so this source has no key the '
+                'device genuinely refuses; declare one to have the '
+                'rejected-not-thrown property judged'
+            : null,
+      );
     });
   },
       skip: supportsWrites
