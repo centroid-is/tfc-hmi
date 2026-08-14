@@ -303,7 +303,10 @@ class FakeTimeseries implements TimeseriesApi {
   Future<Map<DateTime, int>> countTimeseriesDataMultiple(
       String tableName, Duration interval, int howMany,
       {DateTime? since}) async {
-    if (interval <= Duration.zero || howMany <= 0) return const {};
+    // Guarded on the unit actually used: a positive sub-millisecond interval
+    // — Duration(microseconds: 500) — passes `> Duration.zero` and truncates
+    // to inMilliseconds == 0, which is a division by zero one bucket later.
+    if (interval.inMilliseconds <= 0 || howMany <= 0) return const {};
     final counts = <DateTime, int>{};
     for (final point in _tables[tableName] ?? const <TimeseriesData>[]) {
       if (since != null && point.time.isBefore(since)) continue;
@@ -330,9 +333,11 @@ class FakeTimeseries implements TimeseriesApi {
   /// epoch — the same alignment `time_bucket` uses, so a bucket boundary means
   /// the same thing here and in TimescaleDB.
   static DateTime _bucketOf(DateTime time, Duration interval) {
+    final step = interval.inMilliseconds;
     final millis = time.millisecondsSinceEpoch;
-    return DateTime.fromMillisecondsSinceEpoch(
-        millis - millis.remainder(interval.inMilliseconds),
+    // Floor, not truncate: remainder() keeps the dividend's sign, which put a
+    // pre-1970 sample in the bucket *after* itself.
+    return DateTime.fromMillisecondsSinceEpoch((millis / step).floor() * step,
         isUtc: true);
   }
 
