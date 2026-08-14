@@ -36,6 +36,7 @@ library;
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
+import 'package:tfc_relay_server/src/tick_engine.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
 import 'support/bands.dart';
@@ -142,6 +143,107 @@ void main() {
       expect(plant.engine.ticks, 1,
           reason: 'the tick counter is the only evidence an idle engine is '
               'running at all');
+    });
+  });
+
+  group('one session\'s failure is one session\'s failure', () {
+    // 03-REVIEW CR-03. `tickOnce` had no containment: `_tickSession` reaches
+    // `session.emit` → `writeFrame` → `ws.sink.add`, a socket write on a
+    // connection that may have died since the last tick. Because the registry
+    // preserves connection order the same session threw first on every
+    // subsequent tick, so this was permanent starvation of everything after
+    // it — and of the reaper, which is what would have removed the corpse
+    // causing it.
+    test('a session that throws on emit does not starve the ones after it',
+        () async {
+      final plant = Plant();
+      final keys = plant.seed(1, prefix: 'CN01.CONV');
+      final dead = await plant.connect('page-dead', keys);
+      final healthy = await plant.connect('page-live', keys);
+      dead.breakSocket();
+      plant.clearWires();
+
+      plant.api.setValues({keys.single: 7});
+      plant.tick();
+
+      expect(healthy.updates.single.changes.values.map((v) => v.v), [7],
+          reason: 'the healthy panel is registered after the poisoned one, so '
+              'before containment it received nothing at all — on this tick '
+              'and on every tick afterwards, which reads on the plant floor '
+              'as half the panels going still with no server-side trace');
+      expect(dead.session.sentCloseCode, CloseCodes.serverDraining,
+          reason: 'a session the server cannot write to is evicted rather '
+              'than left to hold the tick; 4002 is the code that tells a panel '
+              'to reconnect without alarming, which is the true instruction '
+              'when the failure is on our side of the socket');
+      expect(plant.errors.map((e) => e.where), contains('tick'),
+          reason: 'containment that reported nothing would be a swallowed '
+              'error wearing a fix\'s name: the throw went to the ambient zone '
+              'before, and this package logs nowhere else');
+    });
+
+    test('the sweep still runs on a tick where a session threw', () async {
+      final plant = Plant();
+      final keys = plant.seed(1, prefix: 'CN01.PUMPX');
+      final dead = await plant.connect('page-dead', keys);
+      dead.breakSocket();
+
+      // The sweep seam rather than the reaper itself: these panels carry the
+      // session's own wall clock, so no amount of advancing the engine's
+      // injected one makes them silent. What CR-03 broke is the tick's *last
+      // step* not running at all, and that is what is asserted here —
+      // `liveness_test.dart` owns the deadline arithmetic.
+      var swept = 0;
+      final engine = TickEngine(
+        registry: plant.registry,
+        config: plant.config,
+        clock: plant.clock.now,
+        sweep: (_) => swept++,
+        onSessionError: (error, stack, where) =>
+            plant.errors.add((where: where, error: error)),
+      );
+
+      plant.api.setValues({keys.single: 1});
+      engine.tickOnce(plant.clock.nowMs);
+
+      expect(swept, 1,
+          reason: 'the sweep is the tick\'s last step, so an uncontained throw '
+              'from any session skipped it entirely — and the session it would '
+              'have reaped is the dead one whose socket is causing the throw, '
+              'which is how the starvation became permanent rather than '
+              'transient');
+      expect(plant.errors.map((e) => e.where), contains('tick'),
+          reason: 'the session that threw is still reported; containment is '
+              'not silence');
+    });
+
+    test('a throwing sweep is contained too', () {
+      final plant = Plant();
+      var swept = 0;
+      final engine = TickEngine(
+        registry: plant.registry,
+        config: plant.config,
+        clock: plant.clock.now,
+        sweep: (_) {
+          swept++;
+          throw StateError('the sweep failed');
+        },
+        onSessionError: (error, stack, where) =>
+            plant.errors.add((where: where, error: error)),
+      );
+
+      expect(() {
+        engine.tickOnce(plant.clock.nowMs);
+        engine.tickOnce(plant.clock.nowMs);
+      }, returnsNormally,
+          reason: 'a sweep that threw took the tick down from the other end: '
+              'every session served and none of them reaped, on every tick, '
+              'permanently');
+      expect(swept, 2, reason: 'the engine keeps ticking after a failed sweep');
+      expect(plant.errors.map((e) => e.where), everyElement('reap'),
+          reason: 'a contained sweep failure is still a failure, and it is '
+              'reported under its own site so a reader can tell it from a '
+              'session\'s');
     });
   });
 
