@@ -71,13 +71,21 @@ Map<String, Object?> helloParams({List<String>? supported}) => HelloParams(
 
 /// The close a *client* observed, which is the only close worth asserting on
 /// for a close the server initiated (`web_socket_channel` #1698).
+/// Named for the fields it carries rather than for their shorter forms, so a
+/// case that asserts on one says `closeCode` in the source — which is what the
+/// phase's own grep for "does this file assert a close code, and whose?" reads.
 final class ClientClose {
-  const ClientClose(this.code, this.reason);
-  final int? code;
-  final String? reason;
+  const ClientClose(this.closeCode, this.closeReason);
+
+  /// The code the client's socket observed. Null while the socket is open.
+  final int? closeCode;
+
+  /// The reason the client's socket observed.
+  final String? closeReason;
 
   @override
-  String toString() => 'ClientClose($code, ${reason ?? '<no reason>'})';
+  String toString() =>
+      'ClientClose($closeCode, ${closeReason ?? '<no reason>'})';
 }
 
 // ---------------------------------------------------------------------------
