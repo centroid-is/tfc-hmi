@@ -122,11 +122,24 @@ Future<void> expectUnreachableMethod(
 /// is fixed by the JSON-RPC specification, it is not a value any of these
 /// checks would otherwise mention, and the alternative is excusing those cases
 /// with no evidence at all.
+///
+/// **On a word boundary, not anywhere in the string** (04-REVIEW IN-03). A
+/// bare `contains` excused a check that failed for a completely different
+/// reason as long as the digits turned up somewhere in the message — inside a
+/// nested `data` echo of the request, inside a larger number, inside a
+/// timestamp. An excused failure is worse than a red one: the suite reports
+/// the gap it already knew about and the new defect leaves no trace at all.
 bool _isMethodNotFound(Object? error) {
   try {
     if ((error as dynamic).code == methodNotFoundCode) return true;
   } catch (_) {
     // No `code` to read; fall through to the text.
   }
-  return '$error'.contains('$methodNotFoundCode');
+  return _codeInText.hasMatch('$error');
 }
+
+/// [methodNotFoundCode] as a standalone token: not preceded by a digit, a
+/// minus or a dot, and not followed by a digit or a dot. `-32601` matches;
+/// `-326013`, `1.32601` and `4-32601` do not.
+final RegExp _codeInText =
+    RegExp('(?<![-.0-9])${RegExp.escape('$methodNotFoundCode')}(?![.0-9])');
