@@ -115,10 +115,19 @@ class FakeStateMan
   /// next value for it.
   final _retiredKeys = <String>{};
 
-  /// Closers for the streams [subscribe] has handed out, so [dispose] can shut
-  /// down a consumer that never cancelled. Closers rather than the controllers
-  /// themselves: nothing here needs to hold a controller once it is wired up.
-  final _closeHandedOutStreams = <Future<void> Function()>[];
+  /// Closers for the streams [subscribe] has handed out that are still open,
+  /// so [dispose] can shut down a consumer that never cancelled.
+  ///
+  /// Each closer deregisters itself, which is the difference between a
+  /// registry and a leak: this class is documented as importable by the server
+  /// and client packages and Phase 3/4 tests will hold one across many cases,
+  /// so a list that only ever grows means a controller per `subscribe` call
+  /// retained for the object's whole lifetime — and a `dispose` that awaits
+  /// `close()` on every controller ever created.
+  ///
+  /// A [Set] with identity semantics, because two closers are never
+  /// interchangeable even though nothing distinguishes their signatures.
+  final _closeHandedOutStreams = <Future<void> Function()>{};
 
   /// When each key last had a value *arrive* for it.
   ///
@@ -219,13 +228,36 @@ class FakeStateMan
     final node = _store.node(key);
     late final StreamController<DynamicValue> controller;
     void push() => controller.add(node.value);
+    // Registered while the stream is live and deregistered when the last
+    // subscriber goes away, so the registry tracks streams that still need
+    // closing rather than every stream ever handed out. Re-listening
+    // re-registers, exactly as it re-attaches the node listener.
+    late final Future<void> Function() close;
+    close = () async {
+      _closeHandedOutStreams.remove(close);
+      await controller.close();
+    };
     controller = StreamController<DynamicValue>.broadcast(
-      onListen: () => node.addListener(push),
-      onCancel: () => node.removeListener(push),
+      onListen: () {
+        node.addListener(push);
+        _closeHandedOutStreams.add(close);
+      },
+      onCancel: () {
+        node.removeListener(push);
+        _closeHandedOutStreams.remove(close);
+      },
     );
-    _closeHandedOutStreams.add(controller.close);
+    _closeHandedOutStreams.add(close);
     return controller.stream;
   }
+
+  /// How many handed-out streams are still registered for closing.
+  ///
+  /// Exposed because nothing else about a cancelled stream is observable from
+  /// outside, and a registry that only ever grows is a leak in shipped `lib/`
+  /// code rather than in a test file: this class is imported by the server and
+  /// client packages, and Phase 3/4 tests hold one instance across many cases.
+  int get openHandedOutStreams => _closeHandedOutStreams.length;
 
   /// The cached value, or null when nothing has arrived for [key] yet — the
   /// "not known" / "known to be bad" distinction the interface requires.
@@ -271,7 +303,9 @@ class FakeStateMan
     _loseTrackOfWritesInFlight(const WriteReason('link_lost',
         message: 'the source was disposed while the write was in flight'));
     _store.dispose();
-    for (final close in _closeHandedOutStreams) {
+    // A snapshot: each closer deregisters itself, and closing a controller
+    // with a live subscriber runs onCancel, which does the same.
+    for (final close in List.of(_closeHandedOutStreams)) {
       await close();
     }
     _closeHandedOutStreams.clear();
