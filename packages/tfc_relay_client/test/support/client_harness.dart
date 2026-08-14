@@ -245,6 +245,13 @@ final class _PlantAddressSpace implements StateManApi {
       _plant.write(key, value, expect: expect, cmd: cmd);
 
   @override
+  Future<List<WriteResult>> writeStatus(List<String> cmds) =>
+      _plant.writeStatus(cmds);
+
+  @override
+  Future<HoldHandle> holdToRun(String key) => _plant.holdToRun(key);
+
+  @override
   BrowseApi get browse => _plant.browse;
 
   @override
@@ -572,6 +579,13 @@ final class RelayServedFake
   Future<WriteResult> write(String key, Object? value,
           {Object? expect, String? cmd}) =>
       _client.write(key, value, expect: expect, cmd: cmd);
+
+  @override
+  Future<List<WriteResult>> writeStatus(List<String> cmds) =>
+      _client.writeStatus(cmds);
+
+  @override
+  Future<HoldHandle> holdToRun(String key) => _client.holdToRun(key);
 
   @override
   List<String> get keys => _client.keys;
