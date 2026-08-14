@@ -64,6 +64,24 @@ const _firehoseDuration = Duration(seconds: 4);
 /// What the firehose writes at a time.
 const _chunkBytes = 64 * 1024;
 
+/// The delay that holds a batch in the queue while the credit arm sets up.
+///
+/// Long enough that a flush and a blackhole both land while the bytes are
+/// still owed, which is the state the arm is about.
+const _creditLatency = Duration(milliseconds: 500);
+
+/// The batch the credit arm queues, discards and then counts.
+///
+/// Several chunks, deliberately: the pump writes the one chunk it is already
+/// holding when the blackhole lands and discards the rest, and the credit
+/// stranded on that remainder is what the next withhold would spend.
+const _creditPayloadBytes = 256 * 1024;
+
+/// The gap between the credit arm's two writes.
+///
+/// Long enough that the upstream reads them as two events rather than one.
+const _chunkGap = Duration(milliseconds: 50);
+
 /// How long a round trip is given.
 const _tripBudget = Duration(seconds: 20);
 
@@ -154,6 +172,70 @@ Future<void> main() async {
             'the traffic it was holding. Discarding here would make the mode '
             'a second blackhole with a misleading name, and the client would '
             'see a gap it has no way to detect');
+  });
+
+  test('a blackhole between a flush and a withhold does not let the next '
+      'batch through', () async {
+    final echo = await _echoServer();
+    final proxy = await _proxyTo(echo.server.port);
+    final peer = await _peerTo(proxy.port);
+
+    // Withheld *and* delayed. The withhold is what makes the batch sit in the
+    // queue deterministically; the latency is what keeps the pump inside an
+    // await while the levers below are pulled, so the release cannot drain
+    // the queue between two of them.
+    proxy.latency = _creditLatency;
+    proxy.bufferServerToClient = true;
+    // Two writes, far enough apart that the upstream reads them as two events
+    // and echoes them as two chunks. One chunk would be written whole when the
+    // pump wakes, and a queue with nothing left in it after the write has no
+    // discarded bytes for a credit to outlive.
+    final half = _pattern(_creditPayloadBytes ~/ 2);
+    await peer.write(half);
+    await Future<void>.delayed(_chunkGap);
+    await peer.write(half);
+    await within(echo.received(_creditPayloadBytes),
+        'the upstream received the batch it is about to echo back',
+        budget: _upstreamBudget);
+    await _barrier(echo.server.port);
+
+    // No awaits between these four: the pump is parked on the injected delay
+    // and must stay parked until the blackhole is armed, or the release it is
+    // already carrying out drains the very queue this arm needs discarded.
+    proxy.flush();
+    proxy.bufferServerToClient = false;
+    proxy.blackhole();
+
+    // Waiting out the injected delay, which is a known quantity this test set
+    // itself — not a guess about the scheduler. The blackhole bites when the
+    // pump next comes round, which is when that delay expires.
+    await Future<void>.delayed(_creditLatency * 3);
+    final before = peer.received;
+    expect(before, lessThan(_creditPayloadBytes),
+        reason: 'the whole batch was delivered before the blackhole reached '
+            'it, so nothing was discarded and there is no stranded credit for '
+            'the withhold below to spend');
+
+    proxy.blackhole(enabled: false);
+    proxy.latency = null;
+    proxy.bufferServerToClient = true;
+
+    await peer.write(half);
+    await Future<void>.delayed(_chunkGap);
+    await peer.write(half);
+    await within(echo.received(_creditPayloadBytes * 2),
+        'the upstream received the second batch it is now withholding',
+        budget: _upstreamBudget);
+    await _barrier(echo.server.port);
+
+    expect(peer.received, before,
+        reason: 'the store-and-forward stall forwarded its first batch. '
+            'flush() takes a release credit against the bytes queued at that '
+            'moment, and a blackhole discards those bytes — so a credit that '
+            'survives the drop is spent on the *next* batch instead, and a '
+            'withhold that was armed before a single byte of it existed lets '
+            'exactly that many through. A fault that silently does not bite '
+            'is the failure this phase ranks worst');
   });
 
   test('a firehose into a withheld direction stays inside the bound', () async {
