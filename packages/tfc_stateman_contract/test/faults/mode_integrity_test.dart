@@ -103,6 +103,12 @@ const _declaredExclusivePairs = 9;
 /// a mode whose *behaviour* never landed, which is precisely the third state
 /// `fault_proxy.dart:21-24` forbids.
 const _notProofOfAMode = <String, String>{
+  'schedule_test.dart':
+      'proves the seeded ScenarioSchedule generator and its playback — it '
+          'pulls levers only by replaying generated timelines, so counting it '
+          'as a mode proof would credit every mode to a file that asserts '
+          'scheduling properties, not fault behaviour (02-13; landed in the '
+          'same wave as this sweep, hence the post-merge addition)',
   'proxy_core_test.dart':
       'asserts every name in faultModes has a lever and that the transport '
           'under the modes is faithful; it names all eight by construction, so '
