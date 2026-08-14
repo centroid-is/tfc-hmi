@@ -53,10 +53,14 @@ final class LocalizedText {
 
   const LocalizedText(this.value, {this.locale});
 
-  factory LocalizedText.fromJson(Map<String, Object?> json) => LocalizedText(
-        json['text'] as String? ?? '',
-        locale: json['locale'] as String?,
-      );
+  factory LocalizedText.fromJson(Map<String, Object?> json) {
+    final text = json['text'];
+    final locale = json['locale'];
+    return LocalizedText(
+      text is String ? text : '',
+      locale: locale is String ? locale : null,
+    );
+  }
 
   Map<String, Object?> toJson() => {
         'text': value,
@@ -288,23 +292,43 @@ final class DynamicValue {
       throw FormatException(
           'DynamicValue JSON nested deeper than maxDepth ($maxDepth)');
     }
-    final type = json['type'] as String? ?? 'unknown';
+    final typeName = json['type'];
+    final type = typeName is String ? typeName : 'unknown';
     final raw = json['value'];
+
+    // A leaf whose declared type and actual value disagree degrades on its
+    // own rather than taking the batch with it. The old casts threw a
+    // _TypeError, and on the notification path (`u` updates) there is no
+    // JSON-RPC error response for one to land in: it surfaces as an unhandled
+    // error and takes down the value pipeline for a frame that had one bad
+    // field in it.
+    var typeMismatch = false;
+    Object? undecodable() {
+      typeMismatch = true;
+      return null;
+    }
+
     final Object? decoded = switch (type) {
       'null' => null,
-      'object' => {
-          for (final entry
-              in (raw as Map? ?? const {}).cast<String, Object?>().entries)
+      'object' when raw is Map => {
+          for (final entry in raw.cast<String, Object?>().entries)
             entry.key: _childFromJson(entry.value, depth + 1),
         },
-      'array' => [
-          for (final element in (raw as List? ?? const []))
-            _childFromJson(element, depth + 1),
+      'array' when raw is List => [
+          for (final element in raw) _childFromJson(element, depth + 1),
         ],
-      'integer' => _asInteger(raw),
-      'double' => (raw as num?)?.toDouble(),
-      'boolean' => raw as bool?,
-      'string' => raw as String?,
+      'integer' when raw is num => _asInteger(raw),
+      'double' when raw is num => raw.toDouble(),
+      'boolean' when raw is bool => raw,
+      // A number under a `string` tag is a representation difference, not a
+      // disagreement about what the value is.
+      'string' => raw is String ? raw : raw?.toString(),
+      // An absent value under any tag is an absent reading, not a mismatch.
+      'object' || 'array' || 'integer' || 'double' || 'boolean'
+          when raw == null =>
+        null,
+      'object' || 'array' || 'integer' || 'double' || 'boolean' =>
+        undecodable(),
       _ => raw,
     };
 
@@ -319,22 +343,22 @@ final class DynamicValue {
     // Infinity and would detonate on the next encode.
     return DynamicValue(
       value: decoded,
-      quality: Quality.fromWire(json['q']),
+      quality: typeMismatch
+          ? Quality.worst(
+              [Quality.fromWire(json['q']), Quality.errorTypeMismatch])
+          : Quality.fromWire(json['q']),
       sourceTime: sourceTime,
-      typeId: _valueTypeNamed(json['typeId'] as String?),
-      sourceTypeId: json['sourceTypeId'] as String?,
-      displayName: json['displayName'] == null
-          ? null
-          : LocalizedText.fromJson(
-              (json['displayName'] as Map).cast<String, Object?>()),
-      description: json['description'] == null
-          ? null
-          : LocalizedText.fromJson(
-              (json['description'] as Map).cast<String, Object?>()),
+      typeId: _valueTypeNamed(json['typeId']),
+      sourceTypeId: _stringOrNull(json['sourceTypeId']),
+      displayName: _localizedOrNull(json['displayName']),
+      description: _localizedOrNull(json['description']),
       enumFields: json['enumFields'] == null
           ? null
-          : _intKeyed(json['enumFields'],
-              (v) => EnumField.fromJson((v as Map).cast<String, Object?>())),
+          : _intKeyed(
+              json['enumFields'],
+              (v) => v is Map
+                  ? EnumField.fromJson(v.cast<String, Object?>())
+                  : null),
     );
   }
 
@@ -352,13 +376,21 @@ final class DynamicValue {
 
   /// An unrecognised tag from a newer peer is treated as absent, not as an
   /// error — forward compatibility, same rule as unknown fields.
-  static ValueType? _valueTypeNamed(String? name) {
-    if (name == null) return null;
+  static ValueType? _valueTypeNamed(Object? name) {
+    if (name is! String) return null;
     for (final candidate in ValueType.values) {
       if (candidate.name == name) return candidate;
     }
     return null;
   }
+
+  /// Metadata is decorative: a peer that sends the wrong shape for it loses
+  /// the label, not the value it was labelling.
+  static String? _stringOrNull(Object? raw) => raw is String ? raw : null;
+
+  static LocalizedText? _localizedOrNull(Object? raw) => raw is Map
+      ? LocalizedText.fromJson(raw.cast<String, Object?>())
+      : null;
 
   // ---------------------------------------------------------------- coercion
 
@@ -688,12 +720,20 @@ final class DynamicValue {
   }
 }
 
-// JSON objects key by String; enum codes are ints. Convert at the boundary.
-Map<int, V> _intKeyed<V>(Object? raw, V Function(Object?) decode) {
-  if (raw == null) return const {};
-  return (raw as Map).cast<String, Object?>().map(
-        (k, v) => MapEntry(int.parse(k), decode(v)),
-      );
+// JSON objects key by String; enum codes are ints. Convert at the boundary,
+// skipping anything that is not an int-keyed entry rather than throwing: a
+// peer's malformed enum table costs the labels, not the value they label.
+Map<int, V> _intKeyed<V extends Object>(
+    Object? raw, V? Function(Object?) decode) {
+  if (raw is! Map) return const {};
+  final out = <int, V>{};
+  for (final entry in raw.entries) {
+    final code = int.tryParse('${entry.key}');
+    if (code == null) continue;
+    final decoded = decode(entry.value);
+    if (decoded != null) out[code] = decoded;
+  }
+  return out;
 }
 
 Map<String, Object?> _stringKeyed<V>(
