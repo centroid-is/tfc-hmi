@@ -42,6 +42,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../src/data_services_contract.dart';
 import '../src/harness.dart';
+import '../src/hold_harness.dart';
 import '../src/write_contract.dart';
 import 'fake_data_services.dart';
 
@@ -51,6 +52,7 @@ class FakeStateMan
         StateManApi,
         StateManHarness,
         StateManWriteHarness,
+        StateManHoldHarness,
         StateManDataHarness {
   FakeStateMan({
     this.staleAfter = const Duration(milliseconds: 300),
@@ -305,6 +307,10 @@ class FakeStateMan
   @override
   Future<void> dispose() async {
     if (_disposed) return;
+    // Before the flag, because a release is a write and [write] refuses to
+    // run on a disposed source — and because a source that tore itself down
+    // leaving a counter advancing is a machine nobody is holding.
+    _releaseHolds(HoldEnded.disposed);
     _disposed = true;
     _watchdog.cancel();
     _loseTrackOfWritesInFlight(const WriteReason('link_lost',
@@ -664,7 +670,146 @@ class FakeStateMan
               'the failure the id exists to make impossible');
     }
     _markWritePending(key);
-    return attemptUpstreamWrite(id, key, value, expected: expect);
+    final result = await attemptUpstreamWrite(id, key, value, expected: expect);
+    // Recorded here, in the one place every write settles, so a write parked
+    // by [stallWrites] is recorded when it settles rather than when it left —
+    // which is the difference between an outcome log and a wish list.
+    _outcomes[result.cmd] = result;
+    return result;
+  }
+
+  /// Every outcome this source has settled, keyed by the id it settled under.
+  ///
+  /// Never pruned. The gateway's log has a TTL and a `outcome_expired` answer
+  /// because it serves a plant for months; a fake lives for one test, so the
+  /// expiry arm cannot be reached here and is deliberately not imitated.
+  final _outcomes = <String, WriteResult>{};
+
+  /// The instant this source started recording outcomes.
+  ///
+  /// The evidence [writeStatus] needs: a command minted before this moment is
+  /// one this source could never have heard about, which is a different thing
+  /// from one it never received.
+  final int _startedMs = DateTime.now().millisecondsSinceEpoch;
+
+  /// What became of each of [cmds], positionally aligned with the question.
+  ///
+  /// The gateway's three-piece positive-evidence rule
+  /// (`value_handlers.dart:357-398`), mirrored rather than loosened. A
+  /// reference implementation that answered [WriteNotReceived] more freely
+  /// than the gateway does is one the contract cannot use: `not_received` is
+  /// the single answer that tells an operator a re-send is safe, so an
+  /// implementation is judged by how hard it is to get, not how helpful it
+  /// sounds.
+  ///
+  ///  * a recorded outcome is the answer, always;
+  ///  * an id that is not a datable ULID is `unrecognized_cmd` — nothing about
+  ///    it can be ruled out;
+  ///  * an id minted before this source started, or ahead of its clock, is
+  ///    `outcome_unwitnessed`: forgetting is not evidence of never happening,
+  ///    and a panel whose clock runs fast must not buy itself a re-send
+  ///    window;
+  ///  * anything left is a command this source genuinely never received.
+  @override
+  Future<List<WriteResult>> writeStatus(List<String> cmds) async =>
+      [for (final cmd in cmds) _statusOf(cmd)];
+
+  WriteResult _statusOf(String cmd) {
+    final held = _outcomes[cmd];
+    if (held != null) return held;
+
+    final mintedAt = _ulidMs(cmd);
+    if (mintedAt == null) {
+      return WriteUnknown(
+          cmd,
+          const WriteReason('unrecognized_cmd',
+              message: 'this is not an id this source could have issued an '
+                  'outcome for, so nothing about it can be ruled out'));
+    }
+    if (mintedAt < _startedMs ||
+        mintedAt > DateTime.now().millisecondsSinceEpoch) {
+      return WriteUnknown(
+          cmd,
+          const WriteReason('outcome_unwitnessed',
+              message: 'this command was minted outside the window this '
+                  'source can vouch for with its own clock — before it '
+                  'started recording, or ahead of it. Read the value back '
+                  'before acting'));
+    }
+    return WriteNotReceived(cmd);
+  }
+
+  /// Crockford base32, the same alphabet `newUlid` encodes with.
+  static const String _ulidAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+  /// The millisecond a ULID was minted at, or null when [cmd] is not one.
+  ///
+  /// A deliberate copy of `value_handlers.dart:479-488` rather than an import:
+  /// this package must not depend on the server package — `handler_table_test`
+  /// asserts exactly that — and the decode is twelve lines. Copying it keeps
+  /// the reference implementation's evidence rule identical to the gateway's,
+  /// which is the property that matters; sharing the code would cost the
+  /// independence that makes the contract worth running.
+  static int? _ulidMs(String cmd) {
+    if (cmd.length != 26) return null;
+    var ms = 0;
+    for (var i = 0; i < 10; i++) {
+      final digit = _ulidAlphabet.indexOf(cmd[i]);
+      if (digit < 0) return null;
+      ms = (ms << 5) | digit;
+    }
+    return ms;
+  }
+
+  /// Every hold this source is currently feeding.
+  final _liveHolds = <HoldHandle>{};
+
+  /// Engages a deadman on [key] with one ordinary write, and hands back the
+  /// handle that feeds it.
+  ///
+  /// Two writes per hold and no more, however long it is held: the engage
+  /// here, the release through the handle. The ticks in between go to the
+  /// plant through [applyHoldTick] — never through [write], never through
+  /// [attemptUpstreamWrite] — so a held button costs the write bookkeeping
+  /// nothing at all.
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await write(key, 1);
+    final hold = HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) => applyHoldTick(key, counter),
+      onRelease: (counter) => write(key, counter),
+    );
+    if (hold.isHeld) {
+      _liveHolds.add(hold);
+      unawaited(hold.onReleased.then((_) => _liveHolds.remove(hold)));
+    }
+    return hold;
+  }
+
+  /// The plant-side seam a deadman counter arrives through.
+  ///
+  /// [applyChanges], the same one `setValue` uses — so a tick is a value
+  /// arriving and nothing else. See [StateManHoldHarness.applyHoldTick] for
+  /// why it does not check that a hold was engaged.
+  @override
+  void applyHoldTick(String key, int counter) =>
+      applyChanges({key: DynamicValue(value: counter)});
+
+  /// Ends every live hold, without waiting for the release writes.
+  ///
+  /// Not awaited on purpose: with [stallWrites] armed a release write never
+  /// answers, and a `dispose` that waited for one would hang the test rather
+  /// than stop the machine. The handle is released the instant this is
+  /// called — the counter stops there, which is the whole safety property —
+  /// and the write's outcome is informational.
+  void _releaseHolds(HoldEnded reason) {
+    for (final hold in List<HoldHandle>.of(_liveHolds)) {
+      unawaited(
+          hold.release(reason: reason).then((_) {}, onError: (Object _) {}));
+    }
+    _liveHolds.clear();
   }
 
   /// The single seam every upstream write attempt passes through.
