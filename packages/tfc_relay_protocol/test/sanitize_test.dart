@@ -51,6 +51,49 @@ void main() {
         expect(sanitize(v).value, v);
       }
     });
+
+    test('a map that is not string-keyed keeps its key type', () {
+      // WR-05. The rebuild went through cast<String, Object?>() and only ran
+      // for a map that actually contained an offender, so the function
+      // worked for a given shape right up until the day a weigher divided by
+      // zero. The OPC UA and M2400 converters do produce int-keyed maps.
+      final r = sanitize(<int, Object?>{1: double.nan, 2: 3.5});
+      expect(r.hadNonFinite, isTrue);
+      expect(r.value, <int, Object?>{1: null, 2: 3.5});
+    });
+
+    test('a clean non-string-keyed map is still returned identically', () {
+      final clean = <int, Object?>{1: 2.5};
+      expect(identical(sanitize(clean).value, clean), isTrue);
+    });
+
+    test('a structure deeper than the limit is refused, not walked', () {
+      // WR-11. The decoder bounds its recursion and documents why; the
+      // constructor and this walk are what the converters call on the
+      // gateway, with structures the upstream controls.
+      Object? deep = 1;
+      for (var i = 0; i < maxValueDepth + 5; i++) {
+        deep = [deep];
+      }
+      expect(() => sanitize(deep), throwsArgumentError);
+    });
+
+    test('a self-referential structure stops at the limit', () {
+      final cycle = <Object?>[];
+      cycle.add(cycle);
+      expect(() => sanitize(cycle), throwsArgumentError,
+          reason: 'a stack overflow on the gateway is every client\'s '
+              'problem, not one tag\'s');
+    });
+
+    test('a structure at the limit still sanitizes', () {
+      Object? deep = double.nan;
+      for (var i = 0; i < maxValueDepth - 1; i++) {
+        deep = [deep];
+      }
+      final r = sanitize(deep);
+      expect(r.hadNonFinite, isTrue);
+    });
   });
 
   group('WireValue', () {

@@ -139,13 +139,21 @@ final class DynamicValue {
   /// `description`, not just replace them.
   static const Object _unset = Object();
 
-  /// Maximum nesting [DynamicValue.fromJson] will decode.
+  /// Maximum nesting [DynamicValue.fromJson] will decode, and the public
+  /// constructor will normalize.
   ///
   /// The decoder is recursive and reads untrusted bytes from a peer, so an
   /// attacker-supplied 100k-deep object would exhaust the stack and take the
-  /// gateway down for every client. 64 is far deeper than any real PLC
-  /// structure.
-  static const int maxDepth = 64;
+  /// gateway down for every client. The constructor is recursive too, and is
+  /// what the OPC UA / Modbus / M2400 converters call on the gateway with
+  /// structures the *upstream* controls — so it needs the same bound, and a
+  /// self-referential structure from a converter stops here rather than at
+  /// the end of the stack. 64 is far deeper than any real PLC structure.
+  ///
+  /// Past the limit the decoder throws [FormatException] (a peer's frame is
+  /// malformed input) and the constructor throws [ArgumentError] (its caller
+  /// is local code, so this is programmer error).
+  static const int maxDepth = maxValueDepth;
 
   final Object? value;
   final Quality quality;
@@ -189,7 +197,7 @@ final class DynamicValue {
     LocalizedText? description,
     Map<int, EnumField>? enumFields,
   }) {
-    final normalized = _normalize(value, quality);
+    final normalized = _normalize(value, quality, 1);
     return DynamicValue._(
       value: normalized.value,
       quality: normalized.quality,
@@ -595,15 +603,27 @@ final class DynamicValue {
   }
 
   /// Rebuilds [raw] into the normalized shape and composes the quality.
+  ///
+  /// [depth] is threaded rather than left implicit because this recursion is
+  /// what a converter's structure drives — see [maxDepth].
   static ({Object? value, Quality quality}) _normalize(
-      Object? raw, Quality own) {
+      Object? raw, Quality own, int depth) {
+    if (depth > maxDepth) {
+      throw ArgumentError.value(
+          raw,
+          'value',
+          'nested deeper than maxDepth ($maxDepth), or self-referential — '
+              'either way normalizing it does not terminate on the stack it '
+              'has, and a stack overflow on the gateway is every client\'s '
+              'problem rather than one tag\'s');
+    }
     if (raw is DynamicValue) {
       return (value: raw.value, quality: _compose(own, [raw.quality]));
     }
     if (raw is Map) {
       final members = <Object, DynamicValue>{};
       for (final entry in raw.entries) {
-        members[entry.key as Object] = _wrap(entry.value);
+        members[entry.key as Object] = _wrap(entry.value, depth + 1);
       }
       return (
         value: Map<Object, DynamicValue>.unmodifiable(members),
@@ -611,7 +631,8 @@ final class DynamicValue {
       );
     }
     if (raw is List) {
-      final elements = List<DynamicValue>.unmodifiable(raw.map(_wrap));
+      final elements = List<DynamicValue>.unmodifiable(
+          [for (final element in raw) _wrap(element, depth + 1)]);
       return (
         value: elements,
         quality: _compose(own, elements.map((c) => c.quality)),
@@ -627,8 +648,20 @@ final class DynamicValue {
     );
   }
 
-  static DynamicValue _wrap(Object? raw) =>
-      raw is DynamicValue ? raw : DynamicValue(value: raw);
+  static DynamicValue _wrap(Object? raw, int depth) {
+    if (raw is DynamicValue) return raw;
+    final normalized = _normalize(raw, Quality.good, depth);
+    return DynamicValue._(
+      value: normalized.value,
+      quality: normalized.quality,
+      sourceTime: null,
+      typeId: null,
+      sourceTypeId: null,
+      displayName: null,
+      description: null,
+      enumFields: null,
+    );
+  }
 
   /// Worst-wins over own and children, and within a band the more specific
   /// code beats plain `good`.
