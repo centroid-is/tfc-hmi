@@ -74,6 +74,24 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 ///    them misbehaving: it handed the server a source with no address space, so
 ///    every key a case seeded after construction was classified as a typo and
 ///    silently never delivered. See `_PlantAddressSpace`.
+///
+/// **Which estimate 31 matched.** Three numbers were in circulation before this
+/// leg ran: the phase brief's 36 (8 named missing), 04-RESEARCH's group table
+/// (browse 6 + data services 7 = 13 unreachable, so 31), and 04-PATTERNS' 32.
+/// The registries enumerate as 5 + 3 + 5 + 8 + 10 + 6 + 7 = 44, and every
+/// unreachable check falls in the last two groups, so **RESEARCH's table is the
+/// one that holds** and the other two were estimates made before the read-only
+/// case and the browse group were counted the same way. 36 in particular is not
+/// reachable from this registry by any grouping — it would need five of the
+/// thirteen handler-less checks to be answerable, and none is.
+///
+/// **This number is proven to bite**, three ways rather than one. Raising it to
+/// 32 with the gap list unchanged fails the arithmetic case below with
+/// `Expected: <44> Actual: <45>` (run, recorded, reverted). Moving a check into
+/// the gap list to keep the arithmetic while lowering the count fails
+/// `expectUnreachable`, which rejects a named check that passes. And a
+/// reachable check that regresses fails as itself, because the suite is green
+/// only when all 31 pass.
 const int reachableChecks = 31;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
@@ -95,23 +113,51 @@ const int reachableChecks = 31;
 /// The two `cmd`-correlation entries that used to sit here were a genuine
 /// write-safety defect and are fixed, not excused; the eight behavioural
 /// entries were closed the same way. [reachableChecks] records what each was.
+///
+/// **Every entry names the handler it waits on**, in the trailing comment on
+/// its own line, and all thirteen wait on **Phase 10**. That is deliberate
+/// bookkeeping rather than decoration: "browse is missing" is a sentence
+/// nobody can act on, whereas `browse.fetchChildren` is a method name somebody
+/// implements and then deletes a line here. A reader arriving the day a
+/// handler lands can grep this list for the method they just wrote and find
+/// exactly which check now has to be judged on its merits.
 const List<String> unreachableChecks = <String>[
-  // browse — six checks, no `browse.*` handler on the gateway.
+  // browse — six checks. Phase 10 owns every `browse.*` handler below; the
+  // client's `ClientBrowseApi` already sends each of these exact method names
+  // (`client_sub_apis.dart:59-62`) and is told -32601 by the gateway.
   'the address space has a top level, and every root is identifiable',
+  //   waits on: browse.fetchRoots
   "expanding a folder yields that folder's children, not another's",
+  //   waits on: browse.fetchChildren
   "a node's detail carries its data type, and a variable's carries a reading",
+  //   waits on: browse.fetchDetail
   'a resolved path runs root to leaf, and every step is a real edge',
+  //   waits on: browse.resolvePath
   'a target that does not exist resolves to null, not empty and not a throw',
+  //   waits on: browse.resolvePath
   'folders and variables expand; methods do not',
-  // data services — seven checks: no `timeseries.*`, `historyViews.*` or
-  // `preferences.*` handler either.
+  //   waits on: browse.fetchChildren + browse.fetchDetail
+  // data services — seven checks. Phase 10 owns these three handler families
+  // too; the client's `ClientTimeseriesApi`, `ClientHistoryViewApi` and
+  // `ClientPreferencesApi` already send the exact names below
+  // (`client_sub_apis.dart:64-100`).
   'a recorded series comes back inside the window, oldest first',
+  //   waits on: timeseries.queryTimeseriesData
   'every requested series gets an entry, including the silent ones',
+  //   waits on: timeseries.queryTimeseriesDataMultiple
   'a downsampled series is bounded and still reaches both ends of the window',
+  //   waits on: timeseries.queryTimeseriesDataDownsampled
   'a history view survives create, list, read back and delete',
+  //   waits on: historyViews.createHistoryView, .selectHistoryViews,
+  //             .deleteHistoryView
   'a saved time window survives add, list and delete',
+  //   waits on: historyViews.addHistoryViewPeriod, .listHistoryViewPeriods,
+  //             .deleteHistoryViewPeriod
   'every typed preference round-trips and containsKey agrees',
+  //   waits on: preferences.setBool/.getBool (and the six other typed pairs),
+  //             preferences.containsKey
   'a preference change reaches a second listener',
+  //   waits on: preferences.changed (the server-to-client notification)
 ];
 
 void main() {
