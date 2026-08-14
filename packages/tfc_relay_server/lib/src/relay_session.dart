@@ -33,6 +33,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'error_codes.dart';
 import 'handle_table.dart';
 import 'server_config.dart';
+import 'subscription_registry.dart';
 import 'token_validator.dart';
 
 /// The moment the last inbound frame arrived, updated by a tap on the read
@@ -123,6 +124,14 @@ final class RelaySession {
 
   /// This session's outbound buffer. Everything the tick engine will drain.
   final ConflatingSendBuffer buffer;
+
+  /// What this session is currently watching.
+  ///
+  /// Public because "the release is asserted by registry inspection" (SRV-02)
+  /// is only true of a registry something can look into, and because the tick
+  /// engine and the reaper both read it from outside the session.
+  late final SubscriptionRegistry subscriptions = SubscriptionRegistry(
+      maxSubscriptions: config.maxSubscriptionsPerSession);
 
   final TokenValidator validator;
 
@@ -364,6 +373,11 @@ final class RelaySession {
     if (_closed) return;
     _closed = true;
     _sentCloseCode ??= code;
+    // Detach before the peer goes: a listener still attached to the upstream
+    // store keeps pushing this client's values into a buffer that will never
+    // be drained again, and a hundred of those is a shift's worth of memory
+    // held for panels that went home (Finding 9's checklist, step 2).
+    subscriptions.clear();
     await peer.close();
     await _closeChannel?.call(code, reason);
     if (!_done.isCompleted) _done.complete();
