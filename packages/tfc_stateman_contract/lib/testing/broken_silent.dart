@@ -65,7 +65,8 @@ class NeverResponds extends FakeStateMan {
   Future<Map<String, DynamicValue>> readMany(List<String> keys) => _never();
 
   @override
-  Future<WriteResult> write(String key, Object? value, {Object? expect}) =>
+  Future<WriteResult> write(String key, Object? value,
+          {Object? expect, String? cmd}) =>
       _never();
 
   /// Even shutting down never finishes.

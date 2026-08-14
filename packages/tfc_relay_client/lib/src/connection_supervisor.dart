@@ -428,7 +428,7 @@ final class ConnectionSupervisor {
             '${entry.key}, which this session never announced');
         continue;
       }
-      changes[key] = DynamicValue(value: entry.value.v, quality: entry.value.q);
+      changes[key] = entry.value.toDynamicValue();
     }
     await _resync.onUpdate(update.sub, seq: update.seq, changes: changes);
   }
