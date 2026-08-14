@@ -239,6 +239,30 @@ final class ValueHandlers {
       throw _refuse(Methods.write, 'write needs a non-empty "key"');
     }
 
+    // **One id, one actuation** (04-REVIEW CR-05). The `cmd` arrives from the
+    // wire and was accepted verbatim, so any peer that completed the handshake
+    // could send two different writes under one id: both went upstream, the
+    // second overwrote the first's outcome, and `writeStatus` then reported
+    // one answer for two actuations — the wrong one for at least one of them.
+    //
+    // A shape refusal, raised before the plant is touched, which is the one
+    // class of refusal this path allows: `INVALID_PARAMS` on a write means
+    // "definitively no effect", and here that is exactly true.
+    //
+    // Phase 5's idempotency window is what makes the *same* key and value a
+    // genuine replay — answered from the log rather than refused, the Stripe
+    // semantic — and it attaches here. A differing key or value stays a
+    // refusal even then, because there is no reading of two different writes
+    // under one id that an operator can act on.
+    if (outcomes.holds(request.cmd)) {
+      throw _refuse(
+          Methods.write,
+          'the command id "${request.cmd}" is already recorded on this '
+          'gateway. One id is one operator action: a second write under it '
+          'would actuate the plant twice and leave one writeStatus answer '
+          'covering both, so nothing was sent. Mint a new id per action');
+    }
+
     // Recorded *before* the call so a writeStatus arriving while this is
     // upstream is answered "unknown" and not "never received": the command is
     // on its way to a machine at that exact moment.

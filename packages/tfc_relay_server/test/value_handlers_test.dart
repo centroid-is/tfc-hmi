@@ -328,6 +328,74 @@ void main() {
     });
   });
 
+  // 04-REVIEW CR-05. The `cmd` arrives from the wire and used to be taken
+  // verbatim, so any peer past the handshake could send two different writes
+  // under one id: both went upstream, the second overwrote the first's
+  // outcome, and writeStatus then reported one answer covering two actuations.
+  group('one cmd, one actuation', () {
+    test('a second write under a recorded cmd is refused', () async {
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+      await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      }));
+      final attemptsAfterFirst =
+          kit.api.upstreamWriteAttempts(cmd);
+
+      final error = await _refusal(
+          kit.handlers.write(_params(Methods.write, {
+            'cmd': cmd,
+            'key': 'CN01.MOT01.speed',
+            'value': 1500,
+          })),
+          'a second write under a live cmd');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'a shape refusal raised before the plant is touched is the '
+              'one class of refusal this path allows, and INVALID_PARAMS on a '
+              'write means "definitively no effect" — which here is true');
+      expect(kit.api.upstreamWriteAttempts(cmd), attemptsAfterFirst,
+          reason: 'the refusal has to happen before anything goes upstream, '
+              'or it is a report about an actuation that already occurred');
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 1200,
+          reason: 'the device holds what the first write put there');
+    });
+
+    test('a cmd whose outcome has aged out is a new command again', () async {
+      // Anti-vacuity, and the honest boundary: the refusal is about what this
+      // gateway still remembers. Past the TTL there is no entry to collide
+      // with, and the id is indistinguishable from one nobody has used.
+      final kit = _kit(writeOutcomeTtl: const Duration(seconds: 60));
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+      await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      }));
+
+      kit.clock.advance(const Duration(seconds: 61).inMilliseconds);
+      final answer = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1500,
+      })));
+
+      // Answered rather than refused: the gateway has no entry to collide
+      // with, and refusing an id it cannot remember would be refusing on a
+      // hunch. What the *source* does with a re-used id is the source's own
+      // business — this one keeps every id it has ever been handed and treats
+      // a repeat as the caller's bug, so the outcome below is unknown rather
+      // than applied. The claim here is about the gateway's boundary.
+      expect(WriteResult.fromJson(answer).cmd, cmd,
+          reason: 'past the TTL the id is indistinguishable from one nobody '
+              'has used, and the write goes upstream on its merits');
+    });
+  });
+
   group('writeStatus', () {
     test('a command written a moment ago answers with the outcome it got',
         () async {
