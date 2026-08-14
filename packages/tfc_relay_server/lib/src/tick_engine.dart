@@ -76,6 +76,7 @@ final class TickEngine {
     LagMonitor? lag,
     int Function()? clock,
     void Function(int nowMs)? sweep,
+    int Function()? wallClock,
     this.onSessionError,
   })  : encoder = encoder ?? FrameEncoder(),
         lag = lag ??
@@ -84,7 +85,17 @@ final class TickEngine {
               thresholdMs: config.stallThreshold.inMilliseconds,
             ),
         _clock = clock,
-        _sweep = sweep;
+        _sweep = sweep,
+        _wallClock =
+            wallClock ?? (() => DateTime.now().millisecondsSinceEpoch) {
+    // Anchored once, here, and never re-sampled. Re-reading the wall clock
+    // per tick would put an NTP step straight into the timestamps a client
+    // derives staleness from — which is the thing the monotonic clock below
+    // exists to keep out of the measurement. One anchor means the wire moves
+    // exactly as the monotonic clock does, offset to the epoch the client
+    // already agreed on in `hello`.
+    _epochAnchor = _wallClock() - now();
+  }
 
   /// The sessions to drive. Read fresh every tick, never cached: a session
   /// that connected between two ticks must be served on the second one.
@@ -127,6 +138,31 @@ final class TickEngine {
   /// would show as a negative gap and a forwards one as a stall nobody
   /// experienced.
   final Stopwatch _uptime = Stopwatch()..start();
+
+  final int Function() _wallClock;
+
+  /// Wall-clock epoch ms minus the monotonic clock, sampled at construction.
+  late final int _epochAnchor;
+
+  /// The epoch-ms timestamp for a monotonic [nowMs] — the **wire** clock.
+  ///
+  /// **03-REVIEW CR-04.** This engine's clock is a `Stopwatch`, correctly: it
+  /// measures callback *arrivals*, so it must not move when NTP steps the
+  /// machine. But `UpdateParams.t`, `TickParams.serverTime` and
+  /// `SubTick.evaluatedAt` are documented as UTC epoch ms
+  /// (`messages.dart:222`, `wire_value.dart:4-6`), and until this existed they
+  /// carried uptime instead — so a single `u` frame put its own `t` (uptime,
+  /// ~150) beside the `WireValue.t` of the values inside it (epoch ms, ~1.79e12),
+  /// two clocks about fifty-five years apart in one object, while
+  /// `HelloResult.serverTime` — the field a client derives its offset from —
+  /// carried the real epoch. Whichever field a client trusted, its staleness
+  /// arithmetic was nonsense, which is exactly the "values are fresh or visibly
+  /// stale" property this project exists to guarantee.
+  ///
+  /// So: monotonic for *measurement* (`lag.poll`, the reaper's trigger,
+  /// `silentForMs`), converted here for *emission*. Nothing inside the engine
+  /// reads this.
+  int wallAt(int nowMs) => _epochAnchor + nowMs;
 
   Timer? _timer;
 
@@ -318,8 +354,9 @@ final class TickEngine {
   void _writeTick(RelaySession session, int nowMs) {
     final subs = session.subscriptions.subscriptions;
     if (subs.isEmpty) return;
+    final wallMs = wallAt(nowMs);
     final frame = StringBuffer('{"jsonrpc":"2.0","method":"${Methods.tick}",'
-        '"params":{"serverTime":$nowMs,"subs":{');
+        '"params":{"serverTime":$wallMs,"subs":{');
     var first = true;
     for (final state in subs) {
       if (!first) frame.write(',');
@@ -329,7 +366,7 @@ final class TickEngine {
         ..write(':{"seq":')
         ..write(state.seq)
         ..write(',"evaluatedAt":')
-        ..write(nowMs)
+        ..write(wallMs)
         ..write('}');
     }
     frame.write('}}}');
@@ -390,7 +427,7 @@ final class TickEngine {
       session.emit(encoder.updateFrame(
         sub: state.literal(encoder.subLiteral),
         seq: state.nextSeq(),
-        t: nowMs,
+        t: wallAt(nowMs),
         body: encoder.bodyFor(
             pending.changes, pending.qualities, pending.removed),
       ));
