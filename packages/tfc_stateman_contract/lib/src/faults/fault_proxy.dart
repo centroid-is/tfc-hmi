@@ -102,6 +102,9 @@ final class FaultProxy {
   Duration? _latency;
   Duration? _jitter;
 
+  /// The high-water reading of every pair that has already closed.
+  int _retiredPeakPendingBytes = 0;
+
   /// The per-chunk delay every line gets, rebuilt when [latency] or [jitter]
   /// changes and handed to pairs accepted afterwards.
   ///
@@ -133,6 +136,28 @@ final class FaultProxy {
   /// that ends with a live pair has leaked two descriptors, and this says so
   /// before the fd count does.
   int get livePairs => _pairs.length;
+
+  /// The most any one direction of any one pair has ever held.
+  ///
+  /// The bounded-memory criterion restated at the proxy, where a test can
+  /// reach it: `DelayLine.peakPendingBytes` is the real observable, but the
+  /// lines belong to pairs this class owns and a test has no other handle on
+  /// them. Sampling RSS instead would measure the whole test host, including
+  /// the payload the firehose is generating, and could not tell a bounded
+  /// queue from a lucky garbage collection.
+  ///
+  /// Retired pairs are remembered. A pair whose peak vanished when its
+  /// connection closed would let a test that tore its client down first read
+  /// zero and pass, which is the worst kind of green: the run that actually
+  /// grew is the one that ends with a closed connection.
+  int get peakPendingBytes {
+    var peak = _retiredPeakPendingBytes;
+    for (final pair in _pairs) {
+      final pairPeak = pair.peakPendingBytes;
+      if (pairPeak > peak) peak = pairPeak;
+    }
+    return peak;
+  }
 
   /// The errno of the last failed upstream connection, or null if none failed.
   ///
@@ -339,7 +364,14 @@ final class FaultProxy {
     // cares about.
     pair.applyChunkDelay(_perChunkDelay);
     _pairs.add(pair);
-    pair.start(_pairs.remove);
+    pair.start(_retire);
+  }
+
+  /// Drops a closed pair, keeping the one number that outlives it.
+  void _retire(_ProxiedPair pair) {
+    final peak = pair.peakPendingBytes;
+    if (peak > _retiredPeakPendingBytes) _retiredPeakPendingBytes = peak;
+    _pairs.remove(pair);
   }
 }
 
@@ -363,6 +395,11 @@ final class _ProxiedPair {
   final DelayLine toUpstream;
   final DelayLine toClient;
   bool _closed = false;
+
+  /// The most either direction of this pair has ever held.
+  int get peakPendingBytes => toUpstream.peakPendingBytes > toClient.peakPendingBytes
+      ? toUpstream.peakPendingBytes
+      : toClient.peakPendingBytes;
 
   /// Applies a per-chunk delay to **both** directions.
   ///
