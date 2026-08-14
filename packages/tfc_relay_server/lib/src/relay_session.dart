@@ -39,6 +39,7 @@ import 'server_config.dart';
 import 'session_handlers.dart';
 import 'subscription_registry.dart';
 import 'token_validator.dart';
+import 'value_handlers.dart';
 
 /// The moment the last inbound frame arrived, updated by a tap on the read
 /// side.
@@ -363,11 +364,18 @@ final class RelaySession {
   }
 
   void _start() {
-    // Every one of these goes through `_on`, and there is no second path. The
-    // table is exactly {hello, ping, subscribe, unsubscribe} for this phase;
-    // Phase 5 adds `write`/`writeStatus` and Phase 10 the data services, and
-    // 03-08 freezes the set against a hand-written literal so each addition is
-    // a deliberate edit to a test that explains its cost.
+    // Every one of these goes through `_on`, and there is no second path.
+    //
+    // The table is nine names. Phase 3 registered four; 04-02 added `write`,
+    // `writeStatus`, `read`, `readFresh` and `readMany`, pulled forward from
+    // Phase 5 because 04-RESEARCH Finding 4 ran the method sweep against a
+    // live gateway and found all five answering `-32601`, which put 28 of the
+    // contract suite's 44 checks out of reach over the real transport. Only
+    // the plumbing moved: Phase 5 still owns write *semantics* (three-state
+    // depth beyond forwarding, idempotency windows, hold-to-run), Phase 6 owns
+    // authorization, and Phase 10 adds the data services. 03-08's rule stands
+    // — the set is frozen against a hand-written literal in `surface_test.dart`
+    // so each addition is a deliberate edit to a test that explains its cost.
     final handlers = SessionHandlers(
       api: api,
       config: config,
@@ -378,10 +386,19 @@ final class RelaySession {
       // guarantees no subscribe reaches a handler before it has.
       epochOf: () => _epoch ?? '',
     );
+    // Per session, because the outcome log inside it is keyed by a
+    // client-minted cmd: a log shared across sessions would answer one
+    // client's writeStatus about another client's write (T-04-05).
+    final values = ValueHandlers(api: api, config: config, now: _now);
     _on(Methods.hello, _hello);
     _on(Methods.ping, _ping);
     _on(Methods.subscribe, handlers.subscribe);
     _on(Methods.unsubscribe, handlers.unsubscribe);
+    _on(Methods.write, values.write);
+    _on(Methods.writeStatus, values.writeStatus);
+    _on(Methods.read, values.read);
+    _on(Methods.readFresh, values.readFresh);
+    _on(Methods.readMany, values.readMany);
     // Method-not-found, answered by us rather than by json_rpc_2.
     //
     // Left to the library, `Server._tryFallbacks` throws
@@ -540,6 +557,18 @@ final class RelaySession {
         return HelloResult(
           protocol: protocol,
           server: const PeerInfo('tfc-relay-gateway', '0.1.0'),
+          // An open map, and it stays one (04-RESEARCH A4): the live handshake
+          // returns `{}` today, so every key added here is additive and no
+          // deployed client has to know about it. A typed DTO would make the
+          // next key a breaking change.
+          //
+          // `tickMs` is the gateway's real cadence, from the config this
+          // session was built with. The client's per-subscription staleness
+          // arithmetic is derived from it (Finding 5), and the alternative —
+          // a constant on the client that must match a server config nobody
+          // diffs — fails silently a year later, as values an operator
+          // believes are fresh.
+          capabilities: {'tickMs': config.tick.inMilliseconds},
           sessionId: id,
           epoch: _epoch!,
           // Always false this phase: nothing is resumable until 03-09, and a
