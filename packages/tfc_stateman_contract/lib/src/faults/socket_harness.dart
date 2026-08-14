@@ -47,6 +47,14 @@ import '../channel/served_state_man.dart';
 import 'fault_proxy.dart';
 import 'line_channel.dart';
 
+/// How long the served end is given to arrive after the client has connected.
+///
+/// Loopback, so this is a fraction of a millisecond in practice. The budget
+/// exists to turn a proxy that accepted but never dialled upstream into a
+/// named failure on the client's channel rather than a harness that never
+/// becomes ready.
+const _acceptBudget = Duration(seconds: 5);
+
 /// Every end of one socket-served source, for a test that needs to reach past
 /// the client — to pull a proxy lever, or to drive the served fake directly.
 ///
@@ -190,9 +198,21 @@ final class _SocketWiring {
     try {
       final bound = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       _server = bound;
+
+      // The served end arrives on its own schedule: the client's connect
+      // completes when the *proxy* accepts, and the proxy only then opens the
+      // upstream connection this listener answers. Without waiting for it,
+      // `ready` can complete — and a case that disposes immediately can tear
+      // the harness down — before the served socket and its peer exist, which
+      // leaves them orphaned behind a proxy that is already gone: a descriptor
+      // nothing closes and a peer writing into a socket whose far end was
+      // destroyed. Waiting here is what makes the set of things `teardown`
+      // has to release a closed one.
+      final accepted = Completer<void>();
       _accepts = bound.listen((socket) {
         _accepted.add(socket);
         _sessions.add(serveStateMan(served, lineChannel(socket)));
+        if (!accepted.isCompleted) accepted.complete();
       });
 
       final started = FaultProxy(targetPort: bound.port);
@@ -204,6 +224,7 @@ final class _SocketWiring {
         started.port,
       );
       _client = client;
+      await accepted.future.timeout(_acceptBudget);
       completer.setChannel(lineChannel(client));
     } catch (error, stack) {
       completer.setError(error, stack);
