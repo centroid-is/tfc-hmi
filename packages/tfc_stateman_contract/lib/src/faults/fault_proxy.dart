@@ -107,6 +107,9 @@ final class FaultProxy {
   /// Whether both directions are currently swallowing traffic.
   bool _blackholed = false;
 
+  /// Whether the server→client direction is currently being withheld.
+  bool _bufferServerToClient = false;
+
   /// Whether the next connection accepted is to be reset on sight.
   ///
   /// Set only when [killOnce] found nothing open, and cleared the moment it
@@ -403,8 +406,42 @@ final class FaultProxy {
   /// The asymmetry is the point, and it is why this is one mode rather than
   /// half of [blackhole]: forwarding client→server keeps the server side alive
   /// and answering, so the peer does not time out while its replies are held.
-  set bufferServerToClient(bool value) =>
-      _notYet('bufferServerToClient', '02-09');
+  /// Carried over from `tfc_dart/test/proxy.dart:118-154`, whose comment is
+  /// the source of that reason — hold both directions and the upstream falls
+  /// idle, times out, and the scenario becomes an ordinary disconnect instead
+  /// of a client hearing nothing from a server that is demonstrably fine.
+  ///
+  /// **Withheld, not discarded, and not off to the side.** The bytes wait in
+  /// the server→client [DelayLine]'s own queue and go on counting toward its
+  /// `pendingBytes`, so a firehose into a withheld direction pauses its source
+  /// at the high-water mark like any other traffic (T-02-24). Clearing this
+  /// flag releases everything held; so does [flush], which releases and leaves
+  /// the lever armed.
+  ///
+  /// Live, like the other levers: it reaches the pairs that are already open
+  /// and the ones accepted afterwards.
+  set bufferServerToClient(bool value) {
+    _bufferServerToClient = value;
+    for (final pair in _pairs) {
+      pair.applyWithhold(value);
+    }
+  }
+
+  /// Releases what [bufferServerToClient] is holding, keeping it armed.
+  ///
+  /// The original proxy's `flushBuffer()`. Deliberately not a disarm: a
+  /// release that also turned the mode off could only ever say "the fault is
+  /// over", where this can say "a batch got through and the stall continues",
+  /// which is the shape of a store-and-forward peer and the reason the mode
+  /// has a release at all.
+  ///
+  /// A no-op when nothing is withheld, including when the lever was never
+  /// pulled — teardown paths and scenario scripts both call it unconditionally.
+  void flush() {
+    for (final pair in _pairs) {
+      pair.releaseWithheld();
+    }
+  }
 
   /// Rebuilds the per-chunk delay and pushes it to every live pair.
   ///
@@ -471,6 +508,7 @@ final class FaultProxy {
     pair.applyThrottle(_throttleBytesPerSec);
     pair.armCutMidFrame(_cutAfterBytes);
     pair.applyBlackhole(_blackholed);
+    pair.applyWithhold(_bufferServerToClient);
     _pairs.add(pair);
     pair.start(_retire);
     if (_killOnceArmed) {
@@ -551,6 +589,19 @@ final class _ProxiedPair {
     toUpstream.discardInsteadOfForward = swallowing;
     toClient.discardInsteadOfForward = swallowing;
   }
+
+  /// Withholds the **server→client** direction only.
+  ///
+  /// Only that one. Withholding both would starve the upstream of the
+  /// client's traffic, and an upstream that stops hearing from its peer stops
+  /// answering — which turns "the server is fine and the client hears
+  /// nothing" into a mutual silence indistinguishable from [applyBlackhole].
+  void applyWithhold(bool withholding) {
+    toClient.withholdUntilReleased = withholding;
+  }
+
+  /// Lets the withheld server→client bytes out, leaving the lever armed.
+  void releaseWithheld() => toClient.releaseWithheld();
 
   /// Arms — or disarms, with null — the server→client byte cut.
   ///
