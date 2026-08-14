@@ -63,9 +63,37 @@ final class SubscriptionState {
   /// sees a new epoch knows its cached handles are from a previous life.
   final String epoch;
 
-  /// The rate the client asked to be pushed at, if it asked. Advisory until
-  /// 03-07, which is what reads it.
+  /// The rate the client asked to be pushed at, if it asked.
+  ///
+  /// Read by `TickEngine._fanOut` through [dueAt] (03-REVIEW WR-07). It was
+  /// accepted from clients, stored and never read by anything: a panel that
+  /// asked for 1 Hz got the full 10 Hz tick, silently. A low-powered eLinux
+  /// panel asking to be pushed at a rate it can render is exactly the client
+  /// this field exists for, and a wire-visible promise the server does not
+  /// keep is worse than a refusal.
   final double? maxRateHz;
+
+  /// The tick this subscription last pushed on, on the engine's **monotonic**
+  /// clock — a cadence is a measurement, so it must not move when NTP steps
+  /// the machine (see `TickEngine.wallAt` for the other half of that split).
+  int? get lastPushMs => _lastPushMs;
+  int? _lastPushMs;
+
+  /// Whether this subscription may be pushed on the tick at [nowMs].
+  ///
+  /// The minimum interval is `1000 / maxRateHz` and the comparison is
+  /// inclusive: a client that asked for 10 Hz on a 100 ms tick must be served
+  /// on every tick, and an exclusive comparison would halve its rate through
+  /// floating-point bad luck alone.
+  bool dueAt(int nowMs) {
+    final hz = maxRateHz;
+    final last = _lastPushMs;
+    if (hz == null || last == null) return true;
+    return nowMs - last >= 1000 / hz;
+  }
+
+  /// Records that this subscription was pushed on the tick at [nowMs].
+  void markPushed(int nowMs) => _lastPushMs = nowMs;
 
   /// This subscription's own monotonic counter, starting at zero.
   ///

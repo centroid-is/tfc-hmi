@@ -417,6 +417,30 @@ final class TickEngine {
   /// concatenated around it, never encoded. Building a map per client and
   /// encoding that is the 7 639 µs strategy, and it is arrived at by accident
   /// rather than by choice.
+  /// Puts a rate-limited subscription's pending changes back in the buffer,
+  /// to be shipped by the first tick it is due on.
+  ///
+  /// **Put back, never dropped.** The drain has already emptied the lane, so
+  /// a `maxRateHz` implemented by simply skipping the emit would discard the
+  /// change — and if that tag never moved again the client would hold the
+  /// previous value forever under a healthy link, which is the stale-number-
+  /// on-a-screen failure this project exists to prevent. Re-buffering
+  /// re-enters the same conflation: several skipped ticks collapse to the one
+  /// latest value per handle, which is what a client asking for a slower rate
+  /// is asking for.
+  void _defer(RelaySession session, String sub, PendingSub pending) {
+    final buffer = session.buffer;
+    pending.changes.forEach((handle, value) {
+      buffer.putValue(sub, handle, value);
+    });
+    pending.qualities.forEach((handle, quality) {
+      buffer.putQuality(sub, handle, quality);
+    });
+    for (final handle in pending.removed) {
+      buffer.remove(sub, handle);
+    }
+  }
+
   void _fanOut(RelaySession session, DrainedFrame frame, int nowMs) {
     frame.subs.forEach((sub, pending) {
       final state = session.subscriptions.get(sub);
@@ -424,6 +448,11 @@ final class TickEngine {
       // point of `unsubscribe`: a client that released a page must not be
       // handed one more frame for it, and there is no seq to advance.
       if (state == null) return;
+      if (!state.dueAt(nowMs)) {
+        _defer(session, sub, pending);
+        return;
+      }
+      state.markPushed(nowMs);
       session.emit(encoder.updateFrame(
         sub: state.literal(encoder.subLiteral),
         seq: state.nextSeq(),
