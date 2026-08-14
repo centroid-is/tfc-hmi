@@ -47,6 +47,19 @@ const _arrivalBudget = Duration(seconds: 30);
 /// Keyed by the entries of `faultModes`, and the test below asserts the two
 /// sets match — a lever nobody can name is a mode nobody will implement, and
 /// a name with no lever is a mode that reads as delivered.
+/// The modes whose behaviour has landed, each pointing at the file that proves
+/// it bites.
+///
+/// A mode is allowed to be in exactly one of two states, and this map is the
+/// boundary between them: either the lever refuses the setting and names the
+/// plan it lands in, or the mode is implemented and a named test file measures
+/// it. What must never exist is the third state — a lever that accepts a
+/// setting and does nothing — which is why a name is only allowed to leave the
+/// group below by arriving here with a test file beside it.
+const _landedModes = <String, String>{
+  'latency': 'test/faults/latency_test.dart',
+};
+
 final _levers = <String, void Function(FaultProxy)>{
   'flap': (p) => p.flap(const Duration(seconds: 1), const Duration(seconds: 1)),
   'latency': (p) => p.latency = const Duration(milliseconds: 50),
@@ -122,8 +135,30 @@ void main() {
             'to whichever mode the test was actually about');
   });
 
+  group('a lever whose mode has landed accepts the setting', () {
+    for (final entry in _landedModes.entries) {
+      test(entry.key, () async {
+        final proxy = await _proxyToEcho();
+        final lever = _levers[entry.key];
+        expect(lever, isNotNull,
+            reason: '${entry.key} is listed as landed with no lever in this '
+                'test, so nothing proves a caller can even reach it');
+
+        expect(
+          () => lever!(proxy),
+          returnsNormally,
+          reason: '${entry.key} is implemented, so its lever must stop '
+              'throwing — a mode still refusing its own setting cannot be '
+              'used by the scenarios it was built for. What proves it does '
+              'something rather than merely returning is ${entry.value}, '
+              'which measures the effect on a live connection',
+        );
+      });
+    }
+  });
+
   group('a lever whose mode has not landed throws by name', () {
-    for (final mode in faultModes) {
+    for (final mode in faultModes.where((m) => !_landedModes.containsKey(m))) {
       test(mode, () async {
         final proxy = await _proxyToEcho();
         final lever = _levers[mode];
@@ -158,6 +193,11 @@ void main() {
     expect(faultModes.toSet(), hasLength(faultModes.length),
         reason: 'a duplicated name makes the sweep count a mode twice and '
             'declare a missing one covered');
+    expect(_landedModes.keys, everyElement(isIn(faultModes)),
+        reason: 'a landed name that is not a mode exempts nothing from the '
+            'throws-by-name group while looking like it did; a misspelling '
+            'here would leave a real mode in the group and read as though it '
+            'had been implemented');
   });
 }
 
