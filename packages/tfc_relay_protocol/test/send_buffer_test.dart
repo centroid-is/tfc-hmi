@@ -48,6 +48,49 @@ void main() {
     });
   });
 
+  group('quality-only transitions', () {
+    test('a link transition cannot launder a non-finite reading back to good',
+        () {
+      // CR-04. The badNonFinite band is a property of the value: the number
+      // is gone, and nothing about the link brings it back. Laundering it
+      // reaches the client as null under good quality — a blank box that
+      // reads as an unbound tag rather than the open-circuit input it is.
+      final buf = ConflatingSendBuffer(maxPending: 100);
+      buf.putValue('s1', 1, WireValue.of(double.nan));
+      buf.putQuality('s1', 1, Quality.good);
+
+      final staged = buf.drain().subs['s1']!.changes[1]!;
+      expect(staged.v, isNull, reason: 'the number never survived sanitize');
+      expect(staged.q, Quality.badNonFinite);
+    });
+
+    test('a worse quality still wins over a non-finite pending value', () {
+      final buf = ConflatingSendBuffer(maxPending: 100);
+      buf.putValue('s1', 1, WireValue.of(double.infinity));
+      buf.putQuality('s1', 1, Quality.errorConfig);
+      expect(buf.drain().subs['s1']!.changes[1]!.q, Quality.errorConfig,
+          reason: 'a deleted tag is worse news than an unencodable number');
+    });
+
+    test('a healthy pending value takes the new quality outright', () {
+      final buf = ConflatingSendBuffer(maxPending: 100);
+      buf.putValue('s1', 1, WireValue.of(21.5, t: 99));
+      buf.putQuality('s1', 1, Quality.badCommFault);
+      final staged = buf.drain().subs['s1']!.changes[1]!;
+      expect([staged.v, staged.q, staged.t],
+          [21.5, Quality.badCommFault, 99],
+          reason: 'the value and its source instant are untouched');
+    });
+
+    test('with nothing pending it stages as a quality-only entry', () {
+      final buf = ConflatingSendBuffer(maxPending: 100);
+      buf.putQuality('s1', 4, Quality.uncertainLastKnown);
+      final sub = buf.drain().subs['s1']!;
+      expect(sub.changes, isEmpty);
+      expect(sub.qualities[4], Quality.uncertainLastKnown);
+    });
+  });
+
   group('priority lane', () {
     test('never conflated, order preserved, drains ahead of telemetry', () {
       final buf = ConflatingSendBuffer(maxPending: 100);
