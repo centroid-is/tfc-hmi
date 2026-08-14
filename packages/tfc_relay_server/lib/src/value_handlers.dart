@@ -282,13 +282,28 @@ final class ValueHandlers {
           'covering both, so nothing was sent. Mint a new id per action');
     }
 
+    // The request this outcome will be recorded for, built from the decoded
+    // params *after* `sanitize` ran at the top of this method — so the value
+    // stored is the value that goes upstream, and the deep comparison it will
+    // later be subject to is bounded in depth by the same sanitize pass
+    // (`json_equality.dart` recurses; ingress is what keeps that finite).
+    final fingerprint = (
+      key: request.key,
+      value: request.value,
+      expect: request.expect,
+    );
+
     // Recorded *before* the call so a writeStatus arriving while this is
     // upstream is answered "unknown" and not "never received": the command is
     // on its way to a machine at that exact moment.
-    _record(request.cmd, WriteUnknown(request.cmd,
-        const WriteReason('in_flight',
-            message: 'the gateway has sent this write upstream and has not '
-                'heard back yet')));
+    _record(
+        request.cmd,
+        WriteUnknown(
+            request.cmd,
+            const WriteReason('in_flight',
+                message: 'the gateway has sent this write upstream and has not '
+                    'heard back yet')),
+        fingerprint);
 
     WriteResult result;
     try {
@@ -320,7 +335,7 @@ final class ValueHandlers {
               message: 'the gateway lost track of this write: $error'));
     }
 
-    _record(request.cmd, result);
+    _record(request.cmd, result, fingerprint);
     return result.toJson();
   }
 
@@ -397,8 +412,16 @@ final class ValueHandlers {
                 'before acting'));
   }
 
-  void _record(String cmd, WriteResult result) =>
-      outcomes.record(cmd, result, ownerHint: ownerOf?.call());
+  /// The one place an outcome enters the log.
+  ///
+  /// [fingerprint] is the write the outcome is about, and it is not optional
+  /// here even though [WriteOutcomeLog.record] allows a null one: both callers
+  /// are inside `write`, with the decoded and sanitized [WriteParams] in scope,
+  /// and an entry recorded without a fingerprint would refuse every replay of
+  /// itself.
+  void _record(String cmd, WriteResult result, WriteFingerprint fingerprint) =>
+      outcomes.record(cmd, result,
+          ownerHint: ownerOf?.call(), fingerprint: fingerprint);
 
   /// The same outcome under the client's own [cmd].
   ///

@@ -43,10 +43,27 @@ library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
-/// One recorded write outcome, the instant it was recorded, and who recorded
-/// it.
+/// The write a recorded outcome belongs to: the tag, the payload, and the
+/// compare-and-set guard it was sent under.
+///
+/// A record rather than three loose fields on the entry, because the question
+/// the gateway asks of it is one question — "is the frame in my hand the same
+/// operator action as the one I already answered?" — and three fields are three
+/// comparisons that can drift apart. A `matches` written half-way (key only, or
+/// key and value) is the failure mode this shape exists to make awkward, and
+/// [WriteOutcomeEntry.matches] is the single place it is answered.
+///
+/// **`expect` is in here deliberately** (05-03 D-P5-B). "Set 1450" and "set
+/// 1450 only if it still reads 1200" are two different operator intents;
+/// answering the unguarded one from the guarded one's log entry would report
+/// that a check passed which was never made.
+typedef WriteFingerprint = ({String key, Object? value, Object? expect});
+
+/// One recorded write outcome, the instant it was recorded, who recorded it,
+/// and the request it was recorded for.
 final class WriteOutcomeEntry {
-  const WriteOutcomeEntry(this.result, this.atMs, this.ownerHint);
+  const WriteOutcomeEntry(this.result, this.atMs, this.ownerHint,
+      [this.fingerprint]);
 
   /// What became of the write. In-flight writes are recorded too, as
   /// [WriteUnknown]: a `writeStatus` crossing a write that is still upstream
@@ -61,6 +78,46 @@ final class WriteOutcomeEntry {
   /// session, and filtering on it would rebuild the defect this log exists to
   /// fix.
   final String? ownerHint;
+
+  /// The write this outcome is about, or null when the recorder had nothing to
+  /// fingerprint.
+  ///
+  /// Nullable rather than required because an entry can be constructed without
+  /// one — a handler's own default log and the unit tests do — and recording
+  /// honestly that the request is unknown beats inventing one. Production has
+  /// no such caller: both record sites in `value_handlers.dart` have the
+  /// decoded [WriteParams] in scope.
+  ///
+  /// **A null fingerprint never matches** ([matches]). Absence of the request
+  /// is not evidence that a replay is the same request, and the two directions
+  /// cost very different things: a false "not the same" is an
+  /// `INVALID_PARAMS` refusal, which on the write path means "definitively no
+  /// effect" and is true for the second write as well; a false "the same"
+  /// reports one write's outcome for another, and puts "applied" on a setpoint
+  /// nobody applied.
+  final WriteFingerprint? fingerprint;
+
+  /// Whether [other] is the same write this outcome was recorded for.
+  ///
+  /// The key compares as a string; the value and the guard compare with
+  /// `jsonEquals` (`json_equality.dart`), which is deep, insensitive to JSON
+  /// object key order, and holds numbers to their runtime type so a DINT `1`
+  /// and a REAL `1.0` stay two different writes. `DynamicValue.operator ==`
+  /// would compare quality and sourceTime that a write payload does not have,
+  /// and comparing encoded strings would make key order significant — both are
+  /// argued out in `json_equality.dart`'s library doc.
+  ///
+  /// The caller is the idempotency window at `value_handlers.dart`'s
+  /// duplicate-cmd decision, and it is the *only* caller: the payload it hands
+  /// over has been through `sanitize` at ingress, which is what bounds the
+  /// depth `jsonEquals` recurses to.
+  bool matches(WriteFingerprint other) {
+    final mine = fingerprint;
+    if (mine == null) return false;
+    return mine.key == other.key &&
+        jsonEquals(mine.value, other.value) &&
+        jsonEquals(mine.expect, other.expect);
+  }
 }
 
 /// Every write outcome this gateway is still prepared to speak about.
@@ -94,9 +151,15 @@ final class WriteOutcomeLog {
   int get recordedOutcomes => _entries.length;
 
   /// Records [result] for [cmd], replacing whatever was there.
-  void record(String cmd, WriteResult result, {String? ownerHint}) {
+  ///
+  /// [fingerprint] is the write the outcome is about, carried so a later frame
+  /// under the same id can be told from it — see [WriteOutcomeEntry.matches].
+  /// Optional, because an entry with nothing to fingerprint records honestly
+  /// and then matches nothing.
+  void record(String cmd, WriteResult result,
+      {String? ownerHint, WriteFingerprint? fingerprint}) {
     prune();
-    _entries[cmd] = WriteOutcomeEntry(result, now(), ownerHint);
+    _entries[cmd] = WriteOutcomeEntry(result, now(), ownerHint, fingerprint);
   }
 
   /// The entry held for [cmd] after pruning, or null.
