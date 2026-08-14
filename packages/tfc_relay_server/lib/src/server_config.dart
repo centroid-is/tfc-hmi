@@ -67,6 +67,28 @@ final class ServerConfig {
   /// is disconnected. Matches `ConflatingSendBuffer`'s own default.
   final int peakWindowMs;
 
+  /// Ceiling on the size of one **inbound** frame, in bytes, enforced before
+  /// `jsonDecode` ever sees it (03-REVIEW WR-04, threat T-03-29).
+  ///
+  /// There was no frame-size limit anywhere in the path: `shelf_web_socket`
+  /// sets only `pingInterval`
+  /// (`shelf_web_socket-3.0.0/lib/src/web_socket_handler.dart:93`). The
+  /// default is generous against what legitimately arrives — the largest real
+  /// request is a `subscribe` carrying [maxKeysPerSubscribe] keys, about
+  /// 120 kB at 2000 keys — and small against the amplification shape, where
+  /// one garbage frame is echoed back verbatim by json_rpc_2's parse-error
+  /// responder and held in the priority lane until the next tick.
+  ///
+  /// Phase 6 owns the full ingress hardening; this is the number, in place,
+  /// with a refusal that names itself.
+  final int maxFrameBytes;
+
+  /// Byte budget for one session's priority lane, handed to its
+  /// `ConflatingSendBuffer`. See [ConflatingSendBuffer.maxPendingBytes]:
+  /// [maxPending] counts entries, and 4096 arbitrarily large entries is a
+  /// heap rather than a queue.
+  final int maxPendingBytes;
+
   /// Browser origins allowed to open a WebSocket, passed to
   /// `shelf_web_socket`. Empty — the default — rejects every browser `Origin`
   /// with 403 while leaving the panels, which are not browsers and send no
@@ -108,6 +130,8 @@ final class ServerConfig {
     this.allowedOrigins = const [],
     this.maxKeysPerSubscribe = 2000,
     this.maxSubscriptionsPerSession = 32,
+    this.maxFrameBytes = 1024 * 1024,
+    this.maxPendingBytes = 8 * 1024 * 1024,
   }) {
     if (tick < minTick || tick > maxTick) {
       throw ArgumentError('tick (${_ms(tick)}) is outside the supported band '
@@ -132,6 +156,8 @@ final class ServerConfig {
     _positive('maxPending', maxPending);
     _positive('peakWindowMs', peakWindowMs);
     _positive('maxKeysPerSubscribe', maxKeysPerSubscribe);
+    _positive('maxFrameBytes', maxFrameBytes);
+    _positive('maxPendingBytes', maxPendingBytes);
     _positive('maxSubscriptionsPerSession', maxSubscriptionsPerSession);
     final peak = peakThreshold;
     if (peak != null && peak <= 0) {

@@ -194,4 +194,49 @@ void main() {
               'client saying it caught up');
     });
   });
+
+  group('the priority lane has a byte budget as well as an entry count', () {
+    // 03-REVIEW WR-04. `maxPending` counts entries, so 4096 arbitrarily large
+    // ones fit under it — and json_rpc_2's parse-error responder appends the
+    // *entire* offending frame into this lane verbatim.
+    test('a few enormous priority entries exceed the byte ceiling', () {
+      final buf = ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      buf.putPriority('x' * 400);
+      expect(buf.poll(0), isA<BufferOk>(),
+          reason: 'two entries against a ceiling of 4096 is nothing, and 400 '
+              'bytes against 1000 is nothing either');
+      buf.putPriority('x' * 700);
+
+      final verdict = buf.poll(0);
+      expect(verdict, isA<BufferDisconnect>(),
+          reason: 'two entries — 0.05% of the entry ceiling — are over the '
+              'byte ceiling, which is the whole shape of the amplification');
+      expect((verdict as BufferDisconnect).closeCode,
+          CloseCodes.backpressureOverrun,
+          reason: 'a lane that overran is a lane that overran, whichever '
+              'dimension it overran in');
+      expect(verdict.reason, contains('bytes'),
+          reason: 'the reason has to say which ceiling, or whoever reads the '
+              'log tunes the wrong number');
+    });
+
+    test('draining releases the byte budget', () {
+      final buf = ConflatingSendBuffer(maxPending: 4096, maxPendingBytes: 1000);
+      buf.putPriority('x' * 900);
+      buf.drain();
+      expect(buf.pendingBytes, 0);
+      buf.putPriority('x' * 900);
+      expect(buf.poll(0), isA<BufferOk>(),
+          reason: 'the budget is what the lane is holding, not what it has '
+              'ever held');
+    });
+
+    test('no byte ceiling is the default, and counts nothing against you', () {
+      final buf = ConflatingSendBuffer(maxPending: 4096);
+      buf.putPriority('x' * 10_000_000);
+      expect(buf.poll(0), isA<BufferOk>(),
+          reason: 'the protocol package keeps its own defaults permissive; '
+              'ServerConfig is where the gateway\'s numbers live');
+    });
+  });
 }

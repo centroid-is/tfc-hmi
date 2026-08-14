@@ -267,6 +267,7 @@ final class RelayServer {
         maxPending: config.maxPending,
         peakThreshold: config.peakThreshold,
         peakWindowMs: config.peakWindowMs,
+        maxPendingBytes: config.maxPendingBytes,
       );
       final sink = SessionSink(buffer, socket: ws.sink);
 

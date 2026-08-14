@@ -64,19 +64,56 @@ final class ConflatingSendBuffer {
   final int? peakThreshold;
   final int peakWindowMs;
 
+  /// Ceiling on **bytes** held in the priority lane, or null for none.
+  ///
+  /// [maxPending] counts entries, and entries say nothing about size
+  /// (03-REVIEW WR-04). The amplifier that makes that matter is json_rpc_2's
+  /// own parse-error responder: `respondToFormatExceptions`
+  /// (`json_rpc_2-4.1.0/lib/src/utils.dart:60-70`) answers with
+  /// `exception.serialize(formatException.source)`, and `source` for a failed
+  /// `jsonDecode` is the *entire offending text*. One megabyte-scale garbage
+  /// frame therefore becomes one megabyte-scale error response appended
+  /// verbatim into this lane, held until the next tick — and 4096 of those is
+  /// a heap, not a queue.
+  ///
+  /// **Only the priority lane is counted**, deliberately. Telemetry is
+  /// conflated, so it is bounded by the number of watched handles no matter
+  /// how fast the plant moves, and measuring a `WireValue`'s size would mean
+  /// encoding it on the hot path to find out. The priority lane is the one
+  /// that appends whatever it is handed.
+  final int? maxPendingBytes;
+
   final _priority = <Object?>[];
   final _subs = <String, _SubState>{};
   int? _peakSinceMs;
+  int _priorityBytes = 0;
 
   ConflatingSendBuffer({
     required this.maxPending,
     this.peakThreshold,
     this.peakWindowMs = 10_000,
+    this.maxPendingBytes,
   });
 
   int get pendingCount =>
       _priority.length +
       _subs.values.fold(0, (n, s) => n + s.pendingCount);
+
+  /// Bytes held in the priority lane, as counted by [putPriority].
+  int get pendingBytes => _priorityBytes;
+
+  /// What one priority entry is charged.
+  ///
+  /// An already-encoded frame is charged its own length — the exact number,
+  /// and the only shape big enough to matter. A structured message is charged
+  /// a flat nominal cost rather than encoded to find out: those are server-
+  /// built announcements (`resync`, `status`) of a known small shape, and
+  /// paying an encode per put to measure them would put the cost on the path
+  /// this whole class exists to keep cheap.
+  static const nominalMessageBytes = 256;
+
+  static int _cost(Object? message) =>
+      message is String ? message.length : nominalMessageBytes;
 
   _SubState _sub(String sub) => _subs.putIfAbsent(sub, _SubState.new);
 
@@ -122,7 +159,10 @@ final class ConflatingSendBuffer {
   /// RPC responses, write acks, status, ticks: appended verbatim, flushed
   /// ahead of telemetry, never conflated — a degraded link must still
   /// deliver the news that it is degraded.
-  void putPriority(Object? message) => _priority.add(message);
+  void putPriority(Object? message) {
+    _priority.add(message);
+    _priorityBytes += _cost(message);
+  }
 
   /// Disconnect policy. Call once per tick with a monotonic timestamp,
   /// **before** [drain].
@@ -131,6 +171,13 @@ final class ConflatingSendBuffer {
   /// recovered, and it decides it on the count it measured before the drain
   /// emptied the buffer. See [drain] for why that used to be untrue.
   BufferVerdict poll(int nowMs) {
+    final byteCeiling = maxPendingBytes;
+    if (byteCeiling != null && _priorityBytes > byteCeiling) {
+      return BufferDisconnect(
+          CloseCodes.backpressureOverrun,
+          'pending priority bytes ($_priorityBytes) exceeded the byte limit '
+          '($byteCeiling)');
+    }
     final pending = pendingCount;
     if (pending > maxPending) {
       return BufferDisconnect(CloseCodes.backpressureOverrun,
@@ -169,6 +216,7 @@ final class ConflatingSendBuffer {
   DrainedFrame drain() {
     final priority = List<Object?>.of(_priority);
     _priority.clear();
+    _priorityBytes = 0;
 
     final subs = <String, PendingSub>{};
     _subs.forEach((name, s) {
