@@ -765,7 +765,22 @@ final class ScenarioPlayback {
   /// given the generator's conflict resolution, means the exclusion table and
   /// the generator have drifted apart. The failure carries the repro log,
   /// because that is the moment somebody needs it.
+  ///
+  /// Refuses to run a playback that has been [stop]ped, in the shape
+  /// `FaultProxy.start()` uses for the same situation. A stopped driver
+  /// schedules nothing — `_schedule` returns on the first line — so a fresh
+  /// completer would be one nothing ever completes, and the caller would hang
+  /// until package:test's own timeout named the test file rather than the
+  /// playback. An unconditional `addTearDown(playback.stop)` registered at
+  /// construction time makes stop-before-run easy to arrive at by accident,
+  /// which is exactly when a hang is hardest to attribute.
   Future<void> run() {
+    if (_stopped) {
+      throw StateError('this playback has been stopped; build a new one '
+          'rather than restarting it — a stopped driver schedules nothing, so '
+          'run() would return a future that never completes and the failure '
+          'would name the test file instead of this object');
+    }
     final existing = _finished;
     if (existing != null) return existing.future;
     final finished = _finished = Completer<void>();
