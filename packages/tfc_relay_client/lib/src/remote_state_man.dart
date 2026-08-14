@@ -123,6 +123,9 @@ final class RemoteStateMan implements StateManApi {
       client: client,
       onStatus: onStatus,
       onBye: onBye,
+      // The gateway's `preferences.changed` reaches every local listener
+      // through the one API that owns the broadcast controller.
+      onPreferenceChanged: (key) => preferences.announce(key),
       // Null in production: the supervisor dials with `connect`. A harness
       // supplies one so a contract leg can be built synchronously against a
       // server whose port is only known asynchronously — see

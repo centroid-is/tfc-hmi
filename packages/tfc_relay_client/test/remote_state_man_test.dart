@@ -35,6 +35,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
+import 'package:tfc_relay_client/src/client_sub_apis.dart'
+    show DataServiceMethods;
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
 import 'package:tfc_relay_client/src/failure_taxonomy.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';
@@ -426,6 +428,49 @@ void main() {
     });
   });
 
+  // 04-REVIEW WR-07. `ClientPreferencesApi.announce` documented itself as
+  // "called from the notification handler and nowhere else", and there was no
+  // such handler: the supervisor registered update/tick/resync/status/bye and
+  // a fallback that *refused* anything else, so the gateway's own
+  // announcement came back `-32000 this panel does not answer
+  // "preferences.changed"` and the change stream could never emit.
+  group('preferences announced by the gateway', () {
+    test('a preferences.changed notification reaches a local listener',
+        () async {
+      final gateway = await _FakeGateway.start((link, method, id, params) {
+        switch (method) {
+          case Methods.hello:
+            link.hello(id);
+          case Methods.subscribe:
+            link.snapshot(id, defaultPageSubscription);
+          default:
+            break;
+        }
+      });
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final changed = <String>[];
+      final listening =
+          client.preferences.onPreferencesChanged.listen(changed.add);
+      addTearDown(listening.cancel);
+
+      gateway.notifyLive(
+          DataServiceMethods.preferencesChanged, {'key': 'ui.theme'});
+
+      await _until('the announcement to reach the stream',
+          () => changed.isNotEmpty);
+      expect(changed, ['ui.theme'],
+          reason: 'a settings page edited on one panel has to reach the chart '
+              'legend on the next one, and the whole path for that is this '
+              'notification');
+      expect(client.complaints, isEmpty);
+    });
+  });
+
   group('the write path', () {
     test('a write mints a cmd and reports what became of it', () async {
       final gateway = await _gateway();
@@ -675,6 +720,54 @@ void main() {
               'still the confirmation');
     });
 
+    test('an unknown answer is asked about again on the next reconnect',
+        () async {
+      // 04-REVIEW WR-01's operator-visible property. The storm guard is
+      // cleared in the `finally` of the call it belongs to, and it used to be
+      // cleared there and nowhere else: a re-query wanted while one was in
+      // flight was dropped rather than run afterwards, and on a link that then
+      // behaved, "some later entry to ready" never came.
+      //
+      // What this case forces is the outer property — while a command is
+      // unresolved, every reconnect asks about it again. The precise
+      // interleaving WR-01 names (a reconnect completing before the previous
+      // call's future has failed) cannot be forced from outside the client:
+      // closing a peer fails its in-flight requests in the same breath, and
+      // that failure unwinds in microtasks while a reconnect costs a backoff
+      // window plus a handshake.
+      final gateway = await statusGateway((cmds) => [
+            for (final cmd in cmds)
+              WriteUnknown(
+                      cmd,
+                      const WriteReason('in_flight',
+                          message: 'still upstream'))
+                  .toJson(),
+          ]);
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final unknown = await client.write(_seededKey, 1).timeout(_recovery);
+      expect(client.debugUnresolvedCmds, contains(unknown.cmd));
+
+      await gateway.dropLive();
+      await _until('the first re-query',
+          () => client.debugWriteStatusQueries.length == 1);
+      await gateway.dropLive();
+      await _until('the re-query after the second reconnect',
+          () => client.debugWriteStatusQueries.length >= 2);
+
+      expect(client.debugUnresolvedCmds, contains(unknown.cmd),
+          reason: 'an unknown answer settles nothing, which is exactly what '
+              'makes it re-queryable');
+      expect(client.debugWritesSent, 1,
+          reason: 'asking twice is recovery; sending twice is a second '
+              'actuation');
+    });
+
     test('one undecodable entry costs one command, not the batch', () async {
       final gateway = await statusGateway((cmds) => [
             // The malformed entry comes *first*, which is the shape that used
@@ -742,6 +835,17 @@ final class _FakeGateway {
   /// How many sockets this gateway has accepted. One per client dial, so a
   /// case can wait for the reconnect rather than for a duration.
   int get accepted => _links.length;
+
+  /// Sends a notification to the live client, the way the gateway announces
+  /// one. No id: nothing that needs an outcome is ever a notification.
+  void notifyLive(String method, Map<String, Object?> params) {
+    if (_links.isEmpty) return;
+    _links.last._send({
+      'jsonrpc': '2.0',
+      'method': method,
+      'params': params,
+    });
+  }
 
   /// Hangs up on the live client, without a close code, the way a plant switch
   /// does. The client's answer to that is always to come back.

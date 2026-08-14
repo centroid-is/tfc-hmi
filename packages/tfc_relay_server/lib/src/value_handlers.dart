@@ -96,6 +96,16 @@ final class ValueHandlers {
   int get recordedOutcomes => outcomes.recordedOutcomes;
 
   /// `read`: the cached value, no round trip.
+  ///
+  /// **Why it stays on the table even though `RemoteStateMan` never sends it**
+  /// (04-REVIEW WR-11). `read` is `StateManApi`'s cached read and this gateway
+  /// exists to serve that interface; the panel client happens to hold its own
+  /// `ValueStore` and answers from it synchronously, which is a property of
+  /// *that* client and not of the protocol. A browser bundle, a diagnostic
+  /// tool or a script has no cache to peek, and for them the gateway's cache
+  /// is the only one there is. It adds no exposure class its neighbours do not
+  /// already have — every method here is reachable by anyone past the
+  /// handshake until Phase 6 attaches authorization at the same per-key seam.
   Future<Object?> read(rpc.Parameters params) async {
     // Sanitize before decode, every time, on every ingress path:
     // `jsonDecode('1e999')` yields Infinity in silence, and an Infinity that
@@ -108,13 +118,22 @@ final class ValueHandlers {
       // "this source does not serve that tag" is the answer to it; a refusal
       // would make a page editor's key check indistinguishable from a broken
       // gateway.
+      //
+      // **Keyed by tag, exactly as `readMany` keys it** (04-REVIEW WR-11).
+      // This used to answer `'rejected': <one KeyReject>` while its neighbour
+      // answered `'rejected': {key: KeyReject}`, so a client written against
+      // either decoded the other wrongly — and the wrong decode is silent: a
+      // `kind` read off a map that has none comes back null, and the tag
+      // renders as merely quiet instead of as misconfigured.
       return {
         'key': key,
         'value': WireValue.of(null, quality: Quality.errorConfig).toJson(),
-        'rejected': KeyReject(KeyRejectKinds.unknownKey,
-                message: 'this source does not serve "$key" — usually a typo '
-                    'in a page config, occasionally a tag renamed upstream')
-            .toJson(),
+        'rejected': {
+          key: KeyReject(KeyRejectKinds.unknownKey,
+                  message: 'this source does not serve "$key" — usually a typo '
+                      'in a page config, occasionally a tag renamed upstream')
+              .toJson(),
+        },
       };
     }
 
