@@ -77,8 +77,10 @@ const Map<int, String> exemptCodes = {
       'which is an intention, not an observation.',
   4003: 'heartbeatTimeout — 03-09 lands the reaper that emits it, together '
       'with the client-side case that watches the close arrive.',
-  4004: 'backpressureOverrun — 03-11 lands the overrun path that emits it; '
-      'session_sink_test names the code in prose only.',
+  // 4004 was exempt until 03-09 wired the buffer's verdicts into the session's
+  // close path. `backpressure_test.dart` now watches a real client observe it
+  // over a real socket, so the debt is paid and the line is gone — which is
+  // exactly the way this list is meant to empty.
 };
 
 /// The marker that distinguishes a client-observed close from a server-recorded

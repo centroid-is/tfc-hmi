@@ -279,6 +279,15 @@ final class RelayServer {
         serverSupported: serverSupported,
         closeChannel: connection.closeSocket,
         emitFrame: connection.write,
+        // Synchronous, and the asynchronous `_release` below does *not*
+        // replace it. A session evicted inside a tick — backpressure, the
+        // heartbeat reaper — must be gone from the registry by the time that
+        // tick's remaining work runs; `session.closed` completes a turn or
+        // more later, after the peer has shut down, and until then the engine
+        // would keep fanning out to a client the server has already evicted.
+        // `remove` is idempotent and fires `gone` once, so the two paths
+        // meeting is not a double report.
+        onClosing: _sessions.remove,
       );
       connection.session = session;
       _sessions.add(session);
