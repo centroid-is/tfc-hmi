@@ -128,6 +128,21 @@ jobs:
         dart analyze
         dart test
 
+    # The panel side, after the gateway it is judged against — it holds
+    # tfc_relay_server as a dev dependency and runs its contract legs against
+    # the real thing on an ephemeral port. A step, not a job, for the same
+    # reason as above: steps run sequentially, and STATE.md's operational rule
+    # is that analyze/test never run in two packages at once. This package
+    # measures milliseconds against a transport whose round trip already has a
+    # 50-100 ms tick-quantised floor, so a neighbour burning the same event
+    # loop is a different machine.
+    - name: Test tfc_relay_client
+      working-directory: packages/tfc_relay_client
+      run: |
+        dart pub get
+        dart analyze
+        dart test
+
   tfc-dart-test:
     strategy:
       fail-fast: false
