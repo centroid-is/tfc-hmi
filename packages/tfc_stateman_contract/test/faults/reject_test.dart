@@ -67,6 +67,22 @@ const _attempts = 20;
 /// is what a closed listener produces on Windows.
 const _terminalBudget = Duration(seconds: 2);
 
+/// How many connects the in-flight-accept arm has stalled on the upstream.
+///
+/// Comfortably more than the upstream's backlog of one, so most of them are
+/// still mid-handshake when the rejection lands.
+const _raceConnections = 12;
+
+/// How long the in-flight-accept arm lets the stall establish itself.
+const _stallWindow = Duration(milliseconds: 150);
+
+/// How long it then watches for a pair that joined after reject() returned.
+///
+/// Several seconds, because a stalled handshake resumes on the SYN
+/// retransmission timer — about a second on the platforms this runs on — and
+/// the pair this arm is looking for appears when it does.
+const _drainWindow = Duration(seconds: 4);
+
 /// How long a round trip through a healthy proxy is given.
 const _tripBudget = Duration(seconds: 10);
 
@@ -132,6 +148,79 @@ Future<void> main() async {
         reason: 'the pair outlived the teardown, so its two sockets are still '
             'open: the descriptor leak the 02-02 leak test measures, arriving '
             'through a mode rather than through the accept path');
+  });
+
+  test('a connect that was in flight when rejection started does not become a '
+      'live pair', () async {
+    // An upstream that is bound with a backlog of one and never accepts. The
+    // window this arm is about — the proxy has taken the client and is
+    // awaiting its own connect to the server — is a loopback connect wide,
+    // about a millisecond, and unobservable at that size. Filling the
+    // upstream's accept queue holds it open instead: the surplus handshakes
+    // stall in SYN retransmission until the queue drains, which is long
+    // enough to pull a lever in the middle of.
+    final upstream = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4, 0,
+        backlog: 1);
+    addTearDown(upstream.close);
+    final proxy = FaultProxy(targetPort: upstream.port);
+    await proxy.start();
+    addTearDown(proxy.shutdown);
+
+    final attempts = <Future<Socket?>>[
+      for (var i = 0; i < _raceConnections; i++)
+        Socket.connect(InternetAddress.loopbackIPv4, proxy.port)
+            .then<Socket?>((socket) => socket, onError: (Object _) => null),
+    ];
+    // Waiting for the accept path to reach the stall it was set up to reach.
+    // There is no event for "the proxy is inside Socket.connect", which is the
+    // reason this window is invisible to every other arm in the file.
+    await Future<void>.delayed(_stallWindow);
+
+    await proxy.reject();
+
+    // Draining the queue lets the stalled handshakes complete, which is the
+    // moment the proxy's connect returns and it decides what to do with a
+    // client it accepted before the rejection.
+    final servedUpstream = <Socket>[];
+    final accepts = upstream.listen((socket) {
+      servedUpstream.add(socket);
+      unawaited(socket.done.catchError((Object _) => socket));
+    });
+    addTearDown(accepts.cancel);
+    addTearDown(() {
+      for (final socket in servedUpstream) {
+        socket.destroy();
+      }
+    });
+
+    var peak = proxy.livePairs;
+    final watching = Stopwatch()..start();
+    while (watching.elapsed < _drainWindow) {
+      // Polling, because the failure is a pair appearing after reject()
+      // returned and there is no event for something the teardown never saw.
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      if (proxy.livePairs > peak) peak = proxy.livePairs;
+    }
+
+    for (final socket in await Future.wait(attempts)) {
+      if (socket == null) continue;
+      unawaited(socket.done.catchError((Object _) => socket));
+      socket.destroy();
+    }
+
+    print('reject against $_raceConnections connects stalled on the upstream: '
+        'peak live pairs $peak, upstream sockets served '
+        '${servedUpstream.length}');
+    expect(peak, 0,
+        reason: 'a connection accepted before the rejection, whose upstream '
+            'connect completed after it, was added as a fully forwarding pair '
+            'while the proxy was refusing everything — and it escaped the '
+            'sweep, because the sweep iterated the set before this pair '
+            'joined it. reject() doc says "when it returns there are none". '
+            'The same window is a flap dropout that a client sails straight '
+            'through, which at thirty cycles a minute in a soak is how "the '
+            'client stayed connected through the outage" reads green');
   });
 
   test('the listener stays bound, and clearing it restores normal service',

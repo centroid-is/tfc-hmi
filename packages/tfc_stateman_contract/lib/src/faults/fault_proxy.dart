@@ -836,6 +836,25 @@ final class FaultProxy {
       upstream.destroy();
       return;
     }
+    if (_rejecting || _flapDown) {
+      // The lever moved while this connect was in flight. Nothing below this
+      // line awaits before the pair joins `_pairs`, so a pair that gets past
+      // here is one the next sweep can see — but a pair created *now* would
+      // be a live, fully forwarding connection in the middle of a dropout,
+      // and it would escape the sweep that has already run: `_dropForFlap`
+      // and `_tearDownForReject` iterate the set as they find it, which is
+      // why `reject`'s doc can promise "when it returns there are none" only
+      // if the accept path stops adding them afterwards. In a soak this is
+      // the shape "the client stayed connected through the outage" takes when
+      // it is a false negative.
+      //
+      // forceReset rather than destroy, matching what the pre-connect checks
+      // send: the client asked for a connection during a refusal and gets the
+      // same answer whichever side of the await it was on.
+      forceReset(client);
+      upstream.destroy();
+      return;
+    }
     final pair = _ProxiedPair(client, upstream);
     // Before `start`, so the first chunk of a connection accepted while a
     // lever is set is already subject to it. A pair that picked its settings
