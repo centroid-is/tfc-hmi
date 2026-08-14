@@ -258,37 +258,89 @@ final class ValueHandlers {
       throw _refuse(Methods.write, 'write needs a non-empty "key"');
     }
 
-    // **One id, one actuation** (04-REVIEW CR-05). The `cmd` arrives from the
-    // wire and was accepted verbatim, so any peer that completed the handshake
-    // could send two different writes under one id: both went upstream, the
-    // second overwrote the first's outcome, and `writeStatus` then reported
-    // one answer for two actuations — the wrong one for at least one of them.
+    // The request this outcome will be recorded for, and the request a second
+    // frame under the same id is compared against. Built from the decoded
+    // params *after* `sanitize` ran at the top of this method — so the value
+    // stored is the value that goes upstream, and the deep comparison below is
+    // bounded in depth by that same sanitize pass (`json_equality.dart`
+    // recurses; ingress is what keeps that finite).
+    final fingerprint = (
+      key: request.key,
+      value: request.value,
+      expect: request.expect,
+    );
+
+    // **One id, one actuation** (04-REVIEW CR-05), and — since 05-03 — one id,
+    // one *answer*. The `cmd` arrives from the wire and is accepted verbatim,
+    // so any peer past the handshake can send a second frame under an id this
+    // gateway has already recorded. Two of those are not the same event, and
+    // the difference is the request itself:
     //
-    // A shape refusal, raised before the plant is touched, which is the one
-    // class of refusal this path allows: `INVALID_PARAMS` on a write means
-    // "definitively no effect", and here that is exactly true.
+    //  * **The same key, value and expect** is one operator action arriving
+    //    twice — a client that restarted still holding the id it minted at the
+    //    keyboard. It is answered with the outcome that action already got,
+    //    from the log, with no second `api.write`. That is the Stripe
+    //    semantic, and the `upstreamWriteAttempts` assertion in
+    //    `value_handlers_test.dart` is the property: one press, one movement
+    //    of the machine.
     //
-    // Phase 5's idempotency window is what makes the *same* key and value a
-    // genuine replay — answered from the log rather than refused, the Stripe
-    // semantic — and it attaches here. A differing key or value stays a
-    // refusal even then, because there is no reading of two different writes
-    // under one id that an operator can act on.
-    if (outcomes.holds(request.cmd)) {
+    //    Including while the first write is still upstream (**D-P5-A**). The
+    //    pre-record below means such a replay reads `unknown(in_flight)`, and
+    //    that is deliberately not a refusal: a refusal reaches the client as
+    //    `WriteRejected(server_refused)` and *settles* the id, against a write
+    //    that is at that instant on its way to a machine. An `unknown` leaves
+    //    it unresolved, so the next `ready` re-queries `writeStatus`.
+    //
+    //  * **Anything else** — a different key, a different value, or a
+    //    different compare-and-set guard (**D-P5-B**: "set 1450" and "set 1450
+    //    only if it still reads 1200" are two different intents) — stays a
+    //    refusal. There is no reading of two different writes under one id
+    //    that an operator can act on, and reporting the first one's outcome
+    //    for the second would put "applied" on a setpoint nobody applied.
+    //
+    // The comparison is `WriteOutcomeEntry.matches` (`write_outcome_log.dart`,
+    // which also carries why the fingerprint is a record and why a null one
+    // never matches), over `jsonEquals` — deep, insensitive to JSON object key
+    // order, and holding numbers to their runtime type so a DINT 1 and a REAL
+    // 1.0 stay two different writes.
+    //
+    // The refusal is a shape refusal raised before the plant is touched, which
+    // is the one class of refusal this path allows: `INVALID_PARAMS` on a
+    // write means "definitively no effect", and here that is exactly true.
+    final held = outcomes.entryFor(request.cmd);
+    if (held != null) {
+      if (held.matches(fingerprint)) {
+        // No `api.write`, and no new `_record`: nothing happened this time
+        // round, so there is nothing new to remember. `_withCmd` already
+        // normalized the stored result under this client's id when it was
+        // recorded, and `WriteResult.fromJson` decodes it on the far side like
+        // any other write answer — a replay of an applied write therefore
+        // re-adopts the same readback onto the mimic.
+        return held.result.toJson();
+      }
       throw _refuse(
           Methods.write,
           'the command id "${request.cmd}" is already recorded on this '
-          'gateway. One id is one operator action: a second write under it '
-          'would actuate the plant twice and leave one writeStatus answer '
-          'covering both, so nothing was sent. Mint a new id per action');
+          'gateway for a different write. One id is one operator action: a '
+          'second, different write under it would actuate the plant twice and '
+          'leave one writeStatus answer covering both, so nothing was sent: '
+          'this write had no effect of any kind and no device was consulted '
+          'about it. The two frames disagree about the key, the value or the '
+          'expect guard, which is a defect in the caller and not a condition '
+          'of the machine. Mint a new id per action');
     }
 
     // Recorded *before* the call so a writeStatus arriving while this is
     // upstream is answered "unknown" and not "never received": the command is
     // on its way to a machine at that exact moment.
-    _record(request.cmd, WriteUnknown(request.cmd,
-        const WriteReason('in_flight',
-            message: 'the gateway has sent this write upstream and has not '
-                'heard back yet')));
+    _record(
+        request.cmd,
+        WriteUnknown(
+            request.cmd,
+            const WriteReason('in_flight',
+                message: 'the gateway has sent this write upstream and has not '
+                    'heard back yet')),
+        fingerprint);
 
     WriteResult result;
     try {
@@ -320,7 +372,7 @@ final class ValueHandlers {
               message: 'the gateway lost track of this write: $error'));
     }
 
-    _record(request.cmd, result);
+    _record(request.cmd, result, fingerprint);
     return result.toJson();
   }
 
@@ -397,8 +449,16 @@ final class ValueHandlers {
                 'before acting'));
   }
 
-  void _record(String cmd, WriteResult result) =>
-      outcomes.record(cmd, result, ownerHint: ownerOf?.call());
+  /// The one place an outcome enters the log.
+  ///
+  /// [fingerprint] is the write the outcome is about, and it is not optional
+  /// here even though [WriteOutcomeLog.record] allows a null one: both callers
+  /// are inside `write`, with the decoded and sanitized [WriteParams] in scope,
+  /// and an entry recorded without a fingerprint would refuse every replay of
+  /// itself.
+  void _record(String cmd, WriteResult result, WriteFingerprint fingerprint) =>
+      outcomes.record(cmd, result,
+          ownerHint: ownerOf?.call(), fingerprint: fingerprint);
 
   /// The same outcome under the client's own [cmd].
   ///
