@@ -417,6 +417,81 @@ void main() {
       expect(decoded.asInt, 1);
       expect(decoded.isInteger, isTrue);
     });
+
+    group('a leaf the peer sent wrong degrades alone', () {
+      // WR-04. A _TypeError out of a decoder on the notification path (`u`
+      // updates) has no JSON-RPC error response to land in: it surfaces as an
+      // unhandled error and takes down the value pipeline for a frame that
+      // had one bad field in it.
+
+      test('a declared type the value does not match', () {
+        for (final json in <Map<String, Object?>>[
+          {'type': 'integer', 'value': 'five'},
+          {'type': 'boolean', 'value': 1},
+          {'type': 'double', 'value': true},
+          {'type': 'object', 'value': 'not an object'},
+          {'type': 'array', 'value': 7},
+        ]) {
+          final decoded = DynamicValue.fromJson(json);
+          expect(decoded.value, isNull, reason: '$json');
+          expect(decoded.quality, Quality.errorTypeMismatch,
+              reason: 'a leaf that could not be decoded must be visibly '
+                  'undecodable, not silently null — $json');
+        }
+      });
+
+      test('a mismatch inside a struct costs that member alone', () {
+        final decoded = DynamicValue.fromJson({
+          'type': 'object',
+          'value': {
+            'ok': {'type': 'integer', 'value': 7},
+            'broken': {'type': 'integer', 'value': 'five'},
+          },
+        });
+        expect(decoded['ok'].asInt, 7,
+            reason: 'the healthy member of the batch survives');
+        expect(decoded['broken'].value, isNull);
+        expect(decoded.quality, Quality.errorTypeMismatch,
+            reason: 'and the parent says so, worst-wins');
+      });
+
+      test('an absent value is an absent reading, not a mismatch', () {
+        for (final type in ['integer', 'double', 'boolean', 'object',
+          'array']) {
+          final decoded =
+              DynamicValue.fromJson({'type': type, 'value': null});
+          expect(decoded.quality, Quality.good, reason: type);
+        }
+      });
+
+      test('a number under a string tag is a representation difference', () {
+        final decoded =
+            DynamicValue.fromJson({'type': 'string', 'value': 42});
+        expect(decoded.value, '42');
+        expect(decoded.quality, Quality.good);
+      });
+
+      test('malformed metadata costs the label, not the value', () {
+        final decoded = DynamicValue.fromJson({
+          'type': 'integer',
+          'value': 7,
+          'typeId': 99,
+          'sourceTypeId': const [],
+          'displayName': 'not an object',
+          'description': 7,
+          'enumFields': {'not a code': {}, '3': 'not an object'},
+        });
+        expect(decoded.asInt, 7);
+        expect(decoded.typeId, isNull);
+        expect(decoded.sourceTypeId, isNull);
+        expect(decoded.displayName, isNull);
+        expect(decoded.enumFields, isEmpty);
+      });
+
+      test('a wrong-typed type tag falls through to unknown', () {
+        expect(DynamicValue.fromJson({'type': 7, 'value': 'x'}).value, 'x');
+      });
+    });
   });
 
   group('poison values are defused at the boundary', () {

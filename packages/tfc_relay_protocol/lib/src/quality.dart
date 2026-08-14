@@ -51,6 +51,12 @@ extension type const Quality(int code) {
   /// configuration error, not a transient — waiting will not fix it.
   static const errorConfig = Quality(770);
 
+  /// A peer declared one type and sent a value of another (`{"type":
+  /// "integer", "value": "five"}`). The leaf could not be decoded, so it
+  /// reads null; the code is what stops that null looking like an absent
+  /// reading. Also non-transient — the two ends disagree about the tag.
+  static const errorTypeMismatch = Quality(771);
+
   /// Highest representable code. The four bands are 0–1023; anything above
   /// belongs to no band, so [worst] would never select it and every band
   /// predicate would answer false.
