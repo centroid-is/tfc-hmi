@@ -374,17 +374,68 @@ final class _Rig {
 }
 
 /// Echoes what it is sent, until it is sent [_firehose] alone.
+///
+/// The lifetime plumbing is `throttle_test.dart`'s `_firehoseServer` shape,
+/// copied deliberately rather than reinvented. A firehose whose only stop
+/// condition is a throwing write does not stop: once the proxy has gone, the
+/// writes complete against a dead socket as fast as the loop can issue them,
+/// the isolate never reaches the event loop again, and the runner hangs with
+/// no failing test — package:test's own timeout cannot fire either, because
+/// firing it needs the timer queue this loop is starving.
 Future<ServerSocket> _upstreamServer() async {
   final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  server.listen((socket) {
+  addTearDown(server.close);
+  final block = _pattern(_blockBytes);
+  var stopped = false;
+  addTearDown(() => stopped = true);
+  final accepted = <Socket>[];
+  addTearDown(() {
+    for (final socket in accepted) {
+      socket.destroy();
+    }
+  });
+
+  final accepts = server.listen((socket) {
+    accepted.add(socket);
     unawaited(socket.done.then<void>((_) {}, onError: (Object _) {}));
     var firehosing = false;
+    // Set the moment this connection ends, and checked every iteration below.
+    // This flag is the difference between a firehose and a hung suite: the
+    // flap under test takes the pair away mid-stream, and writing into a
+    // socket whose peer has gone does *not* throw — it completes as fast as
+    // the loop can issue it, which starves the event loop of the very isolate
+    // the test, the client and package:test's own timeout all run in. The
+    // symptom is a runner that never returns and never fails.
+    var gone = false;
+    void end() {
+      gone = true;
+      socket.destroy();
+    }
+
     socket.listen(
-      (data) {
+      (data) async {
         if (firehosing) return;
         if (data.length == 1 && data.first == _firehose) {
           firehosing = true;
-          unawaited(_firehoseInto(socket));
+          // A wall-clock backstop as well as the flag, because the flag is
+          // delivered by the event loop and the failure being guarded against
+          // is the event loop not getting a turn. A Stopwatch needs nobody's
+          // permission to advance.
+          final runaway = Stopwatch()..start();
+          try {
+            // Gated on `flush()` for the same reason the delay line's writes
+            // are: an ungated firehose buffers inside its own `dart:io` sink
+            // and reproduces Finding 7's 4463 MB in the sender instead of the
+            // proxy.
+            while (!stopped &&
+                !gone &&
+                runaway.elapsed < const Duration(seconds: 30)) {
+              socket.add(block);
+              await socket.flush();
+            }
+          } catch (_) {
+            // The rig was torn down mid-write, which is how this ends.
+          }
           return;
         }
         try {
@@ -394,30 +445,12 @@ Future<ServerSocket> _upstreamServer() async {
           // modes under test do on purpose.
         }
       },
-      onError: (Object _) => socket.destroy(),
-      onDone: socket.destroy,
-      cancelOnError: true,
+      onError: (Object _) => end(),
+      onDone: end,
     );
   });
-  addTearDown(server.close);
+  addTearDown(accepts.cancel);
   return server;
-}
-
-/// Writes blocks as fast as the socket will take them, until it will not.
-///
-/// Awaiting the flush each time is what makes this a firehose rather than a
-/// memory leak: the sender follows the kernel's pace, and the queue that is
-/// supposed to be bounded stays in the proxy where the test can see it.
-Future<void> _firehoseInto(Socket socket) async {
-  final block = _pattern(_blockBytes);
-  while (true) {
-    try {
-      socket.add(block);
-      await socket.flush();
-    } catch (_) {
-      return;
-    }
-  }
 }
 
 Uint8List _pattern(int length) =>
