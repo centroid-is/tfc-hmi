@@ -248,12 +248,26 @@ void main() {
     await within(fixture.ready, 'the server to accept a real client',
         budget: connectBudget);
     await fixture.hello(budget: rpcBudget);
+    final session = fixture.server.sessions.sessions.single;
 
     // No code: the ordinary shape of a panel being closed, a laptop lid, a
     // process killed.
     await fixture.client.sink.close();
-    await within(fixture.untilNoSessions(),
-        'the server to notice the client left', budget: closeBudget);
+
+    // Waited on the *session*, not on the registry, and 03-11 is why. The
+    // registry entry now comes out in the synchronous first step of teardown
+    // (Finding 9's order, so no tick can select a session mid-dismantling),
+    // while the ledger record is written by the connection's release when the
+    // session has finished closing — which is strictly later. An empty
+    // registry no longer means the disconnect has been recorded, and a test
+    // that read the ledger there was reading it one step early.
+    await within(session.closed, 'the session to finish closing',
+        budget: closeBudget);
+    // The release hangs off `closed` rather than being part of it, so it lands
+    // a microtask later. Same reasoning as `RelayFixture.awaitClose`: one turn
+    // of the event queue costs nothing and removes the only way this could
+    // report an absence it did not mean.
+    if (fixture.server.closeLedger.isEmpty) await pumpEventQueue(times: 1);
 
     final record = fixture.server.closeLedger.single;
     expect(record.clientCloseCode, 1005,
