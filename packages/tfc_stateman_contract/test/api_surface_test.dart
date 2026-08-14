@@ -135,29 +135,52 @@ const List<Type> wireTypes = [
   PreferencesApi,
 ];
 
-/// Every method, getter and setter [type] declares itself.
+/// Every method, getter and setter reachable on [type], including inherited
+/// ones.
+///
+/// Superinterfaces are walked, not just the class's own declarations. A member
+/// arriving via `abstract interface class TimeseriesApi implements RawQueryApi`
+/// is fully part of the wire surface and would otherwise be completely
+/// invisible here — in a test whose entire job is to be the access-control
+/// policy, which is exactly where `query(String sql)` would come in through
+/// the side door.
 ///
 /// Constructors and private members are excluded; a setter's trailing `=` is
 /// stripped so `foo` and `foo=` do not read as two separate wire methods.
-Set<String> declaredMemberNames(Type type) => reflectClass(type)
-    .declarations
-    .values
-    .whereType<MethodMirror>()
-    .where((m) => !m.isConstructor && !m.isPrivate)
-    .map((m) => MirrorSystem.getName(m.simpleName))
-    .map((name) => name.endsWith('=')
-        ? name.substring(0, name.length - 1)
-        : name)
-    .toSet();
+/// `Object`'s own members are not part of anybody's wire table, so the
+/// superclass walk stops there.
+Set<String> declaredMemberNames(Type type) =>
+    _walkSurface(type, (m) => [MirrorSystem.getName(m.simpleName)])
+        .map((name) =>
+            name.endsWith('=') ? name.substring(0, name.length - 1) : name)
+        .toSet();
 
-/// Every parameter name declared anywhere on [type], positional or named.
-Iterable<String> declaredParameterNames(Type type) => reflectClass(type)
-    .declarations
-    .values
-    .whereType<MethodMirror>()
-    .where((m) => !m.isConstructor && !m.isPrivate)
-    .expand((m) =>
-        m.parameters.map((p) => MirrorSystem.getName(p.simpleName)));
+/// Every parameter name declared anywhere on [type], inherited included — the
+/// `secret:` check has the identical hole otherwise.
+Iterable<String> declaredParameterNames(Type type) => _walkSurface(
+    type, (m) => m.parameters.map((p) => MirrorSystem.getName(p.simpleName)));
+
+/// Collects [read] over every public, non-constructor member of [type] and of
+/// everything it inherits from.
+Set<String> _walkSurface(
+    Type type, Iterable<String> Function(MethodMirror) read) {
+  final seen = <String>{};
+  final visited = <ClassMirror>{};
+
+  void walk(ClassMirror mirror) {
+    if (!visited.add(mirror)) return;
+    for (final member in mirror.declarations.values.whereType<MethodMirror>()) {
+      if (member.isConstructor || member.isPrivate) continue;
+      seen.addAll(read(member));
+    }
+    mirror.superinterfaces.forEach(walk);
+    final parent = mirror.superclass;
+    if (parent != null && parent.reflectedType != Object) walk(parent);
+  }
+
+  walk(reflectClass(type));
+  return seen;
+}
 
 void main() {
   group('the wire surface is closed', () {
@@ -210,6 +233,18 @@ void main() {
       });
     }
 
+    test('the walk itself sees members arriving via a superinterface', () {
+      // WR-07. The reflection used to read `declarations` alone, which
+      // returns only what a class declares itself — so the one shape this
+      // file exists to forbid could arrive through a superinterface and be
+      // completely invisible to every assertion above.
+      expect(declaredMemberNames(_DerivedFixture), {'query', 'ownMember'},
+          reason: 'a member inherited from a superinterface is fully part of '
+              'the wire surface');
+      expect(declaredParameterNames(_DerivedFixture), contains('secret'),
+          reason: 'the secret check had the identical hole');
+    });
+
     test('no member name suggests a statement-taking escape hatch', () {
       final suspicious = <String>[
         for (final type in wireTypes)
@@ -226,4 +261,15 @@ void main() {
               'socket, and no gateway-side sanitizing makes that safe.');
     });
   });
+}
+
+/// Fixtures for the walk's own regression test: exactly the shape that used to
+/// slip past — a statement-taking method and a `secret:` parameter, reachable
+/// only through a superinterface. Nothing on the wire implements these.
+abstract interface class _InheritedFixture {
+  Future<void> query(String sql, {bool secret});
+}
+
+abstract interface class _DerivedFixture implements _InheritedFixture {
+  void ownMember();
 }
