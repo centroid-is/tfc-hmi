@@ -122,7 +122,24 @@ abstract interface class StateManApi {
   /// the implementation, at call time**, because the call is the operator
   /// action: a re-send of the same action carries the same id, and
   /// [WriteResult.cmd] carries it back so a write can be reconciled later.
-  /// Callers do not pass an id in and cannot make two actions share one.
+  /// Ordinary callers do not pass an id in and cannot make two actions share
+  /// one — leave [cmd] null and the implementation mints.
+  ///
+  /// **[cmd] is for a relay, and a relay only.** A gateway serving a remote
+  /// client is not originating the operator action, it is forwarding one that
+  /// was already minted at the operator's keyboard (design §4.6), and the id
+  /// minted there is the idempotency correlation everything downstream is keyed
+  /// by: the client's `writeStatus` re-query after a reconnect asks about *that*
+  /// id, and the outcome log has to answer under it. An implementation in the
+  /// middle that mints a second id for the same operator action has created a
+  /// write it can no longer reconcile — the client asks about the id it holds,
+  /// the plant knows the write under another, and the honest answer collapses to
+  /// "never received" for a command that may well have actuated a machine. So a
+  /// relay passes the id it was given, and does not mint.
+  ///
+  /// Passing a [cmd] does not make a write idempotent by itself; it makes the
+  /// *outcome* attributable, which is what lets the three-state answer survive a
+  /// reconnect.
   ///
   /// While the write is in flight the value's quality carries
   /// `Quality.goodWritePending`, so a pending badge is a property of the
@@ -131,7 +148,8 @@ abstract interface class StateManApi {
   ///
   /// Pass [expect] for compare-and-set: the write applies only if the current
   /// value still equals it, otherwise the result is a [WriteRejected].
-  Future<WriteResult> write(String key, Object? value, {Object? expect});
+  Future<WriteResult> write(String key, Object? value,
+      {Object? expect, String? cmd});
 
   /// Every key this source can serve, for pickers and diagnostics.
   List<String> get keys;

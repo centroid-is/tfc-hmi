@@ -622,22 +622,31 @@ class FakeStateMan
   /// somebody has to remember to hold. And then exactly one upstream attempt
   /// is made, through [attemptUpstreamWrite] and through nothing else.
   ///
+  /// A caller that is **relaying** an operator action rather than originating
+  /// one passes the id that action was already minted under (see
+  /// `state_man_api.dart`), and then that id — not a second one — is what
+  /// [mintedCmds] records and what [upstreamWriteAttempts] counts against. That
+  /// is the whole reason the parameter exists: behind a gateway, a plant that
+  /// minted its own id would make "how many times did this operator action
+  /// reach the device" a question nothing on either side could answer.
+  ///
   /// It never throws to report an outcome. The [StateError] below is a
   /// programmer error — calling this after [dispose] — and is the only throw
   /// on the write path. A throw that meant "the write failed" would collapse
   /// "the PLC may have applied this" into "this definitely did not happen",
   /// which is the anti-pattern [WriteResult] exists to make unrepresentable.
   @override
-  Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
+  Future<WriteResult> write(String key, Object? value,
+      {Object? expect, String? cmd}) async {
     if (_disposed) {
       throw StateError('write($key) on a disposed source: the store and the '
           'upstream link are both gone, so no outcome reported here could be '
           'true. This is a lifecycle bug in the caller, not a write outcome.');
     }
-    final cmd = newUlid();
-    _mintedCmds.add(cmd);
+    final id = cmd ?? newUlid();
+    _mintedCmds.add(id);
     _markWritePending(key);
-    return attemptUpstreamWrite(cmd, key, value, expected: expect);
+    return attemptUpstreamWrite(id, key, value, expected: expect);
   }
 
   /// The single seam every upstream write attempt passes through.
@@ -826,6 +835,22 @@ class FakeStateMan
   /// a timer. Idempotent.
   @override
   void stallWrites() => _writesStalled = true;
+
+  /// How many writes are parked upstream right now, awaiting an answer.
+  ///
+  /// The read side of [stallWrites], and it exists for one caller: a harness
+  /// that has to cut the upstream link *while a write is genuinely out*. Driven
+  /// directly that needs no observable, because `api.write(...)` has already
+  /// reached this object by the time the next line of the case runs. Behind a
+  /// gateway it does not — the call is still crossing a socket — so a case that
+  /// drops the link on the following line drops it before the plant has ever
+  /// seen the write, and then settles nothing, and the write parks forever
+  /// against a stall nobody will release.
+  ///
+  /// Exposed as a count rather than a bool so a harness can tell "the write I
+  /// am waiting for has landed" from "some write is out", and read-only because
+  /// nothing outside this class may park or settle one.
+  int get writesInFlight => _stalledWrites.length;
 
   /// Ends the stall and settles everything parked by it.
   ///
