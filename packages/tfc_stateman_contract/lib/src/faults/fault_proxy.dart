@@ -265,7 +265,15 @@ final class FaultProxy {
     return peak;
   }
 
-  /// How many times [flap] has changed half since the cycle started.
+  /// How many times [flap] has changed half since this proxy was created.
+  ///
+  /// Since the proxy, not since the cycle: [flap] cancels the old timer
+  /// without zeroing the counter, so a proxy driven through two cycles reports
+  /// the sum. That is deliberate now it is written down — the counter's job is
+  /// the timer-hygiene assertion below, which compares it across a shutdown
+  /// and would be weakened by anything that resets it — but a soak reading it
+  /// as a per-cycle rate has to divide by the cycles it armed, and a generated
+  /// storm that draws `flap` twice is two of them.
   ///
   /// The observable behind the timer-hygiene criterion. A cancelled timer is
   /// not otherwise visible from a test — `Timer` exposes nothing and package:
@@ -276,8 +284,9 @@ final class FaultProxy {
   /// that survived moves this number even though the transition it would have
   /// made is refused (T-02-31).
   ///
-  /// Also worth printing in a soak: a minute of `flap(1s, 1s)` should be
-  /// around 59 transitions, and a number far off that says the cycle drifted
+  /// Also worth printing in a soak: a minute of `flap(1s, 1s)` on a proxy that
+  /// has been armed once should be around 59 transitions, and a number far off
+  /// that — allowing for the earlier cycles it also counts — says it drifted
   /// before any client-side aggregate does.
   int get flapTransitions => _flapTransitions;
 
