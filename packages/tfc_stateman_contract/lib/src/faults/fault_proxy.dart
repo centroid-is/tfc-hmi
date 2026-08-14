@@ -488,8 +488,18 @@ final class FaultProxy {
   /// burst, which dominates anything shorter than about two.
   ///
   /// Live, like [latency]: it reaches the pairs that are already open. Null
-  /// means unmetered.
+  /// means unmetered, and a non-positive rate is refused — see below.
   set throttleBytesPerSec(int? value) {
+    if (value != null && value <= 0) {
+      throw ArgumentError.value(
+          value,
+          'throttleBytesPerSec',
+          'a rate of zero is not a very slow link, it is an unmetered one: '
+              'the token bucket is only consulted for a positive rate, so the '
+              'lever would read as armed in the composition table and forward '
+              'at full speed. Use blackhole for "no bytes get through", and '
+              'null for unmetered');
+    }
     if (value != null) _refuseConflict('throttle');
     _throttleBytesPerSec = value;
     for (final pair in _pairs) {
