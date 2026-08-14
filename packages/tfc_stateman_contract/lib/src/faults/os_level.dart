@@ -320,18 +320,68 @@ const _systemPfConf = '/etc/pf.conf';
 /// arm's — each traversal pays the pipe's delay, so a round trip pays it
 /// twice ([loopbackRoundTripFor]).
 ///
-/// **This is the unverified part.** Stock `/etc/pf.conf` contains
-/// `set skip on lo0`, which excuses loopback from pf entirely; these rules
-/// replace the ruleset rather than adding to it, so that exclusion is gone
-/// while they are loaded. Whether the packets then actually enter the pipe is
-/// the question the spike exists to answer (RESEARCH Assumptions Log A1). Note
-/// also that `pf.conf(5)` documents no `dummynet` keyword at all — the syntax
-/// comes from `dnctl(8)`'s examples — so a parse error here is a plausible
-/// outcome and a legitimate answer.
+/// **This is the unverified part** (RESEARCH Assumptions Log A1). Two things
+/// were measured on macOS 15.1.1 while writing this, and they point opposite
+/// ways:
+///
+/// - The stock `/etc/pf.conf` on that machine does **not** contain
+///   `set skip on lo0` — the exclusion usually blamed for pf ignoring
+///   loopback. It contains `dummynet-anchor "com.apple/*"`, so the platform's
+///   own ruleset has a dummynet anchor point already. That is encouraging.
+/// - `pf.conf(5)` on that machine documents no `dummynet` keyword at all; the
+///   syntax comes only from `dnctl(8)`'s examples. A parse error here is a
+///   plausible outcome, and a legitimate answer to the spike.
+///
+/// Whether the packets then actually enter the pipe is still unanswered, and
+/// needs root to answer. See [pfRulesetWithDummynet] for how these lines reach
+/// the kernel without flushing the ruleset they are added to.
 String dummynetLoopbackRules({required int pipe}) {
   final n = _checkedPipe(pipe);
   return 'dummynet in quick on $dummynetLoopbackInterface all pipe $n\n'
       'dummynet out quick on $dummynetLoopbackInterface all pipe $n\n';
+}
+
+/// [baseRuleset] with [dummynetLoopbackRules] spliced in at the right place.
+///
+/// `pfctl -f` **replaces** the active ruleset, and the stock `/etc/pf.conf`
+/// opens with a warning about exactly that: "Care must be taken to ensure that
+/// the main ruleset does not get flushed, as the nested anchors rely on the
+/// anchor point defined here." Loading a two-line file of our own would drop
+/// `scrub-anchor`, `nat-anchor`, `rdr-anchor`, `dummynet-anchor` and
+/// `anchor "com.apple/*"` for as long as the spike runs — on a developer's
+/// Mac, with whatever system services depend on them (threat T-02-17). So the
+/// spike adds to the ruleset instead of substituting for it.
+///
+/// Placement is not cosmetic: pf requires rule *types* in order — options,
+/// normalisation, queueing, translation, then filtering — so the dummynet
+/// lines go immediately after the `dummynet-anchor` line, ahead of the filter
+/// anchors. Throws [ArgumentError] on a ruleset with no anchor to place them
+/// against, because guessing at a position in a firewall configuration is not
+/// a thing this file should do.
+String pfRulesetWithDummynet({
+  required String baseRuleset,
+  required int pipe,
+}) {
+  final lines = baseRuleset.split('\n');
+  final anchor = RegExp(r'^\s*dummynet-anchor\b');
+  final earlierAnchor = RegExp(r'^\s*(scrub|nat|rdr)-anchor\b');
+
+  var at = lines.lastIndexWhere(anchor.hasMatch);
+  at = at >= 0 ? at : lines.lastIndexWhere(earlierAnchor.hasMatch);
+  if (at < 0) {
+    throw ArgumentError.value(
+        baseRuleset,
+        'baseRuleset',
+        'has no dummynet-anchor or translation-anchor line to place the '
+            'dummynet rules after, and pf orders rule types strictly enough '
+            'that the wrong position is a parse error rather than a subtle '
+            'bug. Place them by hand on this machine');
+  }
+  return [
+    ...lines.sublist(0, at + 1),
+    dummynetLoopbackRules(pipe: pipe).trimRight(),
+    ...lines.sublist(at + 1),
+  ].join('\n');
 }
 
 /// `sudo -n dnctl pipe <n> config [delay <ms>] [bw <rate>]`.
@@ -408,9 +458,15 @@ Future<void> installDummynetLoopbackDelay({
   // back off is only knowable now.
   final wasEnabled = await _pfEnabled();
 
+  // Add to the system ruleset rather than replace it: `pfctl -f` flushes what
+  // it does not carry, and /etc/pf.conf's own header warns that its nested
+  // anchors depend on staying loaded.
   final directory = await Directory.systemTemp.createTemp('dummynet_spike');
   final rules = File('${directory.path}/loopback.pf.conf');
-  await rules.writeAsString(dummynetLoopbackRules(pipe: pipe));
+  await rules.writeAsString(pfRulesetWithDummynet(
+    baseRuleset: await File(_systemPfConf).readAsString(),
+    pipe: pipe,
+  ));
 
   await _mustRun(
     dnctlPipeConfigArgv(pipe: pipe, delay: perTraversalDelay),

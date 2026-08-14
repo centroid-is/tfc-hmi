@@ -147,6 +147,34 @@ Future<({List<int> received, int sent})> _sendDatagrams({
   return (received: received, sent: sent);
 }
 
+/// The stock `/etc/pf.conf`, as read from macOS 15.1.1 while writing this.
+///
+/// A fixture rather than a read of the live file: the assertion is that the
+/// splice preserves *these* anchors, which is only a meaningful claim if the
+/// input cannot quietly change underneath it. Note what is absent — the
+/// `set skip on lo0` line usually blamed for pf ignoring loopback is not
+/// there, and `dummynet-anchor` is.
+const _stockPfConf = '''
+#
+# Default PF configuration file.
+#
+# Care must be taken to ensure that the main ruleset does not get flushed,
+# as the nested anchors rely on the anchor point defined here.
+#
+# See pf.conf(5) for syntax.
+#
+
+#
+# com.apple anchor point
+#
+scrub-anchor "com.apple/*"
+nat-anchor "com.apple/*"
+rdr-anchor "com.apple/*"
+dummynet-anchor "com.apple/*"
+anchor "com.apple/*"
+load anchor "com.apple" from "/etc/pf.anchors/com.apple"
+''';
+
 Future<void> main() async {
   // ---------------------------------------------------------------------
   // Command construction. No privileges, no kernel — these run everywhere
@@ -268,6 +296,42 @@ Future<void> main() async {
       expect(() => dnctlPipeConfigArgv(pipe: 1), throwsArgumentError,
           reason: 'a pipe configured with neither delay nor bandwidth shapes '
               'nothing, which is the spike failing silently');
+    });
+
+    test('adds the dummynet rules to the system ruleset without flushing it',
+        () {
+      final spliced =
+          pfRulesetWithDummynet(baseRuleset: _stockPfConf, pipe: 1);
+
+      for (final anchor in [
+        'scrub-anchor "com.apple/*"',
+        'nat-anchor "com.apple/*"',
+        'rdr-anchor "com.apple/*"',
+        'dummynet-anchor "com.apple/*"',
+        'anchor "com.apple/*"',
+        'load anchor "com.apple" from "/etc/pf.anchors/com.apple"',
+      ]) {
+        expect(spliced, contains(anchor),
+            reason: 'pfctl -f replaces the active ruleset, and /etc/pf.conf '
+                'opens by warning that its nested anchors rely on staying '
+                'loaded. Dropping $anchor for the duration of a spike is a '
+                'firewall change on a developer machine (threat T-02-17)');
+      }
+
+      final lines = spliced.split('\n');
+      expect(lines.indexWhere((l) => l.startsWith('dummynet in')),
+          greaterThan(lines.indexWhere((l) => l.startsWith('dummynet-anchor'))),
+          reason: 'pf orders rule types strictly — normalisation, '
+              'translation, then filtering — so the position is load-bearing '
+              'and a wrong one is a parse error');
+      expect(lines.indexWhere((l) => l.startsWith('dummynet out')),
+          lessThan(lines.indexWhere((l) => l.startsWith('anchor "com.apple'))));
+
+      expect(() => pfRulesetWithDummynet(baseRuleset: '', pipe: 1),
+          throwsArgumentError,
+          reason: 'a ruleset with no anchor to place these against is one '
+              'this helper must refuse rather than guess at, because the '
+              'guess would be a position in somebody firewall configuration');
     });
   });
 
