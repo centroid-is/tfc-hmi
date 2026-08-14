@@ -28,5 +28,6 @@ export 'src/faults/fault_proxy.dart';
 export 'src/faults/fd_count.dart';
 export 'src/faults/line_channel.dart';
 export 'src/faults/os_level.dart';
+export 'src/faults/scenario_schedule.dart';
 export 'src/faults/socket_harness.dart';
 export 'src/faults/socket_ops.dart';

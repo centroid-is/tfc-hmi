@@ -105,14 +105,30 @@ void main() {
 
     test('no forbidden mode pair is ever co-armed, over $_sweepSeeds seeds',
         () {
+      final armings = <String, int>{};
+      var resolutions = 0;
       for (var seed = 0; seed < _sweepSeeds; seed++) {
         final timeline = ScenarioSchedule.generate(
           seed: seed,
           duration: _soakDuration,
           weights: ScenarioWeights.everything,
         );
-        _assertNeverCoArmed(seed, timeline);
+        resolutions += _assertNeverCoArmed(seed, timeline, armings);
       }
+
+      // The sweep above can only fail if the guarded path is reached, so the
+      // two checks below are what stop it from passing vacuously. Without
+      // them, a generator that simply never armed `reject` would sail through
+      // 150 seeds having tested none of the seven rows that name it.
+      expect(armings.keys, containsAll(faultModes),
+          reason: 'a mode the sweep never armed is a mode whose exclusion '
+              'rules the sweep never checked, so this arm would be green for '
+              'a generator that had quietly stopped emitting it');
+      expect(resolutions, greaterThan(100),
+          reason: 'a conflict resolution is a clear emitted at the same '
+              'offset immediately before an arming draw — the mechanism this '
+              'whole arm exists to verify. Zero of them means the storm never '
+              'produced a conflict, and the guard was never asked anything');
     });
 
     test('the returned timeline is unmodifiable', () {
@@ -184,13 +200,28 @@ void main() {
 /// from a second copy of the rule written here. A sweep that restated the
 /// exclusions would pass whenever the generator and the test made the same
 /// mistake, which is the only mistake worth catching.
-void _assertNeverCoArmed(int seed, List<ScheduledFault> timeline) {
+///
+/// Counts each arming into [armings] and returns how many conflict
+/// resolutions it saw, so the caller can prove the guarded path was reached.
+int _assertNeverCoArmed(
+    int seed, List<ScheduledFault> timeline, Map<String, int> armings) {
   final armed = <String>{};
-  for (final entry in timeline) {
+  var resolutions = 0;
+  for (var index = 0; index < timeline.length; index++) {
+    final entry = timeline[index];
     final mutation = entry.mutation;
     if (!mutation.arms) {
       armed.remove(mutation.mode);
       continue;
+    }
+    armings[mutation.mode] = (armings[mutation.mode] ?? 0) + 1;
+    // A clear sharing this entry's offset is the generator having resolved a
+    // conflict rather than the storm having toggled something off in its own
+    // right — the two are distinguishable only by the shared offset.
+    if (index > 0 &&
+        timeline[index - 1].offset == entry.offset &&
+        !timeline[index - 1].mutation.arms) {
+      resolutions++;
     }
     for (final conflict in exclusiveModePairs) {
       final String other;
@@ -210,4 +241,5 @@ void _assertNeverCoArmed(int seed, List<ScheduledFault> timeline) {
     }
     armed.add(mutation.mode);
   }
+  return resolutions;
 }
