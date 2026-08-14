@@ -159,6 +159,13 @@ void main() {
           budget: _reapBudget);
       silence.stop();
 
+      // Reported, not just asserted: a window that passes tells you nothing
+      // about how much room it had, and the margin is what says whether the
+      // sweep is landing on the tick after the deadline or four ticks later.
+      print('silent client: reaped ${silence.elapsedMilliseconds} ms after its '
+          'last frame, against a ${_deadline.inMilliseconds} ms deadline and a '
+          '${_reapCeiling.inMilliseconds} ms $platformName window');
+
       expect(close.closeCode, CloseCodes.heartbeatTimeout,
           reason: 'a panel disconnected with a bare 1006 cannot tell a '
               'crashed gateway from a gateway that stopped hearing it, and '
@@ -207,6 +214,12 @@ void main() {
           budget: _reapBudget);
       silence.stop();
 
+      print('the race: reaped at ${silence.elapsedMilliseconds} ms; a '
+          'ping-based reap could not have noticed before '
+          '${_earliestPingCouldNotice.inMilliseconds} ms '
+          '(${_pingInterval.inMilliseconds} ms x $measuredPingDetectionFactor, '
+          'Finding 7)');
+
       expect(close.closeCode, CloseCodes.heartbeatTimeout);
       expect(
         silence.elapsed,
@@ -244,6 +257,10 @@ void main() {
       await within(fixture.untilNoSessions(),
           'the server reaping the black-holed panel', budget: _reapBudget);
       silence.stop();
+
+      print('black-holed client: reaped ${silence.elapsedMilliseconds} ms '
+          'after the blackhole went on, against a '
+          '${_reapCeiling.inMilliseconds} ms $platformName window');
 
       expect(session.sentCloseCode, CloseCodes.heartbeatTimeout,
           reason: 'a black-holed panel is reaped by the same mechanism and '
