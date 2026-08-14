@@ -41,6 +41,7 @@ import 'handle_table.dart';
 import 'relay_session.dart';
 import 'server_config.dart';
 import 'session_sink.dart';
+import 'tick_engine.dart';
 import 'token_validator.dart';
 import 'ws_channel.dart';
 
@@ -170,6 +171,15 @@ final class RelayServer {
   HttpServer? _http;
   var _closed = false;
 
+  /// The one tick engine, built by [start] and stopped by [close].
+  ///
+  /// Exactly one per server, holding the server's only timer and the one
+  /// [FrameEncoder] whose cache is shared by every session that ticks
+  /// together — that sharing is what makes two panels watching one motor cost
+  /// one encode instead of two.
+  TickEngine? get engine => _engine;
+  TickEngine? _engine;
+
   /// The sessions this server is holding.
   SessionRegistry get sessions => _sessions;
 
@@ -224,6 +234,10 @@ final class RelayServer {
       InternetAddress.loopbackIPv4,
       0,
     );
+    // After the bind, so a server that failed to bind has no timer running
+    // against an empty registry, and one engine for the whole process — see
+    // `tick_engine.dart` on why this is never per session.
+    _engine = TickEngine(registry: _sessions, config: config)..start();
   }
 
   /// Builds one session for one upgraded connection.
@@ -264,10 +278,10 @@ final class RelayServer {
         validator: validator,
         serverSupported: serverSupported,
         closeChannel: connection.closeSocket,
+        emitFrame: connection.write,
       );
       connection.session = session;
       _sessions.add(session);
-      connection.start(config.tick);
 
       unawaited(session.closed.then((_) => _release(connection)));
     } catch (error, stack) {
@@ -318,13 +332,19 @@ final class RelayServer {
 
   /// Stops serving. Idempotent, and ordered.
   ///
-  /// Sessions first, each with [CloseCodes.serverDraining] so a panel knows to
-  /// reconnect rather than alarm — a client disconnected with no code cannot
-  /// tell a restart from a crash. The listener last, so nothing new arrives
-  /// while the drain is running. Completes only when every session has.
+  /// The engine first, so no tick can start fanning out to a session that is
+  /// halfway through its own teardown — and so the process has no timer left
+  /// holding it open. Sessions next, each with [CloseCodes.serverDraining] so
+  /// a panel knows to reconnect rather than alarm: a client disconnected with
+  /// no code cannot tell a restart from a crash. The listener last, so nothing
+  /// new arrives while the drain is running. Completes only when every session
+  /// has.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+
+    await _engine?.stop();
+    _engine = null;
 
     for (final session in _sessions.sessions) {
       await session.close(CloseCodes.serverDraining, 'server draining');
@@ -339,7 +359,9 @@ final class RelayServer {
   }
 }
 
-/// One socket, its buffer, and the pump that moves one onto the other.
+/// One socket, its buffer, and the two ways a frame gets from one to the
+/// other: the tick engine's [_Connection.write], and the out-of-band priority
+/// flush the teardown path needs.
 final class _Connection {
   _Connection({
     required WebSocketChannel ws,
@@ -352,7 +374,6 @@ final class _Connection {
   final SessionSink sink;
 
   RelaySession? session;
-  Timer? _pump;
   var _finished = false;
 
   /// Whether [finish] has already run.
@@ -363,29 +384,33 @@ final class _Connection {
   bool get released => _released;
   var _released = false;
 
-  void start(Duration tick) {
-    _pump = Timer.periodic(tick, (_) => flush());
+  /// The session's `emitFrame`: one already-encoded frame onto this socket.
+  ///
+  /// Everything the tick engine produces for this client arrives here — the
+  /// drained priority lane, the `u` updates, the tick notification — and it is
+  /// the reason `_Connection` no longer owns a timer. Until 03-07 this class
+  /// pumped its own buffer on its own `Timer.periodic`, which is one timer per
+  /// connected panel; the engine replaced all of them with the server's single
+  /// one (`tick_engine.dart`, Finding 8).
+  void write(String frame) {
+    if (_finished) return;
+    writeFrame(_ws, frame);
   }
 
-  /// Moves the priority lane onto the wire.
+  /// Puts the priority lane on the wire *now*, outside the tick.
   ///
-  /// Only the priority lane, because only the priority lane has a producer
-  /// today: nothing fills the telemetry lanes until 03-05's `subscribe`, and
-  /// nothing can encode them until 03-07's frame budget and tick engine. The
-  /// assertion is there so that if something does start filling them before
-  /// then, the frames are noticed rather than dropped by `drain()`'s clear.
+  /// Only the priority lane, and only on the way out: this runs from
+  /// [closeSocket], where the telemetry that is still pending belongs to a
+  /// client that is being disconnected in the next statement. Dropping it is
+  /// correct — resync is a snapshot, never a replayed backlog — while the
+  /// refusal that explains the close must land, and that is what the priority
+  /// lane is for.
   ///
-  /// Deliberately **not** calling `buffer.poll` — backpressure verdicts and
-  /// the disconnect they imply belong to 03-07's tick engine, and polling here
-  /// while ignoring the verdict would be worse than not polling.
-  void flush() {
+  /// Deliberately **not** calling `buffer.poll`: a backpressure verdict here
+  /// would be an eviction decided during a teardown that is already underway.
+  void flushPriority() {
     if (_finished) return;
     final frame = buffer.drain();
-    assert(
-        frame.subs.isEmpty,
-        'telemetry reached the send buffer before 03-07 could encode it, and '
-        'drain() has already cleared it — wire the tick engine before the '
-        'producer');
     for (final message in frame.priority) {
       writeFrame(_ws, message is String ? message : jsonEncode(message));
     }
@@ -396,15 +421,13 @@ final class _Connection {
   /// The flush is load-bearing and not obvious. A refusal that explains a
   /// close — the 4005 body naming both version lists, say — is written into
   /// the buffer by the peer and would otherwise wait up to a full tick for the
-  /// pump, while `RelaySession._requestClose` schedules the close on the very
+  /// engine, while `RelaySession._requestClose` schedules the close on the very
   /// next turn of the event loop. The client would then get the close and
   /// never the explanation. Flushing here puts both frames on the wire in
   /// order, which is what the whole close-code discipline is for.
   Future<void> closeSocket(int code, String reason) async {
-    flush();
+    flushPriority();
     _finished = true;
-    _pump?.cancel();
-    _pump = null;
     try {
       await _ws.sink.close(code, reason);
     } catch (_) {
@@ -425,8 +448,6 @@ final class _Connection {
       serverCloseCode: session?.sentCloseCode,
     );
     _finished = true;
-    _pump?.cancel();
-    _pump = null;
     sink.finish();
     unawaited(_ws.sink.close().catchError((Object _) {}));
     return close;
