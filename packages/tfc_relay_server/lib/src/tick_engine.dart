@@ -28,7 +28,7 @@
 ///  3. per session: `buffer.poll(nowMs)` **before** `drain()`, act on the
 ///     verdict, drain, write the priority lane, write the conflated telemetry,
 ///     write the tick notification.
-///  4. the heartbeat sweep, once, over every session (03-11 fills [sweep]).
+///  4. the heartbeat sweep, once, over every session ([TickEngine.reap]).
 ///
 /// **Why the poll comes before the drain.** `ConflatingSendBuffer.drain()`
 /// empties the buffer by contract — "recovery never has a backlog to flush" —
@@ -99,6 +99,13 @@ final class TickEngine {
   final LagMonitor lag;
 
   final int Function()? _clock;
+
+  /// An override for the tick's final step, replacing [reap].
+  ///
+  /// A replacement rather than an addition: a test that wants to observe the
+  /// sweep seam, or to drive ticks with no reaper at all, must be able to say
+  /// so. Absent — which is every production path — the step is [reap], so the
+  /// liveness deadline is not something a server has to be configured into.
   final void Function(int nowMs)? _sweep;
 
   /// The default clock: monotonic, and not the timer's own tick count.
@@ -152,7 +159,57 @@ final class TickEngine {
     for (final session in registry.sessions) {
       _tickSession(session, nowMs, drift);
     }
-    _sweep?.call(nowMs);
+    (_sweep ?? reap)(nowMs);
+  }
+
+  /// Step 4 of the tick: close every session that has gone silent past
+  /// `config.heartbeatDeadline`, with [CloseCodes.heartbeatTimeout].
+  ///
+  /// **This is the liveness reaper, and the WebSocket ping is not.**
+  /// 03-RESEARCH Finding 7 measured half-open detection through `pingInterval`
+  /// at **1.85x the interval** — a client black-holed at 308 ms was noticed at
+  /// 4008 ms with `pingInterval: 2s`. Extrapolated to the design's 20 s
+  /// interval that is a **~37 second** window in which the gateway holds a
+  /// dead panel's subscriptions, its buffer and (from Phase 8) its upstream
+  /// monitored items, against a project constraint that says half-open
+  /// connections are detected in seconds. So the relationship the whole design
+  /// rests on is: **the app-level heartbeat deadline is the primary reaper,
+  /// and the ping is NAT keepalive plus a backstop for a client that is alive
+  /// while its heartbeat logic is broken.** `ServerConfig` refuses to
+  /// construct a config that inverts it, and `liveness_test.dart` watches the
+  /// race being won rather than trusting that it must be.
+  ///
+  /// **A sweep, not a timer per session** (Finding 8). Cost is not the
+  /// argument — 0.001 µs per reset against 0.11 µs, and 0.05 µs for a full
+  /// 100-session scan — leak-safety is: a per-session `Timer` capturing the
+  /// session closure is exactly the ghost `teardown_test.dart`'s kill cycle
+  /// hunts, still owning a closed session's buffer, listeners and socket long
+  /// after the registry has forgotten it exists. There is nothing here to
+  /// cancel and therefore nothing to forget to cancel.
+  ///
+  /// **[tickNowMs] is the trigger and deliberately not the measurement.** Each
+  /// session reports its own silence through `RelaySession.silentForMs`,
+  /// because this engine's clock is a monotonic uptime `Stopwatch` and a
+  /// session's `lastSeenMs` is wall-clock epoch milliseconds; the two are
+  /// different by about fifty-five years, and a sweep that subtracted one from
+  /// the other would never reap anything while looking entirely implemented.
+  /// `registry.sessions` is read fresh rather than reusing the copy [tickOnce]
+  /// is iterating: a session evicted by a backpressure verdict earlier in this
+  /// same tick is already gone, and reaping it again would be a second
+  /// teardown for a session that has none of its resources left.
+  void reap(int tickNowMs) {
+    final deadlineMs = config.heartbeatDeadline.inMilliseconds;
+    for (final session in registry.sessions) {
+      final silentMs = session.silentForMs();
+      if (silentMs <= deadlineMs) continue;
+      // `unawaited` is safe precisely because the registry removal is the
+      // synchronous half of `close` (Finding 9, step 2): the session is out
+      // before this loop reaches the next one, so nothing can be swept twice
+      // and the next tick cannot fan out to it.
+      unawaited(session.close(
+          CloseCodes.heartbeatTimeout,
+          'no heartbeat for $silentMs ms; the deadline is $deadlineMs ms'));
+    }
   }
 
   void _tickSession(RelaySession session, int nowMs, LagVerdict drift) {

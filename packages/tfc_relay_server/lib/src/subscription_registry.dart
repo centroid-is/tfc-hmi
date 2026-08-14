@@ -200,7 +200,29 @@ final class SubscriptionRegistry {
     return true;
   }
 
-  /// Empties the registry, detaching everything. Called by session teardown.
+  /// How many listeners this session currently holds on the backing source,
+  /// across every subscription.
+  ///
+  /// Derived on read rather than tallied, for the reason
+  /// [SessionSubscriptionCounts] gives: a maintained count can drift from the
+  /// thing it counts, and a teardown assertion reading a drifted tally is an
+  /// assertion that passes while the listeners are still attached. Note that
+  /// this is the session's own bookkeeping — the *source's* count
+  /// (`ValueStoreNode.listenerCount`) is the independent one, and
+  /// `teardown_test.dart` reads both because either alone can be right while
+  /// the other is wrong.
+  int get listenerCount =>
+      _bySub.values.fold(0, (n, state) => n + state.listenerCount);
+
+  /// Empties the registry, detaching everything. Called by session teardown,
+  /// and the single place teardown detaches through — the alternative, a loop
+  /// in `RelaySession.close` beside this one, is two implementations of "every
+  /// listener comes off" that only have to disagree once.
+  ///
+  /// Idempotent, because teardown is: [SubscriptionState.detach] empties its
+  /// own list as it goes, and the map is cleared here, so a second call
+  /// detaches nothing rather than reaching for a source it has already let go
+  /// of.
   void clear() {
     for (final state in _bySub.values) {
       state.detach();
@@ -224,4 +246,12 @@ extension SessionSubscriptionCounts on SessionRegistry {
   /// Every handle any live session is watching, deduplicated.
   Set<int> get watchedHandles =>
       {for (final session in sessions) ...session.subscriptions.handles};
+
+  /// The sum of every live session's attached listeners. Reaches zero when the
+  /// last session goes — the resource the ~37 second ping window of
+  /// 03-RESEARCH Finding 7 is expensive about, and the one a registry count
+  /// alone cannot see: a session can leave the registry with its listeners
+  /// still on the plant.
+  int get listenerCount =>
+      sessions.fold(0, (n, session) => n + session.subscriptions.listenerCount);
 }
