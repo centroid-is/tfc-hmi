@@ -33,6 +33,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
@@ -83,10 +84,19 @@ void main() {
       final received = <String>[];
       final both = Completer<void>();
       server.listen((socket) {
-        lineChannel(socket).stream.listen((message) {
-          received.add(message);
-          if (received.length == 2 && !both.isCompleted) both.complete();
-        });
+        lineChannel(socket).stream.listen(
+          (message) {
+            received.add(message);
+            if (received.length == 2 && !both.isCompleted) both.complete();
+          },
+          // Required, not defensive. This arm destroys its client, and a
+          // destroyed peer reaches the served socket as an error on the read
+          // stream — with no handler it becomes an unhandled async error and
+          // package:test attributes it to whichever case is running by then,
+          // which here is a contract case forty lines away that has nothing
+          // to do with framing.
+          onError: (Object _) {},
+        );
       });
 
       final client =
