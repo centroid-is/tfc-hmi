@@ -1,0 +1,48 @@
+name: tfc_relay_server
+description: >-
+  The gateway: the WebSocket + JSON-RPC session layer that serves StateMan to
+  every panel. Two constraints shape this layout. First, the shared contract
+  test kit binds real ports and pulls package:test in as a real dependency, so
+  it is a dev dependency only here — nothing that binds a port belongs in a
+  production solve. Second, the Flutter app must not depend on this package at
+  all: the app depends on tfc_relay_protocol, and dragging analyzer into the
+  app's version solve is the analyzer-cap blocker that has stopped this repo
+  twice in twelve months. Pure Dart, server-side, no Flutter.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  # The HTTP server this gateway is mounted in: shelf owns the request
+  # pipeline, and the upgrade handler hangs off one route.
+  shelf: ^1.4.2
+  # The WebSocket upgrade itself. Its `allowedOrigins` argument is the
+  # cross-site-WebSocket-hijacking defence (RESEARCH Finding 1), and its
+  # `pingInterval` is the NAT keepalive — not the liveness reaper.
+  shelf_web_socket: ^3.0.0
+  # The JSON-RPC 2.0 envelope both ends already speak. Peer is bidirectional
+  # and, deliberately, neither queues nor retries — which is the write-safety
+  # property, not an omission.
+  json_rpc_2: ^4.1.0
+  # The channel abstraction Peer is wired over; the WS adapter builds a
+  # StreamChannel<String> by hand rather than using `.cast()`
+  # (RESEARCH Finding 1: cast() locks the sink for the connection's life).
+  stream_channel: ^2.1.4
+  # The wire shapes, the DTOs and the pure cores (ConflatingSendBuffer,
+  # HelloGate) this server is assembled from.
+  tfc_relay_protocol: {path: ../tfc_relay_protocol}
+
+dev_dependencies:
+  # Same analyzer-recommended lint set as the other two relay packages.
+  lints: ^4.0.0
+  # The suite runner. It stays on this side of the line for the reason in the
+  # description above.
+  test: ^1.25.0
+  # The *client* socket, used only by the WS test harness to connect to an
+  # ephemeral port. The server never speaks through it.
+  web_socket_channel: ^3.0.3
+  # The shared 44-check contract suite plus the socket fault kit, run over
+  # this transport. It binds ports; dev-only is not negotiable.
+  tfc_stateman_contract: {path: ../tfc_stateman_contract}
