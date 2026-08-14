@@ -54,5 +54,6 @@ export 'src/channel/channel_harness.dart';
 export 'src/channel/channel_pair.dart';
 export 'src/channel/channel_state_man.dart';
 export 'src/channel/channel_sub_apis.dart';
+export 'src/channel/malformed_peer.dart';
 export 'src/channel/rpc_names.dart';
 export 'src/channel/served_state_man.dart';

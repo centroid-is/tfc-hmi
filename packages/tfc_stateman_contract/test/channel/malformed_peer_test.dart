@@ -12,11 +12,13 @@
 ///
 /// Two rules the assertions follow, both from `lib/src/meta.dart:60-79`:
 ///
-///  * **Never `throwsA`.** The Peer does not throw on a malformed response —
-///    it replies `-32700` to the sender and carries on with the client half
-///    never told anything failed (RESEARCH Finding 15). A `throwsA` here would
-///    hang for the runner's thirty seconds and then report this file's name
-///    instead of the property. The hang is asserted by converting a deadline
+///  * **Never a throws-matcher.** The Peer does not throw on a malformed
+///    response — it replies `-32700` to the sender and carries on with the
+///    client half never told anything failed (RESEARCH Finding 15). A matcher
+///    that waited for a throw would hang for the runner's thirty seconds and
+///    then report this file's name instead of the property. That absence is
+///    grep-enforced, which is why the matcher is not named even in prose here.
+///    The hang is asserted by converting a deadline
 ///    into a plain bool and asserting on the bool, which does produce a
 ///    `TestFailure` carrying its reason.
 ///  * **Every budget is short and named**, so silence fails fast. Nine hang
@@ -32,6 +34,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
@@ -123,15 +126,36 @@ final _expectations = <String, _Expected>{
     budget: _oversizeBudget,
   ),
   'unpairedSurrogate': _Expected.resolves(
-    'a lone \\ud800 is silently replaced with U+FFFD — it does not throw',
-    (raw) => expect(
-      (raw! as Map<String, Object?>)[loneSurrogateKey],
-      '\u{FFFD}',
-      reason: 'an unpaired surrogate was measured to decode to the '
-          'replacement character rather than to raise. A decode path that '
-          'started throwing here would turn a mangled string into a dropped '
-          'frame, which is a different fault with a different defence',
-    ),
+    'a lone \\ud800 survives the message layer and becomes U+FFFD on a socket '
+        '— it does not throw at either point',
+    (raw) {
+      final value = (raw! as Map<String, Object?>)[loneSurrogateKey]! as String;
+      // Finding 15's row says "silently replaced with U+FFFD". Measured here,
+      // over a String channel, the replacement has not happened yet: the lone
+      // high surrogate arrives intact as one UTF-16 code unit, because nothing
+      // between the two peers ever encoded it to bytes. That is a refinement
+      // of the row rather than a contradiction of it — and it matters, because
+      // the message layer and the byte layer therefore hand application code
+      // two different strings for the same frame.
+      expect(
+        value.codeUnits,
+        [0xD800],
+        reason: 'the message layer was measured to pass an unpaired surrogate '
+            'through intact. If it now raises, a mangled string has turned '
+            'into a dropped frame, which is a different fault with a '
+            'different defence',
+      );
+      // And what the byte layer does with the same value, which is the half
+      // Finding 15 measured: U+FFFD, silently, still without raising.
+      expect(
+        utf8.decode(utf8.encode(value)),
+        '\u{FFFD}',
+        reason: 'a socket-backed peer was measured to deliver the replacement '
+            'character. If UTF-8 encoding started throwing on a lone '
+            'surrogate, one bad string would take down the frame it shares '
+            'with every other message on that connection',
+      );
+    },
   ),
 };
 
@@ -276,7 +300,7 @@ Future<_Attempt> _attempt(
   var settled = true;
   Object? resolved;
   Object? failure;
-  // Not `expectLater(…, completes)` and not `throwsA`: neither converts a
+  // Neither a completes-matcher nor a throws-matcher: neither converts a
   // never-settling future into a TestFailure, so the hang cases — which are
   // most of this catalogue — would escape as raw TimeoutExceptions naming
   // nothing. meta.dart:60-79, polarity inverted.
