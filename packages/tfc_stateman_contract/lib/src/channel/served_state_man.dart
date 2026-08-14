@@ -57,6 +57,7 @@ import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import '../data_services_contract.dart';
 import '../harness.dart';
 import '../write_contract.dart';
 import 'rpc_names.dart';
@@ -116,23 +117,39 @@ final class ServedStateMan {
   Future<void> get closed => _done.future;
   final _done = Completer<void>();
 
+  /// Every name [_on] has registered, in registration order.
+  ///
+  /// Kept so the method table can be asserted against the handlers in *both*
+  /// directions (`test/channel/channel_sub_apis_test.dart`): a declared name
+  /// with no handler answers METHOD_NOT_FOUND from a table claiming to carry
+  /// it, and a handler with no declared name is surface nobody counted, which
+  /// is the half of T-02-22 a one-directional check would miss.
+  Set<String> get registeredMethods => Set.unmodifiable(_registered);
+  final _registered = <String>{};
+
+  /// Registers [handler] under [method] and records that it happened.
+  void _on(String method, Function handler) {
+    _registered.add(method);
+    peer.registerMethod(method, handler);
+  }
+
   void _start() {
-    peer
-      ..registerMethod(HarnessMethods.readFresh, _readFresh)
-      ..registerMethod(HarnessMethods.readMany, _readMany)
-      ..registerMethod(HarnessMethods.keys, (rpc.Parameters _) => api.keys)
-      ..registerMethod(HarnessMethods.write, _write)
-      ..registerMethod(HarnessMethods.setValue, _setValue)
-      ..registerMethod(HarnessMethods.setValues, _setValues)
-      ..registerMethod(HarnessMethods.setQuality, _setQuality)
-      ..registerMethod(HarnessMethods.dropKey, _dropKey)
-      ..registerMethod(HarnessMethods.disconnectUpstream, _disconnectUpstream)
-      ..registerMethod(HarnessMethods.reconnectUpstream, _reconnectUpstream)
-      ..registerMethod(HarnessMethods.failNextWrite, _failNextWrite)
-      ..registerMethod(HarnessMethods.clampNextWrite, _clampNextWrite)
-      ..registerMethod(HarnessMethods.stallWrites, _stallWrites)
-      ..registerMethod(HarnessMethods.releaseWrites, _releaseWrites)
-      ..registerMethod(HarnessMethods.setReadOnly, _setReadOnly);
+    _on(HarnessMethods.readFresh, _readFresh);
+    _on(HarnessMethods.readMany, _readMany);
+    _on(HarnessMethods.keys, (rpc.Parameters _) => api.keys);
+    _on(HarnessMethods.write, _write);
+    _on(HarnessMethods.setValue, _setValue);
+    _on(HarnessMethods.setValues, _setValues);
+    _on(HarnessMethods.setQuality, _setQuality);
+    _on(HarnessMethods.dropKey, _dropKey);
+    _on(HarnessMethods.disconnectUpstream, _disconnectUpstream);
+    _on(HarnessMethods.reconnectUpstream, _reconnectUpstream);
+    _on(HarnessMethods.failNextWrite, _failNextWrite);
+    _on(HarnessMethods.clampNextWrite, _clampNextWrite);
+    _on(HarnessMethods.stallWrites, _stallWrites);
+    _on(HarnessMethods.releaseWrites, _releaseWrites);
+    _on(HarnessMethods.setReadOnly, _setReadOnly);
+    _registerDataServices();
 
     // Swallowed on purpose. A channel that fails must fail the check that named
     // the property it broke; an unhandled zone error would instead be
@@ -285,6 +302,419 @@ final class ServedStateMan {
   void _setReadOnly(rpc.Parameters params) => _afterLever(() => writePlant
       .setReadOnly(params['key'].asString, params['readOnly'].asBoolOr(true)));
 
+  // ------------------------------------------------------- the data services
+
+  /// The recorder's control surface, resolved on first use.
+  ///
+  /// Lazily for the same reason [writePlant] is: a source with no historian
+  /// behind it is a legitimate thing to serve, and the four sub-suites that
+  /// need no samples judge it perfectly well. The failure then arrives when a
+  /// case first seeds, naming what to add.
+  late final StateManDataHarness dataPlant = dataHarnessOf(api);
+
+  /// The one subscription behind every client's change stream.
+  StreamSubscription<String>? _preferenceChanges;
+
+  /// Thirty-four handlers, one per sub-API method, plus the seeding lever and
+  /// the outbound change notification.
+  ///
+  /// Named individually rather than dispatched from a table of closures keyed
+  /// by string: the registration *is* the access-control decision (T-02-22),
+  /// and a loop over a map would move the list of what this peer answers out of
+  /// the place a reviewer reads and into a place a caller supplies.
+  void _registerDataServices() {
+    _on(HarnessMethods.browseFetchRoots, _browseFetchRoots);
+    _on(HarnessMethods.browseFetchChildren, _browseFetchChildren);
+    _on(HarnessMethods.browseFetchDetail, _browseFetchDetail);
+    _on(HarnessMethods.browseResolvePath, _browseResolvePath);
+
+    _on(HarnessMethods.timeseriesQuery, _timeseriesQuery);
+    _on(HarnessMethods.timeseriesQueryMultiple, _timeseriesQueryMultiple);
+    _on(HarnessMethods.timeseriesQueryDownsampled, _timeseriesQueryDownsampled);
+    _on(HarnessMethods.timeseriesCountMultiple, _timeseriesCountMultiple);
+
+    _on(HarnessMethods.historyCreateView, _historyCreateView);
+    _on(HarnessMethods.historyUpdateView, _historyUpdateView);
+    _on(HarnessMethods.historyDeleteView, _historyDeleteView);
+    _on(HarnessMethods.historySelectViews, _historySelectViews);
+    _on(HarnessMethods.historyGetKeys, _historyGetKeys);
+    _on(HarnessMethods.historyGetGraphs, _historyGetGraphs);
+    _on(HarnessMethods.historyGetKeyNames, _historyGetKeyNames);
+    _on(HarnessMethods.historyAddPeriod, _historyAddPeriod);
+    _on(HarnessMethods.historyDeletePeriod, _historyDeletePeriod);
+    _on(HarnessMethods.historyListPeriods, _historyListPeriods);
+    _on(HarnessMethods.historyRetentionHorizon, _historyRetentionHorizon);
+
+    _on(HarnessMethods.prefGetKeys, _prefGetKeys);
+    _on(HarnessMethods.prefGetAll, _prefGetAll);
+    _on(HarnessMethods.prefGetBool, _prefGetBool);
+    _on(HarnessMethods.prefGetInt, _prefGetInt);
+    _on(HarnessMethods.prefGetDouble, _prefGetDouble);
+    _on(HarnessMethods.prefGetString, _prefGetString);
+    _on(HarnessMethods.prefGetStringList, _prefGetStringList);
+    _on(HarnessMethods.prefContainsKey, _prefContainsKey);
+    _on(HarnessMethods.prefSetBool, _prefSetBool);
+    _on(HarnessMethods.prefSetInt, _prefSetInt);
+    _on(HarnessMethods.prefSetDouble, _prefSetDouble);
+    _on(HarnessMethods.prefSetString, _prefSetString);
+    _on(HarnessMethods.prefSetStringList, _prefSetStringList);
+    _on(HarnessMethods.prefRemove, _prefRemove);
+    _on(HarnessMethods.prefClear, _prefClear);
+
+    _on(HarnessMethods.seedTimeseries, _seedTimeseries);
+
+    _watchPreferences();
+  }
+
+  /// One subscription, however many clients are listening on the far side.
+  ///
+  /// Opened here rather than on demand because a change that happens before
+  /// anybody asked is still a change a settings page must not miss — the same
+  /// argument the opening snapshot makes for values. The fan-out to individual
+  /// listeners is the client's job (`ChannelPreferencesApi`), so the wire
+  /// carries one message per change no matter how many widgets are open.
+  ///
+  /// [UnsupportedError] is caught and not rethrown: a source with no preference
+  /// store is legitimate — the data-services sub-suite is skipped for it, with
+  /// a reason on the record — and refusing to serve it at all would turn a
+  /// declared absence into a startup failure. Nothing else is caught, because
+  /// nothing else here is a shape a correct source can have.
+  void _watchPreferences() {
+    try {
+      _preferenceChanges = api.preferences.onPreferencesChanged.listen((key) {
+        if (_closed || peer.isClosed) return;
+        peer.sendNotification(HarnessMethods.preferencesChanged, {'key': key});
+      });
+    } on UnsupportedError {
+      _preferenceChanges = null;
+    }
+  }
+
+  /// Answers [method], with every failure turned into an encodable error.
+  ///
+  /// The wrapper exists for one reason, and it is the trap 02-05 documented on
+  /// the write path: `RpcException.serialize` copies the offending **request**
+  /// into the error response unless `data` already carries a `request` key
+  /// (`json_rpc_2-4.1.0/lib/src/exception.dart:46-57`), and json_rpc_2's own
+  /// wrapping of an uncaught error does the same. A request that `jsonEncode`
+  /// cannot re-emit — one carrying an Infinity decoded from `1e999` — therefore
+  /// produces an error response that cannot be sent, the refusal is thrown away
+  /// inside the peer, and the caller waits forever on a path with no deadline
+  /// (RESEARCH Finding 15). Substituting `request` here is what keeps the
+  /// answer sendable, so a failure arrives as a failure.
+  ///
+  /// [TypeError] keeps its own code on the way out, because it is part of the
+  /// interface being mirrored rather than an incident: `PreferencesApi`'s typed
+  /// getters throw one when the stored value is of another type, and a client
+  /// catching `on TypeError` in ported code has to catch the same thing here.
+  Future<Object?> _answer(String method, Future<Object?> Function() work) async {
+    try {
+      return await work();
+    } on rpc.RpcException {
+      rethrow;
+    } on TypeError catch (error) {
+      throw rpc.RpcException(HarnessErrorCodes.typeMismatch, '$error',
+          data: _substitute(method));
+    } catch (error) {
+      throw rpc.RpcException(
+          HarnessErrorCodes.subApiFailed, '$method failed: $error',
+          data: _substitute(method));
+    }
+  }
+
+  static Map<String, Object?> _substitute(String method) => {
+        'method': method,
+        'request': 'omitted: echoing a request that may carry a non-finite '
+            'number is what makes the error itself unencodable, and an '
+            'unencodable error on a path with no deadline is a hang',
+      };
+
+  // browse
+
+  Future<Object?> _browseFetchRoots(rpc.Parameters _) =>
+      _answer(HarnessMethods.browseFetchRoots, () async =>
+          [for (final node in await api.browse.fetchRoots()) node.toJson()]);
+
+  Future<Object?> _browseFetchChildren(rpc.Parameters params) =>
+      _answer(HarnessMethods.browseFetchChildren, () async {
+        final parent = BrowseNode.fromJson(_object(params['parent'].asMap));
+        return [
+          for (final node in await api.browse.fetchChildren(parent))
+            node.toJson(),
+        ];
+      });
+
+  Future<Object?> _browseFetchDetail(rpc.Parameters params) =>
+      _answer(HarnessMethods.browseFetchDetail, () async {
+        final node = BrowseNode.fromJson(_object(params['node'].asMap));
+        return (await api.browse.fetchDetail(node)).toJson();
+      });
+
+  Future<Object?> _browseResolvePath(rpc.Parameters params) =>
+      _answer(HarnessMethods.browseResolvePath, () async {
+        final chain = await api.browse.resolvePath(params['targetId'].asString);
+        // Null and the empty list stay apart: null is a stale binding, and an
+        // empty list would claim the target sits zero nodes from a root.
+        return chain == null ? null : [for (final node in chain) node.toJson()];
+      });
+
+  // timeseries
+
+  Future<Object?> _timeseriesQuery(rpc.Parameters params) =>
+      _answer(HarnessMethods.timeseriesQuery, () async => _points(
+          await api.timeseries.queryTimeseriesData(
+              params['table'].asString, _at(params['to'].value)!,
+              orderBy: params['orderBy'].valueOr(null) as String?,
+              from: _at(params['from'].valueOr(null)))));
+
+  Future<Object?> _timeseriesQueryMultiple(rpc.Parameters params) =>
+      _answer(HarnessMethods.timeseriesQueryMultiple, () async {
+        final tables = [for (final name in params['tables'].asList) '$name'];
+        final answers = await api.timeseries.queryTimeseriesDataMultiple(
+            tables, _at(params['to'].value)!,
+            orderBy: params['orderBy'].valueOr(null) as String?,
+            from: _at(params['from'].valueOr(null)));
+        return {
+          for (final entry in answers.entries) entry.key: _points(entry.value),
+        };
+      });
+
+  Future<Object?> _timeseriesQueryDownsampled(rpc.Parameters params) =>
+      _answer(HarnessMethods.timeseriesQueryDownsampled, () async => _points(
+          await api.timeseries.queryTimeseriesDataDownsampled(
+              params['table'].asString,
+              _at(params['from'].value)!,
+              _at(params['to'].value)!,
+              maxPoints: params['maxPoints'].asInt)));
+
+  Future<Object?> _timeseriesCountMultiple(rpc.Parameters params) =>
+      _answer(HarnessMethods.timeseriesCountMultiple, () async {
+        final counts = await api.timeseries.countTimeseriesDataMultiple(
+            params['table'].asString,
+            Duration(milliseconds: params['intervalMs'].asInt),
+            params['howMany'].asInt,
+            since: _at(params['since'].valueOr(null)));
+        // JSON objects key by String and these keys are instants, so they
+        // travel as epoch milliseconds — converted here, at the boundary,
+        // exactly once.
+        return {
+          for (final entry in counts.entries)
+            '${entry.key.millisecondsSinceEpoch}': entry.value,
+        };
+      });
+
+  // history views
+
+  Future<Object?> _historyCreateView(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyCreateView, () async =>
+          api.historyViews.createHistoryView(
+            params['name'].asString,
+            [for (final key in params['keys'].asList) '$key'],
+            _keyConfigs(params['keyConfigs'].valueOr(null)),
+            _graphConfigs(params['graphConfigs'].valueOr(null)),
+          ));
+
+  Future<Object?> _historyUpdateView(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyUpdateView, () async {
+        await api.historyViews.updateHistoryView(
+          params['id'].asInt,
+          params['name'].asString,
+          [for (final key in params['keys'].asList) '$key'],
+          _keyConfigs(params['keyConfigs'].valueOr(null)),
+          _graphConfigs(params['graphConfigs'].valueOr(null)),
+        );
+        return null;
+      });
+
+  Future<Object?> _historyDeleteView(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyDeleteView, () async {
+        await api.historyViews.deleteHistoryView(params['id'].asInt);
+        return null;
+      });
+
+  Future<Object?> _historySelectViews(rpc.Parameters _) =>
+      _answer(HarnessMethods.historySelectViews, () async => [
+            for (final view in await api.historyViews.selectHistoryViews())
+              view.toJson(),
+          ]);
+
+  Future<Object?> _historyGetKeys(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyGetKeys, () async {
+        final keys =
+            await api.historyViews.getHistoryViewKeys(params['viewId'].asInt);
+        return {
+          for (final entry in keys.entries) entry.key: entry.value.toJson(),
+        };
+      });
+
+  Future<Object?> _historyGetGraphs(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyGetGraphs, () async =>
+          historyViewGraphsToJson(await api.historyViews
+              .getHistoryViewGraphs(params['viewId'].asInt)));
+
+  Future<Object?> _historyGetKeyNames(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyGetKeyNames, () async =>
+          api.historyViews.getHistoryViewKeyNames(params['viewId'].asInt));
+
+  Future<Object?> _historyAddPeriod(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyAddPeriod, () async =>
+          api.historyViews.addHistoryViewPeriod(
+            params['viewId'].asInt,
+            params['name'].asString,
+            _at(params['start'].value)!,
+            _at(params['end'].value)!,
+          ));
+
+  Future<Object?> _historyDeletePeriod(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyDeletePeriod, () async {
+        await api.historyViews.deleteHistoryViewPeriod(params['id'].asInt);
+        return null;
+      });
+
+  Future<Object?> _historyListPeriods(rpc.Parameters params) =>
+      _answer(HarnessMethods.historyListPeriods, () async => [
+            for (final period in await api.historyViews
+                .listHistoryViewPeriods(params['viewId'].asInt))
+              period.toJson(),
+          ]);
+
+  Future<Object?> _historyRetentionHorizon(rpc.Parameters _) =>
+      _answer(HarnessMethods.historyRetentionHorizon, () async =>
+          (await api.historyViews.getGlobalRetentionHorizon())
+              ?.millisecondsSinceEpoch);
+
+  // preferences
+
+  Future<Object?> _prefGetKeys(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetKeys, () async =>
+          (await api.preferences.getKeys(allowList: _allowList(params)))
+              .toList());
+
+  Future<Object?> _prefGetAll(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetAll,
+          () => api.preferences.getAll(allowList: _allowList(params)));
+
+  Future<Object?> _prefGetBool(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetBool,
+          () => api.preferences.getBool(params['key'].asString));
+
+  Future<Object?> _prefGetInt(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetInt,
+          () => api.preferences.getInt(params['key'].asString));
+
+  Future<Object?> _prefGetDouble(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetDouble,
+          () => api.preferences.getDouble(params['key'].asString));
+
+  Future<Object?> _prefGetString(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetString,
+          () => api.preferences.getString(params['key'].asString));
+
+  Future<Object?> _prefGetStringList(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefGetStringList,
+          () => api.preferences.getStringList(params['key'].asString));
+
+  Future<Object?> _prefContainsKey(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefContainsKey,
+          () => api.preferences.containsKey(params['key'].asString));
+
+  Future<Object?> _prefSetBool(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefSetBool, () async {
+        await api.preferences
+            .setBool(params['key'].asString, params['value'].asBool);
+        return null;
+      });
+
+  Future<Object?> _prefSetInt(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefSetInt, () async {
+        await api.preferences
+            .setInt(params['key'].asString, params['value'].asInt);
+        return null;
+      });
+
+  Future<Object?> _prefSetDouble(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefSetDouble, () async {
+        // Through `num` rather than `asNum.toDouble()` on a cast: an integral
+        // double is emitted as `800.0` by Dart's encoder but a hand-written
+        // client may well send `800`, and refusing that would be refusing a
+        // value the type admits.
+        await api.preferences
+            .setDouble(params['key'].asString, params['value'].asNum.toDouble());
+        return null;
+      });
+
+  Future<Object?> _prefSetString(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefSetString, () async {
+        await api.preferences
+            .setString(params['key'].asString, params['value'].asString);
+        return null;
+      });
+
+  Future<Object?> _prefSetStringList(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefSetStringList, () async {
+        await api.preferences.setStringList(params['key'].asString,
+            [for (final entry in params['value'].asList) '$entry']);
+        return null;
+      });
+
+  Future<Object?> _prefRemove(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefRemove, () async {
+        await api.preferences.remove(params['key'].asString);
+        return null;
+      });
+
+  Future<Object?> _prefClear(rpc.Parameters params) =>
+      _answer(HarnessMethods.prefClear, () async {
+        await api.preferences.clear(allowList: _allowList(params));
+        return null;
+      });
+
+  /// The seeding lever, in the same one-way lane as the value levers.
+  ///
+  /// `seedTimeseries` is `void` on [StateManDataHarness], so there is nothing
+  /// to await; what makes seed-then-query correct is the channel's ordering,
+  /// which a socket has too.
+  ///
+  /// Decoded as [TimeseriesData]`<num>` — the same element type the contract
+  /// seeds and the widest one JSON numbers carry losslessly. A series of
+  /// anything else needs a `decode` callback agreed at both ends; see the
+  /// header of `channel_sub_apis.dart`.
+  void _seedTimeseries(rpc.Parameters params) {
+    if (_closed) return;
+    dataPlant.seedTimeseries(params['table'].asString, [
+      for (final point in params['points'].asList)
+        TimeseriesData<num>.fromJson(_object((point as Map))),
+    ]);
+  }
+
+  Set<String>? _allowList(rpc.Parameters params) {
+    final raw = params['allowList'].valueOr(null);
+    return raw == null ? null : {for (final key in raw as List) '$key'};
+  }
+
+  static List<Object?> _points(List<TimeseriesData> points) =>
+      [for (final point in points) point.toJson()];
+
+  static Map<String, Object?> _object(Map<Object?, Object?> raw) =>
+      {for (final entry in raw.entries) '${entry.key}': entry.value};
+
+  static Map<String, HistoryViewKeyRecord>? _keyConfigs(Object? raw) => raw ==
+          null
+      ? null
+      : {
+          for (final entry in (raw as Map).entries)
+            '${entry.key}': HistoryViewKeyRecord.fromJson(
+                _object(entry.value as Map<Object?, Object?>)),
+        };
+
+  static Map<int, HistoryViewGraphRecord>? _graphConfigs(Object? raw) =>
+      raw == null ? null : historyViewGraphsFromJson(raw);
+
+  /// Epoch milliseconds to a UTC instant; null stays null.
+  static DateTime? _at(Object? raw) => raw == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch((raw as num).toInt(), isUtc: true);
+
   /// Applies a lever, then adopts whatever keys it brought into existence.
   ///
   /// The re-scan is not an optimisation and cannot be dropped: `setValue` on a
@@ -354,6 +784,12 @@ final class ServedStateMan {
     }
     _watchers.clear();
     _pending.clear();
+    // The preference subscription is a listener on the served store exactly as
+    // the per-key watchers are, and leaving it attached keeps pushing into a
+    // closed channel — the leak that surfaces as an inexplicable failure in
+    // whichever case runs next.
+    await _preferenceChanges?.cancel();
+    _preferenceChanges = null;
     await peer.close();
     if (!_done.isCompleted) _done.complete();
   }

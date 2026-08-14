@@ -36,6 +36,26 @@ library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+/// The error codes this harness mints, in JSON-RPC's implementation-defined
+/// range (-32099…-32000).
+///
+/// Two, and both exist so an exception keeps its *type* across the boundary.
+/// A JSON-RPC error carries a number, a sentence and a data bag; what it cannot
+/// carry is a Dart class, so a caller catching `on TypeError` in ported code
+/// would catch nothing at all unless the number says which class to rebuild.
+abstract final class HarnessErrorCodes {
+  /// The far side's typed accessor was handed a value of another type.
+  ///
+  /// `PreferencesApi`'s getters are documented to throw a `TypeError` for this
+  /// (`preferences_api.dart:30-36`) — it is the behavior of the interface being
+  /// mirrored, kept so ported call sites read the same, and therefore something
+  /// the channel has to preserve rather than flatten into a generic failure.
+  static const typeMismatch = -32001;
+
+  /// A sub-API method failed on the far side for any other reason.
+  static const subApiFailed = -32002;
+}
+
 /// Every method name the channel harness registers or sends.
 abstract final class HarnessMethods {
   /// What marks a name as belonging to the harness rather than to the wire.
@@ -112,6 +132,222 @@ abstract final class HarnessMethods {
   /// `StateManWriteHarness.setReadOnly`.
   static const setReadOnly = '${prefix}setReadOnly';
 
+  /// `StateManDataHarness.seedTimeseries` — the one data-service lever.
+  ///
+  /// A lever and not an API method, and the distinction is the reason the
+  /// contract declares it separately from `TimeseriesApi`
+  /// (`data_services_contract.dart:78-81`): a client that could insert samples
+  /// could forge history, and a chart is evidence. Recording is the gateway's
+  /// job, upstream of anything a socket can reach — so this name belongs in
+  /// [levers], where a Phase 10 test asserting the real method table is closed
+  /// will find it.
+  static const seedTimeseries = '${prefix}seedTimeseries';
+
+  // -------------------------------------------------------- the sub-APIs
+  //
+  // Thirty-four names, one per method on the four data-service interfaces, and
+  // not one generic `call(method, args)` among them. That is T-02-22: a
+  // pass-through that dispatched on a caller-supplied string would let whatever
+  // is on the far side be asked for anything it happens to implement, and the
+  // set of things reachable over the channel would stop being a list anybody
+  // can read. `test/channel/channel_sub_apis_test.dart` counts the abstract
+  // methods on each interface and fails when a constant or a handler is
+  // missing, in both directions, so the list cannot fall behind the interface
+  // it mirrors either.
+  //
+  // These are *not* levers. Browse, history and preferences are things a real
+  // client legitimately asks a gateway for; they carry the [prefix] only
+  // because the real table (`methods.dart`) has not named them yet, and Phase 3
+  // is where they get their wire spelling. Putting them in [levers] would say
+  // the opposite — that they must never be reachable — which would be wrong in
+  // a way that a later reader would take as settled.
+
+  /// `BrowseApi.fetchRoots`.
+  static const browseFetchRoots = '${prefix}browse.fetchRoots';
+
+  /// `BrowseApi.fetchChildren`.
+  static const browseFetchChildren = '${prefix}browse.fetchChildren';
+
+  /// `BrowseApi.fetchDetail`.
+  static const browseFetchDetail = '${prefix}browse.fetchDetail';
+
+  /// `BrowseApi.resolvePath`.
+  static const browseResolvePath = '${prefix}browse.resolvePath';
+
+  /// Every [BrowseApi] method, as data.
+  static const browseMethods = <String>{
+    browseFetchRoots,
+    browseFetchChildren,
+    browseFetchDetail,
+    browseResolvePath,
+  };
+
+  /// `TimeseriesApi.queryTimeseriesData`.
+  static const timeseriesQuery = '${prefix}timeseries.queryTimeseriesData';
+
+  /// `TimeseriesApi.queryTimeseriesDataMultiple`.
+  static const timeseriesQueryMultiple =
+      '${prefix}timeseries.queryTimeseriesDataMultiple';
+
+  /// `TimeseriesApi.queryTimeseriesDataDownsampled`.
+  static const timeseriesQueryDownsampled =
+      '${prefix}timeseries.queryTimeseriesDataDownsampled';
+
+  /// `TimeseriesApi.countTimeseriesDataMultiple`.
+  static const timeseriesCountMultiple =
+      '${prefix}timeseries.countTimeseriesDataMultiple';
+
+  /// Every [TimeseriesApi] method, as data.
+  static const timeseriesMethods = <String>{
+    timeseriesQuery,
+    timeseriesQueryMultiple,
+    timeseriesQueryDownsampled,
+    timeseriesCountMultiple,
+  };
+
+  /// `HistoryViewApi.createHistoryView`.
+  static const historyCreateView = '${prefix}historyViews.createHistoryView';
+
+  /// `HistoryViewApi.updateHistoryView`.
+  static const historyUpdateView = '${prefix}historyViews.updateHistoryView';
+
+  /// `HistoryViewApi.deleteHistoryView`.
+  static const historyDeleteView = '${prefix}historyViews.deleteHistoryView';
+
+  /// `HistoryViewApi.selectHistoryViews`.
+  static const historySelectViews = '${prefix}historyViews.selectHistoryViews';
+
+  /// `HistoryViewApi.getHistoryViewKeys`.
+  static const historyGetKeys = '${prefix}historyViews.getHistoryViewKeys';
+
+  /// `HistoryViewApi.getHistoryViewGraphs`.
+  static const historyGetGraphs = '${prefix}historyViews.getHistoryViewGraphs';
+
+  /// `HistoryViewApi.getHistoryViewKeyNames`.
+  static const historyGetKeyNames =
+      '${prefix}historyViews.getHistoryViewKeyNames';
+
+  /// `HistoryViewApi.addHistoryViewPeriod`.
+  static const historyAddPeriod = '${prefix}historyViews.addHistoryViewPeriod';
+
+  /// `HistoryViewApi.deleteHistoryViewPeriod`.
+  static const historyDeletePeriod =
+      '${prefix}historyViews.deleteHistoryViewPeriod';
+
+  /// `HistoryViewApi.listHistoryViewPeriods`.
+  static const historyListPeriods =
+      '${prefix}historyViews.listHistoryViewPeriods';
+
+  /// `HistoryViewApi.getGlobalRetentionHorizon`.
+  static const historyRetentionHorizon =
+      '${prefix}historyViews.getGlobalRetentionHorizon';
+
+  /// Every [HistoryViewApi] method, as data.
+  static const historyViewMethods = <String>{
+    historyCreateView,
+    historyUpdateView,
+    historyDeleteView,
+    historySelectViews,
+    historyGetKeys,
+    historyGetGraphs,
+    historyGetKeyNames,
+    historyAddPeriod,
+    historyDeletePeriod,
+    historyListPeriods,
+    historyRetentionHorizon,
+  };
+
+  /// `PreferencesApi.getKeys`.
+  static const prefGetKeys = '${prefix}preferences.getKeys';
+
+  /// `PreferencesApi.getAll`.
+  static const prefGetAll = '${prefix}preferences.getAll';
+
+  /// `PreferencesApi.getBool`.
+  static const prefGetBool = '${prefix}preferences.getBool';
+
+  /// `PreferencesApi.getInt`.
+  static const prefGetInt = '${prefix}preferences.getInt';
+
+  /// `PreferencesApi.getDouble`.
+  static const prefGetDouble = '${prefix}preferences.getDouble';
+
+  /// `PreferencesApi.getString`.
+  static const prefGetString = '${prefix}preferences.getString';
+
+  /// `PreferencesApi.getStringList`.
+  static const prefGetStringList = '${prefix}preferences.getStringList';
+
+  /// `PreferencesApi.containsKey`.
+  static const prefContainsKey = '${prefix}preferences.containsKey';
+
+  /// `PreferencesApi.setBool`.
+  static const prefSetBool = '${prefix}preferences.setBool';
+
+  /// `PreferencesApi.setInt`.
+  static const prefSetInt = '${prefix}preferences.setInt';
+
+  /// `PreferencesApi.setDouble`.
+  static const prefSetDouble = '${prefix}preferences.setDouble';
+
+  /// `PreferencesApi.setString`.
+  static const prefSetString = '${prefix}preferences.setString';
+
+  /// `PreferencesApi.setStringList`.
+  static const prefSetStringList = '${prefix}preferences.setStringList';
+
+  /// `PreferencesApi.remove`.
+  static const prefRemove = '${prefix}preferences.remove';
+
+  /// `PreferencesApi.clear`.
+  static const prefClear = '${prefix}preferences.clear';
+
+  /// Every [PreferencesApi] *method*, as data.
+  ///
+  /// `onPreferencesChanged` is deliberately absent: it is a getter returning a
+  /// stream, not a request, and it crosses this channel as
+  /// [preferencesChanged] going the other way.
+  static const preferenceMethods = <String>{
+    prefGetKeys,
+    prefGetAll,
+    prefGetBool,
+    prefGetInt,
+    prefGetDouble,
+    prefGetString,
+    prefGetStringList,
+    prefContainsKey,
+    prefSetBool,
+    prefSetInt,
+    prefSetDouble,
+    prefSetString,
+    prefSetStringList,
+    prefRemove,
+    prefClear,
+  };
+
+  /// One key changed, pushed source → client.
+  ///
+  /// The stream half of [PreferencesApi], and the only sub-API traffic that
+  /// travels outward. One notification per change, fanned out to every local
+  /// listener by [ChannelPreferencesApi] rather than by opening a subscription
+  /// per listener: DB-03's promise is that a second operator's edit reaches the
+  /// first one's open form, and a per-listener subscription would make the
+  /// number of messages on the wire depend on how many widgets happen to be
+  /// watching.
+  static const preferencesChanged = '${prefix}preferences.changed';
+
+  /// Every request name belonging to the four data-service sub-APIs.
+  ///
+  /// The number the meta test counts. Excludes [seedTimeseries], which is a
+  /// lever, and [preferencesChanged], which is a notification travelling the
+  /// other way.
+  static const dataServices = <String>{
+    ...browseMethods,
+    ...timeseriesMethods,
+    ...historyViewMethods,
+    ...preferenceMethods,
+  };
+
   // There is deliberately no name here for `upstreamWriteAttempts` or
   // `mintedCmds`. Both are synchronous on the interface, so neither could be
   // answered by a round trip without changing the interface — the same
@@ -138,6 +374,7 @@ abstract final class HarnessMethods {
     stallWrites,
     releaseWrites,
     setReadOnly,
+    seedTimeseries,
   };
 
   /// Every name this harness registers on the served side.
@@ -147,5 +384,6 @@ abstract final class HarnessMethods {
     keys,
     write,
     ...levers,
+    ...dataServices,
   };
 }
