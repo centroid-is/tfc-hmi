@@ -103,14 +103,66 @@ void main() {
     expect(s.error, 'BadNotConnected');
   });
 
-  test('WriteParams sanitizes its value — a write cannot poison a frame', () {
+  test('WriteParams round-trips and can never poison a frame', () {
     final w = WriteParams(
-        cmd: '01J8', key: 'ST101.x', value: double.nan, ttlMs: 15000);
-    expect(w.value, isNull);
+        cmd: '01J8', key: 'ST101.x', value: 1500, expect: 1400, ttlMs: 15000);
     expect(() => jsonEncode(w.toJson()), returnsNormally);
     final r = WriteParams.fromJson(viaJson(w.toJson()));
     expect(r.cmd, '01J8');
+    expect(r.value, 1500);
+    expect(r.expect, 1400);
     expect(r.ttlMs, 15000);
+  });
+
+  group('WriteParams refuses a non-finite argument', () {
+    // CR-03. Sanitizing is right for telemetry; on the write path it turns
+    // an operator's intent into a different actuation, silently.
+
+    test('a non-finite value would write null to the tag', () {
+      expect(
+          () => WriteParams(cmd: '01J8', key: 'ST101.x', value: double.nan),
+          throwsA(isA<ArgumentError>()
+              .having((e) => e.name, 'name', 'value')
+              .having((e) => e.message.toString(), 'message',
+                  contains('did not choose'))));
+    });
+
+    test('a non-finite expect would drop the compare-and-set guard', () {
+      // The sharper of the two: null means "no guard" in this encoding, so
+      // a guarded write would silently become an unconditional one.
+      expect(
+          () => WriteParams(
+              cmd: '01J8',
+              key: 'ST101.x',
+              value: 1,
+              expect: double.infinity),
+          throwsA(isA<ArgumentError>().having((e) => e.name, 'name', 'expect')));
+    });
+
+    test('a non-finite buried inside a structure is found too', () {
+      expect(
+          () => WriteParams(
+              cmd: '01J8',
+              key: 'ST101.setpoint',
+              value: {
+                'lo': 1.0,
+                'hi': [2.0, double.negativeInfinity]
+              }),
+          throwsArgumentError);
+    });
+
+    test('a 1e999 arriving from a peer is a malformed frame, not a write', () {
+      // jsonDecode turns 1e999 into Infinity without complaint, so the
+      // refusal is reachable from the wire; there it is a FormatException.
+      final decoded = jsonDecode('{"cmd":"c","key":"k","value":1e999}')
+          as Map<String, Object?>;
+      expect(() => WriteParams.fromJson(decoded), throwsFormatException);
+    });
+
+    test('a finite write is untouched', () {
+      final w = WriteParams(cmd: 'c', key: 'k', value: 0.0, expect: -1.5);
+      expect([w.value, w.expect], [0.0, -1.5]);
+    });
   });
 
   test('Icelandic strings survive every shape they can appear in', () {
