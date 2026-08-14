@@ -1,0 +1,413 @@
+/// The bodies of `read`, `readFresh`, `readMany`, `write` and `writeStatus`.
+///
+/// Same rule as `session_handlers.dart`, for the same reason: **nothing in
+/// here registers anything.** Handlers are handed to `RelaySession._on`, which
+/// is the one seam where a method enters the table and therefore the one place
+/// the handshake gate and the error armor are applied. A handler that
+/// registered itself would be a handler that arrived ungated, and `write`
+/// ungated is a client that never said hello reaching a contactor.
+/// A grep for the peer's registration call over this file is meant to come
+/// back empty — and unlike `session_handlers.dart`, this doc does not spell
+/// that call out, so the grep is a check anyone can run rather than a sentence
+/// that answers itself.
+///
+/// ## Why these five exist in Phase 4 rather than Phase 5
+///
+/// 04-RESEARCH Finding 4 ran the method sweep against a live `RelayServer`:
+/// every one of these answered `-32601 Unknown method`, which put 28 of the
+/// contract suite's 44 checks out of reach over the real gateway. The
+/// contract leg cannot run against a socket that cannot read or write, so the
+/// plumbing was pulled forward. Only the plumbing.
+///
+/// ## What Phase 5 still owns, and this file deliberately does not do
+///
+///  * **Write semantics.** Three-state depth beyond forwarding what the source
+///    reports, dedup of a re-sent `cmd` against a live window, hold-to-run and
+///    the rest of the write-safety machinery (WRT-*).
+///  * **Authorization.** Which keys a session may read and which it may
+///    actuate is Phase 6 (SEC-03, T-04-03). Every method here is reachable by
+///    anyone who completes the handshake. That is not an oversight being
+///    hidden — it is the same posture `subscribe` has had since Phase 3, and
+///    it attaches at the same per-key seam.
+///
+/// ## The outcome log, and the one answer it must never invent
+///
+/// `writeStatus` is answered from a short-TTL map of `cmd` → outcome, pruned
+/// on access rather than by a timer: it is data with a clock passed in, not a
+/// scheduler, so a test models a stale entry with arithmetic instead of a
+/// sleep.
+///
+/// [WriteNotReceived] is the only outcome that tells an operator a re-send is
+/// safe. A gateway that has merely *forgotten* a command must therefore never
+/// spell its amnesia that way — so absence from the log is not enough to say
+/// "never received". The `cmd` is a ULID and carries the millisecond it was
+/// minted at, which is the second piece of evidence: inside the TTL, an
+/// unrecorded command genuinely never arrived; outside it, the honest answer
+/// is [WriteUnknown], because the gateway can no longer tell the two apart.
+/// A `cmd` that cannot be dated at all gets the same answer, for the same
+/// reason.
+library;
+
+import 'package:json_rpc_2/error_code.dart' as rpc_errors;
+import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+
+import 'server_config.dart';
+import 'session_handlers.dart' show KeyRejectKinds;
+
+/// One recorded write outcome and the instant it was recorded.
+///
+/// In-flight writes are recorded too, as [WriteUnknown]: a `writeStatus` that
+/// crosses a write still upstream must not answer `not_received` about a
+/// command that is, at that moment, on its way to a machine.
+final class _Outcome {
+  _Outcome(this.result, this.atMs);
+  final WriteResult result;
+  final int atMs;
+}
+
+/// The handler bodies for one session's value methods.
+///
+/// Holds one piece of state — the outcome log — and it is per session on
+/// purpose: a `cmd` is minted by a client, and answering another session's
+/// commands would make the log a cross-client enumeration surface (T-04-05).
+final class ValueHandlers {
+  ValueHandlers({
+    required this.api,
+    required this.config,
+    required this.now,
+  });
+
+  final StateManApi api;
+  final ServerConfig config;
+
+  /// Wall-clock epoch milliseconds. Injected rather than read, because every
+  /// promise the outcome log makes is arithmetic about *when*.
+  final int Function() now;
+
+  final _outcomes = <String, _Outcome>{};
+
+  /// How many outcomes are being held. Read by the test that proves the log
+  /// is bounded (T-04-06); nothing in production depends on it.
+  int get recordedOutcomes => _outcomes.length;
+
+  /// `read`: the cached value, no round trip.
+  Future<Object?> read(rpc.Parameters params) async {
+    // Sanitize before decode, every time, on every ingress path:
+    // `jsonDecode('1e999')` yields Infinity in silence, and an Infinity that
+    // reaches an error response makes the *error* unencodable — the 02-05 hang.
+    final decoded = sanitize(params.asMap).value as Map;
+    final key = _requireKey(decoded['key'], Methods.read);
+
+    if (!api.keys.contains(key)) {
+      // An answer, not a throw. The caller asked a legitimate question and
+      // "this source does not serve that tag" is the answer to it; a refusal
+      // would make a page editor's key check indistinguishable from a broken
+      // gateway.
+      return {
+        'key': key,
+        'value': WireValue.of(null, quality: Quality.errorConfig).toJson(),
+        'rejected': KeyReject(KeyRejectKinds.unknownKey,
+                message: 'this source does not serve "$key" — usually a typo '
+                    'in a page config, occasionally a tag renamed upstream')
+            .toJson(),
+      };
+    }
+
+    return {'key': key, 'value': _wire(api.read(key)).toJson()};
+  }
+
+  /// `readFresh`: force the round trip the cache is under suspicion of.
+  Future<Object?> readFresh(rpc.Parameters params) async {
+    final decoded = sanitize(params.asMap).value as Map;
+    final key = _requireKey(decoded['key'], Methods.readFresh);
+
+    final value = await api.readFresh(key);
+    return {'key': key, 'value': _wire(value).toJson()};
+  }
+
+  /// `readMany`: one round trip, an answer per key.
+  ///
+  /// A key this source cannot serve costs that one key. The argument is
+  /// `session_handlers.dart:30-44`'s, unchanged: a page config carries ~1500
+  /// hand-edited keys, so one typo must not cost the call.
+  Future<Object?> readMany(rpc.Parameters params) async {
+    final decoded = sanitize(params.asMap).value as Map;
+    final raw = decoded['keys'];
+    if (raw is! List) {
+      throw _refuse(Methods.readMany,
+          'readMany needs a "keys" list: the one call that exists so a '
+          'diagnostics page does not pay N round trips');
+    }
+    if (raw.isEmpty) {
+      throw _refuse(Methods.readMany,
+          'readMany needs at least one key: a request for nothing is a '
+          'round trip the client then waits on');
+    }
+    if (raw.length > config.maxKeysPerSubscribe) {
+      throw _refuse(
+          Methods.readMany,
+          'readMany carried ${raw.length} keys, over this server\'s limit of '
+          '${config.maxKeysPerSubscribe}; split the request or raise '
+          'maxKeysPerSubscribe');
+    }
+
+    final servable = api.keys.toSet();
+    final wanted = <String>[];
+    final rejected = <String, Object?>{};
+    for (final entry in raw) {
+      if (entry is! String || entry.trim().isEmpty) {
+        rejected['$entry'] = const KeyReject(KeyRejectKinds.invalidKey,
+                message: 'an empty key is not a tag; something built this '
+                    'list from a blank field')
+            .toJson();
+        continue;
+      }
+      if (!servable.contains(entry)) {
+        rejected[entry] = KeyReject(KeyRejectKinds.unknownKey,
+                message: 'this source does not serve "$entry" — usually a '
+                    'typo in a page config, occasionally a tag renamed '
+                    'upstream')
+            .toJson();
+        continue;
+      }
+      wanted.add(entry);
+    }
+
+    // One call for the whole list even when the list is empty after
+    // filtering — an empty upstream read is cheap, and skipping it would make
+    // the round-trip count depend on how many keys were mistyped.
+    final values = wanted.isEmpty
+        ? const <String, DynamicValue>{}
+        : await api.readMany(wanted);
+
+    return {
+      'values': {
+        for (final entry in values.entries) entry.key: _wire(entry.value).toJson(),
+      },
+      'rejected': rejected,
+    };
+  }
+
+  /// `write`: forward the operator's intent, report what became of it.
+  ///
+  /// Never throws to report an outcome. A JSON-RPC error on this path means
+  /// "definitively no effect, safe to re-send" (`write_result.dart:6-8`), so
+  /// the only refusals here are shape refusals raised *before* the plant is
+  /// touched; anything that goes wrong after that is [WriteUnknown].
+  Future<Object?> write(rpc.Parameters params) async {
+    final sanitized = sanitize(params.asMap);
+    if (sanitized.hadNonFinite) {
+      // Refused rather than cleaned up, and the asymmetry is the point.
+      // Sanitizing is right for telemetry, where the alternative is a frame
+      // that fails for every client. Here a nulled `value` actuates the device
+      // with something nobody chose, and a nulled `expect` is this path's
+      // encoding of "no guard at all" — the operator's "only if it still reads
+      // 1200" silently becomes "whatever it reads".
+      throw _refuse(
+          Methods.write,
+          'this write carries a non-finite number. Nulling the value would '
+          'actuate the device with something the operator did not choose, and '
+          'nulling an expect would turn a guarded write into an unconditional '
+          'one, so neither is done for you');
+    }
+    final decoded = (sanitized.value as Map).cast<String, Object?>();
+
+    final WriteParams request;
+    try {
+      request = WriteParams.fromJson(decoded);
+    } on FormatException catch (error) {
+      throw _refuse(Methods.write, 'write params could not be read: $error');
+    } on TypeError {
+      throw _refuse(
+          Methods.write,
+          'write needs a "cmd" and a "key", both strings: the cmd is the '
+          'operator action this outcome will be reconciled against, and '
+          'without it nothing can be re-queried later');
+    }
+    if (request.cmd.trim().isEmpty) {
+      throw _refuse(
+          Methods.write,
+          'write needs a non-empty "cmd": it is the id the operator\'s action '
+          'was minted under, and the only handle writeStatus has on it');
+    }
+    if (request.key.trim().isEmpty) {
+      throw _refuse(Methods.write, 'write needs a non-empty "key"');
+    }
+
+    // Recorded *before* the call so a writeStatus arriving while this is
+    // upstream is answered "unknown" and not "never received": the command is
+    // on its way to a machine at that exact moment.
+    _record(request.cmd, WriteUnknown(request.cmd,
+        const WriteReason('in_flight',
+            message: 'the gateway has sent this write upstream and has not '
+                'heard back yet')));
+
+    WriteResult result;
+    try {
+      result = _withCmd(
+          await api.write(request.key, request.value, expect: request.expect),
+          request.cmd);
+    } catch (error) {
+      // The source failed in a way it does not describe as an outcome. The
+      // write may still have reached the device, so this is unknown — not an
+      // RPC error, which would read as "definitely did not happen" and is
+      // what makes an operator press the button a second time.
+      result = WriteUnknown(
+          request.cmd,
+          WriteReason('gateway_lost_track',
+              message: 'the gateway lost track of this write: $error'));
+    }
+
+    _record(request.cmd, result);
+    return result.toJson();
+  }
+
+  /// `writeStatus`: what became of these commands, as far as this gateway can
+  /// honestly say.
+  Future<Object?> writeStatus(rpc.Parameters params) async {
+    final decoded = sanitize(params.asMap).value as Map;
+    final raw = decoded['cmds'];
+    if (raw is! List) {
+      throw _refuse(Methods.writeStatus,
+          'writeStatus needs a "cmds" list of the ids to re-query');
+    }
+    if (raw.isEmpty) {
+      throw _refuse(Methods.writeStatus,
+          'writeStatus needs at least one cmd: a re-query about nothing is a '
+          'reconnect that learns nothing');
+    }
+    if (raw.length > config.maxKeysPerSubscribe) {
+      throw _refuse(
+          Methods.writeStatus,
+          'writeStatus carried ${raw.length} cmds, over this server\'s limit '
+          'of ${config.maxKeysPerSubscribe}');
+    }
+
+    _prune();
+    return {
+      'results': [
+        for (final entry in raw) _statusOf('$entry').toJson(),
+      ],
+    };
+  }
+
+  /// The answer for one cmd, after [_prune] has run.
+  WriteResult _statusOf(String cmd) {
+    final held = _outcomes[cmd];
+    if (held != null) return held.result;
+
+    final mintedAt = _ulidMs(cmd);
+    if (mintedAt == null) {
+      return WriteUnknown(
+          cmd,
+          const WriteReason('unrecognized_cmd',
+              message: 'this is not an id this gateway could have issued an '
+                  'outcome for, so nothing about it can be ruled out'));
+    }
+    if (now() - mintedAt <= config.writeOutcomeTtl.inMilliseconds) {
+      // Inside the window and nothing was recorded: the command genuinely
+      // never arrived. The only re-send-safe answer, and it is only safe
+      // because of the window.
+      return WriteNotReceived(cmd);
+    }
+    return WriteUnknown(
+        cmd,
+        WriteReason('outcome_expired',
+            message: 'this command is older than the gateway\'s '
+                '${config.writeOutcomeTtl.inSeconds} s memory. Forgetting is '
+                'not evidence that it never happened — read the value back '
+                'before acting'));
+  }
+
+  void _record(String cmd, WriteResult result) {
+    _prune();
+    _outcomes[cmd] = _Outcome(result, now());
+  }
+
+  /// Drops everything past the TTL. On access rather than on a timer: a timer
+  /// here would be a second clock in a class that was handed one.
+  void _prune() {
+    final horizon = now() - config.writeOutcomeTtl.inMilliseconds;
+    _outcomes.removeWhere((_, entry) => entry.atMs < horizon);
+  }
+
+  /// The same outcome under the client's own [cmd].
+  ///
+  /// `StateManApi.write` mints its id inside the implementation, so the result
+  /// comes back under the *gateway's* id. The client can only reconcile
+  /// against the id its operator action was minted under, and an answer
+  /// carrying a different one is an answer `writeStatus` could never match.
+  static WriteResult _withCmd(WriteResult result, String cmd) =>
+      switch (result) {
+        WriteApplied(:final readback, :final at) =>
+          WriteApplied(cmd, readback: readback, at: at),
+        WriteRejected(:final reason, :final at) =>
+          WriteRejected(cmd, reason, at: at),
+        WriteUnknown(:final reason) => WriteUnknown(cmd, reason),
+        WriteNotReceived() => WriteNotReceived(cmd),
+      };
+
+  String _requireKey(Object? raw, String method) {
+    if (raw is! String || raw.trim().isEmpty) {
+      throw _refuse(method,
+          '$method needs a non-empty "key": the tag being asked about');
+    }
+    return raw;
+  }
+
+  /// A refusal with the armor already on it.
+  ///
+  /// `data['request']` is pre-substituted because `RpcException.serialize`
+  /// copies the offending request into `error.data` when it is not — and one
+  /// request carrying `1e999` then makes the *error* unencodable, at which
+  /// point the peer drops it and every caller without a deadline waits forever
+  /// (STATE.md, the 02-05 hang).
+  ///
+  /// Spelled with the general constructor rather than
+  /// `RpcException.invalidParams`, which takes no `data` — and a refusal with
+  /// no `data` is exactly the one the serializer fills in for you.
+  static rpc.RpcException _refuse(String method, String why) =>
+      rpc.RpcException(rpc_errors.INVALID_PARAMS, why,
+          data: _substitute(method));
+
+  static Map<String, Object?> _substitute(String method) => {
+        'method': method,
+        'request': 'omitted: echoing a request that may carry a non-finite '
+            'number is what makes the error itself unencodable, and an '
+            'unencodable error on a path with no deadline is a hang',
+      };
+
+  /// A value on the wire. Null means "not known yet" — a distinct thing from a
+  /// known-bad value, and the wire says which.
+  static WireValue _wire(DynamicValue? value) {
+    if (value == null) {
+      return WireValue.of(null, quality: Quality.uncertainNotYetKnown);
+    }
+    return WireValue.of(
+      value.toJson(slim: true),
+      quality: value.quality,
+      t: value.sourceTime?.millisecondsSinceEpoch,
+    );
+  }
+
+  /// Crockford base32, the same alphabet `newUlid` encodes with.
+  static const String _alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+  /// The millisecond a ULID was minted at, or null when [cmd] is not one.
+  ///
+  /// The decode half of `ulid.dart`'s encoder, kept here rather than there
+  /// because this is the only place that needs it and the property it is used
+  /// for — "could this command still be inside the not-received window?" — is
+  /// a gateway question, not an id question.
+  static int? _ulidMs(String cmd) {
+    if (cmd.length != 26) return null;
+    var ms = 0;
+    for (var i = 0; i < 10; i++) {
+      final digit = _alphabet.indexOf(cmd[i]);
+      if (digit < 0) return null;
+      ms = (ms << 5) | digit;
+    }
+    return ms;
+  }
+}

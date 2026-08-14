@@ -178,6 +178,28 @@ void main() {
     });
   });
 
+  group('the write-outcome window', () {
+    test('a gateway that remembers nothing is refused', () {
+      expect(() => ServerConfig(writeOutcomeTtl: Duration.zero),
+          throwsA(argumentErrorNaming(['writeOutcomeTtl'])),
+          reason: 'writeStatus answers "never received" only for a command '
+              'minted inside this window. A zero window makes that the answer '
+              'to every re-query, and "never received" is the one outcome '
+              'that tells an operator it is safe to actuate the machine '
+              'again');
+    });
+
+    test('the default outlives a reconnect', () {
+      // Backoff is capped at 30 s (CLAUDE.md), so a client that dropped mid
+      // write has one full retry cycle plus its resync inside the window. A
+      // TTL under it would turn "the link flapped" into "we forgot", and a
+      // forgotten outcome is one an operator has to establish by reading the
+      // value back.
+      expect(ServerConfig().writeOutcomeTtl,
+          greaterThan(const Duration(seconds: 30)));
+    });
+  });
+
   test('the config is data, not a clock', () {
     final a = ServerConfig();
     final b = ServerConfig();
