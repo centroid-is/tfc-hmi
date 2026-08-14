@@ -266,6 +266,38 @@ void main() {
     });
   });
 
+  group('the server can say what went wrong', () {
+    // 03-REVIEW WR-10. Nothing in this package logged, and `rpc.Peer` was
+    // built without `onUnhandledError`, whose documented behaviour when absent
+    // is that "the exception will be swallowed"
+    // (json_rpc_2-4.1.0/lib/src/server.dart:56-61). A handler that failed
+    // while answering a *notification* is the shape that still cannot reach
+    // the client — there is no request to fail — so it is the one that proves
+    // the seam.
+    test('a handler that fails on a notification is reported, not swallowed',
+        () async {
+      final reported = <String>[];
+      final fixture =
+          relayFixture(onError: (error, stack, where) => reported.add(where));
+      await fixture.ready;
+      await fixture.hello();
+
+      // No `id`: a JSON-RPC notification. json_rpc_2 runs the handler and
+      // discards the refusal, because there is nowhere to send it.
+      fixture.client.sink.add('{"jsonrpc":"2.0","method":"${Methods.subscribe}",'
+          '"params":{"sub":"","keys":["$_key"]}}');
+      expect(await _stillAnswers(fixture), isTrue,
+          reason: 'a failed notification costs nothing on the wire');
+
+      expect(reported, contains('session peer'),
+          reason: 'every failure the Phase 3 review found was invisible from '
+              'the server side. For a gateway whose whole claim is that '
+              'operators can trust what the screen shows, "the server cannot '
+              'say what went wrong" is a gap of the same family as the ones '
+              'this package carefully closes elsewhere');
+    });
+  });
+
   // ## The sibling-field arm (03-REVIEW CR-01 / CR-02)
   //
   // The `poison-1` case above puts `1e999` where a *String* belongs, so the

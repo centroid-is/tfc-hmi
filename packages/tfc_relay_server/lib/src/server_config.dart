@@ -57,14 +57,29 @@ final class ServerConfig {
   /// Hard ceiling on entries pending for one client; exceeding it is an
   /// immediate disconnect (HA: MAX_PENDING_MSG). Handed straight to each
   /// session's `ConflatingSendBuffer`.
+  ///
+  /// **It bounds *production*, not client backlog** (03-REVIEW WR-11). The
+  /// engine drains every tick and `ws.sink.add` never blocks, so the count
+  /// this is compared against is what the server produced for one client
+  /// during one tick. On `dart:io` WebSockets there is no observable client
+  /// backlog at all — it sits in the socket's own unbounded write buffer — so
+  /// a genuinely slow client is detected only by [heartbeatDeadline]: it stops
+  /// reading, therefore it stops sending heartbeats, and the reaper is what
+  /// notices. `tick_engine.dart`'s library doc carries the full statement and
+  /// the two options Phase 6 has.
   final int maxPending;
 
   /// Soft ceiling: staying above it for [peakWindowMs] continuously means the
-  /// client cannot keep up (HA: PENDING_MSG_PEAK).
+  /// client cannot keep up (HA: PENDING_MSG_PEAK). Same caveat as
+  /// [maxPending]: what stays above it is production, not backlog.
   final int? peakThreshold;
 
   /// How long [peakThreshold] may be exceeded continuously before the session
   /// is disconnected. Matches `ConflatingSendBuffer`'s own default.
+  ///
+  /// The window only accumulates because `drain()` no longer clears it
+  /// (03-REVIEW WR-02): a drain is the server's own schedule, and only a poll
+  /// that reads a count under the threshold counts as recovery.
   final int peakWindowMs;
 
   /// Ceiling on the size of one **inbound** frame, in bytes, enforced before

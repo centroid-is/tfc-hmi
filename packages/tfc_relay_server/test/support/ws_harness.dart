@@ -33,6 +33,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+import 'package:tfc_relay_server/src/error_reporter.dart';
 import 'package:tfc_relay_server/src/relay_server.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/token_validator.dart';
@@ -211,6 +212,7 @@ RelayFixture relayFixture({
   TokenValidator validator = const PermissiveTokenValidator(),
   List<String> serverSupported = const [protocolVersion],
   bool withProxy = false,
+  RelayErrorHandler? onError,
 }) {
   final served = FakeStateMan(
     staleAfter: staleAfter,
@@ -226,6 +228,11 @@ RelayFixture relayFixture({
     config: config ?? fixtureConfig(),
     validator: validator,
     serverSupported: serverSupported,
+    // Defaults to a collector that discards rather than to `reportToStderr`:
+    // several cases in this phase provoke errors on purpose, and a suite that
+    // printed a stack trace per provoked error would train everyone to
+    // scroll past them. A case that cares supplies its own.
+    onError: onError ?? (_, __, ___) {},
   );
   final wiring = _RelayWiring(served, server, withProxy: withProxy);
   final ready = wiring.connect();
