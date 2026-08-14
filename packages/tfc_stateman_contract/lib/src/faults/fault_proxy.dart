@@ -441,9 +441,10 @@ final class FaultProxy {
   ///
   /// Applied per direction, so an application round trip through the proxy
   /// costs `2 * value`. Overhead is a small constant, 1–2.5 ms per direction
-  /// (Finding 6), so tests assert `inInclusiveRange(2 * d, 2 * d + 20ms)`
+  /// (Finding 6), so tests assert `inInclusiveRange(2 * d, 2 * d + slack)`
   /// rather than a percentage band — the constant is bigger than a percentage
-  /// allows at 50 ms and smaller than one allows at 500 ms.
+  /// allows at 50 ms and smaller than one allows at 500 ms. The slack itself
+  /// belongs to the test, which sizes it for the runner it is on.
   ///
   /// Live: setting it reaches the pairs that are already open as well as the
   /// ones accepted later. A lever that only worked before connect could not
