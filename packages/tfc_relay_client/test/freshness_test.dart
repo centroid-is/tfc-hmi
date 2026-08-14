@@ -34,6 +34,7 @@ import 'dart:io' show Platform;
 
 import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/freshness_watchdog.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart' show within;
 import 'package:test/test.dart';
 
@@ -48,6 +49,13 @@ const Duration period = Duration(milliseconds: 100);
 
 /// The configured freshness deadline, as a ratio of [period]. CLI-04's "3×".
 final Duration deadline = period * 3;
+
+/// A gateway wall-clock instant, verbatim from the tick payload captured in
+/// 04-RESEARCH Finding 5 (`{serverTime: 1786711225813, subs: {s1: {seq: 0,
+/// evaluatedAt: 1786711225813}}}`). Real epoch ms, because Finding 5b verified
+/// live that `hello.serverTime`, `tick.serverTime` and `SubTick.evaluatedAt`
+/// are all wall clock and can be subtracted from one another.
+const int serverEpochMs = 1786711225813;
 
 /// STATE.md Phase 2 handoff timing bands: Linux is the quiet CI box, every
 /// other platform is a developer machine with a browser open.
@@ -203,6 +211,146 @@ void main() {
       await Future<void>.delayed(deadline + ceiling);
       expect(log.staleFlags, isEmpty,
           reason: 'a disposed watchdog still announced a transition');
+    });
+  });
+
+  group('per-subscription staleness: the dead subscription on a live socket', () {
+    test('one frozen subscription is stale while the view and its neighbour are fresh', () {
+      final log = TransitionLog();
+      final watchdog =
+          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: log.record);
+      addTearDown(watchdog.dispose);
+
+      // Ticks keep arriving and s1 keeps being evaluated; s2's plant-side
+      // source stopped at the first tick and never moved again. This is F25.
+      var serverTime = serverEpochMs;
+      const frozenAt = serverEpochMs;
+      for (var i = 0; i <= 5; i++) {
+        watchdog.sawTick(TickParams(serverTime: serverTime, subs: {
+          's1': SubTick(seq: i, evaluatedAt: serverTime),
+          's2': const SubTick(seq: 0, evaluatedAt: frozenAt),
+        }));
+        serverTime += period.inMilliseconds;
+      }
+
+      expect(watchdog.isSubscriptionStale('s2'), isTrue,
+          reason: 'a subscription whose source stopped evaluating five periods '
+              'ago still rendered as current, which is the operator trusting a '
+              'dead number on a live screen');
+      expect(watchdog.isSubscriptionStale('s1'), isFalse,
+          reason: 'a healthy neighbour was condemned along with the dead one, '
+              'so one dead PLC tag greys the values next to it');
+      expect(watchdog.staleSubscriptions, equals(<String>{'s2'}));
+      expect(watchdog.viewIsStale, isFalse,
+          reason: 'the link is delivering ticks and the whole view was still '
+              'called dead: link-down and one-value-dead are the two states '
+              'CLI-04 exists to keep apart');
+      expect(log.staleFlags, isEmpty,
+          reason: 'a plant fault announced itself as a stream fault');
+    });
+
+    test('a wrong local clock does not make every subscription look stale', () {
+      final watchdog =
+          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: (_) {});
+      addTearDown(watchdog.dispose);
+
+      const frozenAt = serverEpochMs;
+      final serverTime = serverEpochMs + period.inMilliseconds;
+      watchdog.sawTick(TickParams(serverTime: serverTime, subs: {
+        's1': SubTick(seq: 1, evaluatedAt: serverTime),
+        's2': const SubTick(seq: 0, evaluatedAt: frozenAt),
+      }));
+
+      // A panel whose clock is right: the 52 ms same-machine skew measured in
+      // 04-RESEARCH Finding 5b.
+      const rightClockSkewMs = 52;
+      // A moment chosen so the frozen subscription is past the deadline and
+      // its still-evaluating neighbour is not. The case would prove nothing at
+      // an instant where both were stale, or where neither was.
+      final localNow = serverTime +
+          rightClockSkewMs +
+          deadline.inMilliseconds -
+          period.inMilliseconds ~/ 2;
+      final rightClock =
+          watchdog.staleSubscriptionsAt(localNow, clockOffsetMs: rightClockSkewMs);
+
+      // The same panel with its clock set ten minutes fast. `clockOffset` is
+      // captured at hello as `localNow - serverTime`, so it carries the error
+      // too, and CLI-05 says that warns — it never greys the plant.
+      const tenMinutesMs = 10 * 60 * 1000;
+      final wrongClock = watchdog.staleSubscriptionsAt(
+        localNow + tenMinutesMs,
+        clockOffsetMs: rightClockSkewMs + tenMinutesMs,
+      );
+
+      expect(rightClock, equals(<String>{'s2'}),
+          reason: 'the frozen subscription was not caught between ticks');
+      expect(wrongClock, equals(rightClock),
+          reason: 'a panel with a wrong wall clock condemned subscriptions the '
+              'gateway says are current: a disagreement about what time it is '
+              'is not a disagreement about the process, and CLI-05 says warn, '
+              'never grey the plant');
+    });
+
+    test('fifty subscriptions add no timers — one link, one deadline', () {
+      final watchdog =
+          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: (_) {});
+      addTearDown(watchdog.dispose);
+
+      final subs = <String, SubTick>{
+        for (var i = 0; i < 50; i++)
+          's$i': const SubTick(seq: 0, evaluatedAt: serverEpochMs),
+      };
+      watchdog.sawTick(TickParams(serverTime: serverEpochMs, subs: subs));
+
+      expect(watchdog.debugTimerCount, 1,
+          reason: 'per-subscription staleness grew a timer per subscription: a '
+              '1500-key page is then 1500 cancellations to get right on every '
+              'reconnect, and the one that is missed fires into a dead page');
+    });
+
+    test('a subscription that starts evaluating again is fresh again, with nothing resynced',
+        () {
+      final log = TransitionLog();
+      final watchdog =
+          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: log.record);
+      addTearDown(watchdog.dispose);
+
+      const frozenAt = serverEpochMs;
+      final lateTime = serverEpochMs + deadline.inMilliseconds * 2;
+      watchdog.sawTick(TickParams(serverTime: lateTime, subs: {
+        's1': const SubTick(seq: 0, evaluatedAt: frozenAt),
+      }));
+      expect(watchdog.isSubscriptionStale('s1'), isTrue);
+
+      watchdog.sawTick(TickParams(serverTime: lateTime, subs: {
+        's1': SubTick(seq: 1, evaluatedAt: lateTime),
+      }));
+
+      expect(watchdog.isSubscriptionStale('s1'), isFalse,
+          reason: 'a source that started evaluating again stayed condemned, so '
+              'the operator has to reload the page to believe a live value');
+      expect(log.staleFlags, isEmpty,
+          reason: 'a plant fault that healed itself moved the whole view, which '
+              'is the resync this class must never ask for');
+    });
+
+    test('an unsubscribed subscription stops being reported', () {
+      final watchdog =
+          FreshnessWatchdog(config: testConfig(), onViewFreshnessChanged: (_) {});
+      addTearDown(watchdog.dispose);
+
+      final lateTime = serverEpochMs + deadline.inMilliseconds * 2;
+      watchdog.sawTick(TickParams(serverTime: lateTime, subs: {
+        's1': const SubTick(seq: 0, evaluatedAt: serverEpochMs),
+      }));
+      expect(watchdog.staleSubscriptions, equals(<String>{'s1'}));
+
+      watchdog.forgetSubscription('s1');
+
+      expect(watchdog.staleSubscriptions, isEmpty,
+          reason: 'an id nobody is subscribed to any more kept raising a fault '
+              'about a value no screen displays');
     });
   });
 }
