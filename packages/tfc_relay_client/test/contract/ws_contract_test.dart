@@ -121,43 +121,56 @@ const int reachableChecks = 31;
 /// implements and then deletes a line here. A reader arriving the day a
 /// handler lands can grep this list for the method they just wrote and find
 /// exactly which check now has to be judged on its merits.
+///
+/// Two lines per entry where they differ, because they usually do. *Trips on*
+/// is the method the check actually dies at today, read off the -32601 the
+/// gateway returns and recorded from a real run (`parity_test.dart`'s
+/// disagreement report prints all thirteen). *Needs* is everything the check
+/// would go on to call once that first one answers. The distinction is the
+/// difference between "I implemented `browse.fetchRoots`, why is this check
+/// still red" and knowing up front that it also wants `fetchChildren`. Four of
+/// the six browse checks trip on `fetchRoots` before they reach the method
+/// they are named for.
 const List<String> unreachableChecks = <String>[
   // browse — six checks. Phase 10 owns every `browse.*` handler below; the
   // client's `ClientBrowseApi` already sends each of these exact method names
   // (`client_sub_apis.dart:59-62`) and is told -32601 by the gateway.
   'the address space has a top level, and every root is identifiable',
-  //   waits on: browse.fetchRoots
+  //   trips on: browse.fetchRoots
   "expanding a folder yields that folder's children, not another's",
-  //   waits on: browse.fetchChildren
+  //   trips on: browse.fetchRoots — needs: browse.fetchChildren
   "a node's detail carries its data type, and a variable's carries a reading",
-  //   waits on: browse.fetchDetail
+  //   trips on: browse.fetchRoots — needs: browse.fetchDetail
   'a resolved path runs root to leaf, and every step is a real edge',
-  //   waits on: browse.resolvePath
+  //   trips on: browse.resolvePath
   'a target that does not exist resolves to null, not empty and not a throw',
-  //   waits on: browse.resolvePath
+  //   trips on: browse.resolvePath
   'folders and variables expand; methods do not',
-  //   waits on: browse.fetchChildren + browse.fetchDetail
+  //   trips on: browse.fetchRoots
+  //   needs:    browse.fetchChildren, browse.fetchDetail
   // data services — seven checks. Phase 10 owns these three handler families
   // too; the client's `ClientTimeseriesApi`, `ClientHistoryViewApi` and
   // `ClientPreferencesApi` already send the exact names below
   // (`client_sub_apis.dart:64-100`).
   'a recorded series comes back inside the window, oldest first',
-  //   waits on: timeseries.queryTimeseriesData
+  //   trips on: timeseries.queryTimeseriesData
   'every requested series gets an entry, including the silent ones',
-  //   waits on: timeseries.queryTimeseriesDataMultiple
+  //   trips on: timeseries.queryTimeseriesDataMultiple
   'a downsampled series is bounded and still reaches both ends of the window',
-  //   waits on: timeseries.queryTimeseriesDataDownsampled
+  //   trips on: timeseries.queryTimeseriesDataDownsampled
   'a history view survives create, list, read back and delete',
-  //   waits on: historyViews.createHistoryView, .selectHistoryViews,
-  //             .deleteHistoryView
+  //   trips on: historyViews.createHistoryView
+  //   needs:    historyViews.selectHistoryViews, .deleteHistoryView
   'a saved time window survives add, list and delete',
-  //   waits on: historyViews.addHistoryViewPeriod, .listHistoryViewPeriods,
+  //   trips on: historyViews.createHistoryView (the window needs a view first)
+  //   needs:    historyViews.addHistoryViewPeriod, .listHistoryViewPeriods,
   //             .deleteHistoryViewPeriod
   'every typed preference round-trips and containsKey agrees',
-  //   waits on: preferences.setBool/.getBool (and the six other typed pairs),
-  //             preferences.containsKey
+  //   trips on: preferences.setBool
+  //   needs:    the six other typed set/get pairs, preferences.containsKey
   'a preference change reaches a second listener',
-  //   waits on: preferences.changed (the server-to-client notification)
+  //   trips on: preferences.setBool
+  //   needs:    preferences.changed (the server-to-client notification)
 ];
 
 void main() {
