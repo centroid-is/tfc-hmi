@@ -565,6 +565,7 @@ void runDataServicesContract(
   bool supportsDataServices = true,
   void Function(StateManApi api, String tableName, List<TimeseriesData> points)?
       seedTimeseries,
+  Set<String> expectUnreachable = const {},
 }) {
   final cases = <String, Check<StateManApi>>{
     ...dataServicesChecks,
@@ -583,6 +584,10 @@ void runDataServicesContract(
       test(property, () async {
         final api = make();
         addTearDown(api.dispose);
+        if (expectUnreachable.contains(property)) {
+          await expectUnreachableMethod(property, () => check(api));
+          return;
+        }
         await check(api);
       });
     });

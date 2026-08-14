@@ -445,6 +445,7 @@ void runBrowseContract(
   StateManApi Function() make, {
   required BrowseFixture fixture,
   bool supportsBrowse = true,
+  Set<String> expectUnreachable = const {},
 }) {
   final cases = <String, Check<StateManApi>>{
     _rootsCase: (api) =>
@@ -466,6 +467,10 @@ void runBrowseContract(
       test(property, () async {
         final api = make();
         addTearDown(api.dispose);
+        if (expectUnreachable.contains(property)) {
+          await expectUnreachableMethod(property, () => check(api));
+          return;
+        }
         await check(api);
       });
     });

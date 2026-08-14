@@ -46,3 +46,87 @@ Future<T> within<T>(
     fail('$what did not happen within ${budget.inMilliseconds} ms');
   }
 }
+
+/// The JSON-RPC 2.0 code for a method the peer has never heard of.
+///
+/// Spelled out rather than imported so this file stays free of a transport
+/// dependency; it is a number fixed by the specification, not by a package.
+const int methodNotFoundCode = -32601;
+
+/// Runs [body] and asserts it fails with exactly [methodNotFoundCode].
+///
+/// **This is how a gap is proven rather than hidden.** A leg driving an
+/// implementation that has not grown a whole family of methods yet has three
+/// options for the checks that need them, and two of them rot:
+///
+///  * declare the capability `false` — the cases vanish from the report, and
+///    the properties go unjudged over that transport for as long as anybody
+///    forgets;
+///  * leave them red — the suite never goes green, so nobody can tell a known
+///    gap from a fresh regression, and the whole run stops being a signal;
+///  * `skip` them — the same as the first, with a reason string.
+///
+/// This is the fourth: the case runs, and passing means *the gap is exactly
+/// what it was claimed to be*. Not "something went wrong" — a peer that has
+/// never heard of the method. A gap that starts to close fails here, loudly,
+/// on the day the handler lands, which is the day the claim stopped being true
+/// and the day the check should start being judged on its merits instead.
+///
+/// [property] is the check's own sentence, so a failure names the property
+/// rather than the plumbing.
+Future<void> expectUnreachableMethod(
+  String property,
+  Future<void> Function() body,
+) async {
+  Object? failure;
+  try {
+    await body();
+  } catch (error) {
+    failure = error;
+  }
+
+  if (failure == null) {
+    fail('"$property" was declared unreachable over this transport and it '
+        'passed. That is good news the gap list has not caught up with: the '
+        'handler behind it exists now, so delete this check from the '
+        'unreachable set and let it be judged on its merits. Left as it is, a '
+        'property that works is permanently excused.');
+  }
+
+  expect(_isMethodNotFound(failure), isTrue,
+      reason: '"$property" was declared unreachable because the peer has no '
+          'handler for the method behind it, which is JSON-RPC '
+          '$methodNotFoundCode. It failed for some other reason instead:\n\n'
+          '$failure\n\n'
+          'That is a different fault, and excusing it under a "not implemented '
+          'yet" heading is how a real defect rides along inside a known gap. '
+          'Either the method now exists and is broken, or the transport is.');
+}
+
+/// Whether [error] is the peer saying it has never heard of the method.
+///
+/// Two arms, because a check reaches this helper by two different routes.
+///
+/// The direct one: the transport error propagates out of the check untouched
+/// and carries a `code`. Read dynamically on purpose — this package must not
+/// depend on a particular RPC client to state a property about error codes, and
+/// every implementation of one exposes `code`.
+///
+/// The indirect one: the check **caught** the transport error itself and failed
+/// with its own sentence. Several browse cases do exactly that on purpose —
+/// their property is "an unresolvable target degrades to null rather than
+/// throwing", so *any* throw is the failure they are built to report, and they
+/// report it in operator language with the original error quoted inside. That
+/// is right, and it means the only evidence left is the text. Matching
+/// [methodNotFoundCode] in it is precise enough to be worth doing: the number
+/// is fixed by the JSON-RPC specification, it is not a value any of these
+/// checks would otherwise mention, and the alternative is excusing those cases
+/// with no evidence at all.
+bool _isMethodNotFound(Object? error) {
+  try {
+    if ((error as dynamic).code == methodNotFoundCode) return true;
+  } catch (_) {
+    // No `code` to read; fall through to the text.
+  }
+  return '$error'.contains('$methodNotFoundCode');
+}
