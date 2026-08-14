@@ -73,7 +73,8 @@ const _probeBytes = 64;
 /// the attempts that succeed and return immediately. What it catches is the
 /// failure mode worth catching — a reconnect loop with no backoff, which
 /// against thirty down-windows produces attempts in the thousands.
-const _attemptBound = _soak ~/ _retryBackoff + 20;
+final _attemptBound =
+    _soak.inMilliseconds ~/ _retryBackoff.inMilliseconds + 20;
 
 /// The fewest dropouts a minute of `flap(1s, 1s)` may produce.
 ///

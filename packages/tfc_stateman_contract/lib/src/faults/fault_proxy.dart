@@ -14,14 +14,17 @@
 /// (Finding 1: on POSIX it is a clean FIN except by coincidence — see
 /// `socket_ops.dart`).
 ///
-/// **Every mode is declared before any is implemented.** [faultModes] names
-/// all eight, each has its lever on this class today, and the levers whose
-/// behaviour has not landed throw [UnimplementedError] naming the plan. The
-/// alternative — adding levers as the modes arrive — means a test written
-/// against a mode that does not exist yet fails to compile, which is fine, but
-/// a lever that exists and quietly does nothing is not: the mode test passes,
-/// the fault was never injected, and CI reports coverage of precisely the
-/// property that is missing.
+/// **Every mode was declared before any was implemented.** [faultModes] names
+/// all eight, each has its lever on this class, and until 02-11 the ones whose
+/// behaviour had not landed threw [UnimplementedError] naming the plan they
+/// would land in. All eight have landed now, so nothing here throws that any
+/// more — but the rule the scaffolding enforced still holds for a ninth: a
+/// lever that exists and quietly does nothing is worse than one that does not
+/// compile, because the mode test passes, the fault was never injected, and CI
+/// reports coverage of precisely the property that is missing.
+/// `test/faults/proxy_core_test.dart` keeps that gate, and it re-arms by
+/// itself the moment a name is added to [faultModes] without a test file
+/// beside it.
 ///
 /// **Loopback only.** The listener binds [InternetAddress.loopbackIPv4] and
 /// there is no option to widen it. A process whose whole purpose is to sever
@@ -119,6 +122,26 @@ final class FaultProxy {
   /// fires. One flag rather than a counter: the mode is "once".
   bool _killOnceArmed = false;
 
+  /// Whether a flap cycle is running.
+  bool _flapping = false;
+
+  /// Whether the flap cycle is currently in its down half.
+  ///
+  /// Separate from [_blackholed] on purpose: a blackhole keeps the sockets up
+  /// and swallows, and a dropout takes the sockets away. They are different
+  /// faults with different client code paths, and sharing one flag would make
+  /// `flap` silently mean "blackhole, periodically".
+  bool _flapDown = false;
+
+  /// The timer carrying the cycle to its next transition.
+  ///
+  /// One chained [Timer] rather than a `Timer.periodic`, because up and down
+  /// have different lengths and a periodic timer can only carry one interval.
+  Timer? _flapTimer;
+
+  /// How many times the flap cycle has changed half.
+  int _flapTransitions = 0;
+
   /// The high-water reading of every pair that has already closed.
   int _retiredPeakPendingBytes = 0;
 
@@ -176,6 +199,22 @@ final class FaultProxy {
     return peak;
   }
 
+  /// How many times [flap] has changed half since the cycle started.
+  ///
+  /// The observable behind the timer-hygiene criterion. A cancelled timer is
+  /// not otherwise visible from a test — `Timer` exposes nothing and package:
+  /// test does not fail a case for leaving one behind; it simply keeps the
+  /// isolate alive until the runner gives up, with no failure to attribute. So
+  /// the counter is incremented at the *top* of the timer callback, ahead of
+  /// the shutdown guard, and a test compares it across a shutdown: a timer
+  /// that survived moves this number even though the transition it would have
+  /// made is refused (T-02-31).
+  ///
+  /// Also worth printing in a soak: a minute of `flap(1s, 1s)` should be
+  /// around 59 transitions, and a number far off that says the cycle drifted
+  /// before any client-side aggregate does.
+  int get flapTransitions => _flapTransitions;
+
   /// The errno of the last failed upstream connection, or null if none failed.
   ///
   /// Read through `errnoOf` because `Socket.connect` throws a bare [OSError]
@@ -206,6 +245,15 @@ final class FaultProxy {
   Future<void> shutdown() async {
     if (_shutDown) return;
     _shutDown = true;
+    // The mode primitives go first, before anything starts closing lines. A
+    // timer left running past this point fires against a half-torn-down proxy
+    // — and, worse, keeps the isolate alive after the test that owned it has
+    // passed, so the runner hangs at the end of the suite with no failure to
+    // point at (T-02-31).
+    _flapTimer?.cancel();
+    _flapTimer = null;
+    _flapping = false;
+    _flapDown = false;
     final accepts = _accepts;
     _accepts = null;
     final server = _server;
@@ -235,9 +283,86 @@ final class FaultProxy {
   ///
   /// Assertions about a flapping proxy must be about windows, not instants:
   /// RESEARCH Finding 10 measured a connect attempt completing on the far side
-  /// of a state transition, so the flag read at assertion time did not
-  /// describe what the connection experienced.
-  void flap(Duration up, Duration down) => _notYet('flap', '02-11');
+  /// of a state transition — `t=1204ms forwarding=false connect OK in 189ms`
+  /// — so the flag read at assertion time did not describe what the
+  /// connection experienced. `test/faults/flap_test.dart` therefore counts
+  /// dropouts, retries and escaped errors over a window and never reads a
+  /// state at an instant, and a test "improved" into an instantaneous check
+  /// here is measuring something other than what it names.
+  ///
+  /// **The down half is a dropout, not a blackhole.** Live pairs are reset and
+  /// retired, and connections arriving during the down half are cut on sight,
+  /// so a client experiences the link going away and has to reconnect —
+  /// [blackhole] is the other fault, where the sockets stay up and the traffic
+  /// vanishes. A flap built on blackholing would never exercise a reconnect
+  /// path, which is the entire content of F2.
+  ///
+  /// **Real timers.** CONTEXT restricts injected clocks to pure state
+  /// machines, and a cycle whose whole subject is wall-clock behaviour against
+  /// live sockets is not one. The cycle starts in the up half, so a client
+  /// that connects immediately gets a connection.
+  ///
+  /// Off is `flap(up, down, enabled: false)` — the same one-lever shape as
+  /// [blackhole] and [reject], for the same reason: an off switch with its own
+  /// name would be reachable without any entry in [faultModes] naming it. Off
+  /// leaves the proxy **forwarding**, not in whichever half the cycle had
+  /// reached, because every scenario that follows a flap needs a working link
+  /// and none of them should have to ask which half it stopped in.
+  void flap(Duration up, Duration down, {bool enabled = true}) {
+    _flapTimer?.cancel();
+    _flapTimer = null;
+    if (!enabled) {
+      _flapping = false;
+      _flapDown = false;
+      return;
+    }
+    if (up <= Duration.zero || down <= Duration.zero) {
+      throw ArgumentError('flap needs a positive duration for each half; got '
+          'up=$up down=$down. A zero half is not a fast flap — it is a timer '
+          'that fires in a loop for ever and starves the event loop the '
+          'sockets run on');
+    }
+    _flapping = true;
+    _flapDown = false;
+    _flapTimer = Timer(up, () => _onFlapTimer(up, down));
+  }
+
+  /// One transition of the cycle, and the scheduling of the next.
+  void _onFlapTimer(Duration up, Duration down) {
+    // Ahead of every guard, deliberately: this counter is how a test sees a
+    // timer that outlived `shutdown()`. Counting after the guard would make a
+    // leaked timer invisible to precisely the assertion written to catch it.
+    _flapTransitions++;
+    if (_shutDown || !_flapping) return;
+    _flapDown = !_flapDown;
+    if (_flapDown) {
+      // Unawaited because a timer callback cannot await, and guarded because
+      // an error on a future nobody holds is reported against whichever test
+      // is running when it lands (T-02-33) — during a soak, that is never
+      // this one.
+      unawaited(_dropForFlap().catchError((Object _) {}));
+    }
+    _flapTimer = Timer(_flapDown ? down : up, () => _onFlapTimer(up, down));
+  }
+
+  /// Takes the link down: every live pair reset, then retired.
+  ///
+  /// Reset rather than closed, and in the order [reject] documents — the RST
+  /// goes out before the lines are closed, because closing first wakes the
+  /// teardown and destroys the socket out from under the linger option, which
+  /// degrades the reset to a FIN intermittently. A dropout that arrived as a
+  /// clean FIN would be an orderly shutdown, which is a different event on the
+  /// client's side and the one thing this mode must not look like.
+  Future<void> _dropForFlap() async {
+    for (final pair in List.of(_pairs)) {
+      pair.killWithReset();
+      await pair.close();
+      // Retired here rather than left to `_closeWhenEitherEnds`, for the same
+      // reason `reject` does it: thirty cycles a minute means thirty chances
+      // for a pair to be counted alive after it is gone.
+      _retire(pair);
+    }
+  }
 
   /// One-way delay applied to every chunk in both directions.
   ///
@@ -507,11 +632,6 @@ final class FaultProxy {
         base + Duration(microseconds: _jitterSource.nextInt(spreadMicros + 1));
   }
 
-  Never _notYet(String mode, String plan) => throw UnimplementedError(
-      'mode $mode lands in plan $plan; the lever is declared now and throws '
-      'rather than accepting the setting silently, because a mode that can be '
-      'switched on and does nothing makes its own test pass');
-
   Future<void> _accept(Socket client) async {
     if (_shutDown) {
       client.destroy();
@@ -523,6 +643,14 @@ final class FaultProxy {
       // of a connect timeout, and the socket is cut before anything upstream
       // is touched — a rejecting proxy must not open a connection to the
       // server for a client it is about to refuse.
+      forceReset(client);
+      return;
+    }
+    if (_flapDown) {
+      // The link is away for this half of the cycle. Cut on sight and never
+      // touch the upstream: a proxy that opened a server connection for a
+      // client it is about to drop would make the *server* see a connection
+      // storm during an outage, which is the opposite of what a dropout does.
       forceReset(client);
       return;
     }
