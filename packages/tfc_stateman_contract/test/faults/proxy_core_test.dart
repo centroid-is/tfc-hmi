@@ -63,6 +63,7 @@ const _landedModes = <String, String>{
   'killOnce': 'test/faults/kill_once_test.dart',
   'blackhole': 'test/faults/blackhole_test.dart',
   'bufferServerToClient': 'test/faults/buffer_test.dart',
+  'reject': 'test/faults/reject_test.dart',
 };
 
 final _levers = <String, void Function(FaultProxy)>{

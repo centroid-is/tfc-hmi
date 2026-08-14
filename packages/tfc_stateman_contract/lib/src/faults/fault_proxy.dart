@@ -110,6 +110,9 @@ final class FaultProxy {
   /// Whether the server→client direction is currently being withheld.
   bool _bufferServerToClient = false;
 
+  /// Whether accepted connections are cut instead of being served.
+  bool _rejecting = false;
+
   /// Whether the next connection accepted is to be reset on sight.
   ///
   /// Set only when [killOnce] found nothing open, and cleared the moment it
@@ -399,7 +402,43 @@ final class FaultProxy {
   /// is POSIX determinism — Finding 8 measured the handshake racing the reset,
   /// so a client sees either a failed connect or a connect that is immediately
   /// reset. Tests assert a terminal failure within a budget, never an errno.
-  Future<void> reject() => _notYet('reject', '02-09');
+  ///
+  /// **Correcting the original's doc.** `tfc_dart/test/proxy.dart:11-14`
+  /// describes this as sending a refusal the client will see as one. It does
+  /// not: on POSIX `destroy()` is a clean FIN except by coincidence (Finding
+  /// 1), and because the listener is still bound the kernel can complete the
+  /// handshake out of the accept queue before this method's teardown reaches
+  /// the new socket. Finding 8 measured both outcomes from consecutive
+  /// attempts against one proxy — connect failing in 7 ms, and connect
+  /// succeeding in 2 ms and then being reset. Both are the mode working. A
+  /// caller that needs one specific outcome wants a closed listener, which is
+  /// a different mode and is slow on the platform this one is for.
+  ///
+  /// **No sleep.** The original waited 100 ms here before returning, a guess
+  /// about someone else's scheduler: too slow for every ordinary run and too
+  /// short for a loaded CI box. This awaits the teardown of the pairs it is
+  /// actually tearing down, so when it returns there are none — which is the
+  /// property the sleep was approximating, stated exactly.
+  ///
+  /// Rejection is a state, not an event: `reject(enabled: false)` leaves it,
+  /// and the connection after it is forwarded normally on the same port.
+  Future<void> reject({bool enabled = true}) async {
+    _rejecting = enabled;
+    if (!enabled) return;
+    // The reset goes to the client before the pair's lines are closed, for the
+    // reason `_ProxiedPair.killWithReset` documents: closing first wakes the
+    // teardown, which destroys the socket out from under the linger option and
+    // degrades this mode's reset to a FIN, intermittently.
+    for (final pair in List.of(_pairs)) {
+      pair.killWithReset();
+      await pair.close();
+      // Retired here rather than left to `_closeWhenEitherEnds`, which runs a
+      // microtask or two later: a caller that awaits this method and then asks
+      // `livePairs` is asking whether the teardown finished, and an answer
+      // that is briefly wrong is worse than a slow one.
+      _retire(pair);
+    }
+  }
 
   /// Withhold server→client traffic while still forwarding client→server.
   ///
@@ -476,6 +515,15 @@ final class FaultProxy {
   Future<void> _accept(Socket client) async {
     if (_shutDown) {
       client.destroy();
+      return;
+    }
+    if (_rejecting) {
+      // Answered here and not by closing the listener, which is the whole
+      // mode: the SYN is accepted, so Windows gets an immediate answer instead
+      // of a connect timeout, and the socket is cut before anything upstream
+      // is touched — a rejecting proxy must not open a connection to the
+      // server for a client it is about to refuse.
+      forceReset(client);
       return;
     }
     final Socket upstream;
