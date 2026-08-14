@@ -30,6 +30,11 @@ dependencies:
   # StreamChannel<String> by hand rather than using `.cast()`
   # (RESEARCH Finding 1: cast() locks the sink for the connection's life).
   stream_channel: ^2.1.4
+  # The WebSocketChannel type itself. shelf_web_socket hands the upgrade
+  # handler one of these, so the server-side adapter (`ws_channel.dart`) names
+  # the type in its signature and the dependency is direct, not transitive.
+  # The same package is the client socket in the test harness.
+  web_socket_channel: ^3.0.3
   # The wire shapes, the DTOs and the pure cores (ConflatingSendBuffer,
   # HelloGate) this server is assembled from.
   tfc_relay_protocol: {path: ../tfc_relay_protocol}
@@ -40,9 +45,6 @@ dev_dependencies:
   # The suite runner. It stays on this side of the line for the reason in the
   # description above.
   test: ^1.25.0
-  # The *client* socket, used only by the WS test harness to connect to an
-  # ephemeral port. The server never speaks through it.
-  web_socket_channel: ^3.0.3
   # The shared 44-check contract suite plus the socket fault kit, run over
   # this transport. It binds ports; dev-only is not negotiable.
   tfc_stateman_contract: {path: ../tfc_stateman_contract}

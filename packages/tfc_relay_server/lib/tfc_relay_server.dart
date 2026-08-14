@@ -18,3 +18,4 @@
 library;
 
 export 'src/server_config.dart';
+export 'src/token_validator.dart';
