@@ -200,12 +200,36 @@ void main() {
 
       // A genuine oversized *request* — padded inside `params`, so the server
       // decodes and dispatches it rather than routing it to the client half as
-      // a stray response. There is no frame-size limit anywhere in the path
-      // (T-02-29 / T-03-29); what this case fixes is the consequence, so that
-      // a ceiling added later changes the verdict here and is noticed.
+      // a stray response.
       final pad = 'x' * oversizeBytes;
       fixture.client.sink.add('{"jsonrpc":"2.0","id":"oversize-1",'
           '"method":"${Methods.ping}","params":{"pad":${jsonEncode(pad)}}}');
+
+      // **The request's own fate, which is what this case was missing**
+      // (03-REVIEW WR-03). Until the ceiling landed, an 8 MiB request was
+      // answered in full and this case asserted only that the session
+      // survived — which any sane ceiling also preserves, so the case could
+      // not have noticed the change it was written to notice.
+      //
+      // The refusal is a parse error rather than an answer to "oversize-1":
+      // the ceiling is enforced before anything decodes the frame, so at the
+      // moment of refusal the server does not yet know the request had an id.
+      // That is the honest shape — a size limit that had to parse the frame to
+      // apply it would be no limit at all.
+      expect(
+          await _untilFrame(fixture, '"error"', budget: _oversizeBudget),
+          isTrue,
+          reason: 'an ${oversizeBytes ~/ (1024 * 1024)} MiB frame is over the '
+              'ingress ceiling and must be refused rather than served. The '
+              'refusal itself carries no echo of the frame: json_rpc_2 answers '
+              'a FormatException with exception.serialize(source), and a '
+              'source of null is what keeps the refusal from being as large as '
+              'the thing it refuses');
+      expect(fixture.inbound.any((frame) => frame.contains('oversize-1')),
+          isFalse,
+          reason: 'nothing that comes back may carry the oversized request '
+              'back with it — echoing it is the amplification the ceiling '
+              'exists to stop, and it would arrive on the priority lane');
 
       expect(await _stillAnswers(fixture, budget: _oversizeBudget), isTrue,
           reason: 'an 8 MiB frame must cost at most the request that carried '

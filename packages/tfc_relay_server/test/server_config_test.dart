@@ -149,6 +149,26 @@ void main() {
           throwsA(argumentErrorNaming(['maxSubscriptionsPerSession'])));
     });
 
+    test('a non-positive maxFrameBytes or maxPendingBytes is refused', () {
+      expect(() => ServerConfig(maxFrameBytes: 0),
+          throwsA(argumentErrorNaming(['maxFrameBytes'])));
+      expect(() => ServerConfig(maxPendingBytes: -1),
+          throwsA(argumentErrorNaming(['maxPendingBytes'])));
+    });
+
+    test('the ingress ceiling has room for the largest legitimate request',
+        () {
+      final config = ServerConfig();
+      // A subscribe carrying the full key allowance, at a generous 60 bytes
+      // per plant tag (`CN01.MOT01.speed` is 16). The ceiling exists to refuse
+      // an order of magnitude, so a default that could refuse a real page
+      // config would be a denial of service written as a defence.
+      expect(config.maxFrameBytes,
+          greaterThan(config.maxKeysPerSubscribe * 60),
+          reason: 'the largest request a real panel sends is a page config of '
+              'about ${config.maxKeysPerSubscribe} keys');
+    });
+
     test('a non-positive maxPending is refused', () {
       expect(() => ServerConfig(maxPending: 0),
           throwsA(argumentErrorNaming(['maxPending'])),

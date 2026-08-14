@@ -116,7 +116,11 @@ final class RelaySession {
     return RelaySession._(
       rpc.Peer(
           StreamChannel<String>(
-              channel.stream.map(lastSeen.touch).map(_defuse), channel.sink),
+              channel.stream
+                  .map(lastSeen.touch)
+                  .map((frame) => _underCeiling(frame, config.maxFrameBytes))
+                  .map(_defuse),
+              channel.sink),
           onUnhandledError: onError == null
               ? null
               // `ErrorCallback`'s two parameters are `dynamic`
@@ -138,6 +142,33 @@ final class RelaySession {
       emitFrame,
       onClosing,
     ).._start();
+  }
+
+  /// Refuses one inbound frame that is over the ingress ceiling, before
+  /// anything decodes it.
+  ///
+  /// **03-REVIEW WR-04 / threat T-03-29.** There was no frame-size limit
+  /// anywhere in the path, and json_rpc_2's parse-error responder echoes the
+  /// *entire* offending text back (`utils.dart:60-70`), into the priority lane,
+  /// held until the next tick. A client sending garbage faster than the tick
+  /// drains grew the server's heap by megabytes per frame with no verdict
+  /// available to stop it.
+  ///
+  /// A `FormatException` rather than a stream error, and one carrying **no
+  /// source**: that is what makes json_rpc_2 answer `-32700` to the sender and
+  /// carry on, and the missing source is what keeps the refusal from echoing
+  /// the very megabytes it is refusing. The session survives — an oversized
+  /// request must cost the request, not the panel that sent it.
+  ///
+  /// The ceiling is on the decoded *string* length rather than on wire bytes.
+  /// For the plant's ASCII tag names the two are the same number; for a frame
+  /// full of Icelandic þ/ð/æ the UTF-8 encoding is larger, so this is the
+  /// slightly permissive direction, which is the right one for a limit whose
+  /// job is to refuse an order of magnitude rather than a byte.
+  static String _underCeiling(String frame, int maxFrameBytes) {
+    if (frame.length <= maxFrameBytes) return frame;
+    throw FormatException('frame of ${frame.length} bytes exceeds the '
+        '$maxFrameBytes byte ingress ceiling');
   }
 
   /// Takes the poison out of one inbound frame before the `Peer` ever sees it.
