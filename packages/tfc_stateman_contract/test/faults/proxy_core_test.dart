@@ -27,11 +27,15 @@ import 'package:test/test.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
-/// Big enough to cross the delay line's 1 MiB high-water in both directions.
+/// A payload as large as the delay line's whole 1 MiB high-water.
 ///
-/// A payload that fits under the mark exercises none of the pause/resume path,
-/// so an ordering bug that only appears once the line has paused its source
-/// would ship unseen behind a passing round-trip test.
+/// Not a round number chosen for looks: a payload smaller than the mark can be
+/// carried entirely by one chunk-sized hop, so it exercises neither the
+/// queue's ordering across many chunks nor — on a slow reader — its
+/// pause/resume path. Whether backpressure actually engages depends on how
+/// fast the echo server drains, which is why this arm asserts *order and
+/// completeness* rather than a pause: the mode plans assert the pause, and
+/// they can only do so on a transport already known not to reorder.
 const _largePayloadBytes = 1024 * 1024;
 
 const _chunkBytes = 64 * 1024;
@@ -71,8 +75,7 @@ void main() {
         reason: 'the bytes that came back are not the bytes that went out');
   });
 
-  test('round-trips a megabyte in order, across the delay line\'s high-water '
-      'mark', () async {
+  test('round-trips a megabyte in order, complete to the last byte', () async {
     final proxy = await _proxyToEcho();
     final client = await _connect(proxy.port);
     final payload = _pattern(_largePayloadBytes);
