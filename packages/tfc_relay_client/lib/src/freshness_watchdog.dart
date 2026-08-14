@@ -33,6 +33,7 @@ library;
 import 'dart:async';
 
 import 'package:tfc_relay_client/src/client_config.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 /// What arrived from the gateway.
 ///
@@ -93,6 +94,27 @@ final class FreshnessWatchdog {
     _deadline = Timer(config.freshnessDeadline, _linkWentQuiet);
     _becomeFresh();
   }
+
+  /// Records a tick and re-judges every subscription. Declared here so the
+  /// per-subscription cases fail by name; implemented in the GREEN step.
+  void sawTick(TickParams tick) =>
+      throw UnimplementedError('freshness watchdog: sawTick');
+
+  /// Subscriptions whose source had stopped evaluating as of the last tick.
+  Set<String> get staleSubscriptions =>
+      throw UnimplementedError('freshness watchdog: staleSubscriptions');
+
+  /// The same verdict for one subscription id.
+  bool isSubscriptionStale(String subId) =>
+      throw UnimplementedError('freshness watchdog: isSubscriptionStale');
+
+  /// The same verdict between ticks, from a local instant plus the offset.
+  Set<String> staleSubscriptionsAt(int localNowMs, {required int clockOffsetMs}) =>
+      throw UnimplementedError('freshness watchdog: staleSubscriptionsAt');
+
+  /// Forgets a subscription that is no longer displayed.
+  void forgetSubscription(String subId) =>
+      throw UnimplementedError('freshness watchdog: forgetSubscription');
 
   /// Drops the deadline. Nothing fires afterwards, and later frames are
   /// ignored rather than re-arming a watchdog whose page is gone.
