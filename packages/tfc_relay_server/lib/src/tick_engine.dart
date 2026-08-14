@@ -60,6 +60,12 @@ import 'relay_server.dart' show SessionRegistry;
 import 'relay_session.dart';
 import 'server_config.dart';
 
+/// The `reason` a stalled gateway announces itself under.
+///
+/// One of `ResyncParams`' documented vocabulary, named here because this is
+/// the only thing that emits it and a client branches on the string.
+const gatewayStalled = 'gateway_stalled';
+
 /// Drives every connected session from one timer.
 final class TickEngine {
   TickEngine({
@@ -163,6 +169,18 @@ final class TickEngine {
         break;
     }
 
+    // Into the priority lane, and only now: pushed before the poll it would
+    // have counted against the client's own backlog, and evicting a panel for
+    // the server's stall is exactly backwards. Pushed before the drain so it
+    // leaves on *this* tick, ahead of the telemetry whose staleness it
+    // explains.
+    switch (drift) {
+      case LagStalled(:final stalledMs):
+        _announceStall(session, stalledMs);
+      case LagOk():
+        break;
+    }
+
     final frame = buffer.drain();
     for (final message in frame.priority) {
       // Already-encoded frames pass through verbatim — re-encoding a string
@@ -174,6 +192,84 @@ final class TickEngine {
     }
 
     _fanOut(session, frame, nowMs);
+    _writeTick(session, nowMs);
+  }
+
+  /// Tells every live subscription that this tick happened, and where its
+  /// sequence stands.
+  ///
+  /// **The property is F25 / SRV-06:** silence must never be ambiguous. Over a
+  /// socket that is still open, "this tag has not moved" and "the gateway
+  /// stopped evaluating this tag" look identical, and they call for opposite
+  /// responses from whoever is watching the screen. `evaluatedAt` is the
+  /// difference, and it moves every tick whether or not `seq` does — `seq`
+  /// counts *pushes*, so advancing it here would make the next real push look
+  /// like a gap and send a healthy panel into a resync loop.
+  ///
+  /// Built by concatenation for the same reason [FrameEncoder.updateFrame] is:
+  /// this runs for every subscription of every session on every tick, and
+  /// nothing in it needs escaping — the numbers are integers this server
+  /// produced and the names are the literals escaped once when the
+  /// subscription was created. `tick_test.dart` decodes what comes out through
+  /// [TickParams], so a hand-built frame that drifted from the DTO fails
+  /// there.
+  ///
+  /// A session watching nothing is sent nothing: an empty `subs` map is bytes
+  /// on a link that exists to carry plant data, and such a client has no
+  /// subscription whose liveness could be in question.
+  void _writeTick(RelaySession session, int nowMs) {
+    final subs = session.subscriptions.subscriptions;
+    if (subs.isEmpty) return;
+    final frame = StringBuffer('{"jsonrpc":"2.0","method":"${Methods.tick}",'
+        '"params":{"serverTime":$nowMs,"subs":{');
+    var first = true;
+    for (final state in subs) {
+      if (!first) frame.write(',');
+      first = false;
+      frame
+        ..write(state.literal(encoder.subLiteral))
+        ..write(':{"seq":')
+        ..write(state.seq)
+        ..write(',"evaluatedAt":')
+        ..write(nowMs)
+        ..write('}');
+    }
+    frame.write('}}}');
+    session.emit(frame.toString());
+  }
+
+  /// Pushes one `gateway_stalled` resync per live subscription of [session].
+  ///
+  /// One per subscription because resync is per subscription: a page that was
+  /// not told keeps rendering pre-freeze values as current, which is the
+  /// stale-number-on-a-screen failure this project exists to prevent. One
+  /// announcement and no debounce because Finding 10 measured a 400 ms freeze
+  /// producing exactly one oversized gap and **no** catch-up burst — a
+  /// debounce here would be guarding against a storm that was measured not to
+  /// happen.
+  ///
+  /// [stalledMs] is the **absolute** gap, straight from the monitor
+  /// (03-CONTEXT amendment): a panel renders it as "the plant view was frozen
+  /// for 400 ms", a statement about the plant, where the excess over the tick
+  /// period is a statement about a number the client does not have.
+  ///
+  /// Pushed as a map rather than a string: this path runs when something has
+  /// gone wrong, not every tick, so the one `jsonEncode` it costs at the drain
+  /// buys the DTO's own field names instead of a hand-spliced envelope on the
+  /// rarest path in the file.
+  void _announceStall(RelaySession session, int stalledMs) {
+    for (final state in session.subscriptions.subscriptions) {
+      session.buffer.putPriority({
+        'jsonrpc': '2.0',
+        'method': Methods.resync,
+        'params': ResyncParams(
+          sub: state.sub,
+          epoch: state.epoch,
+          reason: gatewayStalled,
+          stalledMs: stalledMs,
+        ).toJson(),
+      });
+    }
   }
 
   /// Writes this session's conflated telemetry: one `u` frame per subscription
