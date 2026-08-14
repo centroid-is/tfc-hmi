@@ -339,7 +339,8 @@ void main() {
   // under one id: both went upstream, the second overwrote the first's
   // outcome, and writeStatus then reported one answer covering two actuations.
   group('one cmd, one actuation', () {
-    test('a second write under a recorded cmd is refused', () async {
+    test('two writes under one id with different values are refused before '
+        'the plant is touched', () async {
       final kit = _kit();
       kit.api.setValue('CN01.MOT01.speed', 0);
       final cmd = kit.mintCmd();
@@ -368,12 +369,61 @@ void main() {
               'or it is a report about an actuation that already occurred');
       expect(kit.api.read('CN01.MOT01.speed')?.value, 1200,
           reason: 'the device holds what the first write put there');
+      expect(error.message, contains('nothing was sent'),
+          reason: 'the refusal reaches the operator as '
+              'WriteRejected(server_refused) — "the device said no" — because '
+              'failure_taxonomy maps every RpcException that way, and that '
+              'mapping is deliberately left alone. The message is therefore '
+              'the only thing that can say no device was consulted');
+      expect(error.message, contains('caller'),
+          reason: 'naming it a defect in the caller rather than a condition '
+              'of the machine is what stops an operator hunting an interlock '
+              'that does not exist');
+      expect(_asMap(error.data)['request'], isA<String>(),
+          reason: 'the rewritten message still travels through _refuse, which '
+              'pre-substitutes data["request"]; a refusal that let '
+              'RpcException.serialize echo the offending request could carry '
+              '1e999 into the error itself and hang every caller (02-05)');
+    });
+
+    test('a replay carrying a different compare-and-set guard is refused',
+        () async {
+      // D-P5-B. "Set 1450" and "set 1450 only if it still reads 1200" are two
+      // different operator intents, so the same id over both is a collision
+      // even though the key and the value agree.
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 1200);
+      final cmd = kit.mintCmd();
+      await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1450,
+        'expect': 1200,
+      }));
+      final attemptsAfterFirst = kit.api.upstreamWriteAttempts(cmd);
+
+      final error = await _refusal(
+          kit.handlers.write(_params(Methods.write, {
+            'cmd': cmd,
+            'key': 'CN01.MOT01.speed',
+            'value': 1450,
+          })),
+          'an unguarded write replaying a guarded one\'s id');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(kit.api.upstreamWriteAttempts(cmd), attemptsAfterFirst,
+          reason: 'answering the unguarded write from the guarded one\'s log '
+              'entry would report that a check passed which was never made');
     });
 
     test('a cmd whose outcome has aged out is a new command again', () async {
       // Anti-vacuity, and the honest boundary: the refusal is about what this
       // gateway still remembers. Past the TTL there is no entry to collide
-      // with, and the id is indistinguishable from one nobody has used.
+      // with, and the id is indistinguishable from one nobody has used. The
+      // idempotency window does not widen that boundary: with no entry there
+      // is no fingerprint to match either, so a replay past the TTL is not
+      // answered from the log — it goes upstream on its merits, exactly as it
+      // did before 05-03.
       final kit = _kit(writeOutcomeTtl: const Duration(seconds: 60));
       kit.api.setValue('CN01.MOT01.speed', 0);
       final cmd = kit.mintCmd();
@@ -399,6 +449,122 @@ void main() {
       expect(WriteResult.fromJson(answer).cmd, cmd,
           reason: 'past the TTL the id is indistinguishable from one nobody '
               'has used, and the write goes upstream on its merits');
+    });
+  });
+
+  // 05-03. The other half of "one id, one actuation": the *same* write
+  // arriving twice is one operator action, not two, and the honest answer is
+  // the outcome that action already got. A client that restarted still holds
+  // the id it minted, and refusing it would settle the id against a write
+  // whose fate the operator was asking about.
+  group('the idempotency window', () {
+    test('a replayed write is answered from the log and the plant is touched '
+        'once', () async {
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+      final first = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      })));
+      expect(WriteResult.fromJson(first), isA<WriteApplied>(),
+          reason: 'the case is about a replay of a settled write; if the '
+              'first one did not settle applied the replay proves nothing');
+
+      final replay = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      })));
+
+      final answered = WriteResult.fromJson(replay);
+      expect(answered, isA<WriteApplied>(),
+          reason: 'the same press arriving twice gets the outcome that press '
+              'already got. Note what a second trip upstream would produce '
+              'instead: the source keeps every id it has been handed and '
+              'throws on a repeat, which the gateway maps to unknown — so '
+              '"applied" here can only have come from the log');
+      expect((answered as WriteApplied).readback,
+          (WriteResult.fromJson(first) as WriteApplied).readback,
+          reason: 'the readback is what the mimic displays; a replay must put '
+              'the same number on the screen as the original did');
+      expect(answered.cmd, cmd);
+      expect(kit.api.upstreamWriteAttempts(cmd), 1,
+          reason: 'one operator action, one movement of the machine. This '
+              'count is the whole property — everything else is bookkeeping');
+    });
+
+    test('a replay arriving while the first write is upstream is answered '
+        'unknown, not refused', () async {
+      // D-P5-A, and the reason it is not a refusal: a refusal arrives at the
+      // client as WriteRejected(server_refused), which *settles* the id — and
+      // it would settle it against a write that is at that moment on its way
+      // to a machine. An unknown leaves the id unresolved, so the next ready
+      // re-queries writeStatus and the operator learns what actually happened.
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+      kit.api.stallWrites();
+
+      final inFlight = kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      }));
+      await pumpEventQueue();
+
+      final replay = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      })));
+
+      final answered = WriteResult.fromJson(replay);
+      expect(answered, isA<WriteUnknown>());
+      expect((answered as WriteUnknown).reason.kind, 'in_flight',
+          reason: 'the gateway has sent this write upstream and has not heard '
+              'back: that is the pre-record talking, and it is the truest '
+              'thing anyone can say at this instant');
+      expect(kit.api.upstreamWriteAttempts(cmd), 1,
+          reason: 'the replay was answered from the log, so the stalled write '
+              'is still the only one out');
+
+      kit.api.releaseWrites();
+      expect(WriteResult.fromJson(_asMap(await inFlight)), isA<WriteApplied>(),
+          reason: 'the original settles on its own merits; the replay changed '
+              'nothing about it');
+    });
+
+    test('an operator re-send after not_received is not refused', () async {
+      // The anti-vacuity arm (05-RESEARCH §A.3, path 2). `not_received` is the
+      // one verdict that makes a re-send safe, and the re-send carries the
+      // same cmd because the operator's action is the same action. If this
+      // plan's window turned that into a refusal it would have removed the
+      // only safe re-send in the system.
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      kit.clock.advance(1000);
+      final cmd = kit.mintCmd();
+
+      final before = await _status(kit, [cmd]);
+      expect(before.single, isA<WriteNotReceived>(),
+          reason: 'minted after this log started, dated by a clock the '
+              'gateway trusts, inside the TTL, and never recorded: the '
+              'gateway can say it never arrived');
+
+      final answer = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      })));
+
+      expect(WriteResult.fromJson(answer), isA<WriteApplied>(),
+          reason: 'the log holds no entry for this id — answering not_received '
+              'is precisely the claim that it holds none — so there is nothing '
+              'to match and nothing to collide with, and the write goes '
+              'upstream on its merits');
+      expect(kit.api.upstreamWriteAttempts(cmd), 1);
     });
   });
 
@@ -454,6 +620,10 @@ void main() {
     });
 
     test('the outcome log does not grow across aged-out commands', () async {
+      // T-04-06, re-run after 05-03 widened the entry: an entry now also
+      // carries the key and the two decoded payloads it was recorded for, both
+      // bounded at ingress by maxFrameBytes. The entry got bigger; the bound
+      // is still "writes within the TTL", and the bound is what matters.
       final kit = _kit(writeOutcomeTtl: const Duration(seconds: 60));
       kit.api.setValue('CN01.MOT01.speed', 0);
 
