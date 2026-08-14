@@ -10,6 +10,13 @@
 /// source, a client that satisfied `StateManApi` but not `harnessOf`, and the
 /// round-trip counter — which lives on the *served* side and is therefore the
 /// one observable a naive channel client would silently stop being judged by.
+///
+/// The write cases at the bottom are here for a different reason: they reach
+/// arms of `WriteResult` and corners of the write path that no healthy source
+/// produces, so `channel_write_contract_test.dart` — which is the real verdict
+/// on the write path — could never exercise them. [WriteNotReceived] is a
+/// `writeStatus` answer, and a non-finite number is a thing `jsonEncode`
+/// refuses to put in a frame at all.
 @Tags(['meta'])
 library;
 
@@ -18,11 +25,16 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_stateman_contract/channel_harness.dart';
+import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
 const _speedKey = 'ST101.CN01.MOT01.speed';
 const _otherKey = 'ST201.CN04.MOT01.speed';
 const _missingKey = 'ST301.CN17.VLV02.stat';
+
+/// A setpoint: the key a write case writes to, and the one the write contract
+/// uses, so a failure here reads against the same tag.
+const _setpointKey = 'ST101.CN01.MOT01.setpoint';
 
 void main() {
   test('a driver can take the control surface off it', () {
@@ -158,4 +170,145 @@ void main() {
             'from its own cache would defeat the one call a diagnostics page '
             'makes when the cache is the thing under suspicion');
   });
+
+  // ------------------------------------------------------------- write path
+
+  test('a driver can take the *write* control surface off it', () {
+    final api = channelServedFake();
+    addTearDown(api.dispose);
+
+    // The same argument as `harnessOf` above, one interface along: five of the
+    // ten write cases pull a lever that only exists here, and
+    // `writeHarnessOf` is what reports a missing one as a sentence rather than
+    // as a cast error naming a line in the contract package.
+    expect(writeHarnessOf(api), same(api),
+        reason: 'a channel-served implementation that does not satisfy '
+            'writeHarnessOf cannot be handed to runWriteContract at all — no '
+            'case could make the device answer for it');
+  });
+
+  test('every arm of the write outcome survives the round trip', () async {
+    // Scripted rather than provoked, because two of the four are unreachable
+    // through a healthy source: WriteNotReceived is a `writeStatus` answer,
+    // and the applied/rejected arms carry fields (`at`, `status`) that a live
+    // source fills with values a test cannot predict. What is being measured
+    // is the encoding, so the outcomes have to be known exactly.
+    const applied = WriteApplied('01JBQ0000000000000000APPLY',
+        readback: 1500, at: 1786000000000);
+    const rejected = WriteRejected(
+        '01JBQ0000000000000000REJEC',
+        WriteReason('interlocked',
+            message: 'guard door open', status: 'Bad_NotWritable'),
+        at: 1786000000001);
+    const unknown = WriteUnknown('01JBQ0000000000000000UNKNO',
+        WriteReason('plc_timeout', message: 'the device never answered'));
+    const notReceived = WriteNotReceived('01JBQ0000000000000000NOTRE');
+
+    final source = _ScriptedWrites([applied, rejected, unknown, notReceived]);
+    final pair = channelPair();
+    final session = serveStateMan(source, pair.server);
+    final api = ChannelStateMan(
+      channel: pair.client,
+      observables: source,
+      closeServed: () async {
+        await session.close();
+        await source.dispose();
+      },
+    );
+    addTearDown(api.dispose);
+
+    for (final expected in <WriteResult>[
+      applied,
+      rejected,
+      unknown,
+      notReceived
+    ]) {
+      final got = await within(api.write(_setpointKey, 1500),
+          'the ${expected.runtimeType} outcome coming back over the channel');
+
+      expect(got.runtimeType, expected.runtimeType,
+          reason: 'a ${expected.runtimeType} crossed the channel and arrived '
+              'as a ${got.runtimeType}. The four arms are what a caller '
+              'switches on, and two of them call for opposite operator '
+              'actions — a boundary that folds one into another decides what '
+              'an operator is told happened to the plant');
+      expect(got.toJson(), expected.toJson(),
+          reason: 'the outcome arrived with different fields than it left '
+              'with: ${got.toJson()} against ${expected.toJson()}. The reason '
+              'kind in particular is what a support engineer greps six months '
+              'later');
+    }
+  });
+
+  test('a non-finite value is nulled before it can reach the frame, and the '
+      'key says so afterwards', () async {
+    // `jsonEncode` throws on Infinity rather than emitting null, so an
+    // unsanitized write does not fail one write — it fails the frame, which on
+    // a real pipe is shared with every other client on it. The client is the
+    // only side that ever sees the poison, so attaching badNonFinite is its
+    // job and not the source's.
+    final api = channelServedFake();
+    addTearDown(api.dispose);
+    final plant = harnessOf(api);
+
+    plant.setValue(_setpointKey, 1200);
+    await arrived(api, _setpointKey);
+
+    final result = await within(api.write(_setpointKey, double.infinity),
+        'a non-finite write resolving rather than detonating the frame');
+
+    expect(result, isA<WriteApplied>(),
+        reason: 'the poison is defused at the boundary, so what reaches the '
+            'source is an ordinary write of a null');
+    expect((result as WriteApplied).readback, isNull,
+        reason: 'a readback still holding ±Infinity is a value that throws on '
+            'the next encode instead of this one');
+    expect(api.read(_setpointKey)?.quality, Quality.badNonFinite,
+        reason: 'the key reads as ${api.read(_setpointKey)?.quality.code} '
+            'after a non-finite write; the operator must see a fault, not a '
+            'blank box that looks like an unbound tag — and the client is the '
+            'only side that ever saw the number, because the wire cannot '
+            'carry it');
+    expect(api.read(_setpointKey)?.value, isNull,
+        reason: 'a non-finite value survived into the client store');
+  });
+
+  test('a non-finite expect is refused, never nulled into an unguarded write',
+      () async {
+    final api = channelServedFake();
+    addTearDown(api.dispose);
+
+    // Nulling it would be the silent failure: null is this path's encoding of
+    // "no compare-and-set guard", so a sanitized expect turns a guarded write
+    // into an unconditional one — the operator's "only if it still reads
+    // 1200" quietly becomes "whatever it reads".
+    await expectLater(
+        api.write(_setpointKey, 1500, expect: double.nan), throwsArgumentError,
+        reason: 'a non-finite expect must be refused where it was typed. '
+            'Nothing upstream of a write box can legitimately produce a NaN, '
+            'so this is programmer error, and an error is the one thing the '
+            'write path is allowed to do about it — as against hanging, which '
+            'is what an unencodable request would otherwise become');
+  });
+}
+
+/// A served source whose write answers are scripted.
+///
+/// Breaks the same seam every sabotage variant breaks
+/// ([FakeStateMan.attemptUpstreamWrite]) and inherits everything else, so the
+/// value path under these writes is the real one.
+final class _ScriptedWrites extends FakeStateMan {
+  _ScriptedWrites(this._answers);
+
+  final List<WriteResult> _answers;
+  var _next = 0;
+
+  @override
+  Future<WriteResult> attemptUpstreamWrite(
+    String cmd,
+    String key,
+    Object? value, {
+    Object? expected,
+  }) async =>
+      _answers[_next++];
 }

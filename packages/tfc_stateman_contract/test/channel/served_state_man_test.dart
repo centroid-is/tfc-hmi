@@ -19,6 +19,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
@@ -140,6 +141,86 @@ void main() {
     expect(far.updates[1].keys, unorderedEquals([_speedKey, _otherKey]),
         reason: 'the single notification must carry both changed keys, or one '
             'of them was silently dropped rather than batched');
+  });
+
+  test('a write is answered with the outcome, not with a throw', () async {
+    final fake = FakeStateMan();
+    addTearDown(fake.dispose);
+    fake.setValue(_speedKey, 1450);
+
+    final pair = channelPair();
+    final served = serveStateMan(fake, pair.server);
+    addTearDown(served.close);
+    final far = _FarSide(pair.client);
+    addTearDown(far.close);
+
+    final raw = await within(
+        far.peer.sendRequest(
+            HarnessMethods.write, {'key': _speedKey, 'value': 1600}),
+        'the answer to a write over the channel');
+
+    final result = WriteResult.fromJson((raw as Map).cast<String, Object?>());
+    expect(result, isA<WriteApplied>(),
+        reason: 'a write nothing objected to came back as '
+            '${result.runtimeType}; the ordinary case must be the one an '
+            'operator can read as "done"');
+    expect((result as WriteApplied).readback, 1600,
+        reason: 'the served side must encode what the device holds; a '
+            'boundary that echoed the written value would confirm a write on '
+            'no evidence at all');
+    expect(fake.read(_speedKey)?.asInt, 1600,
+        reason: 'the write never reached the source, so every write case '
+            'running over this harness would be measuring the encoder');
+  });
+
+  test('a peer that puts a non-finite number on the write path is answered '
+      'with an error, not with silence', () async {
+    // Reachable only from a raw frame: `jsonEncode` refuses to *emit* a
+    // non-finite, but `1e999` silently *decodes* to Infinity, so the decoder
+    // is exactly where poison enters from outside. The answer must be a
+    // JSON-RPC error — which on a write means "definitively no effect", the
+    // one retry-safe case — rather than a pending request nobody will ever
+    // settle. RESEARCH Finding 15: a request with no answer hangs forever,
+    // because there is no per-request deadline on this path and will not be
+    // one until Phase 4.
+    final fake = FakeStateMan();
+    addTearDown(fake.dispose);
+    fake.setValue(_speedKey, 1450);
+
+    final pair = channelPair();
+    final served = serveStateMan(fake, pair.server);
+    addTearDown(served.close);
+
+    final answered = Completer<Map<String, Object?>>();
+    final subscription = pair.client.stream.listen((message) {
+      final decoded = jsonDecode(message);
+      if (decoded is Map &&
+          decoded['id'] == 1 &&
+          !answered.isCompleted) {
+        answered.complete(decoded.cast<String, Object?>());
+      }
+    });
+    addTearDown(subscription.cancel);
+
+    pair.client.sink.add('{"jsonrpc":"2.0","id":1,'
+        '"method":"${HarnessMethods.write}",'
+        '"params":{"key":"$_speedKey","value":1600,"expect":1e999}}');
+
+    final reply = await within(answered.future,
+        'the answer to a write carrying a non-finite compare-and-set guard');
+
+    expect(reply['error'], isNotNull,
+        reason: 'the write came back as a normal result, or not at all. A '
+            'non-finite expect nulled on the way in turns a guarded write '
+            'into an unconditional one, and a request left unanswered hangs '
+            'the caller until something else times out — refusing it by '
+            'error is the only answer that is both true and terminating');
+    expect(reply['result'], isNull,
+        reason: 'a refused write must not also carry an outcome');
+    expect(fake.read(_speedKey)?.asInt, 1450,
+        reason: 'the refusal must happen before the device is touched; a '
+            'write that was refused *and* applied is the worst of both '
+            'answers');
   });
 
   test('closing the channel closes the served peer without throwing',
