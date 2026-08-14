@@ -55,6 +55,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'backoff.dart';
 import 'client_config.dart';
+import 'client_sub_apis.dart';
 import 'connection_supervisor.dart';
 import 'deadline.dart';
 import 'failure_taxonomy.dart';
@@ -70,7 +71,7 @@ import 'subscription_state.dart';
 const String defaultPageSubscription = 'page';
 
 /// A `StateManApi` whose values only ever arrive over a WebSocket.
-final class RemoteStateMan {
+final class RemoteStateMan implements StateManApi {
   /// Points a client at [uri] and starts dialling. Never throws, never blocks.
   ///
   /// [keys] is the page this panel is showing. It becomes one subscription,
@@ -217,12 +218,14 @@ final class RemoteStateMan {
   // ------------------------------------------------- answers from the store
 
   /// The node for [key] — the same instance every time.
+  @override
   ValueListenable<DynamicValue> listen(String key) => _storeOf(key).node(key);
 
   /// The last known value for [key], or null if none is known yet.
   ///
   /// Synchronous and never a round trip, whatever the link is doing. Null means
   /// "not known yet", which is a different thing from a known-bad value.
+  @override
   DynamicValue? read(String key) => _storeOf(key).peek(key);
 
   /// The keys a value has actually arrived for.
@@ -231,6 +234,7 @@ final class RemoteStateMan {
   /// [listen] creates a node for any key asked of it, including one mistyped
   /// into a page config, and offering that back to the picker would launder a
   /// typo into a valid binding.
+  @override
   List<String> get keys => [
         for (final store in _stores.values)
           for (final key in store.keys)
@@ -242,6 +246,7 @@ final class RemoteStateMan {
   /// A view and never a second source of truth. Returned synchronously so
   /// taking the stream and listening to it happen in one turn, which is what
   /// stops a widget missing the first values of its own subscription.
+  @override
   Stream<DynamicValue> subscribe(String key) {
     final node = _storeOf(key).node(key);
     late final StreamController<DynamicValue> controller;
@@ -270,6 +275,7 @@ final class RemoteStateMan {
   // -------------------------------------------------- answers over the wire
 
   /// Forces a round trip and resolves with a freshly-read value.
+  @override
   Future<DynamicValue> readFresh(String key) async {
     final raw = await _request(Methods.readFresh, {'key': key});
     return _value(_asJson(raw)['value']);
@@ -280,6 +286,7 @@ final class RemoteStateMan {
   /// One request for however many keys, which is the promise the interface
   /// makes (`state_man_api.dart:104-109`) and the reason the diagnostics page
   /// does not pay N latencies for N tags.
+  @override
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
     final raw = _asJson(await _request(Methods.readMany, {'keys': keys}));
     final values = raw['values'];
@@ -288,6 +295,42 @@ final class RemoteStateMan {
       for (final entry in values.entries) '${entry.key}': _value(entry.value),
     };
   }
+
+  // -------------------------------------------------------- the sub-APIs
+
+  /// Browse, timeseries, history views and preferences — all four over the same
+  /// pipe, none of them holding a source of their own.
+  ///
+  /// Built once and kept, rather than minted per access, for one reason that
+  /// only applies to the last of them (`channel_state_man.dart:443-448`):
+  /// [preferences] owns the broadcast controller every local listener reads
+  /// from, and a fresh instance per getter call would hand the second listener a
+  /// stream nothing ever pushes to. The other three are stateless and are kept
+  /// alongside it for symmetry.
+  ///
+  /// None of these has a gateway handler before Phase 10; until then they
+  /// surface `-32601` (04-RESEARCH Finding 4), which is the honest answer and
+  /// the gap 04-10 counts.
+  @override
+  late final BrowseApi browse = ClientBrowseApi(_dataServiceCall);
+
+  @override
+  late final TimeseriesApi timeseries = ClientTimeseriesApi(_dataServiceCall);
+
+  @override
+  late final HistoryViewApi historyViews =
+      ClientHistoryViewApi(_dataServiceCall);
+
+  @override
+  late final ClientPreferencesApi preferences =
+      ClientPreferencesApi(_dataServiceCall);
+
+  /// The request the sub-APIs are handed: the same barrier, the same deadline
+  /// and the same peer-at-call-time capture as every other call this client
+  /// makes.
+  Future<Object?> _dataServiceCall(
+          String method, Map<String, Object?> params) =>
+      _request(method, params);
 
   // ------------------------------------------------------------- the write
 
@@ -317,6 +360,7 @@ final class RemoteStateMan {
   ///    [Quality.badNonFinite] is attached locally once the outcome is back, so
   ///    the operator sees a fault rather than a blank box.
   ///  * a non-finite **expect** is refused outright. See the [ArgumentError].
+  @override
   Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
     final sanitizedValue = sanitize(value);
     final sanitizedExpect = sanitize(expect);
@@ -423,6 +467,7 @@ final class RemoteStateMan {
   /// disposing it errors the readiness barrier — which is how a call still
   /// waiting for a connection gets something it can show instead of a spinner
   /// that never stops.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -431,6 +476,7 @@ final class RemoteStateMan {
       await close();
     }
     _closeHandedOutStreams.clear();
+    await preferences.dispose();
 
     await _transitions.cancel();
     await _supervisor.dispose();
