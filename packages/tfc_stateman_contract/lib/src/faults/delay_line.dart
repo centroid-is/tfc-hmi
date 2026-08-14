@@ -46,6 +46,7 @@ library;
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+import 'dart:typed_data';
 
 /// Pending bytes at which the line stops reading from its source.
 ///
@@ -61,6 +62,34 @@ const defaultHighWaterBytes = 1024 * 1024;
 /// costs a syscall pair per chunk and makes the pause events useless as a
 /// backpressure signal.
 const defaultLowWaterBytes = 256 * 1024;
+
+/// How many slices of its budget a throttled line hands out per second.
+///
+/// Fifty, so a slice is 20 ms of traffic: 2500 bytes at 1 Mbit/s, 250 at
+/// 100 kbit/s. The number trades two failures against each other. Slices too
+/// small mean a write and a `flush()` per few bytes, where the syscalls cost
+/// more than the traffic and the timer's own resolution — about a millisecond
+/// — becomes most of the interval. Slices too large mean the rate is only
+/// correct when averaged over something longer than the window, and Finding 5
+/// measures over three seconds.
+///
+/// Accuracy does not depend on the timer being punctual. Tokens accrue from
+/// the clock, not from the schedule, so a slice that fires late finds more
+/// budget waiting and the next ones go out back to back until the arrears are
+/// paid.
+const _slicesPerSecond = 50;
+
+/// The smallest slice a throttled line will wait for.
+///
+/// Below this the write is mostly syscall. At very low rates it makes the
+/// slice interval longer rather than the rate wrong.
+const _minimumSliceBytes = 64;
+
+/// The largest slice a throttled line hands out at once.
+///
+/// A fast throttle should not turn into "one enormous write per second",
+/// which is a burst with an average rather than a rate.
+const _maximumSliceBytes = 64 * 1024;
 
 /// One queued chunk and the earliest moment it may be written.
 ///
@@ -104,6 +133,14 @@ final class DelayLine {
   StreamSubscription<List<int>>? _source;
   int _pendingBytes = 0;
   int _peakPendingBytes = 0;
+
+  /// Bytes of the head chunk already written.
+  ///
+  /// Non-zero only under a throttle, which hands out slices rather than whole
+  /// chunks. The remainder stays at the head of the same queue instead of
+  /// moving to a holding area of its own — one queue is what keeps the memory
+  /// bound and the ordering guarantee the same statement they were before.
+  int _headWritten = 0;
   bool _sourceDone = false;
   bool _writing = false;
   bool _paused = false;
@@ -139,8 +176,42 @@ final class DelayLine {
 
   /// Bytes per second this line may forward. Null means unmetered.
   ///
-  /// The seat `throttle` takes in plan 02-04.
-  int? bytesPerSecond;
+  /// The seat `throttle` takes (plan 02-04), implemented as a token bucket
+  /// consulted by the same flush-gated writer everything else goes through —
+  /// **not** a second buffer. A rate limiter with its own queue would be a
+  /// second place bytes can pile up, and only one of the two would be under
+  /// the high-water mark this line's memory bound was measured against.
+  ///
+  /// The bucket holds at most one second of traffic, so a line that has been
+  /// idle can burst for a second and no longer. That cap is why Finding 5
+  /// measures over windows of three seconds and up: below about two the burst
+  /// is most of what is being measured.
+  int? get bytesPerSecond => _bytesPerSecond;
+
+  set bytesPerSecond(int? value) {
+    if (value == _bytesPerSecond) return;
+    _bytesPerSecond = value;
+    // Re-base the bucket on every change. Budget accrued under the old rate —
+    // or accrued while unmetered, where the clock ran and nothing ever spent
+    // it — is not credit against the new one. Without this, setting a
+    // throttle on a connection that has been open for a minute would release
+    // a full second of the new rate immediately, and the first measurement
+    // window would read high for a reason no test could see.
+    _tokens = 0;
+    _tokensAtMicros = _clock.elapsedMicroseconds;
+  }
+
+  int? _bytesPerSecond;
+
+  /// Bytes of budget available to spend right now.
+  ///
+  /// Fractional because a slice interval is rarely a whole number of bytes at
+  /// these rates, and rounding it away every 20 ms is a systematic error of a
+  /// few per cent — an error the size of the tolerance being measured.
+  double _tokens = 0;
+
+  /// When [_tokens] was last brought up to date, on the line's own clock.
+  int _tokensAtMicros = 0;
 
   /// Drop queued chunks instead of forwarding them. False means forward.
   ///
@@ -218,6 +289,7 @@ final class DelayLine {
     _source = null;
     _pending.clear();
     _pendingBytes = 0;
+    _headWritten = 0;
     _paused = false;
     await source?.cancel();
     if (!_pauseChanges.isClosed) await _pauseChanges.close();
@@ -274,8 +346,17 @@ final class DelayLine {
           if (_closed) return;
         }
         final chunk = queued.bytes;
+        var take = chunk.length - _headWritten;
+        final rate = _bytesPerSecond;
+        if (rate != null && rate > 0) {
+          take = await _spendBudget(take, rate);
+          // Re-read after the await: `close()` may have emptied the queue
+          // under a line that was waiting for its next slice.
+          if (_closed || take <= 0) return;
+        }
+        final slice = _sliceOf(chunk, _headWritten, _headWritten + take);
         try {
-          _destination.add(chunk);
+          _destination.add(slice);
           await _destination.flush();
         } catch (_) {
           // The destination went away — a closed or reset socket throws from
@@ -290,8 +371,12 @@ final class DelayLine {
         // teardown down with a `Bad state: No element` naming this line rather
         // than the teardown.
         if (_closed) return;
-        _pending.removeFirst();
-        _pendingBytes -= chunk.length;
+        _headWritten += take;
+        _pendingBytes -= take;
+        if (_headWritten >= chunk.length) {
+          _pending.removeFirst();
+          _headWritten = 0;
+        }
         if (_paused && _pendingBytes <= lowWaterBytes) {
           _paused = false;
           _source?.resume();
@@ -304,6 +389,69 @@ final class DelayLine {
     if (_sourceDone && _pending.isEmpty && !_finished.isCompleted) {
       _finished.complete();
     }
+  }
+
+  /// Waits until the bucket can pay for a slice, then spends it.
+  ///
+  /// Returns how many of [wanted] bytes may be written now — a slice, not the
+  /// whole chunk. Splitting the head chunk is what makes a 64 KiB read
+  /// deliverable at 100 kbit/s as five seconds of even traffic instead of one
+  /// write five seconds late, and it is why the rate holds inside a window
+  /// rather than only on average across several.
+  ///
+  /// Returns 0 only when the line closed while waiting.
+  Future<int> _spendBudget(int wanted, int rate) async {
+    final slice = _sliceSizeFor(rate);
+    final want = wanted < slice ? wanted : slice;
+    while (!_closed) {
+      _accrue(rate);
+      if (_tokens >= want) {
+        _tokens -= want;
+        return want;
+      }
+      final shortfallMicros =
+          ((want - _tokens) * Duration.microsecondsPerSecond / rate).ceil();
+      // The rate limit itself, not a synchronisation guess: this is the wait
+      // that makes the link slow. The bytes stay in `_pending` throughout, so
+      // a firehose against a slow throttle still hits the high-water mark and
+      // pauses its source (T-02-09) rather than piling up out of sight.
+      await Future<void>.delayed(Duration(microseconds: shortfallMicros));
+    }
+    return 0;
+  }
+
+  /// Credits the bucket for the time since it was last read.
+  ///
+  /// Capped at one second of traffic. An idle line may bank a second's burst
+  /// and no more — which is the cap Finding 5's measurements were taken under,
+  /// and the reason its windows start at three seconds.
+  void _accrue(int rate) {
+    final now = _clock.elapsedMicroseconds;
+    final elapsed = now - _tokensAtMicros;
+    _tokensAtMicros = now;
+    if (elapsed <= 0) return;
+    _tokens += rate * elapsed / Duration.microsecondsPerSecond;
+    final cap = rate.toDouble();
+    if (_tokens > cap) _tokens = cap;
+  }
+
+  /// How much a throttled line hands out at a time, at [rate].
+  int _sliceSizeFor(int rate) {
+    final perSlice = rate ~/ _slicesPerSecond;
+    if (perSlice < _minimumSliceBytes) return _minimumSliceBytes;
+    if (perSlice > _maximumSliceBytes) return _maximumSliceBytes;
+    return perSlice;
+  }
+
+  /// A view of `chunk[start..end)`, copying only when it has to.
+  ///
+  /// `sublistView` for the typed lists every socket produces, so slicing a
+  /// throttled stream costs no copies; `sublist` is the fallback for a source
+  /// that hands out a plain `List<int>`, which the tests do.
+  List<int> _sliceOf(List<int> chunk, int start, int end) {
+    if (start == 0 && end == chunk.length) return chunk;
+    if (chunk is Uint8List) return Uint8List.sublistView(chunk, start, end);
+    return chunk.sublist(start, end);
   }
 
   void _announce(bool paused) {

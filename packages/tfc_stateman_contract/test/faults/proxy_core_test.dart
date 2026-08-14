@@ -58,6 +58,7 @@ const _arrivalBudget = Duration(seconds: 30);
 /// group below by arriving here with a test file beside it.
 const _landedModes = <String, String>{
   'latency': 'test/faults/latency_test.dart',
+  'throttle': 'test/faults/throttle_test.dart',
 };
 
 final _levers = <String, void Function(FaultProxy)>{
