@@ -307,17 +307,19 @@ final class DynamicValue {
       _ => raw,
     };
 
+    // `isFinite` before `toInt()`: a `1e999` timestamp decodes to Infinity,
+    // on which toInt() throws.
+    final t = json['t'];
+    final sourceTime = t is num && t.isFinite
+        ? DateTime.fromMillisecondsSinceEpoch(t.toInt(), isUtc: true)
+        : null;
+
     // Construction re-sanitizes: `1e999` in incoming JSON silently parses to
     // Infinity and would detonate on the next encode.
     return DynamicValue(
       value: decoded,
-      quality: json.containsKey('q')
-          ? Quality((json['q'] as num).toInt())
-          : Quality.good,
-      sourceTime: json['t'] == null
-          ? null
-          : DateTime.fromMillisecondsSinceEpoch((json['t'] as num).toInt(),
-              isUtc: true),
+      quality: Quality.fromWire(json['q']),
+      sourceTime: sourceTime,
       typeId: _valueTypeNamed(json['typeId'] as String?),
       sourceTypeId: json['sourceTypeId'] as String?,
       displayName: json['displayName'] == null

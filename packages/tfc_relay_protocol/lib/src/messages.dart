@@ -247,8 +247,7 @@ final class UpdateParams {
         t: (json['t'] as num).toInt(),
         changes: _intKeyed(
             json['c'], (v) => WireValue.fromJson((v as Map).cast())),
-        qualities:
-            _intKeyed(json['q'], (v) => Quality((v as num).toInt())),
+        qualities: _intKeyed(json['q'], Quality.fromWire),
         removed: (json['r'] as List? ?? const []).cast<int>(),
       );
 

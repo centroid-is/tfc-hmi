@@ -30,12 +30,13 @@ final class WireValue {
   factory WireValue.fromJson(Map<String, Object?> json) {
     // Re-sanitize on decode: `1e999` in incoming JSON silently parses to
     // Infinity and would detonate on the next encode.
+    final t = json['t'];
     return WireValue.of(
       json['v'],
-      quality: json.containsKey('q')
-          ? Quality((json['q'] as num).toInt())
-          : Quality.good,
-      t: (json['t'] as num?)?.toInt(),
+      quality: Quality.fromWire(json['q']),
+      // `isFinite` before `toInt()`: a `1e999` timestamp decodes to Infinity,
+      // on which toInt() throws.
+      t: t is num && t.isFinite ? t.toInt() : null,
     );
   }
 
