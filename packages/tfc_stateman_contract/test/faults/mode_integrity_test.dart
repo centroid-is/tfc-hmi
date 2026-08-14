@@ -132,6 +132,9 @@ const _notProofOfAMode = <String, String>{
           'judges fidelity of the implementation against the kernel, and is '
           'skipped wholesale off Linux/macOS with root',
   'mode_integrity_test.dart': 'this file',
+  'platform_skip_audit_test.dart':
+      'audits how the kit reports what it cannot run — it names mode test '
+          'files and mechanisms as data and pulls no lever of its own',
 };
 
 /// Errors that escaped a case after it finished, across the whole sweep.
