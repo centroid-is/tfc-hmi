@@ -468,9 +468,21 @@ Future<void> checkPreferenceChangeNotifiesASecondListener(
     StateManApi api) async {
   final prefs = api.preferences;
 
-  Future<String> nextChange(String what) {
+  /// Subscribes now and reports the outcome later, without ever erroring.
+  ///
+  /// Two deadlines run at once in this case, and against a source that emits
+  /// nothing they expire together. A [within] that expires on a future nobody
+  /// is awaiting *yet* becomes an unhandled async error — which the runner
+  /// attributes to whatever test is in progress rather than to this case, and
+  /// which `expectContractViolation` therefore cannot catch, so the sabotage
+  /// suite would report a zone error instead of the promise that was broken.
+  /// Converting each listener into an outcome that never errors lets both be
+  /// collected first and the failure raised deliberately, in the order this
+  /// case is named for.
+  Future<Object?> nextChange(String what) {
     try {
-      return within(prefs.onPreferencesChanged.first, what);
+      return within(prefs.onPreferencesChanged.first, what)
+          .then<Object?>((key) => key, onError: (Object error) => error);
     } catch (error) {
       fail('$what could not even be waited for: taking a listener threw '
           '${error.runtimeType} ($error). onPreferencesChanged must be a '
@@ -486,10 +498,19 @@ Future<void> checkPreferenceChangeNotifiesASecondListener(
 
   await within(prefs.setBool(_prefKey, true), 'the preference write completing');
 
-  expect(await second, _prefKey,
+  final heardSecond = await second;
+  final heardFirst = await first;
+
+  // The second listener's failure is raised first: it is the one this property
+  // is about, and a source that notifies only whoever subscribed first is
+  // exactly the shape of bug DB-03 is written against.
+  if (heardSecond is! String) throw heardSecond as Object;
+  if (heardFirst is! String) throw heardFirst as Object;
+
+  expect(heardSecond, _prefKey,
       reason: 'the second listener was told about a different key than the one '
           'that changed');
-  expect(await first, _prefKey,
+  expect(heardFirst, _prefKey,
       reason: 'the first listener was told about a different key than the one '
           'that changed');
 }
