@@ -57,6 +57,7 @@ import 'backoff.dart';
 import 'client_config.dart';
 import 'connection_supervisor.dart';
 import 'deadline.dart';
+import 'failure_taxonomy.dart';
 import 'freshness_watchdog.dart';
 import 'readiness_barrier.dart';
 import 'subscription_state.dart';
@@ -152,10 +153,39 @@ final class RemoteStateMan {
   /// panel runs for a shift.
   final _closeHandedOutStreams = <Future<void> Function()>{};
 
+  /// Commands whose outcome this client cannot establish.
+  ///
+  /// A `WriteUnknown` is the only verdict that lands here and the only one that
+  /// stays: applied, rejected and never-received are all settled answers, and
+  /// re-querying a settled answer is a question nobody needed asked.
+  final _unresolved = <String>{};
+
+  /// Every `writeStatus` re-query this client has issued, in order.
+  ///
+  /// The observable the no-re-actuation property is asserted against: an
+  /// implementation that re-sent the write instead would leave this empty and
+  /// [debugWritesSent] one higher.
+  final _writeStatusQueries = <List<String>>[];
+
+  var _writesSent = 0;
+  var _requerying = false;
+
   late final ConnectionSupervisor _supervisor;
   late final StreamSubscription<LinkState> _transitions;
 
   var _disposed = false;
+
+  /// Commands still in flight, for the case that has to prove the set was not
+  /// empty when the re-query ran.
+  List<String> get debugUnresolvedCmds => List<String>.unmodifiable(_unresolved);
+
+  /// The cmd lists this client has re-queried, in order.
+  List<List<String>> get debugWriteStatusQueries => [
+        for (final query in _writeStatusQueries) List<String>.unmodifiable(query),
+      ];
+
+  /// How many `write` requests reached the wire. Never more than one per call.
+  int get debugWritesSent => _writesSent;
 
   // -------------------------------------------------------------- the link
 
@@ -259,6 +289,130 @@ final class RemoteStateMan {
     };
   }
 
+  // ------------------------------------------------------------- the write
+
+  /// Writes [value] to [key] and reports what became of it.
+  ///
+  /// **Never throws to report an outcome, and never retried.** Both halves are
+  /// the property rather than an omission (`CLAUDE.md`: no queue / no retry =
+  /// the write-safety property). A retry here would be invisible from the API
+  /// surface — same call, same result type, slightly later — and on a plant it
+  /// is a second actuation of machinery an operator commanded once. What
+  /// replaces it is [Methods.writeStatus] on the next `ready`: the client asks
+  /// what became of the command, it does not send the command again.
+  ///
+  /// The `cmd` is minted **here**, at call time, because the call is the
+  /// operator action (`state_man_api.dart:121-125`). It is the only handle
+  /// `writeStatus` has on this write, so it goes into [_unresolved] before the
+  /// request leaves — a socket that dies between the two would otherwise lose
+  /// the one identifier the outcome can ever be reconciled against.
+  ///
+  /// The non-finite halves are not symmetric, and the asymmetry is copied
+  /// verbatim from `channel_state_man.dart:207-227`:
+  ///
+  ///  * a non-finite **value** is sanitized *knowingly*: null goes on the wire,
+  ///    because `jsonEncode` throws on NaN and ±Infinity rather than emitting
+  ///    null, so an unsanitized value does not fail one write — it fails the
+  ///    frame, which a real pipe shares with every other client on it.
+  ///    [Quality.badNonFinite] is attached locally once the outcome is back, so
+  ///    the operator sees a fault rather than a blank box.
+  ///  * a non-finite **expect** is refused outright. See the [ArgumentError].
+  Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
+    final sanitizedValue = sanitize(value);
+    final sanitizedExpect = sanitize(expect);
+    if (sanitizedExpect.hadNonFinite) {
+      throw ArgumentError.value(
+          expect,
+          'expect',
+          'a write cannot carry a non-finite compare-and-set guard: nulling '
+              'it is this path\'s encoding of "no guard at all", so a guarded '
+              'write would silently become an unconditional one');
+    }
+
+    final cmd = newUlid();
+    _unresolved.add(cmd);
+
+    WriteResult result;
+    try {
+      final raw = await _request(
+        Methods.write,
+        {
+          'cmd': cmd,
+          'key': key,
+          'value': sanitizedValue.value,
+          if (expect != null) 'expect': sanitizedExpect.value,
+        },
+        deadline: config.writeDeadline,
+        onSend: () => _writesSent++,
+      );
+      result = WriteResult.fromJson(_asJson(raw));
+    } catch (error) {
+      // One seam decides whether this means "we do not know" or "the server
+      // said no", and it rethrows anything that is a defect in this process
+      // rather than a condition of the plant (`failure_taxonomy.dart`).
+      result = writeOutcomeFor(cmd, error);
+    }
+
+    // Only an established outcome settles the command. `WriteUnknown` is the
+    // one verdict that does not, which is exactly what makes it re-queryable.
+    if (result is! WriteUnknown) _unresolved.remove(cmd);
+
+    if (sanitizedValue.hadNonFinite) _markNonFinite(key);
+    return result;
+  }
+
+  /// Records, locally, that the value written to [key] was not a number.
+  ///
+  /// After the outcome rather than before it, and the ordering is load-bearing
+  /// (`channel_state_man.dart:252-265`). The gateway pushes the readback as an
+  /// update whose flush is scheduled while the write is still being handled, so
+  /// on an ordered channel that update is delivered *before* the response this
+  /// runs after. Marking first would be marking something the readback then
+  /// overwrote — with a good-quality null, which renders as a healthy empty box.
+  void _markNonFinite(String key) {
+    if (_disposed) return;
+    final store = _storeOf(key);
+    final held = store.peek(key);
+    store.applyBatch({
+      key: DynamicValue(
+        value: null,
+        quality: Quality.badNonFinite,
+        sourceTime: held?.sourceTime,
+      ),
+    });
+  }
+
+  /// Asks the gateway what became of every command still in flight.
+  ///
+  /// Invoked on entry to `ready` and nowhere else. This is the whole of the
+  /// recovery story for a write whose link died under it: one question about N
+  /// commands, and never a re-send. A gateway that has forgotten the command
+  /// answers `unknown` again, which leaves it in [_unresolved] for the next
+  /// `ready` to ask about — forgetting is not evidence that it never happened.
+  Future<void> _requeryWriteStatus() async {
+    if (_requerying) return;
+    final cmds = List<String>.of(_unresolved);
+    if (cmds.isEmpty) return;
+    _requerying = true;
+    _writeStatusQueries.add(cmds);
+    try {
+      final raw = _asJson(await _request(Methods.writeStatus, {'cmds': cmds}));
+      final results = raw['results'];
+      if (results is! List) return;
+      for (final entry in results) {
+        final outcome = WriteResult.fromJson(_asJson(entry));
+        if (outcome is WriteUnknown) continue;
+        _unresolved.remove(outcome.cmd);
+      }
+    } catch (_) {
+      // A re-query that fails leaves the commands unresolved, which is the
+      // honest state and the one the next `ready` will ask about again. What it
+      // never becomes is a reason to send the write a second time.
+    } finally {
+      _requerying = false;
+    }
+  }
+
   // ---------------------------------------------------------------- teardown
 
   /// Drops every listener, closes every handed-out stream, stops the
@@ -310,10 +464,12 @@ final class RemoteStateMan {
     String method,
     Map<String, Object?> params, {
     Duration? deadline,
+    void Function()? onSend,
   }) async {
     _refuseIfDisposed(method);
     await _supervisor.barrier.ready;
     _refuseIfDisposed(method);
+    onSend?.call();
     return callWithDeadline(
       () => _supervisor.peer,
       method,
@@ -337,6 +493,12 @@ final class RemoteStateMan {
   /// to the code path that got there lives here.
   void _onLinkState(LinkState state) {
     if (_disposed) return;
+    // Entry to `ready` and nowhere else: `resyncing` means the socket answered
+    // the phone, and a re-query issued then races the snapshot it is competing
+    // with for the same link.
+    if (state != LinkState.ready) return;
+    if (_unresolved.isEmpty) return;
+    unawaited(_requeryWriteStatus());
   }
 
   /// A wire value, sanitized and quality-composed by [WireValue.fromJson].
