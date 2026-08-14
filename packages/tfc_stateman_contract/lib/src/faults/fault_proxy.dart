@@ -104,6 +104,9 @@ final class FaultProxy {
   int? _throttleBytesPerSec;
   int? _cutAfterBytes;
 
+  /// Whether both directions are currently swallowing traffic.
+  bool _blackholed = false;
+
   /// Whether the next connection accepted is to be reset on sight.
   ///
   /// Set only when [killOnce] found nothing open, and cleared the moment it
@@ -286,11 +289,42 @@ final class FaultProxy {
 
   /// The link goes silent while the sockets stay up — a true half-open.
   ///
-  /// The proxy counterpart of `StateManHarness.disconnectUpstream`. This is
-  /// the fault the whole project is built against: a peer that has not closed
-  /// anything and has simply stopped answering, which no `onDone` will ever
-  /// report.
-  void blackhole() => _notYet('blackhole', '02-09');
+  /// The proxy counterpart of `StateManHarness.disconnectUpstream`, which
+  /// names this mode from the other side (`harness.dart:96-110`), and the
+  /// counterpart of `reconnectUpstream` when called with [enabled] false. This
+  /// is the fault the whole project is built against: a peer that has not
+  /// closed anything and has simply stopped answering, which no `onDone` will
+  /// ever report.
+  ///
+  /// **Read-the-bytes-and-drop-them, in both directions.** Not a paused read
+  /// subscription: that would stall the sender's `flush()` within one socket
+  /// buffer, which is *backpressure*, a different fault with different
+  /// client-side code paths. RESEARCH Finding 4 measured this implementation
+  /// producing `echoed=0 event=none write completed`, which is the shape
+  /// F5/F7/F17 need — the sender keeps writing happily into nothing. A "the
+  /// sender stalls too" variant is a separate lever with its own name and its
+  /// own entry in [faultModes]; it is not a setting on this one.
+  ///
+  /// **Blackholed bytes are lost, not replayed.** Finding 4's third line —
+  /// `recovered: echoed=100`, not 200. Recovery that flushed what had been
+  /// swallowed would deliver a value from before the outage to a client that
+  /// has just recovered, with nothing marking its age, which is the one
+  /// outcome this project's core value forbids: never a stale reading
+  /// rendered as current.
+  ///
+  /// Recovery is `blackhole(enabled: false)` rather than a lever of its own,
+  /// so that the mode's on and off states cannot drift apart in [faultModes]
+  /// — a `recover()` naming no mode would be reachable without any mode being
+  /// named, which is exactly what the registry exists to prevent. Live in both
+  /// directions: it reaches open pairs and the ones accepted afterwards, and
+  /// the connection survives, because a half-open that required a reconnect
+  /// to end would not be one.
+  void blackhole({bool enabled = true}) {
+    _blackholed = enabled;
+    for (final pair in _pairs) {
+      pair.applyBlackhole(enabled);
+    }
+  }
 
   /// Deliver exactly [n] bytes of the next response, then end the connection.
   ///
@@ -436,6 +470,7 @@ final class FaultProxy {
     pair.applyChunkDelay(_perChunkDelay);
     pair.applyThrottle(_throttleBytesPerSec);
     pair.armCutMidFrame(_cutAfterBytes);
+    pair.applyBlackhole(_blackholed);
     _pairs.add(pair);
     pair.start(_retire);
     if (_killOnceArmed) {
@@ -504,6 +539,17 @@ final class _ProxiedPair {
   void applyThrottle(int? bytesPerSecond) {
     toUpstream.bytesPerSecond = bytesPerSecond;
     toClient.bytesPerSecond = bytesPerSecond;
+  }
+
+  /// Swallows — or stops swallowing — traffic in **both** directions.
+  ///
+  /// Both, because a half-open in one direction only is a different fault: the
+  /// scenarios this serves (F5, F7, F17) include the case where the client's
+  /// requests vanish as well as the case where the answers do, and a mode that
+  /// silently only did one of them would report the other as covered.
+  void applyBlackhole(bool swallowing) {
+    toUpstream.discardInsteadOfForward = swallowing;
+    toClient.discardInsteadOfForward = swallowing;
   }
 
   /// Arms — or disarms, with null — the server→client byte cut.

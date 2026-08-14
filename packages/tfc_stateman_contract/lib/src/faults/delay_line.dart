@@ -217,6 +217,22 @@ final class DelayLine {
   ///
   /// The seat `blackhole` takes in plan 02-09 — a true half-open, where the
   /// socket stays up and the bytes stop arriving.
+  ///
+  /// **Read-and-drop, and specifically not a paused subscription.** The bytes
+  /// are taken off the source and discarded in [_onData], so nothing
+  /// accumulates and no backpressure reaches the sender: its `add` and
+  /// `flush()` complete exactly as they did before the switch was thrown
+  /// (RESEARCH Finding 4, the `write completed` clause). Pausing the source
+  /// instead would stall the sender inside one socket buffer, which is
+  /// backpressure — a different fault, with different client-side code paths,
+  /// wearing this one's name. See `fault_proxy.dart`'s `blackhole` for the
+  /// same statement from the lever's side.
+  ///
+  /// Dropping happens on arrival *and* at the head of the queue, because the
+  /// switch can be thrown while chunks are already waiting — under a latency
+  /// or a throttle they may be waiting for some time, and a blackhole that
+  /// delivered them anyway would let bytes cross a link that is supposed to
+  /// have gone silent.
   bool discardInsteadOfForward = false;
 
   /// Hold queued chunks back until released. False means forward.
@@ -325,6 +341,13 @@ final class DelayLine {
 
   void _onData(List<int> chunk) {
     if (_closed || chunk.isEmpty) return;
+    if (discardInsteadOfForward) {
+      // Read and dropped. Returning before the queue is touched is what keeps
+      // the sender unstalled: nothing is counted toward the high-water mark,
+      // so the source is never paused and the peer's `flush()` keeps
+      // completing while its bytes go nowhere.
+      return;
+    }
     final delay = chunkDelay?.call();
     final releaseAtMicros = delay == null || delay <= Duration.zero
         ? 0
@@ -359,6 +382,15 @@ final class DelayLine {
     _writing = true;
     try {
       while (!_closed && _pending.isNotEmpty) {
+        if (discardInsteadOfForward) {
+          // Chunks that were already queued when the switch was thrown. Break
+          // rather than return, so a source that has already ended still
+          // completes `done` below — a blackholed direction whose peer went
+          // away must still be collectable, or the pair outlives both its
+          // sockets.
+          _dropQueued();
+          break;
+        }
         // Read once per iteration and use that reading for both the clamp and
         // the countdown. Re-reading after the awaits below would let a cut
         // re-armed mid-write have `take` subtracted from a budget those bytes
@@ -439,6 +471,23 @@ final class DelayLine {
     }
     if (_sourceDone && _pending.isEmpty && !_finished.isCompleted) {
       _finished.complete();
+    }
+  }
+
+  /// Throws away everything queued, and lets the source run again.
+  ///
+  /// Resuming matters as much as clearing: a line that hit the high-water mark
+  /// before it was blackholed has a paused source, and a blackhole is defined
+  /// by the sender never noticing. Leaving it paused would deliver
+  /// backpressure to a peer that is supposed to be writing into silence.
+  void _dropQueued() {
+    _pending.clear();
+    _pendingBytes = 0;
+    _headWritten = 0;
+    if (_paused) {
+      _paused = false;
+      _source?.resume();
+      _announce(false);
     }
   }
 
