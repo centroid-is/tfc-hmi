@@ -66,10 +66,11 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../harness.dart';
+import '../write_contract.dart';
 import 'rpc_names.dart';
 
 /// A state source on the far side of a message channel.
-final class ChannelStateMan implements StateManApi, StateManHarness {
+final class ChannelStateMan implements StateManApi, StateManWriteHarness {
   /// Wraps the client end of a channel whose other end is a served source.
   ///
   /// [observables] is the served instance's control surface, read directly for
@@ -179,14 +180,89 @@ final class ChannelStateMan implements StateManApi, StateManHarness {
     };
   }
 
+  /// One request out, one outcome back — and no retry, no queue, no deadline.
+  ///
+  /// The absence of all three is the property, not an omission
+  /// (`CLAUDE.md`: no queue / no retry = the write-safety property). A retry
+  /// here would be invisible from the API surface — same call, same result
+  /// type, slightly later — and on a plant it is a second actuation of
+  /// machinery an operator commanded once. The counter that catches one lives
+  /// on the served side, where the attempts happen, which is what makes
+  /// [upstreamWriteAttempts] able to judge this method at all. The missing
+  /// deadline is the other half: a response that never comes leaves this
+  /// future pending forever (RESEARCH Finding 15). Plan 02-10 proves that hang
+  /// exists; the per-request deadline that fixes it belongs to Phase 4's
+  /// `RemoteStateMan`, and inventing one here would hide the thing 02-10 is
+  /// being written to show.
+  ///
+  /// The non-finite handling is the one place this method does more than
+  /// forward, and it is the client's job for a reason nothing on the far side
+  /// can help with: `jsonEncode` throws on NaN and ±Infinity rather than
+  /// emitting null, so an unsanitized value does not fail one write — it fails
+  /// the frame, which a real pipe shares with every other client on it. This
+  /// side is therefore the only side that ever sees the number, and the two
+  /// halves of it are not symmetric:
+  ///
+  ///  * a non-finite **value** is sanitized *knowingly*: null goes on the
+  ///    wire, and [Quality.badNonFinite] is attached to the local key once the
+  ///    outcome is back, so the operator sees a fault rather than a blank box.
+  ///  * a non-finite **expect** is refused outright. Null is this path's
+  ///    encoding of "no compare-and-set guard", so sanitizing one would turn
+  ///    the operator's "only if it still reads 1200" into "whatever it reads".
+  ///    Nothing upstream of a write box can legitimately produce a NaN, so it
+  ///    is programmer error, and `WriteParams` (`messages.dart:384-401`) makes
+  ///    exactly the same refusal for exactly this reason.
+  ///
+  /// That split is the shape Phase 4 inherits, recorded in STATE.md's Phase 1
+  /// handoff before either end of it existed.
   @override
   Future<WriteResult> write(String key, Object? value, {Object? expect}) async {
+    final sanitizedValue = sanitize(value);
+    final sanitizedExpect = sanitize(expect);
+    if (sanitizedExpect.hadNonFinite) {
+      throw ArgumentError.value(
+          expect,
+          'expect',
+          'a write cannot carry a non-finite compare-and-set guard: nulling '
+              'it is this path\'s encoding of "no guard at all", so a guarded '
+              'write would silently become an unconditional one');
+    }
+
     final raw = await _peer.sendRequest(HarnessMethods.write, {
       'key': key,
-      'value': value,
-      if (expect != null) 'expect': expect,
+      'value': sanitizedValue.value,
+      if (expect != null) 'expect': sanitizedExpect.value,
     });
-    return WriteResult.fromJson(_asJson(raw));
+    final result = WriteResult.fromJson(_asJson(raw));
+
+    if (sanitizedValue.hadNonFinite) _markNonFinite(key);
+    return result;
+  }
+
+  /// Records, locally, that the value written to [key] was not a number.
+  ///
+  /// After the outcome rather than before it, and the ordering is load-bearing
+  /// rather than incidental. The served source pushes the readback as an
+  /// [Methods.update] whose flush is scheduled while the write request is
+  /// still being handled, so on a single ordered channel that update is
+  /// delivered *before* the response this method runs after. Marking first
+  /// would therefore be marking something the readback then overwrote — with
+  /// a good-quality null, which renders as a healthy empty box.
+  ///
+  /// The two stores now disagree: the served side holds a good null, because
+  /// a good null is genuinely what it was asked to write. That divergence is
+  /// the boundary being honest about itself — the poison never crossed it —
+  /// and it is the same divergence Phase 4 will have, for the same reason.
+  void _markNonFinite(String key) {
+    if (_disposed) return;
+    final held = _store.peek(key);
+    _store.applyBatch({
+      key: DynamicValue(
+        value: null,
+        quality: Quality.badNonFinite,
+        sourceTime: held?.sourceTime,
+      ),
+    });
   }
 
   // ------------------------------------------------------- levers, one-way
@@ -220,6 +296,26 @@ final class ChannelStateMan implements StateManApi, StateManHarness {
   void reconnectUpstream() =>
       _lever(HarnessMethods.reconnectUpstream, const {});
 
+  @override
+  void failNextWrite(WriteReason reason, {bool unknown = false}) => _lever(
+      HarnessMethods.failNextWrite,
+      {'reason': reason.toJson(), 'unknown': unknown});
+
+  @override
+  void clampNextWrite(Object? readback) =>
+      _lever(HarnessMethods.clampNextWrite, {'readback': readback});
+
+  @override
+  void stallWrites() => _lever(HarnessMethods.stallWrites, const {});
+
+  @override
+  void releaseWrites({bool applied = true}) =>
+      _lever(HarnessMethods.releaseWrites, {'applied': applied});
+
+  @override
+  void setReadOnly(String key, bool readOnly) =>
+      _lever(HarnessMethods.setReadOnly, {'key': key, 'readOnly': readOnly});
+
   /// Posts one lever, unless this source is gone.
   ///
   /// The guard is not defensive tidiness. `checkDisposeStopsNotifications`
@@ -244,6 +340,46 @@ final class ChannelStateMan implements StateManApi, StateManHarness {
 
   @override
   int get statusNotifications => _observables.statusNotifications;
+
+  /// How many upstream attempts [cmd] cost — read off the served source.
+  ///
+  /// This is the observable that makes the no-auto-retry property judgeable
+  /// across a channel at all, and it works *because* the counter lives where
+  /// the attempts happen. A client-side copy would count what this object
+  /// sent, which is exactly the place a retry would not be: the retry the
+  /// contract is hunting for is the one a transport adds beneath the call, and
+  /// a source that quietly re-sent every unanswered write would show 1 on
+  /// every counter it owned itself. Reading the server's number is also the
+  /// only arrangement that survives Phase 4, where the counter genuinely is on
+  /// another host.
+  @override
+  int upstreamWriteAttempts(String cmd) =>
+      _writeObservables.upstreamWriteAttempts(cmd);
+
+  @override
+  List<String> get mintedCmds => _writeObservables.mintedCmds;
+
+  /// The served source's write control surface, or a failure naming what is
+  /// missing.
+  ///
+  /// [_observables] is typed as the read-side harness so that a source with no
+  /// write levers can still be served and judged by the four sub-suites that
+  /// do not need any. Asking for a write observable from one is the point at
+  /// which that stops being true, and it fails here rather than returning a
+  /// zero — a zero would read as "no retry happened", which is the answer the
+  /// no-auto-retry case is looking for and the one thing it must not be
+  /// handed for free.
+  StateManWriteHarness get _writeObservables {
+    final observables = _observables;
+    if (observables is StateManWriteHarness) return observables;
+    throw UnsupportedError(
+        'the served source (${observables.runtimeType}) exposes no '
+        'StateManWriteHarness, so the upstream attempt count and the minted '
+        'ids this harness would report are not measurements of anything. '
+        'Serve a source that implements it, or declare supportsWrites: false '
+        'where the contract is registered so the write group is skipped on '
+        'the record instead of passing vacuously.');
+  }
 
   // ------------------------------------------------------------- the inbound
 

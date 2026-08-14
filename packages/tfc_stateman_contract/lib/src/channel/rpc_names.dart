@@ -94,9 +94,37 @@ abstract final class HarnessMethods {
   /// `StateManHarness.reconnectUpstream`.
   static const reconnectUpstream = '${prefix}reconnectUpstream';
 
+  // ----------------------------------------------------- the write levers
+
+  /// `StateManWriteHarness.failNextWrite`.
+  static const failNextWrite = '${prefix}failNextWrite';
+
+  /// `StateManWriteHarness.clampNextWrite`.
+  static const clampNextWrite = '${prefix}clampNextWrite';
+
+  /// `StateManWriteHarness.stallWrites` — Phase 2's `blackhole`, aimed at the
+  /// write path.
+  static const stallWrites = '${prefix}stallWrites';
+
+  /// `StateManWriteHarness.releaseWrites`.
+  static const releaseWrites = '${prefix}releaseWrites';
+
+  /// `StateManWriteHarness.setReadOnly`.
+  static const setReadOnly = '${prefix}setReadOnly';
+
+  // There is deliberately no name here for `upstreamWriteAttempts` or
+  // `mintedCmds`. Both are synchronous on the interface, so neither could be
+  // answered by a round trip without changing the interface — the same
+  // argument `channel_state_man.dart` makes for `roundTrips`. It is worth
+  // stating once more here because of what the attempt counter is *for*: it is
+  // the only observable that makes "a write is never auto-retried" testable,
+  // and it works precisely because it lives where the attempts happen. A
+  // mirrored copy on the client would count the client's sends, which is the
+  // one place a retry would not be.
+
   /// The names that must never appear on a wire a connected client can reach.
   ///
-  /// As data rather than as six references, so a Phase 10 test asserting the
+  /// As data rather than as eleven references, so a Phase 10 test asserting the
   /// real method table is closed can iterate it instead of restating it.
   static const levers = <String>{
     setValue,
@@ -105,6 +133,11 @@ abstract final class HarnessMethods {
     dropKey,
     disconnectUpstream,
     reconnectUpstream,
+    failNextWrite,
+    clampNextWrite,
+    stallWrites,
+    releaseWrites,
+    setReadOnly,
   };
 
   /// Every name this harness registers on the served side.
