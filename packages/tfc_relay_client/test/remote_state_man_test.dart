@@ -501,7 +501,7 @@ void main() {
       // (04-RESEARCH Finding 1), so without the deadline seam this future never
       // settles: the socket is fine, nothing is stale, and the operator has a
       // spinner and no symptom to report beyond "it is just sitting there".
-      final silent = await _FakeGateway.start((link, method, id) {
+      final silent = await _FakeGateway.start((link, method, id, params) {
         switch (method) {
           case Methods.hello:
             link.hello(id);
@@ -577,6 +577,109 @@ void main() {
               'stroke of a ram the operator commanded once');
     });
   });
+
+  // The other end of the re-query. Everything above asserts that the question
+  // goes out; these assert that the answer is used — 04-REVIEW WR-02 and WR-03,
+  // and the observable CR-02 was found through.
+  group('what the re-query comes back with', () {
+    /// A gateway that answers the handshake and the page, never answers a
+    /// write, and answers `writeStatus` with whatever [answer] makes of the
+    /// cmds it was asked about.
+    Future<_FakeGateway> statusGateway(
+            List<Object?> Function(List<String> cmds) answer) =>
+        _FakeGateway.start((link, method, id, params) {
+          switch (method) {
+            case Methods.hello:
+              link.hello(id);
+            case Methods.subscribe:
+              link.snapshot(id, defaultPageSubscription);
+            case Methods.writeStatus:
+              final cmds = <String>[
+                for (final raw in (params['cmds'] as List? ?? const []))
+                  '$raw',
+              ];
+              link.result(id, {'results': answer(cmds)});
+            default:
+              break; // `write` included, deliberately
+          }
+        });
+
+    Map<String, Object?> applied(String cmd, Object? readback) =>
+        WriteApplied(cmd,
+                readback: readback,
+                at: DateTime.now().millisecondsSinceEpoch)
+            .toJson();
+
+    test('an applied answer resolves the command and lands in the store',
+        () async {
+      final gateway =
+          await statusGateway((cmds) => [for (final cmd in cmds) applied(cmd, 4242)]);
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final resolutions = <WriteResult>[];
+      final listening = client.onWriteResolved.listen(resolutions.add);
+      addTearDown(listening.cancel);
+
+      final unknown = await client.write(_seededKey, 4242).timeout(_recovery);
+      expect(unknown, isA<WriteUnknown>());
+      expect(client.debugUnresolvedCmds, contains(unknown.cmd));
+
+      await gateway.dropLive();
+      await _until('the re-query to be answered',
+          () => client.debugWriteStatusAnswers.isNotEmpty);
+      await pumpEventQueue();
+
+      expect(resolutions.single, isA<WriteApplied>(),
+          reason: 'an operator who was told "unknown", walked out to look at '
+              'the machine and came back learns nothing when the gateway '
+              'finally answers "applied"');
+      expect(resolutions.single.cmd, unknown.cmd);
+      expect(client.debugUnresolvedCmds, isEmpty);
+      expect(client.read(_seededKey)?.value, 4242,
+          reason: 'the readback is what the device reported holding, and the '
+              'direct path adopts it. A confirmation that arrives late is '
+              'still the confirmation');
+    });
+
+    test('one undecodable entry costs one command, not the batch', () async {
+      final gateway = await statusGateway((cmds) => [
+            // The malformed entry comes *first*, which is the shape that used
+            // to discard every settled outcome behind it.
+            'this is not a write result',
+            applied(cmds.last, 7),
+          ]);
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey, _writableKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final first = await client.write(_seededKey, 1).timeout(_recovery);
+      final second = await client.write(_writableKey, 7).timeout(_recovery);
+      expect(client.debugUnresolvedCmds, hasLength(2));
+
+      await gateway.dropLive();
+      await _until('the re-query to be answered',
+          () => client.debugWriteStatusAnswers.isNotEmpty);
+
+      expect(client.debugUnresolvedCmds, isNot(contains(second.cmd)),
+          reason: 'the second command had a perfectly good answer in the same '
+              'batch, and a malformed entry at index 0 threw it away with the '
+              'rest. On a 1500-key panel that batch is not small');
+      expect(client.debugUnresolvedCmds, contains(first.cmd),
+          reason: 'nothing legible came back about the first command, so it '
+              'stays held for the next entry to ready');
+      expect(client.complaints, isNotEmpty,
+          reason: 'a dropped entry that nobody records is a page that goes '
+              'half-blank with nothing in the log');
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -585,7 +688,8 @@ void main() {
 // ---------------------------------------------------------------------------
 
 /// How a scripted gateway answers one request.
-typedef _Script = void Function(_FakeLink link, String method, int id);
+typedef _Script = void Function(
+    _FakeLink link, String method, int id, Map<String, Object?> params);
 
 /// A gateway that answers JSON-RPC by script. It speaks only what the deadline
 /// arm needs, which is two methods and a silence.
@@ -606,6 +710,17 @@ final class _FakeGateway {
 
   int get port => _http.port;
 
+  /// How many sockets this gateway has accepted. One per client dial, so a
+  /// case can wait for the reconnect rather than for a duration.
+  int get accepted => _links.length;
+
+  /// Hangs up on the live client, without a close code, the way a plant switch
+  /// does. The client's answer to that is always to come back.
+  Future<void> dropLive() async {
+    if (_links.isEmpty) return;
+    await _links.last.socket.close().catchError((Object _) => null);
+  }
+
   Future<void> _accept() async {
     await for (final request in _http) {
       final socket = await WebSocketTransformer.upgrade(request);
@@ -618,7 +733,9 @@ final class _FakeGateway {
           final id = frame['id'];
           final method = frame['method'];
           if (id is! int || method is! String) return;
-          _script(link, method, id);
+          final params = frame['params'];
+          _script(link, method, id,
+              params is Map ? params.cast<String, Object?>() : const {});
         },
         onError: (Object _) {},
         cancelOnError: true,

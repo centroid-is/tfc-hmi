@@ -40,6 +40,7 @@ import 'session_handlers.dart';
 import 'subscription_registry.dart';
 import 'token_validator.dart';
 import 'value_handlers.dart';
+import 'write_outcome_log.dart';
 
 /// The moment the last inbound frame arrived, updated by a tap on the read
 /// side.
@@ -74,6 +75,7 @@ final class RelaySession {
     this._closeChannel,
     this._emitFrame,
     this._onClosing,
+    this._writeOutcomes,
   );
 
   /// Serves [api] over [channel] and starts listening immediately.
@@ -106,6 +108,7 @@ final class RelaySession {
     required ConflatingSendBuffer buffer,
     TokenValidator validator = const PermissiveTokenValidator(),
     List<String> serverSupported = const [protocolVersion],
+    WriteOutcomeLog? writeOutcomes,
     Future<void> Function(int code, String reason)? closeChannel,
     void Function(String frame)? emitFrame,
     void Function(RelaySession session)? onClosing,
@@ -142,6 +145,8 @@ final class RelaySession {
       closeChannel,
       emitFrame,
       onClosing,
+      writeOutcomes ??
+          WriteOutcomeLog(ttl: config.writeOutcomeTtl, now: clock),
     ).._start();
   }
 
@@ -250,6 +255,13 @@ final class RelaySession {
   /// (see this library's doc), and every in-memory test in this phase builds
   /// one without either.
   final void Function(RelaySession session)? _onClosing;
+
+  /// The gateway's write outcome log, shared with every other session on this
+  /// server. Defaulted to one of this session's own when nobody supplied one,
+  /// which is the in-memory test shape — and which is exactly the per-socket
+  /// lifetime 04-REVIEW CR-02 is about, so a session built that way can only
+  /// ever answer about writes it handled itself.
+  final WriteOutcomeLog _writeOutcomes;
 
   /// Puts one already-encoded [frame] on this session's transport.
   ///
@@ -386,10 +398,23 @@ final class RelaySession {
       // guarantees no subscribe reaches a handler before it has.
       epochOf: () => _epoch ?? '',
     );
-    // Per session, because the outcome log inside it is keyed by a
-    // client-minted cmd: a log shared across sessions would answer one
-    // client's writeStatus about another client's write (T-04-05).
-    final values = ValueHandlers(api: api, config: config, now: _now);
+    // The handlers are per session; the outcome log they write to is not.
+    // 04-REVIEW CR-02: `writeStatus` is only ever asked by a client that has
+    // just reconnected, so a per-socket log was empty every time it was
+    // consulted and answered `not_received` — the one verdict that licenses
+    // re-actuating a machine — for the commands whose fate was unknown.
+    // T-04-05's cross-client concern is answered in `write_outcome_log.dart`:
+    // the `cmd` is an 80-bit-random ULID, and Phase 6's identity narrows it
+    // further without moving the log back inside a socket's lifetime.
+    final values = ValueHandlers(
+      api: api,
+      config: config,
+      now: _now,
+      outcomes: _writeOutcomes,
+      // Minted by `hello`, which cannot have run yet — read through a callback
+      // for the same reason the epoch is.
+      ownerOf: () => _sessionId,
+    );
     _on(Methods.hello, _hello);
     _on(Methods.ping, _ping);
     _on(Methods.subscribe, handlers.subscribe);

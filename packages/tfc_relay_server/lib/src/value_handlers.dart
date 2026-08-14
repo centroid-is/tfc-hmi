@@ -32,20 +32,20 @@
 ///
 /// ## The outcome log, and the one answer it must never invent
 ///
-/// `writeStatus` is answered from a short-TTL map of `cmd` → outcome, pruned
-/// on access rather than by a timer: it is data with a clock passed in, not a
-/// scheduler, so a test models a stale entry with arithmetic instead of a
-/// sleep.
+/// `writeStatus` is answered from [WriteOutcomeLog] — a short-TTL map of
+/// `cmd` → outcome, pruned on access rather than by a timer, and owned by the
+/// **server** rather than by this per-session object. That lifetime is
+/// 04-REVIEW CR-02 and the whole of why the log is a class of its own; its
+/// library doc carries the argument.
 ///
 /// [WriteNotReceived] is the only outcome that tells an operator a re-send is
 /// safe. A gateway that has merely *forgotten* a command must therefore never
 /// spell its amnesia that way — so absence from the log is not enough to say
-/// "never received". The `cmd` is a ULID and carries the millisecond it was
-/// minted at, which is the second piece of evidence: inside the TTL, an
-/// unrecorded command genuinely never arrived; outside it, the honest answer
-/// is [WriteUnknown], because the gateway can no longer tell the two apart.
-/// A `cmd` that cannot be dated at all gets the same answer, for the same
-/// reason.
+/// "never received". Three pieces of evidence are required, all of them the
+/// gateway's own: the `cmd` is a ULID and can be dated, the instant it names
+/// is one this log was already recording at, and it is inside the TTL.
+/// Anything else is [WriteUnknown], because the gateway cannot tell "never
+/// arrived" from "arrived while I was not looking".
 library;
 
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
@@ -54,29 +54,23 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'server_config.dart';
 import 'session_handlers.dart' show KeyRejectKinds;
-
-/// One recorded write outcome and the instant it was recorded.
-///
-/// In-flight writes are recorded too, as [WriteUnknown]: a `writeStatus` that
-/// crosses a write still upstream must not answer `not_received` about a
-/// command that is, at that moment, on its way to a machine.
-final class _Outcome {
-  _Outcome(this.result, this.atMs);
-  final WriteResult result;
-  final int atMs;
-}
+import 'write_outcome_log.dart';
 
 /// The handler bodies for one session's value methods.
 ///
-/// Holds one piece of state — the outcome log — and it is per session on
-/// purpose: a `cmd` is minted by a client, and answering another session's
-/// commands would make the log a cross-client enumeration surface (T-04-05).
+/// Holds no outcome state of its own. The log it writes to and reads from
+/// belongs to the server and outlives this object, because the only caller of
+/// `writeStatus` is a client that has just reconnected — see
+/// `write_outcome_log.dart`.
 final class ValueHandlers {
   ValueHandlers({
     required this.api,
     required this.config,
     required this.now,
-  });
+    WriteOutcomeLog? outcomes,
+    this.ownerOf,
+  }) : outcomes =
+            outcomes ?? WriteOutcomeLog(ttl: config.writeOutcomeTtl, now: now);
 
   final StateManApi api;
   final ServerConfig config;
@@ -85,11 +79,21 @@ final class ValueHandlers {
   /// promise the outcome log makes is arithmetic about *when*.
   final int Function() now;
 
-  final _outcomes = <String, _Outcome>{};
+  /// The server's outcome log. Defaulted to a fresh one so a handler can be
+  /// driven on its own in a unit test, exactly as it is over a socket.
+  final WriteOutcomeLog outcomes;
+
+  /// Which session recorded an outcome, carried into the log for Phase 6's
+  /// identity narrowing.
+  ///
+  /// A callback rather than a value because these handlers are built during
+  /// the session's `_start` and the session id is minted later, by `hello` —
+  /// the same reason `SessionHandlers` reads its epoch through one.
+  final String? Function()? ownerOf;
 
   /// How many outcomes are being held. Read by the test that proves the log
   /// is bounded (T-04-06); nothing in production depends on it.
-  int get recordedOutcomes => _outcomes.length;
+  int get recordedOutcomes => outcomes.recordedOutcomes;
 
   /// `read`: the cached value, no round trip.
   Future<Object?> read(rpc.Parameters params) async {
@@ -298,7 +302,7 @@ final class ValueHandlers {
           'of ${config.maxKeysPerSubscribe}');
     }
 
-    _prune();
+    outcomes.prune();
     return {
       'results': [
         for (final entry in raw) _statusOf('$entry').toJson(),
@@ -306,9 +310,9 @@ final class ValueHandlers {
     };
   }
 
-  /// The answer for one cmd, after [_prune] has run.
+  /// The answer for one cmd, after the log has been pruned.
   WriteResult _statusOf(String cmd) {
-    final held = _outcomes[cmd];
+    final held = outcomes.entryFor(cmd);
     if (held != null) return held.result;
 
     final mintedAt = _ulidMs(cmd);
@@ -319,10 +323,26 @@ final class ValueHandlers {
               message: 'this is not an id this gateway could have issued an '
                   'outcome for, so nothing about it can be ruled out'));
     }
-    if (now() - mintedAt <= config.writeOutcomeTtl.inMilliseconds) {
-      // Inside the window and nothing was recorded: the command genuinely
-      // never arrived. The only re-send-safe answer, and it is only safe
-      // because of the window.
+    if (!outcomes.witnessed(mintedAt)) {
+      // Either minted before this log existed — which, on a gateway that has
+      // restarted, is every command that crossed the outage — or minted in a
+      // future this gateway's clock has not reached, which is a panel whose
+      // clock runs ahead and which would otherwise have bought itself a
+      // `not_received` window of `ttl + skew`. Neither is evidence. Forgetting
+      // is not evidence of never happening, and neither is never having been
+      // told.
+      return WriteUnknown(
+          cmd,
+          const WriteReason('outcome_unwitnessed',
+              message: 'this command was minted outside the window this '
+                  'gateway can vouch for with its own clock — before it '
+                  'started recording, or ahead of it. Nothing about it can be '
+                  'ruled out; read the value back before acting'));
+    }
+    if (outcomes.insideWindow(mintedAt)) {
+      // Inside the window, dated by a clock this gateway trusts, and nothing
+      // was recorded: the command genuinely never arrived. The only re-send-
+      // safe answer, and it is only safe because of the three checks above.
       return WriteNotReceived(cmd);
     }
     return WriteUnknown(
@@ -334,17 +354,8 @@ final class ValueHandlers {
                 'before acting'));
   }
 
-  void _record(String cmd, WriteResult result) {
-    _prune();
-    _outcomes[cmd] = _Outcome(result, now());
-  }
-
-  /// Drops everything past the TTL. On access rather than on a timer: a timer
-  /// here would be a second clock in a class that was handed one.
-  void _prune() {
-    final horizon = now() - config.writeOutcomeTtl.inMilliseconds;
-    _outcomes.removeWhere((_, entry) => entry.atMs < horizon);
-  }
+  void _record(String cmd, WriteResult result) =>
+      outcomes.record(cmd, result, ownerHint: ownerOf?.call());
 
   /// The same outcome under the client's own [cmd].
   ///

@@ -28,6 +28,7 @@ import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/value_handlers.dart';
+import 'package:tfc_relay_server/src/write_outcome_log.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
 import 'support/fake_clock.dart';
@@ -39,15 +40,36 @@ const int _epochStart = 1_760_000_000_000;
 
 /// The handlers under test, their source, and the clock both share.
 final class _Kit {
-  _Kit(this.handlers, this.api, this.clock);
+  _Kit(this.handlers, this.api, this.clock, this.config, this.log);
 
   final ValueHandlers handlers;
   final FakeStateMan api;
   final FakeClock clock;
+  final ServerConfig config;
+
+  /// The gateway's log. Held so [reconnect] can hand the same one to the next
+  /// session, which is what a real server does.
+  final WriteOutcomeLog log;
 
   /// A cmd minted on this kit's clock, exactly as a client would mint one at
   /// the moment the operator pressed the button.
   String mintCmd() => newUlid(nowMs: clock.nowMs);
+
+  /// The same gateway, the same plant, the same clock, the same log — and a
+  /// fresh set of handlers, which is what the link dying and coming back
+  /// produces (`relay_session.dart`: handlers are built per session).
+  _Kit reconnect() => _Kit(
+        ValueHandlers(
+          api: api,
+          config: config,
+          now: clock.now,
+          outcomes: log,
+        ),
+        api,
+        clock,
+        config,
+        log,
+      );
 }
 
 _Kit _kit({
@@ -56,15 +78,20 @@ _Kit _kit({
 }) {
   final api = FakeStateMan(readOnlyKeys: readOnlyKeys);
   final clock = FakeClock(start: _epochStart);
+  final config = ServerConfig(writeOutcomeTtl: writeOutcomeTtl);
+  final log = WriteOutcomeLog(ttl: writeOutcomeTtl, now: clock.now);
   addTearDown(api.dispose);
   return _Kit(
     ValueHandlers(
       api: api,
-      config: ServerConfig(writeOutcomeTtl: writeOutcomeTtl),
+      config: config,
       now: clock.now,
+      outcomes: log,
     ),
     api,
     clock,
+    config,
+    log,
   );
 }
 
@@ -416,6 +443,110 @@ void main() {
       expect(results.single, isA<WriteUnknown>(),
           reason: 'nothing can be dated, so nothing can be ruled out; the '
               'safe answer to "I cannot tell" is unknown');
+    });
+  });
+
+  // 04-REVIEW CR-02. `not_received` is a licence to re-actuate a machine, so
+  // the gateway may only give it about a window it can vouch for with its own
+  // clock — and it may not lose the window every time a socket dies, because a
+  // socket dying is the *only* thing that ever makes a client ask.
+  group('writeStatus across a reconnect', () {
+    test('a cmd minted before this log started answers unknown, never '
+        'not_received', () async {
+      final kit = _kit();
+
+      // The panel pressed the button before this gateway process was recording
+      // — which, after a gateway restart, is every command that crossed the
+      // outage.
+      final cmd = newUlid(nowMs: _epochStart - 5000);
+      final results = await _status(kit, [cmd]);
+
+      expect(results.single, isNot(isA<WriteNotReceived>()),
+          reason: 'never having been told is not evidence of never having '
+              'happened, and not_received is what sends an operator back to '
+              'the button');
+      expect(results.single, isA<WriteUnknown>());
+      expect((results.single as WriteUnknown).reason.kind,
+          'outcome_unwitnessed');
+    });
+
+    test('a cmd minted in the future answers unknown, never not_received',
+        () async {
+      // A panel whose clock runs four minutes ahead: inside
+      // `implausibleClockThreshold`, which 04-CONTEXT rules warns and keeps
+      // going, so skew of exactly this size is anticipated elsewhere in the
+      // phase. Unclamped it bought a `not_received` window of `ttl + skew`.
+      final kit = _kit();
+      final cmd =
+          newUlid(nowMs: _epochStart + const Duration(minutes: 4).inMilliseconds);
+
+      final results = await _status(kit, [cmd]);
+
+      expect(results.single, isA<WriteUnknown>());
+      expect((results.single as WriteUnknown).reason.kind,
+          'outcome_unwitnessed');
+    });
+
+    test('an outcome recorded on one session is answerable on the next',
+        () async {
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+      await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      }));
+
+      // The link dies and the panel reconnects: a *new* session, new handlers,
+      // the same gateway and therefore the same log.
+      final reconnected = kit.reconnect();
+      final results = await _status(reconnected, [cmd]);
+
+      expect(results.single, isA<WriteApplied>(),
+          reason: 'the write was applied and the gateway knows it. A log that '
+              'died with the socket answered this question with the empty '
+              'set every single time it was asked');
+      expect(results.single.cmd, cmd);
+    });
+
+    test('a write still upstream when the link died is unknown on the new '
+        'session, not not_received', () async {
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+      kit.api.stallWrites();
+      final inFlight = kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1200,
+      }));
+      await pumpEventQueue();
+
+      final results = await _status(kit.reconnect(), [cmd]);
+
+      expect(results.single, isNot(isA<WriteNotReceived>()),
+          reason: 'the gateway received this command and forwarded it; the '
+              'device may have taken it. This is the exact sequence that made '
+              'the panel tell an operator a write it had sent never arrived');
+      expect(results.single, isA<WriteUnknown>());
+
+      kit.api.releaseWrites();
+      await inFlight;
+    });
+
+    test('a cmd minted after the log started and never seen is still '
+        'not_received', () async {
+      // The anti-vacuity arm: the clamps above must not have turned the one
+      // safe answer off altogether. A gateway that was up, recording, and
+      // never told about this command can say so.
+      final kit = _kit();
+      kit.clock.advance(1000);
+      final cmd = kit.mintCmd();
+
+      final results = await _status(kit.reconnect(), [cmd]);
+
+      expect(results.single, isA<WriteNotReceived>());
     });
   });
 
