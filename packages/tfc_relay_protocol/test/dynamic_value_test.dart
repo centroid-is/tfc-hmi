@@ -247,6 +247,38 @@ void main() {
               'plain good by composition');
     });
 
+    test("a child's within-band quality is visible on its parent", () {
+      // WR-10. A widget bound to a struct rather than to the leaf showed no
+      // pending badge while a write to one of its members was in flight —
+      // the case CONTEXT D-04 exists to make visible.
+      final v = DynamicValue(value: {
+        'ok': DynamicValue(value: 1),
+        'writing':
+            DynamicValue(value: 2, quality: Quality.goodWritePending),
+      });
+      expect(v.quality, Quality.goodWritePending);
+    });
+
+    test('a worse band still beats a within-band child', () {
+      final v = DynamicValue(value: {
+        'writing':
+            DynamicValue(value: 1, quality: Quality.goodWritePending),
+        'dead': DynamicValue(value: 2, quality: Quality.badCommFault),
+      });
+      expect(v.quality, Quality.badCommFault,
+          reason: 'the pending badge must not shadow a dead member');
+    });
+
+    test("a parent's own non-good quality is not replaced by a child's", () {
+      final v = DynamicValue(
+        value: {'writing': DynamicValue(value: 1, quality: Quality.goodWritePending)},
+        quality: Quality.uncertainLastKnown,
+      );
+      expect(v.quality, Quality.uncertainLastKnown,
+          reason: 'within-band promotion only lifts a plain-good parent; it '
+              'never lowers one that already says something');
+    });
+
     test('a non-finite leaf becomes null with badNonFinite quality', () {
       final v = DynamicValue(value: double.infinity);
       expect(v.value, isNull);

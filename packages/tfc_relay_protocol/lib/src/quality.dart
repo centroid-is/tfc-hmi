@@ -75,11 +75,17 @@ extension type const Quality(int code) {
 
   /// Worst-quality-wins: a derived value can never look healthier than its
   /// worst input.
+  ///
+  /// Ties are broken by position, so the first input of the worst band wins —
+  /// callers pass the value's own quality first. Seeding the accumulator with
+  /// [good] instead would discard every good-band input that is not literally
+  /// [good]: `worst([goodWritePending])` used to answer `good`, silently
+  /// dropping the badge an operator watches while a write is in flight.
   static Quality worst(Iterable<Quality> qualities) {
-    var result = good;
+    Quality? result;
     for (final q in qualities) {
-      if (q.band > result.band) result = q;
+      if (result == null || q.band > result.band) result = q;
     }
-    return result;
+    return result ?? good;
   }
 }
