@@ -8,8 +8,8 @@
 ///
 /// | Cut with | Peer reading | Peer paused |
 /// |---|---|---|
-/// | RST (`forceReset`) | 137/137 bytes, 50 of 50 runs | **0/137 bytes, 50 of 50 runs** |
-/// | FIN (`close()`)    | 137/137 bytes, 50 of 50 runs | 137/137 bytes, 50 of 50 runs |
+/// | RST (`SO_LINGER{1, 0}` + destroy) | 137/137 bytes, 50 of 50 runs | **0/137 bytes, 50 of 50 runs** |
+/// | FIN (`close()`)                   | 137/137 bytes, 50 of 50 runs | 137/137 bytes, 50 of 50 runs |
 ///
 /// The FIN version held across N ∈ {1, 64, 4096, 200000}. The reset version is
 /// the obvious implementation, it compiles, and it passes any test written
@@ -97,12 +97,6 @@ void main() {
       test('cutMidFrame($n) delivers exactly $n bytes and then ends', () async {
         final outcome = await _cutRun(n: n, pausePeer: false);
 
-        expect(outcome.error, isNull,
-            reason: 'the mode promises a partial frame followed by an orderly '
-                'end, so the peer must see onDone; an error here means the '
-                'connection was reset rather than closed, and the bytes this '
-                'arm counted survived by luck of the peer having already read '
-                'them (Finding 3)');
         expect(outcome.received.length, n,
             reason: 'the peer was offered ${n + _overshootBytes} bytes and the '
                 'cut was set at $n, so anything else means the byte count is '
@@ -113,6 +107,12 @@ void main() {
             reason: 'the peer must receive the *first* $n bytes in order — a '
                 'cut that dropped a chunk and delivered a later one would '
                 'still count to $n and would still be wrong');
+        expect(outcome.error, isNull,
+            reason: 'the mode promises a partial frame followed by an orderly '
+                'end, so the peer must see onDone; an error here means the '
+                'connection was reset rather than closed, and the bytes this '
+                'arm counted survived only by luck of the peer having already '
+                'read them (Finding 3)');
       });
     }
   });
@@ -122,10 +122,6 @@ void main() {
       test('cutMidFrame($n) still delivers exactly $n bytes', () async {
         final outcome = await _cutRun(n: n, pausePeer: true);
 
-        expect(outcome.error, isNull,
-            reason: 'RESEARCH Finding 3: the reset-based version of this mode '
-                'made the paused peer see ECONNRESET instead of onDone in 50 '
-                'of 50 runs. An error here is that implementation come back');
         expect(outcome.received.length, n,
             reason: 'this is the arm the mode exists for. Finding 3 measured '
                 'the reset-based cut delivering 0 of 137 bytes in 50 of 50 '
@@ -140,6 +136,10 @@ void main() {
             reason: 'the paused peer must receive the same first $n bytes the '
                 'reading peer did — the pause changes when they are read, not '
                 'which ones arrive');
+        expect(outcome.error, isNull,
+            reason: 'RESEARCH Finding 3: the reset-based version of this mode '
+                'made the paused peer see ECONNRESET instead of onDone in 50 '
+                'of 50 runs. An error here is that implementation come back');
       });
     }
   });
