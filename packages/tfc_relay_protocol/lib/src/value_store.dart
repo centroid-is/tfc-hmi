@@ -112,10 +112,13 @@ final class BatchOk extends BatchVerdict {
   const BatchOk();
 }
 
-/// A batch was lost or replayed: the cache may no longer match the server, so
-/// the client resyncs with a snapshot rather than trusting a delta chain
-/// (CLI-03). Reported once for the whole batch; the values in hand are still
-/// applied, because they are newer than what was cached.
+/// A batch was lost: the cache may no longer match the server, so the client
+/// resyncs with a snapshot rather than trusting a delta chain (CLI-03).
+/// Reported once for the whole batch; the values in hand are still applied,
+/// because they are newer than what was cached.
+///
+/// A batch arriving *behind* the sequence is [BatchReplay], not this — its
+/// values are older than what is cached and are not applied at all.
 final class BatchSeqGap extends BatchVerdict {
   /// The sequence number this batch should have carried.
   final int expected;
@@ -127,6 +130,28 @@ final class BatchSeqGap extends BatchVerdict {
 
   @override
   String toString() => 'BatchSeqGap(expected: $expected, received: $received)';
+}
+
+/// A re-delivery: this batch's sequence is one already applied. Its values are
+/// older than what is cached, so they are **discarded** — applying them would
+/// put a reading from two batches ago on the mimic under good quality, which
+/// is the F18 old-epoch/old-seq rule.
+///
+/// Still a verdict rather than silence: a duplicate on the wire means the
+/// stream is not behaving, and the client resyncs on it exactly as it does on
+/// [BatchSeqGap].
+final class BatchReplay extends BatchVerdict {
+  /// The highest sequence number already applied.
+  final int lastApplied;
+
+  /// The sequence number this batch carried.
+  final int received;
+
+  const BatchReplay({required this.lastApplied, required this.received});
+
+  @override
+  String toString() =>
+      'BatchReplay(lastApplied: $lastApplied, received: $received)';
 }
 
 /// Keys to nodes, plus the sequence bookkeeping for the stream feeding them.
@@ -146,32 +171,37 @@ final class ValueStore {
   /// for it, in first-touch order.
   List<String> get keys => _nodes.keys.toList(growable: false);
 
-  /// Applies [changes] in one synchronous loop, then evaluates the sequence
-  /// once.
+  /// Evaluates the sequence, then applies [changes] in one synchronous loop.
+  ///
+  /// The sequence is judged *first* because a batch that is not newer than
+  /// what has already been applied must not be applied at all: its values are
+  /// stale, and writing them would put an old reading on screen under good
+  /// quality with only a verdict — which the caller may or may not act on — to
+  /// say so.
   ///
   /// Only keys whose value genuinely changed notify. Pass [seq] when the batch
   /// is part of a numbered stream; omit it for out-of-band applications
   /// (a snapshot, a local write echo), which never disturb the bookkeeping.
   BatchVerdict applyBatch(Map<String, DynamicValue> changes, {int? seq}) {
+    final last = _lastSeq;
+    if (seq != null && last != null && seq <= last) {
+      // A re-delivery. Never rewind _lastSeq either: doing so would turn the
+      // next legitimate batch into a second, false gap.
+      return BatchReplay(lastApplied: last, received: seq);
+    }
+
     for (final entry in changes.entries) {
       node(entry.key)._set(entry.value);
     }
 
     if (seq == null) return const BatchOk();
 
-    final last = _lastSeq;
-    if (last == null) {
-      // First numbered batch of the stream: it sets the baseline.
-      _lastSeq = seq;
-      return const BatchOk();
-    }
-
-    final expected = last + 1;
-    // Never rewind on a replayed older batch: doing so would turn the next
-    // legitimate batch into a second, false gap.
-    if (seq > last) _lastSeq = seq;
-    if (seq == expected) return const BatchOk();
-    return BatchSeqGap(expected: expected, received: seq);
+    // First numbered batch of the stream sets the baseline; it is not a gap.
+    final expected = last == null ? seq : last + 1;
+    _lastSeq = seq;
+    return seq == expected
+        ? const BatchOk()
+        : BatchSeqGap(expected: expected, received: seq);
   }
 
   /// Discards the cache — the resync path, since recovery is always a
