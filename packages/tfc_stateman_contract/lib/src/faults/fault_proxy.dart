@@ -341,7 +341,10 @@ final class _ProxiedPair {
     try {
       upstream.destroy();
     } catch (_) {
-      // Same, and this is the one that leaked when it was missing.
+      // Same, and this is the one that leaked when it was missing: with this
+      // block deleted, `test/faults/leak_test.dart` fails at the +10
+      // checkpoint with a delta of 10 — one descriptor per cycle, the rate
+      // RESEARCH Finding 11 measured before it was added.
     }
   }
 }

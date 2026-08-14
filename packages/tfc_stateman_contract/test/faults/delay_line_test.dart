@@ -232,8 +232,9 @@ Future<_StalledRun> _measureStalledRun(Duration window) async {
   // A measurement window, not synchronisation. The property under test is
   // "the queue does not grow while time passes", so time passing *is* the
   // experiment — there is no event to await, because the assertion is about
-  // the absence of one.
-  await Future<void>.delayed(window);
+  // the absence of one. Written in the unparameterised form so the phase-wide
+  // grep for sleeps finds it.
+  await Future.delayed(window);
 
   final peak = rig.line.peakPendingBytes;
   stopped = true;
