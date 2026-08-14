@@ -139,7 +139,10 @@ Map<String, Check<StateManApi>> get allContractChecks => {
 ///
 /// The hook parameters are absent on purpose: a hook rebinds a case, it never
 /// adds or removes one, so it cannot change this count. [readOnlyKey] can, and
-/// does — see below.
+/// does — see below. So can [supportsHoldToRun], which takes all five
+/// [holdChecks] out at once and is the flag most likely to be declined by a
+/// real device adapter, so a leg that forgot to gate on it here would report a
+/// count nobody could reconcile.
 Map<String, Check<StateManApi>> contractCases({
   bool supportsWrites = true,
   String? readOnlyKey,
