@@ -6,3 +6,11 @@ tags:
   meta:
     # Cases that test the harness itself: that a check bites a deliberately
     # broken implementation, and that the helpers fail the way they promise.
+  faults:
+    # The socket-level fault kit. Wall-clock by design — it measures real
+    # delays through real loopback sockets — so it is slower than the contract
+    # suite and worth being able to exclude while iterating on one.
+  oslevel:
+    # Kernel traffic shaping (tc netem, dnctl/pf). Needs root and the tool
+    # present, and skips by name naming which half of the probe failed rather
+    # than passing vacuously where neither is available.
