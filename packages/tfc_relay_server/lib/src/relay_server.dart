@@ -262,6 +262,15 @@ final class RelayServer {
   /// whichever test happened to be running; it is delivered to the connection
   /// that caused it instead.
   void _onConnect(WebSocketChannel ws, String? negotiated) {
+    if (_closed) {
+      // Accepted while the drain was running. Refused with the same code every
+      // drained session gets, because from the panel's side it is the same
+      // event: this gateway is going away, reconnect rather than alarm.
+      unawaited(ws.sink
+          .close(CloseCodes.serverDraining, 'server draining')
+          .catchError((Object _) {}));
+      return;
+    }
     try {
       final buffer = ConflatingSendBuffer(
         maxPending: config.maxPending,
@@ -321,18 +330,34 @@ final class RelayServer {
   /// answer — the failure happened before the client said anything — and a
   /// socket that closes with no explanation is indistinguishable from a
   /// crashed server, which is the reconnect behaviour we do not want.
+  ///
+  /// **Built through [StatusParams], not by hand** (03-REVIEW WR-06). This
+  /// used to send `{'fatal': '...'}` under the `status` method, and `status`
+  /// is `StatusParams` — `{alias, state, error?}`. A client routing the
+  /// notification through `StatusParams.fromJson` hit `json['alias'] as String`
+  /// on null and threw a TypeError on the *notification* path, where there is
+  /// no request to fail and the error is swallowed. So the one frame whose job
+  /// is to explain a fatal wiring failure was the one frame a conforming
+  /// client could not read. Going through the DTO makes a future drift a
+  /// compile error instead.
+  ///
+  /// The underlying `$error` rides in `error:`, which is the field the
+  /// contract has for it — not spliced into free text that nothing can parse.
   Future<void> _failConnection(
       WebSocketChannel ws, Object error, StackTrace stack) async {
+    onError(error, stack, 'session wiring');
     try {
       writeFrame(
         ws,
         jsonEncode({
           'jsonrpc': '2.0',
           'method': Methods.status,
-          'params': {
-            'fatal': 'the server could not build a session for this '
-                'connection: $error',
-          },
+          'params': StatusParams(
+            alias: 'gateway',
+            state: 'unhealthy',
+            error: 'the server could not build a session for this connection: '
+                '$error',
+          ).toJson(),
         }),
       );
       await ws.sink.close(1000, 'session wiring failed');
@@ -358,16 +383,33 @@ final class RelayServer {
 
   /// Stops serving. Idempotent, and ordered.
   ///
-  /// The engine first, so no tick can start fanning out to a session that is
+  /// **The listener first** (03-REVIEW WR-05). The doc used to say "the
+  /// listener last, so nothing new arrives while the drain is running", which
+  /// is the opposite of what closing it last achieves: a connection accepted
+  /// between the session-drain loop and the listener close built a whole
+  /// session — peer, listeners on the backing `StateManApi`, buffer — and
+  /// registered it, and `_sessions.dispose()` then cleared the registry
+  /// *without closing anything*, so that session's listeners stayed attached
+  /// to the source and its socket stayed open. That is precisely the leak
+  /// `teardown_test.dart` exists to police, on the one path it could not see.
+  ///
+  /// The engine next, so no tick can start fanning out to a session that is
   /// halfway through its own teardown — and so the process has no timer left
-  /// holding it open. Sessions next, each with [CloseCodes.serverDraining] so
-  /// a panel knows to reconnect rather than alarm: a client disconnected with
-  /// no code cannot tell a restart from a crash. The listener last, so nothing
-  /// new arrives while the drain is running. Completes only when every session
-  /// has.
+  /// holding it open. Sessions after that, each with
+  /// [CloseCodes.serverDraining] so a panel knows to reconnect rather than
+  /// alarm: a client disconnected with no code cannot tell a restart from a
+  /// crash. Completes only when every session has.
+  ///
+  /// [_onConnect] is guarded as well, and the guard is not redundant:
+  /// `force: true` does not retract a connection already handed to the
+  /// handler, and `_closed` is set synchronously here while the close itself
+  /// is awaited.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+
+    await _http?.close(force: true);
+    _http = null;
 
     await _engine?.stop();
     _engine = null;
@@ -379,8 +421,6 @@ final class RelayServer {
       _release(connection);
     }
 
-    await _http?.close(force: true);
-    _http = null;
     await _sessions.dispose();
   }
 }

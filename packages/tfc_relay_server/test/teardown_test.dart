@@ -48,6 +48,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
@@ -243,6 +244,61 @@ final class _Client {
 }
 
 void main() {
+  // 03-REVIEW WR-05. `close()` used to close its listener *last*, which is
+  // what allows new connections to arrive while the drain is running — the
+  // opposite of what its doc claimed it achieved. A connection accepted
+  // between the session-drain loop and the listener close built a whole
+  // session, registered it, and then met `_sessions.dispose()`, which clears
+  // the registry without closing anything: listeners left attached to the
+  // source, socket left open. That is the leak this file polices, on the one
+  // path it could not see, because it never closed a server mid-connect.
+  test('a client that arrives while the server is draining is refused, not '
+      'registered', () async {
+    final served = FakeStateMan();
+    final server = RelayServer(api: served, config: fixtureConfig());
+    await server.start();
+    final uri = Uri.parse('ws://127.0.0.1:${server.port}');
+    addTearDown(served.dispose);
+
+    // Fired in the same turn as the close, so the accept path and the drain
+    // are genuinely interleaved. Whether any given attempt lands before, in
+    // or after the window is up to the scheduler; what must hold for every
+    // one of them is that it did not leave a session behind.
+    final draining = server.close();
+    final attempts = <Future<void>>[
+      for (var i = 0; i < 20; i++)
+        () async {
+          try {
+            final ws = IOWebSocketChannel.connect(uri);
+            await ws.ready;
+            ws.sink.add(jsonEncode({
+              'jsonrpc': '2.0',
+              'id': 'drain-$i',
+              'method': Methods.hello,
+              'params': helloParams(),
+            }));
+            await ws.stream.drain<void>();
+          } catch (_) {
+            // A refused TCP connect is the ordinary outcome once the listener
+            // is closed, and it is the outcome this fix is *for*.
+          }
+        }(),
+    ];
+
+    await draining;
+    await Future.wait(attempts);
+
+    expect(server.sessions.sessionCount, 0,
+        reason: 'a session built during the drain is one nothing will ever '
+            'close: the drain loop has already passed and dispose() only '
+            'clears the list');
+    expect(_attachedListeners(served), 0,
+        reason: 'the listeners of a session built during the drain stay '
+            'attached to the plant forever, pushing values into a buffer that '
+            'will never be drained again — the exact leak the kill-cycle test '
+            'below measures across two hundred cycles');
+  }, tags: 'ws');
+
   test(
       'two hundred kill cycles return the registry to baseline',
       () async {
