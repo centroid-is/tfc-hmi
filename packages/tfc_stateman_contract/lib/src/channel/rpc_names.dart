@@ -36,6 +36,26 @@ library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+/// The error codes this harness mints, in JSON-RPC's implementation-defined
+/// range (-32099…-32000).
+///
+/// Two, and both exist so an exception keeps its *type* across the boundary.
+/// A JSON-RPC error carries a number, a sentence and a data bag; what it cannot
+/// carry is a Dart class, so a caller catching `on TypeError` in ported code
+/// would catch nothing at all unless the number says which class to rebuild.
+abstract final class HarnessErrorCodes {
+  /// The far side's typed accessor was handed a value of another type.
+  ///
+  /// `PreferencesApi`'s getters are documented to throw a `TypeError` for this
+  /// (`preferences_api.dart:30-36`) — it is the behavior of the interface being
+  /// mirrored, kept so ported call sites read the same, and therefore something
+  /// the channel has to preserve rather than flatten into a generic failure.
+  static const typeMismatch = -32001;
+
+  /// A sub-API method failed on the far side for any other reason.
+  static const subApiFailed = -32002;
+}
+
 /// Every method name the channel harness registers or sends.
 abstract final class HarnessMethods {
   /// What marks a name as belonging to the harness rather than to the wire.

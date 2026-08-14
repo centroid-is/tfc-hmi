@@ -47,16 +47,22 @@
 /// the client, which is the only arrangement that survives Phase 4, where the
 /// counter genuinely will be on another host.
 ///
+/// **The four data-service sub-APIs, over the channel too.** Browse,
+/// timeseries, history views and preferences are thirty-four requests and one
+/// outbound notification, forwarded by `channel_sub_apis.dart`. They were
+/// stubs that threw until plan 02-08, deliberately — a getter returning an
+/// empty implementation would have let `runDataServicesContract` run against a
+/// channel carrying nothing and report a colour — and what replaced them is
+/// forwarding, not a second store: the only thing on this side that holds
+/// data-service state is the preference change stream's fan-out, and every key
+/// it reports arrived over the channel.
+///
 /// ## What is not implemented, and why it is not stubbed
 ///
-/// The four data-service sub-APIs throw. They are a real part of the interface
-/// and a real part of the contract suite, and carrying them over this channel
-/// means serializing browse nodes, timeseries samples, history-view records and
-/// preferences — twenty-five methods whose encodings this plan does not own. A
-/// getter that returned an empty implementation would let
-/// `runDataServicesContract` run against a channel that carries nothing and
-/// report a colour; a getter that throws by name says which leg is missing to
-/// whoever points the umbrella at this harness before that leg exists.
+/// Reconnect, resync, sequence gaps and per-request deadlines. All four are
+/// what a socket forces and a `StreamChannelController` does not, and each is
+/// listed here rather than approximated so that nothing in this file can be
+/// mistaken for a client that has already solved them.
 library;
 
 import 'dart:async';
@@ -65,12 +71,15 @@ import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import '../data_services_contract.dart';
 import '../harness.dart';
 import '../write_contract.dart';
+import 'channel_sub_apis.dart';
 import 'rpc_names.dart';
 
 /// A state source on the far side of a message channel.
-final class ChannelStateMan implements StateManApi, StateManWriteHarness {
+final class ChannelStateMan
+    implements StateManApi, StateManWriteHarness, StateManDataHarness {
   /// Wraps the client end of a channel whose other end is a served source.
   ///
   /// [observables] is the served instance's control surface, read directly for
@@ -86,6 +95,7 @@ final class ChannelStateMan implements StateManApi, StateManWriteHarness {
         _closeServed = closeServed,
         _peer = rpc.Peer(channel) {
     _peer.registerMethod(HarnessMethods.update, _applyUpdate);
+    _peer.registerMethod(HarnessMethods.preferencesChanged, _preferenceChanged);
     // Swallowed deliberately — see served_state_man.dart for the argument: a
     // channel failure must fail the check that named the property, not arrive
     // as an unhandled zone error attributed to an unrelated test.
@@ -420,32 +430,72 @@ final class ChannelStateMan implements StateManApi, StateManWriteHarness {
       await close();
     }
     _closeHandedOutStreams.clear();
+    await preferences.dispose();
     await _peer.close();
     await _closeServed();
   }
 
-  // ------------------------------------------------------ the missing legs
+  // -------------------------------------------------------- the sub-APIs
+
+  /// Browse, timeseries, history views and preferences — all four over the
+  /// same peer, none of them holding a source of their own.
+  ///
+  /// Built once and kept, rather than minted per access, for one reason that
+  /// only applies to the last of them: [preferences] owns the broadcast
+  /// controller every local listener reads from, and a fresh instance per
+  /// getter call would hand the contract's *second* listener a stream nothing
+  /// ever pushes to. The other three are stateless and are kept alongside it
+  /// for symmetry.
+  @override
+  late final BrowseApi browse = ChannelBrowseApi(_request);
 
   @override
-  BrowseApi get browse => throw UnsupportedError(_notCarried('browse'));
+  late final TimeseriesApi timeseries = ChannelTimeseriesApi(_request);
 
   @override
-  TimeseriesApi get timeseries => throw UnsupportedError(_notCarried('timeseries'));
+  late final HistoryViewApi historyViews = ChannelHistoryViewApi(_request);
 
   @override
-  HistoryViewApi get historyViews =>
-      throw UnsupportedError(_notCarried('historyViews'));
+  late final ChannelPreferencesApi preferences = ChannelPreferencesApi(_request);
 
+  /// Records samples on the far side — the one data-service lever.
+  ///
+  /// `void`, so it travels in the ordered notification lane like every other
+  /// lever: what makes seed-then-query correct is the channel's ordering, not
+  /// an acknowledgement. That is also why `runDataServicesContract` needs no
+  /// `seedTimeseries` hook here — the default path reaches this method, which
+  /// puts the samples on the wire, which is the thing worth testing.
   @override
-  PreferencesApi get preferences =>
-      throw UnsupportedError(_notCarried('preferences'));
+  void seedTimeseries(String tableName, List<TimeseriesData> points) =>
+      _lever(HarnessMethods.seedTimeseries, {
+        'table': tableName,
+        'points': [for (final point in points) point.toJson()],
+      });
 
-  static String _notCarried(String member) =>
-      'ChannelStateMan does not carry $member over the channel yet. This '
-      'harness covers the value path — subscribe, store, and the read and '
-      'write round trips — which is what plan 02-03 built it for. Pointing '
-      'runStateManContract at it will reach this getter; run the value-path '
-      'sub-suites directly, or serialize the data services first.';
+  /// One request out and one answer back, unless this source is gone.
+  ///
+  /// The disposed guard is the same one [_lever] makes and it matters more
+  /// here: a `sendRequest` on a closed peer throws a `StateError` out of
+  /// json_rpc_2, and a case that disposed its source and then asked it a
+  /// question would report that instead of the property it names. A
+  /// [StateError] of this file's own, saying which call arrived after the
+  /// close, is the honest answer — there is no value to invent and no round
+  /// trip left to make.
+  Future<Object?> _request(String method, Map<String, Object?> params) {
+    if (_disposed || _peer.isClosed) {
+      throw StateError(
+          'ChannelStateMan was asked for $method after it was disposed; the '
+          'channel is closed, so there is no round trip left to make and no '
+          'answer that would not be invented');
+    }
+    return _peer.sendRequest(method, params);
+  }
+
+  /// One inbound preference change, fanned out to every local listener.
+  void _preferenceChanged(rpc.Parameters params) {
+    if (_disposed) return;
+    preferences.announce(params['key'].asString);
+  }
 
   /// Narrows a decoded JSON value to the map shape the protocol decoders take.
   ///
