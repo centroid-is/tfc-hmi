@@ -157,7 +157,14 @@ class FakeStateMan
   final _writeAttempts = <String, int>{};
 
   /// Every `cmd` minted, in mint order.
-  final _mintedCmds = <String>[];
+  ///
+  /// A `Set` and not a `List`, and that is the contract check's teeth
+  /// (04-REVIEW CR-05): "every write mints its own 26-character cmd" was
+  /// asserted against a list, which cannot tell two writes sharing one id from
+  /// two writes with two ids. One id covering two actuations is precisely the
+  /// failure `ulid.dart` names — "one of the two writes silently reports the
+  /// other's outcome" — so the reference implementation refuses it.
+  final _mintedCmds = <String>{};
 
   /// Writes that went upstream and have had no answer.
   final _stalledWrites = <_StalledWrite>[];
@@ -644,7 +651,18 @@ class FakeStateMan
           'true. This is a lifecycle bug in the caller, not a write outcome.');
     }
     final id = cmd ?? newUlid();
-    _mintedCmds.add(id);
+    if (!_mintedCmds.add(id)) {
+      // A programmer error, like the disposed case above, and reported the
+      // same way: nothing was attempted, so there is no outcome to report and
+      // a `WriteResult` here would be an invention.
+      throw ArgumentError.value(
+          id,
+          'cmd',
+          'this source has already seen the command id "$id". One id is one '
+              'operator action: a second write under it would be a second '
+              'actuation reported under the first one\'s outcome, which is '
+              'the failure the id exists to make impossible');
+    }
     _markWritePending(key);
     return attemptUpstreamWrite(id, key, value, expected: expect);
   }
@@ -891,6 +909,8 @@ class FakeStateMan
   int upstreamWriteAttempts(String cmd) => _writeAttempts[cmd] ?? 0;
 
   @override
+  /// In mint order — the set is insertion-ordered, so this is still a
+  /// history and not merely a membership test.
   List<String> get mintedCmds => List<String>.unmodifiable(_mintedCmds);
 
   // ---------------------------------------------------------- data services

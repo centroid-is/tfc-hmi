@@ -475,6 +475,35 @@ void main() {
               '1200" into "whatever it reads"');
     });
 
+    test('a second write under a live cmd is refused before it reaches the '
+        'wire', () async {
+      final gateway = await _gateway();
+      final client = _client(gateway.uri);
+      await _until('the link', () => client.isReady);
+
+      // The first write is left unresolved by stalling the plant, which is
+      // what "already in flight" means.
+      gateway.served.stallWrites();
+      final cmd = newUlid();
+      final first = client.write(_writableKey, 1, cmd: cmd);
+      await _until('the write to reach the plant',
+          () => gateway.served.writesInFlight > 0);
+
+      await expectLater(
+        () => client.write(_writableKey, 2, cmd: cmd),
+        throwsA(isA<ArgumentError>()),
+        reason: 'the unresolved set is keyed by cmd, so two live writes '
+            'sharing one id are one entry: whichever settles first removes '
+            'it, and the other unknown is never re-queried',
+      );
+      expect(client.debugWritesSent, 1,
+          reason: 'nothing reached the wire for the second write, which is '
+              'what makes the refusal safe to raise');
+
+      gateway.served.releaseWrites();
+      await first.timeout(_recovery);
+    });
+
     test('a socket killed mid-write resolves unknown and does not throw',
         () async {
       final gateway = await _gateway(withProxy: true);

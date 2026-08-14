@@ -443,6 +443,26 @@ final class RemoteStateMan implements StateManApi {
     // when it is relaying one already minted upstream of it. Either way there
     // is exactly one id for one action, which is what `writeStatus` reconciles
     // against after a reconnect.
+    // One id, one operator action (04-REVIEW CR-05). [_unresolved] is a `Set`,
+    // so two live writes sharing an id are one entry: whichever settles first
+    // removes it, and the other's `WriteUnknown` is never re-queried. The
+    // gateway is worse off still — both writes go upstream and the second
+    // overwrites the first's outcome, so one `writeStatus` answer is reported
+    // for two actuations and it is the wrong one for at least one of them.
+    //
+    // An `ArgumentError` and not a `WriteResult`, as the non-finite `expect`
+    // refusal above is: nothing was sent, nothing is unknown, and the caller
+    // handed this client the same id twice. That is a defect in the caller,
+    // and reporting it as a plant outcome is how it survives to production.
+    if (cmd != null && _unresolved.contains(cmd)) {
+      throw ArgumentError.value(
+          cmd,
+          'cmd',
+          'this command id is already in flight: one id means one operator '
+              'action, and a second write under it would report the first '
+              'one\'s outcome for both');
+    }
+
     final id = cmd ?? newUlid();
     _unresolved.add(id);
     // The tag this id belongs to, so a re-query's readback can be adopted onto
