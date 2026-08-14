@@ -454,8 +454,8 @@ void main() {
     expect(link.session.subscriptions.count, 0);
   });
 
-  test('the wire surface is exactly the nine methods declared today',
-      () async {
+  test('the wire surface is exactly the nine methods declared today, plus the '
+      'one name a client announces', () async {
     final link = _link();
     addTearDown(link.dispose);
 
@@ -469,6 +469,11 @@ void main() {
       Methods.read,
       Methods.readFresh,
       Methods.readMany,
+      // 05-05. Not a tenth callable name: `h` is a client→server
+      // notification, dispatched through the same table because that is how
+      // json_rpc_2 routes a frame with no id. `surface_test.dart` keeps the
+      // two apart in separate literals; here the ledger is one set.
+      Methods.holdTick,
     }, reason: 'a declared name with no handler answers METHOD_NOT_FOUND from '
         'a table claiming to carry it; a handler nobody declared is surface '
         'nobody counted. 03-08 freezes this set and 04-02 added the five '

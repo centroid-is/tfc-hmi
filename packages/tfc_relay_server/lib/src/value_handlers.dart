@@ -1,4 +1,5 @@
-/// The bodies of `read`, `readFresh`, `readMany`, `write` and `writeStatus`.
+/// The bodies of `read`, `readFresh`, `readMany`, `write`, `writeStatus` and
+/// the hold-to-run tick.
 ///
 /// Same rule as `session_handlers.dart`, for the same reason: **nothing in
 /// here registers anything.** Handlers are handed to `RelaySession._on`, which
@@ -48,6 +49,8 @@
 /// arrived" from "arrived while I was not looking".
 library;
 
+import 'dart:async';
+
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
@@ -94,6 +97,95 @@ final class ValueHandlers {
   /// How many outcomes are being held. Read by the test that proves the log
   /// is bounded (T-04-06); nothing in production depends on it.
   int get recordedOutcomes => outcomes.recordedOutcomes;
+
+  /// The hold-to-run deadmen this **session** has engaged, by plant key.
+  ///
+  /// Per session because this object is: `relay_session.dart` builds one
+  /// `ValueHandlers` per `RelaySession`, and that is what makes teardown free
+  /// — the session's `_teardown` calls [releaseAllHolds] and a panel that
+  /// vanished stops feeding the machine it was jogging (05-RESEARCH §G.4,
+  /// D-P5-J). A hold map on the *server* would outlive the socket that
+  /// engaged it, which is a machine being fed by nobody.
+  ///
+  /// It is also the authorization boundary for the tick (T-05-16). A `'h'`
+  /// frame names a key; this map decides whether that name means anything.
+  /// Without it the tick would be a write primitive with no engage in front
+  /// of it, no cmd, no outcome and no refusal path.
+  final _holds = <String, HoldHandle>{};
+
+  /// How many ticks were dropped: malformed, naming a hold this session never
+  /// engaged, or thrown out of by the source.
+  ///
+  /// Doc'd exactly like [recordedOutcomes] and for the same reason: read by a
+  /// test, and nothing in production depends on it. The production home for
+  /// this number is a `PIPE.*` health key, and those ship with upstream
+  /// fan-in in Phase 8 (STATE.md roadmap decision) — so the counter is built
+  /// now and surfaced later (D-P5-I).
+  int get droppedHoldTicks => _droppedHoldTicks;
+  int _droppedHoldTicks = 0;
+
+  /// `h`: one deadman tick for a hold **this session** engaged.
+  ///
+  /// The first client→server notification on this wire, and the only handler
+  /// here that answers nothing: `json_rpc_2` discards a notification
+  /// handler's return value and sends no frame back (measured, 05-RESEARCH
+  /// §B.1 #1). The `Future<Object?>` signature is `RelaySession._on`'s, so
+  /// the tick inherits the handshake gate and the error armor from the one
+  /// seam every other method comes through.
+  ///
+  /// **The lookup is the authorization boundary, not bookkeeping** (D-P5-G,
+  /// T-05-16). The counter is applied to the handle [write] took when *this*
+  /// session engaged the hold — never to the key the frame names. Applying it
+  /// to an arbitrary key would make `h` a write primitive with no engage in
+  /// front of it, no cmd, no outcome-log entry and no refusal path, reachable
+  /// by any peer past the handshake.
+  ///
+  /// **It cannot throw. Not for anything.** A malformed frame, a hold this
+  /// session does not have, a source that throws out of `onTick` — all of
+  /// them are dropped and counted. `json_rpc_2` sends no frame back for a
+  /// notification and calls `onUnhandledError` instead (§B.1 #2), which
+  /// `RelaySession.serve` forwards to the `RelayErrorHandler`: at 10 Hz per
+  /// held button, a throw here is a log flood and nothing else. A tick for an
+  /// unknown hold is an ordinary, expected condition — the panel released a
+  /// moment ago, or the gateway restarted under it — and the client learns
+  /// nothing either way, because the counter stopping is the whole signal.
+  ///
+  /// The frame's own `n` is decoded and validated but is **not** the value
+  /// written: [HoldHandle.tick] mints the next counter from the handle the
+  /// engage created. Trusting `n` would put an attacker-chosen integer on a
+  /// deadman tag through this path, which is precisely what the write path's
+  /// "1 or 0, nothing else" refusal prevents from the other side.
+  Future<Object?> holdTick(rpc.Parameters params) async {
+    final HoldTickParams tick;
+    try {
+      // Sanitize before decode, as on every ingress path: `1e999` decodes to
+      // Infinity in silence, and `Infinity.toInt()` throws where nothing is
+      // catching. `HoldTickParams.fromJson` refuses a non-finite counter
+      // anyway; both belts are cheap and this one is the house convention.
+      final decoded =
+          (sanitize(params.asMap).value as Map).cast<String, Object?>();
+      tick = HoldTickParams.fromJson(decoded);
+    } catch (_) {
+      _droppedHoldTicks++;
+      return null;
+    }
+
+    final hold = _holds[tick.key];
+    if (hold == null) {
+      _droppedHoldTicks++;
+      return null;
+    }
+
+    try {
+      hold.tick();
+    } catch (_) {
+      // A source that throws while being fed is a dropped tick like any
+      // other. The machine stops because the counter stopped, which has
+      // already happened by the time anyone could act on an exception here.
+      _droppedHoldTicks++;
+    }
+    return null;
+  }
 
   /// `read`: the cached value, no round trip.
   ///
@@ -257,6 +349,31 @@ final class ValueHandlers {
     if (request.key.trim().isEmpty) {
       throw _refuse(Methods.write, 'write needs a non-empty "key"');
     }
+    // The hold flag's vocabulary on the *write* path is exactly two values,
+    // and this is a pre-plant refusal like the ones above it: raised before
+    // `api.holdToRun` and before `api.write`, so `INVALID_PARAMS` here means
+    // what it means everywhere else on this path — definitively no effect.
+    //
+    // Anything else would make `write` a way to put an arbitrary integer on a
+    // deadman tag while calling it an engage. Intermediate counter values are
+    // ticks: notifications, no cmd, no outcome, and only ever for a hold this
+    // session already engaged.
+    //
+    // `num` rather than `int` on purpose: a REAL tag's 1.0 and a DINT's 1 are
+    // the same operator intent, and this refusal is about the number 7, not
+    // about which Dart type a JSON decoder chose.
+    if (request.hold) {
+      final value = request.value;
+      if (value is! num || (value != 1 && value != 0)) {
+        throw _refuse(
+            Methods.write,
+            'a hold-to-run write carries 1 to engage or 0 to release, and '
+            'this one carries ${request.value}. Intermediate counter values '
+            'arrive as ticks — notifications for a hold already engaged — '
+            'and never as writes, so nothing was sent: no hold was taken and '
+            'no device was consulted');
+      }
+    }
 
     // The request this outcome will be recorded for, and the request a second
     // frame under the same id is compared against. Built from the decoded
@@ -344,23 +461,60 @@ final class ValueHandlers {
 
     WriteResult result;
     try {
-      // The client's cmd goes upstream, and the gateway does not mint one of
-      // its own. It is not this process's action to identify: the id was minted
-      // at the operator's keyboard (design §4.6) and everything that will ever
-      // ask about this write — the `writeStatus` re-query after a reconnect,
-      // the outcome log below, the plant's own count of how many times the
-      // command reached the device — has to be keyed by that one id or the
-      // three-state answer stops being attributable to anything.
+      // **The hold branch (D-P5-C).** An engage and a release are ordinary
+      // writes — same idempotency window above, same in-flight pre-record,
+      // same three-state outcome, same two record sites below — and the flag
+      // changes only which seam they travel through.
       //
-      // Minting here instead was a write-safety defect, not a cosmetic one:
-      // the plant recorded the attempt under an id the client could never name,
-      // so "how many times did my write reach the machine" had no answer from
-      // either end, and `_withCmd` relabelling the outcome on the way back made
-      // the loss invisible at exactly the point it mattered.
-      result = _withCmd(
-          await api.write(request.key, request.value,
-              expect: request.expect, cmd: request.cmd),
-          request.cmd);
+      //  * `hold: true, value: 1` → `api.holdToRun`, and the handle it
+      //    returns is what this session's ticks feed. An `api.write(key, 1)`
+      //    here would put a 1 on the tag with nothing behind it: the number
+      //    would be right for one instant and there would be no way to
+      //    advance it afterwards, which is a jog button that stops the
+      //    machine a second after it starts it.
+      //  * `hold: true, value: 0` → the handle's own `release()`, which
+      //    writes the 0 and completes `onReleased`.
+      //  * `hold: true, value: 0` with **no** handle held → falls through to
+      //    the ordinary write below, deliberately. Writing 0 to a deadman tag
+      //    is a legitimate thing to do, and a gateway that restarted holds no
+      //    handle for a hold its predecessor engaged; refusing would make a
+      //    sensible release read as a caller defect.
+      //
+      // The outcome is relabelled by the same `_withCmd` every other write
+      // answer goes through: the source mints its own id inside `holdToRun`,
+      // and an answer carrying an id the client never minted is one
+      // `writeStatus` could never match.
+      final hold = request.hold ? _holds[request.key] : null;
+      if (request.hold && request.value == 1) {
+        final handle = await api.holdToRun(request.key);
+        // Recorded only when it took. A refused engage produces an inert
+        // handle (`hold_handle.dart`), and keeping one would make the next
+        // tick look authorized for a hold that never existed.
+        if (handle.isHeld) _holds[request.key] = handle;
+        result = _withCmd(handle.engagement, request.cmd);
+      } else if (hold != null && request.value == 0) {
+        _holds.remove(request.key);
+        result = _withCmd(await hold.release(), request.cmd);
+      } else {
+        // The client's cmd goes upstream, and the gateway does not mint one of
+        // its own. It is not this process's action to identify: the id was
+        // minted at the operator's keyboard (design §4.6) and everything that
+        // will ever ask about this write — the `writeStatus` re-query after a
+        // reconnect, the outcome log below, the plant's own count of how many
+        // times the command reached the device — has to be keyed by that one
+        // id or the three-state answer stops being attributable to anything.
+        //
+        // Minting here instead was a write-safety defect, not a cosmetic one:
+        // the plant recorded the attempt under an id the client could never
+        // name, so "how many times did my write reach the machine" had no
+        // answer from either end, and `_withCmd` relabelling the outcome on
+        // the way back made the loss invisible at exactly the point it
+        // mattered.
+        result = _withCmd(
+            await api.write(request.key, request.value,
+                expect: request.expect, cmd: request.cmd),
+            request.cmd);
+      }
     } catch (error) {
       // The source failed in a way it does not describe as an outcome. The
       // write may still have reached the device, so this is unknown — not an
@@ -374,6 +528,29 @@ final class ValueHandlers {
 
     _record(request.cmd, result, fingerprint);
     return result.toJson();
+  }
+
+  /// Ends every hold this session engaged, because the session has ended.
+  ///
+  /// Called from `RelaySession._teardown`, so it runs for **every** way a
+  /// session can end — a graceful close, a protocol refusal, the heartbeat
+  /// reaper, a backpressure eviction, a yanked cable. A hold that outlived
+  /// its socket would be a counter still advancing for a panel that went
+  /// home, which is the one shape of this feature that could hurt somebody
+  /// (T-05-20).
+  ///
+  /// The release writes are **not** awaited. The machine stops when the
+  /// counter stops, which happens synchronously here; the release write's
+  /// outcome is informational, and a teardown that waited for one would hang
+  /// on exactly the dead link that caused it. Errors are swallowed for the
+  /// same reason — the source may already be disposed underneath us.
+  void releaseAllHolds() {
+    for (final hold in List<HoldHandle>.of(_holds.values)) {
+      unawaited(hold
+          .release(reason: HoldEnded.disposed)
+          .then((_) {}, onError: (Object _) {}));
+    }
+    _holds.clear();
   }
 
   /// `writeStatus`: what became of these commands, as far as this gateway can

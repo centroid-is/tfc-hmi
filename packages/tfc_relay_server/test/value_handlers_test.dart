@@ -794,6 +794,197 @@ void main() {
     });
   });
 
+  // 05-05 / D-P5-C. Engage and release are ordinary write frames carrying one
+  // extra flag, which is what buys them a three-state outcome, an entry in the
+  // outcome log and `writeStatus` reconciliation across a reconnect with no
+  // new code. What the flag changes is the *seam*: an engage goes to
+  // `api.holdToRun` and takes a handle this session can feed, not to
+  // `api.write`, which would put a 1 on the tag with nothing behind it and no
+  // way to advance the counter afterwards.
+  //
+  // The observable throughout is the source's own write bookkeeping. A write
+  // that went through `api.write` carries the client's cmd upstream, so
+  // `upstreamWriteAttempts(cmd)` is 1; a write that went through the hold seam
+  // does not, because the handle mints its own ids for the engage and the
+  // release. That difference is what tells "a hold was taken" from "a number
+  // was written".
+  group('hold-to-run: the flag routes to a different seam', () {
+    test('an engage takes a source-side hold, not a one-off write', () async {
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final engageCmd = kit.mintCmd();
+
+      final answer = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': engageCmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+
+      expect(WriteResult.fromJson(answer), isA<WriteApplied>(),
+          reason: 'the engage is a real write and "did the hold take" is a '
+              'three-state question');
+      expect(answer['cmd'], engageCmd,
+          reason: 'the source mints its own id inside holdToRun, so the '
+              'outcome has to be relabelled under the operator\'s id or '
+              'writeStatus could never reconcile the engage');
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 1,
+          reason: 'the deadman counter starts at 1 the moment the button goes '
+              'down');
+      expect(kit.api.upstreamWriteAttempts(engageCmd), 0,
+          reason: 'the client\'s cmd did not go upstream as a write, because '
+              'the engage is not one: it is holdToRun, and the handle it '
+              'returns is what the ticks feed');
+
+      // The load-bearing arm, and the reason this case is not a call count:
+      // a release under the hold flag can only be answered by a *handle*, so
+      // a release that never reached the plant's write path is proof there
+      // was a live hold here to release. Route the engage through `api.write`
+      // instead and there is no handle, the release falls through to the
+      // ordinary path, and this expectation reads 1.
+      final releaseCmd = kit.mintCmd();
+      final released = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': releaseCmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 0,
+        'hold': true,
+      })));
+
+      expect(kit.api.upstreamWriteAttempts(releaseCmd), 0,
+          reason: 'the release went through the handle this session engaged. '
+              'If the engage had been an ordinary write there would have been '
+              'no handle to release and this count would be 1 — which is what '
+              'makes this arm the proof that a hold was taken');
+      expect(WriteResult.fromJson(released), isA<WriteApplied>());
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 0,
+          reason: '0 is reserved for released, and the tag says so');
+    });
+
+    test('a release with no hold held writes zero on its merits', () async {
+      // The mirror of the arm above, and the reason it is allowed: writing 0
+      // to a deadman tag is a legitimate thing to do, and a gateway that
+      // restarted holds no handle for a hold its predecessor engaged.
+      // Refusing here would make a perfectly sensible release look like a
+      // caller defect and leave the operator with a counter nobody can stop.
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 7);
+      final cmd = kit.mintCmd();
+
+      final answer = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 0,
+        'hold': true,
+      })));
+
+      expect(WriteResult.fromJson(answer), isA<WriteApplied>());
+      expect(kit.api.upstreamWriteAttempts(cmd), 1,
+          reason: 'no handle, so this is an ordinary write and it goes '
+              'upstream under the operator\'s own id');
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 0);
+    });
+
+    test('a hold write carrying 7 is refused before the plant is touched',
+        () async {
+      // The counter's vocabulary on the *write* path is exactly 1 and 0.
+      // Intermediate values arrive as ticks, which are notifications with no
+      // cmd and no outcome; letting one in here would make `write` a way to
+      // put an arbitrary integer on a deadman tag while calling it an engage.
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+
+      final error = await _refusal(
+          kit.handlers.write(_params(Methods.write, {
+            'cmd': cmd,
+            'key': 'CN01.MOT01.speed',
+            'value': 7,
+            'hold': true,
+          })),
+          'a hold write carrying an out-of-band counter value');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'a shape refusal raised before the plant is touched is the '
+              'one class of refusal this path allows, and here "definitively '
+              'no effect" is true');
+      expect(kit.api.upstreamWriteAttempts(cmd), 0);
+      expect(kit.api.mintedCmds, isEmpty,
+          reason: 'refused before api.holdToRun and before api.write: nothing '
+              'was consulted, so the source has not seen an id at all');
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 0,
+          reason: 'the tag still holds what it held');
+      expect(error.message, contains('tick'),
+          reason: 'the refusal names where an intermediate counter value '
+              'belongs — a tick — rather than naming a type');
+      expect(error.message, contains('nothing was sent'),
+          reason: 'the refusal reaches the operator as '
+              'WriteRejected(server_refused), so the message is the only '
+              'thing that can say no device was consulted');
+      expect(_asMap(error.data)['request'], isA<String>(),
+          reason: 'the new refusal travels through _refuse, which '
+              'pre-substitutes data["request"] (02-05)');
+    });
+
+    test('a replayed engage is answered from the log and the hold is taken '
+        'once', () async {
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+      final cmd = kit.mintCmd();
+
+      final first = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+      expect(WriteResult.fromJson(first), isA<WriteApplied>(),
+          reason: 'a replay of a settled engage proves nothing if the engage '
+              'did not settle');
+      final mintedAfterFirst = kit.api.mintedCmds.length;
+
+      final replay = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+
+      expect(WriteResult.fromJson(replay), isA<WriteApplied>(),
+          reason: 'one press of a hold-to-run button arriving twice is one '
+              'press: it is answered with the outcome that press already got');
+      expect(kit.api.mintedCmds, hasLength(mintedAfterFirst),
+          reason: 'a second holdToRun would have minted a second engage write '
+              'at the source — one operator action, one movement of the '
+              'machine, and that is the whole property');
+    });
+
+    test('an engage the gateway loses track of answers unknown, not an error',
+        () async {
+      final kit = _kit();
+      final cmd = kit.mintCmd();
+      // A disposed source is the cheapest thing that throws out of holdToRun;
+      // the shape asserted is any failure the gateway cannot interpret.
+      await kit.api.dispose();
+
+      final answer = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': cmd,
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+
+      final result = WriteResult.fromJson(answer);
+      expect(result, isA<WriteUnknown>(),
+          reason: 'a throw out of the hold seam is the same class of event as '
+              'a throw out of api.write: the engage may still have reached the '
+              'device, and saying otherwise is what makes an operator press '
+              'the button again');
+      expect((result as WriteUnknown).reason.kind, 'gateway_lost_track',
+          reason: 'one try/catch covers both seams, so both answer with the '
+              'same reason');
+    });
+  });
+
   group('the error armor', () {
     test('every refusal carries a pre-substituted request', () async {
       final kit = _kit();

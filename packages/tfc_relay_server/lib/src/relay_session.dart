@@ -271,6 +271,11 @@ final class RelaySession {
   /// ever answer about writes it handled itself.
   final WriteOutcomeLog _writeOutcomes;
 
+  /// This session's value handlers, held because they own the hold-to-run map
+  /// and [_teardown] has to release it. Null only between construction and
+  /// [_start], which is one expression in [serve].
+  ValueHandlers? _values;
+
   /// Puts one already-encoded [frame] on this session's transport.
   ///
   /// The tick engine's write seam, and the only way out of a session that does
@@ -315,6 +320,17 @@ final class RelaySession {
 
   String? get epoch => _epoch;
   String? _epoch;
+
+  /// How many hold-to-run ticks this session dropped — malformed, or naming a
+  /// hold it never engaged.
+  ///
+  /// A passthrough to [ValueHandlers.droppedHoldTicks], exposed here for the
+  /// same reason [sentCloseCode] and [lastSeenMs] are: it is the only way a
+  /// case that drives a whole session can read a property the wire cannot
+  /// report, because a tick is never answered. Nothing in production depends
+  /// on it; the production home for the number is a `PIPE.*` health key in
+  /// Phase 8 (D-P5-I).
+  int get droppedHoldTicks => _values?.droppedHoldTicks ?? 0;
 
   /// When the last inbound frame arrived, on the session's clock.
   ///
@@ -423,6 +439,11 @@ final class RelaySession {
       // for the same reason the epoch is.
       ownerOf: () => _sessionId,
     );
+    // Kept, unlike `handlers`, because this object owns state with a lifetime:
+    // the hold-to-run map. `_teardown` has to be able to release it, and the
+    // fact that it hangs off a *per-session* object is what makes that release
+    // free (05-RESEARCH §G.4 / D-P5-J).
+    _values = values;
     _on(Methods.hello, _hello);
     _on(Methods.ping, _ping);
     _on(Methods.subscribe, handlers.subscribe);
@@ -432,6 +453,24 @@ final class RelaySession {
     _on(Methods.read, values.read);
     _on(Methods.readFresh, values.readFresh);
     _on(Methods.readMany, values.readMany);
+    // **The first client→server notification on this wire** (05-05). Every
+    // other name above is a request; all five *sent* notifications travel the
+    // other way and are asserted absent from this table. `h` is registered
+    // here because that is how json_rpc_2 dispatches an un-idded frame — the
+    // same `_methods[name]` lookup a request goes through — so it lands in
+    // `registeredMethods` and `surface_test.dart` keeps it in a literal of its
+    // own rather than in the nine names a client may *call*.
+    //
+    // It comes through `_on` deliberately, which buys the gate and the armor
+    // with no new rule for anyone to remember. **D-P5-H**: a tick arriving
+    // before `hello` is therefore refused by `_gated` — right, since a
+    // pre-hello tick has no hold to feed — and the refusal *evaporates*
+    // instead of being answered, because the frame has no id for a response
+    // to name. That is the one asymmetry in this table: every other gate
+    // refusal is visible to the client. The refusal still reaches the
+    // `RelayErrorHandler` through `onUnhandledError`, so it is unanswered,
+    // not unnoticed.
+    _on(Methods.holdTick, values.holdTick);
     // Method-not-found, answered by us rather than by json_rpc_2.
     //
     // Left to the library, `Server._tryFallbacks` throws
@@ -714,6 +753,14 @@ final class RelaySession {
     _closed = true;
     if (code != null) _sentCloseCode ??= code;
     _onClosing?.call(this);
+    // In the synchronous half, and beside `subscriptions.clear()` because it
+    // is the same kind of debt: a listener still attached pushes values at a
+    // panel that is gone, and a hold still engaged pushes a *counter* at a
+    // machine on behalf of one. The second is the one that moves metal, so it
+    // must not wait for the peer to close — this line is what makes "the app
+    // was killed / the cable was pulled / the reaper swept it" all stop the
+    // jog, since every one of those arrives here (T-05-20, D-P5-J).
+    _values?.releaseAllHolds();
     subscriptions.clear();
     await peer.close();
     if (code != null) await _closeChannel?.call(code, reason);

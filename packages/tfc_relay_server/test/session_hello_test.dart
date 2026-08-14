@@ -277,8 +277,8 @@ void main() {
             'that nobody diffs against the server');
   });
 
-  test('the handler table is exactly the nine names a client may call',
-      () async {
+  test('the handler table is exactly the nine names a client may call, plus '
+      'the one it announces', () async {
     final link = _link();
     addTearDown(link.dispose);
 
@@ -294,6 +294,11 @@ void main() {
           Methods.read,
           Methods.readFresh,
           Methods.readMany,
+          // 05-05: the hold tick, a client→server notification. It is in the
+          // ledger because json_rpc_2 dispatches an un-idded frame through
+          // the same table, and it is not a name a client may *call* — see
+          // `surface_test.dart`, which keeps the two in separate literals.
+          Methods.holdTick,
         },
         reason: 'the wire surface is a closed set: 03-05 added subscribe and '
             'unsubscribe, 03-08 froze it, and 04-02 added the five value '
