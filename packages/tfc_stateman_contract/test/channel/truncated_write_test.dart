@@ -1,5 +1,5 @@
 /// CR-01, end to end: a write whose result is truncated on the wire never
-/// settles.
+/// settles for a client that carries no deadline of its own.
 ///
 /// The Phase 1 review cycle queued this case as "a truncated write result must
 /// surface as an unknown outcome, never a throw". The measured failure is worse
@@ -15,13 +15,26 @@
 /// already have moved. That is the write-safety property in `CLAUDE.md` losing
 /// to silence rather than to a retry.
 ///
-/// **This file is the counterpart to a fix that does not exist yet.** Phase 4's
-/// `RemoteStateMan` per-request deadline is what turns this hang into an honest
-/// `WriteUnknown`, and when it lands, this file's polarity flips: the hang
-/// assertions below become "resolves, as unknown, inside the deadline". The
-/// deadline deliberately does **not** live in `ChannelStateMan`
+/// **The fix exists now, and it is not this client's.** Phase 4 landed the
+/// per-request deadline in `RemoteStateMan`, and the flipped assertion — the
+/// same corruption on the same key, resolving as an honest `WriteUnknown`
+/// inside that deadline — lives in
+/// `packages/tfc_relay_client/test/truncated_write_test.dart`. It is there
+/// rather than here on purpose: asserting it in this package would make the
+/// client a dev dependency of the suite that judges it, and a judge that
+/// depends on a defendant is the edge this project keeps grep-checkable
+/// elsewhere. The two files are a pair and each names the other by path, so
+/// they cannot drift apart unnoticed.
+///
+/// So this file's polarity does **not** flip, and the reason is the honest one
+/// rather than an oversight: `ChannelStateMan` has no deadline and is not going
+/// to get one. The deadline deliberately does not live there
 /// (`channel_state_man.dart:193-206` says so at the call site) — inventing one
-/// here would hide the thing this file exists to show.
+/// would hide the thing this file exists to show, which is what the envelope
+/// alone does with a truncated answer. What changed is what the assertions
+/// below *claim*: they are no longer a bug report waiting for a fix, they are
+/// the measured behaviour of a client that carries no deadline of its own, and
+/// the price of not carrying one.
 ///
 /// Assertion mechanism, from `lib/src/meta.dart:60-79` with the polarity
 /// inverted: await into a plain bool through `onTimeout`, then assert on the
@@ -64,8 +77,8 @@ MessageCorruption _truncateTheWriteResult() =>
 void main() {
   final wall = Stopwatch()..start();
 
-  test('a truncated write result leaves the write unsettled — forever',
-      () async {
+  test('a client with no deadline of its own never settles a truncated write '
+      'result', () async {
     final harness = serveFakeOverChannel(
       corruptServerToClient: _truncateTheWriteResult(),
     );
@@ -82,9 +95,12 @@ void main() {
           'forever (Finding 15): the operator is told nothing — not applied, '
           'not failed, not unknown — so the write box stays as it was and the '
           'operator will re-send a command the plant may already have taken. '
-          'If it settles now, either Phase 4\'s per-request deadline has '
-          'landed (in which case this file inverts: assert it resolves as '
-          'WriteUnknown) or something is answering that should not be. '
+          'If it settles now, something in this path grew a deadline. That is '
+          'good news in the wrong place: the settling belongs to a client that '
+          'owns one, and Phase 4 put that assertion in '
+          'packages/tfc_relay_client/test/truncated_write_test.dart where it '
+          'is judged against a real socket. Find what added the timeout here, '
+          'because this file can no longer show what the envelope alone does. '
           'Resolved with ${attempt.outcome}, failed with ${attempt.failure}',
     );
     expect(

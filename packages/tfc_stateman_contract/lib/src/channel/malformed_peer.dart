@@ -44,9 +44,12 @@
 /// Three of those outcomes are threats that this package cannot fix and does
 /// not pretend to:
 ///
-///  * the hang is T-02-27, transferred to Phase 4 — a per-request deadline in
-///    `RemoteStateMan` is the mitigation, and `test/channel/
-///    truncated_write_test.dart` is what it will be verified against;
+///  * the hang is T-02-27, transferred to Phase 4 and mitigated there — a
+///    per-request deadline in `RemoteStateMan` turns it into an honest
+///    `WriteUnknown`, verified in
+///    `packages/tfc_relay_client/test/truncated_write_test.dart`, whose
+///    counterpart here (`test/channel/truncated_write_test.dart`) goes on
+///    holding the un-deadlined behaviour in place so the two can be compared;
 ///  * `1e999` arriving as `Infinity` is T-02-28, transferred to Phases 3-4 —
 ///    `sanitize` has to run on the decode path, not only on encode;
 ///  * the absence of any frame-size limit is T-02-29, transferred to Phase 3.
