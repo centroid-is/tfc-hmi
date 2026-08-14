@@ -308,6 +308,15 @@ jobs:
         fi
         dart test --tags oslevel
 
+    # 02-14's lane-budget arm is opt-in (it costs a full fault-lane run);
+    # exactly one job watches the number, per its SUMMARY.
+    - name: Fault-lane wall-clock budget
+      if: runner.os == 'Linux'
+      working-directory: packages/tfc_stateman_contract
+      env:
+        FAULT_LANE_BUDGET: "1"
+      run: dart test test/faults/mode_integrity_test.dart
+
   tfc-dart-test:
     strategy:
       fail-fast: false
