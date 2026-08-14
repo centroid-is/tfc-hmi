@@ -80,6 +80,7 @@ export 'src/check.dart';
 export 'src/data_services_contract.dart';
 export 'src/freshness_contract.dart';
 export 'src/harness.dart';
+export 'src/hold_harness.dart';
 export 'src/meta.dart';
 export 'src/read_contract.dart';
 export 'src/store_contract.dart';

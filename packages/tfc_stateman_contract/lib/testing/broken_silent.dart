@@ -69,6 +69,21 @@ class NeverResponds extends FakeStateMan {
           {Object? expect, String? cmd}) =>
       _never();
 
+  @override
+  Future<List<WriteResult>> writeStatus(List<String> cmds) => _never();
+
+  /// The engage never answers, so no handle is ever handed out.
+  ///
+  /// Overridden rather than inherited even though the inherited version would
+  /// hang too — it awaits [write], which is already silent here. Overriding
+  /// says so at the surface, and it is what keeps this class's promise
+  /// checkable by reading it: every member either swallows or never answers,
+  /// and none of them throws. An `UnimplementedError` would surface as
+  /// `meta.dart:80-85`'s third forbidden failure mode and make every hold
+  /// check in the integrity sweep fail for the wrong reason.
+  @override
+  Future<HoldHandle> holdToRun(String key) => _never();
+
   /// Even shutting down never finishes.
   ///
   /// A source whose `dispose` hangs is an ordinary and nasty bug — a socket

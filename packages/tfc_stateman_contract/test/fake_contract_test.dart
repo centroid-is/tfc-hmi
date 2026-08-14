@@ -296,6 +296,111 @@ void main() {
               'it contains, so a chart draws the point before its own bar');
     });
 
+    test('feeding a hold costs no upstream write attempts', () async {
+      // Trap 3. Ten ticks a second through `write` would mint ten cmds a
+      // second into the strict `_mintedCmds` set and inflate the attempt
+      // counter WRT-03's whole contract rests on. A hold costs exactly two
+      // writes — the engage and the release — however long it is held.
+      final source = FakeStateMan(staleAfter: _staleAfter);
+      addTearDown(source.dispose);
+
+      final hold = await source.holdToRun(_speedKey);
+      expect(hold.isHeld, isTrue);
+      final engage = source.mintedCmds.single;
+
+      for (var i = 0; i < 10; i++) {
+        hold.tick();
+      }
+
+      expect(source.mintedCmds, [engage],
+          reason: 'ten ticks minted ${source.mintedCmds.length - 1} extra '
+              'command ids; a tick is not an operator action and must not '
+              'take one');
+      expect(source.upstreamWriteAttempts(engage), 1);
+
+      await hold.release();
+      expect(source.mintedCmds, hasLength(2),
+          reason: 'a whole hold is two writes: the engage and the release');
+      for (final cmd in source.mintedCmds) {
+        expect(source.upstreamWriteAttempts(cmd), 1);
+      }
+    });
+
+    test('a hold engages, advances the tag, and writes zero on release',
+        () async {
+      // D-P5-D: one key, and it is the key passed in — the tag *is* the
+      // deadman counter, so what the PLC sees is what this test reads.
+      final source = FakeStateMan(staleAfter: _staleAfter);
+      addTearDown(source.dispose);
+
+      final hold = await source.holdToRun(_speedKey);
+      expect(source.read(_speedKey)?.asInt, 1,
+          reason: 'the engage write puts 1 on the tag');
+
+      hold.tick();
+      hold.tick();
+      expect(source.read(_speedKey)?.asInt, 3);
+
+      await hold.release();
+      expect(source.read(_speedKey)?.asInt, 0,
+          reason: '0 is reserved for released');
+      expect(await hold.onReleased, HoldEnded.operatorLetGo);
+    });
+
+    test(
+        'writeStatus answers not_received only for a datable cmd minted after '
+        'this source started', () async {
+      // The gateway's three-piece positive-evidence rule
+      // (`value_handlers.dart:357-398`), mirrored rather than loosened: a
+      // reference implementation that says not_received more freely than the
+      // gateway does is one the contract cannot use, because not_received is
+      // the only answer that invites an operator to move a machine again.
+      final source = FakeStateMan(staleAfter: _staleAfter);
+      addTearDown(source.dispose);
+
+      final applied = await source.write(_speedKey, 12);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final fresh = newUlid();
+      final ancient = newUlid(nowMs: now - const Duration(days: 1).inMilliseconds);
+      final ahead = newUlid(nowMs: now + const Duration(hours: 1).inMilliseconds);
+      const gibberish = 'not-a-ulid';
+
+      final answers = await source
+          .writeStatus([applied.cmd, fresh, ancient, ahead, gibberish]);
+
+      expect(answers.map((a) => a.cmd).toList(),
+          [applied.cmd, fresh, ancient, ahead, gibberish],
+          reason: 'the answer is positionally aligned with the question');
+      expect(answers[0], isA<WriteApplied>(),
+          reason: 'a recorded outcome is the answer, always');
+      expect(answers[1], isA<WriteNotReceived>());
+      expect(answers[1].isSafeToResend, isTrue);
+      expect(answers[2], isA<WriteUnknown>(),
+          reason: 'minted before this source existed: forgetting is not '
+              'evidence of never happening');
+      expect(answers[3], isA<WriteUnknown>(),
+          reason: 'minted in a future this source has not reached — a panel '
+              'whose clock runs ahead must not buy itself a re-send window');
+      expect(answers[4], isA<WriteUnknown>());
+      expect((answers[4] as WriteUnknown).reason.kind, 'unrecognized_cmd');
+    });
+
+    test('disposing the source releases every live hold', () async {
+      // A disposed source that leaves a counter advancing is a machine nobody
+      // is holding.
+      final source = FakeStateMan(staleAfter: _staleAfter);
+      final hold = await source.holdToRun(_speedKey);
+      expect(hold.isHeld, isTrue);
+
+      await source.dispose();
+
+      expect(await hold.onReleased, HoldEnded.disposed);
+      expect(hold.isHeld, isFalse);
+      expect(hold.tick, returnsNormally,
+          reason: 'a tick after the source is gone must be a no-op, not a '
+              'throw out of a timer nobody is awaiting');
+    });
+
     test('what ran is what the umbrella accounts for', () {
       expect(ranFull, full,
           reason: 'the fully-capable run executed $ranFull cases while '

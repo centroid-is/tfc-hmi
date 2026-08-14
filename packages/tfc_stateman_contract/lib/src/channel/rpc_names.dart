@@ -89,9 +89,26 @@ abstract final class HarnessMethods {
   /// A write — the real wire's name, because this is the real concept.
   static const write = Methods.write;
 
+  /// Re-asking what became of a list of commands — the real wire's name, for
+  /// the same reason [write] uses it.
+  static const writeStatus = Methods.writeStatus;
+
   /// A batch of changed values, pushed source → client. The real wire's name,
   /// one character long, for the same reason it is one character there.
   static const update = Methods.update;
+
+  // ------------------------------------------------------- the hold feed
+
+  /// One feed of a hold-to-run deadman, client → source. The real wire's
+  /// name, because it is the real concept.
+  ///
+  /// In its own block and deliberately **not** in [levers]. A lever is a name
+  /// that must never appear on a wire a connected client can reach, and this
+  /// one does appear there: the gateway registers `Methods.holdTick` and a
+  /// panel sends it ten times a second while a button is held. It is a
+  /// notification in both places for the same reason — a tick has no outcome
+  /// to correlate, and the safety property is that the counter STOPS.
+  static const holdTick = Methods.holdTick;
 
   // ----------------------------------------------------------------- levers
 
@@ -383,6 +400,8 @@ abstract final class HarnessMethods {
     readMany,
     keys,
     write,
+    writeStatus,
+    holdTick,
     ...levers,
     ...dataServices,
   };

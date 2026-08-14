@@ -263,6 +263,53 @@ final class ChannelStateMan
     return result;
   }
 
+  @override
+  Future<List<WriteResult>> writeStatus(List<String> cmds) async {
+    final raw = _asJson(
+        await _peer.sendRequest(HarnessMethods.writeStatus, {'cmds': cmds}));
+    final results = raw['results'];
+    return [
+      if (results is List)
+        for (final entry in results)
+          WriteResult.fromJson(_asJson(entry))
+      else
+        // An answer with no results list is an answer about nothing. Every
+        // cmd asked about therefore stays unknown — the one thing that must
+        // not happen is a truncated frame reading as "never received", which
+        // is the only verdict that invites a second actuation.
+        for (final cmd in cmds)
+          WriteUnknown(
+              cmd,
+              const WriteReason('malformed_result:writeStatus',
+                  message: 'the source answered without a results list, so '
+                      'nothing about these commands can be ruled out')),
+    ];
+  }
+
+  /// Engages a hold with an ordinary write of its own.
+  ///
+  /// No caller-minted cmd anywhere in this path, so the [UnsupportedError]
+  /// above is never tripped: this implementation *originates* the engage and
+  /// the release, and the harness write protocol has no field to carry
+  /// somebody else's id.
+  ///
+  /// The feed goes out as a notification through the same one-way lane the
+  /// levers use, for the same two reasons: a tick has no answer to wait for,
+  /// and a `sendNotification` on a closed peer throws synchronously, so the
+  /// gate in [_lever] is what keeps a disposed source from dying inside
+  /// json_rpc_2 instead of quietly stopping.
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await write(key, 1);
+    return HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) =>
+          _lever(HarnessMethods.holdTick, {'k': key, 'n': counter}),
+      onRelease: (counter) => write(key, counter),
+    );
+  }
+
   /// Records, locally, that the value written to [key] was not a number.
   ///
   /// After the outcome rather than before it, and the ordering is load-bearing
