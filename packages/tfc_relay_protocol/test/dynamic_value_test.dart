@@ -557,5 +557,33 @@ void main() {
           reason: 'the recursive decoder is new code receiving untrusted '
               'bytes; a stack overflow would take the whole gateway down');
     });
+
+    test('the public constructor honours the same bound', () {
+      // WR-11. The decoder bounded its recursion and the constructor did
+      // not — and the constructor is what the OPC UA / Modbus / M2400
+      // converters call on the gateway, with structures the upstream
+      // controls.
+      Object? deep = 1;
+      for (var i = 0; i < DynamicValue.maxDepth + 5; i++) {
+        deep = {'child': deep};
+      }
+      expect(() => DynamicValue(value: deep), throwsArgumentError,
+          reason: 'ArgumentError rather than FormatException: the caller here '
+              'is local code, so this is programmer error');
+    });
+
+    test('a self-referential structure from a converter is refused', () {
+      final cycle = <String, Object?>{};
+      cycle['self'] = cycle;
+      expect(() => DynamicValue(value: cycle), throwsArgumentError);
+    });
+
+    test('a structure just inside the bound still constructs', () {
+      Object? deep = 1;
+      for (var i = 0; i < DynamicValue.maxDepth - 2; i++) {
+        deep = [deep];
+      }
+      expect(() => DynamicValue(value: deep), returnsNormally);
+    });
   });
 }
