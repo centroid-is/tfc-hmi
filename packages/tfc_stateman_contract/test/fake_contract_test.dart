@@ -42,6 +42,10 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 /// ones in the suite that spend real time, and they are registered twice here.
 const _staleAfter = Duration(milliseconds: 100);
 
+/// An ordinary plant key, for the two cases below that poke at the fake
+/// directly rather than through the contract.
+const _speedKey = 'ST101.CN01.MOT01.speed';
+
 /// The whole file's wall-clock budget, asserted at the end rather than hoped
 /// for.
 ///
@@ -218,6 +222,44 @@ void main() {
               '${dataServicesChecks.length} data-service cases and nothing '
               'else; it removed ${full - reduced}, so a flag is reaching '
               'further than the capability it names');
+    });
+
+    test('a cancelled subscription stops being held for closing', () async {
+      // WR-08. Nothing ever removed a closer, including on cancel, so a
+      // long-lived source — and Phase 3/4 tests will hold one across many
+      // cases — accumulated a controller per subscribe call, and dispose then
+      // awaited close() on every controller ever created. This is shipped
+      // lib/ code, not a test file.
+      final source = FakeStateMan(staleAfter: _staleAfter);
+      addTearDown(source.dispose);
+      expect(source.openHandedOutStreams, 0);
+
+      for (var i = 0; i < 50; i++) {
+        final subscription = source.subscribe(_speedKey).listen((_) {});
+        await subscription.cancel();
+      }
+
+      expect(source.openHandedOutStreams, 0,
+          reason: 'fifty subscribe/cancel cycles left '
+              '${source.openHandedOutStreams} controllers registered; the '
+              'registry tracks streams that still need closing, not every '
+              'stream ever handed out');
+    });
+
+    test('a live subscription is still held, and closed by dispose', () async {
+      final source = FakeStateMan(staleAfter: _staleAfter);
+      var done = false;
+      source.subscribe(_speedKey).listen((_) {}, onDone: () => done = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(source.openHandedOutStreams, 1,
+          reason: 'deregistering on cancel must not deregister a stream '
+              'nobody cancelled');
+
+      await source.dispose();
+      expect(done, isTrue,
+          reason: 'a consumer that never cancelled must still be told the '
+              'source is gone');
+      expect(source.openHandedOutStreams, 0);
     });
 
     test('what ran is what the umbrella accounts for', () {
