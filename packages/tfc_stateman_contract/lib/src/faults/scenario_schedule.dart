@@ -48,6 +48,7 @@
 /// incumbent it excludes, at the same offset, immediately before itself.
 library;
 
+import 'dart:async';
 import 'dart:math';
 
 import 'fault_proxy.dart';
@@ -710,6 +711,190 @@ final class SeededScenarioRandom implements Random {
 
   @override
   bool nextBool() => (_next() & 1) != 0;
+}
+
+/// Applies a generated timeline to a live proxy, and records what it applied.
+///
+/// **The only timed thing in this file.** CONTEXT restricts injected clocks to
+/// pure state machines, and this driver is deliberately not one: it pulls real
+/// levers on real sockets with real timers. The part that needed determinism —
+/// which fault, and when — was moved out of the timed path rather than faked
+/// inside it, which is the whole argument of the library doc above.
+///
+/// **One chained timer, not one timer per entry.** Each step schedules the
+/// next from the elapsed time of a single [Stopwatch], so a mutation that
+/// takes a moment to apply — `reject` awaits its own teardown — does not push
+/// every later offset out by that much. It also makes [stop] exactly true:
+/// there is only ever one pending timer to cancel, so "no timer fires after
+/// stop" is a property of the shape rather than a bookkeeping claim (T-02-37).
+final class ScenarioPlayback {
+  ScenarioPlayback({
+    required this.proxy,
+    required this.timeline,
+    required this.seed,
+  });
+
+  final FaultProxy proxy;
+
+  /// The generated storm, in offset order.
+  final List<ScheduledFault> timeline;
+
+  /// The seed that generated [timeline], carried so failures can print it.
+  final int seed;
+
+  final List<ScheduledFault> _applied = <ScheduledFault>[];
+  final Stopwatch _clock = Stopwatch();
+  Completer<void>? _finished;
+  Timer? _pending;
+  int _index = 0;
+  bool _stopped = false;
+
+  /// What has actually been applied, in the order it was applied.
+  ///
+  /// Compared against [timeline] by the tests: a divergence between what was
+  /// planned and what happened is the failure mode a soak cannot otherwise
+  /// see, because both halves look fine on their own.
+  List<ScheduledFault> get applied => List.unmodifiable(_applied);
+
+  /// Whether the driver is between [run] and its completion.
+  bool get isRunning => _finished != null && !_finished!.isCompleted;
+
+  /// Plays the whole timeline. Completes when it ends or when [stop] is called.
+  ///
+  /// Completes with a [ScenarioPlaybackFailure] if a lever throws — which,
+  /// given the generator's conflict resolution, means the exclusion table and
+  /// the generator have drifted apart. The failure carries the repro log,
+  /// because that is the moment somebody needs it.
+  Future<void> run() {
+    final existing = _finished;
+    if (existing != null) return existing.future;
+    final finished = _finished = Completer<void>();
+    _clock.start();
+    _schedule();
+    return finished.future;
+  }
+
+  /// Stops the storm and cancels the pending timer. Idempotent.
+  ///
+  /// Does **not** undo what has been applied: a caller that wants a clean link
+  /// afterwards clears the modes itself, or shuts the proxy down. Unwinding
+  /// here would mean this driver deciding the order of eight lever pulls
+  /// nobody scheduled, on a proxy a test may already be asserting against.
+  void stop() {
+    if (_stopped) return;
+    _stopped = true;
+    _pending?.cancel();
+    _pending = null;
+    _clock.stop();
+    final finished = _finished;
+    if (finished != null && !finished.isCompleted) finished.complete();
+  }
+
+  /// The `(seed, schedule log)` artifact for this run.
+  String get reproLog =>
+      ScenarioSchedule.reproLog(seed: seed, timeline: timeline);
+
+  /// The same, plus what was actually applied — for a divergence.
+  String get divergenceReport => '$reproLog\n'
+      '--- applied ${_applied.length} of ${timeline.length} ---\n'
+      '${_applied.join('\n')}';
+
+  void _schedule() {
+    if (_stopped) return;
+    if (_index >= timeline.length) {
+      final finished = _finished;
+      _clock.stop();
+      if (finished != null && !finished.isCompleted) finished.complete();
+      return;
+    }
+    final due = timeline[_index].offset - _clock.elapsed;
+    _pending = Timer(due < Duration.zero ? Duration.zero : due, _fire);
+  }
+
+  Future<void> _fire() async {
+    _pending = null;
+    if (_stopped) return;
+    final entry = timeline[_index];
+    try {
+      await apply(proxy, entry.mutation);
+    } catch (error, stack) {
+      final finished = _finished;
+      _stopped = true;
+      _clock.stop();
+      if (finished != null && !finished.isCompleted) {
+        finished.completeError(
+            ScenarioPlaybackFailure(entry, error, divergenceReport), stack);
+      }
+      return;
+    }
+    // Checked again after the await: `stop()` may have run while a lever that
+    // awaits its own teardown was in flight, and appending here would leave an
+    // applied log with an entry after the stop that ended the run.
+    if (_stopped) return;
+    _applied.add(entry);
+    _index++;
+    _schedule();
+  }
+
+  /// Pulls the lever [mutation] names on [proxy].
+  ///
+  /// An exhaustive switch over the sealed [FaultMutation], which is the point
+  /// of it being sealed: a ninth lever added to `fault_proxy.dart` with a
+  /// mutation beside it and no arm here fails `dart analyze` at this switch,
+  /// rather than becoming a storm entry that logs itself and does nothing.
+  ///
+  /// `reject` is the only arm that returns a future worth awaiting — it tears
+  /// down live pairs — and the whole method is `Future`-returning so the
+  /// chained timer can wait for it before timing the next offset.
+  static Future<void> apply(FaultProxy proxy, FaultMutation mutation) {
+    switch (mutation) {
+      case FlapMutation(:final up, :final down, :final enabled):
+        proxy.flap(up, down, enabled: enabled);
+      case LatencyMutation(:final latency, :final jitter):
+        // Latency before jitter, and both always: jitter is the same mode's
+        // second dial, so setting one and leaving the other would arm the mode
+        // with a value from the previous mutation still in place.
+        proxy.latency = latency;
+        proxy.jitter = jitter;
+      case ThrottleMutation(:final bytesPerSecond):
+        proxy.throttleBytesPerSec = bytesPerSecond;
+      case BlackholeMutation(:final enabled):
+        proxy.blackhole(enabled: enabled);
+      case CutMidFrameMutation(:final afterBytes):
+        proxy.cutMidFrame(afterBytes);
+      case KillOnceMutation():
+        proxy.killOnce();
+      case RejectMutation(:final enabled):
+        // Returned rather than awaited in the arm, for the reason
+        // `FaultProxy.reject` is not an `async` function: its composition check
+        // is a synchronous throw, and it must stay one all the way out to
+        // `_fire`'s try block.
+        return proxy.reject(enabled: enabled);
+      case BufferServerToClientMutation(:final enabled):
+        proxy.bufferServerToClient = enabled;
+    }
+    return Future<void>.value();
+  }
+}
+
+/// A lever threw during playback, with everything needed to reproduce it.
+final class ScenarioPlaybackFailure implements Exception {
+  const ScenarioPlaybackFailure(this.entry, this.cause, this.report);
+
+  /// The entry whose lever threw.
+  final ScheduledFault entry;
+
+  /// What the lever threw.
+  final Object cause;
+
+  /// The repro log, plus what had been applied before the throw.
+  final String report;
+
+  @override
+  String toString() => 'the storm could not be played: applying $entry threw '
+      '$cause.\nThe generator resolves the exclusion table before emitting, so '
+      'this means the table and the generator have drifted apart — or the '
+      'proxy was in a state the storm did not put it in.\n$report';
 }
 
 /// `mm:ss.mmm`, so a log column lines up and a reader can scan offsets.
