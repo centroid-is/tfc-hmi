@@ -47,6 +47,28 @@
 /// `flush()`, an `add` that returns `void` — so tick-paced draining plus the
 /// buffer's own verdicts is what §5's flush-gating maps to on this transport.
 /// A reader at this line does not have to go and find the plan.
+///
+/// **What the backpressure verdicts actually measure** (03-REVIEW WR-11, and
+/// this is the honest version of the paragraph above). `drain()` runs
+/// unconditionally every tick and `ws.sink.add` never blocks, so the buffer is
+/// empty at the start of every tick by construction. What `poll` reads is
+/// therefore **how much this server produced for one client during one tick** —
+/// not how far behind that client is. A genuinely slow client's backlog
+/// accumulates in the `dart:io` socket's own unbounded write buffer, which is
+/// exactly the thing this process cannot see. So `maxPending` is a
+/// per-client *production* ceiling wearing a backpressure ceiling's name, the
+/// soft `peakThreshold` window measures sustained heavy production rather than
+/// sustained client backlog, and **a slow client is detected only by the
+/// heartbeat deadline** — a panel that stops reading stops sending heartbeats,
+/// and the reaper is what notices.
+///
+/// This is the accepted `dart:io` divergence taken to its conclusion rather
+/// than a defect in the implementation of a decision, but SRV-04's "convert
+/// silent heap growth into a visible reconnect" is only half met and the docs
+/// used to read as though it were fully met. Phase 6 has exactly two real
+/// options and should choose deliberately: a periodic `ws.sink.done`-based
+/// liveness check, or moving to `package:web_socket` if it ever exposes a
+/// completion signal.
 library;
 
 import 'dart:async';
