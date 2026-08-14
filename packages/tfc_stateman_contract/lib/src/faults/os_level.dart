@@ -34,11 +34,13 @@
 ///    twice.** `delay 50ms` measured a 108 ms RTT. The delay parameter is
 ///    therefore documented as *per traversal*, and [loopbackRoundTripFor] is
 ///    the single place the factor of two is written down.
-/// 2. **`tc qdisc change` and `tc qdisc replace` preserve parameters that the
-///    new command does not mention.** Verified: after a `rate 1mbit`, a
-///    `replace … delay 7ms` still had the rate attached. So setup is `del`
-///    (tolerating "nothing was installed") then `add`, always. Neither keyword
-///    appears in this file, and a test greps for that.
+/// 2. **The `change` and `replace` subcommands of `tc` preserve parameters
+///    that the new command does not mention.** Verified: after a `rate
+///    1mbit`, a further `… delay 7ms` through either of them still had the
+///    rate attached. So setup is `del` (tolerating "nothing was installed")
+///    then `add`, always. Neither keyword is constructed anywhere in this
+///    file, and `oslevel_test.dart` asserts that on the argument vectors
+///    themselves rather than on the source text.
 /// 3. **`tc qdisc del` with nothing installed exits 2.** [removeNetem]
 ///    tolerates exactly that code and no other, which is what makes an
 ///    unconditional teardown safe without making a genuine failure silent.
