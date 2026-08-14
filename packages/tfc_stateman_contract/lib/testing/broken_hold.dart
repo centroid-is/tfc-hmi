@@ -60,6 +60,18 @@ import 'fake_state_man.dart';
 /// surgical arm names the case that still passes.
 class EngagesWithoutActuating extends FakeStateMan {
   EngagesWithoutActuating({super.staleAfter});
+
+  @override
+  Future<HoldHandle> holdToRun(String key) async => HoldHandle(
+        key: key,
+        // Minted locally and applied to nothing. The id even looks right,
+        // which is what makes the result survive an eyeball.
+        engagement: WriteApplied(newUlid(),
+            readback: 1, at: DateTime.now().millisecondsSinceEpoch),
+        onTick: (counter) => applyHoldTick(key, counter),
+        onRelease: (counter) async => WriteApplied(newUlid(),
+            readback: counter, at: DateTime.now().millisecondsSinceEpoch),
+      );
 }
 
 /// Honours no tick at all.
@@ -76,6 +88,12 @@ class EngagesWithoutActuating extends FakeStateMan {
 /// the surgical case pins it by naming the one check that still passes.
 class NeverAdvancesTheCounter extends FakeStateMan {
   NeverAdvancesTheCounter({super.staleAfter});
+
+  @override
+  void applyHoldTick(String key, int counter) {
+    // Swallowed, exactly the way a dropped notification is swallowed: no
+    // error, no counter, no complaint.
+  }
 }
 
 /// Lets one more counter value reach the plant after the release.
@@ -92,6 +110,62 @@ class NeverAdvancesTheCounter extends FakeStateMan {
 /// looking, and it is cancelled in [dispose] so it cannot outlive its case.
 class KeepsFeedingAfterRelease extends FakeStateMan {
   KeepsFeedingAfterRelease({super.staleAfter});
+
+  /// The last counter this source put on a tag, so the straggler carries the
+  /// value the cancelled timer would have sent next.
+  int _lastCounter = 1;
+
+  Timer? _straggler;
+
+  @override
+  void applyHoldTick(String key, int counter) {
+    _lastCounter = counter;
+    super.applyHoldTick(key, counter);
+  }
+
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await write(key, 1);
+    final hold = HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) => applyHoldTick(key, counter),
+      onRelease: (counter) {
+        // Scheduled before the zero is even written, which is what an
+        // already-queued timer amounts to.
+        _straggler = Timer(const Duration(milliseconds: 5),
+            () => applyHoldTick(key, _lastCounter + 1));
+        return write(key, counter);
+      },
+    );
+    if (hold.isHeld) {
+      _liveHolds.add(hold);
+      unawaited(hold.onReleased.then((_) => _liveHolds.remove(hold)));
+    }
+    return hold;
+  }
+
+  /// This variant's own registry, because building the handle here puts these
+  /// holds outside the superclass's. Kept honest on purpose: a teardown that
+  /// also forgot to release would break a second check, and then neither
+  /// failure would pin anything.
+  final _liveHolds = <HoldHandle>{};
+
+  /// Releases like the honest source does, and only then cancels the timer the
+  /// release just scheduled. A pending timer left behind here is the zone leak
+  /// `suite_integrity_test.dart:158-169` hunts, and a sabotage that leaked one
+  /// would fail an unrelated case rather than its own.
+  @override
+  Future<void> dispose() async {
+    for (final hold in List<HoldHandle>.of(_liveHolds)) {
+      unawaited(hold
+          .release(reason: HoldEnded.disposed)
+          .then((_) {}, onError: (Object _) {}));
+    }
+    _liveHolds.clear();
+    await super.dispose();
+    _straggler?.cancel();
+  }
 }
 
 /// Advances the counter on a timer of its own, with no tick arriving.
@@ -107,6 +181,42 @@ class KeepsFeedingAfterRelease extends FakeStateMan {
 /// surgical: this variant is wrong about *unattended* holds only.
 class FeedsTheCounterOnATimer extends FakeStateMan {
   FeedsTheCounterOnATimer({super.staleAfter});
+
+  /// 20 ms: fast enough that a whole quiet window is unmistakable, slow enough
+  /// that the hand-called tick every case makes right after its engage still
+  /// lands first.
+  static const _cadence = Duration(milliseconds: 20);
+
+  Timer? _pump;
+  int _counter = 1;
+
+  @override
+  void applyHoldTick(String key, int counter) {
+    _counter = counter;
+    super.applyHoldTick(key, counter);
+  }
+
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final hold = await super.holdToRun(key);
+    if (hold.isHeld) {
+      _counter = hold.counter;
+      _pump = Timer.periodic(_cadence, (_) => applyHoldTick(key, ++_counter));
+      // Stopping on release is what keeps this surgical: the variant is wrong
+      // about *unattended* holds and about nothing else.
+      unawaited(hold.onReleased.then((_) => _pump?.cancel()));
+    }
+    return hold;
+  }
+
+  @override
+  Future<void> dispose() async {
+    _pump?.cancel();
+    await super.dispose();
+    // Again after the superclass, because its teardown releases the hold and
+    // this variant's own release path runs through the callback above.
+    _pump?.cancel();
+  }
 }
 
 /// Hands out a hold it does not track, so its teardown has nothing to release.
@@ -117,4 +227,18 @@ class FeedsTheCounterOnATimer extends FakeStateMan {
 /// still down, and by then nothing is watching the counter it left advancing.
 class LeavesHoldsRunningOnDispose extends FakeStateMan {
   LeavesHoldsRunningOnDispose({super.staleAfter});
+
+  /// The honest source's [holdToRun] with the two registry lines missing, and
+  /// nothing else changed. That is what the bug looks like in a diff, which is
+  /// why it survives review.
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final engagement = await write(key, 1);
+    return HoldHandle(
+      key: key,
+      engagement: engagement,
+      onTick: (counter) => applyHoldTick(key, counter),
+      onRelease: (counter) => write(key, counter),
+    );
+  }
 }
