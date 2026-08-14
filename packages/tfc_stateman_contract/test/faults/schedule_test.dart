@@ -267,6 +267,35 @@ void main() {
       }
     });
 
+    test('a playback stopped before it ran refuses to run rather than hanging',
+        () async {
+      final proxy = await _proxy();
+      final timeline = ScenarioSchedule.generate(
+        seed: 90210,
+        duration: _shortStorm,
+        minGap: _shortMinGap,
+        maxGap: _shortMaxGap,
+      );
+      final playback =
+          ScenarioPlayback(proxy: proxy, timeline: timeline, seed: 90210);
+
+      // The order an unconditional `addTearDown(playback.stop)` registered at
+      // construction produces when the body never gets as far as run().
+      playback.stop();
+
+      expect(playback.run, throwsStateError,
+          reason: 'stop() only completes the run future if one exists, so a '
+              'run() afterwards builds a fresh completer, calls _schedule, '
+              'which returns immediately because the driver is stopped — and '
+              'the future never completes. The caller then hangs until '
+              'package:test times the case out thirty seconds later, and the '
+              'failure names the test file rather than this object, which is '
+              'the exact failure mode within() exists to eliminate everywhere '
+              'else in this package');
+      expect(playback.applied, isEmpty);
+      expect(playback.isRunning, isFalse);
+    });
+
     test('stop() cancels the pending timer and nothing further is applied',
         () async {
       final proxy = await _proxy();
