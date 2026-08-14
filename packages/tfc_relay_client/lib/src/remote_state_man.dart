@@ -411,6 +411,14 @@ final class RemoteStateMan implements StateManApi {
     final id = cmd ?? newUlid();
     _unresolved.add(id);
 
+    // Whether any bytes were offered to a socket for this write. A `cmd` that
+    // never reached one is a `cmd` no gateway can have an opinion about, and
+    // re-querying it on every reconnect for the rest of the shift is how a
+    // panel with a dead link grows an unresolved set until `writeStatus` is
+    // refused for being over `maxKeysPerSubscribe` — taking the recovery path
+    // for the *genuine* unknowns down with it.
+    var dispatched = false;
+
     WriteResult result;
     try {
       final raw = await _request(
@@ -422,23 +430,53 @@ final class RemoteStateMan implements StateManApi {
           if (expect != null) 'expect': sanitizedExpect.value,
         },
         deadline: config.writeDeadline,
-        onSend: () => _writesSent++,
+        onSend: () {
+          dispatched = true;
+          _writesSent++;
+        },
       );
       result = WriteResult.fromJson(_asJson(raw));
     } catch (error) {
       // One seam decides whether this means "we do not know" or "the server
       // said no", and it rethrows anything that is a defect in this process
       // rather than a condition of the plant (`failure_taxonomy.dart`).
-      result = writeOutcomeFor(id, error);
+      result = _writeOutcomeFor(id, error);
     }
 
     // Only an established outcome settles the command. `WriteUnknown` is the
-    // one verdict that does not, which is exactly what makes it re-queryable.
-    if (result is! WriteUnknown) _unresolved.remove(id);
+    // one verdict that does not, which is exactly what makes it re-queryable —
+    // unless this client watched the request fail to leave, in which case
+    // there is nothing on the far side to reconcile against.
+    if (result is! WriteUnknown || !dispatched) _unresolved.remove(id);
 
     _adoptReadback(key, result);
     if (sanitizedValue.hadNonFinite) _markNonFinite(key);
     return result;
+  }
+
+  /// [writeOutcomeFor], plus the one fact the taxonomy cannot know: this
+  /// client is shutting down.
+  ///
+  /// A page that closes while a write is parked on the barrier gets a
+  /// `StateError` out of [ReadinessBarrier.dispose] or [_refuseIfDisposed], and
+  /// the taxonomy rethrows an unrecognised `StateError` on purpose — a defect
+  /// in this process must never be reported to an operator as a plant
+  /// condition. But `write` promises never to throw to report an outcome, and
+  /// a closing page handed a `StateError` instead of a `WriteResult` is that
+  /// promise broken at the one moment nobody is watching the screen.
+  ///
+  /// [_disposed] is a fact this object owns rather than a message match, so
+  /// nothing widens here the way a string predicate widens. Unknown and not
+  /// never-received: what this client knows is that it stopped looking.
+  WriteResult _writeOutcomeFor(String cmd, Object error) {
+    if (_disposed && error is StateError) {
+      return WriteUnknown(
+          cmd,
+          WriteReason(FailureKind.linkDown,
+              message: 'the panel was shut down before this write could be '
+                  'sent: ${error.message}'));
+    }
+    return writeOutcomeFor(cmd, error);
   }
 
   /// Puts an applied write's readback into the store before the write resolves.
@@ -591,14 +629,38 @@ final class RemoteStateMan implements StateManApi {
     void Function()? onSend,
   }) async {
     _refuseIfDisposed(method);
-    await _supervisor.barrier.ready;
+    final budget = deadline ?? config.controlDeadline;
+    try {
+      await _supervisor.barrier.ready.timeout(budget);
+    } on TimeoutException {
+      // **Never queued behind a link that is not there.** The barrier owns no
+      // clock (`readiness_barrier.dart`: "the supervisor owns the clock", and
+      // the supervisor's only schedules reconnects), so an unbounded wait here
+      // made every deadline in `ClientConfig` a measurement of the round trip
+      // alone. Two things came of that, and the second is the dangerous one: a
+      // write never settled, so the operator's spinner never stopped; and when
+      // the gateway came back — ten minutes later, at shift change — the
+      // request went out. A button pressed at 09:00 actuating a ram at 09:10 is
+      // a queue, and `CLAUDE.md` names "no queue / no retry" as *the*
+      // write-safety property.
+      //
+      // Reported as "no link", never as a server answer: `writeOutcomeFor`
+      // turns [LinkDown] into `WriteUnknown(link_down)` and reads surface it
+      // through `classifyFailure`.
+      throw LinkDown(method);
+    }
     _refuseIfDisposed(method);
     onSend?.call();
+    // The budget again rather than what is left of it. A link that arrived at
+    // the last millisecond of the wait has earned the whole round-trip window;
+    // a truncated one would expire against a perfectly healthy gateway and
+    // report a write it never sent as unknown. So the worst case is two
+    // budgets, bounded and deliberate, instead of one budget and a queue.
     return callWithDeadline(
       () => _supervisor.peer,
       method,
       params: params,
-      deadline: deadline ?? config.controlDeadline,
+      deadline: budget,
     );
   }
 

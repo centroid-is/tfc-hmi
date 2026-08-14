@@ -38,6 +38,7 @@ import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
 import 'package:tfc_relay_client/src/failure_taxonomy.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';
+import 'package:tfc_relay_client/src/ws_transport.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/faults.dart';
@@ -125,6 +126,15 @@ RemoteStateMan _client(Uri uri, {ClientConfig? config, Set<String>? keys}) {
   );
   addTearDown(client.dispose);
   return client;
+}
+
+/// A port nothing is bound to: the panel's ordinary state at power-on, and a
+/// dial that will be refused for as long as the case cares to wait.
+Future<Uri> _deadPort() async {
+  final dead = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+  final port = dead.port;
+  await dead.close();
+  return Uri.parse('ws://127.0.0.1:$port');
 }
 
 /// Polls [done] until it holds or [budget] runs out, and fails naming [what].
@@ -316,6 +326,103 @@ void main() {
       // And nothing is left ticking: the watchdog's deadline and the pending
       // reconnect are the only two timers this client ever owns.
       expect(client.debugTimerCount, 0);
+    });
+  });
+
+  group('a write with no link under it', () {
+    // The barrier has no clock of its own by design (`readiness_barrier.dart`:
+    // "the supervisor owns the clock"), and the supervisor's clock only
+    // schedules reconnects. So before 04-review CR-01 every deadline in
+    // `ClientConfig` measured the round trip and nothing else: a write issued
+    // against a gateway that was not there waited for a link forever, and then
+    // went out the moment one appeared. That is a queue, and "no queue / no
+    // retry" is the write-safety property.
+
+    test('a write issued while the link is down settles unknown on its own '
+        'deadline', () async {
+      final client = _client(
+        await _deadPort(),
+        config: _config(write: _writeDeadline),
+      );
+      expect(client.isReady, isFalse);
+
+      final started = DateTime.now();
+      final result = await client
+          .write(_writableKey, 7)
+          .timeout(_writeDeadline * 10, onTimeout: () {
+        fail('the write never settled: the operator\'s spinner never stops, '
+            'and there is no outcome to act on');
+      });
+      final took = DateTime.now().difference(started);
+
+      expect(result, isA<WriteUnknown>());
+      expect((result as WriteUnknown).reason.kind, FailureKind.linkDown);
+      expect(took, lessThan(_writeDeadline + _band),
+          reason: 'a write must reach one terminal state inside its own '
+              'deadline whatever the link is doing');
+      expect(client.debugWritesSent, 0);
+    });
+
+    test('a write that expired waiting for a link is not dispatched when one '
+        'arrives', () async {
+      final gateway = await _gateway();
+      var dialAllowed = false;
+      final client = RemoteStateMan(
+        uri: gateway.uri,
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey, _writableKey},
+        dial: (_) async {
+          if (!dialAllowed) {
+            throw const SocketException('the gateway is rebooting');
+          }
+          return connect(gateway.uri);
+        },
+      );
+      addTearDown(client.dispose);
+
+      final result = await client.write(_writableKey, 4242);
+      expect(result, isA<WriteUnknown>());
+
+      // The gateway comes back — ten minutes later on a plant, one backoff
+      // window here.
+      dialAllowed = true;
+      await _until('the link to come up', () => client.isReady);
+      await _settle();
+
+      expect(client.debugWritesSent, 0,
+          reason: 'a button pressed at 09:00 against a gateway that reboots '
+              'for ten minutes must not actuate the machinery at 09:10');
+      expect(gateway.served.mintedCmds, isEmpty,
+          reason: 'nothing reached the plant for a write the operator was '
+              'already told was unknown');
+      expect(client.read(_writableKey)?.value, isNot(4242));
+    });
+
+    test('dispose while a write is parked resolves it unknown rather than '
+        'throwing', () async {
+      final client = _client(await _deadPort());
+
+      // Attached before the dispose that provokes it, as the read case above
+      // does: an unlistened rejection lands on the ambient handler and
+      // `package:test` attributes it to whichever case runs next.
+      final pending = client.write(_writableKey, 1);
+      final settled = expectLater(
+        pending.timeout(_recovery),
+        completion(isA<WriteUnknown>()),
+        reason: 'a closing page gets a WriteResult, not a StateError: '
+            '`write` never throws to report an outcome',
+      );
+      await client.dispose();
+      await settled;
+    });
+
+    test('a write after dispose is an outcome, not a throw', () async {
+      final client = _client(await _deadPort());
+      await client.dispose();
+
+      final result = await client.write(_writableKey, 1).timeout(_recovery);
+      expect(result, isA<WriteUnknown>());
+      expect(client.debugWritesSent, 0);
     });
   });
 
