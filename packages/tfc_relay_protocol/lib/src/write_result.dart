@@ -95,6 +95,22 @@ sealed class WriteResult {
       ? WriteReason.fromJson(raw.cast<String, Object?>())
       : const WriteReason(WriteReason.unspecified);
 
+  /// Whether re-sending this command is definitively safe.
+  ///
+  /// True for [WriteNotReceived] and nothing else — an outcome the gateway
+  /// could only reach with positive evidence (`write_outcome_log.dart`: the
+  /// cmd is datable, was minted after the log started, is not in the future,
+  /// and is still inside the dedup TTL). Every other outcome either landed at
+  /// the plant or may have.
+  ///
+  /// It says a re-send *may be offered*, never that one should happen. No
+  /// code path in this system re-sends a write by itself; re-send is always
+  /// an operator decision, on this outcome as much as any other.
+  ///
+  /// The default is `false` so that an outcome nobody has thought about is
+  /// never the one that invites a second movement of the machine.
+  bool get isSafeToResend => false;
+
   Map<String, Object?> toJson();
 }
 
@@ -147,6 +163,10 @@ final class WriteUnknown extends WriteResult {
 /// re-send (and even then, re-sending is an operator decision).
 final class WriteNotReceived extends WriteResult {
   const WriteNotReceived(super.cmd);
+
+  /// The one arm where this is true. See [WriteResult.isSafeToResend].
+  @override
+  bool get isSafeToResend => true;
 
   @override
   Map<String, Object?> toJson() => {'cmd': cmd, 'outcome': 'not_received'};
