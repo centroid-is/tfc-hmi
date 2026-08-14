@@ -15,10 +15,13 @@
 /// `expectContractViolation`), the test-only control surface an implementation
 /// must expose for a case to be able to make a value arrive
 /// (`StateManHarness`), the write-side control surface (`StateManWriteHarness`,
-/// declared alongside the cases that need it), and the sub-suites written so
-/// far. The remaining sub-suite (`runDataServicesContract`) and the
-/// `runStateManContract` umbrella arrive with the plans that contract those
-/// areas.
+/// declared alongside the cases that need it), the timeseries seeding lever
+/// (`StateManDataHarness`, declared the same way), and every sub-suite. The
+/// `runStateManContract` umbrella is the one thing still to come; it has to
+/// forward the capability flags each sub-suite now declares
+/// (`supportsWrites`/`readOnlyKey`, `supportsBrowse`/`fixture`,
+/// `supportsDataServices`/`seedTimeseries`), because a flag an umbrella drops
+/// is a capability that stops being judged.
 ///
 /// The reference implementation is deliberately **not** exported from here:
 /// `package:tfc_stateman_contract/testing/fake_state_man.dart` is a separate
@@ -26,7 +29,9 @@
 /// contract.
 library;
 
+export 'src/browse_contract.dart';
 export 'src/check.dart';
+export 'src/data_services_contract.dart';
 export 'src/freshness_contract.dart';
 export 'src/harness.dart';
 export 'src/meta.dart';
