@@ -90,12 +90,22 @@ final class ConflatingSendBuffer {
   }
 
   /// Quality-only transition (value unchanged upstream).
+  ///
+  /// Composes rather than replaces when the pending value is already flagged
+  /// non-finite: that band is a property of the *value*, the pending value was
+  /// sanitized to null when it was put, and a quality-only transition is by
+  /// definition not news about the value. Letting it win outright would land
+  /// an open-circuit 4–20 mA reading at the client as `null` under good
+  /// quality — a blank box that looks like an unbound tag rather than a fault.
   void putQuality(String sub, int handle, Quality quality) {
     final s = _sub(sub);
     final pendingValue = s.changes[handle];
     if (pendingValue != null) {
+      final composed = pendingValue.q == Quality.badNonFinite
+          ? Quality.worst([quality, Quality.badNonFinite])
+          : quality;
       s.changes[handle] =
-          WireValue.of(pendingValue.v, quality: quality, t: pendingValue.t);
+          WireValue.of(pendingValue.v, quality: composed, t: pendingValue.t);
     } else {
       s.qualities[handle] = quality;
     }
