@@ -10,13 +10,15 @@
 ///
 /// The overhead is a small constant — 1 to 2.5 ms per direction — and not a
 /// proportion of the configured delay. That is the whole reason every timing
-/// assertion in this file is `inInclusiveRange(2 * d, 2 * d + 20ms)` and never
+/// assertion in this file is `inInclusiveRange(2 * d, 2 * d + _slack)` and never
 /// a proportional band: a band of one twentieth is 5 ms at 50 ms, which is
 /// tighter than the measured overhead and fails on a good day, and 25 ms at
 /// 500 ms, which is looser than the overhead and would pass a mode that had
 /// quietly stopped injecting anything. The slack is widened from the measured
-/// 4-9 ms to 20 ms for CI hardware (Assumption A5), and it is the same 20 ms at
-/// both delays on purpose.
+/// 4-9 ms to 20 ms for CI hardware (Assumption A5), and it is the same slack
+/// at both delays on purpose. It is 75 ms rather than 20 off Linux, where the
+/// runners are shared and noisy — see [_slack] for why that is a statement
+/// about the hardware and not a loosened assertion.
 ///
 /// **What this mode is for.** Phase 7's F19 and F20 are slow-link scenarios;
 /// their precondition is a proxy that can add a known one-way delay to a live
@@ -41,10 +43,25 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 /// The additive slack every timing assertion in this file allows.
 ///
 /// Finding 6 measured 2-9 ms of total round-trip overhead across 50, 200 and
-/// 500 ms. 20 ms is that, roughly doubled twice over, for a CI box that is
-/// slower and noisier than the machine the table came from (Assumption A5).
-/// It is a constant because the overhead is a constant.
-const _slack = Duration(milliseconds: 20);
+/// 500 ms. It is a constant because the overhead is a constant, and it is
+/// additive rather than proportional for the reason the library doc gives.
+///
+/// **Two values, by platform, and the Linux one is the real bound.** 20 ms is
+/// Finding 6's measurement roughly doubled twice over, and it is what the
+/// Linux leg keeps: that leg runs on the runner this phase's numbers were
+/// taken against, and its resolution is what would notice a mode that had
+/// quietly stopped injecting most of its delay. The hosted macOS and Windows
+/// runners are neither quiet nor dedicated — `dart_test.yaml`'s
+/// `concurrency: 1` removes this suite's self-inflicted noise and nothing
+/// about a noisy neighbour — and tens of milliseconds of event-loop jitter
+/// there is ordinary. At 20 ms those legs would go red about the runner while
+/// naming the latency mode, which is the expensive kind of noise: it trains
+/// people to re-run CI. 75 ms is wide enough for that jitter and still far
+/// under the smallest delay this file injects, so a mode that stopped
+/// injecting is caught on every leg.
+final _slack = Platform.isLinux
+    ? const Duration(milliseconds: 20)
+    : const Duration(milliseconds: 75);
 
 /// The delay the headline arm injects, and the one the live-mutability arm
 /// switches on mid-connection.
@@ -68,10 +85,16 @@ const _jitterSamples = 8;
 
 /// The ceiling the live-mutability arm holds its *undelayed* round trip to.
 ///
-/// Loopback through the proxy measures a millisecond or two. 100 ms is far
-/// above that and far below the 400 ms the same connection must show after the
-/// lever is set, so the arm cannot pass by both readings being slow.
-const _undelayedCeiling = Duration(milliseconds: 100);
+/// Loopback through the proxy measures a millisecond or two. The ceiling is
+/// far above that and far below the 400 ms the same connection must show after
+/// the lever is set, so the arm cannot pass by both readings being slow —
+/// which is the property being kept, and the reason 150 ms off Linux is still
+/// a ceiling rather than a formality. The first round trip of the file pays
+/// for a cold-start JIT compile of the whole pump path, and on a loaded
+/// Windows runner that alone can approach 100 ms.
+final _undelayedCeiling = Platform.isLinux
+    ? const Duration(milliseconds: 100)
+    : const Duration(milliseconds: 150);
 
 /// A payload small enough to cross as one chunk in each direction.
 ///
