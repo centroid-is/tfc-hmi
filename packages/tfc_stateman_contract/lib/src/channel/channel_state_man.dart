@@ -301,13 +301,41 @@ final class ChannelStateMan
   @override
   Future<HoldHandle> holdToRun(String key) async {
     final engagement = await write(key, 1);
-    return HoldHandle(
+    final hold = HoldHandle(
       key: key,
       engagement: engagement,
       onTick: (counter) =>
           _lever(HarnessMethods.holdTick, {'k': key, 'n': counter}),
       onRelease: (counter) => write(key, counter),
     );
+    if (hold.isHeld) {
+      _liveHolds.add(hold);
+      unawaited(hold.onReleased.then((_) => _liveHolds.remove(hold)));
+    }
+    return hold;
+  }
+
+  /// Every hold this source is currently feeding.
+  ///
+  /// Kept for one reason and it is [dispose]'s: a source that goes away with a
+  /// counter still advancing has left a machine running with the window that
+  /// was watching it already closed. The same registry, for the same reason,
+  /// as `fake_state_man.dart:764-765` and `remote_state_man.dart`'s.
+  final _liveHolds = <HoldHandle>{};
+
+  /// Ends every live hold, without waiting for the release writes.
+  ///
+  /// Not awaited, matching the reference implementation
+  /// (`fake_state_man.dart:800-813`): the counter stops the instant the handle
+  /// is released, which is the whole safety property, and a teardown that
+  /// waited for the zero to be acknowledged would hang on exactly the dead
+  /// link that caused it.
+  void _releaseHolds(HoldEnded reason) {
+    for (final hold in List<HoldHandle>.of(_liveHolds)) {
+      unawaited(
+          hold.release(reason: reason).then((_) {}, onError: (Object _) {}));
+    }
+    _liveHolds.clear();
   }
 
   /// Records, locally, that the value written to [key] was not a number.
@@ -482,9 +510,15 @@ final class ChannelStateMan
   /// registers `api.dispose` with `addTearDown` and nothing else, so a served
   /// source left running here is a freshness watchdog ticking for the rest of
   /// the session against a store nobody is watching.
+  ///
+  /// Holds are released **before** the flag, for the same two reasons
+  /// `fake_state_man.dart:307-313` gives: the release is a write and [write]
+  /// refuses to run on a disposed source, and a source that tore itself down
+  /// leaving a counter advancing is a machine nobody is holding.
   @override
   Future<void> dispose() async {
     if (_disposed) return;
+    _releaseHolds(HoldEnded.disposed);
     _disposed = true;
     _store.dispose();
     for (final close in List.of(_closeHandedOutStreams)) {

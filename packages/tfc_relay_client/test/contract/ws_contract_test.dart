@@ -2,7 +2,7 @@
 /// WebSocket, in front of a real `RelayServer`, in front of a real plant fake.
 ///
 /// This is CLI-01's headline and the leg that makes it mean something: the
-/// same 44 properties `LocalStateMan` is held to, driven through a socket, a
+/// same 50 properties `LocalStateMan` is held to, driven through a socket, a
 /// gateway session and a handle table. A defect in `RemoteStateMan` shows up
 /// here as a *named property* failing rather than as a mystery on a socket.
 ///
@@ -78,21 +78,32 @@ const _readOnlyKey = 'ST301.CN21.SEN01.temp';
 /// **Which estimate 31 matched.** Three numbers were in circulation before this
 /// leg ran: the phase brief's 36 (8 named missing), 04-RESEARCH's group table
 /// (browse 6 + data services 7 = 13 unreachable, so 31), and 04-PATTERNS' 32.
-/// The registries enumerate as 5 + 3 + 5 + 8 + 10 + 6 + 7 = 44, and every
-/// unreachable check falls in the last two groups, so **RESEARCH's table is the
-/// one that holds** and the other two were estimates made before the read-only
-/// case and the browse group were counted the same way. 36 in particular is not
-/// reachable from this registry by any grouping — it would need five of the
-/// thirteen handler-less checks to be answerable, and none is.
+/// The registries enumerate as 5 + 3 + 5 + 8 + 11 + 6 + 7 + 5 = 50, and every
+/// unreachable check falls in the browse and data-services groups, so
+/// **RESEARCH's table is the one that holds** and the other two were estimates
+/// made before the read-only case and the browse group were counted the same
+/// way. 36 in particular is not reachable from this registry by any grouping —
+/// it would need five of the thirteen handler-less checks to be answerable, and
+/// none is.
+///
+/// **Why 31 became 37 in Phase 5.** Six checks were added — five hold-to-run
+/// properties in a registry of their own and one `writeStatus` property in
+/// `write` — and every one of them is *reachable* rather than a new gap,
+/// because the gateway handler behind them landed in the same phase (05-05's
+/// hold branch, the `h` notification and the per-session hold map) rather than
+/// being deferred to Phase 10 the way `browse.*` was. That is also why
+/// `expectUnreachable`'s guard could stay narrowed to browse and data-services
+/// names (`tfc_stateman_contract.dart:251-263`): a hold check cannot be excused
+/// here even by somebody who wanted to.
 ///
 /// **This number is proven to bite**, three ways rather than one. Raising it to
-/// 32 with the gap list unchanged fails the arithmetic case below with
-/// `Expected: <44> Actual: <45>` (run, recorded, reverted). Moving a check into
+/// 38 with the gap list unchanged fails the arithmetic case below with
+/// `Expected: <50> Actual: <51>` (run, recorded, reverted). Moving a check into
 /// the gap list to keep the arithmetic while lowering the count fails
 /// `expectUnreachable`, which rejects a named check that passes. And a
 /// reachable check that regresses fails as itself, because the suite is green
-/// only when all 31 pass.
-const int reachableChecks = 31;
+/// only when all 37 pass.
+const int reachableChecks = 37;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///

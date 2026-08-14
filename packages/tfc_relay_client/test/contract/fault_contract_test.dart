@@ -106,7 +106,12 @@ const _benignThrottle = 4 * 1024 * 1024;
 /// `ws_contract_test.dart`'s ever disagree, one of the two legs is running a
 /// different set of checks and the difference is the finding — which is why
 /// the accounting case below reads that file rather than trusting this comment.
-const int reachableThroughTheProxy = 31;
+///
+/// 31 until Phase 5, when the suite grew six checks — five hold-to-run
+/// properties and one `writeStatus` property — all of them reachable, because
+/// the gateway handler behind them landed in the same phase (05-05) rather
+/// than being deferred. The WS leg's own comment carries the argument in full.
+const int reachableThroughTheProxy = 37;
 
 /// Every check this leg does not pass, by name — all of them for one cause.
 ///

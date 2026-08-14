@@ -11,7 +11,7 @@
 /// setpoint the machine already took is how a second start command reaches a
 /// conveyor somebody is standing on.
 ///
-/// Five properties, in the order an operator meets them:
+/// Six properties, in the order an operator meets them:
 ///
 ///  * **Exactly one of three states.** Applied with a readback, rejected with a
 ///    reason, or explicitly unknown. Never a throw, and never a fourth thing.
@@ -27,6 +27,12 @@
 ///    implementation at call time, because the call *is* the operator action
 ///    (CONTEXT D-04). Without it there is no way to reconcile, after a
 ///    reconnect, what became of the write that was in flight.
+///  * **An outcome can be asked for again, and only one answer invites a
+///    re-send.** After a reconnect the operator is owed a verdict on the write
+///    that was in flight, and `writeStatus` is where they get it — added to the
+///    interface in Phase 5 for exactly this reason (05-RESEARCH §C.2): a member
+///    off the interface is a member no contract check can ask about, and
+///    `not_received` is the single verdict that makes a second actuation safe.
 ///  * **Nothing an operator can type can detonate the pipe.** A read-only key
 ///    is rejected rather than thrown (`M2400DeviceClientAdapter.write` throws
 ///    `UnsupportedError` today, `state_man.dart:929-931`), and a non-finite
@@ -568,6 +574,74 @@ Future<void> checkStoredValueIsTheReadbackNotTheTypedValue(
           'to');
 }
 
+/// `writeStatus` answers for a cmd this source has seen, and `not_received`
+/// for one it never did.
+///
+/// The check that makes 05-RESEARCH §C.2's argument pay. `writeStatus` was
+/// moved onto `StateManApi` in this phase for one reason: a member off the
+/// interface is a member no contract check can ask about, so Phase 8's
+/// `LocalStateMan` would have shipped its write-recovery behaviour judged by
+/// nothing at all. This is the case that judges it, on every implementation.
+///
+/// The `cmd` is taken from a completed [WriteResult] and never passed in.
+/// Partly because that is what a reconnecting client actually does — it asks
+/// about the actions it minted — and partly because `ChannelStateMan.write`
+/// refuses a caller-minted id (`channel_state_man.dart:229-241`), so a check
+/// that passed one would fail the channel leg for a harness reason rather than
+/// an implementation one (§C.5).
+///
+/// **[WriteResult.isSafeToResend] is the assertion that matters.** Every arm
+/// but `not_received` is false, because every other arm leaves open the
+/// possibility that the plant already took the write. A source that answered
+/// `not_received` for a command it merely could not remember would be handing
+/// the operator a licence to actuate a machine twice — which is why the
+/// unseen-cmd arm here is a *freshly minted* id rather than a made-up string:
+/// a source is judged on how hard `not_received` is to get, not on how helpful
+/// it sounds.
+Future<void> checkWriteStatusAnswersSeenAndUnseenCommands(
+    StateManApi api) async {
+  final plant = writeHarnessOf(api);
+  plant.setValue(_setpointKey, 1200);
+
+  final done = await _outcomeOf(api.write(_setpointKey, 1450),
+      'the write whose outcome is then re-queried resolving');
+  // Minted here and never sent anywhere: an action this source cannot have
+  // heard of, which is the only input for which `not_received` is true.
+  final never = newUlid();
+
+  final answers = await within(api.writeStatus([done.cmd, never]),
+      're-querying the outcome of one command this source settled and one it '
+      'has never seen');
+
+  expect(answers, hasLength(2),
+      reason: 'two commands were asked about and ${answers.length} answers '
+          'came back; the answers are positional, so a short list shifts every '
+          'later verdict onto the wrong command — and one of those verdicts '
+          'could be the not_received that invites a second actuation');
+  expect(answers[0].cmd, done.cmd,
+      reason: 'the first answer is about "${answers[0].cmd}" and the first '
+          'command asked about was "${done.cmd}"; an answer under the wrong id '
+          'is an outcome attributed to an action nobody took');
+  expect(answers[0].isSafeToResend, isFalse,
+      reason: 'this source settled this command itself and still reports it as '
+          'safe to re-send. Re-sending a write the plant already took is a '
+          'second actuation of machinery an operator commanded once');
+  expect(answers[1], isA<WriteNotReceived>(),
+      reason: 'a command this source has never seen came back as '
+          '${answers[1].runtimeType}; not_received is the one verdict that '
+          'tells an operator a re-send is safe, and a source that cannot say '
+          'it for an id it demonstrably never received leaves them with no '
+          'safe move at all');
+  expect(answers[1].cmd, never,
+      reason: 'the second answer is about "${answers[1].cmd}" rather than the '
+          'command it was asked about; positional alignment is the whole '
+          'protocol here');
+  expect(answers[1].isSafeToResend, isTrue,
+      reason: 'not_received came back and isSafeToResend says otherwise, so '
+          'the one re-send-safe verdict on the write path cannot be acted on '
+          'by any caller that reads the flag instead of switching on the type');
+}
+
 /// The case names, declared once so [runWriteContract] can override a case by
 /// name without the string appearing twice.
 const _appliedCase =
@@ -585,6 +659,9 @@ const _pendingCase = 'a write in flight is visible as pending on the value';
 const _readOnlyCase = 'a write to a read-only key is rejected, not thrown';
 const _nonFiniteCase = 'a non-finite write is sanitized, not detonated';
 const _readbackCase = 'the store shows the readback, not the value that was typed';
+const _writeStatusCase =
+    'writeStatus answers for a cmd this source has seen, and not_received for '
+    'one it never did';
 
 /// Every write property, keyed by the sentence it asserts.
 ///
@@ -602,6 +679,7 @@ const writeChecks = <String, Check<StateManApi>>{
   _readOnlyCase: checkReadOnlyKeyIsRejectedNotThrown,
   _nonFiniteCase: checkNonFiniteWriteIsSanitizedNotThrown,
   _readbackCase: checkStoredValueIsTheReadbackNotTheTypedValue,
+  _writeStatusCase: checkWriteStatusAnswersSeenAndUnseenCommands,
 };
 
 /// Registers the write contract against implementations from [make].
