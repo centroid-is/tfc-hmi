@@ -49,11 +49,17 @@ const _shortRun = Duration(seconds: 4);
 /// peak.
 const _longRun = Duration(seconds: 12);
 
-/// The most the long window's peak may exceed the short window's.
+/// The most the twelve-second sample may exceed the four-second one.
 ///
-/// Not 1.0: the arms are separate rigs with separately negotiated kernel
-/// buffers, and the chunk in flight when the peak is sampled is genuine noise.
-/// 1.5x is far below the 3x an unbounded queue would show over 3x the window.
+/// Both samples come from **one** rig, which is the only way this comparison
+/// means anything: peak pending bytes vary by a megabyte between rigs
+/// depending on how much `dart:io` had already buffered when the pause landed
+/// and how the kernel sized that connection's buffers, so two rigs compared
+/// against each other measure that variance and fail on a busy machine.
+/// Sampled twice in one run, the number is monotonic and the ratio is a
+/// statement about growth and nothing else. 1.5x is generous for a queue that
+/// fills within the first second and far below the 3x an unbounded one shows
+/// over 3x the window.
 const _growthAllowance = 1.5;
 
 /// Chunk size the firehose writes.
@@ -69,9 +75,6 @@ const _minimumOffered = 1024 * 1024;
 
 const _connectBudget = Duration(seconds: 5);
 const _arrivalBudget = Duration(seconds: 20);
-
-/// The short window's peak, measured once and reused by the long arm.
-int? _shortRunPeak;
 
 void main() {
   test('carries bytes through intact and in order', () async {
@@ -101,18 +104,16 @@ void main() {
 
   test('holds its queue under the bound against a consumer that never reads',
       () async {
-    final run = await _measureStalledRun(_shortRun);
-    _shortRunPeak = run.peakPendingBytes;
+    final run = await _measureStalledRun(_shortRun, sampleAt: _shortRun);
 
     expect(run.bytesOffered, greaterThanOrEqualTo(_minimumOffered),
         reason: 'the firehose only managed ${run.bytesOffered} bytes, so the '
-            'rig never pressured the line and its peak of '
-            '${run.peakPendingBytes} proves nothing — a bounded-memory arm '
-            'that never applied pressure is the vacuous pass this phase keeps '
-            'finding');
-    expect(run.peakPendingBytes, lessThan(_bound),
-        reason: 'the line held ${run.peakPendingBytes} bytes against a bound '
-            'of $_bound; ungated, RESEARCH measured the same four seconds cost '
+            'rig never pressured the line and its peak of ${run.peakAtEnd} '
+            'proves nothing — a bounded-memory arm that never applied '
+            'pressure is the vacuous pass this phase keeps finding');
+    expect(run.peakAtEnd, lessThan(_bound),
+        reason: 'the line held ${run.peakAtEnd} bytes against a bound of '
+            '$_bound; ungated, RESEARCH measured the same four seconds cost '
             '4463 MB of RSS, and a test host that dies of memory never reports '
             'on the fault it was injecting');
   });
@@ -120,29 +121,30 @@ void main() {
   test(
       'is bounded rather than merely slower: three times the window is not '
       'three times the queue', () async {
-    // The short arm normally supplies this. Measured here too when this test
-    // is run on its own, so `-N` on the long arm cannot report a comparison
-    // against a number nobody took.
-    final shortPeak =
-        _shortRunPeak ?? (await _measureStalledRun(_shortRun)).peakPendingBytes;
-    final run = await _measureStalledRun(_longRun);
+    // One rig, sampled twice. Two rigs compared against each other measure
+    // per-connection buffer variance, which is about a megabyte and has
+    // nothing to do with whether the queue grows.
+    final run = await _measureStalledRun(_longRun, sampleAt: _shortRun);
 
     expect(run.bytesOffered, greaterThanOrEqualTo(_minimumOffered),
         reason: 'the long window pushed only ${run.bytesOffered} bytes, so '
-            'the comparison below is between two idle rigs rather than between '
-            'two pressured ones');
-    expect(run.peakPendingBytes, lessThan(_bound),
-        reason: 'the line held ${run.peakPendingBytes} bytes at '
+            'the comparison below is between two readings of an idle rig');
+    expect(run.peakAtSample, lessThan(_bound),
+        reason: 'the line held ${run.peakAtSample} bytes at '
+            '${_shortRun.inSeconds} s against a bound of $_bound');
+    expect(run.peakAtEnd, lessThan(_bound),
+        reason: 'the line held ${run.peakAtEnd} bytes at '
             '${_longRun.inSeconds} s against a bound of $_bound');
     expect(
-      run.peakPendingBytes,
-      lessThanOrEqualTo((shortPeak * _growthAllowance).ceil()),
-      reason: 'the ${_longRun.inSeconds} s peak was ${run.peakPendingBytes} '
-          'against ${_shortRun.inSeconds} s at $shortPeak. The queue must be '
-          '*bounded*, not merely slower to fill: a line that grows with time '
-          'passes a four-second test and takes the soak run down at minute '
-          'forty, where the failure looks like a memory leak in whatever the '
-          'harness was testing',
+      run.peakAtEnd,
+      lessThanOrEqualTo((run.peakAtSample * _growthAllowance).ceil()),
+      reason: 'the same line peaked at ${run.peakAtSample} bytes after '
+          '${_shortRun.inSeconds} s and ${run.peakAtEnd} after '
+          '${_longRun.inSeconds} s. The queue must be *bounded*, not merely '
+          'slower to fill: a line that grows with time passes a four-second '
+          'test and takes the soak run down at minute forty, where the '
+          'failure looks like a memory leak in whatever the harness was '
+          'testing',
     );
   }, timeout: const Timeout(Duration(seconds: 120)));
 
@@ -220,11 +222,13 @@ void main() {
   });
 }
 
-/// One stalled-consumer window: what the line peaked at, and what it was fed.
-typedef _StalledRun = ({int peakPendingBytes, int bytesOffered});
+/// One stalled-consumer window, read at two points on the same rig.
+typedef _StalledRun = ({int peakAtSample, int peakAtEnd, int bytesOffered});
 
-/// Runs a firehose into a line whose consumer never reads, for [window].
-Future<_StalledRun> _measureStalledRun(Duration window) async {
+/// Runs a firehose into a line whose consumer never reads, for [window],
+/// recording the peak at [sampleAt] on the way past.
+Future<_StalledRun> _measureStalledRun(Duration window,
+    {required Duration sampleAt}) async {
   final rig = await _Rig.open(stalled: true);
   var stopped = false;
   final firehose = _firehoseUntil(rig.firehose, () => stopped);
@@ -234,9 +238,11 @@ Future<_StalledRun> _measureStalledRun(Duration window) async {
   // experiment — there is no event to await, because the assertion is about
   // the absence of one. Written in the unparameterised form so the phase-wide
   // grep for sleeps finds it.
-  await Future.delayed(window);
+  await Future.delayed(sampleAt);
+  final peakAtSample = rig.line.peakPendingBytes;
+  await Future.delayed(window - sampleAt);
+  final peakAtEnd = rig.line.peakPendingBytes;
 
-  final peak = rig.line.peakPendingBytes;
   stopped = true;
   rig.firehose.destroy();
   final offered = await firehose;
@@ -244,9 +250,14 @@ Future<_StalledRun> _measureStalledRun(Duration window) async {
   // Printed, not merely asserted: RESEARCH's table is a pair of numbers per
   // window, and a future regression is far easier to read as "the peak tripled
   // when the window tripled" than as one failed comparison.
-  print('stalled consumer, ${window.inSeconds} s: peak pending $peak bytes, '
+  print('stalled consumer: peak pending $peakAtSample bytes at '
+      '${sampleAt.inSeconds} s, $peakAtEnd at ${window.inSeconds} s, '
       '$offered bytes offered');
-  return (peakPendingBytes: peak, bytesOffered: offered);
+  return (
+    peakAtSample: peakAtSample,
+    peakAtEnd: peakAtEnd,
+    bytesOffered: offered
+  );
 }
 
 /// Writes as fast as the far side will take it, gating on `flush()`.
