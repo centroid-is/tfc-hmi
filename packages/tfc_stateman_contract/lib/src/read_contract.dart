@@ -94,6 +94,13 @@ Future<void> checkSyncReadCostsNoRoundTrip(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValue(_speedKey, 1450);
+  // The ten reads below have to be reads of something *cached*, which is the
+  // word the property uses. Without this barrier they are ten reads of a key
+  // the source has not delivered yet on any implementation that delivers
+  // asynchronously — and a miss is precisely where an implementation that
+  // secretly round-trips would round-trip, so the case would be aimed away
+  // from the behaviour it is named for.
+  await arrived(api, _speedKey);
   final before = plant.roundTrips;
 
   for (var i = 0; i < 10; i++) {
@@ -127,6 +134,12 @@ Future<void> checkReadFreshCostsExactlyOneRoundTrip(StateManApi api) async {
 
   final stamped = DateTime.utc(2026, 8, 13, 6, 30);
   plant.setValue(_speedKey, 1450, sourceTime: stamped);
+  // This case compares the forced read against the cache, so the cache has to
+  // have something in it before the comparison is set up. An implementation
+  // whose values cross a message boundary has not delivered the seed yet at
+  // this line, and the assertion below would then blame the source for the
+  // case's impatience.
+  await arrived(api, _speedKey);
   final cached = api.read(_speedKey);
   expect(cached, isNotNull,
       reason: 'the case needs a cached value to compare against; the value '
