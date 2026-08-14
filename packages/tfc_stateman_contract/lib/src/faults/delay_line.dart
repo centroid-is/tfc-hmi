@@ -278,7 +278,15 @@ final class DelayLine {
   ///
   /// Bytes that arrive after this call are withheld again, because they are
   /// not part of the batch that was released — the count is taken now, once.
+  ///
+  /// A no-op when nothing is being withheld, which is what
+  /// `FaultProxy.flush()`'s doc claims of itself: teardown paths and scenario
+  /// scripts call it unconditionally, and a credit taken while the lever is
+  /// off is a number that nothing will ever spend — until a blackhole
+  /// discards the bytes it was counted against and a later withhold spends it
+  /// on somebody else's.
   void releaseWithheld() {
+    if (!_withholdUntilReleased) return;
     _releasableBytes = _pendingBytes;
     unawaited(_pump());
   }
@@ -570,6 +578,11 @@ final class DelayLine {
     _pending.clear();
     _pendingBytes = 0;
     _headWritten = 0;
+    // The release was a credit against bytes that no longer exist. Carrying it
+    // forward would let the next withhold leak exactly this many: the credit
+    // normally drains to zero as the same bytes are written, and a blackhole
+    // in between is the one thing that separates the two.
+    _releasableBytes = 0;
     if (_paused) {
       _paused = false;
       _source?.resume();
