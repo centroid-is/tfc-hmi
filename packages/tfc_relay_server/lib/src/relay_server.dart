@@ -44,6 +44,7 @@ import 'server_config.dart';
 import 'session_sink.dart';
 import 'tick_engine.dart';
 import 'token_validator.dart';
+import 'write_outcome_log.dart';
 import 'ws_channel.dart';
 
 /// Writes one already-encoded frame to [socket].
@@ -139,8 +140,29 @@ final class RelayServer {
     this.validator = const PermissiveTokenValidator(),
     this.serverSupported = const [protocolVersion],
     this.onError = reportToStderr,
+    int Function()? now,
   })  : config = config ?? ServerConfig(),
-        handles = handles ?? HandleTable();
+        handles = handles ?? HandleTable(),
+        _now = now ?? _wallClock {
+    writeOutcomes =
+        WriteOutcomeLog(ttl: this.config.writeOutcomeTtl, now: _now);
+  }
+
+  static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
+
+  /// Wall-clock epoch milliseconds, injectable so a test can age the outcome
+  /// log with arithmetic rather than a sleep.
+  final int Function() _now;
+
+  /// What became of every write this gateway has handled recently.
+  ///
+  /// **Per server, not per session** (04-REVIEW CR-02). `writeStatus` is only
+  /// ever asked by a client that has just reconnected, so a log that died with
+  /// the socket was empty every single time it was consulted — and an empty log
+  /// answered `not_received`, the one verdict that licenses re-actuating a
+  /// machine, about commands the gateway had received and forwarded. The
+  /// argument in full is in `write_outcome_log.dart`.
+  late final WriteOutcomeLog writeOutcomes;
 
   /// Where this server reports an error nobody asked for: an unhandled peer
   /// error, a session that threw inside the tick, a sweep that failed.
@@ -302,6 +324,10 @@ final class RelayServer {
         buffer: buffer,
         validator: validator,
         serverSupported: serverSupported,
+        // One log for the whole gateway: a reconnecting panel is a new session
+        // asking about a write the previous one issued.
+        writeOutcomes: writeOutcomes,
+        now: _now,
         closeChannel: connection.closeSocket,
         emitFrame: connection.write,
         // Synchronous, and the asynchronous `_release` below does *not*

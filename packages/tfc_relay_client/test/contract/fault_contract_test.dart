@@ -492,6 +492,30 @@ void main() {
               'dangerous thing this client could do, and it is why recovery is '
               'a question about the command rather than a repeat of it');
 
+      // **What came back, not merely that something went out** (04-REVIEW
+      // CR-02). This arm is the one the old shape was missing, and its absence
+      // is why nothing noticed that the gateway was answering `not_received`
+      // here: the write was received, forwarded, and is parked at the plant
+      // right now, and `not_received` is the one verdict that tells an operator
+      // it is safe to press the button again.
+      await until('the re-query to be answered',
+          () => fixture.client.debugWriteStatusAnswers.isNotEmpty,
+          budget: _recovery);
+      final answered = fixture.client.debugWriteStatusAnswers
+          .firstWhere((result) => result.cmd == outcome.cmd,
+              orElse: () => fail('the re-query came back with no answer about '
+                  '${outcome.cmd}, which is the only command it asked about'));
+      expect(answered, isNot(isA<WriteNotReceived>()),
+          reason: 'the gateway answered "never received" about a write it had '
+              'received and forwarded, and which is upstream at this moment. '
+              'That answer sends the operator back to the button');
+      expect(answered, isA<WriteUnknown>(),
+          reason: 'the write is parked at the plant: nobody knows yet, and '
+              'that is the honest answer');
+      expect(fixture.client.debugUnresolvedCmds, contains(outcome.cmd),
+          reason: 'an unknown answer settles nothing, so the command stays '
+              'held for the next entry to ready to ask about again');
+
       // Released after the assertions so the plant does not carry a stalled
       // write into teardown.
       fixture.served.releaseWrites();

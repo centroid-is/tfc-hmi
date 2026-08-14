@@ -168,6 +168,13 @@ final class RemoteStateMan implements StateManApi {
   /// re-querying a settled answer is a question nobody needed asked.
   final _unresolved = <String>{};
 
+  /// key per unresolved command, so a re-query's answer can be adopted.
+  ///
+  /// A `writeStatus` result carries a `cmd` and no key, and the readback has to
+  /// land on the tag it was read from. Bounded by [_unresolved]: an entry
+  /// leaves the moment its command settles.
+  final _keyOf = <String, String>{};
+
   /// Every `writeStatus` re-query this client has issued, in order.
   ///
   /// The observable the no-re-actuation property is asserted against: an
@@ -175,8 +182,23 @@ final class RemoteStateMan implements StateManApi {
   /// [debugWritesSent] one higher.
   final _writeStatusQueries = <List<String>>[];
 
+  /// What those re-queries came *back* with, in order.
+  ///
+  /// The other half of the same observable, and the one 04-REVIEW CR-02 was
+  /// found through: a case can assert that the re-query went out and that
+  /// nothing was re-sent while the gateway is answering `not_received` — the
+  /// one verdict that licenses re-actuating a machine — about every command
+  /// whose fate is genuinely unknown.
+  final _writeStatusAnswers = <WriteResult>[];
+
+  /// How many entries each debug history keeps. See [_record].
+  static const int _debugHistory = 64;
+
+  final _resolved = StreamController<WriteResult>.broadcast();
+
   var _writesSent = 0;
   var _requerying = false;
+  var _requeryWanted = false;
 
   late final ConnectionSupervisor _supervisor;
   late final StreamSubscription<LinkState> _transitions;
@@ -191,6 +213,19 @@ final class RemoteStateMan implements StateManApi {
   List<List<String>> get debugWriteStatusQueries => [
         for (final query in _writeStatusQueries) List<String>.unmodifiable(query),
       ];
+
+  /// The answers those re-queries came back with, in order.
+  List<WriteResult> get debugWriteStatusAnswers =>
+      List<WriteResult>.unmodifiable(_writeStatusAnswers);
+
+  /// Every write whose outcome was established *after* the call that made it
+  /// had already resolved — the `writeStatus` re-query's answers.
+  ///
+  /// Broadcast, and never a second source of truth: what an applied outcome
+  /// says about the value is already in the store by the time this emits. It
+  /// exists so an operator who was shown "unknown" is shown the resolution
+  /// when it arrives, rather than having to remember to ask.
+  Stream<WriteResult> get onWriteResolved => _resolved.stream;
 
   /// How many `write` requests reached the wire. Never more than one per call.
   int get debugWritesSent => _writesSent;
@@ -410,6 +445,9 @@ final class RemoteStateMan implements StateManApi {
     // against after a reconnect.
     final id = cmd ?? newUlid();
     _unresolved.add(id);
+    // The tag this id belongs to, so a re-query's readback can be adopted onto
+    // it later — a `writeStatus` answer names the command and not the key.
+    _keyOf[id] = key;
 
     // Whether any bytes were offered to a socket for this write. A `cmd` that
     // never reached one is a `cmd` no gateway can have an opinion about, and
@@ -447,7 +485,10 @@ final class RemoteStateMan implements StateManApi {
     // one verdict that does not, which is exactly what makes it re-queryable —
     // unless this client watched the request fail to leave, in which case
     // there is nothing on the far side to reconcile against.
-    if (result is! WriteUnknown || !dispatched) _unresolved.remove(id);
+    if (result is! WriteUnknown || !dispatched) {
+      _unresolved.remove(id);
+      _keyOf.remove(id);
+    }
 
     _adoptReadback(key, result);
     if (sanitizedValue.hadNonFinite) _markNonFinite(key);
@@ -550,19 +591,42 @@ final class RemoteStateMan implements StateManApi {
   /// answers `unknown` again, which leaves it in [_unresolved] for the next
   /// `ready` to ask about — forgetting is not evidence that it never happened.
   Future<void> _requeryWriteStatus() async {
-    if (_requerying) return;
+    if (_requerying) {
+      // **Wanted, not dropped** (04-REVIEW WR-01). The guard is against a
+      // storm, and the flag alone turned it into a permanent skip: ready →
+      // re-query sent → link drops → reconnect → this fires while the old
+      // call's future has not failed yet → early return. The old call then
+      // failed and cleared the flag, and nothing re-armed, so the commands
+      // stayed unresolved until some later entry to ready — which on a link
+      // that then behaves is never.
+      _requeryWanted = true;
+      return;
+    }
     final cmds = List<String>.of(_unresolved);
     if (cmds.isEmpty) return;
     _requerying = true;
-    _writeStatusQueries.add(cmds);
+    _record(_writeStatusQueries, cmds);
     try {
       final raw = _asJson(await _request(Methods.writeStatus, {'cmds': cmds}));
       final results = raw['results'];
       if (results is! List) return;
       for (final entry in results) {
-        final outcome = WriteResult.fromJson(_asJson(entry));
+        final WriteResult outcome;
+        try {
+          outcome = WriteResult.fromJson(_asJson(entry));
+        } catch (error) {
+          // One entry, not the batch (04-REVIEW WR-03). Decoding inside the
+          // loop was letting a malformed entry at index 0 discard the settled
+          // outcomes of every other command in it, and on a 1500-key panel the
+          // batch is not small. One typo costs one tag, here as everywhere.
+          _supervisor.resync.complaints.add(
+              'a writeStatus entry could not be read and was dropped rather '
+              'than taken as an answer about some other command: $error');
+          continue;
+        }
+        _record(_writeStatusAnswers, outcome);
         if (outcome is WriteUnknown) continue;
-        _unresolved.remove(outcome.cmd);
+        _settle(outcome);
       }
     } catch (_) {
       // A re-query that fails leaves the commands unresolved, which is the
@@ -570,7 +634,39 @@ final class RemoteStateMan implements StateManApi {
       // never becomes is a reason to send the write a second time.
     } finally {
       _requerying = false;
+      if (_requeryWanted && !_disposed) {
+        _requeryWanted = false;
+        unawaited(_requeryWriteStatus());
+      }
     }
+  }
+
+  /// One command has an established answer at last.
+  ///
+  /// **The recovery has to end somewhere the operator can see** (04-REVIEW
+  /// WR-02). Removing the id from [_unresolved] and stopping there meant that
+  /// an operator who was told "unknown", walked out to look at the machine and
+  /// came back was told nothing at all when the gateway finally said "applied".
+  /// So the outcome goes out on [onWriteResolved], and an applied one has its
+  /// readback adopted into the store exactly as the direct path adopts one —
+  /// the readback is what the device reported holding, and adopting it is
+  /// applying the confirmation rather than predicting it.
+  void _settle(WriteResult outcome) {
+    _unresolved.remove(outcome.cmd);
+    final key = _keyOf.remove(outcome.cmd);
+    if (key != null) _adoptReadback(key, outcome);
+    if (!_resolved.isClosed) _resolved.add(outcome);
+  }
+
+  /// Appends to a debug list, keeping only the most recent [_debugHistory].
+  ///
+  /// 04-REVIEW IN-02: one entry per re-query, never trimmed, is a leak with a
+  /// diagnostic excuse — a panel that flaps all shift accumulates them. The
+  /// question these answer ("what did the recovery just do?") is about the
+  /// recent past, so the bound costs nothing that was being read.
+  static void _record<T>(List<T> history, T entry) {
+    history.add(entry);
+    if (history.length > _debugHistory) history.removeAt(0);
   }
 
   // ---------------------------------------------------------------- teardown
@@ -592,6 +688,7 @@ final class RemoteStateMan implements StateManApi {
       await close();
     }
     _closeHandedOutStreams.clear();
+    await _resolved.close();
     await preferences.dispose();
 
     await _transitions.cancel();

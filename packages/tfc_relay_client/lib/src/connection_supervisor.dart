@@ -177,6 +177,9 @@ final class ConnectionSupervisor {
 
   final List<Duration> _waits = <Duration>[];
 
+  /// How many scheduled waits [debugScheduledWaits] keeps.
+  static const int _waitHistory = 64;
+
   late final ResyncEngine _resync;
 
   LinkState _state = LinkState.down;
@@ -535,6 +538,11 @@ final class ConnectionSupervisor {
     _retry?.cancel();
     final wait = backoff.next();
     _waits.add(wait);
+    // Bounded (04-REVIEW IN-02). One entry per attempt and never trimmed is a
+    // leak with a diagnostic excuse: a panel whose gateway is down all shift
+    // makes an attempt every backoffCap. What the list answers — "what has the
+    // schedule been doing lately" — is a question about the recent past.
+    if (_waits.length > _waitHistory) _waits.removeAt(0);
     _retry = Timer(wait, () {
       _retry = null;
       unawaited(_attempt());
