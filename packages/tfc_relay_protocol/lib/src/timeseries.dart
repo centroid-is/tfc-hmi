@@ -65,12 +65,23 @@ final class TimeseriesData<T> {
         't': time.millisecondsSinceEpoch,
       };
 
+  /// Equality through the same sanitizer the encoder uses, so it agrees with
+  /// the wire representation.
+  ///
+  /// The constructor deliberately keeps a non-finite value when [T] does not
+  /// admit null, and `NaN == NaN` is false — so a `TimeseriesData<double>`
+  /// from a weigher divide-by-zero was not equal to itself while its hashCode
+  /// stayed stable, which breaks the `Set`/`Map` contract and makes any
+  /// de-duplication downstream silently keep every copy. Two samples that
+  /// encode identically are the same sample.
   @override
   bool operator ==(Object other) =>
-      other is TimeseriesData<T> && other.value == value && other.time == time;
+      other is TimeseriesData<T> &&
+      other.time == time &&
+      sanitize(other.value).value == sanitize(value).value;
 
   @override
-  int get hashCode => Object.hash(value, time);
+  int get hashCode => Object.hash(sanitize(value).value, time);
 
   @override
   String toString() => 'TimeseriesData(value: $value, time: $time)';

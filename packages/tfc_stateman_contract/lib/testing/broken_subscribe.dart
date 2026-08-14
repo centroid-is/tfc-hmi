@@ -27,6 +27,11 @@ import 'fake_state_man.dart';
 /// lapsed. This is the failure operators cannot see and cannot be expected to
 /// see, which is why it is the first thing the suite is required to catch.
 class DropsSubscriptions extends FakeStateMan {
+  /// Forwarded so a sabotage suite can run this variant against a shortened
+  /// freshness deadline, the way every variant in `broken_freshness.dart` and
+  /// `broken_write.dart` can (IN-07).
+  DropsSubscriptions({super.staleAfter});
+
   final _delivered = <String>{};
 
   @override
@@ -53,6 +58,9 @@ class DropsSubscriptions extends FakeStateMan {
 /// cost: the reason the store contract asserts a notification *count* and not
 /// just the values delivered.
 class NotifiesOnUnchanged extends FakeStateMan {
+  /// See [DropsSubscriptions] — same reason (IN-07).
+  NotifiesOnUnchanged({super.staleAfter});
+
   var _receivedAt = 0;
 
   @override

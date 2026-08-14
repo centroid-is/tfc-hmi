@@ -63,6 +63,32 @@ void main() {
       expect(jsonEncode(poison.toJson()), isNotEmpty);
     });
 
+    test('a retained non-finite sample is equal to itself', () {
+      // WR-12. The constructor keeps the poison when T does not admit null,
+      // and NaN != NaN — so the sample was unequal to itself while its
+      // hashCode stayed stable, breaking the Set/Map contract. Any
+      // de-duplication downstream then silently keeps every copy.
+      final t = DateTime.utc(2026, 8, 13);
+      final poison = TimeseriesData<double>(double.nan, t);
+
+      expect(poison, poison);
+      expect(poison, TimeseriesData<double>(double.nan, t));
+      expect({poison, TimeseriesData<double>(double.nan, t)}, hasLength(1),
+          reason: 'two samples that encode identically are one sample');
+      expect(poison.hashCode, TimeseriesData<double>(double.nan, t).hashCode);
+    });
+
+    test('equality still separates samples that encode differently', () {
+      final t = DateTime.utc(2026, 8, 13);
+      expect(TimeseriesData<double>(1.5, t),
+          isNot(TimeseriesData<double>(2.5, t)));
+      expect(TimeseriesData<double>(1.5, t),
+          isNot(TimeseriesData<double>(1.5, t.add(const Duration(days: 1)))));
+      expect(TimeseriesData<double>(double.nan, t),
+          isNot(TimeseriesData<double>(0.0, t)),
+          reason: 'a retained NaN encodes as null, and null is not zero');
+    });
+
     test('1e999 decoded from the wire cannot survive into a re-encode', () {
       final wire = jsonDecode('{"v": 1e999, "t": 0}') as Map<String, Object?>;
 
