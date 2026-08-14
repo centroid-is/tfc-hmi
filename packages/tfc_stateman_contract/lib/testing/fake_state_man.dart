@@ -406,8 +406,10 @@ class FakeStateMan
     for (final key in keys) {
       final cached = _store.peek(key);
       if (cached == null) {
-        // Nothing is known and nothing can be: notYetKnown carries
-        // errorConfig, which renders as a fault rather than as a good null.
+        // Nothing is known: notYetKnown carries an uncertain-band code, which
+        // renders as "cannot be trusted" rather than as a good null — and
+        // does not claim the tag is gone, which is what errorConfig means and
+        // is a thing a round trip finding nothing does not establish.
         answers[key] = notYetKnown;
         continue;
       }

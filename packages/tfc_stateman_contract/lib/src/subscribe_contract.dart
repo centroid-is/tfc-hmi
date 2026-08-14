@@ -42,8 +42,13 @@ const _speedKey = 'ST101.CN01.MOT01.speed';
 const _otherKey = 'ST201.CN04.MOT01.speed';
 
 /// A key no source in this suite ever delivers — a tag mistyped into a page
-/// config, or renamed in the PLC since the page was drawn.
+/// config, or one whose first batch has simply not landed yet.
 const _missingKey = 'ST301.CN17.VLV02.stat';
+
+/// A key that exists, is delivered, and is then retired: the tag renamed or
+/// deleted in the PLC under a page that still binds it. Distinct from
+/// [_missingKey], and the contract requires that they read differently.
+const _deletedKey = 'ST301.CN18.VLV01.stat';
 
 /// A freshly subscribed key carries its current value, and carries it good.
 ///
@@ -129,11 +134,20 @@ Future<void> checkSubscribeStreamMirrorsListen(StateManApi api) async {
           'one tag on one page is the worst thing this API can do');
 }
 
-/// An unknown key degrades to a visibly bad value; it never throws and never
-/// invents traffic.
+/// An unknown key degrades to a visibly untrustworthy value; it never throws
+/// and never invents traffic. A key the source knows is *gone* reads
+/// differently from one it simply has not delivered yet.
 ///
 /// A key mistyped into a page config, or a tag renamed in the PLC after the
 /// page was drawn, must take out that one box on the mimic — not the mimic.
+///
+/// The second half is the one an implementation is most likely to get wrong by
+/// collapsing both into [Quality.errorConfig]. "The tag has been deleted, go
+/// fix the page" and "the first batch has not landed yet" call for opposite
+/// actions from the operator, and on a slow link every key on a page passes
+/// through the second state for a round trip. An implementation that reports
+/// them identically teaches operators that the one non-transient error code
+/// heals on its own, after which nobody acts on the real one.
 Future<void> checkUnknownKeyReportsConfigErrorNotThrow(StateManApi api) async {
   final plant = harnessOf(api);
 
@@ -152,6 +166,11 @@ Future<void> checkUnknownKeyReportsConfigErrorNotThrow(StateManApi api) async {
   final unknown = node!;
   final quiet = observe(unknown);
 
+  // A key the source has affirmatively been told is gone, to compare against.
+  plant.setValue(_deletedKey, 1);
+  final deleted = api.listen(_deletedKey);
+  plant.dropKey(_deletedKey);
+
   final live = api.listen(_otherKey);
   final seen = observe(live);
   plant.setValues({_otherKey: 3});
@@ -160,10 +179,17 @@ Future<void> checkUnknownKeyReportsConfigErrorNotThrow(StateManApi api) async {
   expect(unknown.value.value, isNull,
       reason: 'an unknown key reported a value; a number rendered for a tag '
           'that does not exist is indistinguishable from a real reading');
-  expect(unknown.value.quality, Quality.errorConfig,
-      reason: 'an unknown key must read as a configuration error, not as a '
-          'stale or uncertain reading — waiting will never fix a renamed tag, '
-          'and the operator needs to be told to fix the page');
+  expect(unknown.value.quality.isGood, isFalse,
+      reason: 'a key nothing has arrived for read as good quality — an '
+          'operator would believe a box that has never had a value in it');
+  expect(deleted.value.quality, Quality.errorConfig,
+      reason: 'a key the source was told is gone must read as a configuration '
+          'error: waiting will never fix a renamed tag, and the operator '
+          'needs to be told to fix the page');
+  expect(unknown.value.quality, isNot(Quality.errorConfig),
+      reason: 'a key whose first batch has not arrived reads the same as a tag '
+          'that has been deleted, so the two are indistinguishable on screen. '
+          'One of them heals by itself and the other never will');
   expect(quiet.count, 0,
       reason: 'the source notified listeners of a key it cannot serve — a page '
           'would rebuild for a tag that will never have a value');
