@@ -10,8 +10,8 @@
 /// dropped. Everything below is a property of the *transport plus the session*,
 /// which is a different subject from either alone.
 ///
-/// **Every close-code assertion here is on the client's observation.** The
-/// server's own `ws.closeCode` is `null` after a close it initiated
+/// **Every close-code assertion here is on the client's observation.** A
+/// server's own socket reports a null close code after a close it initiated
 /// (`web_socket_channel` #1698 / dart-lang/http#1698, reproduced server-side in
 /// 03-RESEARCH Finding 6), so a test that read the server's socket would pass
 /// just as happily against a server that closed with no code at all. The
@@ -170,7 +170,7 @@ void main() {
     expect(result.protocol, protocolVersion,
         reason: "Home Assistant's pre-auth rule: a refusal before hello leaves "
             'the link open so the client can correct itself');
-    expect(fixture.observedClose.code, isNull,
+    expect(fixture.observedClose.closeCode, isNull,
         reason: 'the socket must still be open — a client disconnected for '
             'asking too early would reconnect in a loop');
   });
@@ -198,13 +198,13 @@ void main() {
     final close = await fixture.awaitClose(
         'the client socket to be closed by the server',
         budget: closeBudget);
-    expect(close.code, CloseCodes.protocolMismatch,
-        reason: "the CLIENT's observation. The server's own ws.closeCode is "
-            'null after a close it initiated (dart-lang/http#1698, '
+    expect(close.closeCode, CloseCodes.protocolMismatch,
+        reason: "the CLIENT's observation. A server's own socket reports a "
+            'null close code after a close it initiated (dart-lang/http#1698, '
             'reproduced server-side in Finding 6), so a test that read the '
             'server side would pass against a server that closed with no code '
             'at all');
-    expect(close.reason, contains('protocol version'),
+    expect(close.closeReason, contains('protocol version'),
         reason: 'a panel that reconnects on 4005 loops forever; the reason is '
             "what tells the operator it is the client's build that is wrong");
     expect(fixture.server.closeLedger.single.serverCloseCode,
@@ -229,7 +229,7 @@ void main() {
     final close = await fixture.awaitClose(
         'the client socket to be closed by the draining server',
         budget: closeBudget);
-    expect(close.code, CloseCodes.serverDraining,
+    expect(close.closeCode, CloseCodes.serverDraining,
         reason: '4002 is the code that tells a panel to reconnect rather than '
             "alarm. Client-observed, for #1698's reason. 03-08 sweeps every "
             'emittable close code for exactly one consumer test each; this is '
