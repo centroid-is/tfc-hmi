@@ -21,3 +21,5 @@
 /// exports the config) and 04-08 (which adds the client itself). Every other
 /// plan imports internals.
 library;
+
+export 'src/client_config.dart';
