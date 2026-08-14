@@ -1,3 +1,4 @@
+import 'dynamic_value.dart';
 import 'quality.dart';
 import 'sanitize.dart';
 
@@ -39,6 +40,28 @@ final class WireValue {
       t: t is num && t.isFinite ? t.toInt() : null,
     );
   }
+
+  /// This value as the store type the rest of the client speaks.
+  ///
+  /// **The [t] half is the reason this exists.** Every decode site on the
+  /// client used to build `DynamicValue(value: v, quality: q)` by hand and drop
+  /// the timestamp on the floor, at three separate places — the subscribe
+  /// snapshot, the update push and the `readFresh`/`readMany` answers. A value
+  /// whose source time is gone cannot be aged by anything downstream: staleness
+  /// stops being computable at the panel, `readFresh` cannot be shown to be
+  /// newer than the cache it was called to bypass, and the freshness badge the
+  /// operator reads becomes a property of when the frame arrived rather than of
+  /// when the plant measured it.
+  ///
+  /// UTC on the way out, because [t] is epoch milliseconds and a local-time
+  /// `DateTime` here would put the panel's timezone into a comparison against
+  /// a timestamp the gateway stamped in UTC.
+  DynamicValue toDynamicValue() => DynamicValue(
+        value: v,
+        quality: q,
+        sourceTime:
+            t == null ? null : DateTime.fromMillisecondsSinceEpoch(t!, isUtc: true),
+      );
 
   Map<String, Object?> toJson() => {
         'v': v,

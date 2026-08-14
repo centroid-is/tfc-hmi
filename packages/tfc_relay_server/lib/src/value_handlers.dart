@@ -245,8 +245,22 @@ final class ValueHandlers {
 
     WriteResult result;
     try {
+      // The client's cmd goes upstream, and the gateway does not mint one of
+      // its own. It is not this process's action to identify: the id was minted
+      // at the operator's keyboard (design §4.6) and everything that will ever
+      // ask about this write — the `writeStatus` re-query after a reconnect,
+      // the outcome log below, the plant's own count of how many times the
+      // command reached the device — has to be keyed by that one id or the
+      // three-state answer stops being attributable to anything.
+      //
+      // Minting here instead was a write-safety defect, not a cosmetic one:
+      // the plant recorded the attempt under an id the client could never name,
+      // so "how many times did my write reach the machine" had no answer from
+      // either end, and `_withCmd` relabelling the outcome on the way back made
+      // the loss invisible at exactly the point it mattered.
       result = _withCmd(
-          await api.write(request.key, request.value, expect: request.expect),
+          await api.write(request.key, request.value,
+              expect: request.expect, cmd: request.cmd),
           request.cmd);
     } catch (error) {
       // The source failed in a way it does not describe as an outcome. The
@@ -334,10 +348,18 @@ final class ValueHandlers {
 
   /// The same outcome under the client's own [cmd].
   ///
-  /// `StateManApi.write` mints its id inside the implementation, so the result
-  /// comes back under the *gateway's* id. The client can only reconcile
-  /// against the id its operator action was minted under, and an answer
-  /// carrying a different one is an answer `writeStatus` could never match.
+  /// A **belt-and-braces** normalization since the client's cmd started going
+  /// upstream: a source that honours the forwarded id already answers under it,
+  /// and this is a no-op. It stays because `StateManApi.write`'s [cmd] is
+  /// optional, so an implementation is free to ignore it and mint anyway, and
+  /// an answer carrying an id the client never minted is an answer
+  /// `writeStatus` could never match — the one failure the client cannot detect
+  /// for itself.
+  ///
+  /// What it deliberately does *not* do is make ignoring the forwarded id
+  /// harmless. The outcome is relabelled; the plant's own attempt count is not,
+  /// and that discrepancy is what the contract's
+  /// `exactly one upstream attempt per cmd` check reads.
   static WriteResult _withCmd(WriteResult result, String cmd) =>
       switch (result) {
         WriteApplied(:final readback, :final at) =>
