@@ -56,6 +56,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'backoff.dart';
 import 'client_config.dart';
 import 'client_sub_apis.dart';
+import 'clock_offset.dart';
 import 'connection_supervisor.dart';
 import 'deadline.dart';
 import 'failure_taxonomy.dart';
@@ -108,7 +109,14 @@ final class RemoteStateMan implements StateManApi {
       barrier: ReadinessBarrier(),
       watchdog: FreshnessWatchdog(
         config: config,
-        onViewFreshnessChanged: (_) {},
+        // Pushed rather than dropped (04-REVIEW CR-06). The watchdog computed
+        // all of this correctly and nothing above it could read a word: an
+        // empty callback here, `_supervisor` private, and `FreshnessWatchdog`
+        // deliberately not exported. Deferring the Flutter widgets defers the
+        // *rendering*; it does not defer the signal, and there was no signal.
+        onViewFreshnessChanged: (stale) {
+          if (!_freshness.isClosed) _freshness.add(stale);
+        },
       ),
       subscriptions: _subscriptions,
       storeFor: _storeFor,
@@ -196,6 +204,11 @@ final class RemoteStateMan implements StateManApi {
 
   final _resolved = StreamController<WriteResult>.broadcast();
 
+  /// Transitions of the whole view between fresh and stale. Broadcast, and fed
+  /// by the watchdog's own transition callback — so it emits when the answer
+  /// changes and not twenty times a second.
+  final _freshness = StreamController<bool>.broadcast();
+
   var _writesSent = 0;
   var _requerying = false;
   var _requeryWanted = false;
@@ -253,9 +266,54 @@ final class RemoteStateMan implements StateManApi {
   List<String> get complaints =>
       List<String>.unmodifiable(_supervisor.resync.complaints);
 
-  /// Every timer this client owns. Never more than two, whatever else is going
-  /// on — the count is the design, not an implementation detail.
+  /// Every timer this client *schedules*: the watchdog's one link deadline,
+  /// plus the pending reconnect when an attempt is scheduled.
+  ///
+  /// Two is the ceiling, and the ceiling is the design — a panel that flaps
+  /// all shift accumulates one orphaned timer per cycle if a teardown misses
+  /// one, and the one that is missed fires into a connection that no longer
+  /// exists. It deliberately does **not** count the per-call timers
+  /// `Future.timeout` allocates (04-REVIEW IN-01): those are owned by the call
+  /// and cancelled when it settles either way, which is the property that
+  /// actually matters — no timer outlives the thing it belongs to — and a
+  /// panel with ten calls out legitimately holds twelve.
   int get debugTimerCount => _supervisor.debugTimerCount;
+
+  // ------------------------------------------------------------ freshness
+
+  /// Whether the link has gone [ClientConfig.freshnessDeadline] without a
+  /// frame of any kind.
+  ///
+  /// The operator-facing half of CLAUDE.md's first constraint: half-open
+  /// connections detected in seconds, staleness always visible. The client
+  /// also *acts* on it — see `connection_supervisor.dart`'s `_linkWentQuiet` —
+  /// so this normally goes true a moment before [linkState] leaves `ready`.
+  bool get viewIsStale => _supervisor.watchdog.viewIsStale;
+
+  /// Every transition of [viewIsStale], and only the transitions.
+  Stream<bool> get viewFreshness => _freshness.stream;
+
+  /// Subscriptions whose plant-side source had stopped being re-evaluated as
+  /// of the last tick.
+  ///
+  /// Distinct from [viewIsStale] on purpose, and the distinction is the whole
+  /// of CLI-04: this set can be non-empty while the link is provably healthy.
+  /// The gateway is fine, one page's tags are not, and the operator needs to
+  /// be told which of those two it is looking at.
+  Set<String> get staleSubscriptions => _supervisor.watchdog.staleSubscriptions;
+
+  /// The same verdict for the one page a widget renders.
+  bool isSubscriptionStale(String sub) =>
+      _supervisor.watchdog.isSubscriptionStale(sub);
+
+  /// How far this panel's clock sits from the gateway's, captured at the last
+  /// handshake.
+  ///
+  /// Surfaced because a panel whose clock is ten minutes wrong renders every
+  /// timestamp ten minutes wrong, and CLI-05 rules that skew warns and keeps
+  /// showing values rather than greying the plant. An operator cannot act on a
+  /// warning nobody exposes.
+  ClockOffset get clockOffset => _supervisor.clockOffset;
 
   // ------------------------------------------------- answers from the store
 
@@ -709,6 +767,7 @@ final class RemoteStateMan implements StateManApi {
     }
     _closeHandedOutStreams.clear();
     await _resolved.close();
+    await _freshness.close();
     await preferences.dispose();
 
     await _transitions.cancel();

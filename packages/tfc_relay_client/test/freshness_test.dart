@@ -40,11 +40,16 @@ import 'package:test/test.dart';
 
 /// The injected heartbeat period the client is configured to expect.
 ///
-/// Deliberately **not** the gateway's measured 50 ms fan-out cadence: the
-/// client cannot learn that number (04-RESEARCH Finding 5 — `HelloResult`
-/// carries no tick field and the live handshake returned `capabilities: {}`),
-/// and every assertion here is a multiple of this local constant so the suite
-/// says nothing about the server's tuning.
+/// Deliberately **not** the gateway's measured 50 ms fan-out cadence. Every
+/// assertion here is a multiple of this local constant, so the suite says
+/// nothing about the server's tuning and a change to the gateway's default
+/// cannot quietly rewrite what these cases mean.
+///
+/// The client *does* learn the real cadence — `hello` advertises
+/// `capabilities.tickMs` and `FreshnessWatchdog.learnedTickMs` takes it — but
+/// only the per-subscription limit is derived from it. The link deadline stays
+/// configured, and `learning the cadence does not move the link deadline` is
+/// the arm that keeps it that way.
 const Duration period = Duration(milliseconds: 100);
 
 /// The configured freshness deadline, as a ratio of [period]. CLI-04's "3×".
@@ -211,6 +216,100 @@ void main() {
       await Future<void>.delayed(deadline + ceiling);
       expect(log.staleFlags, isEmpty,
           reason: 'a disposed watchdog still announced a transition');
+    });
+  });
+
+  // 04-REVIEW CR-06 and WR-06/WR-08. Two halves that used to be missing: the
+  // expiry did nothing but flip a bool, and the per-subscription verdict
+  // borrowed the *link* deadline as its limit.
+  group('the watchdog acts, and knows whose clock it is judging', () {
+    test('a link that goes quiet asks for something to be done about it',
+        () async {
+      var quiet = 0;
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(), onViewFreshnessChanged: (_) {})
+        ..onQuiet = () => quiet++;
+      addTearDown(watchdog.dispose);
+
+      watchdog.sawFrame(InboundFrame.tick);
+      await Future<void>.delayed(deadline + ceiling);
+
+      expect(quiet, 1,
+          reason: 'a socket that has said nothing for a whole freshness '
+              'deadline is one the client must stop believing in. Announcing '
+              'it and doing nothing leaves LinkState reading ready over '
+              'frozen values, which is the half-open case the product exists '
+              'for');
+      expect(watchdog.viewIsStale, isTrue);
+    });
+
+    test('the per-subscription limit follows the cadence the gateway '
+        'advertised, not the link deadline', () {
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(), onViewFreshnessChanged: (_) {});
+      addTearDown(watchdog.dispose);
+      // What a `hello` carries: `capabilities: {'tickMs': …}`. The multiple is
+      // the config's default of 30, so the limit is thirty injected periods.
+      watchdog.learnedTickMs(period.inMilliseconds);
+
+      // Five periods without re-evaluation — comfortably past the *link*
+      // deadline of three, which is the number this verdict used to borrow.
+      var serverTime = serverEpochMs;
+      for (var i = 0; i <= 5; i++) {
+        watchdog.sawTick(TickParams(serverTime: serverTime, subs: {
+          's1': const SubTick(seq: 0, evaluatedAt: serverEpochMs),
+        }));
+        serverTime += period.inMilliseconds;
+      }
+      expect(watchdog.isSubscriptionStale('s1'), isFalse,
+          reason: 'a page whose plant-side source is evaluated more slowly '
+              'than the socket ticks was marked permanently stale — the grey '
+              'that cries wolf, and the operator stops reading grey');
+
+      // Past thirty periods it is stale, which is the anti-vacuity half: a
+      // limit that never fires reports a dead sensor as a healthy one.
+      watchdog.sawTick(TickParams(
+        serverTime: serverEpochMs + period.inMilliseconds * 31,
+        subs: const {'s1': SubTick(seq: 0, evaluatedAt: serverEpochMs)},
+      ));
+      expect(watchdog.isSubscriptionStale('s1'), isTrue);
+    });
+
+    test('learning the cadence does not move the link deadline', () async {
+      // The 04-CONTEXT ruling, asserted rather than trusted: reading "3x tick"
+      // against the measured 50 ms fan-out gives a 150 ms deadline, and one GC
+      // pause then greys every value on the screen at once.
+      final log = TransitionLog();
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(), onViewFreshnessChanged: log.record);
+      addTearDown(watchdog.dispose);
+      watchdog.learnedTickMs(period.inMilliseconds);
+
+      watchdog.sawFrame(InboundFrame.tick);
+      final wentStale = await within(log.firstStale, 'the view going stale',
+          budget: deadline + ceiling);
+
+      expect(wentStale, greaterThan(deadline - slack),
+          reason: 'the link deadline moved when the client learned the '
+              'gateway\'s cadence: it is configured, and it stays configured');
+    });
+
+    test('a gateway that advertises nothing leaves the limit where it was', () {
+      final watchdog = FreshnessWatchdog(
+          config: testConfig(), onViewFreshnessChanged: (_) {});
+      addTearDown(watchdog.dispose);
+      watchdog.learnedTickMs(null);
+
+      watchdog.sawTick(TickParams(
+        serverTime: serverEpochMs + period.inMilliseconds * 5,
+        subs: const {'s1': SubTick(seq: 0, evaluatedAt: serverEpochMs)},
+      ));
+
+      expect(watchdog.tickMs, isNull);
+      expect(watchdog.isSubscriptionStale('s1'), isTrue,
+          reason: 'with no cadence to derive one from, the link deadline is '
+              'the only horizon there is — over-reporting a dead subscription '
+              'is the safe direction to be wrong in');
     });
   });
 

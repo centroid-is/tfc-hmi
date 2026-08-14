@@ -58,6 +58,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:tfc_relay_client/src/connection_supervisor.dart' show LinkState;
 import 'package:tfc_relay_client/src/failure_taxonomy.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 // The reference implementation's sub-API fakes, for the factory signature: the
@@ -439,6 +440,56 @@ void main() {
       fixture.proxy.blackhole(enabled: false);
       fixture.served.setValue(_key, 1500);
       await until('the link recovering after the blackhole lifted',
+          () => fixture.client.read(_key)?.value == 1500,
+          budget: _recovery);
+    });
+
+    test('F5: a half-open link stops reading ready, and says so', () async {
+      // 04-REVIEW CR-06. The watchdog computed all of this correctly and
+      // nothing above it could read a word, so the case the whole product is
+      // built around — socket up, no frames, values frozen — presented as
+      // LinkState.ready, isReady true, Quality.good, and no observable of any
+      // kind for as long as the panel stayed on.
+      final fixture = await faultFixture(
+        keys: const {_key},
+        withProxy: true,
+        config: faultClientConfig(freshness: const Duration(milliseconds: 500)),
+        seed: (plant) => plant.setValue(_key, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+      expect(fixture.client.viewIsStale, isFalse,
+          reason: 'the view was already stale on a healthy link, so the '
+              'transition below is not a measurement of the blackhole');
+
+      final transitions = <bool>[];
+      final watching = fixture.client.viewFreshness.listen(transitions.add);
+      addTearDown(watching.cancel);
+
+      fixture.proxy.blackhole();
+
+      await until('the view to be reported stale',
+          () => fixture.client.viewIsStale,
+          budget: _recovery);
+      expect(transitions, contains(true),
+          reason: 'the freshness stream never emitted, so nothing above this '
+              'client could render the staleness it had detected');
+      await until('the link to stop reading ready',
+          () => !fixture.client.isReady,
+          budget: _recovery);
+      expect(fixture.client.linkState, isNot(LinkState.ready),
+          reason: 'a socket that has said nothing for a whole freshness '
+              'deadline is one this client must stop believing in; leaving it '
+              'at ready is the operator reading a five-minute-old tank level '
+              'as current');
+
+      // And it recovers on its own, which is what makes acting on the silence
+      // safe: the reconnect loop is the same one every other kind of drop uses.
+      fixture.proxy.blackhole(enabled: false);
+      await until('the reconnect', () => fixture.client.isReady,
+          budget: _recovery);
+      expect(fixture.client.viewIsStale, isFalse);
+      fixture.served.setValue(_key, 1500);
+      await until('values flowing again',
           () => fixture.client.read(_key)?.value == 1500,
           budget: _recovery);
     });
