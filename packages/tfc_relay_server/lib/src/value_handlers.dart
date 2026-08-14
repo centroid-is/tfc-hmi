@@ -1,4 +1,5 @@
-/// The bodies of `read`, `readFresh`, `readMany`, `write` and `writeStatus`.
+/// The bodies of `read`, `readFresh`, `readMany`, `write`, `writeStatus` and
+/// the hold-to-run tick.
 ///
 /// Same rule as `session_handlers.dart`, for the same reason: **nothing in
 /// here registers anything.** Handlers are handed to `RelaySession._on`, which
@@ -112,11 +113,79 @@ final class ValueHandlers {
   /// of it, no cmd, no outcome and no refusal path.
   final _holds = <String, HoldHandle>{};
 
-  /// STUB (05-05 task 2 RED): declared so the cases can fail by name.
-  int get droppedHoldTicks => 0;
+  /// How many ticks were dropped: malformed, naming a hold this session never
+  /// engaged, or thrown out of by the source.
+  ///
+  /// Doc'd exactly like [recordedOutcomes] and for the same reason: read by a
+  /// test, and nothing in production depends on it. The production home for
+  /// this number is a `PIPE.*` health key, and those ship with upstream
+  /// fan-in in Phase 8 (STATE.md roadmap decision) — so the counter is built
+  /// now and surfaced later (D-P5-I).
+  int get droppedHoldTicks => _droppedHoldTicks;
+  int _droppedHoldTicks = 0;
 
-  /// STUB (05-05 task 2 RED): declared so the cases can fail by name.
-  Future<Object?> holdTick(rpc.Parameters params) async => null;
+  /// `h`: one deadman tick for a hold **this session** engaged.
+  ///
+  /// The first client→server notification on this wire, and the only handler
+  /// here that answers nothing: `json_rpc_2` discards a notification
+  /// handler's return value and sends no frame back (measured, 05-RESEARCH
+  /// §B.1 #1). The `Future<Object?>` signature is `RelaySession._on`'s, so
+  /// the tick inherits the handshake gate and the error armor from the one
+  /// seam every other method comes through.
+  ///
+  /// **The lookup is the authorization boundary, not bookkeeping** (D-P5-G,
+  /// T-05-16). The counter is applied to the handle [write] took when *this*
+  /// session engaged the hold — never to the key the frame names. Applying it
+  /// to an arbitrary key would make `h` a write primitive with no engage in
+  /// front of it, no cmd, no outcome-log entry and no refusal path, reachable
+  /// by any peer past the handshake.
+  ///
+  /// **It cannot throw. Not for anything.** A malformed frame, a hold this
+  /// session does not have, a source that throws out of `onTick` — all of
+  /// them are dropped and counted. `json_rpc_2` sends no frame back for a
+  /// notification and calls `onUnhandledError` instead (§B.1 #2), which
+  /// `RelaySession.serve` forwards to the `RelayErrorHandler`: at 10 Hz per
+  /// held button, a throw here is a log flood and nothing else. A tick for an
+  /// unknown hold is an ordinary, expected condition — the panel released a
+  /// moment ago, or the gateway restarted under it — and the client learns
+  /// nothing either way, because the counter stopping is the whole signal.
+  ///
+  /// The frame's own `n` is decoded and validated but is **not** the value
+  /// written: [HoldHandle.tick] mints the next counter from the handle the
+  /// engage created. Trusting `n` would put an attacker-chosen integer on a
+  /// deadman tag through this path, which is precisely what the write path's
+  /// "1 or 0, nothing else" refusal prevents from the other side.
+  Future<Object?> holdTick(rpc.Parameters params) async {
+    final HoldTickParams tick;
+    try {
+      // Sanitize before decode, as on every ingress path: `1e999` decodes to
+      // Infinity in silence, and `Infinity.toInt()` throws where nothing is
+      // catching. `HoldTickParams.fromJson` refuses a non-finite counter
+      // anyway; both belts are cheap and this one is the house convention.
+      final decoded =
+          (sanitize(params.asMap).value as Map).cast<String, Object?>();
+      tick = HoldTickParams.fromJson(decoded);
+    } catch (_) {
+      _droppedHoldTicks++;
+      return null;
+    }
+
+    final hold = _holds[tick.key];
+    if (hold == null) {
+      _droppedHoldTicks++;
+      return null;
+    }
+
+    try {
+      hold.tick();
+    } catch (_) {
+      // A source that throws while being fed is a dropped tick like any
+      // other. The machine stops because the counter stopped, which has
+      // already happened by the time anyone could act on an exception here.
+      _droppedHoldTicks++;
+    }
+    return null;
+  }
 
   /// `read`: the cached value, no round trip.
   ///
