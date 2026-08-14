@@ -62,6 +62,7 @@ import 'failure_taxonomy.dart';
 import 'freshness_watchdog.dart';
 import 'readiness_barrier.dart';
 import 'subscription_state.dart';
+import 'ws_transport.dart';
 
 /// The subscription a client opens for the keys it was constructed with.
 ///
@@ -86,6 +87,7 @@ final class RemoteStateMan implements StateManApi {
     PeerInfo client = const PeerInfo('tfc_relay_client', '0.1.0'),
     void Function(StatusParams status)? onStatus,
     void Function(String reason)? onBye,
+    Future<ConnectAttempt> Function(Uri uri)? dial,
   }) : _page = page {
     if (keys.isNotEmpty) {
       _subscriptions[page] =
@@ -113,6 +115,11 @@ final class RemoteStateMan implements StateManApi {
       client: client,
       onStatus: onStatus,
       onBye: onBye,
+      // Null in production: the supervisor dials with `connect`. A harness
+      // supplies one so a contract leg can be built synchronously against a
+      // server whose port is only known asynchronously — see
+      // `connection_supervisor.dart`'s `_dial`.
+      dial: dial,
     );
 
     // Attached **before** `start()`. The supervisor can reach `ready` in the
