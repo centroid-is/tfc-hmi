@@ -61,6 +61,7 @@ import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'backoff.dart';
 import 'client_config.dart';
+import 'client_sub_apis.dart' show DataServiceMethods;
 import 'clock_offset.dart';
 import 'deadline.dart';
 import 'freshness_watchdog.dart';
@@ -114,10 +115,12 @@ final class ConnectionSupervisor {
     this.client = const PeerInfo('tfc_relay_client', '0.1.0'),
     void Function(StatusParams status)? onStatus,
     void Function(String reason)? onBye,
+    void Function(String key)? onPreferenceChanged,
     int Function()? now,
     Future<ConnectAttempt> Function(Uri uri)? dial,
   })  : _onStatus = onStatus,
         _onBye = onBye,
+        _onPreferenceChanged = onPreferenceChanged,
         _now = now ?? _wallClock,
         _dial = dial ?? connect {
     // The watchdog is built by the client above and handed down, so what it
@@ -160,6 +163,10 @@ final class ConnectionSupervisor {
 
   final void Function(StatusParams status)? _onStatus;
   final void Function(String reason)? _onBye;
+
+  /// Where a `preferences.changed` notification goes. The client above wires
+  /// it to `ClientPreferencesApi.announce`.
+  final void Function(String key)? _onPreferenceChanged;
   final int Function() _now;
 
   /// How one attempt reaches the gateway. Defaults to [connect], the real
@@ -335,6 +342,19 @@ final class ConnectionSupervisor {
         (rpc.Parameters p) => _armored(Methods.status, () => _status(p)));
     peer.registerMethod(Methods.bye,
         (rpc.Parameters p) => _armored(Methods.bye, () => _bye(p)));
+    // 04-REVIEW WR-07. `ClientPreferencesApi.announce` documented itself as
+    // "called from the notification handler and nowhere else", and there was
+    // no such handler: `preferences.changed` fell through to the fallback
+    // below and was answered `-32000 this panel does not answer
+    // "preferences.changed"`, so `onPreferencesChanged` could never emit and a
+    // settings page edited on one panel never reached a second. The gateway
+    // has no preferences handlers until Phase 10, so nothing sends this yet —
+    // but a handler that does not exist is a different defect from a feature
+    // that has not shipped, and only one of the two is fixed by waiting.
+    peer.registerMethod(
+        DataServiceMethods.preferencesChanged,
+        (rpc.Parameters p) => _armored(
+            DataServiceMethods.preferencesChanged, () => _preferenceChanged(p)));
     // A name this build does not know is answered by us, inside the same
     // armor, rather than by the library — whose refusal echoes the raw request
     // back into the response, which is the unencodable-error hang when the
@@ -480,6 +500,19 @@ final class ConnectionSupervisor {
     watchdog.sawFrame(InboundFrame.update);
     final json = _asJson(sanitize(params.asMap).value);
     _onBye?.call('${json['reason'] ?? 'the gateway said goodbye'}');
+  }
+
+  /// A preference changed somewhere else. Carried up, never interpreted here.
+  void _preferenceChanged(rpc.Parameters params) {
+    watchdog.sawFrame(InboundFrame.update);
+    final json = _asJson(sanitize(params.asMap).value);
+    final key = json['key'];
+    if (key is! String || key.isEmpty) {
+      // Refused rather than announced under a guess: a settings listener told
+      // that "null" changed goes and re-reads a preference nobody has.
+      throw FormatException('preferences.changed carried no "key"');
+    }
+    _onPreferenceChanged?.call(key);
   }
 
   /// Wraps a handler body in the pre-substituted armor.

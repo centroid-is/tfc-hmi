@@ -151,7 +151,13 @@ void main() {
               'and not a value that is late: waiting will not fix a typo in a '
               'page config, and an uncertain code would tell the operator to '
               'wait');
-      expect(_asMap(answer['rejected'])['kind'], 'unknownKey',
+      expect(_asMap(answer['rejected']).keys, ['CN99.NOPE01.invented'],
+          reason: 'keyed by tag, exactly as readMany keys it (04-REVIEW '
+              'WR-11). Two neighbouring methods that spell one field two ways '
+              'is a client decoding the wrong one in silence');
+      expect(
+          _asMap(_asMap(answer['rejected'])['CN99.NOPE01.invented'])['kind'],
+          'unknownKey',
           reason: 'the reason rides with the answer so a page editor can say '
               'which of its 1500 bindings is wrong');
     });
