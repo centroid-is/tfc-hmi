@@ -10,8 +10,12 @@ const protocolVersion = '2026-08-13';
 /// steps.
 ///
 /// Notifications (no id, never acknowledged): [update], [tick], [resync],
-/// [status], [bye]. Nothing that needs an outcome may ever be sent as a
-/// notification.
+/// [status], [bye] server→client, and [holdTick] client→server — the only
+/// name a client sends without expecting an answer. Nothing that needs an
+/// outcome may ever be sent as a notification, and a hold tick has none: the
+/// engage and the release are ordinary [write] calls with three-state
+/// outcomes, and the feed in between is liveness, whose whole safety property
+/// is that it STOPS.
 abstract final class Methods {
   static const hello = 'hello';
   static const subscribe = 'subscribe';
@@ -30,6 +34,15 @@ abstract final class Methods {
   static const readMany = 'readMany';
 
   static const ping = 'ping';
+
+  /// The hold-to-run deadman feed — client→server, one frame per tick period
+  /// while a button is held, carrying [HoldTickParams] and no id.
+  ///
+  /// One character for the same reason [update] is: this is a hot path, and
+  /// the wire spelling is a literal in the server's surface test either way.
+  /// It is registered as a handler so json_rpc_2 dispatches it, but it is not
+  /// one of the nine names a client may *call* — nothing is ever sent back.
+  static const holdTick = 'h';
 
   static const update = 'u'; // hot path — one character on purpose
   static const tick = 'tick';

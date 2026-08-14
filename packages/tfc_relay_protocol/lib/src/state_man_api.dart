@@ -29,11 +29,6 @@
 ///  * **[StateManApi.readMany] stays on the interface.** The diagnostics page
 ///    already uses it, and N round trips over a slow link is precisely what
 ///    this project exists to avoid.
-///  * **`writeStatus` is NOT here in this phase.** Re-querying the outcome of
-///    a `cmd` is a reconnect-recovery path internal to the client
-///    implementation for now. Phase 5 (WRT-02) will have to change the frozen
-///    method table to add it — which is exactly the deliberate act the surface
-///    test exists to force.
 ///  * **`isKeyDisabled` is not mirrored.** A key the server will not serve
 ///    surfaces as a per-key subscribe rejection and `Quality.errorConfig` on
 ///    the value, not as a second query path a caller must remember to consult.
@@ -57,6 +52,7 @@ library;
 import 'browse.dart';
 import 'dynamic_value.dart';
 import 'history_view.dart';
+import 'hold_handle.dart';
 import 'preferences_api.dart';
 import 'timeseries.dart';
 import 'value_listenable.dart';
@@ -150,6 +146,54 @@ abstract interface class StateManApi {
   /// value still equals it, otherwise the result is a [WriteRejected].
   Future<WriteResult> write(String key, Object? value,
       {Object? expect, String? cmd});
+
+  /// Re-asks what became of commands whose outcome this side never learned.
+  ///
+  /// The answer is per-cmd and **positionally aligned with [cmds]** — element
+  /// *i* answers `cmds[i]` — so a caller reconciling a reconnect does not have
+  /// to trust a map key round trip to know which command it is being told
+  /// about.
+  ///
+  /// [WriteNotReceived] is the only re-send-safe answer
+  /// ([WriteResult.isSafeToResend]) and it requires positive evidence: the id
+  /// is datable, was minted after the answering source started, is not in the
+  /// future, and is still inside the dedup window. An implementation that
+  /// cannot establish all four says [WriteUnknown], because "I have no record
+  /// of it" and "it never happened" are the same sentence to a lookup table
+  /// and very different sentences to a machine.
+  ///
+  /// On the interface rather than inside one client because the alternative
+  /// leaves write recovery judged by nothing: the wire already exposes this
+  /// call, so it is the *less* exposed of the two, and a contract suite that
+  /// cannot ask a source about a cmd cannot check what it answers.
+  Future<List<WriteResult>> writeStatus(List<String> cmds);
+
+  /// Engages a hold-to-run deadman on [key] and returns the live hold.
+  ///
+  /// There is exactly one key and it is the one passed in: the tag *is* the
+  /// deadman counter. A convention that derived a sibling tag name in Dart
+  /// would have to be matched by hand in every PLC program, so the mapping
+  /// stays where the integrator can see it.
+  ///
+  /// The engage is a real write and its outcome is three-state — a hold can
+  /// be interlocked out exactly like any other command, and
+  /// [HoldHandle.engagement] carries that answer. A handle whose engage did
+  /// not apply is inert and already released with [HoldEnded.refused].
+  ///
+  /// The counter is client-minted and monotonic: **1** on engage, **+1** per
+  /// tick, **0** on release, wrapping to 1 rather than going negative. Server
+  /// stamping would make the gateway a source of the liveness the operator's
+  /// finger is supposed to be.
+  ///
+  /// Ticks are fire-and-forget and are sent by calling [HoldHandle.tick] at a
+  /// cadence the caller chooses (100 ms against a ~1 s PLC deadman). They are
+  /// not a member of this interface, and must never become one: a method here
+  /// is a thing any connected client may invoke against any key, and a bare
+  /// `tick(key, n)` is a write primitive with no engage in front of it.
+  ///
+  /// The PLC-side counterpart — the deadman block that drops the output when
+  /// the counter stops changing — is `relay-comm-design.md` §4.6a.
+  Future<HoldHandle> holdToRun(String key);
 
   /// Every key this source can serve, for pickers and diagnostics.
   List<String> get keys;

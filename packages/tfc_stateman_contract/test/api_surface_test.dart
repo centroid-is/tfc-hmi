@@ -36,12 +36,21 @@ import 'dart:mirrors';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
-/// The twelve members of the wire's primary interface.
+/// The fourteen members of the wire's primary interface.
+///
+/// `writeStatus` and `holdToRun` were added in Phase 5 (05-04), which is the
+/// deliberate act this file exists to force: `writeStatus` because the wire
+/// already exposed it and an interface that cannot be asked about a cmd is an
+/// interface whose write recovery no contract check can judge, and
+/// `holdToRun` because a deadman is a capability, not a convenience. Every
+/// other hold verb lives on the returned `HoldHandle`, which is a concrete
+/// class and not part of the walked surface — that is why a whole hold
+/// protocol costs one member here and not seven.
 ///
 /// Deliberately absent, each for a reason recorded in `state_man_api.dart`:
-/// `writeStatus` (Phase 5 / WRT-02 must edit this line to add it),
-/// `isKeyDisabled`, the four substitution members, and any health method —
-/// `PIPE.*` keys are subscribed through `listen` like any plant tag.
+/// `isKeyDisabled`, the four substitution members, any health method —
+/// `PIPE.*` keys are subscribed through `listen` like any plant tag — and
+/// `tick`, which would be a write primitive with no engage in front of it.
 const Set<String> expectedStateManApi = {
   'listen',
   'subscribe',
@@ -49,6 +58,8 @@ const Set<String> expectedStateManApi = {
   'readFresh',
   'readMany',
   'write',
+  'writeStatus',
+  'holdToRun',
   'keys',
   'browse',
   'timeseries',
@@ -199,7 +210,7 @@ void main() {
       });
     }
 
-    test('the whole surface is 47 members and nothing more', () {
+    test('the whole surface is 49 members and nothing more', () {
       final actual = <String>{
         for (final type in wireTypes) ...declaredMemberNames(type),
       };
@@ -210,7 +221,7 @@ void main() {
           reason: 'the union is checked as well as the parts, so a member '
               'moved from one sub-interface to another still has to be a '
               'deliberate edit here');
-      expect(actual, hasLength(47),
+      expect(actual, hasLength(49),
           reason: 'the count is written down so a same-size swap — one '
               'member removed, another added — cannot slip through as a '
               'coincidence');
