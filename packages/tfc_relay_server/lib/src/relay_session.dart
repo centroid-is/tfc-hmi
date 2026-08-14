@@ -69,6 +69,7 @@ final class RelaySession {
     this._now,
     this._closeChannel,
     this._emitFrame,
+    this._onClosing,
   );
 
   /// Serves [api] over [channel] and starts listening immediately.
@@ -103,6 +104,7 @@ final class RelaySession {
     List<String> serverSupported = const [protocolVersion],
     Future<void> Function(int code, String reason)? closeChannel,
     void Function(String frame)? emitFrame,
+    void Function(RelaySession session)? onClosing,
     int Function()? now,
   }) {
     final clock = now ?? () => DateTime.now().millisecondsSinceEpoch;
@@ -120,6 +122,7 @@ final class RelaySession {
       clock,
       closeChannel,
       emitFrame,
+      onClosing,
     ).._start();
   }
 
@@ -156,12 +159,48 @@ final class RelaySession {
   final Future<void> Function(int code, String reason)? _closeChannel;
   final void Function(String frame)? _emitFrame;
 
+  /// Called synchronously, once, at the top of [close] — before the peer, the
+  /// subscriptions or the transport are touched.
+  ///
+  /// The server hangs the registry removal off it. A hook rather than a
+  /// registry reference because the session does not know what a server is
+  /// (see this library's doc), and every in-memory test in this phase builds
+  /// one without either.
+  final void Function(RelaySession session)? _onClosing;
+
   /// Puts one already-encoded [frame] on this session's transport.
   ///
   /// The tick engine's write seam, and the only way out of a session that does
   /// not go through the buffer first — because by the time the engine calls
   /// this, the buffer is what the frame came *out* of.
   void emit(String frame) => _emitFrame?.call(frame);
+
+  /// Acts on one [verdict] from this session's send buffer. Returns whether
+  /// the session survived it.
+  ///
+  /// **Why the switch lives here rather than at the caller.** The close code a
+  /// backpressure eviction carries is decided by the thing that measured the
+  /// backlog, and it reaches the client by being *carried* — `verdict.closeCode`
+  /// and `verdict.reason`, never a constant re-typed at this call site. A
+  /// session that named 4004 for its own reasons and a buffer that named it for
+  /// the measured one can drift apart the moment either is edited, and the
+  /// symptom of that drift is a client told the wrong thing about why it was
+  /// disconnected — which is precisely the repudiation T-03-27 is about. One
+  /// switch, in one place, over the sealed type.
+  ///
+  /// The switch is exhaustive with no `default:` and no `_ =>` arm, and
+  /// [BufferOk] is an explicit no-op rather than a fall-through: a third
+  /// verdict added to `BufferVerdict` must be a compile error here, not a
+  /// silently ignored eviction policy.
+  bool applyVerdict(BufferVerdict verdict) {
+    switch (verdict) {
+      case BufferDisconnect(:final closeCode, :final reason):
+        unawaited(close(closeCode, reason));
+        return false;
+      case BufferOk():
+        return true;
+    }
+  }
 
   /// The negotiated protocol, and the session's identity — all null until a
   /// `hello` is accepted.
@@ -409,10 +448,20 @@ final class RelaySession {
   /// already gone; the peer is closed next, which is what stops handlers from
   /// running; the transport is closed last, with the code, because a socket
   /// closed before the peer swallows the peer's final frames.
+  ///
+  /// **Everything before the first `await` is the synchronous half, and that
+  /// is deliberate.** A close decided inside a tick — a backpressure eviction,
+  /// the heartbeat reaper — must take the session out of the registry in the
+  /// same turn it was decided in. This method is a `Future` because it has to
+  /// await the peer, and a caller that only `unawaited`s it would otherwise
+  /// leave a window in which the server is still selecting a client it has
+  /// already given up on: the next tick fans out to it, the reaper sweeps it,
+  /// and the frames go to a socket that is halfway through closing.
   Future<void> close(int code, String reason) async {
     if (_closed) return;
     _closed = true;
     _sentCloseCode ??= code;
+    _onClosing?.call(this);
     // Detach before the peer goes: a listener still attached to the upstream
     // store keeps pushing this client's values into a buffer that will never
     // be drained again, and a hundred of those is a shift's worth of memory

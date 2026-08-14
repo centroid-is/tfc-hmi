@@ -159,15 +159,16 @@ final class TickEngine {
     final buffer = session.buffer;
 
     // Before the drain. See the library doc: after it, this always reads zero.
-    switch (buffer.poll(nowMs)) {
-      case BufferDisconnect(:final closeCode, :final reason):
-        // The code comes from the verdict rather than being restated here, so
-        // the client is told which ceiling it hit by the thing that decided.
-        unawaited(session.close(closeCode, reason));
-        return;
-      case BufferOk():
-        break;
-    }
+    //
+    // The verdict is handed to the session rather than switched on here: the
+    // close code has to reach the client *carried* by the thing that measured
+    // the backlog, and one exhaustive switch over `BufferVerdict` in one place
+    // is what keeps a future third verdict a compile error instead of a
+    // silently dropped eviction (`RelaySession.applyVerdict`). A session that
+    // did not survive is abandoned for the rest of this tick — no drain, no
+    // stall announcement, no telemetry, no tick notification. It has already
+    // left the registry by the time this returns.
+    if (!session.applyVerdict(buffer.poll(nowMs))) return;
 
     // Into the priority lane, and only now: pushed before the poll it would
     // have counted against the client's own backlog, and evicting a panel for
