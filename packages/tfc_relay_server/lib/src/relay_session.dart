@@ -68,6 +68,7 @@ final class RelaySession {
     this._lastSeen,
     this._now,
     this._closeChannel,
+    this._emitFrame,
   );
 
   /// Serves [api] over [channel] and starts listening immediately.
@@ -75,6 +76,17 @@ final class RelaySession {
   /// [channel] is already a channel of whole JSON strings, and its sink is
   /// already whoever's the caller decided it should be — the session sink for
   /// a real client, the raw pair end for a test.
+  ///
+  /// [emitFrame] is how an already-encoded frame the **tick engine** produced
+  /// leaves this session — the drained priority lane, the `u` updates and the
+  /// tick notification. It cannot be the channel's own sink: that sink is the
+  /// [SessionSink], which puts everything it is given *into* the buffer, so a
+  /// tick that wrote its drained frames back through it would refill the lane
+  /// it had just emptied and nothing would ever reach the wire. Optional,
+  /// because a session driven by no engine never produces one; when it is
+  /// absent [emit] drops the frame rather than throwing, since the caller is
+  /// the timer and an exception there takes the whole server's tick down with
+  /// it.
   ///
   /// [closeChannel] is how a close *code* reaches the client. Optional,
   /// because an in-memory channel has nowhere to put one; without it [close]
@@ -90,6 +102,7 @@ final class RelaySession {
     TokenValidator validator = const PermissiveTokenValidator(),
     List<String> serverSupported = const [protocolVersion],
     Future<void> Function(int code, String reason)? closeChannel,
+    void Function(String frame)? emitFrame,
     int Function()? now,
   }) {
     final clock = now ?? () => DateTime.now().millisecondsSinceEpoch;
@@ -106,6 +119,7 @@ final class RelaySession {
       lastSeen,
       clock,
       closeChannel,
+      emitFrame,
     ).._start();
   }
 
@@ -140,6 +154,14 @@ final class RelaySession {
   final _LastSeen _lastSeen;
   final int Function() _now;
   final Future<void> Function(int code, String reason)? _closeChannel;
+  final void Function(String frame)? _emitFrame;
+
+  /// Puts one already-encoded [frame] on this session's transport.
+  ///
+  /// The tick engine's write seam, and the only way out of a session that does
+  /// not go through the buffer first — because by the time the engine calls
+  /// this, the buffer is what the frame came *out* of.
+  void emit(String frame) => _emitFrame?.call(frame);
 
   /// The negotiated protocol, and the session's identity — all null until a
   /// `hello` is accepted.

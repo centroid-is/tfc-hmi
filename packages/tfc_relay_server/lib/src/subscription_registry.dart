@@ -78,6 +78,20 @@ final class SubscriptionState {
   /// Advances and returns the next sequence number.
   int nextSeq() => ++_seq;
 
+  /// This subscription's name as an escaped JSON string literal, quotes
+  /// included, computed with [escape] the first time it is asked for and kept.
+  ///
+  /// `FrameEncoder.subLiteral` is an encode, and the whole point of the
+  /// encode-once path is that no per-client work in a tick is an encode
+  /// (03-RESEARCH Finding 2: 69.6× when it is). The name is fixed for the life
+  /// of the subscription, so escaping it once per subscription and splicing
+  /// the result into every frame afterwards is exact rather than merely
+  /// cheaper. Escaped rather than concatenated raw because the name is
+  /// client-chosen text going into a frame this server builds by hand, which
+  /// is an injection into its own output stream.
+  String literal(String Function(String) escape) => _literal ??= escape(sub);
+  String? _literal;
+
   /// handle → key, for everything this subscription watches.
   Map<int, String> get keysByHandle => Map.unmodifiable(_keysByHandle);
   final _keysByHandle = <int, String>{};
