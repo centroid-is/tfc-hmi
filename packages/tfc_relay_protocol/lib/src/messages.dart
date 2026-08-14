@@ -371,26 +371,56 @@ final class WriteParams {
   final Object? expect;
   final int? ttlMs;
 
-  /// Sanitizes [value]/[expect] — a write can never poison a frame either.
+  /// Refuses a non-finite [value] or [expect] rather than sanitizing it.
+  ///
+  /// Sanitizing is right for telemetry, where the alternative is a frame that
+  /// fails for every client. On the write path the value is an operator's
+  /// intent and the two losses are both silent: a non-finite [value] would
+  /// become a write of `null`, actuating the device with something nobody
+  /// chose, and a non-finite [expect] would become `null`, which is this
+  /// class's encoding of "no compare-and-set guard" — turning a guarded write
+  /// into an unconditional one. Nothing upstream of a write box can
+  /// legitimately produce a NaN, so this is programmer error, and throwing is
+  /// the one thing the write path is allowed to do about it.
   factory WriteParams(
       {required String cmd,
       required String key,
       required Object? value,
       Object? expect,
       int? ttlMs}) {
-    return WriteParams._(cmd, key, sanitize(value).value,
-        sanitize(expect).value, ttlMs);
+    final v = sanitize(value);
+    final e = sanitize(expect);
+    if (v.hadNonFinite || e.hadNonFinite) {
+      throw ArgumentError.value(
+          v.hadNonFinite ? value : expect,
+          v.hadNonFinite ? 'value' : 'expect',
+          'a write cannot carry a non-finite number: nulling it would actuate '
+              'the device with a value the operator did not choose, and '
+              'nulling an expect would turn a guarded write into an '
+              'unconditional one');
+    }
+    return WriteParams._(cmd, key, v.value, e.value, ttlMs);
   }
 
   const WriteParams._(this.cmd, this.key, this.value, this.expect, this.ttlMs);
 
-  factory WriteParams.fromJson(Map<String, Object?> json) => WriteParams(
+  factory WriteParams.fromJson(Map<String, Object?> json) {
+    try {
+      return WriteParams(
         cmd: json['cmd'] as String,
         key: json['key'] as String,
         value: json['value'],
         expect: json['expect'],
         ttlMs: (json['ttlMs'] as num?)?.toInt(),
       );
+    } on ArgumentError catch (e) {
+      // `1e999` decodes silently to Infinity, so a peer can reach the refusal
+      // above. From here it is a malformed frame rather than local programmer
+      // error — the write is refused either way, which is the point.
+      throw FormatException('write params carry a non-finite number: '
+          '${e.name} = ${e.invalidValue}');
+    }
+  }
 
   Map<String, Object?> toJson() => {
         'cmd': cmd,
