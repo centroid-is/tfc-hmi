@@ -133,5 +133,86 @@ void main() {
       expect(describe(const WriteUnknown('x', WriteReason('link_lost'))),
           contains('never auto-retry'));
     });
+
+    group('re-send safety is a member of the type', () {
+      // 05-RESEARCH §E.2 Gap 1. Until now "only not_received is re-send-safe"
+      // lived as prose in three doc comments and one switch label in the
+      // contract suite, so a caller building a re-send button had nothing to
+      // test but `is WriteNotReceived`.
+      //
+      // What this group costs if a fifth outcome is ever added: the switch
+      // below stops compiling, in this file, next to this comment. That is
+      // the point. A new arm would otherwise inherit `false` in silence —
+      // which is the safe default, but silence is not a decision, and the
+      // re-send policy for a new outcome is a decision somebody has to make
+      // in writing.
+      String nameOf(WriteResult r) => switch (r) {
+            WriteApplied() => 'WriteApplied',
+            WriteRejected() => 'WriteRejected',
+            WriteUnknown() => 'WriteUnknown',
+            WriteNotReceived() => 'WriteNotReceived',
+          };
+
+      const everyOutcome = <WriteResult>[
+        WriteApplied('cmd', readback: 1450, at: 1786000000456),
+        WriteRejected('cmd', WriteReason('interlocked')),
+        WriteUnknown('cmd', WriteReason('link_lost')),
+        WriteNotReceived('cmd'),
+      ];
+
+      test(
+          'exactly one outcome is re-send-safe, and it is the one the gateway '
+          'needed evidence for', () {
+        final safe = everyOutcome
+            .where((r) => r.isSafeToResend)
+            .map(nameOf)
+            .toSet();
+        expect(safe, {'WriteNotReceived'},
+            reason: 'offering a re-send for any other outcome invites the '
+                'operator to move the machine twice — not_received is the '
+                'only verdict the gateway reached with positive evidence');
+      });
+
+      test('the four arms answer individually, not just as a set', () {
+        expect(const WriteApplied('c', readback: 1, at: 1).isSafeToResend,
+            isFalse,
+            reason: 'the write already landed; re-sending would apply it a '
+                'second time');
+        expect(
+            const WriteRejected('c', WriteReason('interlocked')).isSafeToResend,
+            isFalse,
+            reason: 'the device said no for a reason; the operator clears the '
+                'interlock, not the dialog');
+        expect(const WriteUnknown('c', WriteReason('plc_timeout')).isSafeToResend,
+            isFalse,
+            reason: 'the write may already be at the plant — verify by '
+                'readback, never re-send blind');
+        expect(const WriteNotReceived('c').isSafeToResend, isTrue,
+            reason: 'the gateway proved it never saw this cmd, so a re-send '
+                'may be offered — offered, still never automatic');
+      });
+
+      test('a truncated answer cannot arrive re-send-safe', () {
+        // The decode path and the getter have to agree: every payload that
+        // degrades to unknown (half-closed socket, version skew, an applied
+        // with no `at`) must come back not-safe.
+        for (final json in <Map<String, Object?>>[
+          {'cmd': 'X', 'outcome': 'unknown'},
+          {'cmd': 'X'},
+          {'cmd': 'X', 'outcome': 'applied', 'readback': 1},
+          {'cmd': 'X', 'outcome': 'partially_applied'},
+        ]) {
+          expect(WriteResult.fromJson(json).isSafeToResend, isFalse,
+              reason: 'a malformed answer about $json is not proof the plant '
+                  'was untouched');
+        }
+        expect(
+            WriteResult.fromJson({'cmd': 'X', 'outcome': 'not_received'})
+                .isSafeToResend,
+            isTrue,
+            reason: 'the one answer that does carry that proof has to survive '
+                'the wire');
+      });
+    });
   });
 }
