@@ -17,12 +17,18 @@
 ///   as an unhandled async error instead of a value the supervisor can branch
 ///   on, the reconnect loop dies at the first attempt and the panel stays grey
 ///   until someone drives to the factory.
-/// * The `.cast()` trap (`ws_channel.dart:4-20`, 03-RESEARCH Finding 1) locks
-///   the write side after the first bind, so the *second* thing the client ever
-///   sends — the first `write` after the handshake, i.e. an operator pressing a
-///   button — throws `Bad state: Cannot add event while adding stream`. Nothing
-///   warns at compile time. The case named `a second write on a live connection
-///   still lands` is the one that bites it.
+/// * The `.cast()` trap (`ws_channel.dart:4-20`, 03-RESEARCH Finding 1) binds
+///   the socket's own sink with `addStream` and keeps it bound for the whole
+///   life of the connection, so the next writer to reach past the channel gets
+///   `Bad state: Cannot add event while adding stream` — measured again here,
+///   on this side, in exactly that form. On the gateway the later writer is the
+///   fan-out tick; on the panel it is the app-level heartbeat, which STACK
+///   makes mandatory because Flutter web cannot send ping frames, and anything
+///   else the supervisor has to say around the `Peer` that owns the channel.
+///   Nothing warns at compile time: the panel connects, shows values, and the
+///   first frame the supervisor sends on its own throws. The case named
+///   `a second write on a live connection still lands` is the one that bites
+///   it.
 @Tags(['ws'])
 library;
 
@@ -33,6 +39,7 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/ws_transport.dart';
 import 'package:tfc_stateman_contract/tfc_stateman_contract.dart' show within;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// A loopback handshake plus one echoed frame, generously: this transport's
 /// measured round trip is 50 ms (04-RESEARCH Finding 8) and a loaded CI box is
@@ -133,10 +140,12 @@ void main() {
     });
 
     test('a second write on a live connection still lands', () async {
-      final attempt =
-          await within(connect(echo.uri), 'the connect attempt settling',
-              budget: _socketBudget);
-      final channel = _channelOf(attempt);
+      // The socket is built here rather than through `connect` because the
+      // property under test is what the adapter leaves *unbound*: a second
+      // writer must still be able to reach the socket after the channel exists.
+      final ws = WebSocketChannel.connect(echo.uri);
+      await within(ws.ready, 'the handshake', budget: _socketBudget);
+      final channel = wsChannel(ws);
       addTearDown(() async => channel.sink.close());
 
       final echoed = <String>[];
@@ -146,23 +155,30 @@ void main() {
         if (echoed.length == 2 && !both.isCompleted) both.complete();
       });
 
-      channel.sink.add('handshake');
+      channel.sink.add('the operator pressed a button');
       await within(
         Future<void>.delayed(Duration.zero),
         'a turn of the event loop between the two writes',
         budget: _socketBudget,
       );
-      // The push that `StreamChannel.cast<String>()` makes throw: the sink is
-      // still bound by the addStream from the first write.
-      channel.sink.add('the operator pressed a button');
+      // The push that a cast of the whole channel makes throw: the socket's own
+      // sink is still bound by the `addStream` the cast set up. Measured, on
+      // this transport: `Bad state: Cannot add event while adding stream.`
+      ws.sink.add('the heartbeat, sent around the Peer');
 
-      await within(both.future, 'both frames coming back', budget: _socketBudget);
+      await within(both.future, 'both frames coming back',
+          budget: _socketBudget);
       expect(
         echoed,
-        <String>['handshake', 'the operator pressed a button'],
-        reason: 'the second frame the client ever sends is the first operator '
-            'write after the handshake; if the sink is locked by a cast, every '
-            'button on the panel is dead and nothing said so at startup',
+        <String>[
+          'the operator pressed a button',
+          'the heartbeat, sent around the Peer',
+        ],
+        reason: 'the supervisor writes an app-level heartbeat around the Peer '
+            'that owns the channel, because Flutter web cannot send ping '
+            'frames; if the cast locked the socket, the panel connects, shows '
+            'values, and the liveness check it depends on throws on its first '
+            'beat',
       );
     });
 
