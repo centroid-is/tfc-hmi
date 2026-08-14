@@ -27,6 +27,16 @@ extension type const Quality(int code) {
   /// boundary, see Sanitize).
   static const badNonFinite = Quality(524);
 
+  /// Nothing has arrived for this key yet — the first batch is still in
+  /// flight, or the page has just resynced.
+  ///
+  /// Uncertain rather than [errorConfig], which means the opposite thing:
+  /// waiting *does* fix this. On the slow link this API was shaped for, every
+  /// key on a 1500-key page passes through this state for one round trip, and
+  /// reporting them all as configuration errors would teach operators that the
+  /// one non-transient error code is transient.
+  static const uncertainNotYetKnown = Quality(258);
+
   /// Source bytes were not valid in the configured string encoding;
   /// replacement characters were substituted.
   static const uncertainEncoding = Quality(260);

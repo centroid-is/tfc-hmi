@@ -38,14 +38,27 @@ void main() {
               'no adapter object per key');
     });
 
-    test('reading a never-updated key yields errorConfig and a null value', () {
+    test('reading a never-updated key yields a null value nobody may trust',
+        () {
       final node = ValueStore().node('MISSING');
       expect(node.value.value, isNull,
           reason: 'a fabricated good zero would render as a plausible reading '
               'for a tag that does not exist');
-      expect(node.value.quality, Quality.errorConfig,
-          reason: 'not-yet-known is a configuration-grade fault an operator '
-              'must see, and reading it must never throw');
+      expect(node.value.quality, Quality.uncertainNotYetKnown,
+          reason: 'not-yet-known is untrustworthy and must never throw to '
+              'read, but it is not a configuration error');
+    });
+
+    test('not-yet-known is distinguishable from a deleted tag', () {
+      // WR-02. On a slow link every key on a page is not-yet-known for the
+      // first round trip. Reporting that as errorConfig — "the tag is gone,
+      // fix the page" — teaches operators that the one non-transient error
+      // code heals on its own.
+      expect(notYetKnown.quality, isNot(Quality.errorConfig));
+      expect(notYetKnown.quality.isGood, isFalse,
+          reason: 'nothing has arrived, so nothing may be believed');
+      expect(notYetKnown.quality.isUncertain, isTrue,
+          reason: 'waiting fixes this one, which is what uncertain means');
     });
 
     test('peek is null until a value has actually arrived', () {
@@ -325,7 +338,7 @@ void main() {
           reason: 'a resync must not orphan the node a widget is listening '
               'to — it would go dark for the rest of the session');
       expect(store.peek('A'), isNull, reason: 'the cache is discarded');
-      expect(node.value.quality, Quality.errorConfig,
+      expect(node.value.quality, Quality.uncertainNotYetKnown,
           reason: 'after a resync starts, nothing is known yet');
     });
 

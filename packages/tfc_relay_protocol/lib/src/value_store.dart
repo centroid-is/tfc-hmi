@@ -28,11 +28,17 @@ import 'value_listenable.dart';
 /// What a key reads as before any value has arrived, and again after a
 /// [ValueStore.clear].
 ///
-/// [Quality.errorConfig] rather than a bad-band code: waiting does not fix an
-/// unknown key, and the alternative — a good-quality zero — renders as a
-/// plausible reading for a tag that may not exist at all.
+/// [Quality.uncertainNotYetKnown], not a good-quality zero — which renders as
+/// a plausible reading for a tag that may not exist at all — and not
+/// [Quality.errorConfig], which asserts the tag is *gone* and that waiting
+/// will not help. On the slow link this store was shaped for, every key on a
+/// page is in this state for the first round trip; labelling that a
+/// configuration error would tell the operator to go fix a page that is fine,
+/// and would teach them that the one non-transient error code heals on its
+/// own. A key the source has affirmatively been told is gone is a different
+/// fact, and carries [Quality.errorConfig].
 final DynamicValue notYetKnown =
-    DynamicValue(value: null, quality: Quality.errorConfig);
+    DynamicValue(value: null, quality: Quality.uncertainNotYetKnown);
 
 /// One key's cached value and its listeners.
 ///
