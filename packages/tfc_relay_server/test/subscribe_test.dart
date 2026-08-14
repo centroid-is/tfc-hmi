@@ -404,4 +404,67 @@ void main() {
         'a table claiming to carry it; a handler nobody declared is surface '
         'nobody counted. 03-08 freezes this set');
   });
+
+  group('a partial subscribe leaves nothing attached', () {
+    // 03-REVIEW WR-08. `state.watch` sits outside the per-key try, and
+    // `subscriptions.put(state)` does not run until the end. A throw from
+    // `api.listen` on the tenth of fifty keys left the nine listeners already
+    // attached unreachable: the state never entered the registry, so teardown
+    // could not find it, and the only other reference was the unwinding stack
+    // frame. A permanent leak per failure.
+    test('a listen that throws mid-loop detaches what it already attached',
+        () async {
+      final api = _ListenFailsOn('CN01.MOT03.speed');
+      final link = _link(api: api);
+      await _sayHello(link);
+
+      final keys = [for (var i = 1; i <= 5; i++) 'CN01.MOT0$i.speed'];
+      api.setValues({for (final key in keys) key: 0});
+      final baseline = _attached(api, keys);
+
+      await _refusal(
+          link.client.sendRequest(Methods.subscribe,
+              SubscribeParams(sub: 'page-1', keys: keys).toJson()),
+          'a subscribe whose third key cannot be listened to');
+
+      expect(_attached(api, keys), baseline,
+          reason: 'every listener attached before the failure has to come off '
+              'on the way out or never: the subscription never reached the '
+              'registry, so `subscriptions.clear()` at teardown cannot see it, '
+              'and the listeners keep pushing a dead page\'s values into a '
+              'buffer nothing will drain');
+      expect(link.session.subscriptions.count, 0,
+          reason: 'a subscribe that failed must leave no subscription behind, '
+              'or the name is taken and the client can never retry it');
+    });
+  });
+}
+
+/// Listeners the session has attached to [api] across [keys].
+///
+/// Read through [_ListenFailsOn.node] rather than `listen`, because the whole
+/// point of that source is that `listen` throws for one of these keys — and a
+/// measurement that could not survive the fault it is measuring would be no
+/// measurement at all.
+int _attached(_ListenFailsOn api, List<String> keys) => [
+      for (final key in keys) api.node(key).listenerCount
+    ].fold(0, (a, b) => a + b);
+
+/// A source whose `listen` throws for one key — an upstream that is there for
+/// most tags and gone for one, which is what a real DeviceClient does when a
+/// node id has been renamed underneath it (Phase 8).
+final class _ListenFailsOn extends FakeStateMan {
+  _ListenFailsOn(this.badKey);
+  final String badKey;
+
+  /// The backing node, reachable even for [badKey].
+  ValueStoreNode node(String key) => super.listen(key) as ValueStoreNode;
+
+  @override
+  ValueListenable<DynamicValue> listen(String key) {
+    if (key == badKey) {
+      throw StateError('the upstream has no monitored item for "$key"');
+    }
+    return super.listen(key);
+  }
 }

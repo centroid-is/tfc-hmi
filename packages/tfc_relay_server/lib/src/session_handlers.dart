@@ -137,6 +137,13 @@ final class SessionHandlers {
           'subscriptions under one name would share a seq, and an ambiguous '
           'seq reads to the client as a permanent gap');
     }
+    final rate = request.maxRateHz;
+    if (rate != null && !(rate > 0)) {
+      throw rpc.RpcException.invalidParams(
+          'maxRateHz must be a positive number of pushes per second; '
+          '"$rate" would ask the gateway either for everything at once or '
+          'for nothing ever, and the client could not tell which it got');
+    }
     if (subscriptions.atCapacity) {
       throw rpc.RpcException.invalidParams(
           'this session already holds ${subscriptions.count} subscriptions, '
@@ -165,36 +172,67 @@ final class SessionHandlers {
     final meta = <int, Object?>{};
     final snapshot = <int, WireValue>{};
 
-    for (final entry in minted.entries) {
-      final key = entry.key;
-      final handle = entry.value;
-      try {
-        final current = api.read(key);
-        meta[handle] = _meta(key, current);
-        snapshot[handle] = _wire(current);
-      } catch (error) {
-        // One tag, not one call (STATE.md). A value the gateway cannot render
-        // is a per-key problem even when it is the gateway's own problem.
-        rejected[key] = KeyReject(KeyRejectKinds.unencodable,
-            message: 'the current value of "$key" could not be encoded: '
-                '$error');
-        continue;
+    // **Everything from here to `put` rolls back as one** (03-REVIEW WR-08).
+    // The per-key `try` below is the deliberate degradation — one typo costs
+    // one tag — but `state.watch` and `api.listen` are outside it, and the
+    // subscription does not enter the registry until the last line. So a
+    // throw on the tenth of fifty keys left nine listeners attached to the
+    // backing source with nothing able to reach them: `state` never entered
+    // the registry, so `subscriptions.clear()` at teardown could not find it,
+    // and the only other reference was the stack frame that was unwinding.
+    // A permanent leak per failure, once per failure, forever.
+    //
+    // `FakeStateMan` never throws from `listen`, which is why the suite was
+    // quiet about it; `LocalStateMan` over real DeviceClients (Phase 8) is a
+    // different proposition.
+    try {
+      for (final entry in minted.entries) {
+        final key = entry.key;
+        final handle = entry.value;
+        try {
+          final current = api.read(key);
+          meta[handle] = _meta(key, current);
+          snapshot[handle] = _wire(current);
+        } catch (error) {
+          // One tag, not one call (STATE.md). A value the gateway cannot
+          // render is a per-key problem even when it is the gateway's own
+          // problem.
+          rejected[key] = KeyReject(KeyRejectKinds.unencodable,
+              message: 'the current value of "$key" could not be encoded: '
+                  '$error');
+          continue;
+        }
+        state.watch(key, handle, api.listen(key), (value) {
+          buffer.putValue(request.sub, handle, _wire(value));
+        });
       }
-      state.watch(key, handle, api.listen(key), (value) {
-        buffer.putValue(request.sub, handle, _wire(value));
-      });
-    }
 
-    // Anything that fell out during encode never got a listener, so it must
-    // not appear in the answer as if it had.
-    for (final key in rejected.keys) {
-      final handle = minted.remove(key);
-      if (handle == null) continue;
-      meta.remove(handle);
-      snapshot.remove(handle);
-    }
+      // Anything that fell out during encode never got a listener, so it must
+      // not appear in the answer as if it had.
+      for (final key in rejected.keys) {
+        final handle = minted.remove(key);
+        if (handle == null) continue;
+        meta.remove(handle);
+        snapshot.remove(handle);
+      }
 
-    subscriptions.put(state);
+      subscriptions.put(state);
+    } on SubscriptionLimitExceeded catch (error) {
+      // Unreachable today — there is no `await` between the `atCapacity`
+      // check above and this `put`, so nothing can interleave. It is caught
+      // anyway because the class's own doc promises "the handler turns it into
+      // a JSON-RPC refusal that names the limit" and no handler did: the throw
+      // would have surfaced through `_answer` as handlerFailed (-32011), whose
+      // documented meaning is "possibly transient: retrying is legitimate,
+      // with backoff". A client would retry a ceiling it can never get under.
+      // Phase 6's per-key authorization is the obvious thing to introduce the
+      // await that opens the race, and the code path should exist before then.
+      state.detach();
+      throw rpc.RpcException.invalidParams('$error');
+    } catch (_) {
+      state.detach();
+      rethrow;
+    }
 
     return SubscribeResult(
       sub: state.sub,

@@ -33,6 +33,7 @@
 /// `ws`, so the simulated path stays anchored to the thing it simulates.
 library;
 
+import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
@@ -340,6 +341,84 @@ void main() {
               'on the plant for one 400 ms hiccup');
       expect(panel.ticks, hasLength(1),
           reason: 'the cadence resumes, unremarkably');
+    });
+  });
+
+  group('maxRateHz is a promise the server keeps', () {
+    // 03-REVIEW WR-07. `maxRateHz` was accepted from clients, stored on
+    // SubscriptionState and read by nothing: a panel that asked for 1 Hz got
+    // the full tick rate, silently. `grep -rn maxRateHz lib/` found the
+    // declaration and the assignment and nothing else.
+    test('a rate-limited subscription is pushed less often than the tick',
+        () async {
+      final plant = Plant(); // 50 ms tick — 20 Hz.
+      final keys = plant.seed(1, prefix: 'CN03.FAST');
+      final panel = await plant.connect('page-1', keys);
+      await plant.ask(
+          panel,
+          Methods.subscribe,
+          SubscribeParams(sub: 'slow', keys: keys, maxRateHz: 5).toJson());
+      plant.clearWires();
+
+      var value = 0;
+      for (var tick = 0; tick < 8; tick++) {
+        plant.api.setValues({keys.single: ++value});
+        plant.tick();
+      }
+      // Four quiet ticks, so the last deferred change has a tick it is due on.
+      for (var tick = 0; tick < 4; tick++) {
+        plant.tick();
+      }
+
+      final fast = panel.updates.where((u) => u.sub == 'page-1').toList();
+      final slow = panel.updates.where((u) => u.sub == 'slow').toList();
+
+      expect(fast, hasLength(8),
+          reason: 'the unlimited subscription is the control: it is pushed on '
+              'every tick that carried a change');
+      expect(slow.length, lessThan(fast.length),
+          reason: 'a subscription that asked for 5 Hz on a 20 Hz tick must be '
+              'pushed less often, or the field is decoration');
+      expect(slow, isNotEmpty,
+          reason: 'less often is not never — a rate limit that starved the '
+              'subscription would be a worse bug than ignoring it');
+      expect(slow.last.changes.values.single.v, value,
+          reason: 'a skipped tick must defer the change, never drop it: the '
+              'buffer has already been drained by the time the rate gate '
+              'runs, so a gate that only skipped the emit would leave a panel '
+              'holding the previous value forever if that tag never moved '
+              'again — under a link that looks perfectly healthy');
+    });
+
+    test('a subscription with no rate is pushed on every tick', () async {
+      final plant = Plant();
+      final keys = plant.seed(1, prefix: 'CN03.PLAIN');
+      final panel = await plant.connect('page-1', keys);
+      plant.clearWires();
+
+      for (var tick = 0; tick < 5; tick++) {
+        plant.api.setValues({keys.single: tick + 1});
+        plant.tick();
+      }
+
+      expect(panel.updates, hasLength(5),
+          reason: 'the gate must be inert for the clients that did not ask '
+              'for it, which is every panel today');
+    });
+
+    test('a non-positive maxRateHz is refused rather than ignored', () async {
+      final plant = Plant();
+      final keys = plant.seed(1, prefix: 'CN03.ZERO');
+      final panel = await plant.connect('page-1', keys);
+
+      await expectLater(
+          plant.ask(panel, Methods.subscribe,
+              SubscribeParams(sub: 'zero', keys: keys, maxRateHz: 0).toJson()),
+          throwsA(isA<rpc.RpcException>()),
+          reason: 'silently ignoring a client-supplied constraint is the one '
+              'option that leaves nobody informed; zero pushes per second is '
+              'either everything at once or nothing ever and the client could '
+              'not tell which it got');
     });
   });
 
