@@ -55,6 +55,22 @@ void main() {
             'after earlier ones');
   });
 
+  test('an id within one millisecond is not its predecessor plus one', () {
+    // WR-03. Standard ULID monotonicity increments the suffix by 1, which
+    // keeps the ordering and hands anyone holding one id every neighbouring
+    // id from the same millisecond — and writeStatus is queried by id.
+    var adjacent = 0;
+    String? previous;
+    for (var i = 0; i < 500; i++) {
+      final id = newUlid(nowMs: 1786000000000);
+      if (previous != null && _isSuccessorOf(id, previous)) adjacent++;
+      previous = id;
+    }
+    expect(adjacent, 0,
+        reason: 'the step between two ids in one millisecond is a secure '
+            'random delta, so the next id cannot be computed from this one');
+  });
+
   test('10,000 ULIDs from a tight loop are all distinct', () {
     final ids = <String>{};
     for (var i = 0; i < 10000; i++) {
@@ -82,4 +98,19 @@ void main() {
     expect(b, hasLength(16));
     expect(a, isNot(b));
   });
+}
+
+/// True when [id] is exactly the base-32 successor of [previous] — what a
+/// plain `+1` monotonicity counter produces.
+bool _isSuccessorOf(String id, String previous) {
+  const crockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  final digits = [for (final c in previous.split('')) crockford.indexOf(c)];
+  for (var i = digits.length - 1; i >= 10; i--) {
+    if (digits[i] < 31) {
+      digits[i]++;
+      break;
+    }
+    digits[i] = 0;
+  }
+  return id == [for (final d in digits) crockford[d]].join();
 }

@@ -14,10 +14,22 @@
 ///  * **Roughly time-sortable.** The dedup log and the write-audit trail are
 ///    read in id order; a random-only id makes them unreadable.
 ///  * **Unguessable.** `writeStatus` is queried by id. A predictable id lets a
-///    hostile client re-query another operator's write outcome, so the random
-///    component comes from [Random.secure] — never the default generator,
-///    which is seeded predictably and is not intended for anything an attacker
-///    can see.
+///    hostile client re-query another operator's write outcome, so every
+///    random digit — the 80-bit draw at the start of each millisecond and the
+///    delta between two ids inside one — comes from [Random.secure], never the
+///    default generator, which is seeded predictably and is not intended for
+///    anything an attacker can see.
+///
+///    Standard ULID monotonicity increments the previous suffix by one, which
+///    keeps the ordering but makes the neighbours of a known id enumerable.
+///    Here the increment is itself a secure random positive delta: the suffix
+///    still sorts strictly after the previous one, and knowing one id says
+///    nothing about the next. It costs a bounded slice of the 80-bit space per
+///    id within a millisecond, which is not a budget any client can spend.
+///
+///    None of this makes an id an authorisation token. `writeStatus`
+///    authorisation is a session property (WRT-02, Phase 5); id opacity is
+///    defence in depth behind it, not instead of it.
 ///
 /// Hand-rolled rather than taken from `package:ulid`: this package is imported
 /// by the Flutter app, and every dependency added here is a future
@@ -44,6 +56,11 @@ const int _randomChars = 16;
 /// guarantees the timestamp can never spill into the random characters, even
 /// if a caller passes a nonsense clock reading.
 const int _msMask = (1 << 48) - 1;
+
+/// Upper bound on the random step between two ids minted in one millisecond.
+/// Large enough that neighbours are not enumerable, small enough that the
+/// 80-bit suffix cannot be walked off the end by any real client.
+const int _maxBump = 1 << 16;
 
 final Random _entropy = Random.secure();
 
@@ -87,20 +104,24 @@ void _drawEntropy() {
   }
 }
 
-/// Base-32 increment from the least significant digit, so the encoded suffix
+/// Base-32 addition from the least significant digit, so the encoded suffix
 /// sorts strictly after the previous one within the same millisecond.
 ///
-/// Exhausting 80 bits inside one millisecond is unreachable — it needs 2^80
-/// writes from one client in 1 ms — but if it ever happened, redrawing keeps
-/// ids unique (the property that protects the dedup log) at the cost of
-/// ordering within that millisecond alone.
+/// The delta is a secure random number in `[1, _maxBump]` rather than 1: both
+/// keep the ordering, but +1 hands anyone holding one id every neighbouring id
+/// from the same millisecond. At most 2^16 of the 80-bit space per id, so
+/// exhausting a millisecond still needs ~2^64 writes from one client inside
+/// it; if it ever happened, redrawing keeps ids unique — the property that
+/// protects the dedup log — at the cost of ordering within that millisecond
+/// alone.
 void _bumpEntropy() {
-  for (var i = _randomChars - 1; i >= 0; i--) {
-    if (_lastRandom[i] < 31) {
-      _lastRandom[i]++;
-      return;
-    }
-    _lastRandom[i] = 0;
+  var carry = 1 + _entropy.nextInt(_maxBump);
+  for (var i = _randomChars - 1; i >= 0 && carry > 0; i--) {
+    final sum = _lastRandom[i] + carry;
+    _lastRandom[i] = sum & 0x1f;
+    carry = sum >> 5;
   }
-  _drawEntropy();
+  // Carry left over means the 80 bits wrapped, and a wrapped suffix would
+  // sort before its predecessor.
+  if (carry > 0) _drawEntropy();
 }
