@@ -419,6 +419,14 @@ Future<void> checkWritePendingIsVisibleWhileInFlight(
   final stall = stallWrites ?? (a) => writeHarnessOf(a).stallWrites();
 
   plant.setValue(_setpointKey, 1200);
+  // The notification this case waits for has to be the pending badge going on.
+  // On a source whose values cross a message boundary the seed is still in
+  // flight here, so without this barrier the wait wakes on the seed instead —
+  // and the case then reads a value that is good, has never been written to,
+  // and reports that the operator gets no feedback for their press. Both
+  // assertions below are about the *same* value in two states, so the first
+  // state has to have arrived before the second is asked for.
+  await arrived(api, _setpointKey);
   final node = api.listen(_setpointKey);
   final seen = observe(node);
 

@@ -101,6 +101,12 @@ Future<void> checkValuePastDeadlineBecomesBadStale(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValue(_speedKey, 1450);
+  // The next notification has to be the one the deadline caused. Without this
+  // barrier, on a source that delivers asynchronously the next notification is
+  // the *seed*, and the case then reads a value that is still perfectly fresh
+  // and reports the source as frozen-fresh — the exact accusation this file
+  // exists to make, made falsely.
+  await arrived(api, _speedKey);
   final node = api.listen(_speedKey);
   final seen = observe(node);
 
@@ -133,6 +139,9 @@ Future<void> checkStaleTransitionNotifiesListeners(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValue(_speedKey, 1450);
+  // Counting starts after the seed has landed, or the seed's own notification
+  // is folded into the count this case promises is exactly one.
+  await arrived(api, _speedKey);
   final node = api.listen(_speedKey);
   final seen = observe(node);
 
@@ -158,6 +167,9 @@ Future<void> checkFreshValueClearsStaleness(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValue(_speedKey, 1450);
+  // The staleness this case recovers from has to be real, so the seed must be
+  // in before the wait for it begins.
+  await arrived(api, _speedKey);
   final node = api.listen(_speedKey);
   final seen = observe(node);
 
@@ -190,6 +202,12 @@ Future<void> checkUpstreamLossDegradesAffectedKeys(StateManApi api) async {
   final plant = harnessOf(api);
 
   plant.setValues({_speedKey: 1450, _otherKey: 3});
+  // Both keys, because the case asserts on both. The next notification after
+  // this point is the degradation; before it, the next notification is the
+  // seed, and a case that read the seed would find two perfectly good values
+  // and call the source a liar.
+  await arrived(api, _speedKey);
+  await arrived(api, _otherKey);
   final speed = api.listen(_speedKey);
   final other = api.listen(_otherKey);
   final seen = observe(speed);
@@ -226,6 +244,12 @@ Future<void> checkUpstreamLossAnnouncesOnce(StateManApi api) async {
   plant.setValues({
     for (var i = 0; i < keys.length; i++) keys[i]: 1000 + i,
   });
+  // The `before` snapshot has to be taken after the seed has landed and the
+  // notification waited for below has to be the degradation. Neither is true
+  // on an asynchronous source without this: the case would read the counter
+  // before the source had processed anything, wake on the seed, and compare
+  // two numbers taken either side of nothing at all.
+  await arrived(api, keys.first);
   final watched = observe(api.listen(keys.first));
 
   final before = plant.statusNotifications;
@@ -251,6 +275,12 @@ Future<void> checkUpstreamLossAnnouncesOnce(StateManApi api) async {
 Future<void> checkHealthKeysAreSubscribableLikeAnyTag(StateManApi api) async {
   final plant = harnessOf(api);
 
+  // Health rides the ordinary value path, which is the property — so it also
+  // arrives the way an ordinary value arrives, and on a source across a
+  // message boundary that is not instantly. A case that read the key before
+  // its first value landed would report a healthy pipe as one that cannot say
+  // whether it is alive.
+  await arrived(api, _connectedKey);
   final connected = api.listen(_connectedKey);
   expect(connected.value.value, isNotNull,
       reason: '$_connectedKey read as unknown on a source that is up; health '
@@ -288,6 +318,11 @@ Future<void> checkHealthKeysExcludedFromOwnFreshness(StateManApi api) async {
   // demonstrably passed, and the health key has been sitting untouched for at
   // least as long. No sleep, and no guess about how long the sweep takes.
   plant.setValue(_speedKey, 1450);
+  // The barrier's own barrier: the plant key's seed has to be in before the
+  // wait for its staling begins, and the health key's first value has to be in
+  // before the case can say anything about its quality at all.
+  await arrived(api, _speedKey);
+  await arrived(api, _connectedKey);
   final speed = api.listen(_speedKey);
   final speedSeen = observe(speed);
   final connected = api.listen(_connectedKey);
@@ -326,12 +361,18 @@ Future<void> checkQualityNeverImprovesOnItsOwn(StateManApi api) async {
 
   plant.setValue(_speedKey, 1450);
   plant.setQuality(_speedKey, Quality.uncertainLastKnown);
+  await arrived(api, _speedKey);
   final node = api.listen(_speedKey);
 
   // The barrier is a second key crossing the same deadline: once it has gone
   // stale, enough time has passed that a source which heals on a timer would
   // have healed.
   plant.setValue(_otherKey, 3);
+  // And the barrier only establishes that if the wait below is a wait for the
+  // *staling* rather than for the seed. Without this the case passes on an
+  // asynchronous source having established nothing — the worst outcome of the
+  // three, because a vacuous pass is indistinguishable in CI from a real one.
+  await arrived(api, _otherKey);
   final barrier = observe(api.listen(_otherKey));
   await within(
       barrier.next,

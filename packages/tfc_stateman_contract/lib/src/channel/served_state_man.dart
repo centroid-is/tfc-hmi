@@ -52,11 +52,13 @@ library;
 
 import 'dart:async';
 
+import 'package:json_rpc_2/error_code.dart' as error_code;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../harness.dart';
+import '../write_contract.dart';
 import 'rpc_names.dart';
 
 /// Serves [api] over [channel] and starts listening immediately.
@@ -77,6 +79,17 @@ final class ServedStateMan {
 
   /// Its test-only control surface.
   final StateManHarness plant;
+
+  /// Its *write*-side control surface, resolved on first use.
+  ///
+  /// Lazily rather than in the constructor, because a source with no write
+  /// levers is a legitimate thing to serve — an M2400 weigher adapter takes no
+  /// writes at all — and the read, subscribe, store and freshness sub-suites
+  /// judge it perfectly well without one. Resolving eagerly would refuse to
+  /// serve it. Resolving here means the failure arrives when a case first
+  /// pulls a write lever, naming what to add, which is the same bargain
+  /// [writeHarnessOf] already strikes.
+  late final StateManWriteHarness writePlant = writeHarnessOf(api);
 
   /// The JSON-RPC endpoint. Exposed so a test can assert on its state; nothing
   /// in the ordinary path needs it.
@@ -114,7 +127,12 @@ final class ServedStateMan {
       ..registerMethod(HarnessMethods.setQuality, _setQuality)
       ..registerMethod(HarnessMethods.dropKey, _dropKey)
       ..registerMethod(HarnessMethods.disconnectUpstream, _disconnectUpstream)
-      ..registerMethod(HarnessMethods.reconnectUpstream, _reconnectUpstream);
+      ..registerMethod(HarnessMethods.reconnectUpstream, _reconnectUpstream)
+      ..registerMethod(HarnessMethods.failNextWrite, _failNextWrite)
+      ..registerMethod(HarnessMethods.clampNextWrite, _clampNextWrite)
+      ..registerMethod(HarnessMethods.stallWrites, _stallWrites)
+      ..registerMethod(HarnessMethods.releaseWrites, _releaseWrites)
+      ..registerMethod(HarnessMethods.setReadOnly, _setReadOnly);
 
     // Swallowed on purpose. A channel that fails must fail the check that named
     // the property it broke; an unhandled zone error would instead be
@@ -147,15 +165,60 @@ final class ServedStateMan {
   }
 
   Future<Object?> _write(rpc.Parameters params) async {
-    final result = await api.write(
-      params['key'].asString,
-      params['value'].valueOr(null),
-      // Absent and null are the same thing here, deliberately: the reference
-      // implementation's compare-and-set is itself keyed on `expected != null`
-      // (`fake_state_man.dart:676`), so a wire that distinguished them would be
-      // carrying a distinction the source cannot act on.
-      expect: params['expect'].valueOr(null),
-    );
+    final key = params['key'].asString;
+    final value = params['value'].valueOr(null);
+    // Absent and null are the same thing here, deliberately: the reference
+    // implementation's compare-and-set is itself keyed on `expected != null`
+    // (`fake_state_man.dart:676`), so a wire that distinguished them would be
+    // carrying a distinction the source cannot act on.
+    final expected = params['expect'].valueOr(null);
+
+    // The same refusal `WriteParams` makes (`messages.dart:373-401`), made
+    // here because this harness does not carry a `WriteParams` — the `cmd` is
+    // minted by the served implementation, not by the caller, so there is no
+    // client-minted id to build one around.
+    //
+    // Reachable only from a raw frame, and reachable nonetheless: `jsonEncode`
+    // refuses to *emit* a non-finite, but `1e999` silently *decodes* to
+    // Infinity, so the decoder is where poison enters from outside. Both
+    // losses it prevents are silent — a nulled value actuates the device with
+    // something nobody chose, and a nulled `expect` is this path's encoding of
+    // "no compare-and-set guard", which turns a guarded write into an
+    // unconditional one.
+    //
+    // An error answer rather than a silent one: on a write, a JSON-RPC error
+    // means "definitively no effect", which is the one outcome it is safe to
+    // re-send — and, more immediately, it means the caller's request settles.
+    // There is no per-request deadline on this path (Phase 4 owns that), so
+    // anything that does not answer hangs forever (RESEARCH Finding 15).
+    //
+    // An [rpc.RpcException] carrying its own `data.request`, rather than the
+    // plain `FormatException` this obviously wants to be, and the reason is
+    // the trap that makes this whole guard nearly self-defeating:
+    // `RpcException.serialize` copies the offending **request** into the error
+    // it sends back unless `data` already has a `request` key
+    // (`json_rpc_2-4.1.0/lib/src/exception.dart:46-57`). A request carrying
+    // Infinity therefore produces an error response carrying Infinity, which
+    // `jsonEncode` refuses on the way out — so the refusal is thrown away
+    // inside the peer and the caller waits forever. The failure the guard
+    // exists to prevent is exactly the failure the guard would have caused.
+    // The substitute string is what keeps the answer encodable.
+    if (sanitize(value).hadNonFinite || sanitize(expected).hadNonFinite) {
+      throw rpc.RpcException(
+        error_code.INVALID_PARAMS,
+        'write params carry a non-finite number: nulling a value would '
+            'actuate the device with something the operator did not choose, '
+            'and nulling an expect would turn a guarded write into an '
+            'unconditional one',
+        data: {
+          'key': key,
+          'request': 'omitted: it carries a non-finite number, and echoing it '
+              'here is what makes the error itself unencodable',
+        },
+      );
+    }
+
+    final result = await api.write(key, value, expect: expected);
     return result.toJson();
   }
 
@@ -188,6 +251,39 @@ final class ServedStateMan {
 
   void _reconnectUpstream(rpc.Parameters _) =>
       _afterLever(plant.reconnectUpstream);
+
+  // ----------------------------------------------------------- write levers
+
+  /// The write levers, in the same one-way lane as the value levers.
+  ///
+  /// All five are `void` on `StateManWriteHarness`, so there is nothing for a
+  /// caller to await and a request-shaped lever would invent an
+  /// acknowledgement the interface does not have. What makes
+  /// `stallWrites()` → `write(…)` correct across the channel is instead the
+  /// ordering guarantee: the notification was posted first, so it is applied
+  /// before the request that follows it is answered. That is a property of the
+  /// transport rather than of this file, and a WebSocket has it too, which is
+  /// why the sequence transfers to Phase 4 unchanged.
+  void _failNextWrite(rpc.Parameters params) => _afterLever(() {
+        final raw = params['reason'].asMap;
+        writePlant.failNextWrite(
+          WriteReason.fromJson({
+            for (final entry in raw.entries) '${entry.key}': entry.value,
+          }),
+          unknown: params['unknown'].asBoolOr(false),
+        );
+      });
+
+  void _clampNextWrite(rpc.Parameters params) =>
+      _afterLever(() => writePlant.clampNextWrite(params['readback'].valueOr(null)));
+
+  void _stallWrites(rpc.Parameters _) => _afterLever(writePlant.stallWrites);
+
+  void _releaseWrites(rpc.Parameters params) => _afterLever(
+      () => writePlant.releaseWrites(applied: params['applied'].asBoolOr(true)));
+
+  void _setReadOnly(rpc.Parameters params) => _afterLever(() => writePlant
+      .setReadOnly(params['key'].asString, params['readOnly'].asBoolOr(true)));
 
   /// Applies a lever, then adopts whatever keys it brought into existence.
   ///
