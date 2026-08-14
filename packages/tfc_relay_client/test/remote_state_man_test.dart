@@ -30,11 +30,13 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
+import 'package:tfc_relay_client/src/failure_taxonomy.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
@@ -55,6 +57,15 @@ const String _writableKey = 'PIPE.rtt_ms';
 /// (04-RESEARCH Finding 8) plus a capped backoff draw: a liveness budget, not a
 /// latency measurement.
 const Duration _recovery = Duration(seconds: 5);
+
+/// The write deadline the expiry arm injects, small enough to fire inside the
+/// case's own budget.
+const Duration _writeDeadline = Duration(milliseconds: 200);
+
+/// The platform band around a timer. A scheduler on a loaded CI box is not a
+/// stopwatch, and a case that asserted an instant would fail one run in twenty
+/// for a reason that has nothing to do with this client.
+const Duration _band = Duration(seconds: 2);
 
 /// The client's timing knobs, with the deadline floor lowered deliberately.
 ///
@@ -307,4 +318,249 @@ void main() {
       expect(client.debugTimerCount, 0);
     });
   });
+
+  group('the write path', () {
+    test('a write mints a cmd and reports what became of it', () async {
+      final gateway = await _gateway();
+      final client = _client(gateway.uri);
+
+      final result = await client.write(_writableKey, 42);
+
+      expect(result, isA<WriteApplied>());
+      // The hand-rolled ULID from 01-04 — 26 Crockford characters. A second
+      // generator in this package would be a second id space the gateway has
+      // to reconcile `writeStatus` against.
+      expect(result.cmd, matches(RegExp(r'^[0-9A-HJKMNP-TV-Z]{26}$')));
+      expect(client.debugWritesSent, 1);
+    });
+
+    test('a non-finite value is sanitized and marked after the outcome',
+        () async {
+      final gateway = await _gateway();
+      final client = _client(gateway.uri);
+      await _until('a snapshot', () => client.read(_writableKey) != null);
+
+      final result = await client.write(_writableKey, double.nan);
+
+      // The write happened, with null on the wire: `jsonEncode` throws on NaN,
+      // so an unsanitized value does not fail one write — it fails the frame
+      // every other client on the pipe shares.
+      expect(result, isA<WriteApplied>());
+      // And the operator sees a fault rather than a healthy empty box. After
+      // the outcome and never before: on an ordered channel the readback
+      // arrives first, so marking early marks something the readback overwrote.
+      expect(client.read(_writableKey)?.quality, Quality.badNonFinite);
+    });
+
+    test('a non-finite expect is refused before anything reaches the wire',
+        () async {
+      final gateway = await _gateway();
+      final client = _client(gateway.uri);
+      await _until('the link', () => client.isReady);
+
+      await expectLater(
+        () => client.write(_writableKey, 1, expect: double.infinity),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(client.debugWritesSent, 0,
+          reason: 'null is this path\'s encoding of "no guard at all", so '
+              'sanitizing one turns the operator\'s "only if it still reads '
+              '1200" into "whatever it reads"');
+    });
+
+    test('a socket killed mid-write resolves unknown and does not throw',
+        () async {
+      final gateway = await _gateway(withProxy: true);
+      final client = _client(gateway.uri);
+      await _until('the link', () => client.isReady);
+
+      final pending = client.write(_writableKey, 7);
+      gateway.proxy!.killOnce();
+
+      final result = await pending.timeout(_recovery);
+      expect(result, isA<WriteUnknown>(),
+          reason: 'nobody knows whether the machine moved, and reporting a '
+              'lost link as a refusal tells an operator a valve definitely did '
+              'not open when it may well have');
+      expect(
+          (result as WriteUnknown).reason.kind,
+          anyOf(FailureKind.linkLost, FailureKind.linkDown,
+              FailureKind.deadlineExpired));
+    });
+
+    test('a write whose deadline expires resolves unknown', () async {
+      // A gateway that answers the handshake and the page and then simply never
+      // answers the write. `json_rpc_2` has no per-request timeout of its own
+      // (04-RESEARCH Finding 1), so without the deadline seam this future never
+      // settles: the socket is fine, nothing is stale, and the operator has a
+      // spinner and no symptom to report beyond "it is just sitting there".
+      final silent = await _FakeGateway.start((link, method, id) {
+        switch (method) {
+          case Methods.hello:
+            link.hello(id);
+          case Methods.subscribe:
+            link.snapshot(id, defaultPageSubscription);
+          default:
+            break; // `write` included, deliberately
+        }
+      });
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${silent.port}'),
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final started = DateTime.now();
+      final result = await client.write(_seededKey, 1).timeout(_recovery);
+      final took = DateTime.now().difference(started);
+
+      expect(result, isA<WriteUnknown>());
+      expect((result as WriteUnknown).reason.kind, FailureKind.deadlineExpired);
+      // A claim about the window the answer landed in, which is the only honest
+      // claim about a timer on a machine that also runs a CI job.
+      expect(took, lessThan(_writeDeadline + _band));
+    });
+
+    test('a server refusal resolves rejected, carrying the reason', () async {
+      final gateway = await _gateway();
+      final client = _client(gateway.uri);
+      await _until('the link', () => client.isReady);
+
+      // A shape refusal, raised before the plant is touched — the one class of
+      // write failure that is definitively "no effect".
+      final result = await client.write('   ', 1);
+
+      expect(result, isA<WriteRejected>());
+      final rejected = result as WriteRejected;
+      expect(rejected.reason.kind, FailureKind.serverRefused);
+      expect(rejected.reason.status, startsWith('jsonrpc:'));
+      expect(rejected.reason.message, isNotEmpty);
+    });
+
+    test('a reconnect re-queries status and never re-actuates', () async {
+      final gateway = await _gateway(withProxy: true);
+      final client = _client(gateway.uri);
+      await _until('the link', () => client.isReady);
+
+      // One write that resolves cleanly before the drop, so the re-query has
+      // something it must *not* ask about.
+      final settled = await client.write(_writableKey, 1);
+      expect(settled, isA<WriteApplied>());
+
+      final pending = client.write(_writableKey, 9);
+      gateway.proxy!.killOnce();
+      final lost = await pending.timeout(_recovery);
+      expect(lost, isA<WriteUnknown>());
+
+      // Anti-vacuity: there has to be something in flight, or the assertion
+      // below is a claim about an empty set.
+      expect(client.debugUnresolvedCmds, contains(lost.cmd));
+      expect(client.debugUnresolvedCmds, isNot(contains(settled.cmd)));
+
+      await _until('the status re-query after the reconnect',
+          () => client.debugWriteStatusQueries.isNotEmpty);
+
+      expect(client.debugWriteStatusQueries.first, equals([lost.cmd]),
+          reason: 'a command that resolved before the drop has a known answer, '
+              'and re-querying it is a question nobody needed asked');
+      expect(client.debugWriteStatusQueries, hasLength(1));
+      expect(client.debugWritesSent, 2,
+          reason: 'the write is never re-sent: on a plant that is a second '
+              'stroke of a ram the operator commanded once');
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// A hand-rolled gateway, for the one thing the real server cannot be asked to
+// do: answer `hello` and `subscribe`, and then never answer a `write`.
+// ---------------------------------------------------------------------------
+
+/// How a scripted gateway answers one request.
+typedef _Script = void Function(_FakeLink link, String method, int id);
+
+/// A gateway that answers JSON-RPC by script. It speaks only what the deadline
+/// arm needs, which is two methods and a silence.
+final class _FakeGateway {
+  _FakeGateway._(this._http, this._script);
+
+  static Future<_FakeGateway> start(_Script script) async {
+    final http = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final gateway = _FakeGateway._(http, script);
+    unawaited(gateway._accept());
+    addTearDown(gateway.shutdown);
+    return gateway;
+  }
+
+  final HttpServer _http;
+  final _Script _script;
+  final List<_FakeLink> _links = <_FakeLink>[];
+
+  int get port => _http.port;
+
+  Future<void> _accept() async {
+    await for (final request in _http) {
+      final socket = await WebSocketTransformer.upgrade(request);
+      final link = _FakeLink(socket);
+      _links.add(link);
+      socket.listen(
+        (Object? data) {
+          final frame = jsonDecode('$data');
+          if (frame is! Map) return;
+          final id = frame['id'];
+          final method = frame['method'];
+          if (id is! int || method is! String) return;
+          _script(link, method, id);
+        },
+        onError: (Object _) {},
+        cancelOnError: true,
+      );
+    }
+  }
+
+  Future<void> shutdown() async {
+    for (final link in _links) {
+      await link.socket.close().catchError((Object _) => null);
+    }
+    await _http.close(force: true);
+  }
+}
+
+/// One accepted socket on a [_FakeGateway].
+final class _FakeLink {
+  _FakeLink(this.socket);
+
+  final WebSocket socket;
+
+  void result(int id, Object? value) => _send({
+        'jsonrpc': '2.0',
+        'id': id,
+        'result': value,
+      });
+
+  void hello(int id) => result(
+        id,
+        HelloResult(
+          protocol: protocolVersion,
+          server: const PeerInfo('fake-gateway', '0.0.1'),
+          sessionId: 'S1',
+          epoch: 'E1',
+          resumed: false,
+          serverTime: DateTime.now().millisecondsSinceEpoch,
+        ).toJson(),
+      );
+
+  void snapshot(int id, String sub) => result(id, {
+        'sub': sub,
+        'epoch': 'E1',
+        'seq': 0,
+        'handles': {_seededKey: 1},
+        'snapshot': {'1': WireValue.of(true).toJson()},
+      });
+
+  void _send(Object? frame) {
+    if (socket.readyState != WebSocket.open) return;
+    socket.add(jsonEncode(frame));
+  }
 }
