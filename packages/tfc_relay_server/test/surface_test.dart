@@ -29,6 +29,24 @@
 ///    table. A notification registered as a handler is a request a client
 ///    could make of the server — the wrong direction on a one-way name.
 ///
+/// **Direction is the whole of the third literal.** A client→server
+/// notification is a name the server *receives*, so it belongs in the handler
+/// table's ledger — `json_rpc_2` dispatches a frame with no `id` through the
+/// same `_methods[name]` table a request goes through — and it does **not**
+/// belong in [expectedNotifications], which is the set of names the server
+/// *sends*. The two are asserted disjoint, so a client notification put in the
+/// wrong literal fails rather than quietly widening what a client may call.
+/// [expectedClientNotifications] is that third set, and the closure checks
+/// compare the ledger against the union.
+///
+/// One asymmetry a reader has to be told about (**D-P5-H**): every `_gated`
+/// refusal in this server is visibly answered *except* a refused client
+/// notification. A `'h'` frame arriving before `hello` is refused by the gate
+/// and the refusal evaporates — the frame has no `id`, so `json_rpc_2` returns
+/// before building a response and hands the exception to `onUnhandledError`
+/// instead (measured, 05-RESEARCH §B.1 #2). Silence there is the gate working,
+/// not the gate missing.
+///
 /// The session publishes its own ledger (`registeredMethods`), so no
 /// reflection is needed: `dart:mirrors` would read the class where the ledger
 /// already reads the registrations, and the registrations are what ship.
@@ -87,6 +105,25 @@ const Set<String> expectedNotifications = {
   'bye',
 };
 
+/// Names the client *sends* as notifications, registered as handlers so
+/// `json_rpc_2` dispatches them, but never carrying an id and never answered.
+///
+/// `h` is the hold-to-run deadman tick — one character for the same reason `u`
+/// is, because it is the hot path while a button is held. It is the first
+/// name on this wire that travels client→server as a notification, and it is
+/// in its own literal rather than in [expectedHandlerTable] because "the nine
+/// names a client may *call*" is a true and useful sentence that `h` is not
+/// part of: calling it as a request would hang the caller waiting for a
+/// response the library never sends.
+const Set<String> expectedClientNotifications = {
+  'h',
+};
+
+/// Every name the session's ledger may contain: what a client may call, plus
+/// what a client may announce.
+Set<String> get everyRegisterableName =>
+    {...expectedHandlerTable, ...expectedClientNotifications};
+
 /// Names that are declared but that nothing answers.
 ///
 /// A pure set operation, kept as a named function so the falsification cases
@@ -140,7 +177,7 @@ void main() {
     test('every handler has a declared name', () {
       final registered = _session().registeredMethods;
 
-      expect(undeclared(registered, expectedHandlerTable), isEmpty,
+      expect(undeclared(registered, everyRegisterableName), isEmpty,
           reason: 'the session registered a method nobody wrote down. The set '
               'of names is the access-control policy, so this is an '
               'authorization change that reached the wire without a diff. Add '
@@ -149,9 +186,23 @@ void main() {
     });
 
     test('the table is exactly the nine names a client may call today', () {
-      expect(_session().registeredMethods, expectedHandlerTable,
+      // The sentence is unchanged and still true: nine names a client may
+      // *call*. `h` is not one of them — it is announced, never called — so
+      // it is taken out of the ledger by name here rather than being added to
+      // the literal, which would say a client may ask the gateway to tick.
+      expect(
+          _session().registeredMethods.difference(expectedClientNotifications),
+          expectedHandlerTable,
           reason: 'both directions at once, stated as one equality so the '
               'failure prints the whole table rather than a difference');
+    });
+
+    test('the registered table is the nine callable names plus the client '
+        'notifications', () {
+      expect(_session().registeredMethods, everyRegisterableName,
+          reason: 'the ledger is the union, because json_rpc_2 dispatches a '
+              'notification through the same table a request goes through. A '
+              'name here that is in neither literal is surface nobody counted');
     });
 
     test('neither side of the comparison is empty', () {
@@ -232,7 +283,14 @@ void main() {
       };
 
       final methodNotFound = <String>[];
-      for (final method in expectedHandlerTable) {
+      // The skip is named in the `where`, not achieved by leaving a name out
+      // of a literal: `h` is a *notification*, and sending it as a request
+      // would hang this case forever waiting for a response json_rpc_2 never
+      // sends (it returns before building one when the frame has no id —
+      // measured, 05-RESEARCH §B.1 #1). The sweep is over the union so that a
+      // future client notification is skipped deliberately too.
+      for (final method in everyRegisterableName
+          .where((name) => !expectedClientNotifications.contains(name))) {
         if (method == 'hello') continue; // one hello per session, spent above.
         try {
           await fixture.request(method, params: params, what: 'a $method answer');
@@ -275,6 +333,50 @@ void main() {
       expect(expectedNotifications, hasLength(5),
           reason: 'update/tick/resync/status/bye — five names as of Phase 3; '
               'changing this count is a deliberate edit');
+    });
+  });
+
+  group('a client notification is a handler, and only that', () {
+    test('the client-notification literal is not empty', () {
+      // Anti-vacuity, the same argument as the arm above: an empty third
+      // literal would make the union equal the handler table and every check
+      // that mentions it true for free.
+      expect(expectedClientNotifications, isNotEmpty,
+          reason: 'an empty literal makes the union check and both '
+              'disjointness arms below vacuous');
+      expect(expectedClientNotifications, hasLength(1),
+          reason: 'h — one name as of Phase 5, and the first frame on this '
+              'wire that travels client to server; changing this count is a '
+              'deliberate edit, because each one is an un-idded, unanswered '
+              'frame that can move a plant tag');
+    });
+
+    test('no client notification is also a callable name', () {
+      expect(
+          expectedClientNotifications.intersection(expectedHandlerTable),
+          isEmpty,
+          reason: 'a name in both literals is a tick a client could also send '
+              'as a request — and a request for it hangs the caller, because '
+              'json_rpc_2 answers a notification with nothing');
+    });
+
+    test('no client notification is a name the server sends', () {
+      expect(
+          expectedClientNotifications.intersection(expectedNotifications),
+          isEmpty,
+          reason: 'direction is the whole distinction: a name in both would '
+              'be the server announcing something it also accepts, and the '
+              'session would register a name it emits');
+    });
+
+    test('every client notification is registered as a handler', () {
+      final registered = _session().registeredMethods;
+
+      expect(unhandled(expectedClientNotifications, registered), isEmpty,
+          reason: 'a declared client notification with no handler is a frame '
+              'the fallback answers -32601 for — into onUnhandledError, where '
+              'nobody sees it — while a panel holds a button and the machine '
+              'never moves');
     });
   });
 }
