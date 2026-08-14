@@ -221,6 +221,12 @@ final class Plant {
         'because a tick drained the priority lane');
   }
 
+  /// The wall-clock epoch ms the engine will stamp a frame produced at
+  /// [monotonicMs] with (03-REVIEW CR-04). The band assertions are what pin
+  /// the conversion to reality; this is what keeps the per-tick cases about
+  /// *which* tick produced a frame.
+  int wall(int monotonicMs) => engine.wallAt(monotonicMs);
+
   /// Clears every panel's recorded wire, so the next tick is the only thing a
   /// case is reading.
   void clearWires() {

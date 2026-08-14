@@ -74,7 +74,7 @@ void main() {
       final pushedAt = plant.tick();
       expect(panel.updates.single.seq, 1,
           reason: 'the push that the idle tick is compared against');
-      expect(panel.ticks.last.subs['page-1']?.evaluatedAt, pushedAt,
+      expect(panel.ticks.last.subs['page-1']?.evaluatedAt, plant.wall(pushedAt),
           reason: 'the tick that carried the push is evaluated at its own '
               'timestamp');
 
@@ -89,11 +89,11 @@ void main() {
           reason: 'seq counts pushes, not ticks; a seq that moved on an idle '
               'tick makes the next real push look like a gap and sends a '
               'healthy panel into a resync loop');
-      expect(tick.subs['page-1']?.evaluatedAt, idleAt,
+      expect(tick.subs['page-1']?.evaluatedAt, plant.wall(idleAt),
           reason: 'evaluatedAt is what tells the operator the gateway is '
               'still looking at this tag; frozen, it is indistinguishable '
               'from a dead server behind a live socket');
-      expect(tick.serverTime, idleAt,
+      expect(tick.serverTime, plant.wall(idleAt),
           reason: 'the tick timestamp is the tick that ran, so a client can '
               're-derive its clock offset without a second handshake');
     });
@@ -341,6 +341,69 @@ void main() {
       expect(panel.ticks, hasLength(1),
           reason: 'the cadence resumes, unremarkably');
     });
+  });
+
+  group('the wire carries epoch ms, not uptime', () {
+    // 03-REVIEW CR-04. `UpdateParams.t`, `TickParams.serverTime` and
+    // `SubTick.evaluatedAt` are documented as UTC epoch ms and carried uptime
+    // ms instead, while `HelloResult.serverTime` and every `WireValue.t` in
+    // the same frame carried the real epoch — two clocks fifty-five years
+    // apart inside one object. A client computing staleness got a nonsense
+    // answer whichever field it trusted.
+    test('an emitted tick timestamp is within a band of the wall clock',
+        () async {
+      final plant = Plant();
+      final keys = plant.seed(1, prefix: 'CN01.SCREW');
+      final panel = await plant.connect('page-1', keys);
+      plant.clearWires();
+
+      plant.api.setValues({keys.single: 3});
+      plant.tick();
+
+      final wallNow = DateTime.now().millisecondsSinceEpoch;
+      const bandMs = 60_000;
+      expect(panel.ticks.single.serverTime,
+          closeTo(wallNow, bandMs),
+          reason: 'uptime ms would be a few hundred here and epoch ms is '
+              '~1.79e12; a band this wide cannot tell a slow runner from a '
+              'fast one and cannot possibly pass on the wrong clock');
+      expect(panel.ticks.single.subs['page-1']?.evaluatedAt,
+          closeTo(wallNow, bandMs),
+          reason: 'evaluatedAt is what a panel subtracts from its own clock to '
+              'decide a tag has gone stale');
+      expect(panel.updates.single.t, closeTo(wallNow, bandMs),
+          reason: 'UpdateParams.t supplies the timestamp for values that do '
+              'not carry their own, so it must be on the same clock as the '
+              'WireValue.t of the ones that do');
+    });
+
+    test('a u frame\'s own t agrees with the WireValue.t inside it', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      final hello = await fixture.hello();
+      const key = 'CN01.MOT01.speed';
+      fixture.served.setValue(key, 1);
+      await fixture.request(Methods.subscribe,
+          params: const SubscribeParams(sub: 'page-1', keys: [key]).toJson());
+      fixture.served.setValue(key, 2);
+
+      final frame = await within(
+          _frame(fixture, (f) => methodOf(f) == Methods.update),
+          'a u frame carrying the changed value',
+          budget: ceiling * 10);
+      final update = UpdateParams.fromJson(paramsOf(frame));
+      final value = update.changes.values.single;
+
+      expect((update.t - hello.serverTime).abs(), lessThan(60_000),
+          reason: 'hello.serverTime is the clock the client derives its offset '
+              'from, and it always carried genuine epoch ms; a u frame stamped '
+              'from a different clock makes that offset a lie');
+      expect((update.t - (value.t ?? update.t)).abs(), lessThan(60_000),
+          reason: 'WireValue.t comes from the source\'s own sourceTime in '
+              'epoch ms (session_handlers.dart:266). Two clocks in one object '
+              'is the shape of this bug that no single-field assertion could '
+              'have caught');
+    }, tags: 'ws');
   });
 
   group('the wall-clock anchor', () {
