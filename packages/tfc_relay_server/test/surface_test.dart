@@ -20,7 +20,7 @@
 /// Two properties are enforced here:
 ///
 ///  * **Closure, in both directions.** The session registers exactly these
-///    four names. One direction alone is half a check: a declared name with no
+///    nine names. One direction alone is half a check: a declared name with no
 ///    handler answers METHOD_NOT_FOUND from a table claiming to carry it, and
 ///    a handler under a name nobody wrote down is surface nobody counted. The
 ///    argument is `suite_integrity_test.dart:22-33`, applied server-side.
@@ -33,11 +33,18 @@
 /// reflection is needed: `dart:mirrors` would read the class where the ledger
 /// already reads the registrations, and the registrations are what ship.
 ///
-/// **Phase note.** Phase 5 adds `write` and `writeStatus`; Phase 10 adds the
+/// **Phase note.** Phase 4 pulled `write`, `writeStatus`, `read`, `readFresh`
+/// and `readMany` forward from Phase 5: 04-RESEARCH Finding 4 ran the method
+/// sweep against a live server and found all five answering `-32601`, which
+/// put 28 of the contract suite's 44 checks out of reach over the real
+/// gateway. Phase 5 still owns their *semantics* (three-state depth beyond the
+/// plumbing, idempotency windows, hold-to-run) and Phase 10 adds the
 /// data-service methods (timeseries, history, preferences). Each of those is
 /// an edit to [expectedHandlerTable] below, made by a human, in a diff.
 library;
 
+import 'package:json_rpc_2/error_code.dart' as rpc_errors;
+import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
 // Deliberately narrowed: the wire's name constants are *not* pulled in, so no
 // expected set below can accidentally be spelled with the thing it pins.
@@ -50,7 +57,9 @@ import 'package:tfc_relay_server/src/token_validator.dart';
 import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
 
-/// Every method a connected client may call, as of Phase 3.
+import 'support/ws_harness.dart';
+
+/// Every method a connected client may call, as of Phase 4 plan 02.
 ///
 /// Hand-written. Not derived. See the library doc for why.
 const Set<String> expectedHandlerTable = {
@@ -58,6 +67,11 @@ const Set<String> expectedHandlerTable = {
   'ping',
   'subscribe',
   'unsubscribe',
+  'write',
+  'writeStatus',
+  'read',
+  'readFresh',
+  'readMany',
 };
 
 /// Every name the server *sends* as a notification, and therefore may never
@@ -134,7 +148,7 @@ void main() {
               'registration.');
     });
 
-    test('the table is exactly the four names of Phase 3', () {
+    test('the table is exactly the nine names a client may call today', () {
       expect(_session().registeredMethods, expectedHandlerTable,
           reason: 'both directions at once, stated as one equality so the '
               'failure prints the whole table rather than a difference');
@@ -192,6 +206,48 @@ void main() {
           reason: 'a failure that does not name the method makes the reviewer '
               'diff the session by hand');
     });
+  });
+
+  // The sweep 04-RESEARCH Finding 4 ran against a live gateway, kept as a
+  // case. The literal above is a statement about a ledger; this is the same
+  // statement made where a client stands, over a real socket, and the two can
+  // only disagree if `_on` has stopped being the way a method reaches the
+  // table.
+  group('every declared name answers over a real socket', () {
+    test('no name in the table comes back -32601', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      fixture.served.setValue('CN01.MOT01.speed', 1200);
+
+      // Params good enough to be *dispatched*; a refusal on the contents is a
+      // pass here, because the property is that the method exists at all.
+      const params = <String, Object?>{
+        'sub': 'surface-probe',
+        'keys': ['CN01.MOT01.speed'],
+        'key': 'CN01.MOT01.speed',
+        'cmd': '01JZZZZZZZZZZZZZZZZZZZZZZZ',
+        'value': 1200,
+        'cmds': ['01JZZZZZZZZZZZZZZZZZZZZZZZ'],
+      };
+
+      final methodNotFound = <String>[];
+      for (final method in expectedHandlerTable) {
+        if (method == 'hello') continue; // one hello per session, spent above.
+        try {
+          await fixture.request(method, params: params, what: 'a $method answer');
+        } on rpc.RpcException catch (error) {
+          if (error.code == rpc_errors.METHOD_NOT_FOUND) {
+            methodNotFound.add(method);
+          }
+        }
+      }
+
+      expect(methodNotFound, isEmpty,
+          reason: 'a name in the frozen table that the wire answers '
+              '"unknown method" for is a client staring at a control it can '
+              'never use: $methodNotFound');
+    }, tags: 'ws');
   });
 
   group('notifications are not handlers', () {

@@ -124,6 +124,24 @@ final class ServerConfig {
   /// until the server's memory is gone (T-03-14).
   final int maxSubscriptionsPerSession;
 
+  /// How long the gateway remembers what became of a write, so `writeStatus`
+  /// can answer about it after a reconnect.
+  ///
+  /// It is a window and not a permanent ledger because the log is per-session
+  /// memory an authenticated client can grow one write at a time (T-04-06),
+  /// and because the question it answers has a shelf life: an operator
+  /// reconciling a button press does it within seconds of the link coming
+  /// back, not the next morning.
+  ///
+  /// The number is also the boundary of a *safety* claim rather than of a
+  /// convenience. `writeStatus` may answer `not_received` — the one outcome
+  /// that tells an operator a re-send is safe — only for a command minted
+  /// inside this window, because outside it the gateway cannot tell "never
+  /// arrived" from "arrived, and forgotten". 60 s is the reconnect budget
+  /// (backoff capped at 30 s, so one full retry cycle plus a resync) with
+  /// room to spare.
+  final Duration writeOutcomeTtl;
+
   /// The tick band's lower bound (SRV-03).
   static const Duration minTick = Duration(milliseconds: 50);
 
@@ -147,6 +165,7 @@ final class ServerConfig {
     this.maxSubscriptionsPerSession = 32,
     this.maxFrameBytes = 1024 * 1024,
     this.maxPendingBytes = 8 * 1024 * 1024,
+    this.writeOutcomeTtl = const Duration(seconds: 60),
   }) {
     if (tick < minTick || tick > maxTick) {
       throw ArgumentError('tick (${_ms(tick)}) is outside the supported band '
@@ -167,6 +186,13 @@ final class ServerConfig {
           'the measured +/-2 ms idle drift; it must be at least '
           '${_ms(minStallThreshold)} or the lag monitor reports a stall on an '
           'idle server');
+    }
+    if (writeOutcomeTtl <= Duration.zero) {
+      throw ArgumentError('writeOutcomeTtl (${_ms(writeOutcomeTtl)}) must be '
+          'positive: a gateway that remembers no write outcome for any length '
+          'of time answers every writeStatus with "never received", which is '
+          'the one answer that tells an operator it is safe to actuate the '
+          'machine a second time');
     }
     _positive('maxPending', maxPending);
     _positive('peakWindowMs', peakWindowMs);

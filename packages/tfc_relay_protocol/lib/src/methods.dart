@@ -5,8 +5,9 @@ const protocolVersion = '2026-08-13';
 /// JSON-RPC method names.
 ///
 /// Requests (carry an id, expect a result): [hello], [subscribe],
-/// [unsubscribe], [write], [writeStatus], [ping], plus the timeseries /
-/// history / preferences methods added in later steps.
+/// [unsubscribe], [write], [writeStatus], [read], [readFresh], [readMany],
+/// [ping], plus the timeseries / history / preferences methods added in later
+/// steps.
 ///
 /// Notifications (no id, never acknowledged): [update], [tick], [resync],
 /// [status], [bye]. Nothing that needs an outcome may ever be sent as a
@@ -17,6 +18,17 @@ abstract final class Methods {
   static const unsubscribe = 'unsubscribe';
   static const write = 'write';
   static const writeStatus = 'writeStatus';
+
+  /// The cached read — no round trip, answered from what the gateway last
+  /// heard. `StateManApi.read`'s name, because it is the same concept.
+  static const read = 'read';
+
+  /// The forced round trip for one key — `StateManApi.readFresh`.
+  static const readFresh = 'readFresh';
+
+  /// One round trip for many keys — `StateManApi.readMany`.
+  static const readMany = 'readMany';
+
   static const ping = 'ping';
 
   static const update = 'u'; // hot path — one character on purpose
