@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:drift/drift.dart' show Variable;
+import 'package:drift/drift.dart' show UpdateKind, Variable;
 
 import 'database.dart';
 import 'secure_storage/secure_storage.dart';
@@ -368,8 +368,14 @@ class Preferences implements PreferencesApi {
     } else {
       await _memoryCache.remove(key);
       await localCache?.remove(key);
+      if (database != null) {
+        await database!.db.customUpdate(
+          r'DELETE FROM flutter_preferences WHERE key = $1',
+          variables: [Variable.withString(key)],
+          updateKind: UpdateKind.delete,
+        );
+      }
     }
-    // TODO: remove from postgres
     _onPreferencesChanged.add(key);
   }
 
