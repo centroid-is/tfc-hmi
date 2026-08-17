@@ -165,7 +165,12 @@ void main() {
           reason: 'The pane must not be a modal dialog.');
 
       // Header carries the tag, and the machine name follows the head count
-      // into a real model number.
+      // into a real model number. showTag is off (the default), so the tag
+      // reaches the operator through the pane while the page label — which
+      // scales with the asset's big bounding box — stays unpainted.
+      expect(config.showTag, isFalse);
+      expect(config.text, isNull,
+          reason: 'AssetStack must see no label while showTag is off.');
       expect(find.text('STRAP-01'), findsOneWidget);
       expect(
           find.textContaining('2 x Strapex'), findsWidgets,

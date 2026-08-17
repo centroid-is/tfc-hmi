@@ -45,6 +45,7 @@ void main() {
         outlineColor: Colors.indigo,
         strokeWidth: 3.5,
         tag: 'STRAP-01',
+        showTag: true,
         notes: 'Afak SL-15-3, three Strapex heads.',
       )
         ..coordinates = Coordinates(x: 0.25, y: 0.5, angle: 90)
@@ -61,6 +62,7 @@ void main() {
       expect(restored.outlineColor.toARGB32(), Colors.indigo.toARGB32());
       expect(restored.strokeWidth, 3.5);
       expect(restored.tag, 'STRAP-01');
+      expect(restored.showTag, isTrue);
       expect(restored.notes, 'Afak SL-15-3, three Strapex heads.');
       expect(restored.coordinates.x, 0.25);
       expect(restored.coordinates.angle, 90);
@@ -77,7 +79,7 @@ void main() {
     });
 
     test('text aliases tag, and a null text does not clobber a legacy tag', () {
-      final config = ThirdPartyEquipmentConfig(tag: 'MV-01');
+      final config = ThirdPartyEquipmentConfig(tag: 'MV-01', showTag: true);
       expect(config.text, 'MV-01');
 
       // The generated fromJson assigns `..text =` AFTER the constructor has
@@ -88,6 +90,46 @@ void main() {
 
       config.text = 'MV-02';
       expect(config.tag, 'MV-02');
+    });
+
+    test('the page label is gated on showTag; the tag itself is not', () {
+      final config = ThirdPartyEquipmentConfig(tag: 'SB-01');
+
+      // Off by default: AssetStack scales the label with the asset's bounding
+      // box and these machines are big, so the tag paints huge on the mimic.
+      // The side pane titles itself from `tag` directly, not `text`.
+      expect(config.showTag, isFalse);
+      expect(config.text, isNull);
+      expect(config.tag, 'SB-01');
+
+      config.showTag = true;
+      expect(config.text, 'SB-01');
+    });
+
+    test('a hidden tag still survives the JSON round-trip', () {
+      // With showTag off, `text` serialises as null — the tag must ride its
+      // own JSON key or hiding the label would erase it on save.
+      final original = ThirdPartyEquipmentConfig(tag: 'SB-01');
+      final restored = ThirdPartyEquipmentConfig.fromJson(original.toJson());
+
+      expect(restored.tag, 'SB-01');
+      expect(restored.showTag, isFalse);
+      expect(restored.text, isNull);
+    });
+
+    test('legacy JSON without showTag defaults to hidden', () {
+      // A page saved before showTag existed has no such key and persisted
+      // `text` equal to the tag (the old getter was unconditional). Loading
+      // it must hide the label — that is the point of the default — while
+      // keeping the tag.
+      final json = ThirdPartyEquipmentConfig(tag: 'MV-01').toJson();
+      json.remove('showTag');
+      json['text'] = 'MV-01';
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(json);
+      expect(restored.showTag, isFalse);
+      expect(restored.tag, 'MV-01');
+      expect(restored.text, isNull);
     });
 
     test('runKey is discoverable through BaseAsset.allKeys', () {

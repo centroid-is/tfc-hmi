@@ -283,6 +283,15 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// Optional human-readable label (e.g. `"MV-01"`).
   String? tag;
 
+  /// Paint [tag] on the page next to the drawing.
+  ///
+  /// Off by default: `AssetStack` scales the label font with the asset's
+  /// bounding box, and these machines are big, so the tag comes out huge on
+  /// the mimic. The side pane titles itself with the tag either way, so
+  /// nothing is lost by leaving this off.
+  @JsonKey(defaultValue: false)
+  bool showTag;
+
   /// Free-text notes surfaced in the side pane — supplier contact, line
   /// position, interlock quirks, whatever the operator needs at 03:00.
   String? notes;
@@ -318,8 +327,12 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// paint the label OUTSIDE the asset's rotated subtree. Aliasing `text` onto
   /// `tag` — the same trick `SensorConfig` uses — keeps the label upright
   /// regardless of `Coordinates.angle`.
+  ///
+  /// Gated on [showTag]: with it off, `AssetStack` sees no label and paints
+  /// nothing. [tag] itself is untouched — it still names the pane and is
+  /// persisted under its own JSON key.
   @override
-  String? get text => tag;
+  String? get text => showTag ? tag : null;
 
   /// Non-null writes only. The generated `fromJson` assigns `..text =` AFTER
   /// the constructor has set `tag`; adopting a null `text` from a legacy page
@@ -338,6 +351,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     Color? outlineColor,
     this.strokeWidth = 2.0,
     this.tag,
+    this.showTag = false,
     this.notes,
     this.strapMachines = 3,
     this.childTextAngle = 0.0,
@@ -1229,6 +1243,17 @@ class _ThirdPartyEquipmentConfigEditorState
               onChanged: (v) =>
                   setState(() => config.tag = v.isEmpty ? null : v),
             ),
+            // The page label scales its font with the asset's bounding box,
+            // and these machines are big — so on the mimic the tag comes out
+            // huge. Off keeps it to the side pane, which shows it regardless.
+            SwitchListTile(
+              title: const Text('Show tag on page'),
+              subtitle: const Text(
+                  'The side pane shows the tag either way'),
+              value: config.showTag,
+              onChanged: (v) => setState(() => config.showTag = v),
+              contentPadding: EdgeInsets.zero,
+            ),
             const SizedBox(height: 16),
 
             // -- Notes (details dialog) --
@@ -1245,19 +1270,22 @@ class _ThirdPartyEquipmentConfigEditorState
             const SizedBox(height: 16),
 
             // -- Label position --
-            Text('Label Position',
-                style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 4),
-            DropdownButton<TextPos>(
-              value: config.textPos ?? TextPos.below,
-              isExpanded: true,
-              onChanged: (value) => setState(() => config.textPos = value!),
-              items: TextPos.values
-                  .map((e) =>
-                      DropdownMenuItem<TextPos>(value: e, child: Text(e.name)))
-                  .toList(),
-            ),
-            const SizedBox(height: 16),
+            // Only meaningful while the tag is painted on the page.
+            if (config.showTag) ...[
+              Text('Label Position',
+                  style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              DropdownButton<TextPos>(
+                value: config.textPos ?? TextPos.below,
+                isExpanded: true,
+                onChanged: (value) => setState(() => config.textPos = value!),
+                items: TextPos.values
+                    .map((e) => DropdownMenuItem<TextPos>(
+                        value: e, child: Text(e.name)))
+                    .toList(),
+              ),
+              const SizedBox(height: 16),
+            ],
 
             SizeField(
               key: ValueKey(_sizeFieldEpoch),
