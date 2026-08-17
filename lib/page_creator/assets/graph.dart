@@ -338,55 +338,27 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Text('Color: '),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () => _showSeriesColorPicker(
-                          context,
-                          config.color,
-                          (color) {
-                            final updated =
-                                List<GraphSeriesConfig>.from(series);
-                            updated[idx] = GraphSeriesConfig(
-                              key: config.key,
-                              label: config.label,
-                              color: color,
-                            );
-                            onChanged(updated);
-                          },
-                        ),
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: config.color ?? Colors.grey.shade300,
-                            border: Border.all(color: Colors.grey),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: config.color == null
-                              ? Icon(Icons.close,
-                                  size: 20, color: Colors.grey.shade600)
-                              : null,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (config.color != null)
-                        TextButton(
-                          onPressed: () {
-                            final updated =
-                                List<GraphSeriesConfig>.from(series);
-                            updated[idx] = GraphSeriesConfig(
-                              key: config.key,
-                              label: config.label,
-                              color: null,
-                            );
-                            onChanged(updated);
-                          },
-                          child: const Text('Clear'),
-                        ),
-                    ],
+                  ColorPickerRow(
+                    label: 'Color',
+                    color: config.color,
+                    onChanged: (color) {
+                      final updated = List<GraphSeriesConfig>.from(series);
+                      updated[idx] = GraphSeriesConfig(
+                        key: config.key,
+                        label: config.label,
+                        color: color,
+                      );
+                      onChanged(updated);
+                    },
+                    onCleared: () {
+                      final updated = List<GraphSeriesConfig>.from(series);
+                      updated[idx] = GraphSeriesConfig(
+                        key: config.key,
+                        label: config.label,
+                        color: null,
+                      );
+                      onChanged(updated);
+                    },
                   ),
                 ],
               ),
@@ -539,16 +511,6 @@ class GraphContentConfigState extends State<GraphContentConfig> {
     );
   }
 
-  void _showSeriesColorPicker(BuildContext context, Color? currentColor,
-      ValueChanged<Color?> onColorChanged) {
-    showColorPickerDialog(
-      context: context,
-      title: 'Select series colour',
-      initialColor: currentColor ?? Colors.blue,
-      onChanged: onColorChanged,
-      onCleared: currentColor != null ? () => onColorChanged(null) : null,
-    );
-  }
 }
 
 // The actual widget that displays the graph using the configuration

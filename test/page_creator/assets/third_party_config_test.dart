@@ -27,6 +27,12 @@ void main() {
       expect(config.size.height, greaterThan(0.05));
     });
 
+    test('stopped defaults to grey — red is reserved for faults', () {
+      final config = ThirdPartyEquipmentConfig();
+      expect(config.stoppedColor.toARGB32(), Colors.grey.toARGB32());
+      expect(config.runningColor.toARGB32(), Colors.green.toARGB32());
+    });
+
     test('displayName and category place it in its own palette group', () {
       final config = ThirdPartyEquipmentConfig.preview();
       expect(config.displayName, '3rd Party Equipment');

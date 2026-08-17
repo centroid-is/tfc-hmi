@@ -79,27 +79,6 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
     super.dispose();
   }
 
-  void _showColorPicker() {
-    showColorPickerDialog(
-      context: context,
-      title: 'Select arrow colour',
-      initialColor: widget.config.color,
-      onChanged: (c) => setState(() => widget.config.color = c),
-    );
-  }
-
-  Widget _colorSwatch(Color color) {
-    return Container(
-      width: 24,
-      height: 24,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.grey.shade600),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -118,13 +97,10 @@ class _ArrowConfigEditorState extends State<_ArrowConfigEditor> {
           ),
           const SizedBox(height: 16),
           // -- Arrow Color --
-          GestureDetector(
-            onTap: _showColorPicker,
-            child: Row(children: [
-              _colorSwatch(widget.config.color),
-              const SizedBox(width: 8),
-              const Text('Arrow Color'),
-            ]),
+          ColorPickerRow(
+            label: 'Arrow Color',
+            color: widget.config.color,
+            onChanged: (c) => setState(() => widget.config.color = c),
           ),
           const SizedBox(height: 16),
           // -- BaseAsset.text overlay (rendered by page_view's label layer).

@@ -7,8 +7,8 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:tfc/widgets/number_slider.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'common.dart';
 import 'package:tfc/converter/color_converter.dart';
 part 'drawn_box.g.dart';
@@ -81,9 +81,10 @@ class _DrawnBoxConfigEditorState extends State<_DrawnBoxConfigEditor> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Color picker
-          BlockPicker(
-            pickerColor: widget.config.color,
-            onColorChanged: (color) =>
+          ColorPickerRow(
+            label: 'Color',
+            color: widget.config.color,
+            onChanged: (color) =>
                 setState(() => widget.config.color = color),
           ),
           const SizedBox(height: 16),
