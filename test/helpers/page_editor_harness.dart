@@ -23,6 +23,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/page_creator/assets/common.dart';
@@ -34,6 +35,8 @@ import 'package:tfc/providers/alarm.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc/providers/page_manager.dart';
 import 'package:tfc/route_registry.dart';
+
+import 'test_helpers.dart' show FakeSecureStorage;
 
 /// Minimal in-memory [PreferencesApi] so the editor can load and save.
 /// Doubles as the read-back channel for [saveAndReadBack].
@@ -154,6 +157,13 @@ void setUpEditorEnvironment() {
   // The asset canvas constructs SharedPreferencesAsync directly.
   SharedPreferencesAsyncPlatform.instance =
       InMemorySharedPreferencesAsync.empty();
+
+  // IO-module configs kick off stateManProvider, which builds the real
+  // Preferences and asks for SecureStorage. Linux and macOS fall back to
+  // AwsSecureStorage, but Windows throws unless main() has registered an
+  // instance — so without this the exception lands asynchronously in
+  // whichever test is running, on Windows only.
+  SecureStorage.setInstance(FakeSecureStorage());
 
   // BaseScaffold renders a NavigationBar from the registry, which asserts on
   // fewer than two destinations.
