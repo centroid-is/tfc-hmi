@@ -8,7 +8,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/page_manager.dart';
 import '../page_creator/assets/common.dart';
+import '../page_creator/assets/editor_clipboard.dart';
+import '../page_creator/assets/image.dart';
+import '../page_creator/assets/image_store.dart';
 import '../page_creator/assets/registry.dart';
+import '../providers/page_images.dart';
 import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
@@ -842,6 +846,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     pageManager.pages = PageManager.copyPages(_temporaryPages);
     pageManager.topLevelOrder = List.of(_topLevelOrder);
     await pageManager.save();
+    await _garbageCollectImages();
     ref.invalidate(pageManagerProvider);
     if (!mounted) return;
 
@@ -860,6 +865,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _proposedAssets = {};
       _preProposalPages = null;
     });
+  }
+
+  /// Deletes stored image blobs nothing points at any more. Runs on save —
+  /// the only moment deletions become permanent — and keeps anything the undo
+  /// history or the copy buffer could still bring back.
+  Future<void> _garbageCollectImages() async {
+    try {
+      final store = await ref.read(pageImageStoreProvider.future);
+      final referenced = <String>{
+        ...PageImageStore.referencedImageIds(
+            _temporaryPages.map((name, page) => MapEntry(name, page.toJson()))),
+        for (final snapshot in _undoHistory)
+          ...PageImageStore.referencedImageIds(
+              snapshot.map((name, page) => MapEntry(name, page.toJson()))),
+        if (_copiedAssets != null)
+          ...PageImageStore.referencedImageIds(jsonDecode(_copiedAssets!)),
+      };
+      await store.removeUnreferenced(referenced);
+    } catch (_) {
+      // A failed cleanup must never break saving; orphans get another chance
+      // on the next save.
+    }
   }
 
   void _updateState(VoidCallback fn) {
@@ -913,16 +940,51 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _handleCopy() {
     if (_selectedAssets.isEmpty) return;
     _copiedAssets = _assetsToJson(_selectedAssets.toList());
+    // Mirror onto the system clipboard, so paste can tell whether the user's
+    // most recent copy was assets here or an image somewhere else.
+    unawaited(EditorClipboard.instance.writeText(_copiedAssets!));
   }
 
-  void _handlePaste() {
-    if (_copiedAssets == null) return;
+  /// True when [text] is the asset JSON that [_handleCopy] puts on the system
+  /// clipboard (from this or another editor window).
+  bool _looksLikeAssetJson(String? text) {
+    if (text == null || !text.contains(constAssetName)) return false;
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is! Map<String, dynamic>) return false;
+      return AssetRegistry.parse(decoded).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _handlePaste() async {
+    final clipboard = EditorClipboard.instance;
+
+    // The system clipboard reflects the user's latest copy: asset JSON when
+    // they last copied in an editor, an image when they last copied one in a
+    // browser or screenshot tool. Prefer whichever it holds; the in-memory
+    // buffer is only a fallback for platforms with no clipboard access.
+    String? assetJson;
+    final text = await clipboard.readText();
+    if (_looksLikeAssetJson(text)) {
+      assetJson = text;
+    } else {
+      final imageBytes = await clipboard.readImage();
+      if (imageBytes != null) {
+        await _pasteImage(imageBytes);
+        return;
+      }
+    }
+    assetJson ??= _copiedAssets;
+    if (assetJson == null || !mounted) return;
+    final pasted = assetJson;
 
     _saveToHistory();
     setState(() {
       _selectedAssets.clear();
 
-      final copiedAssets = AssetRegistry.parse(jsonDecode(_copiedAssets!));
+      final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
 
       for (final asset in copiedAssets) {
         asset.coordinates = Coordinates(
@@ -935,6 +997,46 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       }
       _updateCurrentJson();
     });
+  }
+
+  /// Drops a pasted clipboard image onto the canvas as a new [ImageConfig],
+  /// sized so the image keeps its shape at a quarter of the canvas width.
+  Future<void> _pasteImage(Uint8List bytes) async {
+    try {
+      final store = await ref.read(pageImageStoreProvider.future);
+      final ingest = await ingestPageImage(store, bytes);
+      // The id is content-derived: a re-pasted image may reuse an id whose
+      // provider cached "gone" after garbage collection.
+      ref.invalidate(pageImageBytesProvider(ingest.id));
+      if (!mounted) return;
+
+      final constraints = _canvasConstraints;
+      final canvasAspect =
+          constraints == null || constraints.maxHeight <= 0
+              ? 16 / 9
+              : constraints.maxWidth / constraints.maxHeight;
+      const widthFrac = 0.25;
+      final heightFrac =
+          (widthFrac * canvasAspect / ingest.aspectRatio).clamp(0.02, 0.9);
+
+      final asset = ImageConfig()
+        ..applyIngest(ingest)
+        ..size = RelativeSize(width: widthFrac, height: heightFrac)
+        ..coordinates = Coordinates(x: 0.5, y: 0.5);
+
+      _saveToHistory();
+      setState(() {
+        assets.add(asset);
+        _selectedAssets
+          ..clear()
+          ..add(asset);
+        _updateCurrentJson();
+      });
+    } on Exception catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
+    }
   }
 
   void _handleDelete() {

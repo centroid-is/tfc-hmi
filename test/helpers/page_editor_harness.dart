@@ -28,7 +28,9 @@ import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/drawn_box.dart';
+import 'package:tfc/page_creator/assets/image_store.dart';
 import 'package:tfc/page_creator/page.dart';
+import 'package:tfc/providers/page_images.dart';
 import 'package:tfc/pages/page_editor.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/providers/alarm.dart';
@@ -135,6 +137,10 @@ Widget buildEditorUnderTest(PageManager manager, {ThemeData? theme}) {
   return ProviderScope(
     overrides: [
       pageManagerProvider.overrideWith((ref) async => manager),
+      // Image blobs go where the pages go, so saveAndReadBack-style tests
+      // see pages and their image bytes in one fake store.
+      pageImageStoreProvider
+          .overrideWith((ref) async => PageImageStore(manager.prefs)),
       // Keep the editor off the database / PLC / alarm stack: BaseScaffold
       // only needs these to decide between the clock and the alarm banner.
       databaseProvider.overrideWith((ref) async => null),
@@ -306,7 +312,12 @@ Future<List<Map<String, dynamic>>> saveAndReadBack(
   // that parses as one and contains our page.
   for (final value in prefs._store.values) {
     if (value is! String) continue;
-    final decoded = jsonDecode(value);
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(value);
+    } on FormatException {
+      continue; // e.g. a base64 image blob
+    }
     if (decoded is! Map<String, dynamic>) continue;
     final page = decoded['/'];
     if (page is Map<String, dynamic> && page['assets'] is List) {

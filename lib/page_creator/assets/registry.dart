@@ -17,6 +17,7 @@ import 'beckhoff.dart';
 import 'advantys_stb.dart';
 import 'schneider.dart';
 import 'icon.dart';
+import 'image.dart';
 import 'table.dart';
 import 'start_stop_button.dart';
 import 'aircab.dart';
@@ -70,6 +71,7 @@ class AssetRegistry {
     STBPDT3100Config: STBPDT3100Config.fromJson,
     SchneiderATV320Config: SchneiderATV320Config.fromJson,
     IconConfig: IconConfig.fromJson,
+    ImageConfig: ImageConfig.fromJson,
     TableAssetConfig: TableAssetConfig.fromJson,
     StartStopPillButtonConfig: StartStopPillButtonConfig.fromJson,
     AirCabConfig: AirCabConfig.fromJson,
@@ -116,6 +118,7 @@ class AssetRegistry {
     STBPDT3100Config: STBPDT3100Config.preview,
     SchneiderATV320Config: SchneiderATV320Config.preview,
     IconConfig: IconConfig.preview,
+    ImageConfig: ImageConfig.preview,
     DrawnBoxConfig: DrawnBoxConfig.preview,
     StartStopPillButtonConfig: StartStopPillButtonConfig.preview,
     AirCabConfig: AirCabConfig.preview,
