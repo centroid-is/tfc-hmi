@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:mcp_dart/mcp_dart.dart';
 
 import '../safety/risk_gate.dart';
+import '../services/asset_type_catalog.dart';
 import '../services/proposal_service.dart';
 import 'tool_registry.dart';
 
@@ -16,59 +17,14 @@ String _slugify(String prefix, String title) {
   return '$prefix-$slug';
 }
 
-/// Valid asset_name values for AssetRegistry.parse. Each maps to a factory
-/// in registry.dart. The LLM must use one of these as `asset_type`.
-///
-/// This is a hand-maintained copy: the MCP package cannot depend on the
-/// Flutter app layer where AssetRegistry lives. The app-layer test
-/// test/mcp/asset_type_sync_test.dart fails when the two lists diverge --
-/// when adding an asset to AssetRegistry, add it here too.
-const List<String> kValidAssetTypes = [
-  'LEDConfig',
-  'LEDColumnConfig',
-  'ButtonConfig',
-  'StartStopPillButtonConfig',
-  'NumberConfig',
-  'RatioNumberConfig',
-  'BpmConfig',
-  'RateValueConfig',
-  'AnalogBoxConfig',
-  'OptionVariableConfig',
-  'TextAssetConfig',
-  'IconConfig',
-  'ImageConfig',
-  'DrawnBoxConfig',
-  'ArrowConfig',
-  'TableAssetConfig',
-  'GraphAssetConfig',
-  'DrawingViewerConfig',
-  'ConveyorConfig',
-  'ConveyorGateConfig',
-  'ConveyorColorPaletteConfig',
-  'GateStatusConfig',
-  'SensorConfig',
-  'ElevatorConfig',
-  'AirCabConfig',
-  'ElCabConfig',
-  'ChecklistsConfig',
-  'RecipesConfig',
-  'SpeedBatcherConfig',
-  'ThirdPartyEquipmentConfig',
-  'Baader221Config',
-  'BeckhoffCX5010Config',
-  'BeckhoffEK1100Config',
-  'BeckhoffEL1008Config',
-  'BeckhoffEL2008Config',
-  'BeckhoffEL3054Config',
-  'BeckhoffEL9186Config',
-  'BeckhoffEL9187Config',
-  'BeckhoffEL9222Config',
-  'STBDDI3725Config',
-  'STBDDO3705Config',
-  'STBNIP2311Config',
-  'STBPDT3100Config',
-  'SchneiderATV320Config',
-];
+/// Valid asset_name values for AssetRegistry.parse, derived from
+/// [AssetTypeCatalog] -- the package's single description of the asset
+/// types the Flutter-side registry can instantiate. The app-layer test
+/// test/mcp/asset_type_sync_test.dart fails when the catalog and
+/// AssetRegistry diverge.
+final List<String> kValidAssetTypes = List.unmodifiable(
+  AssetTypeCatalog.all.map((t) => t.assetName),
+);
 
 /// Registers the propose_asset MCP write tool.
 ///

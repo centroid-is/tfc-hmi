@@ -8,7 +8,10 @@
 ///
 /// **Maintenance:** When a new asset type is added to the Flutter-side
 /// `AssetRegistry` (in `lib/page_creator/assets/registry.dart`), a
-/// corresponding entry should be added here.
+/// corresponding entry must be added here. The app-layer test
+/// `test/mcp/asset_type_sync_test.dart` fails when the two diverge.
+/// `kValidAssetTypes` (used in the propose_asset/propose_page schemas)
+/// is derived from this catalog.
 library;
 
 /// Metadata for a single configurable property of an asset type.
@@ -684,6 +687,83 @@ class AssetTypeCatalog {
       ],
     ),
 
+    AssetTypeInfo(
+      assetName: 'ConveyorGateConfig',
+      displayName: 'Conveyor Gate',
+      category: 'Visualization',
+      description:
+          'An animated gate (pneumatic flap or slider variant) on a '
+          'conveyor, bound to a boolean open/closed state key. Supports '
+          'force-open/force-close commands with feedback keys.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'stateKey',
+            type: 'String',
+            description: 'Boolean tag key indicating the gate is open',
+            required: true),
+        AssetPropertyInfo(
+            name: 'gateVariant',
+            type: 'String',
+            description: 'Gate mechanism: "pneumatic" or "slider"'),
+        AssetPropertyInfo(
+            name: 'forceOpenKey',
+            type: 'String',
+            description: 'Tag key to write a force-open command'),
+        AssetPropertyInfo(
+            name: 'forceCloseKey',
+            type: 'String',
+            description: 'Tag key to write a force-close command'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'SensorConfig',
+      displayName: 'Sensor',
+      category: 'Visualization',
+      description:
+          'A sensor glyph (photo-eye, proximity, etc.) bound to a boolean '
+          'detection key. Preferred binding is the HMI member of an '
+          'FB_Sensor instance, which also unlocks live debounce editing; '
+          'a plain BOOL node is accepted as the raw detection bit.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'detectionKey',
+            type: 'String',
+            description: 'Tag key for the detection state '
+                '(FB_Sensor HMI struct or plain BOOL)',
+            required: true),
+        AssetPropertyInfo(
+            name: 'invertActivePolarity',
+            type: 'bool',
+            description: 'Invert the visual active state'),
+        AssetPropertyInfo(
+            name: 'tag',
+            type: 'String',
+            description: 'Human-readable label (e.g. "PE-101A")'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'ElevatorConfig',
+      displayName: 'Elevator',
+      category: 'Visualization',
+      description:
+          'An elevator platform visualization animated by a 0-100% '
+          'position value from the PLC. Child assets can ride the '
+          'platform.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'positionKey',
+            type: 'String',
+            description: 'Tag key emitting the raw 0..100% position float',
+            required: true),
+        AssetPropertyInfo(
+            name: 'travelRange',
+            type: 'double',
+            description:
+                'Fraction of bounding-box height the platform travels '
+                '(0.0-1.0)'),
+      ],
+    ),
+
     // ── Beckhoff Devices ──────────────────────────────────────────────
     AssetTypeInfo(
       assetName: 'BeckhoffCX5010Config',
@@ -820,6 +900,85 @@ class AssetTypeCatalog {
       ],
     ),
 
+    // ── Advantys STB Devices ──────────────────────────────────────────
+    AssetTypeInfo(
+      assetName: 'STBNIP2311Config',
+      displayName: 'STBNIP2311 (Ethernet Head)',
+      category: 'Advantys STB Devices',
+      description:
+          'Visualization of a Schneider Advantys STB NIP2311 Ethernet '
+          'network head module. Hosts subdevice modules on its island bus.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Island name or node id'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'STBDDI3725Config',
+      displayName: 'STBDDI3725 (16-Ch DI)',
+      category: 'Advantys STB Devices',
+      description:
+          'Visualization of an Advantys STB DDI3725 16-channel digital '
+          'input module with live channel status, forcing, and per-channel '
+          'on/off filters.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Module name or node id'),
+        AssetPropertyInfo(
+            name: 'rawStateKey',
+            type: 'String',
+            description: 'Tag key for the raw channel states'),
+        AssetPropertyInfo(
+            name: 'forceValuesKey',
+            type: 'String',
+            description: 'Tag key for channel force values'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'STBDDO3705Config',
+      displayName: 'STBDDO3705 (16-Ch DO)',
+      category: 'Advantys STB Devices',
+      description:
+          'Visualization of an Advantys STB DDO3705 16-channel digital '
+          'output module with live channel status and forcing.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Module name or node id'),
+        AssetPropertyInfo(
+            name: 'rawStateKey',
+            type: 'String',
+            description: 'Tag key for the raw channel states'),
+        AssetPropertyInfo(
+            name: 'forceValuesKey',
+            type: 'String',
+            description: 'Tag key for channel force values'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'STBPDT3100Config',
+      displayName: 'STBPDT3100 (24 VDC PDM)',
+      category: 'Advantys STB Devices',
+      description:
+          'Visualization of an Advantys STB PDT3100 24 VDC power '
+          'distribution module.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Module name or node id'),
+        AssetPropertyInfo(
+            name: 'inputOkKey',
+            type: 'String',
+            description: 'Tag key for the input-power-OK status'),
+      ],
+    ),
+
     // ── Industrial Equipment ──────────────────────────────────────────
     AssetTypeInfo(
       assetName: 'Baader221Config',
@@ -864,6 +1023,32 @@ class AssetTypeCatalog {
             type: 'String',
             description: 'Tag key for cabinet status',
             required: true),
+      ],
+    ),
+
+    AssetTypeInfo(
+      assetName: 'ThirdPartyEquipmentConfig',
+      displayName: '3rd Party Equipment',
+      category: 'Industrial Equipment',
+      description:
+          'A packing-hall machine tile (Multivac, SpeedBatcher, box '
+          'erector, strapping line, ...) with a run-status LED bound to a '
+          'boolean key. Child entries can bind additional signals.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'kind',
+            type: 'String',
+            description: 'Which machine this represents, e.g. "multivac", '
+                '"speedBatcher", "boxErector", "strappingLine"',
+            required: true),
+        AssetPropertyInfo(
+            name: 'runKey',
+            type: 'String',
+            description: 'Boolean tag key carrying the run status'),
+        AssetPropertyInfo(
+            name: 'invertRunPolarity',
+            type: 'bool',
+            description: 'Invert the raw bool (stopped-contact equipment)'),
       ],
     ),
 
