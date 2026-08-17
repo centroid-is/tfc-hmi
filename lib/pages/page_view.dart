@@ -122,6 +122,11 @@ class AssetStack extends ConsumerStatefulWidget {
   final List<Asset> assets;
   final BoxConstraints constraints;
   final void Function(Asset asset)? onTap;
+
+  /// Double tap on an asset in edit mode. Registering it costs single taps
+  /// the double-tap disambiguation window before [onTap] fires, so it is only
+  /// wired up when a host actually supplies it — the runtime view never pays.
+  final void Function(Asset asset)? onDoubleTap;
   final void Function(Asset asset, DragUpdateDetails details)? onPanUpdate;
   final void Function(Asset asset, DragStartDetails details)? onPanStart;
 
@@ -142,6 +147,7 @@ class AssetStack extends ConsumerStatefulWidget {
     required this.assets,
     required this.constraints,
     this.onTap,
+    this.onDoubleTap,
     this.onPanUpdate,
     this.onPanStart,
     this.onSecondaryTap,
@@ -354,6 +360,9 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                                 behavior: HitTestBehavior.opaque,
                                 onTap: widget.onTap != null
                                     ? () => widget.onTap!(asset)
+                                    : null,
+                                onDoubleTap: widget.onDoubleTap != null
+                                    ? () => widget.onDoubleTap!(asset)
                                     : null,
                                 onPanUpdate: widget.onPanUpdate != null
                                     ? (d) => widget.onPanUpdate!(asset, d)

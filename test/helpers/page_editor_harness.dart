@@ -15,7 +15,8 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:beamer/beamer.dart';
-import 'package:flutter/gestures.dart' show kSecondaryButton;
+import 'package:flutter/gestures.dart'
+    show kDoubleTapMinTime, kDoubleTapTimeout, kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -278,7 +279,24 @@ Future<void> tapAsset(
 }) async {
   if (addToSelection) await tester.sendKeyDownEvent(editorModifier);
   await tester.tapAt(onCanvas(tester, fx, fy));
+  // The editor also listens for double taps, so a single tap only lands once
+  // the double-tap window has passed with no second tap in it. The modifier
+  // has to stay down until then — the editor reads it when the tap lands, and
+  // an operator holds it through the click anyway.
+  await tester.pump(kDoubleTapTimeout);
   if (addToSelection) await tester.sendKeyUpEvent(editorModifier);
+  await tester.pumpAndSettle();
+}
+
+/// Double-clicks the asset at relative ([fx], [fy]), the pointer-first way of
+/// opening its config pane.
+Future<void> doubleTapAsset(WidgetTester tester, double fx, double fy) async {
+  final where = onCanvas(tester, fx, fy);
+  await tester.tapAt(where);
+  // A real double click has daylight between its taps; anything faster is
+  // discarded as a bounce (kDoubleTapMinTime), anything slower is two taps.
+  await tester.pump(kDoubleTapMinTime);
+  await tester.tapAt(where);
   await tester.pumpAndSettle();
 }
 
