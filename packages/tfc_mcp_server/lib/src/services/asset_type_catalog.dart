@@ -552,6 +552,44 @@ class AssetTypeCatalog {
 
     // ── Visualization ─────────────────────────────────────────────────
     AssetTypeInfo(
+      assetName: 'ImageConfig',
+      displayName: 'Image',
+      category: 'Visualization',
+      description:
+          'A static image (PNG, JPEG, BMP or SVG). The bytes are stored '
+          'under a separate preference key (page_editor_image:<id>) and the '
+          'asset references them by content-hash id; images are added '
+          'through the page editor (file picker or clipboard paste), not '
+          'via MCP.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'image_id',
+            type: 'String',
+            description:
+                'Content-hash id of the stored image bytes; null shows a '
+                'placeholder'),
+        AssetPropertyInfo(
+            name: 'source_name',
+            type: 'String',
+            description: 'Original file name, informational only'),
+        AssetPropertyInfo(
+            name: 'fit',
+            type: 'BoxFit',
+            description:
+                'How the image fills the asset box: "contain" (default), '
+                '"cover", "fill", "fitWidth", "fitHeight", "scaleDown", '
+                '"none"'),
+        AssetPropertyInfo(
+            name: 'opacity',
+            type: 'double',
+            description: 'Opacity 0.0-1.0, default 1.0'),
+        AssetPropertyInfo(
+            name: 'natural_aspect',
+            type: 'double',
+            description: 'Width/height ratio of the source image'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'ConveyorConfig',
       displayName: 'Conveyor',
       category: 'Visualization',
