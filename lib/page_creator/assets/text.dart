@@ -479,38 +479,23 @@ class _ConfigContentState extends State<_ConfigContent> {
           const SizedBox(height: 20),
         ],
 
-        // Text color
-        Row(
-          children: [
-            const Text('Text Color: '),
-            const SizedBox(width: 8),
-            GestureDetector(
-              onTap: () => _showColorPicker(context),
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: _textColor ?? Colors.grey.shade300,
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: _textColor == null
-                    ? Icon(Icons.color_lens_outlined,
-                        size: 20, color: Colors.grey.shade600)
-                    : null,
-              ),
-            ),
-            const SizedBox(width: 8),
-            TextButton(
-              onPressed: () {
-                setState(() {
-                  _textColor = null;
-                  widget.config.textColor = null;
-                });
-              },
-              child: const Text('Reset to Default'),
-            ),
-          ],
+        // Text color — null means "theme default"; the dialog's Clear
+        // action gets back to it.
+        ColorPickerRow(
+          label: 'Text Color',
+          color: _textColor,
+          onChanged: (color) {
+            setState(() {
+              _textColor = color;
+              widget.config.textColor = color;
+            });
+          },
+          onCleared: () {
+            setState(() {
+              _textColor = null;
+              widget.config.textColor = null;
+            });
+          },
         ),
 
         const SizedBox(height: 20),
@@ -651,20 +636,6 @@ class _ConfigContentState extends State<_ConfigContent> {
     }
 
     return processedText;
-  }
-
-  void _showColorPicker(BuildContext context) {
-    showColorPickerDialog(
-      context: context,
-      title: 'Select text colour',
-      initialColor: _textColor ?? Colors.black,
-      onChanged: (color) {
-        setState(() {
-          _textColor = color;
-          widget.config.textColor = color;
-        });
-      },
-    );
   }
 
   void _showKeySearchDialog(BuildContext context) {

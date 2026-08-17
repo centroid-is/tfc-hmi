@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
 
 import '../../providers/state_man.dart';
+import '../../widgets/panes/color_picker_dialog.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'package:tfc/widgets/number_slider.dart';
@@ -346,7 +346,10 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   })  : children =
             children != null ? List<ThirdPartyChildEntry>.of(children) : [],
         runningColor = runningColor ?? Colors.green,
-        stoppedColor = stoppedColor ?? Colors.red,
+        // Grey, not red: stopped is a normal state on this line, and red is
+        // reserved for something actually being wrong. The unknown state stays
+        // tellable from stopped by the `!` glyph LEDPainter adds.
+        stoppedColor = stoppedColor ?? Colors.grey,
         outlineColor = outlineColor ?? Colors.blueGrey {
     textPos = TextPos.below;
     // These machines are wide; the BaseAsset 3%×3% default would squash the
@@ -510,10 +513,11 @@ RatioNumberConfig thirdPartyAcceptRatio({
 /// sizes everything, then the operator points each child at its tag through
 /// the per-child Configure button.
 ///
-/// The two conveyor LANES are not scaffolded. They run up the page, so a
-/// conveyor there needs a 90-degree angle and a thickness that depends on the
-/// asset's pixel aspect — guessing that would place them wrong more often
-/// than right. Use "Conveyor" and the position sliders for those.
+/// The two conveyor LANES are not scaffolded: they run up the page, so a
+/// conveyor there would need a 90-degree angle and a thickness that depends
+/// on the asset's pixel aspect. They stay part of the painted drawing — the
+/// SpeedBatcher box is static, and its editor offers no free-form add
+/// buttons; this scaffold is everything that lives inside it.
 ///
 /// [acceptWindowMinutes] is folded into the accept readout's units so the
 /// averaging window is visible on the mimic rather than assumed.
@@ -1040,51 +1044,8 @@ class _ThirdPartyEquipmentConfigEditorState
     super.dispose();
   }
 
-  void _showColorPicker(
-    BuildContext context,
-    Color current,
-    ValueChanged<Color> onChanged,
-  ) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Select Color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: current,
-            onColorChanged: onChanged,
-            pickerAreaHeightPercent: 0.8,
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _colorRow(String label, Color color, ValueChanged<Color> onChanged) {
-    return GestureDetector(
-      onTap: () => _showColorPicker(context, color, onChanged),
-      child: Row(
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.grey.shade600),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(label),
-        ],
-      ),
-    );
+    return ColorPickerRow(label: label, color: color, onChanged: onChanged);
   }
 
   @override
@@ -1311,8 +1272,12 @@ class _ThirdPartyEquipmentConfigEditorState
                 style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 4),
             Text(
-              'Place live assets over the drawing — e.g. a Conveyor on the '
-              'SpeedBatcher infeed lane, driven by its real frequency.',
+              config.kind == ThirdPartyEquipmentKind.speedBatcher
+                  ? 'The SpeedBatcher station is fixed: two checkweigher '
+                      'belts with weight and accept-rate readouts. Point '
+                      'each one at its tag with Configure below.'
+                  : 'Place live assets over the drawing — e.g. a Conveyor '
+                      'on an infeed lane, driven by its real frequency.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -1321,28 +1286,35 @@ class _ThirdPartyEquipmentConfigEditorState
               runSpacing: 8,
               children: [
                 if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
+                  // The SpeedBatcher station is static: its checkweigher
+                  // belts and readouts are the scaffold and nothing else
+                  // belongs in the box, so the free-form add buttons are
+                  // withheld for this kind. This button only recovers the
+                  // scaffold if the children were removed.
                   FilledButton.icon(
                     onPressed: _addStationScaffold,
                     icon: const Icon(Icons.auto_awesome_motion, size: 18),
                     label: const Text('Build checkweighers'),
+                  )
+                else ...[
+                  FilledButton.tonalIcon(
+                    onPressed: () => _addChild(
+                        thirdPartyNumber(units: '', decimalPlaces: 1),
+                        keepUpright: true),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Readout'),
                   ),
-                FilledButton.tonalIcon(
-                  onPressed: () => _addChild(
-                      thirdPartyNumber(units: '', decimalPlaces: 1),
-                      keepUpright: true),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Readout'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: () => _addChild(thirdPartyConveyor()),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Conveyor'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: () => _addChild(SensorConfig.preview()),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Sensor'),
-                ),
+                  FilledButton.tonalIcon(
+                    onPressed: () => _addChild(thirdPartyConveyor()),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Conveyor'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: () => _addChild(SensorConfig.preview()),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Sensor'),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 8),

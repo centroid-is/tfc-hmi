@@ -402,5 +402,38 @@ void main() {
 
       expect(config.kind, ThirdPartyEquipmentKind.boxErector);
     });
+
+    testWidgets('SpeedBatcher box is static — no free-form add buttons',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+      );
+      await tester.pumpWidget(wrap(
+        Builder(builder: (context) => config.configure(context)),
+      ));
+      await tester.pumpAndSettle();
+
+      // The station's contents are the scaffold and nothing else — the
+      // operator points the scaffolded children at tags, but cannot place
+      // arbitrary assets inside the box.
+      expect(find.widgetWithText(FilledButton, 'Readout'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Conveyor'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Sensor'), findsNothing);
+      // Scaffold recovery stays available.
+      expect(find.text('Build checkweighers'), findsOneWidget);
+    });
+
+    testWidgets('other kinds keep the free-form add buttons', (tester) async {
+      final config = ThirdPartyEquipmentConfig(); // multivac
+      await tester.pumpWidget(wrap(
+        Builder(builder: (context) => config.configure(context)),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(FilledButton, 'Readout'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Conveyor'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Sensor'), findsOneWidget);
+      expect(find.text('Build checkweighers'), findsNothing);
+    });
   });
 }

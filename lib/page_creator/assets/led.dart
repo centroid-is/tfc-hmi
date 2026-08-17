@@ -4,11 +4,11 @@ import 'dart:io';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
+import '../../widgets/panes/color_picker_dialog.dart';
 import 'package:tfc/converter/color_converter.dart';
 
 part 'led.g.dart';
@@ -126,38 +126,24 @@ class _ConfigContentState extends State<_ConfigContent> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      const Text('On Color'),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: BlockPicker(
-                          pickerColor: widget.config.onColor,
-                          onColorChanged: (value) {
-                            setState(() {
-                              widget.config.onColor = value;
-                            });
-                          },
-                        ),
-                      ),
-                    ],
+                  ColorPickerRow(
+                    label: 'On Color',
+                    color: widget.config.onColor,
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.onColor = value;
+                      });
+                    },
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      const Text('Off Color'),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: BlockPicker(
-                          pickerColor: widget.config.offColor,
-                          onColorChanged: (value) {
-                            setState(() {
-                              widget.config.offColor = value;
-                            });
-                          },
-                        ),
-                      ),
-                    ],
+                  ColorPickerRow(
+                    label: 'Off Color',
+                    color: widget.config.offColor,
+                    onChanged: (value) {
+                      setState(() {
+                        widget.config.offColor = value;
+                      });
+                    },
                   ),
                   const SizedBox(height: 16),
                   DropdownButton<TextPos>(

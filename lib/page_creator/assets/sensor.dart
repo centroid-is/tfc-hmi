@@ -942,30 +942,6 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
     super.dispose();
   }
 
-  void _showColorPicker(
-    BuildContext context,
-    Color current,
-    ValueChanged<Color> onChanged,
-  ) {
-    showColorPickerDialog(
-      context: context,
-      initialColor: current,
-      onChanged: onChanged,
-    );
-  }
-
-  Widget _colorSwatch(Color color) {
-    return Container(
-      width: 24,
-      height: 24,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.grey.shade600),
-      ),
-    );
-  }
-
   /// Per-kind painter dispatch for the live preview. Mirrors the runtime
   /// dispatch in `_SensorState._createPainter` but always renders
   /// `isActive: true` so the preview shows the active visual. The preview
@@ -1087,32 +1063,18 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             const SizedBox(height: 16),
 
             // -- Active Color --
-            GestureDetector(
-              onTap: () => _showColorPicker(
-                context,
-                config.activeColor,
-                (c) => setState(() => config.activeColor = c),
-              ),
-              child: Row(children: [
-                _colorSwatch(config.activeColor),
-                const SizedBox(width: 8),
-                const Text('Active Color'),
-              ]),
+            ColorPickerRow(
+              label: 'Active Color',
+              color: config.activeColor,
+              onChanged: (c) => setState(() => config.activeColor = c),
             ),
             const SizedBox(height: 8),
 
             // -- Inactive Color --
-            GestureDetector(
-              onTap: () => _showColorPicker(
-                context,
-                config.inactiveColor,
-                (c) => setState(() => config.inactiveColor = c),
-              ),
-              child: Row(children: [
-                _colorSwatch(config.inactiveColor),
-                const SizedBox(width: 8),
-                const Text('Inactive Color'),
-              ]),
+            ColorPickerRow(
+              label: 'Inactive Color',
+              color: config.inactiveColor,
+              onChanged: (c) => setState(() => config.inactiveColor = c),
             ),
             const SizedBox(height: 16),
 

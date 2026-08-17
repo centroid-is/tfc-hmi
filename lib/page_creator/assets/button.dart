@@ -4,9 +4,9 @@ import 'dart:async';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:logger/logger.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
@@ -48,7 +48,7 @@ enum _TextColorMode { useDefault, custom }
 /// Seed value used when the operator first switches the Text Color
 /// toggle from "Default" to "Custom" — pure black so the picker swatch
 /// renders something visible immediately. The operator is expected to
-/// pick their actual color from the BlockPicker that appears underneath.
+/// pick their actual color from the picker row that appears underneath.
 const Color _defaultTextColorSeed = Color(0xFF000000);
 
 /// Drives how a [ButtonConfig]'s `disabledKey` stream maps to the
@@ -665,39 +665,25 @@ class _ConfigContentState extends State<_ConfigContent> {
         const SizedBox(height: 16),
 
         // Colors
-        Row(
-          children: [
-            const Text('Outward Color'),
-            const SizedBox(width: 8),
-            Expanded(
-              child: BlockPicker(
-                pickerColor: widget.config.outwardColor,
-                onColorChanged: (value) {
-                  setState(() {
-                    widget.config.outwardColor = value;
-                  });
-                },
-              ),
-            ),
-          ],
+        ColorPickerRow(
+          label: 'Outward Color',
+          color: widget.config.outwardColor,
+          onChanged: (value) {
+            setState(() {
+              widget.config.outwardColor = value;
+            });
+          },
         ),
         const SizedBox(height: 16),
 
-        Row(
-          children: [
-            const Text('Inward Color'),
-            const SizedBox(width: 8),
-            Expanded(
-              child: BlockPicker(
-                pickerColor: widget.config.inwardColor,
-                onColorChanged: (value) {
-                  setState(() {
-                    widget.config.inwardColor = value;
-                  });
-                },
-              ),
-            ),
-          ],
+        ColorPickerRow(
+          label: 'Inward Color',
+          color: widget.config.inwardColor,
+          onChanged: (value) {
+            setState(() {
+              widget.config.inwardColor = value;
+            });
+          },
         ),
         const SizedBox(height: 16),
 
@@ -741,21 +727,14 @@ class _ConfigContentState extends State<_ConfigContent> {
         ),
         if (widget.config.textColor != null) ...[
           const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text('Color'),
-              const SizedBox(width: 8),
-              Expanded(
-                child: BlockPicker(
-                  pickerColor: widget.config.textColor!,
-                  onColorChanged: (value) {
-                    setState(() {
-                      widget.config.textColor = value;
-                    });
-                  },
-                ),
-              ),
-            ],
+          ColorPickerRow(
+            label: 'Color',
+            color: widget.config.textColor,
+            onChanged: (value) {
+              setState(() {
+                widget.config.textColor = value;
+              });
+            },
           ),
         ],
         const SizedBox(height: 16),
@@ -893,22 +872,15 @@ class _ConfigContentState extends State<_ConfigContent> {
           ],
         ),
         const SizedBox(height: 8),
-        Row(
-          children: [
-            const Text('Feedback Color'),
-            const SizedBox(width: 8),
-            Expanded(
-              child: BlockPicker(
-                pickerColor: widget.config.feedback?.color ?? Colors.green,
-                onColorChanged: (value) {
-                  setState(() {
-                    widget.config.feedback ??= FeedbackConfig();
-                    widget.config.feedback!.color = value;
-                  });
-                },
-              ),
-            ),
-          ],
+        ColorPickerRow(
+          label: 'Feedback Color',
+          color: widget.config.feedback?.color ?? Colors.green,
+          onChanged: (value) {
+            setState(() {
+              widget.config.feedback ??= FeedbackConfig();
+              widget.config.feedback!.color = value;
+            });
+          },
         ),
         const SizedBox(height: 24),
 
@@ -1052,21 +1024,14 @@ class _ConfigContentState extends State<_ConfigContent> {
         // reduce visual noise.
         if (widget.config.disabledKey != null &&
             widget.config.disabledKey!.isNotEmpty) ...[
-          Row(
-            children: [
-              const Text('Disabled Color'),
-              const SizedBox(width: 8),
-              Expanded(
-                child: BlockPicker(
-                  pickerColor: widget.config.disabledColor,
-                  onColorChanged: (value) {
-                    setState(() {
-                      widget.config.disabledColor = value;
-                    });
-                  },
-                ),
-              ),
-            ],
+          ColorPickerRow(
+            label: 'Disabled Color',
+            color: widget.config.disabledColor,
+            onChanged: (value) {
+              setState(() {
+                widget.config.disabledColor = value;
+              });
+            },
           ),
           const SizedBox(height: 16),
         ],

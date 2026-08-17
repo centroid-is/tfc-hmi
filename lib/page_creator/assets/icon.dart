@@ -296,29 +296,11 @@ class _ConfigContentState extends State<_ConfigContent> {
         // full HSV picker lays out ~680px wide in landscape, which does not
         // fit the editor's config pane — and this is how every other asset
         // asks for a colour.
-        Row(
-          children: [
-            const Text('Icon Colour: '),
-            const SizedBox(width: 8),
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: widget.config.color ??
-                    Theme.of(context).colorScheme.primary,
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: InkWell(onTap: _showIconColorPicker),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: _showIconColorPicker,
-                child: const Text('Change Colour'),
-              ),
-            ),
-          ],
+        ColorPickerRow(
+          label: 'Icon Colour',
+          color: widget.config.color,
+          onChanged: (color) => setState(() => widget.config.color = color),
+          onCleared: () => setState(() => widget.config.color = null),
         ),
         const SizedBox(height: 16),
 
@@ -406,36 +388,15 @@ class _ConfigContentState extends State<_ConfigContent> {
                   const SizedBox(height: 8),
 
                   // Color Selection for this condition
-                  Row(
-                    children: [
-                      const Text('Override Color: '),
-                      const SizedBox(width: 8),
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: state.color ?? Colors.grey,
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: InkWell(
-                          onTap: () => _showConditionalColorPicker(index),
-                          child: state.color == null
-                              ? const Icon(Icons.color_lens,
-                                  color: Colors.white)
-                              : null,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => _showConditionalColorPicker(index),
-                          child: Text(state.color != null
-                              ? 'Change Color'
-                              : 'Set Color'),
-                        ),
-                      ),
-                    ],
+                  ColorPickerRow(
+                    label: 'Override Color',
+                    color: state.color,
+                    onChanged: (color) => setState(() {
+                      widget.config.conditionalStates![index].color = color;
+                    }),
+                    onCleared: () => setState(() {
+                      widget.config.conditionalStates![index].color = null;
+                    }),
                   ),
                 ],
               ),
@@ -555,33 +516,4 @@ class _ConfigContentState extends State<_ConfigContent> {
     );
   }
 
-  void _showIconColorPicker() {
-    showColorPickerDialog(
-      context: context,
-      title: 'Select icon colour',
-      initialColor:
-          widget.config.color ?? Theme.of(context).colorScheme.primary,
-      onChanged: (color) => setState(() => widget.config.color = color),
-      onCleared: () => setState(() => widget.config.color = null),
-    );
-  }
-
-  void _showConditionalColorPicker(int stateIndex) {
-    showColorPickerDialog(
-      context: context,
-      title: 'Select colour for condition',
-      initialColor: widget.config.conditionalStates![stateIndex].color ??
-          Theme.of(context).colorScheme.primary,
-      onChanged: (color) {
-        setState(() {
-          widget.config.conditionalStates![stateIndex].color = color;
-        });
-      },
-      onCleared: () {
-        setState(() {
-          widget.config.conditionalStates![stateIndex].color = null;
-        });
-      },
-    );
-  }
 }

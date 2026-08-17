@@ -124,28 +124,10 @@ class _ConfigContentState extends State<_ConfigContent> {
         // Behind the shared picker dialog rather than inline: the full HSV
         // picker lays out ~680px wide in landscape, which does not fit the
         // editor's config pane.
-        Row(
-          children: [
-            const Text('Colour: '),
-            const SizedBox(width: 8),
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: widget.config.color,
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: InkWell(onTap: _showColorPicker),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: _showColorPicker,
-                child: const Text('Change Colour'),
-              ),
-            ),
-          ],
+        ColorPickerRow(
+          label: 'Colour',
+          color: widget.config.color,
+          onChanged: (color) => setState(() => widget.config.color = color),
         ),
         const SizedBox(height: 16),
         Row(
@@ -193,12 +175,4 @@ class _ConfigContentState extends State<_ConfigContent> {
     );
   }
 
-  void _showColorPicker() {
-    showColorPickerDialog(
-      context: context,
-      title: 'Select colour',
-      initialColor: widget.config.color,
-      onChanged: (color) => setState(() => widget.config.color = color),
-    );
-  }
 }

@@ -682,41 +682,11 @@ class _TableConfigContentState extends State<_TableConfigContent> {
     Color? color,
     ValueChanged<Color?> onChanged,
   ) {
-    return Row(
-      children: [
-        Expanded(child: Text(label)),
-        Container(
-          width: 44,
-          height: 24,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: color ?? Colors.transparent,
-            border: Border.all(color: Colors.grey),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: color == null
-              ? const Text('None', style: TextStyle(fontSize: 10))
-              : const SizedBox.shrink(),
-        ),
-        const SizedBox(width: 8),
-        OutlinedButton(
-          child: const Text('Pick'),
-          onPressed: () {
-            showColorPickerDialog(
-              context: context,
-              title: 'Pick $label colour',
-              initialColor: color ?? Colors.black, // fallback when null
-              onChanged: onChanged,
-            );
-          },
-        ),
-        const SizedBox(width: 8),
-        TextButton.icon(
-          icon: const Icon(Icons.clear),
-          label: const Text('Clear'),
-          onPressed: () => onChanged(null), // ← sets to null
-        ),
-      ],
+    return ColorPickerRow(
+      label: label,
+      color: color,
+      onChanged: onChanged,
+      onCleared: () => onChanged(null),
     );
   }
 }

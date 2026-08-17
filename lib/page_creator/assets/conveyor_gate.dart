@@ -627,30 +627,6 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
     });
   }
 
-  void _showColorPicker(
-    BuildContext context,
-    Color current,
-    ValueChanged<Color> onChanged,
-  ) {
-    showColorPickerDialog(
-      context: context,
-      initialColor: current,
-      onChanged: onChanged,
-    );
-  }
-
-  Widget _colorSwatch(Color color) {
-    return Container(
-      width: 24,
-      height: 24,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.grey.shade600),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final config = widget.config;
@@ -823,36 +799,18 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           const SizedBox(height: 16),
 
           // -- Open Color --
-          GestureDetector(
-            onTap: () => _showColorPicker(
-              context,
-              config.openColor,
-              (color) => setState(() => config.openColor = color),
-            ),
-            child: Row(
-              children: [
-                _colorSwatch(config.openColor),
-                const SizedBox(width: 8),
-                const Text('Open Color'),
-              ],
-            ),
+          ColorPickerRow(
+            label: 'Open Color',
+            color: config.openColor,
+            onChanged: (color) => setState(() => config.openColor = color),
           ),
           const SizedBox(height: 12),
 
           // -- Closed Color --
-          GestureDetector(
-            onTap: () => _showColorPicker(
-              context,
-              config.closedColor,
-              (color) => setState(() => config.closedColor = color),
-            ),
-            child: Row(
-              children: [
-                _colorSwatch(config.closedColor),
-                const SizedBox(width: 8),
-                const Text('Closed Color'),
-              ],
-            ),
+          ColorPickerRow(
+            label: 'Closed Color',
+            color: config.closedColor,
+            onChanged: (color) => setState(() => config.closedColor = color),
           ),
           const SizedBox(height: 16),
 
