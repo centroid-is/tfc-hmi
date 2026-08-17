@@ -80,7 +80,15 @@ class TfcMcpServer {
                 capabilities: ServerCapabilities(
                   tools: ServerCapabilitiesTools(),
                   resources: ServerCapabilitiesResources(),
-                  prompts: ServerCapabilitiesPrompts(),
+                  // Prompts are only registered when alarms are enabled (see
+                  // the registerPrompt calls below). Advertising the
+                  // capability with zero prompts registered leaves
+                  // prompts/list without a handler in mcp_dart, and over
+                  // Streamable HTTP the resulting error never closes the
+                  // stream -- clients hang instead of getting an answer.
+                  prompts: toggles.alarmsEnabled
+                      ? ServerCapabilitiesPrompts()
+                      : null,
                 ),
               ),
             ),
