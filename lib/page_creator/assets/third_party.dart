@@ -4,6 +4,7 @@ import 'dart:math' show pi;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/converter/color_converter.dart';
 
 import '../../providers/state_man.dart';
@@ -237,9 +238,10 @@ class ThirdPartyChildEntry {
 /// scope of supply". One LED in the top-left corner reports run status; tap
 /// anywhere in the box for the details dialog.
 ///
-/// Scope note: run status is the ONLY live signal for now. Richer handshake
-/// state (ready / fault / demand) can be added as extra keys later without
-/// changing the layout — the header strip has room for more LEDs.
+/// Scope note: run status is the only live signal on the MIMIC. The
+/// SpeedBatcher additionally reads its `p_stat_*` handshake struct via
+/// [statusKey], surfaced as diodes in the side pane — richer state stays off
+/// the drawing so the box reads the same across kinds.
 @JsonSerializable(explicitToJson: true)
 class ThirdPartyEquipmentConfig extends BaseAsset {
   @override
@@ -274,6 +276,16 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// When true the visual run state is the inverse of the raw bool — for
   /// equipment that hands us a "stopped" contact rather than a "running" one.
   bool invertRunPolarity;
+
+  /// Struct node carrying the SpeedBatcher's `p_stat_*` handshake bits
+  /// (e.g. `SB1` mapping to `SPB01.speedBatcher.hmi`). Drives the diodes in
+  /// the side pane's Status section.
+  ///
+  /// SpeedBatcher only — the other kinds have no equivalent handshake struct,
+  /// so the editor hides the field and the pane omits the section for them.
+  /// A bit the PLC does not expose renders as the unknown LED rather than
+  /// claiming "off".
+  String statusKey;
 
   /// LED colour while the machine is running.
   @ColorConverter()
@@ -344,6 +356,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.kind = ThirdPartyEquipmentKind.multivac,
     this.runKey = '',
     this.invertRunPolarity = false,
+    this.statusKey = '',
     Color? runningColor,
     Color? stoppedColor,
     Color? outlineColor,
@@ -426,6 +439,105 @@ bool thirdPartyIsRunning({
   required bool invertRunPolarity,
 }) {
   return invertRunPolarity ? !rawBool : rawBool;
+}
+
+// ---------------------------------------------------------------------------
+// SpeedBatcher status diodes
+// ---------------------------------------------------------------------------
+
+/// One diode of the SpeedBatcher handshake: which struct member feeds it and
+/// how it is presented.
+class SpeedBatcherStatusBit {
+  /// Member name inside the [ThirdPartyEquipmentConfig.statusKey] struct.
+  final String member;
+
+  /// Operator-facing label beside the diode.
+  final String label;
+
+  /// Diode colour when the bit is true. Off is white, unknown is the grey `!`.
+  final Color onColor;
+
+  const SpeedBatcherStatusBit(this.member, this.label, this.onColor);
+}
+
+/// The five handshake bits, in display order — same names, labels and colours
+/// as the retired flat SpeedBatcher asset (`speedbatcher.dart`), so the pane
+/// reads identically to what the operators already know. Blue for Cleaning,
+/// green for the rest.
+const List<SpeedBatcherStatusBit> speedBatcherStatusBits = [
+  SpeedBatcherStatusBit('p_stat_Running', 'Running', Colors.green),
+  SpeedBatcherStatusBit('p_stat_Cleaning', 'Cleaning', Colors.blue),
+  SpeedBatcherStatusBit('p_stat_BatchReady', 'Batch ready', Colors.green),
+  SpeedBatcherStatusBit('p_stat_DropOk', 'Drop Ok from PLC', Colors.green),
+  SpeedBatcherStatusBit('p_stat_Dropped', 'Dropped Batch', Colors.green),
+];
+
+/// Reads one handshake bit out of the status struct, degrading to unknown.
+///
+/// `null` — the unknown state — covers every way the bit can be absent: no
+/// struct received yet, a non-struct value on the key, or a struct without
+/// this member. The last one matters because `DynamicValue.operator[]` THROWS
+/// on a missing member, and three of the five bits have never been confirmed
+/// against the live PLC — a missing bit must render as the grey `!`, not take
+/// the pane down.
+bool? speedBatcherStatusBitOf(DynamicValue? status, String member) {
+  if (status == null || !status.isObject) return null;
+  if (!status.contains(member)) return null;
+  return status[member].asBool;
+}
+
+/// The Status section body: one diode row per handshake bit.
+///
+/// Split out as its own widget — same seam as [ThirdPartyEquipmentBody] — so
+/// tests and goldens can render every diode state from a hand-built
+/// [DynamicValue] without a `StateMan`.
+class SpeedBatcherStatusDiodes extends StatelessWidget {
+  const SpeedBatcherStatusDiodes({
+    super.key,
+    required this.statusKey,
+    required this.status,
+  });
+
+  /// The configured struct key, shown so the operator can tell an
+  /// unconfigured pane from a dead subscription.
+  final String statusKey;
+
+  /// Latest struct off the wire; `null` renders every diode unknown.
+  final DynamicValue? status;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        PaneDetailRow(
+          label: 'Key',
+          value: statusKey.isEmpty ? '—' : statusKey,
+        ),
+        for (final bit in speedBatcherStatusBits)
+          PaneDetailRow(
+            label: bit.label,
+            // 22 px, not smaller: the unknown state is a grey fill with a
+            // white `!`, and below this size the glyph blurs out and unknown
+            // becomes indistinguishable from off — the exact confusion the
+            // unknown state exists to prevent.
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CustomPaint(
+                painter: LEDPainter(
+                  color: switch (speedBatcherStatusBitOf(status, bit.member)) {
+                    null => null,
+                    true => bit.onColor,
+                    false => Colors.white,
+                  },
+                  ledType: LEDType.circle,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 /// Picks the painter for [kind].
@@ -632,6 +744,33 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// same config instance in place, so both widgets hold the same reference.
   String? _hoistedKey;
 
+  /// `null` means no status stream is needed — not a SpeedBatcher, or the
+  /// status key is empty. Same hoisted lifecycle as [_runStream].
+  Stream<DynamicValue>? _statusStream;
+
+  /// The single subscription to [_statusStream], fanned out through
+  /// [_statusRaw] for the same single-subscription reasons as [_sub].
+  StreamSubscription<DynamicValue>? _statusSub;
+
+  /// Latest handshake struct off the wire. `null` renders every diode in the
+  /// pane's Status section unknown — nothing received yet, or the stream
+  /// errored.
+  final ValueNotifier<DynamicValue?> _statusRaw =
+      ValueNotifier<DynamicValue?>(null);
+
+  /// The key [_statusStream] was built for; compared against [_wantedStatusKey]
+  /// so a kind change away from SpeedBatcher drops the subscription too.
+  String? _hoistedStatusKey;
+
+  /// The status key this config actually wants a subscription for. Empty for
+  /// every kind but the SpeedBatcher — a leftover [ThirdPartyEquipmentConfig.statusKey]
+  /// on a config switched to another kind must not hold a PLC subscription
+  /// open for a section the pane no longer shows.
+  String get _wantedStatusKey =>
+      widget.config.kind == ThirdPartyEquipmentKind.speedBatcher
+          ? widget.config.statusKey
+          : '';
+
   bool? get _isRunning {
     final raw = _raw.value;
     if (raw == null) return null;
@@ -645,6 +784,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   void initState() {
     super.initState();
     _hoistStream();
+    _hoistStatusStream();
   }
 
   @override
@@ -652,6 +792,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     super.didUpdateWidget(oldWidget);
     if (_hoistedKey != widget.config.runKey) {
       _hoistStream();
+    }
+    if (_hoistedStatusKey != _wantedStatusKey) {
+      _hoistStatusStream();
     }
   }
 
@@ -679,10 +822,39 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     );
   }
 
+  /// Hoists the SpeedBatcher status-struct stream, mirroring [_hoistStream].
+  /// Unlike the run stream the value stays a [DynamicValue]: the pane reads
+  /// individual `p_stat_*` members out of it per diode.
+  void _hoistStatusStream() {
+    final key = _wantedStatusKey;
+    _hoistedStatusKey = key;
+    _statusSub?.cancel();
+    _statusSub = null;
+    _statusRaw.value = null;
+    if (key.isEmpty) {
+      _statusStream = null;
+      return;
+    }
+    _statusStream = ref
+        .read(stateManProvider.future)
+        .asStream()
+        .asyncExpand((sm) => sm.subscribe(key).asStream())
+        .asyncExpand((s) => s);
+    _statusSub = _statusStream!.listen(
+      (value) => _statusRaw.value = value,
+      // Same honesty rule as the run stream: unknown beats a stale latch.
+      onError: (Object _) => _statusRaw.value = null,
+    );
+  }
+
   /// Test-only window onto the hoisted stream identity, so the stream
   /// lifecycle can be asserted without a real `StateMan`.
   @visibleForTesting
   Stream<bool>? get debugRunStream => _runStream;
+
+  /// Test-only window onto the hoisted status stream, as [debugRunStream].
+  @visibleForTesting
+  Stream<DynamicValue>? get debugStatusStream => _statusStream;
 
   @override
   void dispose() {
@@ -692,6 +864,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     closeSidePane(id: _paneId);
     _sub?.cancel();
     _raw.dispose();
+    _statusSub?.cancel();
+    _statusRaw.dispose();
     super.dispose();
   }
 
@@ -717,11 +891,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     showSidePane(
       context: context,
       id: _paneId,
-      // Rebuilds off the same notifier the body uses, so the status chip
+      // Rebuilds off the same notifiers the body uses, so the status chip
       // stays live while the pane is open and always agrees with the LED.
-      builder: (context) => ValueListenableBuilder<bool?>(
-        valueListenable: _raw,
-        builder: (context, _, __) => _paneFor(_isRunning),
+      // Merged rather than nested: the status struct only feeds the pane, so
+      // the body's ValueListenableBuilder stays on `_raw` alone.
+      builder: (context) => ListenableBuilder(
+        listenable: Listenable.merge([_raw, _statusRaw]),
+        builder: (context, _) => _paneFor(_isRunning),
       ),
     );
   }
@@ -797,6 +973,18 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               ],
             ),
           ),
+          if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
+            // Always present for a SpeedBatcher, key configured or not: five
+            // grey `!` diodes and a `—` key row tell the operator the section
+            // exists and is unconfigured, which a silently absent section
+            // would not.
+            PaneSection(
+              title: 'Status',
+              child: SpeedBatcherStatusDiodes(
+                statusKey: config.statusKey,
+                status: _statusRaw.value,
+              ),
+            ),
           if (config.children.isNotEmpty)
             PaneSection(
               title: 'Inside the box',
@@ -1153,6 +1341,22 @@ class _ThirdPartyEquipmentConfigEditorState
               contentPadding: EdgeInsets.zero,
             ),
             const SizedBox(height: 16),
+
+            // -- Status struct key (SpeedBatcher handshake) --
+            if (config.kind == ThirdPartyEquipmentKind.speedBatcher) ...[
+              KeyField(
+                label: 'Status Struct Key',
+                initialValue: config.statusKey,
+                onChanged: (v) => setState(() => config.statusKey = v),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Struct with the p_stat_* handshake bits — feeds the '
+                'diodes in the side pane\'s Status section.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 16),
+            ],
 
             // -- Colours --
             _colorRow('Running Color', config.runningColor,
