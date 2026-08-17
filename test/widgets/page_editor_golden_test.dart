@@ -281,6 +281,34 @@ void main() {
     });
   });
 
+  group('asset palette', () {
+    testWidgets('the full grid', (tester) async {
+      await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_palette_dark.png'),
+      );
+    });
+
+    // "multivac" names no tile — the machine lives inside the 3rd-party
+    // umbrella asset. The search matches the per-kind keywords, so the tile
+    // that CAN become a Multivac is the one result.
+    testWidgets('searching for a machine hidden in an umbrella tile',
+        (tester) async {
+      await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'multivac');
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_palette_multivac_dark.png'),
+      );
+    });
+  });
+
   group('one editing mode', () {
     testWidgets('a marquee selection, with no mode to enter first',
         (tester) async {

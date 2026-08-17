@@ -514,7 +514,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// from [_hasUnsavedChanges]'s JSON compare because app-registered items are
   /// not part of the pages JSON at all.
   bool _navOrderDirty = false;
-  String _paletteSearchQuery = '';
+
+  /// Backs the palette's search box. A controller rather than a bare string:
+  /// the palette is torn down whenever it is closed, and a controller-less
+  /// TextField would come back empty while the remembered query kept
+  /// filtering the grid.
+  final TextEditingController _paletteSearchController =
+      TextEditingController();
   String _savedJson = '';
   String _currentJson = '';
 
@@ -612,6 +618,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final configAsset = _configAsset;
     if (configAsset != null) closeSidePane(id: _configPaneId(configAsset));
     _treeScrollController.dispose();
+    _paletteSearchController.dispose();
     super.dispose();
   }
 
@@ -1039,20 +1046,25 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
   }
 
-  void _handleDelete() {
-    if (_selectedAssets.isEmpty) return;
+  void _handleDelete() => _deleteAssets(_selectedAssets.toList());
+
+  /// Removes [targets] from the page. Backs both the Delete/Backspace keys
+  /// (whole selection) and the context menu's Delete entry (the asset under
+  /// the cursor, or the selection when it is part of one).
+  void _deleteAssets(List<Asset> targets) {
+    if (targets.isEmpty) return;
 
     // The pane would otherwise stay up over an asset that no longer exists
     // until the next `_syncConfigEdits` tick noticed and shut it.
     final configAsset = _configAsset;
-    if (configAsset != null && _selectedAssets.contains(configAsset)) {
+    if (configAsset != null && targets.contains(configAsset)) {
       closeSidePane(id: _configPaneId(configAsset));
     }
 
     _saveToHistory();
     setState(() {
-      assets.removeWhere((asset) => _selectedAssets.contains(asset));
-      _selectedAssets.clear();
+      assets.removeWhere(targets.contains);
+      _selectedAssets.removeAll(targets);
       _updateCurrentJson();
     });
   }
@@ -1078,6 +1090,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   static const int _editAction = -6;
   static const int _mirrorHorizontalAction = -7;
   static const int _mirrorVerticalAction = -8;
+  static const int _deleteAction = -9;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
@@ -1315,6 +1328,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             enabled: canSendToBack,
           ),
         ),
+        // Set off from the layout actions above: everything else rearranges,
+        // this one destroys. Same targets rule though — the selection when
+        // the clicked asset is in it, otherwise just that asset.
+        const PopupMenuDivider(),
+        PopupMenuItem<int>(
+          value: _deleteAction,
+          child: ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: Text(targets.length > 1
+                ? 'Delete ${targets.length} assets'
+                : 'Delete'),
+            dense: true,
+          ),
+        ),
         if (aiItems.isNotEmpty) const PopupMenuDivider(),
         for (var i = 0; i < aiItems.length; i++)
           PopupMenuItem<int>(
@@ -1353,6 +1380,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _alignAssets(targets, AlignAxis.horizontal);
     } else if (choice == _alignVerticalAction) {
       _alignAssets(targets, AlignAxis.vertical);
+    } else if (choice == _deleteAction) {
+      _deleteAssets(targets);
     } else {
       await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
     }
@@ -1385,10 +1414,17 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         }
       },
       onKeyEvent: (node, event) {
-        // Don't intercept keys when a text field has focus
-        final primaryFocus = FocusManager.instance.primaryFocus;
-        if (primaryFocus != null &&
-            primaryFocus.context?.widget is EditableText) {
+        // Don't intercept keys when a text field has focus — otherwise
+        // backspace/delete edit the canvas selection, R rotates it and space
+        // pans, all mid-keystroke. A focused text field's FocusNode attaches
+        // to a Focus widget *inside* EditableText's build, so the focused
+        // context's own widget is never EditableText — the EditableText is
+        // found among its ancestors.
+        final focusContext = FocusManager.instance.primaryFocus?.context;
+        if (focusContext != null &&
+            (focusContext.widget is EditableText ||
+                focusContext.findAncestorStateOfType<EditableTextState>() !=
+                    null)) {
           return KeyEventResult.ignored;
         }
         // Space is held, not pressed: it is the only thing that turns a drag
@@ -1809,12 +1845,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   Widget _buildPalette() {
+    final query = _paletteSearchController.text.trim().toLowerCase();
     final entries = AssetRegistry.defaultFactories.entries.where((entry) {
-      if (_paletteSearchQuery.isEmpty) return true;
+      if (query.isEmpty) return true;
       final asset = entry.value();
-      return asset.displayName
-          .toLowerCase()
-          .contains(_paletteSearchQuery.toLowerCase());
+      // Keywords let an umbrella asset be found by what it contains — the
+      // 3rd-party tile answers to "multivac".
+      return asset.displayName.toLowerCase().contains(query) ||
+          asset.searchKeywords.any((k) => k.toLowerCase().contains(query));
     }).toList();
 
     return Column(
@@ -1822,13 +1860,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 48, 8),
           child: TextField(
+            controller: _paletteSearchController,
             decoration: const InputDecoration(
               hintText: 'Search assets...',
               prefixIcon: Icon(Icons.search),
               isDense: true,
               border: OutlineInputBorder(),
             ),
-            onChanged: (value) => setState(() => _paletteSearchQuery = value),
+            onChanged: (_) => setState(() {}),
           ),
         ),
         Expanded(
