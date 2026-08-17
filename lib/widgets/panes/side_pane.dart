@@ -336,6 +336,17 @@ class _SidePaneShell extends StatefulWidget {
 
 class _SidePaneShellState extends State<_SidePaneShell>
     with SingleTickerProviderStateMixin {
+  /// The pane's own Navigator. The pane lives in the root overlay, and
+  /// `Overlay.rearrange` keeps it above every route the app Navigator will
+  /// ever push — so a `DropdownButton` menu or `showDialog` opened from pane
+  /// content would land BEHIND the pane, invisible but armed (tapping the
+  /// dropdown a second time trips the framework's `_dropdownRoute == null`
+  /// assertion). Giving the pane subtree its own Navigator makes those routes
+  /// open in the pane's overlay instead, on top of the pane.
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
+  late final OverlayEntry _paneEntry = OverlayEntry(builder: _buildPane);
+
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 220),
@@ -372,6 +383,13 @@ class _SidePaneShellState extends State<_SidePaneShell>
     // A floating dialog opened from this pane sits on top of it, so it gets
     // the Escape first and the pane only closes once they are all gone.
     if (!FloatingDialogs.isEmpty) return false;
+    // Same for anything pushed onto the pane's own Navigator — an open
+    // dropdown menu or a modal dialog goes first, the pane after.
+    final navigator = _navigatorKey.currentState;
+    if (navigator != null && navigator.canPop()) {
+      navigator.pop();
+      return true;
+    }
     closeSidePane();
     return true;
   }
@@ -384,6 +402,17 @@ class _SidePaneShellState extends State<_SidePaneShell>
 
   @override
   Widget build(BuildContext context) {
+    // Full-screen, but hit-transparent everywhere the pane is not: the
+    // Navigator's Overlay claims a tap only where a child does, so the plant
+    // view behind stays interactive — the pane remains non-modal.
+    return Navigator(
+      key: _navigatorKey,
+      onGenerateRoute: (_) => null,
+      onGenerateInitialRoutes: (_, __) => [_PaneCanvasRoute(_paneEntry)],
+    );
+  }
+
+  Widget _buildPane(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
     final margin = SidePaneDefaults.margin;
     // Never let the reserved chrome squeeze the pane off a short screen.
@@ -460,7 +489,23 @@ class _SidePaneShellState extends State<_SidePaneShell>
   void _resizeBy(double delta, double minWidth, double maxWidth) {
     final next = (SidePaneHost._width + delta).clamp(minWidth, maxWidth);
     if (next == SidePaneHost._width) return;
-    setState(() => SidePaneHost._width = next);
+    SidePaneHost._width = next;
+    // The pane sits in its own route's OverlayEntry, which a plain setState
+    // here would not reach.
+    _paneEntry.markNeedsBuild();
     widget.onWidthChanged?.call(next);
   }
+}
+
+/// The base route of the pane's private Navigator: just the pane's
+/// [OverlayEntry], with none of what `ModalRoute` would bring — no barrier
+/// (which would block the plant view) and no transition. Routes pushed on top
+/// of it by pane content (dropdown menus, dialogs) behave normally.
+class _PaneCanvasRoute extends OverlayRoute<void> {
+  _PaneCanvasRoute(this._entry);
+
+  final OverlayEntry _entry;
+
+  @override
+  Iterable<OverlayEntry> createOverlayEntries() => <OverlayEntry>[_entry];
 }

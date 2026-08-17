@@ -225,6 +225,146 @@ void main() {
     });
   });
 
+  group('SidePane — route popups from pane content', () {
+    /// The pane lives in the root overlay, ABOVE every route the app
+    /// Navigator will ever push — `Overlay.rearrange` keeps foreign entries
+    /// on top. Anything route-based opened from inside the pane (a
+    /// `DropdownButton`'s menu, `showDialog`) must therefore not land on the
+    /// app Navigator, or it opens invisibly BEHIND the pane.
+    Widget dropdownPane(ValueChanged<String?> onChanged) {
+      return SidePane(
+        title: 'CN-04',
+        child: DropdownButton<String>(
+          value: 'A',
+          items: const [
+            DropdownMenuItem(value: 'A', child: Text('A')),
+            DropdownMenuItem(value: 'B', child: Text('B')),
+          ],
+          onChanged: onChanged,
+        ),
+      );
+    }
+
+    testWidgets('a DropdownButton opens a usable menu above the pane',
+        (tester) async {
+      String? picked;
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          builder: (_) => dropdownPane((v) => picked = v),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+
+      expect(find.text('B').hitTestable(), findsOneWidget,
+          reason: 'the menu must open on top of the pane, not behind it');
+
+      await tester.tap(find.text('B').hitTestable());
+      await tester.pumpAndSettle();
+      expect(picked, 'B');
+    });
+
+    testWidgets('tapping the dropdown again while its menu is open is safe',
+        (tester) async {
+      // The field bug: the menu opened behind the pane, so the button stayed
+      // visible and the second tap tripped the framework's
+      // `_dropdownRoute == null` assertion.
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          builder: (_) => dropdownPane((_) {}),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButton<String>),
+          warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(SidePane), findsOneWidget);
+    });
+
+    testWidgets('Escape closes the open menu first, then the pane',
+        (tester) async {
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          builder: (_) => dropdownPane((_) {}),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      expect(find.text('B').hitTestable(), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('B').hitTestable(), findsNothing,
+          reason: 'the first Escape closes the menu on top');
+      expect(find.byType(SidePane), findsOneWidget,
+          reason: '...and leaves the pane alone');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byType(SidePane), findsNothing);
+    });
+
+    testWidgets('a modal dialog opened from the pane blocks the pane',
+        (tester) async {
+      var resets = 0;
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          builder: (_) => SidePane(
+            title: 'CN-04',
+            actions: [
+              PaneAction.destructive(
+                label: 'Fault reset',
+                onPressed: () => resets++,
+              ),
+            ],
+            child: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showStandardDialog<void>(
+                  context: context,
+                  title: 'Acknowledge',
+                  builder: (_) => const Text('dialog body'),
+                ),
+                child: const Text('ask'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ask'));
+      await tester.pumpAndSettle();
+      expect(find.text('dialog body'), findsOneWidget);
+
+      await tester.tap(find.text('Fault reset'), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(resets, 0,
+          reason: 'the modal barrier must sit above the pane it came from');
+      expect(find.text('dialog body'), findsNothing,
+          reason: 'the tap landed on the dismissible barrier, not the pane');
+      expect(find.byType(SidePane), findsOneWidget);
+    });
+  });
+
   group('SidePane — actions', () {
     testWidgets('footer actions fire and sit next to Close', (tester) async {
       var resets = 0;

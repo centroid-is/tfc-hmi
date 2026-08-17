@@ -1060,6 +1060,46 @@ void main() {
       );
     });
 
+    testWidgets('dropdown menu opens above the pane — dark', (tester) async {
+      // The pane hosts its own Navigator so a DropdownButton's menu route
+      // lands on top of the pane instead of invisibly behind it (where a
+      // second tap used to trip the framework's `_dropdownRoute == null`
+      // assertion). The golden shows the menu sitting over the pane body.
+      await _pumpWithPane(
+        tester,
+        theme: dark,
+        pane: (_) => SidePane(
+          title: 'Text',
+          subtitle: 'Asset config',
+          icon: Icons.tune,
+          child: PaneSection(
+            title: 'Layout',
+            child: Row(
+              children: [
+                const Expanded(child: Text('Label position')),
+                DropdownButton<String>(
+                  value: 'Below',
+                  items: const [
+                    DropdownMenuItem(value: 'Above', child: Text('Above')),
+                    DropdownMenuItem(value: 'Below', child: Text('Below')),
+                    DropdownMenuItem(value: 'Left', child: Text('Left')),
+                    DropdownMenuItem(value: 'Right', child: Text('Right')),
+                  ],
+                  onChanged: (_) {},
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_dropdown_menu_dark.png'),
+      );
+    });
+
     // The next four run the REAL production code, not a stand-in:
     // `showIoModulePane` is what Beckhoff EL1008/EL2008 and Advantys
     // DDI3725/DDO3705 call, fed a canned emission instead of a PLC.
