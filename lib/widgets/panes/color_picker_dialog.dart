@@ -1,8 +1,97 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'pane_chrome.dart';
 import 'standard_dialog.dart';
+
+/// The quick-pick palette: one swatch per material hue plus white and black.
+///
+/// These are the colours an HMI actually uses — running green, fault red,
+/// warning amber, "this belt" blue — so most picks are one tap here instead
+/// of a hunt through the HSV square. The full picker below stays for
+/// tweaking.
+const List<Color> kColorPickerPresets = [
+  Colors.red,
+  Colors.deepOrange,
+  Colors.orange,
+  Colors.amber,
+  Colors.yellow,
+  Colors.lime,
+  Colors.green,
+  Colors.teal,
+  Colors.cyan,
+  Colors.blue,
+  Colors.indigo,
+  Colors.purple,
+  Colors.pink,
+  Colors.brown,
+  Colors.grey,
+  Colors.blueGrey,
+  Colors.white,
+  Colors.black,
+];
+
+/// Colours the operator actually settled on, newest first, persisted across
+/// restarts.
+///
+/// The point is "make this LED the same blue as the last one" without
+/// remembering an RGB value: confirm a colour with Done once and it is a
+/// one-tap swatch in every later dialog. Presets are not recorded — they are
+/// already in the strip.
+abstract final class RecentColors {
+  static const String prefsKey = 'color_picker_recent_colors';
+  static const int max = 8;
+
+  /// In-memory copy, so the strip renders without an async gap once any
+  /// dialog has loaded it. Null until first [load].
+  static List<Color>? _cache;
+
+  static Future<List<Color>> load() async {
+    if (_cache != null) return _cache!;
+    // A broken preferences store must never take the colour picker with it —
+    // the strip just starts empty.
+    List<String> stored;
+    try {
+      stored = await SharedPreferencesAsync().getStringList(prefsKey) ?? [];
+    } catch (_) {
+      stored = [];
+    }
+    _cache = [
+      for (final s in stored)
+        if (int.tryParse(s, radix: 16) case final v?) Color(v),
+    ];
+    return _cache!;
+  }
+
+  /// Records a confirmed pick: move-to-front, capped at [max]. Preset
+  /// colours are skipped — recording them would only duplicate the strip.
+  static Future<void> add(Color color) async {
+    if (kColorPickerPresets.any((p) => p.toARGB32() == color.toARGB32())) {
+      return;
+    }
+    final list = List<Color>.of(await load())
+      ..removeWhere((c) => c.toARGB32() == color.toARGB32())
+      ..insert(0, color);
+    if (list.length > max) list.removeRange(max, list.length);
+    _cache = list;
+    try {
+      await SharedPreferencesAsync().setStringList(
+        prefsKey,
+        [for (final c in list) c.toARGB32().toRadixString(16)],
+      );
+    } catch (_) {
+      // The in-memory copy still works for this session; Done is called
+      // fire-and-forget, so a throw here would surface as an unhandled
+      // async error over nothing.
+    }
+  }
+
+  /// Test seam: forget the in-memory copy so the next [load] re-reads
+  /// whatever the (mocked) store holds.
+  @visibleForTesting
+  static void resetCache() => _cache = null;
+}
 
 /// The one colour picker.
 ///
@@ -105,18 +194,13 @@ Future<Color?> showColorPickerDialog({
     subtitle: subtitle,
     icon: Icons.palette,
     width: 420,
-    builder: (_) => ColorPicker(
-      pickerColor: initialColor,
+    builder: (_) => _ColorPickerContent(
+      initialColor: initialColor,
       enableAlpha: enableAlpha,
-      // The HMI runs landscape, where the picker's side-by-side layout is
-      // ~640px wide — it overflows the 420px dialog. The stacked portrait
-      // layout fits at any orientation.
-      portraitOnly: true,
       onColorChanged: (c) {
         picked = c;
         onChanged?.call(c);
       },
-      pickerAreaHeightPercent: 0.8,
     ),
     actionsBuilder: (dialogContext) => [
       if (onCleared != null)
@@ -130,8 +214,118 @@ Future<Color?> showColorPickerDialog({
         ),
       PaneAction.primary(
         label: 'Done',
-        onPressed: () => Navigator.of(dialogContext).pop(picked),
+        onPressed: () {
+          // Fire-and-forget: the recents strip is a convenience, and a
+          // failed preferences write must not hold the dialog open.
+          RecentColors.add(picked);
+          Navigator.of(dialogContext).pop(picked);
+        },
       ),
     ],
   );
+}
+
+/// Quick-pick strip (recents + presets) over the full HSV picker.
+///
+/// Tapping a swatch is a full selection — it streams through [onColorChanged]
+/// like a drag would, and the HSV picker below jumps to it (its
+/// `didUpdateWidget` re-syncs from `pickerColor`), so a preset can still be
+/// tweaked before Done.
+class _ColorPickerContent extends StatefulWidget {
+  final Color initialColor;
+  final bool enableAlpha;
+  final ValueChanged<Color> onColorChanged;
+
+  const _ColorPickerContent({
+    required this.initialColor,
+    required this.enableAlpha,
+    required this.onColorChanged,
+  });
+
+  @override
+  State<_ColorPickerContent> createState() => _ColorPickerContentState();
+}
+
+class _ColorPickerContentState extends State<_ColorPickerContent> {
+  late Color _current = widget.initialColor;
+  List<Color> _recents = RecentColors._cache ?? const [];
+
+  @override
+  void initState() {
+    super.initState();
+    // Usually a no-op thanks to the cache; first dialog after launch loads
+    // from disk and the strip appears a frame later.
+    RecentColors.load().then((r) {
+      if (mounted && r.isNotEmpty) setState(() => _recents = r);
+    });
+  }
+
+  void _select(Color c) {
+    setState(() => _current = c);
+    widget.onColorChanged(c);
+  }
+
+  Widget _swatch(Color c) {
+    final selected = c.toARGB32() == _current.toARGB32();
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: () => _select(c),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: c,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: selected ? scheme.primary : scheme.outline,
+            width: selected ? 2.5 : 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final labelStyle = Theme.of(context).textTheme.labelSmall;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_recents.isNotEmpty) ...[
+          Text('Recent', style: labelStyle),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [for (final c in _recents) _swatch(c)],
+          ),
+          const SizedBox(height: 8),
+        ],
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [for (final c in kColorPickerPresets) _swatch(c)],
+        ),
+        const SizedBox(height: 8),
+        ColorPicker(
+          pickerColor: _current,
+          enableAlpha: widget.enableAlpha,
+          // The HMI runs landscape, where the picker's side-by-side layout
+          // is ~640px wide — it overflows the 420px dialog. The stacked
+          // portrait layout fits at any orientation.
+          portraitOnly: true,
+          onColorChanged: (c) {
+            // No setState: the picker paints its own drag feedback, and a
+            // rebuild here would fight it. _current still tracks the value
+            // so the strip's selection ring is right on the next rebuild.
+            _current = c;
+            widget.onColorChanged(c);
+          },
+          pickerAreaHeightPercent: 0.8,
+        ),
+      ],
+    );
+  }
 }
