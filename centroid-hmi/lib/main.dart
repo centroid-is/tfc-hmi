@@ -211,6 +211,11 @@ Future<void> _startApp([bool debugMode = false]) async {
     ),
   );
 
+  // Everything is registered; now put the top level — built-ins included — in
+  // the order arranged in the page editor. No stored order leaves the
+  // registration order above untouched.
+  pageManager.sortTopLevel(registry.menuItems);
+
   final locationBuilder = createLocationBuilder(extraMenuItems);
 
   final upgrader = Upgrader(
