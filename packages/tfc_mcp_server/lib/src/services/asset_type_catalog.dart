@@ -619,6 +619,29 @@ class AssetTypeCatalog {
       properties: [],
     ),
     AssetTypeInfo(
+      assetName: 'AlarmVisibilityConfig',
+      displayName: 'Alarm',
+      category: 'Visualization',
+      description:
+          'A beacon placed where an alarm condition physically lives on '
+          'the mimic. Pulses expanding rings in the linked alarm\'s own '
+          'colours (highest active level wins); tapping opens the alarm '
+          'details and acknowledge button in the side pane. Idle it '
+          'renders nothing unless the idle marker is enabled.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'alarm_uids',
+            type: 'List<String>',
+            description: 'Uids of the AlarmMan alarm configs this beacon '
+                'represents. Empty means it reacts to every alarm.'),
+        AssetPropertyInfo(
+            name: 'show_when_inactive',
+            type: 'bool',
+            description: 'Show a faint tappable marker at runtime while no '
+                'bound alarm is active (default off: invisible when idle)'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'GraphAssetConfig',
       displayName: 'Graph',
       category: 'Visualization',

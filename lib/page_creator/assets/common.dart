@@ -282,6 +282,28 @@ abstract class BaseAsset implements Asset {
   }
 }
 
+/// Marks a subtree as living on the page-editor canvas.
+///
+/// `AssetStack` (in `lib/pages/page_view.dart`) wraps asset builds in this
+/// scope when it runs in editor mode (`absorb: true`). Assets whose runtime
+/// rendering can be invisible (e.g. an alarm beacon with no active alarm)
+/// check [isEditing] to draw a placeholder so they stay findable and
+/// selectable in the editor.
+///
+/// Lives here rather than in `page_view.dart` so assets can depend on it
+/// without importing the page machinery (which imports the asset registry —
+/// an import cycle).
+class AssetEditModeScope extends InheritedWidget {
+  const AssetEditModeScope({super.key, required super.child});
+
+  /// Whether [context] is inside the page editor's canvas.
+  static bool isEditing(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<AssetEditModeScope>() != null;
+
+  @override
+  bool updateShouldNotify(AssetEditModeScope oldWidget) => false;
+}
+
 class KeyField extends ConsumerStatefulWidget {
   final String? initialValue;
   final ValueChanged<String>? onChanged;
