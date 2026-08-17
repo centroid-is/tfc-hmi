@@ -1594,6 +1594,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                 _openConfigPane(asset);
                               }
                             },
+                            // The pointer-first route to the config pane; the
+                            // right-click menu's "Edit" stays as the
+                            // discoverable one. A double tap swallows both of
+                            // its single taps, so selection has to happen
+                            // here too — plainly, since reaching for a double
+                            // click says "just this one".
+                            onDoubleTap: (asset) {
+                              setState(() => _selectedAssets = {asset});
+                              if (!identical(_configAsset, asset)) {
+                                _openConfigPane(asset);
+                              }
+                            },
                             onPanUpdate: (asset, details) {
                               _moveAsset(asset, details, constraints);
                             },
