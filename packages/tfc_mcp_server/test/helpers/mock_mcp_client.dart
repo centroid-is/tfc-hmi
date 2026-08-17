@@ -115,6 +115,10 @@ class MockMcpClient {
     return MockMcpClient._(client, serverTransport, clientTransport);
   }
 
+  /// The capabilities the server advertised during the initialize handshake.
+  ServerCapabilities? get serverCapabilities =>
+      _client.getServerCapabilities();
+
   /// Call a tool registered on the server by name.
   Future<CallToolResult> callTool(
       String name, Map<String, dynamic> arguments) async {

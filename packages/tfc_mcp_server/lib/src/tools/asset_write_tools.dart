@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:mcp_dart/mcp_dart.dart';
 
 import '../safety/risk_gate.dart';
+import '../services/asset_type_catalog.dart';
 import '../services/proposal_service.dart';
 import 'tool_registry.dart';
 
@@ -16,30 +17,14 @@ String _slugify(String prefix, String title) {
   return '$prefix-$slug';
 }
 
-/// Valid asset_name values for AssetRegistry.parse. Each maps to a factory
-/// in registry.dart. The LLM must use one of these as `asset_type`.
-const List<String> kValidAssetTypes = [
-  'LEDConfig',
-  'ButtonConfig',
-  'NumberConfig',
-  'TextAssetConfig',
-  'IconConfig',
-  'DrawnBoxConfig',
-  'ArrowConfig',
-  'LEDColumnConfig',
-  'ConveyorConfig',
-  'ConveyorColorPaletteConfig',
-  'GraphAssetConfig',
-  'RatioNumberConfig',
-  'BpmConfig',
-  'RateValueConfig',
-  'AnalogBoxConfig',
-  'OptionVariableConfig',
-  'TableAssetConfig',
-  'StartStopPillButtonConfig',
-  'DrawingViewerConfig',
-  'GateStatusConfig',
-];
+/// Valid asset_name values for AssetRegistry.parse, derived from
+/// [AssetTypeCatalog] -- the package's single description of the asset
+/// types the Flutter-side registry can instantiate. The app-layer test
+/// test/mcp/asset_type_sync_test.dart fails when the catalog and
+/// AssetRegistry diverge.
+final List<String> kValidAssetTypes = List.unmodifiable(
+  AssetTypeCatalog.all.map((t) => t.assetName),
+);
 
 /// Registers the propose_asset MCP write tool.
 ///
