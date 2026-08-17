@@ -34,6 +34,7 @@ ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
           ThirdPartyEquipmentKind.multivac,
       runKey: json['runKey'] as String? ?? '',
       invertRunPolarity: json['invertRunPolarity'] as bool? ?? false,
+      statusKey: json['statusKey'] as String? ?? '',
       runningColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
           json['runningColor'], const ColorConverter().fromJson),
       stoppedColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
@@ -70,6 +71,7 @@ Map<String, dynamic> _$ThirdPartyEquipmentConfigToJson(
       'kind': _$ThirdPartyEquipmentKindEnumMap[instance.kind]!,
       'runKey': instance.runKey,
       'invertRunPolarity': instance.invertRunPolarity,
+      'statusKey': instance.statusKey,
       'runningColor': const ColorConverter().toJson(instance.runningColor),
       'stoppedColor': const ColorConverter().toJson(instance.stoppedColor),
       'outlineColor': const ColorConverter().toJson(instance.outlineColor),

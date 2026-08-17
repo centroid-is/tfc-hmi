@@ -1,6 +1,9 @@
+import 'dart:collection' show LinkedHashMap;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/page_creator/assets/number.dart';
@@ -253,6 +256,47 @@ void main() {
       expect(find.text('INSIDE THE BOX'), findsOneWidget);
     });
 
+    testWidgets('a SpeedBatcher pane carries the Status section with all '
+        'five diodes', (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        runKey: '',
+        statusKey: '',
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 500,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      // The section shows even unconfigured — a `—` key row and five unknown
+      // diodes tell the operator the feature exists; a silently absent
+      // section would not.
+      expect(find.text('STATUS'), findsOneWidget);
+      for (final bit in speedBatcherStatusBits) {
+        expect(find.text(bit.label), findsOneWidget,
+            reason: '${bit.member} must have its diode row.');
+      }
+    });
+
+    testWidgets('other kinds get no Status section', (tester) async {
+      final config = ThirdPartyEquipmentConfig(runKey: ''); // multivac
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 160,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      expect(find.text('STATUS'), findsNothing,
+          reason: 'Only the SpeedBatcher has a p_stat_* handshake struct.');
+    });
+
     testWidgets('the pane does not outlive the asset that opened it',
         (tester) async {
       final config = ThirdPartyEquipmentConfig(runKey: '');
@@ -385,6 +429,139 @@ void main() {
     });
   });
 
+  group('SpeedBatcher status diodes', () {
+    List<LEDPainter> diodePaintersOf(WidgetTester tester) => tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .where((c) => c.painter is LEDPainter)
+        .map((c) => c.painter! as LEDPainter)
+        .toList();
+
+    testWidgets('each diode resolves its bit: on colour, off white, '
+        'missing unknown', (tester) async {
+      // Only Running and Cleaning confirmed present — BatchReady, DropOk and
+      // Dropped are absent from the struct, the way a PLC that does not
+      // expose them would hand it to us.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_Running': true,
+        'p_stat_Cleaning': false,
+      }));
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 320,
+        child: SpeedBatcherStatusDiodes(statusKey: 'SB1', status: status),
+      )));
+
+      final painters = diodePaintersOf(tester);
+      expect(painters, hasLength(speedBatcherStatusBits.length));
+      // Column order == speedBatcherStatusBits order.
+      expect(painters[0].color, Colors.green, reason: 'Running is true');
+      expect(painters[1].color, Colors.white, reason: 'Cleaning is false');
+      for (var i = 2; i < painters.length; i++) {
+        expect(painters[i].color, isNull,
+            reason: 'A bit the PLC does not expose must render unknown, '
+                'not off.');
+      }
+    });
+
+    testWidgets('Cleaning lights blue, matching the retired flat asset',
+        (tester) async {
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_Cleaning': true,
+      }));
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 320,
+        child: SpeedBatcherStatusDiodes(statusKey: 'SB1', status: status),
+      )));
+
+      expect(diodePaintersOf(tester)[1].color, Colors.blue);
+    });
+
+    testWidgets('an empty key shows as an em dash, not a blank', (tester) async {
+      await tester.pumpWidget(wrap(const SizedBox(
+        width: 320,
+        child: SpeedBatcherStatusDiodes(statusKey: '', status: null),
+      )));
+
+      expect(find.text('—'), findsOneWidget);
+    });
+  });
+
+  group('Status stream lifecycle', () {
+    testWidgets('a SpeedBatcher with a status key hoists the struct stream',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        statusKey: 'SB1',
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 500,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugStatusStream, isNotNull);
+    });
+
+    testWidgets('no status key — no stream', (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        statusKey: '',
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 500,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugStatusStream, isNull);
+    });
+
+    testWidgets('a leftover status key on another kind holds no subscription',
+        (tester) async {
+      // The editor hides the field for other kinds but the config keeps the
+      // string — a Multivac must not subscribe to a SpeedBatcher struct for
+      // a pane section it never shows.
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+        statusKey: 'SB1',
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 160,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugStatusStream, isNull);
+    });
+
+    testWidgets('changing the status key re-hoists; clearing it drops it',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        statusKey: 'SB1',
+      );
+      Widget build() => wrap(SizedBox(
+            width: 300,
+            height: 500,
+            child: ThirdPartyEquipment(config: config),
+          ));
+      await tester.pumpWidget(build());
+
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      final first = state.debugStatusStream;
+
+      config.statusKey = 'SB2';
+      await tester.pumpWidget(build());
+      expect(identical(state.debugStatusStream, first), isFalse);
+
+      config.statusKey = '';
+      await tester.pumpWidget(build());
+      expect(state.debugStatusStream, isNull);
+    });
+  });
+
   group('Config editor', () {
     testWidgets('kind dropdown lists every machine and switches the drawing',
         (tester) async {
@@ -439,6 +616,26 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Conveyor'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Sensor'), findsOneWidget);
       expect(find.text('Build checkweighers'), findsNothing);
+    });
+
+    testWidgets('the status struct key field is SpeedBatcher-only',
+        (tester) async {
+      final speedBatcher = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+      );
+      await tester.pumpWidget(wrap(
+        Builder(builder: (context) => speedBatcher.configure(context)),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('Status Struct Key'), findsOneWidget);
+
+      final multivac = ThirdPartyEquipmentConfig();
+      await tester.pumpWidget(wrap(
+        Builder(builder: (context) => multivac.configure(context)),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('Status Struct Key'), findsNothing,
+          reason: 'No other kind has the p_stat_* handshake struct.');
     });
   });
 }

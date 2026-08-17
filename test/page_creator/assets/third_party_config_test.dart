@@ -1,8 +1,10 @@
+import 'dart:collection' show LinkedHashMap;
 import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
@@ -141,6 +143,30 @@ void main() {
     test('runKey is discoverable through BaseAsset.allKeys', () {
       final config = ThirdPartyEquipmentConfig(runKey: 'ST301.MV01.Running');
       expect(config.allKeys, contains('ST301.MV01.Running'));
+    });
+
+    test('statusKey round-trips and is discoverable through allKeys', () {
+      final original = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        statusKey: 'SB1',
+      );
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>);
+      expect(restored.statusKey, 'SB1');
+      // Ends in "Key", so the BaseAsset introspection must pick it up — the
+      // key-discovery UI would otherwise never offer the handshake struct.
+      expect(restored.allKeys, contains('SB1'));
+    });
+
+    test('legacy JSON without statusKey loads with it empty', () {
+      final json = jsonDecode(jsonEncode(
+              ThirdPartyEquipmentConfig(kind: ThirdPartyEquipmentKind.speedBatcher)
+                  .toJson()))
+          as Map<String, dynamic>;
+      json.remove('statusKey');
+
+      expect(ThirdPartyEquipmentConfig.fromJson(json).statusKey, '');
     });
   });
 
@@ -628,6 +654,54 @@ void main() {
       // Deliberate: the make/model has not been identified yet. When it is,
       // this test should be updated along with the label and the painter.
       expect(ThirdPartyEquipmentKind.boxErector.label, contains('TODO'));
+    });
+  });
+
+  group('SpeedBatcher status bits', () {
+    test('the five diodes match the retired flat asset, in the same order',
+        () {
+      // Same members, labels and colours as speedbatcher.dart, so the pane
+      // reads identically to the widget the operators already know.
+      expect(speedBatcherStatusBits.map((b) => b.member), [
+        'p_stat_Running',
+        'p_stat_Cleaning',
+        'p_stat_BatchReady',
+        'p_stat_DropOk',
+        'p_stat_Dropped',
+      ]);
+      for (final bit in speedBatcherStatusBits) {
+        expect(bit.onColor.toARGB32(),
+            (bit.member == 'p_stat_Cleaning' ? Colors.blue : Colors.green)
+                .toARGB32());
+      }
+    });
+
+    test('a present bit reads through, true and false alike', () {
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_Running': true,
+        'p_stat_Cleaning': false,
+      }));
+      expect(speedBatcherStatusBitOf(status, 'p_stat_Running'), isTrue);
+      expect(speedBatcherStatusBitOf(status, 'p_stat_Cleaning'), isFalse);
+    });
+
+    test('a missing member degrades to unknown instead of throwing', () {
+      // Three of the five bits have never been confirmed against the live
+      // PLC, and `DynamicValue.operator[]` throws on a missing member — a
+      // struct without the bit must give the grey `!`, not take the pane
+      // down.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_Running': true,
+      }));
+      expect(speedBatcherStatusBitOf(status, 'p_stat_BatchReady'), isNull);
+    });
+
+    test('no struct at all — or a non-struct value — is unknown', () {
+      expect(speedBatcherStatusBitOf(null, 'p_stat_Running'), isNull);
+      expect(
+          speedBatcherStatusBitOf(
+              DynamicValue(value: true), 'p_stat_Running'),
+          isNull);
     });
   });
 }

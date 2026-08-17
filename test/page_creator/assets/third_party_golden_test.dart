@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:collection' show LinkedHashMap;
 import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus, PaneSection;
+import 'package:tfc/widgets/panes/side_pane.dart' show SidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
@@ -249,6 +253,58 @@ void main() {
       );
 
 
+    });
+
+    // The SpeedBatcher side pane's Status section, every diode state at once:
+    // Running lit green, Cleaning lit blue, Batch ready off (white), and the
+    // two bits absent from the struct — the way a PLC that does not expose
+    // them hands it over — as the grey `!` unknown. This is the golden to
+    // judge the diode treatment by.
+    testWidgets('speedBatcher — status pane diodes', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_Running': true,
+        'p_stat_Cleaning': true,
+        'p_stat_BatchReady': false,
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 560,
+                child: Material(
+                  child: SidePane(
+                    title: 'SB-01',
+                    subtitle: 'Marel SpeedBatcher',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: SpeedBatcherStatusDiodes(
+                        statusKey: 'SB1',
+                        status: status,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_speedBatcher_status_pane.png'),
+      );
     });
 
     // The strapping line ships as SL-15-1, -2 and -3. Head count changes both
