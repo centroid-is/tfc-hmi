@@ -24,6 +24,7 @@ import 'package:tfc/page_creator/assets/image.dart';
 import 'package:tfc/page_creator/assets/image_store.dart';
 import 'package:tfc/providers/page_images.dart';
 
+import '../../helpers/golden_tolerance.dart';
 import '../../helpers/image_fixtures.dart';
 import '../../helpers/page_editor_harness.dart';
 
@@ -69,10 +70,34 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
-Future<void> _expectGolden(WidgetTester tester, String name) => expectLater(
+/// Goldens whose pixels come from a font or the SVG rasteriser drift more
+/// across Flutter versions than the CustomPaint drawings the suite-wide
+/// 0.01% tolerance was sized for: the icon glyphs moved 0.03–0.04% and the
+/// SVG's antialiased diagonal 1.0% between Flutter 3.41 and 3.44, with no
+/// change to the widget. A real regression on a 200x200 capture — a wrong
+/// colour, a missing quadrant, a dropped glyph — shifts tens of percent, so
+/// these still fail loudly.
+const double _glyphTolerance = 0.005;
+const double _vectorTolerance = 0.02;
+
+Future<void> _expectGolden(WidgetTester tester, String name,
+    {double? tolerance}) async {
+  final previous = goldenFileComparator;
+  if (tolerance != null && previous is LocalFileComparator) {
+    goldenFileComparator = TolerantGoldenComparator(
+      previous.basedir.resolve('image_golden_test.dart'),
+      tolerance: tolerance,
+    );
+  }
+  try {
+    await expectLater(
       find.byKey(_boundaryKey),
       matchesGoldenFile('goldens/image/$name.png'),
     );
+  } finally {
+    goldenFileComparator = previous;
+  }
+}
 
 void main() {
   group('Image asset golden tests',
@@ -121,13 +146,13 @@ void main() {
     testWidgets('placeholder before an image is chosen', (tester) async {
       final config = ImageConfig();
       await _pump(tester, store, Builder(builder: config.build));
-      await _expectGolden(tester, 'placeholder');
+      await _expectGolden(tester, 'placeholder', tolerance: _glyphTolerance);
     });
 
     testWidgets('broken glyph for a dangling id', (tester) async {
       final config = ImageConfig(imageId: 'feedfeedfeedfeedfeedfeed');
       await _pump(tester, store, Builder(builder: config.build));
-      await _expectGolden(tester, 'missing_bytes');
+      await _expectGolden(tester, 'missing_bytes', tolerance: _glyphTolerance);
     });
 
     for (final (name, bytes) in [
@@ -140,7 +165,8 @@ void main() {
           (tester) async {
         final config = await assetWith(bytes);
         await _pump(tester, store, Builder(builder: config.build));
-        await _expectGolden(tester, name);
+        await _expectGolden(tester, name,
+            tolerance: name == 'svg' ? _vectorTolerance : null);
       });
     }
 
@@ -228,7 +254,7 @@ void main() {
         ),
         size: const Size(80, 80),
       );
-      await _expectGolden(tester, 'palette_tile');
+      await _expectGolden(tester, 'palette_tile', tolerance: _glyphTolerance);
     });
   });
 }
