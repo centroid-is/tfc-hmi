@@ -27,6 +27,13 @@ class AssetUpdateResult {
 /// zero or several candidates both fail, leaving the page untouched, so a
 /// stale proposal can never silently patch the wrong asset.
 ///
+/// An `index` (position in the page's flat assets array, as returned by
+/// get_asset_detail) picks between candidates the semantic match cannot
+/// tell apart. It is a tie-breaker, never trusted alone: the asset at
+/// that position must still satisfy the semantic selector, so an index
+/// gone stale through insert/delete/reorder fails loudly instead of
+/// patching whatever slid into the slot.
+///
 /// The patch is a shallow merge onto the asset's JSON (its `asset_name`
 /// cannot be changed). With `child_id` set, the patch instead targets the
 /// child entry with that stable id inside the asset -- merging into the
@@ -55,6 +62,7 @@ AssetUpdateResult applyAssetUpdate(
   final title = target['title'] as String?;
   final key = target['key'] as String?;
   final childId = target['child_id'] as String?;
+  final targetIndex = target['index'] as int?;
 
   bool keyMatches(Asset a) {
     try {
@@ -78,16 +86,34 @@ AssetUpdateResult applyAssetUpdate(
     if (title != null) 'title "$title"',
     if (key != null) 'key "$key"',
   ].join(', ');
-  if (candidates.isEmpty) {
-    return AssetUpdateResult.failure('no asset matches $selector');
-  }
-  if (candidates.length > 1) {
-    return AssetUpdateResult.failure(
-        '${candidates.length} assets match $selector -- add title or key '
-        'to disambiguate');
-  }
 
-  final index = candidates.single;
+  final int index;
+  if (targetIndex != null) {
+    if (targetIndex < 0 || targetIndex >= assets.length) {
+      return AssetUpdateResult.failure(
+          'index $targetIndex is out of range (page has ${assets.length} '
+          'assets) -- the page may have changed since the proposal was made');
+    }
+    if (!candidates.contains(targetIndex)) {
+      final actual = assets[targetIndex];
+      return AssetUpdateResult.failure(
+          'asset at index $targetIndex is ${actual.runtimeType}'
+          '${actual.text != null ? ' "${actual.text}"' : ''}, which does not '
+          'match $selector -- the page may have changed since the proposal '
+          'was made');
+    }
+    index = targetIndex;
+  } else {
+    if (candidates.isEmpty) {
+      return AssetUpdateResult.failure('no asset matches $selector');
+    }
+    if (candidates.length > 1) {
+      return AssetUpdateResult.failure(
+          '${candidates.length} assets match $selector -- add title, key or '
+          'index to disambiguate');
+    }
+    index = candidates.single;
+  }
   final json = Map<String, dynamic>.from(assets[index].toJson());
   // The patch may not switch the asset to a different type.
   final cleanPatch = Map<String, dynamic>.from(patch)..remove(constAssetName);

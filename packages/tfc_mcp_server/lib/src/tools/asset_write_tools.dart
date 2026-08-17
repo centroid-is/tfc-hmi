@@ -187,6 +187,13 @@ void registerAssetWriteTools({
           description: 'Tag key currently bound to the target asset, to '
               'narrow the match',
         ),
+        'index': JsonSchema.integer(
+          description: 'Position of the target in the page\'s assets array '
+              '(as returned by get_asset_detail). Only needed when several '
+              'assets share the same type and title/key. Validated against '
+              'asset_type/title/key when applied -- a stale index fails '
+              'instead of patching the wrong asset.',
+        ),
         'child_id': JsonSchema.string(
           description: 'Stable id of a child entry inside the target '
               '(e.g. a ThirdPartyEquipment or Elevator child). When set, '
@@ -206,6 +213,7 @@ void registerAssetWriteTools({
       final assetType = args['asset_type'] as String;
       final title = args['title'] as String?;
       final key = args['key'] as String?;
+      final index = args['index'] as int?;
       final childId = args['child_id'] as String?;
       final patch = args['patch'];
 
@@ -237,6 +245,7 @@ void registerAssetWriteTools({
           'asset_type': assetType,
           if (title != null) 'title': title,
           if (key != null) 'key': key,
+          if (index != null) 'index': index,
           if (childId != null) 'child_id': childId,
         },
         'patch': patch,
@@ -248,6 +257,7 @@ void registerAssetWriteTools({
           assetType,
           if (title != null) 'title "$title"',
           if (key != null) 'key "$key"',
+          if (index != null) 'index $index',
           if (childId != null) 'child "$childId"',
         ].join(', '),
         for (final e in patch.entries) 'patch: ${e.key}': '${e.value}',

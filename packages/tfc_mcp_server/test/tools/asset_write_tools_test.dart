@@ -386,6 +386,7 @@ void main() {
         final result = await client.callTool('update_asset', {
           'page_key': '/',
           'asset_type': 'ThirdPartyEquipmentConfig',
+          'index': 3,
           'child_id': 'child-42',
           'patch': {'detectionKey': 'SB1.Infeed.PE'},
         });
@@ -395,6 +396,7 @@ void main() {
         final json = jsonDecode(text) as Map<String, dynamic>;
         final target = json['target'] as Map<String, dynamic>;
         expect(target['child_id'], equals('child-42'));
+        expect(target['index'], equals(3));
       });
 
       test('unknown asset_type is rejected', () async {

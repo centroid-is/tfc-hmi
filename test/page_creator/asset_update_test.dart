@@ -15,6 +15,7 @@ Map<String, dynamic> proposal({
   required String assetType,
   String? title,
   String? key,
+  int? index,
   String? childId,
   required Map<String, dynamic> patch,
 }) =>
@@ -25,6 +26,7 @@ Map<String, dynamic> proposal({
         'asset_type': assetType,
         if (title != null) 'title': title,
         if (key != null) 'key': key,
+        if (index != null) 'index': index,
         if (childId != null) 'child_id': childId,
       },
       'patch': patch,
@@ -114,6 +116,75 @@ void main() {
     expect(result.error, isNull);
     expect(result.updated!.runtimeType.toString(), 'LEDConfig');
     expect((result.updated! as dynamic).key, 'b');
+  });
+
+  group('index as a guarded tie-breaker', () {
+    test('picks between candidates the semantic match cannot tell apart', () {
+      final assets = [
+        makeAsset('LEDConfig', key: 'same', text: 'Pump'),
+        makeAsset('LEDConfig', key: 'same', text: 'Pump'),
+      ];
+
+      final result = applyAssetUpdate(
+        assets,
+        proposal(
+            assetType: 'LEDConfig',
+            title: 'Pump',
+            index: 1,
+            patch: {'key': 'new'}),
+      );
+
+      expect(result.error, isNull);
+      expect(result.index, 1);
+      expect((result.updated! as dynamic).key, 'new');
+    });
+
+    test('stale index pointing at another type fails loudly', () {
+      final assets = [
+        makeAsset('ButtonConfig', text: 'Start'),
+        makeAsset('LEDConfig', key: 'a', text: 'Pump'),
+      ];
+
+      final result = applyAssetUpdate(
+        assets,
+        proposal(assetType: 'LEDConfig', index: 0, patch: {'key': 'x'}),
+      );
+
+      expect(result.updated, isNull);
+      expect(result.error, contains('index 0 is ButtonConfig'));
+      expect(result.error, contains('page may have changed'));
+    });
+
+    test('index that fails the title guard fails loudly', () {
+      final assets = [
+        makeAsset('LEDConfig', key: 'a', text: 'Infeed'),
+        makeAsset('LEDConfig', key: 'b', text: 'Outfeed'),
+      ];
+
+      final result = applyAssetUpdate(
+        assets,
+        proposal(
+            assetType: 'LEDConfig',
+            title: 'Infeed',
+            index: 1,
+            patch: {'key': 'x'}),
+      );
+
+      expect(result.updated, isNull);
+      expect(result.error, contains('does not match'));
+    });
+
+    test('out-of-range index fails loudly', () {
+      final assets = [makeAsset('LEDConfig', key: 'a')];
+
+      final result = applyAssetUpdate(
+        assets,
+        proposal(assetType: 'LEDConfig', index: 5, patch: {'key': 'x'}),
+      );
+
+      expect(result.updated, isNull);
+      expect(result.error, contains('out of range'));
+    });
   });
 
   group('child_id targeting', () {
