@@ -107,6 +107,14 @@ abstract class Asset {
   /// to override this getter (currently only `ButtonConfig.textColor`).
   Color? get labelColor;
 
+  /// Extra terms the palette's search box matches besides [displayName].
+  ///
+  /// An asset that stands for several concrete things (the 3rd-party
+  /// equipment asset covers the Multivac, the SpeedBatcher, …) lists them
+  /// here so an operator searching for the machine they can see on the
+  /// floor still finds the tile.
+  List<String> get searchKeywords;
+
   Widget build(BuildContext context);
   Widget configure(BuildContext context);
   Map<String, dynamic> toJson();
@@ -131,6 +139,12 @@ abstract class BaseAsset implements Asset {
 
   @override
   String get category => 'General';
+
+  // Excluded like `allKeys`: getters serialize by default and this is
+  // palette metadata, not page state.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<String> get searchKeywords => const [];
 
   static String _humanize(String typeName) {
     String name = typeName;

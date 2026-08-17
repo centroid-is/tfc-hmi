@@ -107,8 +107,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
   /// to right.
   ///
   /// Sizing an asset well away from its kind's ratio squashes the layout — the
-  /// Multivac especially, at 5.4:1. Used for the editor preview and for the
-  /// "match proportions" button.
+  /// Multivac especially, at 5.4:1. Used for the editor preview.
   double aspectRatio({int strapMachines = 3}) {
     switch (this) {
       case ThirdPartyEquipmentKind.multivac:
@@ -248,6 +247,18 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
 
   @override
   String get category => 'Third Party';
+
+  /// Every kind's label, so searching for the machine on the floor —
+  /// "multivac", "speedbatcher", "afak" — surfaces this tile even though the
+  /// palette shows the umbrella name. "vodlari" is listed on top of the label
+  /// because the label spells it with the Icelandic characters a search box
+  /// won't get.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<String> get searchKeywords => [
+        for (final kind in ThirdPartyEquipmentKind.values) kind.label,
+        'vodlari',
+      ];
 
   /// Which machine this asset represents.
   @JsonKey(unknownEnumValue: ThirdPartyEquipmentKind.multivac)
@@ -1014,18 +1025,6 @@ class _ThirdPartyEquipmentConfigEditorState
   late TextEditingController _tagController;
   late TextEditingController _notesController;
 
-  /// Bumped only by the "match proportions" button, and used as the
-  /// `SizeField` key.
-  ///
-  /// `SizeField` seeds its text controllers in `initState` and never resyncs
-  /// them, so writing `config.size` from outside would leave a stale height in
-  /// the box — and the operator's next keystroke in either field would push
-  /// that stale value straight back over the computed one. Changing the key
-  /// remounts the field against the new size. It must NOT be derived from
-  /// `config.size` itself: typing in the field also changes the size, and
-  /// remounting mid-keystroke would reset the cursor.
-  int _sizeFieldEpoch = 0;
-
   @override
   void initState() {
     super.initState();
@@ -1260,36 +1259,8 @@ class _ThirdPartyEquipmentConfigEditorState
             const SizedBox(height: 16),
 
             SizeField(
-              key: ValueKey(_sizeFieldEpoch),
               initialValue: config.size,
               onChanged: (v) => setState(() => config.size = v),
-            ),
-            const SizedBox(height: 8),
-            // The four kinds range from 1.15:1 to 5.4:1 in plan, so a size
-            // that suits one squashes another. This keeps the width and
-            // solves for the height that reproduces the real footprint on
-            // screen.
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                icon: const Icon(Icons.aspect_ratio, size: 18),
-                label: Text('Match ${config.kind.label} proportions'),
-                onPressed: () {
-                  final screen = MediaQuery.of(context).size;
-                  final aspect = config.kind
-                      .aspectRatio(strapMachines: config.strapMachines);
-                  final height = config.size.width *
-                      screen.width /
-                      (aspect * screen.height);
-                  setState(() {
-                    config.size = RelativeSize(
-                      width: config.size.width,
-                      height: height,
-                    );
-                    _sizeFieldEpoch++;
-                  });
-                },
-              ),
             ),
             const SizedBox(height: 16),
 
