@@ -2315,14 +2315,19 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _stateSubscription;
 
+  /// False until the user touches the password field. While false the stored
+  /// password is passed through untouched on save, so the field can stay
+  /// blank — pre-filling an obscured field would count out the password's
+  /// length in dots to anyone glancing at the screen.
+  bool _passwordEdited = false;
+
   @override
   void initState() {
     super.initState();
     _endpointController = TextEditingController(text: widget.server.endpoint);
     _usernameController =
         TextEditingController(text: widget.server.username ?? '');
-    _passwordController =
-        TextEditingController(text: widget.server.password ?? '');
+    _passwordController = TextEditingController();
     _serverAliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
     _connectionStatus = widget.connectionStatus;
@@ -2360,8 +2365,9 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
       ..endpoint = _endpointController.text
       ..username =
           _usernameController.text.isEmpty ? null : _usernameController.text
-      ..password =
-          _passwordController.text.isEmpty ? null : _passwordController.text
+      ..password = _passwordEdited
+          ? (_passwordController.text.isEmpty ? null : _passwordController.text)
+          : widget.server.password
       ..serverAlias = _serverAliasController.text.isEmpty
           ? null
           : _serverAliasController.text
@@ -2464,6 +2470,42 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
 
   String? uint8ListToString(Uint8List? ls) {
     return ls != null ? String.fromCharCodes(ls) : null;
+  }
+
+  /// The stored password never enters the field; a saved one is signalled by
+  /// a fixed-width hint so the dot count says nothing about its length.
+  Widget _passwordField() {
+    final hasSaved =
+        !_passwordEdited && (widget.server.password?.isNotEmpty ?? false);
+    return TextField(
+      controller: _passwordController,
+      decoration: InputDecoration(
+        labelText: 'Password (optional)',
+        prefixIcon: const FaIcon(FontAwesomeIcons.lock, size: 16),
+        hintText: hasSaved ? '••••••••' : null,
+        helperText: hasSaved ? 'Saved — leave blank to keep it' : null,
+        // Floats the label off the empty field so the hint dots above are
+        // what reads as the field's content.
+        floatingLabelBehavior:
+            hasSaved ? FloatingLabelBehavior.always : FloatingLabelBehavior.auto,
+        suffixIcon: hasSaved
+            ? IconButton(
+                tooltip: 'Remove password',
+                icon: const FaIcon(FontAwesomeIcons.xmark, size: 16),
+                onPressed: () {
+                  setState(() => _passwordEdited = true);
+                  _passwordController.clear();
+                  _updateServer();
+                },
+              )
+            : null,
+      ),
+      obscureText: true,
+      onChanged: (_) {
+        if (!_passwordEdited) setState(() => _passwordEdited = true);
+        _updateServer();
+      },
+    );
   }
 
   @override
@@ -2571,16 +2613,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                             onChanged: (_) => _updateServer(),
                           ),
                           const SizedBox(height: 12),
-                          TextField(
-                            controller: _passwordController,
-                            decoration: const InputDecoration(
-                              labelText: 'Password (optional)',
-                              prefixIcon:
-                                  FaIcon(FontAwesomeIcons.lock, size: 16),
-                            ),
-                            obscureText: true,
-                            onChanged: (_) => _updateServer(),
-                          ),
+                          _passwordField(),
                         ],
                       );
                     }
@@ -2598,18 +2631,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                           ),
                         ),
                         const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _passwordController,
-                            decoration: const InputDecoration(
-                              labelText: 'Password (optional)',
-                              prefixIcon:
-                                  FaIcon(FontAwesomeIcons.lock, size: 16),
-                            ),
-                            obscureText: true,
-                            onChanged: (_) => _updateServer(),
-                          ),
-                        ),
+                        Expanded(child: _passwordField()),
                       ],
                     );
                   },
