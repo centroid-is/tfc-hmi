@@ -416,4 +416,67 @@ void main() {
     await client.close();
     server.mcpServer.close();
   });
+
+  // ── update_asset E2E ──────────────────────────────────────────────────
+
+  test('MCP update_asset tool → DB proposal → ProposalWatcher detects',
+      () async {
+    final env = {'TFC_USER': 'test-operator'};
+    final identity = EnvOperatorIdentity(environmentProvider: () => env);
+
+    final server = TfcMcpServer(
+      identity: identity,
+      database: db,
+      stateReader: _EmptyStateReader(),
+      alarmReader: _EmptyAlarmReader(),
+      toggles: const McpToolToggles(proposalsEnabled: true),
+    );
+
+    final client = await _connectClient(server.mcpServer);
+
+    final result = await client.callTool(CallToolRequest(
+      name: 'update_asset',
+      arguments: {
+        'page_key': '/',
+        'asset_type': 'ThirdPartyEquipmentConfig',
+        'title': 'SpeedBatcher',
+        'patch': {'runKey': 'SB1.Running'},
+      },
+    ));
+
+    final text = result.content
+        .whereType<TextContent>()
+        .map((c) => c.text)
+        .join();
+    final proposal = jsonDecode(text) as Map<String, dynamic>;
+    expect(proposal['_proposal_type'], 'asset_update');
+    expect(proposal['page_key'], '/');
+    expect((proposal['target'] as Map)['asset_type'],
+        'ThirdPartyEquipmentConfig');
+    expect((proposal['patch'] as Map)['runKey'], 'SB1.Running');
+
+    // Wait for async DB write from ProposalService
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
+    final rows = await db.customSelect('SELECT * FROM mcp_proposal').get();
+    expect(rows, hasLength(1));
+    expect(rows.first.read<String>('proposal_type'), 'asset_update');
+    expect(rows.first.read<String>('title'), 'Update SpeedBatcher');
+    expect(rows.first.read<String>('status'), 'pending');
+
+    // Flutter side: ProposalWatcher detects and routes to the page editor
+    final watcher = ProposalWatcher(db);
+    addTearDown(watcher.dispose);
+
+    await Future<void>.delayed(const Duration(seconds: 4));
+
+    expect(watcher.pending, hasLength(1));
+    expect(watcher.pending.first.proposalType, 'asset_update');
+    expect(watcher.pending.first.editorRoute, '/advanced/page-editor');
+    expect(watcher.pending.first.editorLabel, 'Page Editor');
+
+    // Cleanup
+    await client.close();
+    server.mcpServer.close();
+  });
 }

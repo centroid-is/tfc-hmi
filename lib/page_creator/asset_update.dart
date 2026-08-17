@@ -1,0 +1,132 @@
+import 'assets/common.dart';
+import 'assets/registry.dart';
+
+/// Outcome of applying an `asset_update` MCP proposal to a page's assets.
+///
+/// Either [updated]/[index] identify the replacement asset, or [error]
+/// says why nothing was changed. Never both.
+class AssetUpdateResult {
+  final Asset? updated;
+  final int index;
+  final String? error;
+
+  const AssetUpdateResult.success(Asset this.updated, this.index)
+      : error = null;
+  const AssetUpdateResult.failure(String this.error)
+      : updated = null,
+        index = -1;
+}
+
+/// Resolves an `asset_update` proposal against [assets] and produces the
+/// patched replacement.
+///
+/// The target is matched semantically at apply time -- by `asset_type`,
+/// narrowed by `title` (the asset's display text) and/or `key` (its bound
+/// tag key) when given -- so a proposal stays valid when the page is
+/// reordered between proposing and applying. The match must be unique:
+/// zero or several candidates both fail, leaving the page untouched, so a
+/// stale proposal can never silently patch the wrong asset.
+///
+/// The patch is a shallow merge onto the asset's JSON (its `asset_name`
+/// cannot be changed). With `child_id` set, the patch instead targets the
+/// child entry with that stable id inside the asset -- merging into the
+/// entry's embedded `child` asset when it has one (ThirdPartyEquipment,
+/// Elevator), or the entry itself otherwise.
+///
+/// The caller is responsible for storing [AssetUpdateResult.updated] back
+/// at [AssetUpdateResult.index]; this function does not mutate [assets].
+AssetUpdateResult applyAssetUpdate(
+  List<Asset> assets,
+  Map<String, dynamic> proposal,
+) {
+  final target = proposal['target'];
+  final patch = proposal['patch'];
+  if (target is! Map<String, dynamic>) {
+    return const AssetUpdateResult.failure('proposal has no target object');
+  }
+  if (patch is! Map<String, dynamic> || patch.isEmpty) {
+    return const AssetUpdateResult.failure('proposal has no patch fields');
+  }
+
+  final assetType = target['asset_type'] as String?;
+  if (assetType == null) {
+    return const AssetUpdateResult.failure('target has no asset_type');
+  }
+  final title = target['title'] as String?;
+  final key = target['key'] as String?;
+  final childId = target['child_id'] as String?;
+
+  bool keyMatches(Asset a) {
+    try {
+      return (a as dynamic).key == key;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  final candidates = <int>[];
+  for (var i = 0; i < assets.length; i++) {
+    final a = assets[i];
+    if (a.runtimeType.toString() != assetType) continue;
+    if (title != null && a.text != title) continue;
+    if (key != null && !keyMatches(a)) continue;
+    candidates.add(i);
+  }
+
+  final selector = [
+    assetType,
+    if (title != null) 'title "$title"',
+    if (key != null) 'key "$key"',
+  ].join(', ');
+  if (candidates.isEmpty) {
+    return AssetUpdateResult.failure('no asset matches $selector');
+  }
+  if (candidates.length > 1) {
+    return AssetUpdateResult.failure(
+        '${candidates.length} assets match $selector -- add title or key '
+        'to disambiguate');
+  }
+
+  final index = candidates.single;
+  final json = Map<String, dynamic>.from(assets[index].toJson());
+  // The patch may not switch the asset to a different type.
+  final cleanPatch = Map<String, dynamic>.from(patch)..remove(constAssetName);
+
+  if (childId != null) {
+    final children = json['children'];
+    if (children is! List) {
+      return AssetUpdateResult.failure(
+          '$assetType has no children to match child_id "$childId"');
+    }
+    var found = false;
+    final newChildren = children.map((c) {
+      if (c is! Map<String, dynamic> || c['id'] != childId) return c;
+      found = true;
+      final childAsset = c['child'];
+      if (childAsset is Map<String, dynamic>) {
+        return {...c, 'child': {...childAsset, ...cleanPatch}};
+      }
+      return {...c, ...cleanPatch};
+    }).toList();
+    if (!found) {
+      return AssetUpdateResult.failure(
+          'no child with id "$childId" in $selector');
+    }
+    json['children'] = newChildren;
+  } else {
+    json.addAll(cleanPatch);
+  }
+  json[constAssetName] = assetType;
+
+  try {
+    final parsed = AssetRegistry.parse({'assets': [json]});
+    if (parsed.length != 1) {
+      return AssetUpdateResult.failure(
+          'patched JSON no longer parses as a $assetType');
+    }
+    return AssetUpdateResult.success(parsed.single, index);
+  } catch (e) {
+    return AssetUpdateResult.failure(
+        'patched JSON no longer parses as a $assetType: $e');
+  }
+}

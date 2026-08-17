@@ -207,6 +207,8 @@ void main() {
       expect(make('page').editorRoute, '/advanced/page-editor');
       expect(make('asset').editorLabel, 'Page Editor');
       expect(make('asset').editorRoute, '/advanced/page-editor');
+      expect(make('asset_update').editorLabel, 'Page Editor');
+      expect(make('asset_update').editorRoute, '/advanced/page-editor');
       expect(make('unknown').editorLabel, 'Editor');
       expect(make('unknown').editorRoute, isNull);
     });

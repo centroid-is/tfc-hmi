@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/page_manager.dart';
+import '../page_creator/asset_update.dart';
 import '../page_creator/assets/common.dart';
 import '../page_creator/assets/editor_clipboard.dart';
 import '../page_creator/assets/image.dart';
@@ -663,6 +664,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _applyPageProposal(proposal);
       } else if (type == 'asset') {
         _applyAssetProposal(proposal);
+      } else if (type == 'asset_update') {
+        _applyUpdateProposal(proposal);
       }
     } catch (_) {
       // Best-effort: if proposal JSON is malformed, ignore it.
@@ -832,6 +835,34 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     _isProposal = true;
     _proposalTitle = title;
+  }
+
+  void _applyUpdateProposal(Map<String, dynamic> proposal) {
+    final targetPage = proposal['page_key'] as String? ?? _currentPage;
+    final page = targetPage == null ? null : _temporaryPages[targetPage];
+    final result = page == null
+        ? const AssetUpdateResult.failure('page not found')
+        : applyAssetUpdate(page.assets, proposal);
+
+    final updated = result.updated;
+    if (page == null || updated == null) {
+      // The page is left untouched -- tell the operator why instead of
+      // silently showing an editor with no diff.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('AI update proposal not applied: '
+              '${result.error}')),
+        );
+      });
+      return;
+    }
+
+    page.assets[result.index] = updated;
+    _currentPage = targetPage;
+    _isProposal = true;
+    _proposalTitle = updated.text ?? updated.runtimeType.toString();
+    _proposedAssets = {updated};
   }
 
   void _updateCurrentJson() {

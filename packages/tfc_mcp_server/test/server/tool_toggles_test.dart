@@ -218,18 +218,18 @@ void main() {
       );
     }
 
-    test('allEnabled registers 22 tools (16 read + 6 write)', () async {
+    test('allEnabled registers 23 tools (16 read + 7 write)', () async {
       final server = createServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
         final tools = await client.listTools();
-        expect(tools, hasLength(22));
+        expect(tools, hasLength(23));
       } finally {
         await client.close();
       }
     });
 
-    test('tagsEnabled=false registers 19 tools', () async {
+    test('tagsEnabled=false registers 20 tools', () async {
       final server = createServer(
         toggles: const McpToolToggles(tagsEnabled: false),
       );
@@ -237,7 +237,7 @@ void main() {
       try {
         final tools = await client.listTools();
         final names = tools.map((t) => t.name).toSet();
-        expect(tools, hasLength(19));
+        expect(tools, hasLength(20));
         expect(names, isNot(contains('list_tags')));
         expect(names, isNot(contains('get_tag_value')));
       } finally {
@@ -245,7 +245,7 @@ void main() {
       }
     });
 
-    test('alarmsEnabled=false registers 16 tools', () async {
+    test('alarmsEnabled=false registers 17 tools', () async {
       final server = createServer(
         toggles: const McpToolToggles(alarmsEnabled: false),
       );
@@ -257,8 +257,8 @@ void main() {
         // query_alarm_history (3 alarm read tools), diagnose_asset (needs
         // both tagsEnabled && alarmsEnabled), create_alarm, update_alarm
         // (write tools gated by alarmsEnabled inside proposalsEnabled block).
-        // 22 total - 6 = 16.
-        expect(tools, hasLength(16));
+        // 23 total - 6 = 17.
+        expect(tools, hasLength(17));
         expect(names, isNot(contains('list_alarms')));
         expect(names, isNot(contains('get_alarm_detail')));
         expect(names, isNot(contains('query_alarm_history')));
@@ -285,6 +285,7 @@ void main() {
         expect(names, isNot(contains('update_key_mapping')));
         expect(names, isNot(contains('propose_page')));
         expect(names, isNot(contains('propose_asset')));
+        expect(names, isNot(contains('update_asset')));
       } finally {
         await client.close();
       }
@@ -305,8 +306,8 @@ void main() {
         // Config-dependent write tools removed (4): create_alarm, update_alarm
         // (need configEnabled for update_alarm's lookup), create_key_mapping,
         // update_key_mapping.
-        // 22 total - 10 = 12.
-        expect(tools, hasLength(12));
+        // 23 total - 10 = 13.
+        expect(tools, hasLength(13));
         expect(names, isNot(contains('list_pages')));
         expect(names, isNot(contains('list_assets')));
         expect(names, isNot(contains('get_asset_detail')));
