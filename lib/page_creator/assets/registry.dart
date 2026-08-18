@@ -30,6 +30,7 @@ import 'speedbatcher.dart';
 import 'conveyor_gate.dart';
 import 'elevator.dart';
 import 'sensor.dart';
+import '../../core/feature_flags.dart';
 import 'drawing_viewer.dart';
 import 'third_party.dart';
 
@@ -127,7 +128,10 @@ class AssetRegistry {
     RecipesConfig: RecipesConfig.preview,
     SpeedBatcherConfig: SpeedBatcherConfig.preview,
     GateStatusConfig: GateStatusConfig.preview,
-    DrawingViewerConfig: DrawingViewerConfig.preview,
+    // Palette entry only — the fromJson factory above stays registered
+    // regardless of the flag so saved pages containing a DrawingViewer
+    // round-trip instead of silently losing the asset on the next save.
+    if (kKnowledgeEnabled) DrawingViewerConfig: DrawingViewerConfig.preview,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.preview,
   };
 
@@ -167,6 +171,13 @@ class AssetRegistry {
               }
             }
           }
+          // A key under constAssetName that matched no registered factory:
+          // the entry will be dropped on the next save. Warn loudly — this
+          // is how assets from a build with more features (or a newer
+          // version) silently disappear.
+          _log.w('Unrecognized asset type "$assetName" in page config — '
+              'it will not render and will be dropped if the page is '
+              're-saved by this build.');
         }
         // If not an asset, crawl deeper
         _log.t('No asset found, crawling deeper');

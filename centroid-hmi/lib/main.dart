@@ -146,7 +146,10 @@ Future<void> _startApp([bool debugMode = false]) async {
         'CENTROID_OPCUA_LOG_LEVEL=${Platform.environment['CENTROID_OPCUA_LOG_LEVEL'] ?? 'unset'}');
   }
 
-  pdfrxFlutterInitialize();
+  if (kKnowledgeEnabled) {
+    // pdfium is only used by the tech-doc/drawing viewers.
+    pdfrxFlutterInitialize();
+  }
   AmplifySecureStorageDart.registerWith();
   if (Platform.isWindows || Platform.isMacOS) {
     // Use the properly branded flutter_secure_storage implementation on
@@ -216,7 +219,8 @@ Future<void> _startApp([bool debugMode = false]) async {
         MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
         MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server.data),
         MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
-        MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
+        if (kKnowledgeEnabled)
+          MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
       ],
     ),
   );
@@ -360,11 +364,19 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         key: const ValueKey('/advanced/key-repository'),
         title: 'Key Repository',
         child: KeyRepositoryPage(proposalData: args is String ? args : null)),
-    '/advanced/knowledge-base': (context, state, args) => BeamPage(
-        key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage()),
     AppRoutes.alarmView: (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
   };
+
+  // Statement-level const guard rather than a collection-if inside the map
+  // literal: AOT tree-shaking reliably folds the former, so a flag-off
+  // build drops TechDocLibraryPage and everything it pulls in.
+  if (kKnowledgeEnabled) {
+    routes['/advanced/knowledge-base'] = (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/knowledge-base'),
+        title: 'Knowledge Base',
+        child: const TechDocLibraryPage());
+  }
 
   addRoute(MenuItem menuItem) {
     // Register route for this item if it has a non-empty path
@@ -482,7 +494,7 @@ class MyApp extends ConsumerWidget {
       builder: (context, navigatorChild) {
         return Consumer(
           builder: (context, ref, _) {
-            final drawingVisible = ref.watch(drawingVisibleProvider);
+            final drawingVisible = kKnowledgeEnabled && ref.watch(drawingVisibleProvider);
             final chatVisible = kChatEnabled && ref.watch(chatVisibleProvider);
             // Use select() to only rebuild when the SSE server running
             // state or port changes, NOT on every McpBridgeNotifier
@@ -511,7 +523,7 @@ class MyApp extends ConsumerWidget {
               children: [
                 navigatorChild!, // existing HMI content
                 const ProposalBanner(),
-                if (drawingVisible) const DrawingOverlay(),
+                if (kKnowledgeEnabled && drawingVisible) const DrawingOverlay(),
                 if (kChatEnabled && chatEnabled && chatVisible) const ChatOverlay(),
                 // Chat FAB and MCP indicator — hidden when a nav
                 // dropdown popup is open so the FAB does not render

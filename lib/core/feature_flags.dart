@@ -16,3 +16,18 @@ library;
 /// by this flag — external MCP agents and operator proposal approval keep
 /// working when chat is off.
 const bool kChatEnabled = bool.fromEnvironment('TFC_CHAT', defaultValue: true);
+
+/// Whether the knowledge features are compiled into the app: the Knowledge
+/// Base page (tech-doc library + PLC code browsing), the drawings overlay,
+/// the DrawingViewer page asset's palette entry, and the tech-doc picker in
+/// the page editor.
+///
+/// Deliberately NOT gated: the `DrawingViewerConfig` JSON deserializer (a
+/// flag-off build must round-trip saved pages without silently dropping the
+/// asset), the `techDocId`/`plcAssetKey` fields on `BaseAsset` (stable
+/// serialization contract in both build modes), and the database schema and
+/// MCP-side indexes, which other MCP tools keep using. Note that `pdfrx` is
+/// a native plugin registered from the pubspec, so its native library still
+/// ships in flag-off builds — only the Dart code is tree-shaken.
+const bool kKnowledgeEnabled =
+    bool.fromEnvironment('TFC_KNOWLEDGE', defaultValue: true);

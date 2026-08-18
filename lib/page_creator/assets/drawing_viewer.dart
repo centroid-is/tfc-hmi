@@ -4,6 +4,7 @@ import 'package:json_annotation/json_annotation.dart';
 
 import 'package:tfc/page_creator/assets/button.dart';
 import 'package:tfc/page_creator/assets/common.dart';
+import 'package:tfc/core/feature_flags.dart';
 import 'package:tfc/drawings/drawing_overlay.dart';
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_picker.dart';
@@ -38,12 +39,19 @@ class DrawingViewerConfig extends BaseAsset {
   @override
   Map<String, dynamic> toJson() => _$DrawingViewerConfigToJson(this);
 
+  // Const-gated so flag-off builds tree-shake the drawing viewer and the
+  // drawings overlay it opens, while this config class (and its JSON
+  // round-trip) stays compiled in — a saved page keeps its DrawingViewer
+  // entry, it just renders nothing.
   @override
-  Widget build(BuildContext context) => DrawingViewerButton(config: this);
+  Widget build(BuildContext context) => kKnowledgeEnabled
+      ? DrawingViewerButton(config: this)
+      : const SizedBox.shrink();
 
   @override
-  Widget configure(BuildContext context) =>
-      _DrawingViewerConfigEditor(config: this);
+  Widget configure(BuildContext context) => kKnowledgeEnabled
+      ? _DrawingViewerConfigEditor(config: this)
+      : const SizedBox.shrink();
 }
 
 class DrawingViewerButton extends ConsumerStatefulWidget {
@@ -160,8 +168,7 @@ class _DrawingViewerConfigEditorState
   @override
   void initState() {
     super.initState();
-    _labelController =
-        TextEditingController(text: widget.config.drawingName);
+    _labelController = TextEditingController(text: widget.config.drawingName);
     _startPageController =
         TextEditingController(text: widget.config.startPage.toString());
   }

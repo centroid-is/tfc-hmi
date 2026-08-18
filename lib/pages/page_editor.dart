@@ -2042,7 +2042,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           child: Column(
             children: [
               Expanded(child: asset.configure(paneContext)),
-              if (asset is BaseAsset)
+              if (kKnowledgeEnabled && asset is BaseAsset)
                 Padding(
                   padding: const EdgeInsets.only(top: 8.0),
                   child: TechDocPicker(
