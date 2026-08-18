@@ -1270,9 +1270,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   static const int _mirrorHorizontalAction = -7;
   static const int _mirrorVerticalAction = -8;
   static const int _bringToFrontAction = -9;
-  static const int _deleteAction = -9;
   static const int _copyAction = -10;
   static const int _pasteAction = -11;
+  static const int _deleteAction = -12;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
