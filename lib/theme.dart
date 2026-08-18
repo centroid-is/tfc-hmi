@@ -32,13 +32,13 @@ abstract final class MutedColors {
   static const Color slateBright = Color(0xFF7FA3B8);
   static const Color gray = Color(0xFF78838B);
 
-  static const Color runningGreen = Color(0xFF7A9B76);
-  static const Color manualOchre = Color(0xFFB39B5A);
-  static const Color cleanBlue = Color(0xFF6B8CAE);
-  static const Color stoppedGray = Color(0xFF9E9E9E);
-  static const Color stoppedGrayDark = Color(0xFF6E6E6E);
+  static const Color runningGreen = Color(0xFF8DA28A);
+  static const Color manualOchre = Color(0xFFB09F72);
+  static const Color cleanBlue = Color(0xFF8197AC);
+  static const Color stoppedGray = Color(0xFF8E8E8E);
+  static const Color stoppedGrayDark = Color(0xFF636363);
   static const Color alarmRed = Color(0xFFD32F2F);
-  static const Color unknownViolet = Color(0xFF8E7CA6);
+  static const Color unknownViolet = Color(0xFF9588A7);
   static const Color onState = Color(0xFFF5F5F5);
 }
 
