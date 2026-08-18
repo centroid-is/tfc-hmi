@@ -23,6 +23,7 @@ import '../widgets/panes/side_pane.dart';
 import '../page_creator/page.dart';
 import '../models/menu_item.dart';
 import '../route_registry.dart';
+import '../routes.dart';
 import '../providers/current_page_assets.dart';
 import '../tech_docs/tech_doc_picker.dart';
 
@@ -1401,9 +1402,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           value: _copyAction,
           child: ListTile(
             leading: const Icon(Icons.copy),
-            title: Text(targets.length > 1
-                ? 'Copy ${targets.length} assets'
-                : 'Copy'),
+            title: Text(
+                targets.length > 1 ? 'Copy ${targets.length} assets' : 'Copy'),
             dense: true,
           ),
         ),
@@ -1737,365 +1737,386 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               ),
             Expanded(
                 child: Listener(
-              // Any click on the canvas re-arms the shortcuts. Selecting an
-              // asset and pressing Ctrl/Cmd+C must work no matter what held
-              // keyboard focus before — the config pane's fields being the
-              // case that never heals on its own: the pane lives in the root
-              // overlay, so as long as it keeps focus, key events never even
-              // reach this page's Focus subtree. Raw pointer-down, not a tap:
-              // it precedes the gesture arena, so a text field clicked inside
-              // the palette still wins focus back on the tap itself.
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (_) {
-                if (!_shortcutFocus.hasPrimaryFocus) {
-                  _shortcutFocus.requestFocus();
-                }
-              },
-              child: ZoomableCanvas(
-              scaleEnabled: !_showPalette,
-              panEnabled: _isPanKeyHeld,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  // Stashed for the keyboard handler, which is above this
-                  // builder and cannot see the canvas box. Plain assignment:
-                  // calling setState during build is not allowed, and nothing
-                  // here needs a repaint — the next rotate simply reads it.
-                  _canvasConstraints = constraints;
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Container(
-                        color: Theme.of(context).colorScheme.surface,
-                      ),
-                      // The only feedback that the held pan key has
-                      // changed what a drag will do. A MouseRegion
-                      // only tracks hover — it joins no gesture arena
-                      // — so it can sit in the stack rather than
-                      // wrapping the canvas and re-indenting it.
-                      if (_isPanKeyHeld)
-                        const Positioned.fill(
-                          child: MouseRegion(cursor: SystemMouseCursors.grab),
-                        ),
-                      DragTarget<Type>(
-                        onAcceptWithDetails: (details) {
-                          final RenderBox box =
-                              context.findRenderObject() as RenderBox;
-                          final localPosition =
-                              box.globalToLocal(details.offset);
-
-                          final relativeX = (localPosition.dx / box.size.width)
-                              .clamp(0.0, 1.0);
-                          final relativeY = (localPosition.dy / box.size.height)
-                              .clamp(0.0, 1.0);
-
-                          final newAsset =
-                              AssetRegistry.createDefaultAsset(details.data);
-                          _saveToHistory();
-                          setState(() {
-                            newAsset.coordinates =
-                                Coordinates(x: relativeX, y: relativeY);
-                            assets.add(newAsset);
-                            _updateCurrentJson();
-                          });
-                        },
-                        builder: (context, candidateData, rejectedData) {
-                          return AssetStack(
-                            assets: assets,
-                            constraints: constraints,
-                            // A tap selects, always. Configuring used to be
-                            // what a tap did, in the mode where selecting was
-                            // not; with one mode there is room for only one
-                            // meaning, and the config pane is reachable from
-                            // the right-click menu instead. The pane is not
-                            // modal, so it can follow the selection: with one
-                            // already open, selecting another asset re-points
-                            // it rather than leaving stale config on screen.
-                            onTap: (asset) {
-                              final keys =
-                                  HardwareKeyboard.instance.logicalKeysPressed;
-                              _handleAssetSelection(asset, keys);
-                              if (_configAsset != null &&
-                                  !identical(_configAsset, asset) &&
-                                  !_isModifierPressed(keys)) {
-                                _openConfigPane(asset);
-                              }
-                            },
-                            // The pointer-first route to the config pane; the
-                            // right-click menu's "Edit" stays as the
-                            // discoverable one. A double tap swallows both of
-                            // its single taps, so selection has to happen
-                            // here too — plainly, since reaching for a double
-                            // click says "just this one".
-                            onDoubleTap: (asset) {
-                              setState(() => _selectedAssets = {asset});
-                              if (!identical(_configAsset, asset)) {
-                                _openConfigPane(asset);
-                              }
-                            },
-                            onPanUpdate: (asset, details) {
-                              _moveAsset(asset, details, constraints);
-                            },
-                            onPanStart: (asset, details) {
-                              // Claims the drag for the asset so the marquee
-                              // listener below stands down for its duration.
-                              _isDraggingAsset = true;
-                              _saveToHistory();
-                            },
-                            onSecondaryTap: (asset, globalPosition) {
-                              final box =
-                                  context.findRenderObject() as RenderBox;
-                              final local = box.globalToLocal(globalPosition);
-                              _showAssetContextMenu(
-                                asset,
-                                globalPosition,
-                                constraints,
-                                Offset(
-                                  (local.dx / constraints.maxWidth)
-                                      .clamp(0.0, 1.0),
-                                  (local.dy / constraints.maxHeight)
-                                      .clamp(0.0, 1.0),
+                    // Any click on the canvas re-arms the shortcuts. Selecting an
+                    // asset and pressing Ctrl/Cmd+C must work no matter what held
+                    // keyboard focus before — the config pane's fields being the
+                    // case that never heals on its own: the pane lives in the root
+                    // overlay, so as long as it keeps focus, key events never even
+                    // reach this page's Focus subtree. Raw pointer-down, not a tap:
+                    // it precedes the gesture arena, so a text field clicked inside
+                    // the palette still wins focus back on the tap itself.
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (_) {
+                      if (!_shortcutFocus.hasPrimaryFocus) {
+                        _shortcutFocus.requestFocus();
+                      }
+                    },
+                    child: ZoomableCanvas(
+                      scaleEnabled: !_showPalette,
+                      panEnabled: _isPanKeyHeld,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // Stashed for the keyboard handler, which is above this
+                          // builder and cannot see the canvas box. Plain assignment:
+                          // calling setState during build is not allowed, and nothing
+                          // here needs a repaint — the next rotate simply reads it.
+                          _canvasConstraints = constraints;
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Container(
+                                color: Theme.of(context).colorScheme.surface,
+                              ),
+                              // The only feedback that the held pan key has
+                              // changed what a drag will do. A MouseRegion
+                              // only tracks hover — it joins no gesture arena
+                              // — so it can sit in the stack rather than
+                              // wrapping the canvas and re-indenting it.
+                              if (_isPanKeyHeld)
+                                const Positioned.fill(
+                                  child: MouseRegion(
+                                      cursor: SystemMouseCursors.grab),
                                 ),
-                              );
-                            },
-                            absorb: true,
-                            selectedAssets: _selectedAssets,
-                            proposedAssets: _proposedAssets,
-                            mirroringDisabled: _temporaryPages[_currentPage]
-                                    ?.mirroringDisabled ??
-                                false,
+                              DragTarget<Type>(
+                                onAcceptWithDetails: (details) {
+                                  final RenderBox box =
+                                      context.findRenderObject() as RenderBox;
+                                  final localPosition =
+                                      box.globalToLocal(details.offset);
+
+                                  final relativeX =
+                                      (localPosition.dx / box.size.width)
+                                          .clamp(0.0, 1.0);
+                                  final relativeY =
+                                      (localPosition.dy / box.size.height)
+                                          .clamp(0.0, 1.0);
+
+                                  final newAsset =
+                                      AssetRegistry.createDefaultAsset(
+                                          details.data);
+                                  _saveToHistory();
+                                  setState(() {
+                                    newAsset.coordinates =
+                                        Coordinates(x: relativeX, y: relativeY);
+                                    assets.add(newAsset);
+                                    _updateCurrentJson();
+                                  });
+                                },
+                                builder:
+                                    (context, candidateData, rejectedData) {
+                                  return AssetStack(
+                                    assets: assets,
+                                    constraints: constraints,
+                                    // A tap selects, always. Configuring used to be
+                                    // what a tap did, in the mode where selecting was
+                                    // not; with one mode there is room for only one
+                                    // meaning, and the config pane is reachable from
+                                    // the right-click menu instead. The pane is not
+                                    // modal, so it can follow the selection: with one
+                                    // already open, selecting another asset re-points
+                                    // it rather than leaving stale config on screen.
+                                    onTap: (asset) {
+                                      final keys = HardwareKeyboard
+                                          .instance.logicalKeysPressed;
+                                      _handleAssetSelection(asset, keys);
+                                      if (_configAsset != null &&
+                                          !identical(_configAsset, asset) &&
+                                          !_isModifierPressed(keys)) {
+                                        _openConfigPane(asset);
+                                      }
+                                    },
+                                    // The pointer-first route to the config pane; the
+                                    // right-click menu's "Edit" stays as the
+                                    // discoverable one. A double tap swallows both of
+                                    // its single taps, so selection has to happen
+                                    // here too — plainly, since reaching for a double
+                                    // click says "just this one".
+                                    onDoubleTap: (asset) {
+                                      setState(() => _selectedAssets = {asset});
+                                      if (!identical(_configAsset, asset)) {
+                                        _openConfigPane(asset);
+                                      }
+                                    },
+                                    onPanUpdate: (asset, details) {
+                                      _moveAsset(asset, details, constraints);
+                                    },
+                                    onPanStart: (asset, details) {
+                                      // Claims the drag for the asset so the marquee
+                                      // listener below stands down for its duration.
+                                      _isDraggingAsset = true;
+                                      _saveToHistory();
+                                    },
+                                    onSecondaryTap: (asset, globalPosition) {
+                                      final box = context.findRenderObject()
+                                          as RenderBox;
+                                      final local =
+                                          box.globalToLocal(globalPosition);
+                                      _showAssetContextMenu(
+                                        asset,
+                                        globalPosition,
+                                        constraints,
+                                        Offset(
+                                          (local.dx / constraints.maxWidth)
+                                              .clamp(0.0, 1.0),
+                                          (local.dy / constraints.maxHeight)
+                                              .clamp(0.0, 1.0),
+                                        ),
+                                      );
+                                    },
+                                    absorb: true,
+                                    selectedAssets: _selectedAssets,
+                                    proposedAssets: _proposedAssets,
+                                    mirroringDisabled:
+                                        _temporaryPages[_currentPage]
+                                                ?.mirroringDisabled ??
+                                            false,
+                                  );
+                                },
+                              ),
+                              // Always live now, rather than only in a select mode.
+                              // It stands down while the pan key is held, which is the
+                              // one gesture it would otherwise take over.
+                              if (!_isPanKeyHeld)
+                                Listener(
+                                  behavior: HitTestBehavior.translucent,
+                                  onPointerDown: (pointerEvent) {
+                                    // Check if we're clicking on an asset first.
+                                    // The hit-test respects the asset's rotation
+                                    // via marqueeHitTestRotatedAsset — without it
+                                    // the marquee gate would (a) start a marquee
+                                    // when the operator clicks inside the rotated
+                                    // visual but outside its pre-rotation AABB,
+                                    // and (b) refuse to start a marquee when the
+                                    // operator clicks empty visual space inside
+                                    // the pre-rotation rect.
+                                    bool hitAsset = assets.any((asset) {
+                                      return marqueeHitTestRotatedAsset(
+                                        pointer: pointerEvent.localPosition,
+                                        cx: asset.coordinates.x *
+                                            constraints.maxWidth,
+                                        cy: asset.coordinates.y *
+                                            constraints.maxHeight,
+                                        halfW: (asset.size.width *
+                                                constraints.maxWidth) /
+                                            2,
+                                        halfH: (asset.size.height *
+                                                constraints.maxHeight) /
+                                            2,
+                                        angleDegrees:
+                                            asset.coordinates.angle ?? 0.0,
+                                      );
+                                    });
+
+                                    // A right-click is a menu, never a marquee: on
+                                    // empty canvas it offers paste-at-cursor; on an
+                                    // asset, AssetStack shows its own menu, so only
+                                    // the marquee below has to stand down.
+                                    if (pointerEvent.buttons ==
+                                        kSecondaryMouseButton) {
+                                      if (!hitAsset) {
+                                        _showCanvasContextMenu(
+                                          pointerEvent.position,
+                                          Offset(
+                                            (pointerEvent.localPosition.dx /
+                                                    constraints.maxWidth)
+                                                .clamp(0.0, 1.0),
+                                            (pointerEvent.localPosition.dy /
+                                                    constraints.maxHeight)
+                                                .clamp(0.0, 1.0),
+                                          ),
+                                        );
+                                      }
+                                      return;
+                                    }
+
+                                    // Only start selection box if we didn't hit an asset
+                                    if (!hitAsset) {
+                                      // If no Ctrl/Cmd, clear any existing selection
+                                      if (!_isModifierPressed(HardwareKeyboard
+                                          .instance.logicalKeysPressed)) {
+                                        setState(() {
+                                          _selectedAssets.clear();
+                                        });
+                                      }
+                                      // Record the start of the drag‐selection
+                                      final box = context.findRenderObject()
+                                          as RenderBox;
+                                      final local = box
+                                          .globalToLocal(pointerEvent.position);
+                                      setState(() {
+                                        _selectionStart = local;
+                                        _selectionCurrent = local;
+                                      });
+                                    }
+                                  },
+                                  onPointerMove: (pointerEvent) {
+                                    // Only update selection if we have a valid selection start AND we're not dragging an asset
+                                    if (_selectionStart != null &&
+                                        !_isDraggingAsset) {
+                                      final box = context.findRenderObject()
+                                          as RenderBox;
+                                      final local = box
+                                          .globalToLocal(pointerEvent.position);
+                                      setState(() {
+                                        _selectionCurrent = local;
+
+                                        final bounds = Rect.fromPoints(
+                                            _selectionStart!,
+                                            _selectionCurrent!);
+                                        _selectedAssets = assets.where((asset) {
+                                          final cx = asset.coordinates.x *
+                                              constraints.maxWidth;
+                                          final cy = asset.coordinates.y *
+                                              constraints.maxHeight;
+                                          final halfW = (asset.size.width *
+                                                  constraints.maxWidth) /
+                                              2;
+                                          final halfH = (asset.size.height *
+                                                  constraints.maxHeight) /
+                                              2;
+
+                                          final assetRect = Rect.fromLTWH(
+                                            cx -
+                                                halfW, // Offset by half width to match Positioned widget
+                                            cy -
+                                                halfH, // Offset by half height to match Positioned widget
+                                            asset.size.width *
+                                                constraints.maxWidth,
+                                            asset.size.height *
+                                                constraints.maxHeight,
+                                          );
+                                          return bounds.overlaps(assetRect);
+                                        }).toSet();
+                                      });
+                                    }
+                                  },
+                                  onPointerUp: (pointerEvent) {
+                                    setState(() {
+                                      _isDraggingAsset = false;
+                                      _selectionStart = null;
+                                      _selectionCurrent = null;
+                                    });
+                                  },
+                                ),
+                              if (_selectionStart != null &&
+                                  _selectionCurrent != null)
+                                CustomPaint(
+                                  painter: SelectionBoxPainter(
+                                    start: _selectionStart!,
+                                    current: _selectionCurrent!,
+                                  ),
+                                ),
+                              AnimatedPositioned(
+                                duration: _configPaneSlide,
+                                curve: Curves.easeOutCubic,
+                                top: 16,
+                                right: 16 + _rightChromeInset,
+                                child: _buildPageSelector(),
+                              ),
+                              Positioned(
+                                left: 16,
+                                bottom: 16,
+                                child: Row(
+                                  children: [
+                                    _buildHamburgerFab(assets),
+                                    const SizedBox(width: 8),
+                                    FloatingActionButton(
+                                      mini: true,
+                                      heroTag: 'save',
+                                      backgroundColor: _hasUnsavedChanges
+                                          ? Colors.orange
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                      onPressed: _saveToPrefs,
+                                      child: const Icon(Icons.save,
+                                          color: Colors.white),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (_showPalette)
+                                Positioned.fill(
+                                  child: GestureDetector(
+                                    onTap: () =>
+                                        setState(() => _showPalette = false),
+                                    behavior: HitTestBehavior.translucent,
+                                    child: Container(),
+                                  ),
+                                ),
+                              if (_showPalette)
+                                Positioned(
+                                  top: 0,
+                                  bottom: 0,
+                                  left: 0,
+                                  child: SizedBox(
+                                    width: 320,
+                                    child: Material(
+                                      elevation: 8,
+                                      color: Theme.of(context)
+                                          .scaffoldBackgroundColor,
+                                      borderRadius: BorderRadius.only(
+                                        topRight: Radius.circular(12),
+                                        bottomRight: Radius.circular(12),
+                                      ),
+                                      child: Stack(
+                                        children: [
+                                          _buildPalette(),
+                                          Positioned(
+                                            top: 8,
+                                            right: 8,
+                                            child: IconButton(
+                                              icon: Icon(Icons.close),
+                                              onPressed: () => setState(
+                                                  () => _showPalette = false),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              AnimatedPositioned(
+                                duration: _configPaneSlide,
+                                curve: Curves.easeOutCubic,
+                                right: 16 + _rightChromeInset,
+                                bottom: 16,
+                                // The mode toggle used to live at the bottom of this
+                                // column. There is only one mode now, so what is left
+                                // is the size pair, and it appears only when there is
+                                // a selection to resize.
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (_selectedAssets.isNotEmpty) ...[
+                                      FloatingActionButton(
+                                        mini: true,
+                                        heroTag: 'increase',
+                                        tooltip: 'Grow selection',
+                                        onPressed: () =>
+                                            _adjustSelectedAssetsSize(1.1),
+                                        child: const Icon(Icons.add,
+                                            color: Colors.white),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      FloatingActionButton(
+                                        mini: true,
+                                        heroTag: 'decrease',
+                                        tooltip: 'Shrink selection',
+                                        onPressed: () =>
+                                            _adjustSelectedAssetsSize(0.9),
+                                        child: const Icon(Icons.remove,
+                                            color: Colors.white),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
                           );
                         },
                       ),
-                      // Always live now, rather than only in a select mode.
-                      // It stands down while the pan key is held, which is the
-                      // one gesture it would otherwise take over.
-                      if (!_isPanKeyHeld)
-                        Listener(
-                          behavior: HitTestBehavior.translucent,
-                          onPointerDown: (pointerEvent) {
-                            // Check if we're clicking on an asset first.
-                            // The hit-test respects the asset's rotation
-                            // via marqueeHitTestRotatedAsset — without it
-                            // the marquee gate would (a) start a marquee
-                            // when the operator clicks inside the rotated
-                            // visual but outside its pre-rotation AABB,
-                            // and (b) refuse to start a marquee when the
-                            // operator clicks empty visual space inside
-                            // the pre-rotation rect.
-                            bool hitAsset = assets.any((asset) {
-                              return marqueeHitTestRotatedAsset(
-                                pointer: pointerEvent.localPosition,
-                                cx: asset.coordinates.x * constraints.maxWidth,
-                                cy: asset.coordinates.y * constraints.maxHeight,
-                                halfW:
-                                    (asset.size.width * constraints.maxWidth) /
-                                        2,
-                                halfH: (asset.size.height *
-                                        constraints.maxHeight) /
-                                    2,
-                                angleDegrees: asset.coordinates.angle ?? 0.0,
-                              );
-                            });
-
-                            // A right-click is a menu, never a marquee: on
-                            // empty canvas it offers paste-at-cursor; on an
-                            // asset, AssetStack shows its own menu, so only
-                            // the marquee below has to stand down.
-                            if (pointerEvent.buttons ==
-                                kSecondaryMouseButton) {
-                              if (!hitAsset) {
-                                _showCanvasContextMenu(
-                                  pointerEvent.position,
-                                  Offset(
-                                    (pointerEvent.localPosition.dx /
-                                            constraints.maxWidth)
-                                        .clamp(0.0, 1.0),
-                                    (pointerEvent.localPosition.dy /
-                                            constraints.maxHeight)
-                                        .clamp(0.0, 1.0),
-                                  ),
-                                );
-                              }
-                              return;
-                            }
-
-                            // Only start selection box if we didn't hit an asset
-                            if (!hitAsset) {
-                              // If no Ctrl/Cmd, clear any existing selection
-                              if (!_isModifierPressed(HardwareKeyboard
-                                  .instance.logicalKeysPressed)) {
-                                setState(() {
-                                  _selectedAssets.clear();
-                                });
-                              }
-                              // Record the start of the drag‐selection
-                              final box =
-                                  context.findRenderObject() as RenderBox;
-                              final local =
-                                  box.globalToLocal(pointerEvent.position);
-                              setState(() {
-                                _selectionStart = local;
-                                _selectionCurrent = local;
-                              });
-                            }
-                          },
-                          onPointerMove: (pointerEvent) {
-                            // Only update selection if we have a valid selection start AND we're not dragging an asset
-                            if (_selectionStart != null && !_isDraggingAsset) {
-                              final box =
-                                  context.findRenderObject() as RenderBox;
-                              final local =
-                                  box.globalToLocal(pointerEvent.position);
-                              setState(() {
-                                _selectionCurrent = local;
-
-                                final bounds = Rect.fromPoints(
-                                    _selectionStart!, _selectionCurrent!);
-                                _selectedAssets = assets.where((asset) {
-                                  final cx = asset.coordinates.x *
-                                      constraints.maxWidth;
-                                  final cy = asset.coordinates.y *
-                                      constraints.maxHeight;
-                                  final halfW = (asset.size.width *
-                                          constraints.maxWidth) /
-                                      2;
-                                  final halfH = (asset.size.height *
-                                          constraints.maxHeight) /
-                                      2;
-
-                                  final assetRect = Rect.fromLTWH(
-                                    cx -
-                                        halfW, // Offset by half width to match Positioned widget
-                                    cy -
-                                        halfH, // Offset by half height to match Positioned widget
-                                    asset.size.width * constraints.maxWidth,
-                                    asset.size.height * constraints.maxHeight,
-                                  );
-                                  return bounds.overlaps(assetRect);
-                                }).toSet();
-                              });
-                            }
-                          },
-                          onPointerUp: (pointerEvent) {
-                            setState(() {
-                              _isDraggingAsset = false;
-                              _selectionStart = null;
-                              _selectionCurrent = null;
-                            });
-                          },
-                        ),
-                      if (_selectionStart != null && _selectionCurrent != null)
-                        CustomPaint(
-                          painter: SelectionBoxPainter(
-                            start: _selectionStart!,
-                            current: _selectionCurrent!,
-                          ),
-                        ),
-                      AnimatedPositioned(
-                        duration: _configPaneSlide,
-                        curve: Curves.easeOutCubic,
-                        top: 16,
-                        right: 16 + _rightChromeInset,
-                        child: _buildPageSelector(),
-                      ),
-                      Positioned(
-                        left: 16,
-                        bottom: 16,
-                        child: Row(
-                          children: [
-                            _buildHamburgerFab(assets),
-                            const SizedBox(width: 8),
-                            FloatingActionButton(
-                              mini: true,
-                              heroTag: 'save',
-                              backgroundColor: _hasUnsavedChanges
-                                  ? Colors.orange
-                                  : Theme.of(context).colorScheme.primary,
-                              onPressed: _saveToPrefs,
-                              child:
-                                  const Icon(Icons.save, color: Colors.white),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (_showPalette)
-                        Positioned.fill(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _showPalette = false),
-                            behavior: HitTestBehavior.translucent,
-                            child: Container(),
-                          ),
-                        ),
-                      if (_showPalette)
-                        Positioned(
-                          top: 0,
-                          bottom: 0,
-                          left: 0,
-                          child: SizedBox(
-                            width: 320,
-                            child: Material(
-                              elevation: 8,
-                              color: Theme.of(context).scaffoldBackgroundColor,
-                              borderRadius: BorderRadius.only(
-                                topRight: Radius.circular(12),
-                                bottomRight: Radius.circular(12),
-                              ),
-                              child: Stack(
-                                children: [
-                                  _buildPalette(),
-                                  Positioned(
-                                    top: 8,
-                                    right: 8,
-                                    child: IconButton(
-                                      icon: Icon(Icons.close),
-                                      onPressed: () =>
-                                          setState(() => _showPalette = false),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      AnimatedPositioned(
-                        duration: _configPaneSlide,
-                        curve: Curves.easeOutCubic,
-                        right: 16 + _rightChromeInset,
-                        bottom: 16,
-                        // The mode toggle used to live at the bottom of this
-                        // column. There is only one mode now, so what is left
-                        // is the size pair, and it appears only when there is
-                        // a selection to resize.
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_selectedAssets.isNotEmpty) ...[
-                              FloatingActionButton(
-                                mini: true,
-                                heroTag: 'increase',
-                                tooltip: 'Grow selection',
-                                onPressed: () => _adjustSelectedAssetsSize(1.1),
-                                child:
-                                    const Icon(Icons.add, color: Colors.white),
-                              ),
-                              const SizedBox(height: 8),
-                              FloatingActionButton(
-                                mini: true,
-                                heroTag: 'decrease',
-                                tooltip: 'Shrink selection',
-                                onPressed: () => _adjustSelectedAssetsSize(0.9),
-                                child: const Icon(Icons.remove,
-                                    color: Colors.white),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ))),
+                    ))),
           ],
         ),
       ),
@@ -2581,12 +2602,76 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   /// Top-level items the app registered itself (Alarm View, Advanced, ...),
   /// keyed by path. They are not pages, so the dialog can only reorder them.
+  /// Built-in destinations whose menu placement the operator may change
+  /// between the top level and the Advanced section. Placement is recorded
+  /// as membership in the shared top-level order — no second key to drift.
+  static const Set<String> movableBuiltinPaths = {AppRoutes.historyView};
+
+  /// Whether the operator's (unsaved) arrangement has [path] at the top
+  /// level rather than under Advanced.
+  bool _isBuiltinPromoted(String path) => _topLevelOrder.contains(path);
+
+  /// Finds [path]'s menu item anywhere in the registry tree — movable
+  /// built-ins live under Advanced by default, so a top-level scan misses
+  /// them.
+  MenuItem? _findRegistryItem(String path, [List<MenuItem>? items]) {
+    for (final item in items ?? RouteRegistry().menuItems) {
+      if (item.path == path) return item;
+      final nested = _findRegistryItem(path, item.children);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+
   Map<String, MenuItem> _appRegisteredTopLevel() {
-    return {
+    final map = {
       for (final item in RouteRegistry().menuItems)
         if (item.path != null && !_temporaryPages.containsKey(item.path))
           item.path!: item,
     };
+    // Movable built-ins follow the editor's (possibly unsaved) placement,
+    // not the registry's — the registry only changes on restart.
+    for (final path in movableBuiltinPaths) {
+      final item = _findRegistryItem(path);
+      if (item == null) continue; // app without this destination
+      if (_isBuiltinPromoted(path)) {
+        map.putIfAbsent(path, () => item);
+      } else {
+        map.remove(path);
+      }
+    }
+    return map;
+  }
+
+  /// Movable built-ins currently placed under Advanced — offered a
+  /// "move to top level" affordance below the list.
+  List<MenuItem> _demotedMovableBuiltins() => [
+        for (final path in movableBuiltinPaths)
+          if (!_isBuiltinPromoted(path))
+            if (_findRegistryItem(path) case final MenuItem item) item,
+      ];
+
+  /// Moves [path] to the top level: freezes the currently displayed
+  /// arrangement into the order list and appends [path], so the promotion
+  /// survives restarts (placement IS membership in the stored order).
+  void _promoteBuiltin(String path, StateSetter dialogSetState) {
+    setState(() {
+      _topLevelOrder = [
+        ..._getTopLevelPaths().where((p) => p != path),
+        path,
+      ];
+      _navOrderDirty = true;
+    });
+    dialogSetState(() {});
+  }
+
+  /// Moves [path] back under Advanced by dropping it from the stored order.
+  void _demoteBuiltin(String path, StateSetter dialogSetState) {
+    setState(() {
+      _topLevelOrder = [..._topLevelOrder.where((p) => p != path)];
+      _navOrderDirty = true;
+    });
+    dialogSetState(() {});
   }
 
   /// Every top-level row of the Pages dialog — root pages and the app's own
@@ -2667,6 +2752,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                             _buildAppItemNode(
                               appItems[roots[i]]!,
                               reorderIndex: i,
+                              dialogSetState: dialogSetState,
                             )
                           else
                             _buildTreeNode(
@@ -2680,6 +2766,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                     ),
                   ),
                   _buildTopLevelDropZone(dialogSetState),
+                  for (final item in _demotedMovableBuiltins())
+                    ListTile(
+                      key: ValueKey('advanced-builtin-${item.path}'),
+                      dense: true,
+                      leading: Icon(item.icon),
+                      title: Text(item.label),
+                      subtitle: const Text('Built-in — in Advanced'),
+                      trailing: TextButton.icon(
+                        key: ValueKey('promote-builtin-${item.path}'),
+                        icon: const Icon(Icons.vertical_align_top, size: 18),
+                        label: const Text('Move to top level'),
+                        onPressed: () =>
+                            _promoteBuiltin(item.path!, dialogSetState),
+                      ),
+                    ),
                   const Divider(),
                   _buildAddButtons(null, dialogSetState, dialogContext),
                 ],
@@ -2998,7 +3099,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   /// A top-level destination the app registered itself. It has no page to
   /// select, edit or publish here — the row exists to be dragged into order.
-  Widget _buildAppItemNode(MenuItem item, {required int reorderIndex}) {
+  Widget _buildAppItemNode(MenuItem item,
+      {required int reorderIndex, StateSetter? dialogSetState}) {
+    final movable =
+        item.path != null && movableBuiltinPaths.contains(item.path);
     return ListTile(
       key: ValueKey('app-item-${item.path}'),
       dense: true,
@@ -3015,6 +3119,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       ),
       title: Text(item.label),
       subtitle: const Text('Built-in — drag to reorder'),
+      trailing: movable && dialogSetState != null
+          ? IconButton(
+              key: ValueKey('demote-builtin-${item.path}'),
+              icon: const Icon(Icons.subdirectory_arrow_right, size: 18),
+              tooltip: 'Move into Advanced',
+              onPressed: () => _demoteBuiltin(item.path!, dialogSetState),
+            )
+          : null,
     );
   }
 
