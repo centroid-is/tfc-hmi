@@ -161,6 +161,85 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
   }
 }
 
+/// Alarm severity colors — deliberately identical in every scheme, so the
+/// alarm system is unaffected by the operator's color scheme choice: alarm
+/// colors must stay reserved and consistent (ISA-18.2). The values are what
+/// the alarm banners have always rendered under Solarized.
+@immutable
+class AlarmColors extends ThemeExtension<AlarmColors> {
+  const AlarmColors({
+    required this.info,
+    required this.onInfo,
+    required this.warning,
+    required this.onWarning,
+    required this.error,
+    required this.onError,
+  });
+
+  final Color info;
+  final Color onInfo;
+  final Color warning;
+  final Color onWarning;
+  final Color error;
+  final Color onError;
+
+  static const light = AlarmColors(
+    info: SolarizedColors.green,
+    onInfo: SolarizedColors.base2,
+    warning: SolarizedColors.yellow,
+    onWarning: SolarizedColors.base2,
+    error: SolarizedColors.red,
+    onError: SolarizedColors.base2,
+  );
+
+  static const dark = AlarmColors(
+    info: SolarizedColors.blue,
+    onInfo: SolarizedColors.base02,
+    warning: SolarizedColors.yellow,
+    onWarning: SolarizedColors.base02,
+    error: SolarizedColors.red,
+    onError: SolarizedColors.base02,
+  );
+
+  static AlarmColors of(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.extension<AlarmColors>() ??
+        (theme.brightness == Brightness.dark ? dark : light);
+  }
+
+  @override
+  AlarmColors copyWith({
+    Color? info,
+    Color? onInfo,
+    Color? warning,
+    Color? onWarning,
+    Color? error,
+    Color? onError,
+  }) {
+    return AlarmColors(
+      info: info ?? this.info,
+      onInfo: onInfo ?? this.onInfo,
+      warning: warning ?? this.warning,
+      onWarning: onWarning ?? this.onWarning,
+      error: error ?? this.error,
+      onError: onError ?? this.onError,
+    );
+  }
+
+  @override
+  AlarmColors lerp(AlarmColors? other, double t) {
+    if (other == null) return this;
+    return AlarmColors(
+      info: Color.lerp(info, other.info, t)!,
+      onInfo: Color.lerp(onInfo, other.onInfo, t)!,
+      warning: Color.lerp(warning, other.warning, t)!,
+      onWarning: Color.lerp(onWarning, other.onWarning, t)!,
+      error: Color.lerp(error, other.error, t)!,
+      onError: Color.lerp(onError, other.onError, t)!,
+    );
+  }
+}
+
 /// A named slot in the active color scheme, for persisting "theme green"
 /// instead of a baked RGBA value. Assets that store an [HmiColorRole] follow
 /// the scheme when it changes; a literal color never does.
@@ -228,7 +307,12 @@ enum AppColorScheme {
 ThemeData _themeFromColorScheme(ColorScheme scheme, HmiStateColors states) {
   return ThemeData(
       colorScheme: scheme,
-      extensions: [states],
+      extensions: [
+        states,
+        scheme.brightness == Brightness.dark
+            ? AlarmColors.dark
+            : AlarmColors.light,
+      ],
       fontFamily: 'roboto-mono',
       textTheme: const TextTheme(),
       textSelectionTheme: TextSelectionThemeData(
