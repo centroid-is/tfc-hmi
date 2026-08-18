@@ -279,6 +279,10 @@ void main() {
       expect(find.text('Accept rate CW2 (30 min)'), findsOneWidget);
       expect(find.text('Weight CW1'), findsOneWidget);
       expect(find.text('Weight CW2'), findsOneWidget);
+      // No PLC in this test, so the value is `---`, but the unit must be
+      // there: the belt readout has no room for it, the pane does. kg is
+      // the default when the child has no unit configured.
+      expect(find.text('--- kg'), findsNWidgets(2));
 
       // Wiring and boilerplate stay out: no key strings, no polarity
       // wording, no footprint, no inventory of the box's children.

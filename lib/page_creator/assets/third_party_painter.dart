@@ -501,14 +501,12 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
 
   /// The weigh belt inside a checkweigher frame.
   ///
-  /// Spans the FULL width of the frame: a checkweigher is a conveyor with a
-  /// load cell under it, not a box with a short belt in the middle. This is
-  /// the rect a live Conveyor child fills.
-  static Rect deckOf(Rect frame) {
-    final inset = frame.height * 0.08;
-    return Rect.fromLTRB(
-        frame.left, frame.top + inset, frame.right, frame.bottom - inset);
-  }
+  /// The FULL frame, edge to edge: a checkweigher is a conveyor with a load
+  /// cell under it, not a box with a belt floating in the middle — a margin
+  /// here read as the belt being narrower than its own station. This is the
+  /// rect a live Conveyor child fills; kept as the one seam between the
+  /// painter, the scaffold and the tests.
+  static Rect deckOf(Rect frame) => frame;
 
   /// Horizontal half-extent of `ConveyorPainter`'s direction arrow, as a
   /// fraction of the belt width.
@@ -602,12 +600,13 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
     }
   }
 
-  /// One checkweigher: the station frame and the belt bed filling it.
+  /// One checkweigher: the station frame, which IS the belt bed.
   ///
-  /// The belt is NOT drawn as machinery — only its bed. A live bidirectional
-  /// `ConveyorConfig` child fills the bed and animates off the real drive
+  /// The belt is NOT drawn as machinery — a live bidirectional
+  /// `ConveyorConfig` child fills the frame and animates off the real drive
   /// frequency; painting a belt underneath a real one reads as a double
-  /// image. Same treatment as the two conveyor lanes.
+  /// image. Same treatment as the two conveyor lanes. The deck now spans the
+  /// whole frame (`deckOf`), so there is no separate bed rect to draw.
   ///
   /// Nothing is drawn on the belt itself: the middle belongs to the
   /// conveyor's run-direction arrow, and the readouts sit either side of it.
@@ -620,9 +619,6 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   ) {
     canvas.drawRect(
         u.r(frame.left, frame.top, frame.right, frame.bottom), stroke);
-
-    final deck = deckOf(frame);
-    canvas.drawRect(u.r(deck.left, deck.top, deck.right, deck.bottom), detail);
   }
 }
 

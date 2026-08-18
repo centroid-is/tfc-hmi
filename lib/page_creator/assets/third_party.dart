@@ -940,7 +940,10 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         key: child.key,
         showDecimalPoint: child.showDecimalPoint,
         decimalPlaces: child.decimalPlaces,
-        units: child.units,
+        // The belt readout is unitless — there is no room beside the arrow —
+        // but the pane has the room, so the unit goes here: whatever the
+        // operator configured on the child, kg otherwise.
+        units: (child.units?.isNotEmpty ?? false) ? child.units : 'kg',
         scale: child.scale,
         graphConfig: GraphAssetConfig.preview(
             key: child.key.isEmpty ? null : child.key)
