@@ -81,8 +81,8 @@ class _SchemeSwatches extends StatelessWidget {
     final HmiStateColors states = switch (scheme) {
       AppColorScheme.solarized =>
         dark ? HmiStateColors.solarizedDark : HmiStateColors.solarizedLight,
-      AppColorScheme.isa101 =>
-        dark ? HmiStateColors.isa101Dark : HmiStateColors.isa101Light,
+      AppColorScheme.muted =>
+        dark ? HmiStateColors.mutedDark : HmiStateColors.mutedLight,
     };
     return Row(
       mainAxisSize: MainAxisSize.min,

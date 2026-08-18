@@ -21,7 +21,7 @@ abstract final class SolarizedColors {
 
 /// ISA-101 inspired palette: gray surfaces, muted equipment-state colors,
 /// saturated red reserved for faults/alarms.
-abstract final class Isa101Colors {
+abstract final class MutedColors {
   static const Color surfaceLight = Color(0xFFECEDEE);
   static const Color containerLight = Color(0xFFDEE1E3);
   static const Color onSurfaceLight = Color(0xFF3C3F41);
@@ -97,24 +97,24 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
     onState: SolarizedColors.base3,
   );
 
-  static const isa101Light = HmiStateColors(
-    auto: Isa101Colors.runningGreen,
-    manual: Isa101Colors.manualOchre,
-    cleaning: Isa101Colors.cleanBlue,
-    stopped: Isa101Colors.stoppedGray,
-    fault: Isa101Colors.alarmRed,
-    unknown: Isa101Colors.unknownViolet,
-    onState: Isa101Colors.onState,
+  static const mutedLight = HmiStateColors(
+    auto: MutedColors.runningGreen,
+    manual: MutedColors.manualOchre,
+    cleaning: MutedColors.cleanBlue,
+    stopped: MutedColors.stoppedGray,
+    fault: MutedColors.alarmRed,
+    unknown: MutedColors.unknownViolet,
+    onState: MutedColors.onState,
   );
 
-  static const isa101Dark = HmiStateColors(
-    auto: Isa101Colors.runningGreen,
-    manual: Isa101Colors.manualOchre,
-    cleaning: Isa101Colors.cleanBlue,
-    stopped: Isa101Colors.stoppedGrayDark,
-    fault: Isa101Colors.alarmRed,
-    unknown: Isa101Colors.unknownViolet,
-    onState: Isa101Colors.onState,
+  static const mutedDark = HmiStateColors(
+    auto: MutedColors.runningGreen,
+    manual: MutedColors.manualOchre,
+    cleaning: MutedColors.cleanBlue,
+    stopped: MutedColors.stoppedGrayDark,
+    fault: MutedColors.alarmRed,
+    unknown: MutedColors.unknownViolet,
+    onState: MutedColors.onState,
   );
 
   /// The theme's state colors, falling back to Solarized when the theme was
@@ -162,10 +162,10 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
 }
 
 /// The color schemes offered in preferences. [solarized] is the historical
-/// default; [isa101] follows ISA-101's muted, gray-first guidance.
+/// default; [muted] follows ISA-101's muted, gray-first guidance.
 enum AppColorScheme {
   solarized('Solarized'),
-  isa101('ISA-101');
+  muted('Muted');
 
   const AppColorScheme(this.displayName);
   final String displayName;
@@ -197,8 +197,8 @@ ThemeData _themeFromColorScheme(ColorScheme scheme, HmiStateColors states) {
   switch (scheme) {
     case AppColorScheme.solarized:
       return solarized();
-    case AppColorScheme.isa101:
-      return isa101();
+    case AppColorScheme.muted:
+      return muted();
   }
 }
 
@@ -242,42 +242,42 @@ ThemeData _themeFromColorScheme(ColorScheme scheme, HmiStateColors states) {
   return (solarizedLight, solarizedDark);
 }
 
-(ThemeData, ThemeData) isa101() {
+(ThemeData, ThemeData) muted() {
   ColorScheme isaDarkColorScheme = const ColorScheme.dark(
     brightness: Brightness.dark,
-    primary: Isa101Colors.slateBright,
-    onPrimary: Isa101Colors.surfaceDark,
-    secondary: Isa101Colors.gray,
-    onSecondary: Isa101Colors.surfaceDark,
-    error: Isa101Colors.alarmRed,
-    onError: Isa101Colors.onState,
-    surface: Isa101Colors.surfaceDark,
-    onSurface: Isa101Colors.onSurfaceDark,
-    tertiary: Isa101Colors.manualOchre,
-    onTertiary: Isa101Colors.surfaceDark,
-    surfaceContainerLow: Isa101Colors.containerDark,
-    surfaceContainerHighest: Isa101Colors.containerDark,
+    primary: MutedColors.slateBright,
+    onPrimary: MutedColors.surfaceDark,
+    secondary: MutedColors.gray,
+    onSecondary: MutedColors.surfaceDark,
+    error: MutedColors.alarmRed,
+    onError: MutedColors.onState,
+    surface: MutedColors.surfaceDark,
+    onSurface: MutedColors.onSurfaceDark,
+    tertiary: MutedColors.manualOchre,
+    onTertiary: MutedColors.surfaceDark,
+    surfaceContainerLow: MutedColors.containerDark,
+    surfaceContainerHighest: MutedColors.containerDark,
   );
 
   ColorScheme isaLightColorScheme = const ColorScheme.light(
     brightness: Brightness.light,
-    primary: Isa101Colors.slate,
-    onPrimary: Isa101Colors.surfaceLight,
-    secondary: Isa101Colors.gray,
-    onSecondary: Isa101Colors.surfaceLight,
-    error: Isa101Colors.alarmRed,
-    onError: Isa101Colors.onState,
-    surface: Isa101Colors.surfaceLight,
-    onSurface: Isa101Colors.onSurfaceLight,
-    tertiary: Isa101Colors.manualOchre,
-    onTertiary: Isa101Colors.surfaceLight,
-    surfaceContainerLow: Isa101Colors.containerLight,
-    surfaceContainerHighest: Isa101Colors.containerLight,
+    primary: MutedColors.slate,
+    onPrimary: MutedColors.surfaceLight,
+    secondary: MutedColors.gray,
+    onSecondary: MutedColors.surfaceLight,
+    error: MutedColors.alarmRed,
+    onError: MutedColors.onState,
+    surface: MutedColors.surfaceLight,
+    onSurface: MutedColors.onSurfaceLight,
+    tertiary: MutedColors.manualOchre,
+    onTertiary: MutedColors.surfaceLight,
+    surfaceContainerLow: MutedColors.containerLight,
+    surfaceContainerHighest: MutedColors.containerLight,
   );
 
   final isaLight =
-      _themeFromColorScheme(isaLightColorScheme, HmiStateColors.isa101Light);
+      _themeFromColorScheme(isaLightColorScheme, HmiStateColors.mutedLight);
   final isaDark =
-      _themeFromColorScheme(isaDarkColorScheme, HmiStateColors.isa101Dark);
+      _themeFromColorScheme(isaDarkColorScheme, HmiStateColors.mutedDark);
   return (isaLight, isaDark);
 }

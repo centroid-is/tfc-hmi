@@ -78,8 +78,8 @@ void main() {
     final cases = <String, ThemeData>{
       'solarized_light': solarized().$1,
       'solarized_dark': solarized().$2,
-      'isa101_light': isa101().$1,
-      'isa101_dark': isa101().$2,
+      'muted_light': muted().$1,
+      'muted_dark': muted().$2,
     };
     for (final entry in cases.entries) {
       testWidgets('conveyor states under ${entry.key}', (tester) async {
