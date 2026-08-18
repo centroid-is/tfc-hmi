@@ -1092,6 +1092,28 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'ConnectionInfoConfig',
+      displayName: 'Connection Info',
+      category: 'Application',
+      description:
+          'A live status card for one PLC/server connection, fed by the '
+          '@conn/<serverAlias>/<field> meta-keys: state chip, requests/s, '
+          'uptime, reconnects and last error.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'serverAlias',
+            type: 'String',
+            description: 'The connection alias to display — a configured '
+                'serverAlias, or host:port for unnamed servers',
+            required: true),
+        AssetPropertyInfo(
+            name: 'protocol',
+            type: 'String',
+            description: 'Display hint, "modbus" or "opcua"; the rendered '
+                'fields follow the live data'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'GateStatusConfig',
       displayName: 'Gate Status',
       category: 'Application',

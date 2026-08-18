@@ -16,9 +16,11 @@ import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
 import 'package:tfc_dart/core/log_config.dart' show opcuaLogLevelFromEnv;
 import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
-import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
+import 'package:modbus_client/modbus_client.dart'
+    show ModbusElementType, ModbusEndianness;
 
 import 'collector.dart';
+import 'conn_meta.dart';
 import 'modbus_client_wrapper.dart' show ModbusDataType;
 import 'modbus_device_client.dart'
     show ModbusDeviceClientAdapter, buildVariableNamesFromKeyMappings;
@@ -282,7 +284,8 @@ class ModbusPollGroupConfig {
   Map<String, dynamic> toJson() => _$ModbusPollGroupConfigToJson(this);
 
   @override
-  String toString() => 'ModbusPollGroupConfig(name: $name, intervalMs: $intervalMs)';
+  String toString() =>
+      'ModbusPollGroupConfig(name: $name, intervalMs: $intervalMs)';
 }
 
 /// Top-level configuration for a single Modbus TCP server connection.
@@ -370,7 +373,8 @@ class StateManConfig {
   @JsonKey(defaultValue: [])
   List<ModbusConfig> modbus;
 
-  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
+  StateManConfig(
+      {required this.opcua, this.jbtm = const [], this.modbus = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
@@ -378,8 +382,7 @@ class StateManConfig {
   List<ServerConfigEntry> get allServers => [...opcua, ...jbtm, ...modbus];
 
   /// Only the servers that should actually be connected to.
-  List<OpcUAConfig> get enabledOpcua =>
-      opcua.where((c) => c.enabled).toList();
+  List<OpcUAConfig> get enabledOpcua => opcua.where((c) => c.enabled).toList();
   List<M2400Config> get enabledJbtm => jbtm.where((c) => c.enabled).toList();
   List<ModbusConfig> get enabledModbus =>
       modbus.where((c) => c.enabled).toList();
@@ -520,7 +523,9 @@ class KeyMappingEntry {
   String? variableName;
 
   String? get server =>
-      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
+      opcuaNode?.serverAlias ??
+      m2400Node?.serverAlias ??
+      modbusNode?.serverAlias;
 
   KeyMappingEntry({
     this.opcuaNode,
@@ -731,6 +736,62 @@ class ClientWrapper {
   final StreamController<ConnectionStatus> _connectionController =
       StreamController<ConnectionStatus>.broadcast();
 
+  // ---------------------------------------------------------------------------
+  // Connection-metadata instrumentation (additive, null-safe)
+  // ---------------------------------------------------------------------------
+
+  /// Rolling requests-per-second. Approximates OPC-UA protocol load by
+  /// counting monitored-item value emissions (and heartbeat ticks) routed
+  /// through StateMan's subscription wiring for this server — the native
+  /// publish rate is not exposed through the isolate binding.
+  final RollingRate _requestRate = RollingRate();
+
+  /// The most recent raw [ClientState] seen on the state stream.
+  ClientState? _lastClientState;
+
+  /// Timestamp of the most recent transition to `connected`.
+  DateTime? _connectedSince;
+  bool _everConnected = false;
+  int _reconnectCount = 0;
+  String _lastError = '';
+
+  /// Record one OPC-UA value emission for the requests-per-second rate.
+  void recordRequest() => _requestRate.increment();
+
+  /// Capture the last error string surfaced at a heartbeat/channel failure.
+  void recordError(String error) => _lastError = error;
+
+  /// Rolling requests-per-second over the recent window.
+  double get requestsPerSec => _requestRate.ratePerSec;
+
+  /// Seconds since the last successful connect (0 when not connected).
+  double get uptimeSec {
+    final since = _connectedSince;
+    if (since == null || _connectionStatus != ConnectionStatus.connected) {
+      return 0;
+    }
+    return DateTime.now().difference(since).inMilliseconds / 1000.0;
+  }
+
+  int get reconnectCount => _reconnectCount;
+  String get lastError => _lastError;
+
+  /// Name of the last-seen secure-channel state (e.g. UA_SECURECHANNELSTATE_*).
+  String get channelStateName => _lastClientState?.channelState.name ?? '';
+
+  /// Name of the last-seen session state (e.g. UA_SESSIONSTATE_*).
+  String get sessionStateName => _lastClientState?.sessionState.name ?? '';
+
+  /// Last-seen recovery status code.
+  int get recoveryStatus => _lastClientState?.recoveryStatus ?? 0;
+
+  /// Seconds since the last heartbeat/data tick, or 0 if none yet.
+  double get lastDataAgeSec {
+    final tick = _lastHeartbeatTick;
+    if (tick == null) return 0;
+    return DateTime.now().difference(tick).inMilliseconds / 1000.0;
+  }
+
   ClientWrapper(this.client, this.config, {this.resendOnRecovery = true});
 
   /// Current connection status (synchronous, always up-to-date).
@@ -741,8 +802,22 @@ class ClientWrapper {
   Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
 
   void updateConnectionStatus(ClientState state) {
+    // Capture the raw state even when the derived ConnectionStatus is
+    // unchanged — channel/session sub-states shift while the coarse status
+    // holds steady, and the metadata getters surface them.
+    _lastClientState = state;
     final next = _mapState(state);
     if (next == _connectionStatus) return;
+    if (next == ConnectionStatus.connected) {
+      if (_everConnected) _reconnectCount++;
+      _everConnected = true;
+      _connectedSince = DateTime.now();
+      // A successful connect supersedes the previous error — a stale
+      // message must not stay on the Connection Info card indefinitely.
+      _lastError = '';
+    } else if (next == ConnectionStatus.disconnected) {
+      _connectedSince = null;
+    }
     _connectionStatus = next;
     _connectionController.add(next);
   }
@@ -774,6 +849,7 @@ class ClientWrapper {
       (_) {
         if (gen != _heartbeatGeneration) return;
         _lastHeartbeatTick = DateTime.now();
+        recordRequest();
         if (_inactive) {
           _logger.i('[${config.endpoint}] Heartbeat recovered (sub=$subId)');
           _handleRecovery();
@@ -792,6 +868,7 @@ class ClientWrapper {
         final sinceTick = _lastHeartbeatTick != null
             ? now.difference(_lastHeartbeatTick!).inMilliseconds
             : -1;
+        recordError(error.toString());
         _logger.w('[${config.endpoint}] Heartbeat error (sub=$subId, '
             '${now.toUtc().toIso8601String()}, ${sinceTick}ms since last tick): $error');
         if (error is Inactivity || error.toString().contains('Inactivity')) {
@@ -974,7 +1051,8 @@ class StateMan {
   /// Returns the original value unchanged if [bitMask] is null.
   /// Single-bit mask returns bool; multi-bit returns int.
   /// Non-numeric values pass through unchanged.
-  static DynamicValue applyBitMask(DynamicValue value, int? bitMask, int? bitShift) {
+  static DynamicValue applyBitMask(
+      DynamicValue value, int? bitMask, int? bitShift) {
     if (bitMask == null) return value;
     final raw = value.value;
     if (raw is! num) return value;
@@ -1237,6 +1315,60 @@ class StateMan {
   /// mappings do — so there is nothing to invalidate.
   late final Set<String?> _disabledAliases = config.disabledServerAliases;
 
+  /// Router for `@conn/<alias>/<field>` connection-metadata meta-keys.
+  ///
+  /// Built once from the live (enabled-only) OPC-UA client wrappers and Modbus
+  /// device-client adapters. `subscribedKeys` is derived here from the current
+  /// [keyMappings] via a live closure, so key-mapping edits are reflected
+  /// without rebuilding the router.
+  late final ConnMetaRouter _connMeta = _buildConnMetaRouter();
+
+  ConnMetaRouter _buildConnMetaRouter() {
+    // Unnamed servers are first-class here, like everywhere else in
+    // StateMan: a server with no alias gets a stable synthetic identity
+    // derived from its connection target (host:port), so its meta-keys
+    // exist and survive restarts. Duplicate identities get a #2/#3 suffix.
+    final taken = <String>{};
+    String claim(String candidate) {
+      var alias = candidate;
+      var n = 2;
+      while (!taken.add(alias)) {
+        alias = '$candidate#${n++}';
+      }
+      return alias;
+    }
+
+    final sources = <ConnMetaSource>[];
+    for (final wrapper in clients) {
+      final wAlias = wrapper.config.serverAlias;
+      final ep = parseOpcEndpoint(wrapper.config.endpoint);
+      final alias = claim(
+          StateManConfig.normalizeAlias(wAlias) ?? '${ep.host}:${ep.port}');
+      sources.add(OpcUaConnMetaSource(
+        wrapper,
+        metaAlias: alias,
+        subscribedKeysFn: () => keyMappings.nodes.values
+            .where((e) => e.opcuaNode?.serverAlias == wAlias)
+            .length,
+      ));
+    }
+    for (final dc in deviceClients) {
+      if (dc is! ModbusDeviceClientAdapter) continue;
+      final cfg = config.modbus
+          .firstWhereOrNull((c) => c.serverAlias == dc.serverAlias);
+      final minInterval = cfg == null || cfg.pollGroups.isEmpty
+          ? null
+          : cfg.pollGroups
+              .map((g) => g.intervalMs)
+              .reduce((a, b) => a < b ? a : b);
+      final alias = claim(StateManConfig.normalizeAlias(dc.serverAlias) ??
+          '${dc.wrapper.host}:${dc.wrapper.port}');
+      sources.add(ModbusConnMetaSource(dc,
+          metaAlias: alias, pollIntervalMs: minInterval));
+    }
+    return ConnMetaRouter(sources);
+  }
+
   bool _isAliasDisabled(String? alias) =>
       _disabledAliases.contains(StateManConfig.normalizeAlias(alias));
 
@@ -1256,8 +1388,8 @@ class StateMan {
 
   ClientWrapper _getClientWrapper(String key) {
     final alias = keyMappings.lookupServerAlias(key);
-    final wrapper = clients.firstWhereOrNull(
-        (wrapper) => wrapper.config.serverAlias == alias);
+    final wrapper = clients
+        .firstWhereOrNull((wrapper) => wrapper.config.serverAlias == alias);
     if (wrapper == null) {
       throw StateManException(
           'No OPC-UA client found for key "$key" (server alias: $alias)');
@@ -1371,6 +1503,10 @@ class StateMan {
 
   /// Example: read("myKey")
   Future<DynamicValue> read(String key) async {
+    // Connection-metadata meta-keys short-circuit before resolveKey /
+    // disabled / routing — they are not in keyMappings.
+    if (ConnMetaRouter.isMetaKey(key)) return _connMeta.read(key);
+
     key = resolveKey(key);
     _throwIfDisabled(key);
 
@@ -1410,13 +1546,15 @@ class StateMan {
         try {
           return await modbusDc.readUmasVariable(key);
         } catch (e) {
-          throw StateManException('Failed to read UMAS variable "$variableName" '
+          throw StateManException(
+              'Failed to read UMAS variable "$variableName" '
               'for key "$key": $e');
         }
       }
       final value = modbusDc.read(key);
       if (value == null) {
-        throw StateManException('No cached value for key: "$key" -- not polled yet');
+        throw StateManException(
+            'No cached value for key: "$key" -- not polled yet');
       }
       return value;
     }
@@ -1448,6 +1586,12 @@ class StateMan {
     // Separate DeviceClient keys from OPC UA keys
     final opcuaKeys = <String>[];
     for (final keyToResolve in keys) {
+      // Connection-metadata meta-keys resolve to a current snapshot.
+      if (ConnMetaRouter.isMetaKey(keyToResolve)) {
+        results[keyToResolve] = _connMeta.read(keyToResolve);
+        continue;
+      }
+
       final key = resolveKey(keyToResolve);
 
       // Keys on a disabled server are simply absent from the result, the
@@ -1462,7 +1606,8 @@ class StateMan {
         // the existing "no cached value -> skip" semantics of
         // [DeviceClient.read]); the caller surfaces missing keys.
         final entry = keyMappings.nodes[key];
-        if (entry?.variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+        if (entry?.variableName != null &&
+            modbusDc is ModbusDeviceClientAdapter) {
           try {
             results[key] = await modbusDc.readUmasVariable(key);
           } catch (_) {
@@ -1542,6 +1687,11 @@ class StateMan {
 
   /// Example: write("myKey", DynamicValue(value: 42, typeId: NodeId.int16))
   Future<void> write(String key, DynamicValue value) async {
+    // Connection metadata is read-only; never silently no-op.
+    if (ConnMetaRouter.isMetaKey(key)) {
+      throw StateManException("connection metadata key '$key' is read-only");
+    }
+
     key = resolveKey(key);
     _throwIfDisabled(key);
 
@@ -1598,6 +1748,10 @@ class StateMan {
   ///
   /// Example: subscribe("myIntKey") or subscribe("BATCH.weight")
   Future<Stream<DynamicValue>> subscribe(String key) async {
+    // Connection-metadata meta-keys return a live snapshot stream that emits
+    // on connection-state changes and on a 1s periodic tick.
+    if (ConnMetaRouter.isMetaKey(key)) return _connMeta.subscribe(key);
+
     key = resolveKey(key);
     _throwIfDisabled(key);
 
@@ -1634,8 +1788,8 @@ class StateMan {
     // DynamicValue for the lifetime of the StateMan.
     for (final dc in deviceClients) {
       if (dc is ModbusDeviceClientAdapter) {
-        final newNames = buildVariableNamesFromKeyMappings(
-            newKeyMappings, dc.serverAlias);
+        final newNames =
+            buildVariableNamesFromKeyMappings(newKeyMappings, dc.serverAlias);
         // Preserve the null entries for non-UMAS keys the adapter knows
         // about so the merged map's "renamed" detection works (it
         // compares old non-null name vs new entry — missing entry =
@@ -1645,7 +1799,19 @@ class StateMan {
     }
   }
 
-  List<String> get keys => keyMappings.keys.toList();
+  List<String> get keys => [...keyMappings.keys, ..._connMeta.metaKeys];
+
+  /// The connection aliases the `@conn` meta-key router answers for, with
+  /// their protocol (unnamed servers appear under their synthetic host:port
+  /// identity). This is what editor UIs should offer as suggestions.
+  List<({String alias, bool isModbus})> get connMetaAliases =>
+      _connMeta.aliases;
+
+  /// All `@conn` fields for [alias] as one stream — a single timer and one
+  /// snapshot per tick, unlike per-field [subscribe] calls. Throws
+  /// [StateManException] for an unknown alias.
+  Stream<Map<String, DynamicValue>> subscribeConnMeta(String alias) =>
+      _connMeta.subscribeAll(alias);
 
   /// Close the connection to the server.
   Future<void> close() async {
@@ -1784,14 +1950,20 @@ class StateMan {
             '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
 
         var stream = client.monitor(id, wrapper.subscriptionId!);
+        // Count each monitored-item emission toward this server's
+        // requests-per-second load figure (see [ClientWrapper.requestsPerSec]).
+        stream = stream.map((value) {
+          wrapper.recordRequest();
+          return value;
+        });
         if (idx != null) {
           stream = stream.map((value) => value[idx]);
         }
         // Apply bit mask if configured on this key
         final entry = keyMappings.nodes[key];
         if (entry?.bitMask != null) {
-          stream = stream.map((value) =>
-              applyBitMask(value, entry!.bitMask, entry.bitShift));
+          stream = stream.map(
+              (value) => applyBitMask(value, entry!.bitMask, entry.bitShift));
         }
 
         // Wait for monitor to deliver first value. No asBroadcastStream()

@@ -27,6 +27,10 @@ class ModbusClientTcp extends ModbusClient {
   @override
   bool get isConnected => _socket != null;
 
+  /// The local TCP port the client socket is bound to, or null when
+  /// disconnected. Exposes the source port for per-connection diagnostics.
+  int? get localPort => _socket?.port;
+
   int _lastTransactionId = 0;
 
   int _getNextTransactionId() {
