@@ -12,6 +12,8 @@ class PreferencesPage extends StatelessWidget {
         body: ListView(
           padding: const EdgeInsets.all(0),
           children: [
+            const AppearanceSection(),
+            const SizedBox(height: 16),
             const DatabaseConfigWidget(),
             const SizedBox(height: 16),
             const McpServerSection(),
