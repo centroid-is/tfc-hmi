@@ -356,24 +356,8 @@ class NumberWidget extends ConsumerWidget {
     return displayWidget;
   }
 
-  /// The number's trend, in a free-floating window.
-  ///
-  /// This is the case the floating variant exists for: the operator wants the
-  /// chart AND the live number on the mimic behind it, so the window can be
-  /// dragged off the value it belongs to and left open.
-  void _showGraphDialog(BuildContext context) {
-    if (config.graphConfig == null) return;
-    final size = MediaQuery.of(context).size;
-    showFloatingDialog(
-      context: context,
-      id: 'number-graph:${identityHashCode(config)}',
-      title: config.graphConfig?.headerText ?? config.text ?? config.key,
-      icon: Icons.show_chart,
-      size: Size(size.width * 0.7, size.height * 0.7),
-      scrollable: false,
-      builder: (_) => _NumberGraphBody(config: config),
-    );
-  }
+  void _showGraphDialog(BuildContext context) =>
+      showNumberGraphDialog(context, config);
 
   /// Writing a value stays MODAL: the operator is answering a question and
   /// the answer must land before anything else happens.
@@ -385,6 +369,29 @@ class NumberWidget extends ConsumerWidget {
       builder: (_) => _NumberWriteDialog(config: config),
     );
   }
+}
+
+/// The number's trend, in a free-floating window.
+///
+/// This is the case the floating variant exists for: the operator wants the
+/// chart AND the live number on the mimic behind it, so the window can be
+/// dragged off the value it belongs to and left open.
+///
+/// Top-level rather than private to [NumberWidget] so other surfaces — the
+/// 3rd-party side pane's trend button — can open the same window without
+/// faking a tap on the readout.
+void showNumberGraphDialog(BuildContext context, NumberConfig config) {
+  if (config.graphConfig == null) return;
+  final size = MediaQuery.of(context).size;
+  showFloatingDialog(
+    context: context,
+    id: 'number-graph:${identityHashCode(config)}',
+    title: config.graphConfig?.headerText ?? config.text ?? config.key,
+    icon: Icons.show_chart,
+    size: Size(size.width * 0.7, size.height * 0.7),
+    scrollable: false,
+    builder: (_) => _NumberGraphBody(config: config),
+  );
 }
 
 class _NumberWriteDialog extends ConsumerStatefulWidget {
