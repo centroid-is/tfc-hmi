@@ -279,6 +279,11 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
           positionedChildren.add(
             Positioned(
+              // Keyed by identity so a z-order change (send to back / bring
+              // to front) moves the existing element instead of rebuilding
+              // every asset at its new index — asset subtrees hold live
+              // state (subscriptions, futures) that a rebuild would restart.
+              key: ObjectKey(asset),
               left: cx - halfAabbW,
               top: cy - halfAabbH,
               width: aabbW,
