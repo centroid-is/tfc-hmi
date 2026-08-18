@@ -26,6 +26,33 @@ abstract class GlobalAppBarLeftWidgetProvider with ChangeNotifier {
 final globalAppBarLeftWidgetProvider =
     Provider<GlobalAppBarLeftWidgetProvider?>((ref) => null);
 
+/// The path Beamer is currently showing, or null when the location state isn't
+/// a [BeamState] (e.g. before the first route resolves). This is the same
+/// current-path source the bottom-nav selected-index logic reads, so the two
+/// stay consistent.
+String? currentBeamPath(BuildContext context) {
+  final state = context.currentBeamLocation.state;
+  if (state is! BeamState) return null;
+  return state.uri.path;
+}
+
+/// Whether [path] is one of the registered top-level destinations.
+///
+/// Top-level menu items live directly in [RouteRegistry.menuItems]; Advanced
+/// sub-pages (`/advanced/...`) are nested children and are therefore NOT
+/// top-level. `/` is always treated as top-level so a deleted Home (a
+/// RouteRedirect with no menu item) still suppresses the back-arrow instead of
+/// throwing. A null path (no [BeamState] yet) counts as top-level so we default
+/// to no arrow.
+bool isTopLevelDestinationPath(String? path) {
+  if (path == null) return true;
+  if (path == '/') return true;
+  for (final item in RouteRegistry().menuItems) {
+    if (item.path == path) return true;
+  }
+  return false;
+}
+
 // ===================
 // BaseScaffold Widget
 // ===================
@@ -207,7 +234,15 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (context.canBeamBack)
+                          // The back-arrow is gated on route depth, not on
+                          // beaming history: history accumulates and stays
+                          // non-empty after landing back on a top-level page,
+                          // which used to leave a stale arrow on Home. On a
+                          // top-level destination there is nothing to go back
+                          // to, so hide it there and only show it deeper in.
+                          if (!isTopLevelDestinationPath(
+                                  currentBeamPath(context)) &&
+                              context.canBeamBack)
                             IconButton(
                               icon: const Icon(Icons.arrow_back),
                               onPressed: () => context.beamBack(),
@@ -295,11 +330,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
       bottomNavigationBar: _isFullscreen
           ? null
           : NavigationBar(
+              // Same null-safe path source as the back-arrow gate: an
+              // unguarded `as BeamState` here would defeat currentBeamPath's
+              // guard — both run in the same build pass, so the scaffold
+              // would fail to build anyway if this threw.
               selectedIndex: findTopLevelIndexForBeamer(
-                RouteRegistry().root,
-                null,
-                (context.currentBeamLocation.state as BeamState).uri.path,
-              ) ?? 0,
+                    RouteRegistry().root,
+                    null,
+                    currentBeamPath(context) ?? '/',
+                  ) ??
+                  0,
               labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
               destinations: [
                 ...RouteRegistry().menuItems.map<Widget>((item) {
