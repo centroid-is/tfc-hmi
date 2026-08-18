@@ -1179,10 +1179,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final pasted = assetJson;
 
     _saveToHistory();
+    final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
     setState(() {
       _selectedAssets.clear();
-
-      final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
 
       if (at != null) {
         final placed = placeGroupAt(
@@ -1213,6 +1212,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       }
       _updateCurrentJson();
     });
+    _retargetConfigPane(copiedAssets);
+  }
+
+  /// Re-points an open config pane at what a paste just produced.
+  ///
+  /// An operator pasting with the pane up is duplicating the asset they are
+  /// configuring; the asset they want to edit next is the copy, not the
+  /// source. Only a lone pasted asset re-points the pane — a group paste has
+  /// no single asset for the pane to show, so it stays where it was.
+  void _retargetConfigPane(List<Asset> pasted) {
+    if (_configAsset == null || pasted.length != 1) return;
+    _openConfigPane(pasted.single);
   }
 
   /// The live canvas's width / height, or 16:9 before the first layout.
@@ -1270,6 +1281,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           ..add(asset);
         _updateCurrentJson();
       });
+      _retargetConfigPane([asset]);
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
