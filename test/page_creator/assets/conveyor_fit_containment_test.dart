@@ -42,10 +42,17 @@ void main() {
             final g = ConveyorPathGeometry.build(entry.value, box,
                 thicknessFactor: thickness);
             expect(g, isNotNull);
-            // The painter strokes the centerline at beltWidth, plus a 2px
-            // border on each side.
-            final painted =
-                g!.path.getBounds().inflate(g.beltWidth / 2 + 2);
+            // The ink the painter actually lays down: the band outline (flat
+            // caps at the ends, beltWidth across) plus the 2px border. The
+            // centerline bounds inflated on every side would overestimate at
+            // the flat ends — the fit centers the ink in the box, so slack
+            // is spent where the band genuinely does not extend.
+            final band = g!
+                    .bandOutline(0, 1,
+                        width: g.beltWidth, radius: g.beltWidth * 0.2)
+                    ?.getBounds() ??
+                g.path.getBounds().inflate(g.beltWidth / 2);
+            final painted = band.inflate(2);
             expect(painted.left, greaterThanOrEqualTo(-0.5));
             expect(painted.top, greaterThanOrEqualTo(-0.5));
             expect(painted.right, lessThanOrEqualTo(box.width + 0.5));
