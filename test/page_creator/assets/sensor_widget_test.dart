@@ -25,9 +25,10 @@ void main() {
     // dialog — NOT the config editor. Config remains editor-only via
     // page_editor.dart's _showConfigDialog → asset.configure(context).
     //
-    // Locks the SENS-01 contract: operators can inspect runtime state
-    // (kind, detection key, polarity, edge-delay keys, tag) but must
-    // never mutate page configuration via runtime taps.
+    // Locks the SENS-01 contract: operators can inspect runtime state but
+    // must never mutate page configuration via runtime taps. The pane shows
+    // live values only — key strings, polarity wording and other wiring
+    // stay out (house pane rules).
 
     // Plan 260811 moved this surface from an `AlertDialog` to the non-modal
     // `SidePane`; the SENS-01 contract (read-only, never the editor) is
@@ -49,12 +50,14 @@ void main() {
 
       expect(find.byType(SidePane), findsOneWidget,
           reason: 'Tap must open the docked details pane.');
-      // Locked field labels — these identify the dialog without coupling
-      // to private widget types.
-      expect(find.text('Detection key'), findsOneWidget,
-          reason: 'Details pane must show "Detection key" label.');
-      expect(find.text('Kind'), findsOneWidget,
-          reason: 'Details pane must show "Kind" label.');
+      // Locked field label — identifies the pane without coupling to
+      // private widget types.
+      expect(find.text('Detection state'), findsOneWidget,
+          reason: 'Details pane must show the "Detection state" row.');
+      // Wiring stays out of the operator surface.
+      expect(find.text('Detection key'), findsNothing,
+          reason: 'Key names are wiring, not something an operator reads.');
+      expect(find.text('sensor/01/det'), findsNothing);
 
       // Negative locks — no editor controls in the runtime details pane.
       expect(find.byType(SegmentedButton<SensorKind>), findsNothing,
@@ -108,11 +111,13 @@ void main() {
       expect(find.widgetWithText(TextButton, 'Save'), findsNothing);
     });
 
-    testWidgets('details dialog shows tag when configured',
+    testWidgets('the tag titles the details pane — even when hidden on canvas',
         (tester) async {
       final config = SensorConfig(
         detectionKey: 'sensor/01/det',
         tag: 'PE-101A',
+        // showTag stays false: hiding the canvas label must NOT hide the
+        // tag from the pane — that is the whole point of the split.
       );
       await tester.pumpWidget(wrap(
         SizedBox(width: 80, height: 40, child: Sensor(config: config)),
@@ -121,8 +126,9 @@ void main() {
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
-      expect(find.text('Tag'), findsOneWidget);
-      expect(find.text('PE-101A'), findsOneWidget);
+      expect(find.text('PE-101A'), findsOneWidget,
+          reason: 'The tag is the pane title, replacing the generic '
+              '"Sensor" and any key-string title.');
     });
 
     testWidgets(
@@ -150,7 +156,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SidePane), findsOneWidget);
-      expect(find.text('Detection key'), findsOneWidget);
+      expect(find.text('Detection state'), findsOneWidget);
     });
   });
 
@@ -158,19 +164,29 @@ void main() {
     // Pre-refactor (commit 5509d610) these tests asserted that
     // `config.tag` flowed to the painter as a `label:` constructor arg.
     // The painter no longer draws the label — `AssetStack` does, via
-    // `Asset.text` (aliased onto `tag` by `SensorConfig`). The tests
-    // are kept at the same conceptual level (tag pass-through from the
-    // config) but assert the new contract: `config.text == config.tag`.
-    test('config.tag is exposed through Asset.text', () {
-      final config = SensorConfig(detectionKey: '', tag: 'PE-101A');
+    // `Asset.text` (aliased onto `tag` by `SensorConfig`). The alias is
+    // gated on `showTag`: the canvas label is opt-in, the pane always
+    // reads `tag` directly.
+    test('config.tag is exposed through Asset.text when showTag is set', () {
+      final config =
+          SensorConfig(detectionKey: '', tag: 'PE-101A', showTag: true);
       expect(config.text, 'PE-101A',
           reason: 'AssetStack reads asset.text to paint the label outside '
               'the rotated subtree (lib/pages/page_view.dart). SensorConfig '
               'must alias tag onto text so this path picks it up.');
     });
 
+    test('a hidden tag yields null Asset.text (hidden is the default)', () {
+      final config = SensorConfig(detectionKey: '', tag: 'PE-101A');
+      expect(config.text, isNull,
+          reason: 'showTag defaults to false — the tag must stay off the '
+              'canvas until the editor checkbox turns it on, while the pane '
+              'keeps reading config.tag.');
+      expect(config.tag, 'PE-101A');
+    });
+
     test('null tag yields null Asset.text', () {
-      final config = SensorConfig(detectionKey: '');
+      final config = SensorConfig(detectionKey: '', showTag: true);
       expect(config.text, isNull,
           reason: 'AssetStack short-circuits the label render block on '
               'null/empty text — a sensor without a tag must produce a null '
@@ -359,6 +375,53 @@ void main() {
     });
   });
 
+  group('Config editor', () {
+    Widget wrapEditor(SensorConfig config) {
+      return wrap(
+        SingleChildScrollView(
+          child: Builder(builder: (context) => config.configure(context)),
+        ),
+      );
+    }
+
+    testWidgets('the legacy delay-key fields are gone', (tester) async {
+      await tester.pumpWidget(wrapEditor(SensorConfig()));
+
+      expect(find.text('Detection State Key'), findsOneWidget);
+      expect(find.text('Rising Edge Delay Key'), findsNothing,
+          reason: 'The debounce lives in the FB_Sensor struct now — the '
+              'legacy delay key fields must not be offered.');
+      expect(find.text('Falling Edge Delay Key'), findsNothing);
+    });
+
+    testWidgets(
+        'the show-tag checkbox gates the canvas label and the position picker',
+        (tester) async {
+      final config = SensorConfig(tag: 'PE-101A');
+      await tester.pumpWidget(wrapEditor(config));
+
+      final checkbox = find.byType(Checkbox);
+      await tester.ensureVisible(checkbox);
+      await tester.pump();
+
+      // Hidden by default: unchecked box, disabled position dropdown —
+      // a position for a label that is not painted is a meaningless knob.
+      expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+      DropdownButton<TextPos> dropdown() =>
+          tester.widget(find.byType(DropdownButton<TextPos>));
+      expect(dropdown().onChanged, isNull);
+      expect(config.text, isNull);
+
+      await tester.tap(checkbox);
+      await tester.pump();
+
+      expect(config.showTag, isTrue);
+      expect(config.text, 'PE-101A',
+          reason: 'Checking the box is what puts the tag on the canvas.');
+      expect(dropdown().onChanged, isNotNull);
+    });
+  });
+
   group('Stream lifecycle', () {
     testWidgets('rebuilds with same detectionKey do not re-hoist the stream',
         (tester) async {
@@ -407,6 +470,7 @@ void main() {
             'Stream must re-hoist when detectionKey changes (didUpdateWidget guard)',
       );
     });
+
 
     test(
         'build() does not construct a stream inline (Pitfall 2 source-level guard)',
@@ -489,7 +553,10 @@ void main() {
       await openConfigEditor(tester, config);
       expect(find.text('Active when state is true'), findsOneWidget);
 
-      // Toggle the switch — subtitle copy must flip per UI-SPEC.
+      // Toggle the switch — subtitle copy must flip per UI-SPEC. The editor
+      // grew a second KeyField above it, so scroll it into view first.
+      await tester.ensureVisible(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
       await tester.tap(find.byType(SwitchListTile));
       await tester.pumpAndSettle();
       expect(find.text('Active when state is false'), findsOneWidget);
@@ -529,7 +596,9 @@ void main() {
 
     testWidgets('changing TextPos via dropdown updates config.textPos',
         (tester) async {
-      final config = SensorConfig();
+      // showTag on: while the tag is hidden the position dropdown is
+      // deliberately disabled (position without a label is meaningless).
+      final config = SensorConfig(showTag: true);
       await openConfigEditor(tester, config);
 
       // Editor body lives in a SingleChildScrollView; the dropdown sits

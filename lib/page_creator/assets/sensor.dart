@@ -181,21 +181,22 @@ class SensorConfig extends BaseAsset {
   ///
   /// Preferred: the `HMI` member of an `FB_Sensor` instance (an
   /// `ST_Sensor_HMI` struct node) — that unlocks the full pane, including
-  /// live debounce editing. A plain BOOL node is still accepted and read as
-  /// the raw detection bit.
+  /// live debounce. A plain BOOL node is still accepted and read as
+  /// the raw detection bit; the decode is shape-driven
+  /// (see [SensorFbState.tryParse]).
   String detectionKey;
 
   /// When true, the visual `isActive` is the inverse of the detection bool.
   bool invertActivePolarity;
 
-  /// Legacy: state key carrying the rising-edge delay (ms), display-only.
+  /// Legacy: state key carrying the rising-edge delay (ms).
   ///
-  /// Only used when [detectionKey] points at a plain BOOL. Against an
-  /// `FB_Sensor` the delay lives in `p_cfg_tOnDelay` inside the bound struct
-  /// and is edited in the side pane.
+  /// No longer surfaced anywhere — the debounce lives in the `ST_Sensor_HMI`
+  /// struct behind [detectionKey] (`p_cfg_tOnDelay`). Retained so pages
+  /// persisted before the struct binding round-trip without data loss.
   String risingEdgeDelayKey;
 
-  /// Legacy: state key carrying the falling-edge delay (ms), display-only.
+  /// Legacy: state key carrying the falling-edge delay (ms).
   ///
   /// See [risingEdgeDelayKey] — superseded by `p_cfg_tOffDelay`.
   String fallingEdgeDelayKey;
@@ -211,6 +212,11 @@ class SensorConfig extends BaseAsset {
   /// Optional human-readable label (e.g. `"PE-101A"`).
   String? tag;
 
+  /// Whether [tag] is painted on the main screen. Off by default: on a busy
+  /// mimic the tags are noise, and the side pane (where the tag is the pane
+  /// title) is the reading surface for identity.
+  bool showTag;
+
   /// `Asset.text` is what `AssetStack` (in `lib/pages/page_view.dart`) reads
   /// to paint the label OUTSIDE the asset's rotated subtree. By aliasing
   /// `text` onto `tag` here, the sensor label rides the same path as Button's
@@ -218,8 +224,11 @@ class SensorConfig extends BaseAsset {
   /// regardless of `Coordinates.angle` — which supersedes the in-painter
   /// label machinery (counterRotateLabel / _paintLabel) introduced as a
   /// 180° hack in 5509d610.
+  ///
+  /// Gated on [showTag]: a hidden tag yields `null` here so `AssetStack`
+  /// short-circuits its label block, while the pane keeps reading [tag].
   @override
-  String? get text => tag;
+  String? get text => showTag ? tag : null;
 
   /// Setter accepts non-null writes only. The generated `fromJson` calls
   /// `..text = json['text']` AFTER the constructor has already set `tag`
@@ -227,7 +236,7 @@ class SensorConfig extends BaseAsset {
   /// a non-null `tag` — adopting `null` here would clobber that tag and
   /// silently erase the operator's label on first load. Non-null adoption
   /// preserves both the legacy load path and the new round-trip (where
-  /// `text` and `tag` hold the same value because the getter aliases them).
+  /// `text` mirrors `tag` when [showTag] is set, and is `null` otherwise).
   @override
   set text(String? value) {
     if (value != null) tag = value;
@@ -242,6 +251,7 @@ class SensorConfig extends BaseAsset {
     Color? activeColor,
     Color? inactiveColor,
     this.tag,
+    this.showTag = false,
   })  : activeColor = activeColor ?? Colors.green,
         inactiveColor = inactiveColor ?? Colors.grey.shade400 {
     // Default label position — matches LED/Button convention (those default
@@ -316,8 +326,8 @@ class Sensor extends ConsumerStatefulWidget {
 }
 
 class _SensorState extends ConsumerState<Sensor> {
-  /// The value stream constructed once per mount (or per detectionKey change).
-  /// `null` indicates the stale path: empty detectionKey — no stream needed.
+  /// The value stream constructed once per mount (or per detectionKey
+  /// change). `null` indicates the stale path: no key — no stream needed.
   ///
   /// Carries the raw [DynamicValue] rather than a pre-mapped bool: the same
   /// subscription serves both bindings — an `ST_Sensor_HMI` struct (decoded by
@@ -328,8 +338,8 @@ class _SensorState extends ConsumerState<Sensor> {
   /// against `widget.config.detectionKey` in `didUpdateWidget` so we re-hoist
   /// even when the editor mutates the same `SensorConfig` instance in-place
   /// (the case where `oldWidget.config` and `widget.config` are identical
-  /// references and we cannot rely on `oldWidget.config.detectionKey` to
-  /// reflect the previous value).
+  /// references and we cannot rely on `oldWidget.config` to reflect the
+  /// previous value).
   String? _hoistedKey;
 
   @override
@@ -343,9 +353,9 @@ class _SensorState extends ConsumerState<Sensor> {
     super.didUpdateWidget(oldWidget);
     // Re-hoist only when the key actually changes — preserves stream identity
     // across rebuilds with same config (Pitfall 2 invariant). Compare against
-    // the stored `_hoistedKey` rather than `oldWidget.config.detectionKey`
-    // because the editor mutates the same config instance in-place, so
-    // `oldWidget.config` and `widget.config` are the same reference.
+    // the stored `_hoistedKey` rather than `oldWidget.config` because the
+    // editor mutates the same config instance in-place, so `oldWidget.config`
+    // and `widget.config` are the same reference.
     if (_hoistedKey != widget.config.detectionKey) {
       _hoistStream();
     }
@@ -386,7 +396,7 @@ class _SensorState extends ConsumerState<Sensor> {
   /// must NOT depend on this — it exists so the Pitfall 2 stream-lifecycle
   /// regression tests can assert `identical(oldStream, newStream)` across
   /// rebuilds (no resubscribe storm) and a fresh stream after a
-  /// `detectionKey` change.
+  /// key change.
   @visibleForTesting
   Stream<DynamicValue>? get debugDetectionStream => _detectionStream;
 
@@ -446,26 +456,27 @@ class _SensorState extends ConsumerState<Sensor> {
   /// setpoint is an operator action; editing the mimic is not.
   String get _paneId => 'sensor:${identityHashCode(widget.config)}';
 
-  /// The read-only detail list. [liveState] fills the "Detection state" row
-  /// when a value is in hand; `null` leaves it deferring to the glyph.
+  /// The read-only detail list — the fallback when no `ST_Sensor_HMI` struct
+  /// is in hand. [liveState] fills the "Detection state" row when a value is
+  /// available; `null` leaves it deferring to the glyph.
+  ///
+  /// Live values only, per the pane house rules: no key names, no polarity
+  /// wording, no debounce section (without a struct there is no live debounce
+  /// to read). The tag is the pane's title, mirroring the 3rd-party pane.
   Widget _staticPane(PaneStatus status, bool? liveState) {
     final config = widget.config;
+    final tagged = config.tag != null && config.tag!.isNotEmpty;
     return SidePane(
-      title: 'Sensor',
-      subtitle: config.kind.name,
+      title: tagged ? config.tag! : 'Sensor',
+      subtitle: tagged ? '${config.kind.name} · sensor' : config.kind.name,
       icon: Icons.sensors,
       status: status,
       child: PaneSection(
-        title: 'Details',
+        title: 'Signal',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            PaneDetailRow(label: 'Kind', value: config.kind.name),
-            PaneDetailRow(
-              label: 'Detection key',
-              value: config.detectionKey.isEmpty ? '—' : config.detectionKey,
-            ),
             PaneDetailRow(
               label: 'Detection state',
               value: config.detectionKey.isEmpty
@@ -476,24 +487,6 @@ class _SensorState extends ConsumerState<Sensor> {
                           ? 'true'
                           : 'false',
             ),
-            PaneDetailRow(
-              label: 'Active polarity inverted',
-              value: config.invertActivePolarity ? 'yes' : 'no',
-            ),
-            PaneDetailRow(
-              label: 'Rising edge delay key',
-              value: config.risingEdgeDelayKey.isEmpty
-                  ? '—'
-                  : config.risingEdgeDelayKey,
-            ),
-            PaneDetailRow(
-              label: 'Falling edge delay key',
-              value: config.fallingEdgeDelayKey.isEmpty
-                  ? '—'
-                  : config.fallingEdgeDelayKey,
-            ),
-            if (config.tag != null && config.tag!.isNotEmpty)
-              PaneDetailRow(label: 'Tag', value: config.tag!),
           ],
         ),
       ),
@@ -592,16 +585,21 @@ class _SensorState extends ConsumerState<Sensor> {
   /// painter hit-testing (UI-SPEC §Interaction Contract).
   ///
   /// Layering order (outer → inner):
-  ///   GestureDetector → LayoutRotatedBox → LayoutBuilder → CustomPaint
+  ///   LayoutRotatedBox → GestureDetector → LayoutBuilder → CustomPaint
   ///
   /// The hover tooltip path was removed — operators read full state via
   /// `_showDetailsPane` on tap. No floating panel sits above the sensor
   /// on a busy HMI canvas.
   ///
-  /// The GestureDetector lives OUTSIDE LayoutRotatedBox because
-  /// `LayoutRotatedBox._RenderLayoutRotatedBox.hitTest` (in `common.dart`)
-  /// does not forward hits to its child — it only adds a self-entry. This
-  /// matches the existing `_buildGate` pattern in `conveyor_gate.dart`.
+  /// The GestureDetector lives INSIDE LayoutRotatedBox:
+  /// `_RenderLayoutRotatedBox.hitTest` (in `common.dart`, ELEV-19 fix)
+  /// forwards hits to its child in the child's un-rotated frame — for any
+  /// incoming position that lands on the ROTATED glyph, including positions
+  /// outside the unrotated layout rect. With the detector outside, its own
+  /// `RenderBox.hitTest` clamps to the unrotated rect first, so a rotated
+  /// sensor was only tappable on the sliver where the rotated visual
+  /// overlaps that rect (the page-level chain is hit-permissive via
+  /// `_HitPermissiveSizedBox` in `lib/pages/page_view.dart`).
   /// Tap-through-`Transform.translate` (Phase 3 forward-compat) is
   /// unaffected: `Transform.translate` defaults `transformHitTests: true`.
   ///
@@ -610,11 +608,11 @@ class _SensorState extends ConsumerState<Sensor> {
   /// the GestureDetector has a non-zero hit-test box.
   Widget _buildPaint(CustomPainter painter) {
     final angleDeg = widget.config.coordinates.angle ?? 0.0;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _showDetailsPane(context),
-      child: LayoutRotatedBox(
-        angle: angleDeg * pi / 180,
+    return LayoutRotatedBox(
+      angle: angleDeg * pi / 180,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _showDetailsPane(context),
         child: LayoutBuilder(
           builder: (context, constraints) {
             // When placed inside a parent with bounded constraints (the
@@ -702,9 +700,12 @@ class SensorFbPane extends StatelessWidget {
   Widget build(BuildContext context) {
     final (blockedValue, blockedUnit) = formatSensorElapsed(state.blockedFor);
     final (clearValue, clearUnit) = formatSensorElapsed(state.clearFor);
+    final tagged = config.tag != null && config.tag!.isNotEmpty;
 
     return SidePane(
-      title: config.detectionKey,
+      // The tag names the pane — key strings are wiring, not something an
+      // operator reads (same convention as the 3rd-party pane).
+      title: tagged ? config.tag! : 'Sensor',
       subtitle: '${config.kind.name} · FB_Sensor',
       icon: Icons.sensors,
       // Fault outranks detection: with neither contact reporting, "clear"
@@ -759,17 +760,10 @@ class SensorFbPane extends StatelessWidget {
                           ? 'blocked'
                           : 'clear',
                 ),
-                PaneDetailRow(
-                  label: 'Raw NO',
-                  value: state.rawNO ? 'on' : 'off',
-                ),
-                // The NC row is noise on a single-contact sensor — it would
-                // read a permanent "off" that means nothing.
-                if (state.hasNC)
-                  PaneDetailRow(
-                    label: 'Raw NC',
-                    value: state.rawNC ? 'on' : 'off',
-                  ),
+                // No raw NO/NC rows: the Output row already says what the
+                // sensor reports, and the undebounced bits are diagnostics,
+                // not something an operator acts on. When the contacts
+                // disagree, the Fault row below carries the message.
                 if (state.fault)
                   const PaneDetailRow(
                     label: 'Fault',
@@ -780,7 +774,12 @@ class SensorFbPane extends StatelessWidget {
           ),
           const Divider(height: 1),
 
-          // --- Setpoints -------------------------------------------------
+          // --- Debounce --------------------------------------------------
+          //
+          // Read-only live values up front: the operator reads the tuning at
+          // a glance but cannot fat-finger it. The editable fields sit
+          // folded behind "Adjust" — retuning is a rare, deliberate act, so
+          // it must not be reachable on the pane's first paint.
           //
           // `p_cfg_tOnDelay` / `p_cfg_tOffDelay` are PERSISTENT RETAIN on the
           // PLC, so a change here survives a restart without a download.
@@ -793,63 +792,64 @@ class SensorFbPane extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                PaneDetailRow(
+                  label: 'On delay',
+                  value: '${state.onDelay.inMilliseconds} ms',
+                ),
+                PaneDetailRow(
+                  label: 'Off delay',
+                  value: '${state.offDelay.inMilliseconds} ms',
+                ),
+                ExpansionTile(
+                  key: const Key('sensor_debounce_adjust'),
+                  title: Text(
+                    'Adjust',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  tilePadding: EdgeInsets.zero,
+                  // Top padding matters: the ExpansionTile clips its
+                  // children, and the delay fields' floating labels paint
+                  // above the field box — flush at the top they lose their
+                  // upper half to the clip.
+                  childrenPadding: const EdgeInsets.only(top: 8, bottom: 8),
+                  // No divider lines when open — the section title already
+                  // scopes the fold.
+                  shape: const Border(),
+                  collapsedShape: const Border(),
                   children: [
-                    Expanded(
-                      child: _DelayField(
-                        fieldKey: 'sensor_on_delay_field',
-                        label: 'On delay',
-                        value: state.onDelay,
-                        onSubmitted: (ms) =>
-                            onWrite(SensorFbFields.onDelay, ms),
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _DelayField(
+                            fieldKey: 'sensor_on_delay_field',
+                            label: 'On delay',
+                            value: state.onDelay,
+                            onSubmitted: (ms) =>
+                                onWrite(SensorFbFields.onDelay, ms),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _DelayField(
+                            fieldKey: 'sensor_off_delay_field',
+                            label: 'Off delay',
+                            value: state.offDelay,
+                            onSubmitted: (ms) =>
+                                onWrite(SensorFbFields.offDelay, ms),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _DelayField(
-                        fieldKey: 'sensor_off_delay_field',
-                        label: 'Off delay',
-                        value: state.offDelay,
-                        onSubmitted: (ms) =>
-                            onWrite(SensorFbFields.offDelay, ms),
-                      ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'On delay holds a detection off until the input has '
+                      'been stable; off delay holds it on after the input '
+                      'drops.',
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'On delay holds a detection off until the input has been '
-                  'stable; off delay holds it on after the input drops.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-
-          // --- Binding ----------------------------------------------------
-          PaneSection(
-            title: 'Binding',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                PaneDetailRow(label: 'Kind', value: config.kind.name),
-                PaneDetailRow(
-                  label: 'Detection key',
-                  value: config.detectionKey,
-                ),
-                PaneDetailRow(
-                  label: 'NO/NC pair',
-                  value: state.hasNC ? 'yes' : 'no',
-                ),
-                PaneDetailRow(
-                  label: 'Active polarity inverted',
-                  value: config.invertActivePolarity ? 'yes' : 'no',
-                ),
-                if (config.tag != null && config.tag!.isNotEmpty)
-                  PaneDetailRow(label: 'Tag', value: config.tag!),
               ],
             ),
           ),
@@ -1019,8 +1019,8 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Point at an FB_Sensor HMI struct for live state and editable '
-              'debounce in the side pane. A plain BOOL key also works.',
+              'Point at an FB_Sensor HMI struct for live state and debounce '
+              'in the side pane. A plain BOOL key also works.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),
@@ -1039,28 +1039,10 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             ),
             const SizedBox(height: 16),
 
-            // -- Rising / Falling Edge Delay Keys (paired — 8px between) --
-            //
-            // Legacy pairing for plain-BOOL bindings. On an FB_Sensor these
-            // are ignored: the delays live in the bound struct and the side
-            // pane edits them in place.
-            Text(
-              'Edge delay keys (plain BOOL bindings only)',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 4),
-            KeyField(
-              label: 'Rising Edge Delay Key',
-              initialValue: config.risingEdgeDelayKey,
-              onChanged: (v) => setState(() => config.risingEdgeDelayKey = v),
-            ),
-            const SizedBox(height: 8),
-            KeyField(
-              label: 'Falling Edge Delay Key',
-              initialValue: config.fallingEdgeDelayKey,
-              onChanged: (v) => setState(() => config.fallingEdgeDelayKey = v),
-            ),
-            const SizedBox(height: 16),
+            // The rising/falling edge delay KeyFields that used to sit here
+            // are gone: the debounce lives in the FB_Sensor struct behind
+            // the detection key, and the side pane reads and edits it
+            // there. The config fields survive for JSON compatibility only.
 
             // -- Active Color --
             ColorPickerRow(
@@ -1094,25 +1076,49 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             const SizedBox(height: 16),
 
             // -- Label Position (mirrors button.dart:758 / led.dart:164) --
+            //
+            // The checkbox gates whether the tag is painted on the canvas at
+            // all (off by default — the pane title carries the tag). The
+            // position dropdown is disabled while hidden: position without a
+            // label is a meaningless knob.
             Text('Label Position',
                 style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 4),
-            DropdownButton<TextPos>(
-              // Coalesce null → TextPos.below for legacy persisted pages
-              // that pre-date this picker (text_pos: null in JSON).
-              value: config.textPos ?? TextPos.below,
-              isExpanded: true,
-              onChanged: (value) {
-                setState(() {
-                  config.textPos = value!;
-                });
-              },
-              items: TextPos.values
-                  .map((e) => DropdownMenuItem<TextPos>(
-                        value: e,
-                        child: Text(e.name),
-                      ))
-                  .toList(),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButton<TextPos>(
+                    // Coalesce null → TextPos.below for legacy persisted
+                    // pages that pre-date this picker (text_pos: null).
+                    value: config.textPos ?? TextPos.below,
+                    isExpanded: true,
+                    onChanged: config.showTag
+                        ? (value) {
+                            setState(() {
+                              config.textPos = value!;
+                            });
+                          }
+                        : null,
+                    items: TextPos.values
+                        .map((e) => DropdownMenuItem<TextPos>(
+                              value: e,
+                              child: Text(e.name),
+                            ))
+                        .toList(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Checkbox(
+                  value: config.showTag,
+                  onChanged: (v) =>
+                      setState(() => config.showTag = v ?? false),
+                ),
+                GestureDetector(
+                  onTap: () =>
+                      setState(() => config.showTag = !config.showTag),
+                  child: const Text('Show on screen'),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
 

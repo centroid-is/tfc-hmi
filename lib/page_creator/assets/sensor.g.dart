@@ -19,6 +19,7 @@ SensorConfig _$SensorConfigFromJson(Map<String, dynamic> json) => SensorConfig(
       inactiveColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
           json['inactiveColor'], const ColorConverter().fromJson),
       tag: json['tag'] as String?,
+      showTag: json['showTag'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -45,6 +46,7 @@ Map<String, dynamic> _$SensorConfigToJson(SensorConfig instance) =>
       'activeColor': const ColorConverter().toJson(instance.activeColor),
       'inactiveColor': const ColorConverter().toJson(instance.inactiveColor),
       'tag': instance.tag,
+      'showTag': instance.showTag,
       'text': instance.text,
     };
 
