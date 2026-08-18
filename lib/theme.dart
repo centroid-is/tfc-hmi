@@ -32,13 +32,16 @@ abstract final class Isa101Colors {
   static const Color slateBright = Color(0xFF7FA3B8);
   static const Color gray = Color(0xFF78838B);
 
-  static const Color runningGreen = Color(0xFF7A9B76);
-  static const Color manualOchre = Color(0xFFB39B5A);
-  static const Color cleanBlue = Color(0xFF6B8CAE);
-  static const Color stoppedGray = Color(0xFF9E9E9E);
-  static const Color stoppedGrayDark = Color(0xFF6E6E6E);
+  // State colors sit a step above gray, not a step below saturated: a faint
+  // hue cast tells the states apart, brightness separates running (light)
+  // from stopped (dark), and only the alarm red is allowed to shout.
+  static const Color runningGreen = Color(0xFFA0A89D);
+  static const Color manualOchre = Color(0xFFACA28A);
+  static const Color cleanBlue = Color(0xFF97A1AB);
+  static const Color stoppedGray = Color(0xFF7E7E7E);
+  static const Color stoppedGrayDark = Color(0xFF585858);
   static const Color alarmRed = Color(0xFFD32F2F);
-  static const Color unknownViolet = Color(0xFF8E7CA6);
+  static const Color unknownViolet = Color(0xFF9C95A8);
   static const Color onState = Color(0xFFF5F5F5);
 }
 
