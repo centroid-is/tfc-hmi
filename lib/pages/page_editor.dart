@@ -4,6 +4,7 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/page_manager.dart';
@@ -287,6 +288,60 @@ List<AssetPlacement> rotateGroup({
   ];
 }
 
+/// Translates [placements] as a rigid group so the centre of their combined
+/// bounding box lands on ([targetX], [targetY]), both in 0..1 canvas
+/// fractions. Backs the context menu's "Paste here".
+///
+/// Same conventions as [rotateGroup]: extents are measured with each asset's
+/// own rotation applied, the maths runs in canvas-height units so a wide
+/// canvas does not skew the drop, and a group that would overhang the canvas
+/// is pulled back on as a unit — leading edge first, so one too large to fit
+/// overhangs the bottom/right — with a final per-centre clamp so no asset
+/// ends up unreachable off-canvas.
+@visibleForTesting
+List<AssetPlacement> placeGroupAt({
+  required List<AssetPlacement> placements,
+  required double targetX,
+  required double targetY,
+  required double aspectRatio,
+}) {
+  if (placements.isEmpty) return const [];
+  // A degenerate canvas has no meaningful aspect; fall back to square rather
+  // than producing NaN coordinates.
+  final aspect = (aspectRatio.isFinite && aspectRatio > 0) ? aspectRatio : 1.0;
+
+  var minX = double.infinity;
+  var minY = double.infinity;
+  var maxX = double.negativeInfinity;
+  var maxY = double.negativeInfinity;
+  for (final p in placements) {
+    final half = _halfExtents(p.width, p.height, p.angle, aspect);
+    minX = math.min(minX, p.x * aspect - half.dx);
+    maxX = math.max(maxX, p.x * aspect + half.dx);
+    minY = math.min(minY, p.y - half.dy);
+    maxY = math.max(maxY, p.y + half.dy);
+  }
+
+  var shiftX = targetX.clamp(0.0, 1.0) * aspect - (minX + maxX) / 2;
+  var shiftY = targetY.clamp(0.0, 1.0) - (minY + maxY) / 2;
+
+  if (maxX + shiftX > aspect) shiftX = aspect - maxX;
+  if (minX + shiftX < 0) shiftX = -minX;
+  if (maxY + shiftY > 1) shiftY = 1 - maxY;
+  if (minY + shiftY < 0) shiftY = -minY;
+
+  return [
+    for (final p in placements)
+      AssetPlacement(
+        x: (p.x + shiftX / aspect).clamp(0.0, 1.0),
+        y: (p.y + shiftY).clamp(0.0, 1.0),
+        width: p.width,
+        height: p.height,
+        angle: p.angle,
+      ),
+  ];
+}
+
 /// Which way a selection is flipped.
 enum MirrorAxis {
   /// Left becomes right: assets swap sides across a vertical line through the
@@ -504,6 +559,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// the `LayoutBuilder`, and [_rotateAssets] needs the aspect ratio, so the
   /// builder leaves it here on the way past.
   BoxConstraints? _canvasConstraints;
+
+  /// The shortcut handler's own focus. `autofocus` arms it once at mount, but
+  /// focus wanders: the config pane docks in the root overlay — outside this
+  /// page's Focus subtree — and a text field there keeps keyboard focus until
+  /// something takes it back, leaving every canvas shortcut dead. Clicking the
+  /// canvas re-arms it (see the Listener around [ZoomableCanvas]).
+  final FocusNode _shortcutFocus =
+      FocusNode(debugLabel: 'PageEditor shortcuts');
   String? _copiedAssets;
   Map<String, AssetPage> _temporaryPages = {};
   String? _currentPage;
@@ -621,6 +684,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (configAsset != null) closeSidePane(id: _configPaneId(configAsset));
     _treeScrollController.dispose();
     _paletteSearchController.dispose();
+    _shortcutFocus.dispose();
     super.dispose();
   }
 
@@ -978,7 +1042,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   void _handleCopy() {
     if (_selectedAssets.isEmpty) return;
-    _copiedAssets = _assetsToJson(_selectedAssets.toList());
+    _copyAssets(_selectedAssets.toList());
+  }
+
+  /// Backs both Ctrl/Cmd+C (the whole selection) and the context menu's Copy
+  /// entry (the asset under the cursor, or the selection when it is in it).
+  void _copyAssets(List<Asset> targets) {
+    if (targets.isEmpty) return;
+    _copiedAssets = _assetsToJson(targets);
     // Mirror onto the system clipboard, so paste can tell whether the user's
     // most recent copy was assets here or an image somewhere else.
     unawaited(EditorClipboard.instance.writeText(_copiedAssets!));
@@ -997,7 +1068,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
   }
 
-  Future<void> _handlePaste() async {
+  /// [at], in 0..1 canvas fractions, is where the context menu's "Paste here"
+  /// drops the group — centred on the click. Ctrl/Cmd+V passes null and gets
+  /// the classic slight offset from the source instead, so repeated pastes
+  /// remain visibly distinct from what they copy.
+  Future<void> _handlePaste({Offset? at}) async {
     final clipboard = EditorClipboard.instance;
 
     // The system clipboard reflects the user's latest copy: asset JSON when
@@ -1011,7 +1086,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     } else {
       final imageBytes = await clipboard.readImage();
       if (imageBytes != null) {
-        await _pasteImage(imageBytes);
+        await _pasteImage(imageBytes, at: at);
         return;
       }
     }
@@ -1025,12 +1100,30 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
       final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
 
-      for (final asset in copiedAssets) {
-        asset.coordinates = Coordinates(
-          x: (asset.coordinates.x + 0.02).clamp(0.0, 1.0),
-          y: (asset.coordinates.y + 0.02).clamp(0.0, 1.0),
-          angle: asset.coordinates.angle,
+      if (at != null) {
+        final placed = placeGroupAt(
+          placements: _placements(copiedAssets),
+          targetX: at.dx,
+          targetY: at.dy,
+          aspectRatio: _canvasAspectRatio(),
         );
+        for (var i = 0; i < copiedAssets.length; i++) {
+          copiedAssets[i].coordinates = Coordinates(
+            x: placed[i].x,
+            y: placed[i].y,
+            angle: copiedAssets[i].coordinates.angle,
+          );
+        }
+      } else {
+        for (final asset in copiedAssets) {
+          asset.coordinates = Coordinates(
+            x: (asset.coordinates.x + 0.02).clamp(0.0, 1.0),
+            y: (asset.coordinates.y + 0.02).clamp(0.0, 1.0),
+            angle: asset.coordinates.angle,
+          );
+        }
+      }
+      for (final asset in copiedAssets) {
         assets.add(asset);
         _selectedAssets.add(asset);
       }
@@ -1038,9 +1131,19 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// The live canvas's width / height, or 16:9 before the first layout.
+  double _canvasAspectRatio() {
+    final constraints = _canvasConstraints;
+    return constraints == null || constraints.maxHeight <= 0
+        ? 16 / 9
+        : constraints.maxWidth / constraints.maxHeight;
+  }
+
   /// Drops a pasted clipboard image onto the canvas as a new [ImageConfig],
-  /// sized so the image keeps its shape at a quarter of the canvas width.
-  Future<void> _pasteImage(Uint8List bytes) async {
+  /// sized so the image keeps its shape at a quarter of the canvas width —
+  /// centred on [at] when the paste came from the context menu, on the canvas
+  /// itself when it came from Ctrl/Cmd+V.
+  Future<void> _pasteImage(Uint8List bytes, {Offset? at}) async {
     try {
       final store = await ref.read(pageImageStoreProvider.future);
       final ingest = await ingestPageImage(store, bytes);
@@ -1049,18 +1152,31 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       ref.invalidate(pageImageBytesProvider(ingest.id));
       if (!mounted) return;
 
-      final constraints = _canvasConstraints;
-      final canvasAspect = constraints == null || constraints.maxHeight <= 0
-          ? 16 / 9
-          : constraints.maxWidth / constraints.maxHeight;
+      final canvasAspect = _canvasAspectRatio();
       const widthFrac = 0.25;
       final heightFrac =
           (widthFrac * canvasAspect / ingest.aspectRatio).clamp(0.02, 0.9);
 
+      var coordinates = Coordinates(x: 0.5, y: 0.5);
+      if (at != null) {
+        // The same pull-back-on-canvas rule as pasting assets, so a paste
+        // near an edge lands flush against it instead of half off-screen.
+        final placed = placeGroupAt(
+          placements: [
+            AssetPlacement(
+                x: at.dx, y: at.dy, width: widthFrac, height: heightFrac),
+          ],
+          targetX: at.dx,
+          targetY: at.dy,
+          aspectRatio: canvasAspect,
+        ).single;
+        coordinates = Coordinates(x: placed.x, y: placed.y);
+      }
+
       final asset = ImageConfig()
         ..applyIngest(ingest)
         ..size = RelativeSize(width: widthFrac, height: heightFrac)
-        ..coordinates = Coordinates(x: 0.5, y: 0.5);
+        ..coordinates = coordinates;
 
       _saveToHistory();
       setState(() {
@@ -1122,6 +1238,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   static const int _mirrorHorizontalAction = -7;
   static const int _mirrorVerticalAction = -8;
   static const int _deleteAction = -9;
+  static const int _copyAction = -10;
+  static const int _pasteAction = -11;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
@@ -1238,10 +1356,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// when MCP chat is up, preserving what the AI-only menu used to offer.
   ///
   /// [constraints] are the canvas's, needed by the rotate entries.
+  /// [pasteTarget] is the click point in 0..1 canvas fractions, where the
+  /// Paste entry drops its group.
   Future<void> _showAssetContextMenu(
     Asset asset,
     Offset globalPosition,
     BoxConstraints constraints,
+    Offset pasteTarget,
   ) async {
     final aiItems = kChatEnabled && isMcpChatAvailable()
         ? buildEditorAssetMenuItems(asset)
@@ -1272,6 +1393,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           child: const ListTile(
             leading: Icon(Icons.tune),
             title: Text('Edit'),
+            dense: true,
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<int>(
+          value: _copyAction,
+          child: ListTile(
+            leading: const Icon(Icons.copy),
+            title: Text(targets.length > 1
+                ? 'Copy ${targets.length} assets'
+                : 'Copy'),
+            dense: true,
+          ),
+        ),
+        // Always enabled: whether there is anything to paste can live on the
+        // system clipboard (asset JSON or an image from another window), which
+        // cannot be inspected synchronously. An empty paste is a no-op.
+        PopupMenuItem<int>(
+          value: _pasteAction,
+          child: const ListTile(
+            leading: Icon(Icons.content_paste),
+            title: Text('Paste here'),
             dense: true,
           ),
         ),
@@ -1413,9 +1556,45 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _alignAssets(targets, AlignAxis.vertical);
     } else if (choice == _deleteAction) {
       _deleteAssets(targets);
+    } else if (choice == _copyAction) {
+      _copyAssets(targets);
+    } else if (choice == _pasteAction) {
+      await _handlePaste(at: pasteTarget);
     } else if (kChatEnabled) {
       await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
     }
+  }
+
+  /// Right-click menu for empty canvas. One entry so far: paste, centred on
+  /// the click — the natural counterpart of Copy on the asset menu.
+  Future<void> _showCanvasContextMenu(
+    Offset globalPosition,
+    Offset pasteTarget,
+  ) async {
+    final choice = await showMenu<int>(
+      context: context,
+      useRootNavigator: true,
+      clipBehavior: Clip.antiAlias,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        globalPosition.dx,
+        globalPosition.dy,
+      ),
+      items: [
+        // Enabled unconditionally, same reasoning as the asset menu's entry.
+        const PopupMenuItem<int>(
+          value: _pasteAction,
+          child: ListTile(
+            leading: Icon(Icons.content_paste),
+            title: Text('Paste here'),
+            dense: true,
+          ),
+        ),
+      ],
+    );
+    if (choice != _pasteAction || !mounted) return;
+    await _handlePaste(at: pasteTarget);
   }
 
   @override
@@ -1436,6 +1615,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
 
     return Focus(
+      focusNode: _shortcutFocus,
       autofocus: true,
       // A window switch or a click into the palette can swallow the key up,
       // which would otherwise leave the canvas stuck in pan.
@@ -1556,7 +1736,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 ),
               ),
             Expanded(
-                child: ZoomableCanvas(
+                child: Listener(
+              // Any click on the canvas re-arms the shortcuts. Selecting an
+              // asset and pressing Ctrl/Cmd+C must work no matter what held
+              // keyboard focus before — the config pane's fields being the
+              // case that never heals on its own: the pane lives in the root
+              // overlay, so as long as it keeps focus, key events never even
+              // reach this page's Focus subtree. Raw pointer-down, not a tap:
+              // it precedes the gesture arena, so a text field clicked inside
+              // the palette still wins focus back on the tap itself.
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) {
+                if (!_shortcutFocus.hasPrimaryFocus) {
+                  _shortcutFocus.requestFocus();
+                }
+              },
+              child: ZoomableCanvas(
               scaleEnabled: !_showPalette,
               panEnabled: _isPanKeyHeld,
               child: LayoutBuilder(
@@ -1646,9 +1841,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               _isDraggingAsset = true;
                               _saveToHistory();
                             },
-                            onSecondaryTap: (asset, globalPosition) =>
-                                _showAssetContextMenu(
-                                    asset, globalPosition, constraints),
+                            onSecondaryTap: (asset, globalPosition) {
+                              final box =
+                                  context.findRenderObject() as RenderBox;
+                              final local = box.globalToLocal(globalPosition);
+                              _showAssetContextMenu(
+                                asset,
+                                globalPosition,
+                                constraints,
+                                Offset(
+                                  (local.dx / constraints.maxWidth)
+                                      .clamp(0.0, 1.0),
+                                  (local.dy / constraints.maxHeight)
+                                      .clamp(0.0, 1.0),
+                                ),
+                              );
+                            },
                             absorb: true,
                             selectedAssets: _selectedAssets,
                             proposedAssets: _proposedAssets,
@@ -1688,6 +1896,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                 angleDegrees: asset.coordinates.angle ?? 0.0,
                               );
                             });
+
+                            // A right-click is a menu, never a marquee: on
+                            // empty canvas it offers paste-at-cursor; on an
+                            // asset, AssetStack shows its own menu, so only
+                            // the marquee below has to stand down.
+                            if (pointerEvent.buttons ==
+                                kSecondaryMouseButton) {
+                              if (!hitAsset) {
+                                _showCanvasContextMenu(
+                                  pointerEvent.position,
+                                  Offset(
+                                    (pointerEvent.localPosition.dx /
+                                            constraints.maxWidth)
+                                        .clamp(0.0, 1.0),
+                                    (pointerEvent.localPosition.dy /
+                                            constraints.maxHeight)
+                                        .clamp(0.0, 1.0),
+                                  ),
+                                );
+                              }
+                              return;
+                            }
 
                             // Only start selection box if we didn't hit an asset
                             if (!hitAsset) {
@@ -1865,7 +2095,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   );
                 },
               ),
-            )),
+            ))),
           ],
         ),
       ),
@@ -2010,6 +2240,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       // A last pass, in case the closing interaction itself was the edit.
       _updateCurrentJson();
     });
+    // The pane may have held keyboard focus (its text fields live in the root
+    // overlay); with it gone, the shortcuts take over again without the
+    // operator having to click the canvas first.
+    _shortcutFocus.requestFocus();
   }
 
   Widget _buildConfigPane(BuildContext paneContext, Asset asset) {
