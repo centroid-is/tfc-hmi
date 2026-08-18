@@ -71,6 +71,7 @@ Widget _wrapInStack(Widget child) {
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 void main() {
+  setUp(Preferences.clearSecretCache);
   group('Title bar conversation picker', () {
     testWidgets(
         'title bar shows active conversation title instead of AI Copilot',

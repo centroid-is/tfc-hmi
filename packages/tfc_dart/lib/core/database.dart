@@ -137,16 +137,45 @@ class DatabaseConfig {
     );
   }
 
+  /// Process-wide cache of the raw config JSON read from secure storage.
+  ///
+  /// [fromPrefs] sits on the `databaseProvider` rebuild path, which retries
+  /// every 2 s while the database is unreachable — without a cache each
+  /// retry is a keychain hit for the postgres password. Stores the read
+  /// *future* so overlapping reads deduplicate; a failed read is evicted so
+  /// the next call retries; [toPrefs] writes through. Tests that swap the
+  /// [SecureStorage] instance should call [clearPrefsCache].
+  static Future<String?>? _configJsonCache;
+
+  /// Clears the process-wide config cache. Intended for tests.
+  static void clearPrefsCache() => _configJsonCache = null;
+
+  static Future<String?> _readConfigJson() {
+    final cached = _configJsonCache;
+    if (cached != null) {
+      return cached;
+    }
+    final future = SecureStorage.getInstance().read(key: _configLocation);
+    _configJsonCache = future;
+    future.then((_) {}, onError: (Object _) {
+      if (identical(_configJsonCache, future)) {
+        _configJsonCache = null;
+      }
+    });
+    return future;
+  }
+
   static Future<DatabaseConfig> fromPrefs() async {
-    final prefs = SecureStorage.getInstance();
-    var configJson = await prefs.read(key: _configLocation);
+    var configJson = await _readConfigJson();
     DatabaseConfig config;
     if (configJson == null) {
       // If not found, create default config
       config = DatabaseConfig(
           postgres: null); // Or provide a default Endpoint if needed
       configJson = jsonEncode(config.toJson());
-      await prefs.write(key: _configLocation, value: configJson);
+      await SecureStorage.getInstance()
+          .write(key: _configLocation, value: configJson);
+      _configJsonCache = Future.value(configJson);
     } else {
       config = DatabaseConfig.fromJson(jsonDecode(configJson));
     }
@@ -157,6 +186,7 @@ class DatabaseConfig {
     final prefs = SecureStorage.getInstance();
     final configJson = jsonEncode(toJson());
     await prefs.write(key: _configLocation, value: configJson);
+    _configJsonCache = Future.value(configJson);
   }
 
   @override
@@ -271,7 +301,8 @@ class Database {
         logger.i('Database connected');
         return db;
       } catch (e) {
-        logger.w('Database not reachable, retrying in ${retryDelay.inSeconds}s: $e');
+        logger.w(
+            'Database not reachable, retrying in ${retryDelay.inSeconds}s: $e');
         await Future.delayed(retryDelay);
       }
     }
@@ -447,7 +478,8 @@ class Database {
         }
       }
     } catch (e) {
-      logger.w('Could not check/update retention policy for $tableName (DB may be down): $e');
+      logger.w(
+          'Could not check/update retention policy for $tableName (DB may be down): $e');
       // Will be applied when table is created during first insert
     }
   }
@@ -463,13 +495,15 @@ class Database {
     }
 
     // Try to ensure table exists, but don't fail if DB is unavailable
-    if (!_writeBuffer.containsKey(tableName) && !_pendingTableCreation.contains(tableName)) {
+    if (!_writeBuffer.containsKey(tableName) &&
+        !_pendingTableCreation.contains(tableName)) {
       try {
         if (!await db.tableExists(tableName)) {
           await _tryToCreateTimeseriesTable(tableName, value);
         }
       } catch (e) {
-        logger.w('Could not verify table $tableName exists (DB may be down), will retry: $e');
+        logger.w(
+            'Could not verify table $tableName exists (DB may be down), will retry: $e');
         _pendingTableCreation.add(tableName);
       }
     }
@@ -485,10 +519,12 @@ class Database {
       // Drop from retryQueue first (oldest), then from buffer
       if (retryQueue.isNotEmpty) {
         final dropped = retryQueue.removeAt(0);
-        logger.w('Queue overflow for $tableName, dropping oldest from ${dropped.time}');
+        logger.w(
+            'Queue overflow for $tableName, dropping oldest from ${dropped.time}');
       } else if (buffer.length > 1) {
         final dropped = buffer.removeAt(0);
-        logger.w('Queue overflow for $tableName, dropping oldest from ${dropped.time}');
+        logger.w(
+            'Queue overflow for $tableName, dropping oldest from ${dropped.time}');
       }
     }
 
@@ -504,7 +540,8 @@ class Database {
         await _ensureTableAndInsert(tableName, writes, maxRetries: 1);
       } catch (e) {
         _totalWriteTime.stop();
-        logger.w('Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
+        logger.w(
+            'Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
         _queueForRetry(tableName, writes);
         return;
       }
@@ -521,7 +558,9 @@ class Database {
   /// Use a low value (0–1) in flush paths that already have higher-level retry
   /// (via [_queueForRetry]) to avoid blocking the data pipeline for tens of
   /// seconds during a sustained DB outage.
-  Future<void> _ensureTableAndInsert(String tableName, List<_PendingWrite> writes, {int maxRetries = 5}) async {
+  Future<void> _ensureTableAndInsert(
+      String tableName, List<_PendingWrite> writes,
+      {int maxRetries = 5}) async {
     // Create table if it was pending
     if (_pendingTableCreation.contains(tableName)) {
       if (!await db.tableExists(tableName)) {
@@ -531,7 +570,8 @@ class Database {
     }
     final rows = writes.map((w) => w.toMap()).toList();
     try {
-      await _withRetry(() => db.tableInsertBatch(tableName, rows), maxRetries: maxRetries);
+      await _withRetry(() => db.tableInsertBatch(tableName, rows),
+          maxRetries: maxRetries);
     } catch (e) {
       if (!_isMissingColumnError(e)) rethrow; // 42703 = undefined_column
       await _addMissingColumn(tableName, e, rows);
@@ -545,11 +585,13 @@ class Database {
   /// (isolate mode) — both contain the column name in their string representation.
   Future<void> _addMissingColumn(
       String tableName, Object error, List<Map<String, dynamic>> rows) async {
-    final errorStr = error is pg.ServerException ? error.message : error.toString();
+    final errorStr =
+        error is pg.ServerException ? error.message : error.toString();
     final match = RegExp(r'column "([^"]+)"').firstMatch(errorStr);
     if (match == null) {
       logger.e('Could not parse missing column name from: $errorStr');
-      throw DatabaseException('Schema evolution failed: cannot parse column name from "$errorStr"');
+      throw DatabaseException(
+          'Schema evolution failed: cannot parse column name from "$errorStr"');
     }
     final colName = match.group(1)!;
     // Find a non-null value for this column across all rows to infer its type
@@ -563,7 +605,8 @@ class Database {
     final colType = _getPostgresType(colValue);
     final quotedTable = tableName.replaceAll('"', '""');
     final quotedCol = colName.replaceAll('"', '""');
-    logger.i('Schema evolution: adding column "$colName" ($colType) to "$tableName"');
+    logger.i(
+        'Schema evolution: adding column "$colName" ($colType) to "$tableName"');
     await db.customStatement(
         'ALTER TABLE "$quotedTable" ADD COLUMN IF NOT EXISTS "$quotedCol" $colType');
   }
@@ -606,8 +649,10 @@ class Database {
     if (_writeBuffer.isEmpty) return;
 
     if (_flushInProgress) {
-      final pendingCount = _writeBuffer.values.fold<int>(0, (sum, list) => sum + list.length);
-      logger.w('Flush already in progress, $pendingCount items waiting - not keeping up with data rate');
+      final pendingCount =
+          _writeBuffer.values.fold<int>(0, (sum, list) => sum + list.length);
+      logger.w(
+          'Flush already in progress, $pendingCount items waiting - not keeping up with data rate');
       return;
     }
 
@@ -633,7 +678,8 @@ class Database {
           _totalWriteTime.stop();
         } catch (e) {
           _totalWriteTime.stop();
-          logger.w('Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
+          logger.w(
+              'Batch flush failed for $tableName, queuing ${writes.length} items for retry: $e');
           _queueForRetry(tableName, writes);
         }
       }
@@ -658,7 +704,8 @@ class Database {
     if (queue.length > _maxRetryQueueSize) {
       queue.sort((a, b) => a.seq.compareTo(b.seq));
       final overflow = queue.length - _maxRetryQueueSize;
-      logger.w('Retry queue overflow for $tableName, dropping $overflow oldest items');
+      logger.w(
+          'Retry queue overflow for $tableName, dropping $overflow oldest items');
       queue.removeRange(0, overflow);
     }
     _scheduleRetryFlush();
@@ -681,10 +728,12 @@ class Database {
 
         try {
           await _ensureTableAndInsert(tableName, writes, maxRetries: 1);
-          logger.i('Retry flush succeeded for $tableName: ${writes.length} items');
+          logger.i(
+              'Retry flush succeeded for $tableName: ${writes.length} items');
         } catch (e) {
           // Still failing — re-queue (drops oldest if full)
-          logger.w('Retry flush failed for $tableName, re-queuing ${writes.length} items');
+          logger.w(
+              'Retry flush failed for $tableName, re-queuing ${writes.length} items');
           _queueForRetry(tableName, writes);
         }
       }
@@ -693,7 +742,8 @@ class Database {
 
       // Schedule another flush if items remain
       if (_retryQueue.isNotEmpty) {
-        final total = _retryQueue.values.fold<int>(0, (sum, list) => sum + list.length);
+        final total =
+            _retryQueue.values.fold<int>(0, (sum, list) => sum + list.length);
         logger.w('Retry queue: $total items still pending');
         _scheduleRetryFlush();
       }
@@ -773,12 +823,17 @@ class Database {
       // Use ISO8601 strings for PostgreSQL timestamptz compatibility
       result = await db.tableQuery(tableName,
           where: r'time >= $1::timestamptz AND time <= $2::timestamptz',
-          whereArgs: [startTime.toUtc().toIso8601String(), endTime.toUtc().toIso8601String()],
+          whereArgs: [
+            startTime.toUtc().toIso8601String(),
+            endTime.toUtc().toIso8601String()
+          ],
           orderBy: orderBy);
     } else {
       // Use ISO8601 string for PostgreSQL timestamptz compatibility
       result = await db.tableQuery(tableName,
-          where: r'time >= $1::timestamptz', whereArgs: [to.toUtc().toIso8601String()], orderBy: orderBy);
+          where: r'time >= $1::timestamptz',
+          whereArgs: [to.toUtc().toIso8601String()],
+          orderBy: orderBy);
     }
 
     // final queryDuration = DateTime.now().difference(queryStart);
@@ -788,7 +843,8 @@ class Database {
     // final processStart = DateTime.now();
     if (result.isEmpty) {
       print('📊 queryTimeseriesData: No results found for $tableName');
-      print('📊 queryTimeseriesData: from=${from?.toUtc().toIso8601String()} to=${to.toUtc().toIso8601String()}');
+      print(
+          '📊 queryTimeseriesData: from=${from?.toUtc().toIso8601String()} to=${to.toUtc().toIso8601String()}');
       return [];
     }
 
@@ -802,7 +858,8 @@ class Database {
         } else if (rawTime is String) {
           time = DateTime.parse(rawTime);
         } else {
-          throw DatabaseException('Unexpected time format: ${rawTime.runtimeType}');
+          throw DatabaseException(
+              'Unexpected time format: ${rawTime.runtimeType}');
         }
         if (row.data.length == 2 && row.data.containsKey('value')) {
           return TimeseriesData(row.data['value'], time);
@@ -875,9 +932,24 @@ class Database {
     final isArray = dataType == 'ARRAY' || udtName.startsWith('_');
 
     // Only support numeric types
-    const scalarNumericTypes = {'double precision', 'integer', 'bigint', 'real', 'smallint', 'numeric'};
-    const arrayNumericUdts = {'_float8', '_float4', '_int4', '_int8', '_int2', '_numeric'};
-    if (!scalarNumericTypes.contains(dataType) && !arrayNumericUdts.contains(udtName)) {
+    const scalarNumericTypes = {
+      'double precision',
+      'integer',
+      'bigint',
+      'real',
+      'smallint',
+      'numeric'
+    };
+    const arrayNumericUdts = {
+      '_float8',
+      '_float4',
+      '_int4',
+      '_int8',
+      '_int2',
+      '_numeric'
+    };
+    if (!scalarNumericTypes.contains(dataType) &&
+        !arrayNumericUdts.contains(udtName)) {
       return queryTimeseriesData(tableName, endTime, from: startTime);
     }
 
@@ -890,7 +962,9 @@ class Database {
             time,
             val,
             idx
-          FROM "''' + quotedTable + r'''"
+          FROM "''' +
+          quotedTable +
+          r'''"
           CROSS JOIN LATERAL unnest(value) WITH ORDINALITY AS t(val, idx)
           WHERE time >= $2::timestamptz AND time <= $3::timestamptz
         ),
@@ -919,7 +993,9 @@ class Database {
             min(value)                                   AS min_val,
             max(value)                                   AS max_val,
             (array_agg(value ORDER BY time DESC))[1]     AS last_val
-          FROM "''' + quotedTable + r'''"
+          FROM "''' +
+          quotedTable +
+          r'''"
           WHERE time >= $2::timestamptz AND time <= $3::timestamptz
           GROUP BY bucket
         )

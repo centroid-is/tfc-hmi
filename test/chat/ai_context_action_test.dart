@@ -60,7 +60,8 @@ class _TrackingChatNotifier extends ChatNotifier {
   }
 
   @override
-  Future<void> sendMessage(String text, {Set<String>? toolFilter, List<ChatAttachment>? attachments}) async {
+  Future<void> sendMessage(String text,
+      {Set<String>? toolFilter, List<ChatAttachment>? attachments}) async {
     sentMessages.add(text);
     // Add message to state so we can verify it was added
     final messages = List<ChatMessage>.from(state.messages);
@@ -96,6 +97,7 @@ Widget _wrapWithTracking({
 }
 
 void main() {
+  setUp(Preferences.clearSecretCache);
   // Resolve the project root directory.
   final cwd = Directory.current.path;
   final projectRoot =

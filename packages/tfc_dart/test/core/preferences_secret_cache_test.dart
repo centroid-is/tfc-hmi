@@ -29,6 +29,21 @@ class CountingSecureStorage implements MySecureStorage {
   }
 }
 
+/// Storage whose first read throws (transient keychain error) and then
+/// recovers.
+class ThrowingThenWorkingSecureStorage extends CountingSecureStorage {
+  bool _thrown = false;
+
+  @override
+  Future<String?> read({required String key}) async {
+    if (!_thrown) {
+      _thrown = true;
+      throw Exception('transient keychain error');
+    }
+    return super.read(key: key);
+  }
+}
+
 void main() {
   late CountingSecureStorage storage;
   late Preferences prefs;
@@ -57,6 +72,37 @@ void main() {
       expect(await prefs.getString('absent', secret: true), isNull);
 
       expect(storage.reads, 1);
+    });
+
+    test('overlapping first reads of one key share a single keychain hit',
+        () async {
+      storage.store['secret_key'] = 'hunter2';
+
+      // Start both reads before either resolves — the startup provider
+      // chain does exactly this — and assert they were deduplicated.
+      final results = await Future.wait([
+        prefs.getString('secret_key', secret: true),
+        prefs.getString('secret_key', secret: true),
+      ]);
+
+      expect(results, ['hunter2', 'hunter2']);
+      expect(storage.reads, 1);
+    });
+
+    test('a failed read is not cached — the next read retries the keychain',
+        () async {
+      final flaky = ThrowingThenWorkingSecureStorage();
+      flaky.store['secret_key'] = 'hunter2';
+      final p = Preferences(database: null, secureStorage: flaky);
+
+      // First read: transient keychain error. It must propagate — turning
+      // it into null would let callers persist default configs over real
+      // data — and it must not poison the cache.
+      await expectLater(
+          p.getString('secret_key', secret: true), throwsException);
+
+      // Second read: the keychain recovered; the value comes through.
+      expect(await p.getString('secret_key', secret: true), 'hunter2');
     });
 
     test('writes go through to storage and populate the cache', () async {
@@ -90,7 +136,8 @@ void main() {
       expect(storage.reads, 2);
     });
 
-    test('cache survives Preferences re-creation (per process, not per '
+    test(
+        'cache survives Preferences re-creation (per process, not per '
         'instance)', () async {
       storage.store['secret_key'] = 'hunter2';
       expect(await prefs.getString('secret_key', secret: true), 'hunter2');

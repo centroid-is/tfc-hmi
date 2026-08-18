@@ -91,6 +91,7 @@ Future<void> _editJsonAndUnfocus(WidgetTester tester, String newText) async {
 }
 
 void main() {
+  setUp(Preferences.clearSecretCache);
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     SharedPreferencesAsyncPlatform.instance =

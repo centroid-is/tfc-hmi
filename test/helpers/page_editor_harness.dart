@@ -36,6 +36,7 @@ import 'package:tfc/pages/page_editor.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/providers/alarm.dart';
 import 'package:tfc/providers/database.dart';
+import 'package:tfc_dart/core/database.dart' show DatabaseConfig;
 import 'package:tfc/providers/page_manager.dart';
 import 'package:tfc/route_registry.dart';
 
@@ -171,6 +172,8 @@ void setUpEditorEnvironment() {
   // instance — so without this the exception lands asynchronously in
   // whichever test is running, on Windows only.
   SecureStorage.setInstance(FakeSecureStorage());
+  Preferences.clearSecretCache();
+  DatabaseConfig.clearPrefsCache();
 
   // BaseScaffold renders a NavigationBar from the registry, which asserts on
   // fewer than two destinations.

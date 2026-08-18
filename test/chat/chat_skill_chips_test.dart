@@ -59,6 +59,7 @@ Widget _wrapInStackWithPrefs(Widget child) {
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 void main() {
+  setUp(Preferences.clearSecretCache);
   group('ChatSkillChips', () {
     testWidgets('renders all default skill chips', (tester) async {
       String? tappedPrompt;
@@ -353,8 +354,7 @@ void main() {
       );
     });
 
-    testWidgets('chip tap places cursor at end of prompt text',
-        (tester) async {
+    testWidgets('chip tap places cursor at end of prompt text', (tester) async {
       setLargeTestSurface(tester);
       addTearDown(() => resetTestSurface(tester));
 

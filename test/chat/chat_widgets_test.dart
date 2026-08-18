@@ -104,6 +104,7 @@ Widget _wrapWithPrefsAndRef(
 // ─── MessageBubble ──────────────────────────────────────────────────────
 
 void main() {
+  setUp(Preferences.clearSecretCache);
   group('MessageBubble', () {
     testWidgets('renders user message right-aligned', (tester) async {
       await tester.pumpWidget(_wrap(
@@ -260,9 +261,8 @@ void main() {
 
       await tester.pumpWidget(_wrap(
         ListView(
-          children: proposals
-              .map((msg) => MessageBubble(message: msg))
-              .toList(),
+          children:
+              proposals.map((msg) => MessageBubble(message: msg)).toList(),
         ),
       ));
 
@@ -292,8 +292,7 @@ void main() {
       expect(selectableText, findsOneWidget);
     });
 
-    testWidgets('assistant message bubble uses SelectableText',
-        (tester) async {
+    testWidgets('assistant message bubble uses SelectableText', (tester) async {
       await tester.pumpWidget(_wrap(
         MessageBubble(message: ChatMessage.assistant('Select me assistant')),
       ));
@@ -307,8 +306,7 @@ void main() {
 
     testWidgets('tool result bubble uses SelectableText', (tester) async {
       await tester.pumpWidget(_wrap(
-        MessageBubble(
-            message: ChatMessage.toolResult('tc1', 'Select me tool')),
+        MessageBubble(message: ChatMessage.toolResult('tc1', 'Select me tool')),
       ));
 
       // Should find a SelectableText containing the tool result text

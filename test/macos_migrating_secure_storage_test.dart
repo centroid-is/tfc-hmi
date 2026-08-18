@@ -15,6 +15,9 @@ class FakeStorage implements MySecureStorage {
   /// When true only [write] throws (partial-failure shape).
   bool throwOnWrite = false;
 
+  /// When true only [delete] throws (partial-failure shape).
+  bool throwOnDelete = false;
+
   final Map<String, String> store = {};
   int reads = 0;
   int writes = 0;
@@ -49,6 +52,10 @@ class FakeStorage implements MySecureStorage {
   Future<void> delete({required String key}) async {
     deletes++;
     _maybeThrow();
+    if (throwOnDelete) {
+      throw PlatformException(
+          code: '-34018', message: "A required entitlement isn't present");
+    }
     store.remove(key);
   }
 }
@@ -72,8 +79,7 @@ void main() {
       expect(legacy.reads, 0);
     });
 
-    test('read miss falls back to legacy and copies the value over',
-        () async {
+    test('read miss falls back to legacy and copies the value over', () async {
       legacy.store['k'] = 'legacy-value';
 
       expect(await storage.read(key: 'k'), 'legacy-value');
@@ -83,6 +89,11 @@ void main() {
       // ...so the next read is served without consulting legacy again.
       expect(await storage.read(key: 'k'), 'legacy-value');
       expect(legacy.reads, 1);
+
+      // Copy-forward completes the migration for this key: the legacy
+      // entry is removed so it cannot go stale or duplicate the secret.
+      expect(legacy.store.containsKey('k'), isFalse);
+      expect(legacy.deletes, 1);
     });
 
     test('read of a key absent everywhere returns null', () async {
@@ -129,26 +140,28 @@ void main() {
       expect(await storage.read(key: 'k'), 'v');
     });
 
-    test('delete still removes the legacy copy instead of throwing',
-        () async {
+    test('delete still removes the legacy copy instead of throwing', () async {
       legacy.store['k'] = 'v';
       await storage.delete(key: 'k');
       expect(legacy.store.containsKey('k'), isFalse);
     });
 
-    test('migration read still returns the legacy value when the copy-over '
+    test(
+        'migration read still returns the legacy value when the copy-over '
         'write fails', () async {
       // New storage read succeeds but returns null; only the copy-over
       // write fails. The caller must still get the legacy value instead of
       // null (which would silently regenerate default configs).
       final flaky = FakeStorage()..throwOnWrite = true;
-      final s = MacOsMigratingSecureStorage(
-          newStorage: flaky, legacyStorage: legacy);
+      final s =
+          MacOsMigratingSecureStorage(newStorage: flaky, legacyStorage: legacy);
       legacy.store['k'] = 'legacy-value';
 
       expect(await s.read(key: 'k'), 'legacy-value');
       expect(flaky.writes, 1); // the copy-over was attempted...
       expect(flaky.store.containsKey('k'), isFalse); // ...and failed
+      // The legacy entry stays: it is still the only copy of the value.
+      expect(legacy.store['k'], 'legacy-value');
     });
   });
 
@@ -157,11 +170,15 @@ void main() {
     // StateManConfig.fromPrefs persist a default config over a null read,
     // which would overwrite real data.
 
-    test('read miss with an erroring legacy storage throws instead of '
-        'returning null', () async {
+    test('read miss with an erroring legacy storage is treated as absent',
+        () async {
+      // A broken amplify store means the pre-migration app could not read
+      // this machine's secrets either — there is no working configuration
+      // to protect, and a fresh install must not break over a store it
+      // never wrote to. (Errors from the *operative* storage still
+      // propagate — see the tests below.)
       legacy.throwOnAccess = true;
-      // The unreadable legacy entry could hold real pre-migration data.
-      expect(storage.read(key: 'k'), throwsA(isA<PlatformException>()));
+      expect(await storage.read(key: 'k'), isNull);
     });
 
     test('read throws when both storages error', () async {
@@ -175,6 +192,17 @@ void main() {
       legacy.throwOnAccess = true;
       expect(storage.write(key: 'k', value: 'v'),
           throwsA(isA<PlatformException>()));
+    });
+
+    test(
+        'delete throws when the new storage refuses the delete but still '
+        'serves reads — a swallowed error would resurrect the value', () async {
+      newStorage.store['k'] = 'v';
+      newStorage.throwOnDelete = true;
+      await expectLater(
+          storage.delete(key: 'k'), throwsA(isA<PlatformException>()));
+      // The legacy copy was still cleaned up on the way through.
+      expect(legacy.store.containsKey('k'), isFalse);
     });
 
     test('delete swallows legacy failure', () async {

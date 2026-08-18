@@ -164,30 +164,45 @@ class Preferences implements PreferencesApi {
   /// macOS can mean a user-visible permission prompt.
   ///
   /// The cache is static so it survives [Preferences] re-creation: each
-  /// secret key touches the keychain at most once per process. Reads
-  /// populate it (a missing key is cached as null), writes update it, and
-  /// [remove] evicts it. Note: this assumes all secret access in the process
-  /// goes through [Preferences] against a single [MySecureStorage] backend;
-  /// writing to secure storage directly behind its back leaves the cache
-  /// stale (call [clearSecretCache] if you must do that, e.g. in tests).
-  static final Map<String, String?> _secretCache = {};
+  /// secret key touches the keychain at most once per process. It stores
+  /// the read *future*, not the resolved value, so overlapping first reads
+  /// of the same key (startup provider chains) are deduplicated into one
+  /// keychain hit instead of a stampede. Reads populate it (a missing key
+  /// is cached as a null result), writes update it, [remove] evicts it,
+  /// and a read that *fails* is evicted again — a transient keychain error
+  /// must not be cached as "absent" or a default config would silently
+  /// overwrite the user's real one. Note: this assumes all secret access
+  /// in the process goes through [Preferences] against a single
+  /// [MySecureStorage] backend; writing to secure storage directly behind
+  /// its back leaves the cache stale (call [clearSecretCache] if you must
+  /// do that, e.g. in tests).
+  static final Map<String, Future<String?>> _secretCache = {};
 
   /// Clears the process-wide secret cache. Intended for tests, which create
   /// independent [Preferences] instances backed by fresh fake storages.
   static void clearSecretCache() => _secretCache.clear();
 
-  Future<String?> _readSecret(String key) async {
-    if (_secretCache.containsKey(key)) {
-      return _secretCache[key];
+  Future<String?> _readSecret(String key) {
+    final cached = _secretCache[key];
+    if (cached != null) {
+      return cached;
     }
-    final value = await secureStorage.read(key: key);
-    _secretCache[key] = value;
-    return value;
+    final future = secureStorage.read(key: key);
+    _secretCache[key] = future;
+    // Never cache a failed read: evict so the next caller retries the
+    // keychain. The error itself still propagates to whoever awaits the
+    // returned future.
+    future.then((_) {}, onError: (Object _) {
+      if (identical(_secretCache[key], future)) {
+        _secretCache.remove(key);
+      }
+    });
+    return future;
   }
 
   Future<void> _writeSecret(String key, String value) async {
     await secureStorage.write(key: key, value: value);
-    _secretCache[key] = value;
+    _secretCache[key] = Future.value(value);
   }
 
   Future<void> _deleteSecret(String key) async {
@@ -196,9 +211,7 @@ class Preferences implements PreferencesApi {
   }
 
   Preferences(
-      {required this.database,
-      required this.secureStorage,
-      this.localCache});
+      {required this.database, required this.secureStorage, this.localCache});
 
   static Future<Preferences> create(
       {required Database? db, PreferencesApi? localCache}) async {
