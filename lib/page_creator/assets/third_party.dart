@@ -16,8 +16,9 @@ import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
 import 'graph.dart' show GraphAssetConfig;
-import 'number.dart' show NumberConfig, NumberWidget;
-import 'ratio_number.dart' show RatioNumberConfig, RatioNumberWidget;
+import 'number.dart' show NumberConfig, NumberWidget, showNumberGraphDialog;
+import 'ratio_number.dart'
+    show RatioNumberConfig, RatioNumberWidget, showRatioAnalysisDialog;
 import 'registry.dart';
 import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
@@ -960,12 +961,32 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
         listenable: Listenable.merge([_raw, _statusRaw]),
-        builder: (context, _) => _paneFor(_isRunning, weights),
+        builder: (context, _) => _paneFor(context, _isRunning, weights),
       ),
     );
   }
 
-  Widget _paneFor(bool? isRunning, List<NumberConfig> weights) {
+  /// A compact trailing chart button for a pane row.
+  ///
+  /// The live figure beside it is tappable too — the readouts keep their own
+  /// tap-through — but a figure does not LOOK tappable, so the button is the
+  /// visible way into the chart.
+  Widget _chartButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      icon: Icon(icon, size: 16),
+      tooltip: tooltip,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 26, height: 26),
+      onPressed: onPressed,
+    );
+  }
+
+  Widget _paneFor(
+      BuildContext context, bool? isRunning, List<NumberConfig> weights) {
     final config = widget.config;
     PaneStatus status;
     if (config.runKey.isEmpty) {
@@ -1026,17 +1047,39 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   PaneDetailRow(
                     label: 'Accept rate CW${i + 1} '
                         '(${config.acceptWindowMinutes} min)',
-                    child: SizedBox(
-                      height: 22,
-                      child: RatioNumberWidget(config: ratio),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          height: 22,
+                          child: RatioNumberWidget(config: ratio),
+                        ),
+                        _chartButton(
+                          icon: Icons.bar_chart,
+                          tooltip: 'Accept/reject chart',
+                          onPressed: () =>
+                              showRatioAnalysisDialog(context, ref, ratio),
+                        ),
+                      ],
                     ),
                   ),
                 for (final (i, weight) in weights.indexed)
                   PaneDetailRow(
                     label: 'Weight CW${i + 1}',
-                    child: SizedBox(
-                      height: 22,
-                      child: NumberWidget(config: weight),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          height: 22,
+                          child: NumberWidget(config: weight),
+                        ),
+                        _chartButton(
+                          icon: Icons.show_chart,
+                          tooltip: 'Weight trend',
+                          onPressed: () =>
+                              showNumberGraphDialog(context, weight),
+                        ),
+                      ],
                     ),
                   ),
               ],

@@ -284,6 +284,13 @@ void main() {
       // the default when the child has no unit configured.
       expect(find.text('--- kg'), findsNWidgets(2));
 
+      // Each figure carries a visible way into its chart — the readout's own
+      // tap-through is invisible, and an operator should not have to guess.
+      expect(find.byIcon(Icons.bar_chart), findsNWidgets(2),
+          reason: 'One accept/reject chart button per checkweigher.');
+      expect(find.byIcon(Icons.show_chart), findsNWidgets(2),
+          reason: 'One weight-trend button per checkweigher.');
+
       // Wiring and boilerplate stay out: no key strings, no polarity
       // wording, no footprint, no inventory of the box's children.
       expect(find.text('INSIDE THE BOX'), findsNothing);
