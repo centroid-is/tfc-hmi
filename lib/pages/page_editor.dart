@@ -504,6 +504,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// the `LayoutBuilder`, and [_rotateAssets] needs the aspect ratio, so the
   /// builder leaves it here on the way past.
   BoxConstraints? _canvasConstraints;
+
+  /// The shortcut handler's own focus. `autofocus` arms it once at mount, but
+  /// focus wanders: the config pane docks in the root overlay — outside this
+  /// page's Focus subtree — and a text field there keeps keyboard focus until
+  /// something takes it back, leaving every canvas shortcut dead. Clicking the
+  /// canvas re-arms it (see the Listener around [ZoomableCanvas]).
+  final FocusNode _shortcutFocus =
+      FocusNode(debugLabel: 'PageEditor shortcuts');
   String? _copiedAssets;
   Map<String, AssetPage> _temporaryPages = {};
   String? _currentPage;
@@ -621,6 +629,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (configAsset != null) closeSidePane(id: _configPaneId(configAsset));
     _treeScrollController.dispose();
     _paletteSearchController.dispose();
+    _shortcutFocus.dispose();
     super.dispose();
   }
 
@@ -1436,6 +1445,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
 
     return Focus(
+      focusNode: _shortcutFocus,
       autofocus: true,
       // A window switch or a click into the palette can swallow the key up,
       // which would otherwise leave the canvas stuck in pan.
@@ -1556,7 +1566,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 ),
               ),
             Expanded(
-                child: ZoomableCanvas(
+                child: Listener(
+              // Any click on the canvas re-arms the shortcuts. Selecting an
+              // asset and pressing Ctrl/Cmd+C must work no matter what held
+              // keyboard focus before — the config pane's fields being the
+              // case that never heals on its own: the pane lives in the root
+              // overlay, so as long as it keeps focus, key events never even
+              // reach this page's Focus subtree. Raw pointer-down, not a tap:
+              // it precedes the gesture arena, so a text field clicked inside
+              // the palette still wins focus back on the tap itself.
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) {
+                if (!_shortcutFocus.hasPrimaryFocus) {
+                  _shortcutFocus.requestFocus();
+                }
+              },
+              child: ZoomableCanvas(
               scaleEnabled: !_showPalette,
               panEnabled: _isPanKeyHeld,
               child: LayoutBuilder(
@@ -1865,7 +1890,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   );
                 },
               ),
-            )),
+            ))),
           ],
         ),
       ),
@@ -2010,6 +2035,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       // A last pass, in case the closing interaction itself was the edit.
       _updateCurrentJson();
     });
+    // The pane may have held keyboard focus (its text fields live in the root
+    // overlay); with it gone, the shortcuts take over again without the
+    // operator having to click the canvas first.
+    _shortcutFocus.requestFocus();
   }
 
   Widget _buildConfigPane(BuildContext paneContext, Asset asset) {
