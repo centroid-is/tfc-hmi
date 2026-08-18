@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
+import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -178,6 +179,50 @@ void main() {
       final offBelt = topLeft + corner + inward;
       expect(await hitsDetector(tester, offBelt), isFalse,
           reason: 'tap on the empty bounding box must not reach the handler');
+    });
+
+    testWidgets('child gate riding the conveyor still receives its own taps',
+        (tester) async {
+      // An interactive gate mounts its own GestureDetector; a tap on the gate
+      // must reach it even though the gate hangs off the belt, where the
+      // conveyor painter itself reports a miss.
+      final config = ConveyorConfig(
+        key: 'AREA01.CN01',
+        turns: [ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)],
+        beltThickness: 0.2,
+        gates: [
+          ChildGateEntry(
+            position: 0.25,
+            side: GateSide.right,
+            gate: ConveyorGateConfig(
+              gateVariant: GateVariant.pusher,
+              forceOpenKey: 'AREA01.CN01.GATE.forceOpen',
+            ),
+          ),
+        ],
+      )..size = relSize;
+
+      await tester.pumpWidget(_wrap(config, boxSize));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final gateDetector = find.descendant(
+        of: find.byType(ConveyorGate),
+        matching: find.byType(GestureDetector),
+      );
+      expect(gateDetector, findsOneWidget,
+          reason: 'a gate with a force key must mount its tap handler');
+      final gateRenderObject = tester.renderObject(gateDetector);
+
+      final probe = tester.getCenter(find.byType(ConveyorGate));
+      final conveyorRect = tester.getRect(find.byType(Conveyor));
+      expect(conveyorRect.contains(probe), isTrue,
+          reason: 'test setup: gate centre must lie inside the conveyor box');
+
+      final result = tester.hitTestOnBinding(probe);
+      expect(
+          result.path.any((entry) => entry.target == gateRenderObject), isTrue,
+          reason: 'tap on a child gate must reach the gate\'s own handler');
     });
 
     testWidgets('straight conveyor keeps its whole box tappable',
