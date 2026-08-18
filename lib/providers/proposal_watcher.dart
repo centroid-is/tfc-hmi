@@ -16,6 +16,7 @@ const proposalRoutes = <String, String>{
   'key_mapping': '/advanced/key-repository',
   'page': '/advanced/page-editor',
   'asset': '/advanced/page-editor',
+  'asset_update': '/advanced/page-editor',
 };
 
 /// A pending proposal notification from the MCP server.
@@ -47,6 +48,7 @@ class PendingProposal {
       case 'page':
         return 'Page Editor';
       case 'asset':
+      case 'asset_update':
         return 'Page Editor';
       default:
         return 'Editor';

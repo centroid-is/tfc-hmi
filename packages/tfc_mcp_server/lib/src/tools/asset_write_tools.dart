@@ -162,4 +162,118 @@ void registerAssetWriteTools({
       );
     },
   );
+
+  registry.registerTool(
+    name: 'update_asset',
+    description: 'Propose changing fields on an asset that already exists '
+        'on a page. The target is matched when the proposal is applied, by '
+        'asset_type narrowed by title and/or key -- the match must be '
+        'unique or nothing is changed. Returns proposal JSON for the page '
+        'editor -- does not write to the database.',
+    inputSchema: JsonSchema.object(
+      properties: {
+        'page_key': JsonSchema.string(
+          description: 'Key of the page holding the asset (e.g., "/")',
+        ),
+        'asset_type': JsonSchema.string(
+          description: 'Type name of the target asset. '
+              'All valid types: ${kValidAssetTypes.join(", ")}',
+        ),
+        'title': JsonSchema.string(
+          description: 'Display label of the target asset, to narrow the '
+              'match when several assets share the type',
+        ),
+        'key': JsonSchema.string(
+          description: 'Tag key currently bound to the target asset, to '
+              'narrow the match',
+        ),
+        'index': JsonSchema.integer(
+          description: 'Position of the target in the page\'s assets array '
+              '(as returned by get_asset_detail). Only needed when several '
+              'assets share the same type and title/key. Validated against '
+              'asset_type/title/key when applied -- a stale index fails '
+              'instead of patching the wrong asset.',
+        ),
+        'child_id': JsonSchema.string(
+          description: 'Stable id of a child entry inside the target '
+              '(e.g. a ThirdPartyEquipment or Elevator child). When set, '
+              'the patch applies to that child instead of the asset itself.',
+        ),
+        'patch': JsonSchema.object(
+          description: 'Fields to change, shallow-merged onto the asset\'s '
+              'JSON. Keys match the asset type\'s serialization fields, '
+              'e.g. {"key": "SB1.Running"} rebinds the tag, {"text": '
+              '"Infeed"} relabels. The asset\'s type cannot be changed.',
+        ),
+      },
+      required: ['page_key', 'asset_type', 'patch'],
+    ),
+    handler: (args, extra) async {
+      final pageKey = args['page_key'] as String;
+      final assetType = args['asset_type'] as String;
+      final title = args['title'] as String?;
+      final key = args['key'] as String?;
+      final index = args['index'] as int?;
+      final childId = args['child_id'] as String?;
+      final patch = args['patch'];
+
+      if (!kValidAssetTypes.contains(assetType)) {
+        return CallToolResult(
+          content: [
+            TextContent(
+              text: 'Unknown asset_type "$assetType". '
+                  'Valid types: ${kValidAssetTypes.join(", ")}',
+            ),
+          ],
+          isError: true,
+        );
+      }
+      if (patch is! Map<String, dynamic> || patch.isEmpty) {
+        return CallToolResult(
+          content: [TextContent(text: 'patch must be a non-empty object')],
+          isError: true,
+        );
+      }
+
+      final targetLabel = title ?? key ?? assetType;
+      final proposal = <String, dynamic>{
+        // Top-level title is what ProposalService records and the
+        // notification banner shows.
+        'title': 'Update $targetLabel',
+        'page_key': pageKey,
+        'target': {
+          'asset_type': assetType,
+          if (title != null) 'title': title,
+          if (key != null) 'key': key,
+          if (index != null) 'index': index,
+          if (childId != null) 'child_id': childId,
+        },
+        'patch': patch,
+      };
+
+      final diff = proposalService.formatCreateDiff('Asset Update', targetLabel, {
+        'page': pageKey,
+        'target': [
+          assetType,
+          if (title != null) 'title "$title"',
+          if (key != null) 'key "$key"',
+          if (index != null) 'index $index',
+          if (childId != null) 'child "$childId"',
+        ].join(', '),
+        for (final e in patch.entries) 'patch: ${e.key}': '${e.value}',
+      });
+
+      // Elicit -- ProposalDeclinedException propagates to middleware
+      await riskGate.requestConfirmation(
+        description: 'Update asset: $targetLabel',
+        level: RiskLevel.medium,
+        details: {'diff': diff},
+      );
+
+      final wrapped = proposalService.wrapProposal('asset_update', proposal);
+      return CallToolResult(
+        content: [TextContent(text: jsonEncode(wrapped))],
+      );
+    },
+  );
 }

@@ -355,6 +355,94 @@ void main() {
         expect(json['children'], isEmpty);
       });
     });
+
+    group('update_asset', () {
+      test('valid args returns asset_update proposal JSON', () async {
+        await setupWithAutoConfirm();
+
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'ThirdPartyEquipmentConfig',
+          'title': 'SpeedBatcher',
+          'patch': {'runKey': 'SB1.Running'},
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['_proposal_type'], equals('asset_update'));
+        expect(json['page_key'], equals('/'));
+        final target = json['target'] as Map<String, dynamic>;
+        expect(target['asset_type'], equals('ThirdPartyEquipmentConfig'));
+        expect(target['title'], equals('SpeedBatcher'));
+        expect(target.containsKey('key'), isFalse);
+        expect(target.containsKey('child_id'), isFalse);
+        expect(json['patch'], equals({'runKey': 'SB1.Running'}));
+      });
+
+      test('child_id is passed through in the target', () async {
+        await setupWithAutoConfirm();
+
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'ThirdPartyEquipmentConfig',
+          'index': 3,
+          'child_id': 'child-42',
+          'patch': {'detectionKey': 'SB1.Infeed.PE'},
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        final target = json['target'] as Map<String, dynamic>;
+        expect(target['child_id'], equals('child-42'));
+        expect(target['index'], equals(3));
+      });
+
+      test('unknown asset_type is rejected', () async {
+        await setupWithAutoConfirm();
+
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'NoSuchConfig',
+          'patch': {'key': 'x'},
+        });
+
+        expect(result.isError, isTrue);
+        final text = (result.content.first as TextContent).text;
+        expect(text, contains('Unknown asset_type'));
+      });
+
+      test('empty patch is rejected', () async {
+        await setupWithAutoConfirm();
+
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'LEDConfig',
+          'patch': <String, dynamic>{},
+        });
+
+        expect(result.isError, isTrue);
+        final text = (result.content.first as TextContent).text;
+        expect(text, contains('patch must be a non-empty object'));
+      });
+
+      test('declined elicitation returns decline message, no proposal',
+          () async {
+        await setupWithDecline();
+
+        final result = await client.callTool('update_asset', {
+          'page_key': '/',
+          'asset_type': 'LEDConfig',
+          'patch': {'key': 'x'},
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        expect(text.toLowerCase(), contains('declined'));
+        expect(text, isNot(contains('_proposal_type')));
+      });
+    });
   });
 }
 

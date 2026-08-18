@@ -16,6 +16,7 @@ const _proposalRoutes = <String, String>{
   'key_mapping': '/advanced/key-repository',
   'page': '/advanced/page-editor',
   'asset': '/advanced/page-editor',
+  'asset_update': '/advanced/page-editor',
 };
 
 /// A widget that parses proposal JSON from tool results and provides
