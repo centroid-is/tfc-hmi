@@ -342,7 +342,13 @@ class ConveyorPathGeometry {
         (t.angle.clamp(-179.5, 179.5)) * pi / 180
     ];
     final n = active.length;
-    final radii = [for (final t in active) max(t.radius, 0.1) * beltWidth];
+    // Capped: a fillet radii beyond any box (hand-edited JSON, slider abuse)
+    // only gets uniformly scaled down again, and taken literally it
+    // overflows the seeding arithmetic into non-finite geometry.
+    final radii = [
+      for (final t in active)
+        min(max(t.radius, 0.1) * beltWidth, size.longestSide * 1e3)
+    ];
 
     final inset = fitWidth / 2 + margin;
     final inner = Size(
@@ -351,14 +357,45 @@ class ConveyorPathGeometry {
     // Straight runs between consecutive corners: seg[0] leads into the first
     // corner, seg[n] leaves the last one. Positions seed their proportions;
     // the fill solve rescales them per axis afterwards.
-    final corners = [
-      for (final t in active) t.position.clamp(0.0, 1.0) * inner.width
+    //
+    // A position points at the *center of the corner arc*, measured along
+    // the belt — the arc is the bend the operator sees, so it is what the
+    // slider must move. Seeded on the skeleton's corner points instead, the
+    // run into a bend and the arc's own length pushed the visible corner
+    // away from the configured number. The skeleton distances are the path
+    // lengths with each fillet's tangent runs added back: a fillet replaces
+    // 2*tangent of skeleton with its arc of belt.
+    //
+    // A radius can make a position physically unreachable — the arc's
+    // center needs half the arc of belt before it, and neighbouring
+    // fillets need their tangent runs — so such positions clamp to the
+    // closest spot the fillet still fits at full radius, rather than
+    // pinching the bend to honour a number nobody can see honoured.
+    final naturalLength = inner.width;
+    final tangentLen = [
+      for (var i = 0; i < n; i++) radii[i] * tan(sweeps[i].abs() / 2)
     ];
+    final arcLen = [for (var i = 0; i < n; i++) radii[i] * sweeps[i].abs()];
+    // Each run's ideal skeleton length: the belt distance between the arc
+    // centers it connects (box start and end count as centers of nothing),
+    // with each adjacent fillet's tangent run added back and half its arc
+    // taken out — a fillet replaces 2*tangent of skeleton with its arc of
+    // belt. Written as differences of neighbouring positions, not a running
+    // sum, so a clamp on one run cannot leak asymmetry into the others.
     final seg = <double>[];
     for (var i = 0; i <= n; i++) {
-      final from = i == 0 ? 0.0 : corners[i - 1];
-      final to = i == n ? inner.width : corners[i];
-      seg.add(max(to - from, 0.0));
+      final prevCenter = i == 0
+          ? 0.0
+          : active[i - 1].position.clamp(0.0, 1.0) * naturalLength;
+      final nextCenter = i == n
+          ? naturalLength
+          : active[i].position.clamp(0.0, 1.0) * naturalLength;
+      var ideal = nextCenter - prevCenter;
+      if (i > 0) ideal += tangentLen[i - 1] - arcLen[i - 1] / 2;
+      if (i < n) ideal += tangentLen[i] - arcLen[i] / 2;
+      final minimum = (i > 0 ? tangentLen[i - 1] : 0.0) +
+          (i < n ? tangentLen[i] : 0.0);
+      seg.add(max(ideal, minimum));
     }
 
     var fillClamped = false;
@@ -507,7 +544,38 @@ class ConveyorPathGeometry {
     }
     final metrics = fitted.computeMetrics().toList();
     if (metrics.isEmpty) return null;
-    return ConveyorPathGeometry._(fitted, beltWidth, fit, metrics.first);
+    final geometry =
+        ConveyorPathGeometry._(fitted, beltWidth, fit, metrics.first);
+
+    // Center the ink, not the centerline. The band extends beltWidth/2 past
+    // the centerline on the outer side of every run but ends in a flat cap,
+    // so around an L the ink is lopsided against the centerline's bounds —
+    // centered on those, the belt visibly hugs one corner of its box. The
+    // shift is at most beltWidth/4 per axis, which the fit's own inset
+    // (beltWidth/2 + margin per side) always has room for.
+    final ink = geometry
+            .bandOutline(0, 1,
+                width: beltWidth,
+                radius: beltWidth * ConveyorPainter._endRadiusFactor)
+            ?.getBounds() ??
+        // Over-wide belt: the painter falls back to a round-capped stroke,
+        // whose ink is the centerline inflated evenly — nothing to correct.
+        fitted.getBounds().inflate(beltWidth / 2);
+    // Per axis, and only while the ink fits: an over-wide belt spills over
+    // the box by design, and dragging its centerline around to center the
+    // spill would break the skeleton's own containment.
+    final shift = Offset(
+      ink.width <= size.width ? size.width / 2 - ink.center.dx : 0.0,
+      ink.height <= size.height ? size.height / 2 - ink.center.dy : 0.0,
+    );
+    // Hostile configs (hand-edited JSON) can degenerate into non-finite
+    // bounds; Path.shift asserts on NaN, and there is nothing to center.
+    if (!shift.dx.isFinite || !shift.dy.isFinite) return geometry;
+    if (shift.distance < 0.01) return geometry;
+    final moved = fitted.shift(shift);
+    final movedMetrics = moved.computeMetrics().toList();
+    if (movedMetrics.isEmpty) return geometry;
+    return ConveyorPathGeometry._(moved, beltWidth, fit, movedMetrics.first);
   }
 }
 
@@ -1630,7 +1698,32 @@ class _ConveyorState extends ConsumerState<Conveyor>
     bool? showExclamation,
     double? frequency,
   ]) {
-    final paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          _buildConveyorVisualSized(context, constraints, color,
+              showExclamation, frequency),
+    );
+  }
+
+  Widget _buildConveyorVisualSized(
+    BuildContext context,
+    BoxConstraints constraints,
+    Color color,
+    bool? showExclamation,
+    double? frequency,
+  ) {
+    // The geometry must be built for the box the belt is actually painted
+    // into. `AssetStack` lays assets out with tight constraints from the page
+    // canvas — the same rectangle the editor draws the selection box from —
+    // and the canvas is never the window: the editor keeps panes and headers
+    // around it, and every monitor slices it differently. A window-derived
+    // size therefore painted the belt offset and rescaled against its own
+    // box. The config-derived size only decides anything in unconstrained
+    // hosts (previews, palettes), where it is what the CustomPaint below
+    // would measure anyway — `constrain` reproduces that layout exactly.
+    final requestedSize =
+        widget.config.size.toSize(MediaQuery.of(context).size);
+    final paintSize = constraints.constrain(requestedSize);
 
     if (widget.config.showAuger ?? false) {
       return LayoutRotatedBox(
@@ -1647,10 +1740,19 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
-    // An explicit screen-relative belt width wins over the box-relative
-    // thickness, and applies whether or not the belt turns.
-    final beltWidth =
-        widget.config.requestedBeltWidth(MediaQuery.of(context).size);
+    // An explicit canvas-relative belt width wins over the box-relative
+    // thickness, and applies whether or not the belt turns. The canvas the
+    // fraction refers to is the one the asset's own `size` fractions are
+    // resolved against; it is not in scope here, but the box is `size` times
+    // the canvas by construction, so it is recovered from the box — using the
+    // window instead made the belt fatten and thin as the window changed
+    // while everything around it stayed put.
+    final canvasHeight = widget.config.size.height > 1e-6
+        ? paintSize.height / widget.config.size.height
+        : MediaQuery.of(context).size.height;
+    final beltWidth = widget.config.beltWidthRelative == null
+        ? null
+        : widget.config.beltWidthRelative! * canvasHeight;
     final geometry = ConveyorPathGeometry.build(
       widget.config.turns,
       paintSize,

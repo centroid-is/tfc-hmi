@@ -33,15 +33,23 @@ void main() {
     }
 
     // Whenever the belt is narrow enough to ever fit the box, the painted
-    // area (centerline fattened by half the belt and the border) must be
-    // contained. A belt wider than the box may spill by design.
-    final margin = g.beltWidth / 2 + 2;
+    // area must be contained. A belt wider than the box may spill by design.
+    // Measure the ink itself — the band outline plus border — rather than
+    // inflating the centerline bounds on every side: the belt ends in flat
+    // caps, and the fit centers the ink, spending slack exactly where the
+    // band does not extend.
     if (g.beltWidth + 8 < size.shortestSide) {
-      expect(b.left, greaterThanOrEqualTo(margin - 2.5), reason: reason);
-      expect(b.top, greaterThanOrEqualTo(margin - 2.5), reason: reason);
-      expect(b.right, lessThanOrEqualTo(size.width - margin + 2.5),
+      final band = g
+              .bandOutline(0, 1,
+                  width: g.beltWidth, radius: g.beltWidth * 0.2)
+              ?.getBounds() ??
+          g.path.getBounds().inflate(g.beltWidth / 2);
+      final painted = band.inflate(2);
+      expect(painted.left, greaterThanOrEqualTo(-0.5), reason: reason);
+      expect(painted.top, greaterThanOrEqualTo(-0.5), reason: reason);
+      expect(painted.right, lessThanOrEqualTo(size.width + 0.5),
           reason: reason);
-      expect(b.bottom, lessThanOrEqualTo(size.height - margin + 2.5),
+      expect(painted.bottom, lessThanOrEqualTo(size.height + 0.5),
           reason: reason);
     }
 
@@ -234,7 +242,13 @@ void main() {
         final g = ConveyorPathGeometry.build(
             [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 1.5)], size,
             beltWidthOverride: 24)!;
-        final painted = g.path.getBounds().inflate(g.beltWidth / 2 + 2);
+        // The real ink: band outline plus border (see the sweep invariant).
+        final band = g
+                .bandOutline(0, 1,
+                    width: g.beltWidth, radius: g.beltWidth * 0.2)
+                ?.getBounds() ??
+            g.path.getBounds().inflate(g.beltWidth / 2);
+        final painted = band.inflate(2);
         expect(painted.left, greaterThanOrEqualTo(-0.5));
         expect(painted.top, greaterThanOrEqualTo(-0.5));
         expect(painted.right, lessThanOrEqualTo(size.width + 0.5));
