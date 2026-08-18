@@ -15,9 +15,11 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
 
 import '../chat/ai_context_action.dart';
+import '../core/feature_flags.dart';
 import '../plc/plc_code_upload_dialog.dart';
 import '../plc/plc_detail_panel.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
+import '../providers/mcp_bridge.dart'
+    show isMcpChatAvailable, isMcpWriteEnabled;
 import '../providers/plc.dart';
 import '../providers/scaffold_messenger_key.dart';
 import '../providers/tech_doc.dart';
@@ -83,7 +85,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     super.dispose();
   }
 
-  bool get _isWriteEnabled => isMcpChatAvailable();
+  bool get _isWriteEnabled => isMcpWriteEnabled();
 
   String get _currentUser => io.Platform.environment['TFC_USER'] ?? 'operator';
 
@@ -440,7 +442,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final items = <PopupMenuEntry<String>>[];
 
     // "Chat about this" — only when MCP chat is available.
-    if (isMcpChatAvailable()) {
+    if (kChatEnabled && isMcpChatAvailable()) {
       items.add(const PopupMenuItem(
         value: 'chat',
         child: ListTile(
@@ -499,7 +501,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     if (value == null || !mounted) return;
     switch (value) {
       case 'chat':
-        _chatAboutDocument(doc);
+        if (kChatEnabled) _chatAboutDocument(doc);
       case 'rename':
         setState(() {
           _editingDocId = doc.id;
@@ -956,7 +958,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final items = <PopupMenuEntry<String>>[];
 
     // "Chat about this" — only when MCP chat is available.
-    if (isMcpChatAvailable()) {
+    if (kChatEnabled && isMcpChatAvailable()) {
       items.add(const PopupMenuItem(
         value: 'chat',
         child: ListTile(
@@ -1014,7 +1016,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     if (value == null || !mounted) return;
     switch (value) {
       case 'chat':
-        _chatAboutPlcAsset(plc);
+        if (kChatEnabled) _chatAboutPlcAsset(plc);
       case 'rename':
         setState(() {
           _editingPlcAssetKey = plc.assetKey;

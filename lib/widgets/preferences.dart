@@ -16,6 +16,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         readMcpConfigFromPreferences,
         writeMcpConfigToPreferences;
 
+import '../core/feature_flags.dart';
 import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
 import 'package:tfc_dart/core/preferences.dart';
@@ -122,8 +123,10 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
             },
           ),
 
-          // Chat bubble toggle (only when server enabled)
-          if (_config.serverEnabled)
+          // Chat bubble toggle (only when server enabled, and only when the
+          // chat feature is compiled in — a flag-off build must not offer a
+          // toggle for a feature that is not in the binary)
+          if (kChatEnabled && _config.serverEnabled)
             SwitchListTile(
               title: const Text('Show Chat Bubble'),
               subtitle: const Text(

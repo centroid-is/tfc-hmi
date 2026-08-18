@@ -12,6 +12,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         VariableReference;
 
 import '../chat/ai_context_action.dart';
+import '../core/feature_flags.dart';
 import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/plc.dart';
 
@@ -265,8 +266,7 @@ class PlcDetailPanel extends ConsumerWidget {
                   ),
                 );
               }
-              return _TabbedDetailView(
-                  blocks: blocks, assetKey: assetKey);
+              return _TabbedDetailView(blocks: blocks, assetKey: assetKey);
             },
           ),
         ),
@@ -495,7 +495,7 @@ class _TopLevelBlockTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final chatAvailable = isMcpChatAvailable();
+    final chatAvailable = kChatEnabled && isMcpChatAvailable();
 
     // Count referenced function blocks.
     final referencedCount = findReferencedBlocks(block, allBlocks).length;
@@ -523,7 +523,7 @@ class _TopLevelBlockTile extends ConsumerWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (chatAvailable)
+            if (kChatEnabled && chatAvailable)
               IconButton(
                 icon: const Icon(Icons.chat_bubble_outline, size: 18),
                 tooltip: 'Chat about this block',
@@ -698,7 +698,7 @@ class _ReferencedBlockTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final chatAvailable = isMcpChatAvailable();
+    final chatAvailable = kChatEnabled && isMcpChatAvailable();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 4),
@@ -721,7 +721,7 @@ class _ReferencedBlockTile extends ConsumerWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (chatAvailable)
+            if (kChatEnabled && chatAvailable)
               IconButton(
                 icon: const Icon(Icons.chat_bubble_outline, size: 18),
                 tooltip: 'Chat about this block',
@@ -1006,8 +1006,7 @@ class _CallGraphView extends ConsumerWidget {
 
         return callGraphAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) =>
-              Center(child: Text('Error building call graph: $e')),
+          error: (e, _) => Center(child: Text('Error building call graph: $e')),
           data: (callGraph) {
             // callGraph may be null if no PLC code is indexed — that's OK.
             return _KeyMapContent(
@@ -1307,9 +1306,7 @@ class _KeyListTile extends StatelessWidget {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 2),
-      color: isSelected
-          ? theme.colorScheme.primaryContainer
-          : null,
+      color: isSelected ? theme.colorScheme.primaryContainer : null,
       child: ListTile(
         dense: true,
         leading: Icon(
@@ -1482,12 +1479,10 @@ class _VariableReferenceTree extends StatelessWidget {
     final theme = Theme.of(context);
 
     // Group references by kind (write, read, call).
-    final writers = chain.references
-        .where((r) => r.kind == ReferenceKind.write)
-        .toList();
-    final readers = chain.references
-        .where((r) => r.kind == ReferenceKind.read)
-        .toList();
+    final writers =
+        chain.references.where((r) => r.kind == ReferenceKind.write).toList();
+    final readers =
+        chain.references.where((r) => r.kind == ReferenceKind.read).toList();
 
     // Deduplicate references that have identical block name AND no
     // distinguishing source info (both lineNumber and sourceLine are null).
@@ -1530,7 +1525,8 @@ class _VariableReferenceTree extends StatelessWidget {
   static List<_DeduplicatedRef> _deduplicateRefs(List<VariableReference> refs) {
     final result = <_DeduplicatedRef>[];
     final nullSourceCounts = <String, int>{}; // blockName -> count
-    final nullSourceRep = <String, VariableReference>{}; // blockName -> first ref
+    final nullSourceRep =
+        <String, VariableReference>{}; // blockName -> first ref
 
     for (final ref in refs) {
       if (ref.lineNumber == null && ref.sourceLine == null) {

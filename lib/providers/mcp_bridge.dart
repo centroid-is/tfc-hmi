@@ -17,6 +17,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         StateReader,
         readMcpConfigFromPreferences;
 
+import '../core/feature_flags.dart';
 import '../mcp/alarm_man_alarm_reader.dart';
 import '../mcp/mcp_lifecycle_state.dart';
 import '../mcp/mcp_bridge_notifier.dart';
@@ -28,11 +29,7 @@ import 'preferences.dart' show preferencesProvider;
 import 'state_man.dart';
 
 export '../mcp/mcp_bridge_notifier.dart'
-    show
-        McpBridgeNotifier,
-        McpBridgeState,
-        McpConnectionState,
-        kMcpConfigKey;
+    show McpBridgeNotifier, McpBridgeState, McpConnectionState, kMcpConfigKey;
 
 /// Provides a singleton [McpBridgeNotifier] for managing the SSE MCP server.
 ///
@@ -68,11 +65,24 @@ String getMcpOperatorId() {
   return io.Platform.environment['TFC_USER'] ?? 'operator';
 }
 
-/// Whether the MCP chat feature is available.
-bool isMcpChatAvailable() {
+/// Whether an operator identity is present (TFC_USER environment variable).
+///
+/// This gates write-style operations that need an attributable operator —
+/// e.g. tech-doc upload/rename/delete. It is independent of [kChatEnabled]:
+/// disabling the chat build flag must not revoke write permissions.
+bool isMcpWriteEnabled() {
   return io.Platform.environment.containsKey('TFC_USER');
 }
 
+/// Whether the MCP chat feature is available.
+///
+/// Requires both the [kChatEnabled] build flag and an operator identity.
+/// Call sites that pull in chat widgets should guard with
+/// `kChatEnabled && isMcpChatAvailable()` so the chat code tree-shakes
+/// out of flag-off builds.
+bool isMcpChatAvailable() {
+  return kChatEnabled && io.Platform.environment.containsKey('TFC_USER');
+}
 
 /// Mutable state for the MCP server lifecycle provider.
 final _serverLifecycle = McpLifecycleState();
@@ -135,7 +145,8 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     _serverLifecycle.activeStateReader = reader;
     stateReader = reader;
   } catch (e) {
-    io.stderr.writeln('_startServer: StateMan unavailable, using empty reader: $e');
+    io.stderr
+        .writeln('_startServer: StateMan unavailable, using empty reader: $e');
     stateReader = _EmptyStateReader();
   }
 
@@ -143,7 +154,8 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     final alarmMan = await ref.read(alarmManProvider.future);
     alarmReader = AlarmManAlarmReader(alarmMan);
   } catch (e) {
-    io.stderr.writeln('_startServer: AlarmMan unavailable, using empty reader: $e');
+    io.stderr
+        .writeln('_startServer: AlarmMan unavailable, using empty reader: $e');
     alarmReader = _EmptyAlarmReader();
   }
 
@@ -217,7 +229,8 @@ final mcpServerLifecycleProvider = Provider<void>((ref) {
       if (!bridge.isRunning) return;
 
       _serverLifecycle.cancelTimer();
-      _serverLifecycle.reconnectTimer = Timer(const Duration(milliseconds: 800), () async {
+      _serverLifecycle.reconnectTimer =
+          Timer(const Duration(milliseconds: 800), () async {
         try {
           await bridge.stopSseServer();
           _serverLifecycle.disposeReader();

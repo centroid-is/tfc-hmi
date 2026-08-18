@@ -10,6 +10,7 @@ import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
 import '../chat/asset_context_menu.dart';
+import '../core/feature_flags.dart';
 import '../widgets/proposal_visual.dart';
 import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
@@ -260,8 +261,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           //
           // See test/page_creator/selection_rotation_test.dart for the
           // regression contract.
-          final angleRadians =
-              (asset.coordinates.angle ?? 0.0) * math.pi / 180;
+          final angleRadians = (asset.coordinates.angle ?? 0.0) * math.pi / 180;
           final isSelected = widget.selectedAssets.contains(asset);
 
           // Compute the rotated AABB (axis-aligned bounding box) so the
@@ -357,58 +357,60 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                           isSelected: isSelected,
                           child: widget.absorb
                               ? GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: widget.onTap != null
-                                    ? () => widget.onTap!(asset)
-                                    : null,
-                                onDoubleTap: widget.onDoubleTap != null
-                                    ? () => widget.onDoubleTap!(asset)
-                                    : null,
-                                onPanUpdate: widget.onPanUpdate != null
-                                    ? (d) => widget.onPanUpdate!(asset, d)
-                                    : null,
-                                onPanStart: widget.onPanStart != null
-                                    ? (details) =>
-                                        widget.onPanStart!(asset, details)
-                                    : null,
-                                // The host's menu wins when supplied: it
-                                // carries editing actions that must be
-                                // reachable whether or not MCP chat is
-                                // available, and folds the AI entries in
-                                // itself.
-                                onSecondaryTapUp: widget.onSecondaryTap != null
-                                    ? (details) => widget.onSecondaryTap!(
-                                          asset,
-                                          details.globalPosition,
-                                        )
-                                    : isMcpChatAvailable()
-                                        ? (details) {
-                                            showEditorAssetContextMenu(
-                                              context,
-                                              ref,
-                                              details.globalPosition,
-                                              asset,
-                                            );
-                                          }
-                                        : null,
-                              )
-                            : GestureDetector(
-                                // Runtime view: only secondary tap is
-                                // handled here (chat context menu). Primary
-                                // taps must pass through to the asset's
-                                // own GestureDetectors. translucent keeps
-                                // us from swallowing them.
-                                behavior: HitTestBehavior.translucent,
-                                onSecondaryTapUp: isMcpChatAvailable()
-                                    ? (details) {
-                                        showAssetContextMenu(
-                                          context,
-                                          details.globalPosition,
-                                          () => debugAsset(ref, asset),
-                                        );
-                                      }
-                                    : null,
-                              ),
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: widget.onTap != null
+                                      ? () => widget.onTap!(asset)
+                                      : null,
+                                  onDoubleTap: widget.onDoubleTap != null
+                                      ? () => widget.onDoubleTap!(asset)
+                                      : null,
+                                  onPanUpdate: widget.onPanUpdate != null
+                                      ? (d) => widget.onPanUpdate!(asset, d)
+                                      : null,
+                                  onPanStart: widget.onPanStart != null
+                                      ? (details) =>
+                                          widget.onPanStart!(asset, details)
+                                      : null,
+                                  // The host's menu wins when supplied: it
+                                  // carries editing actions that must be
+                                  // reachable whether or not MCP chat is
+                                  // available, and folds the AI entries in
+                                  // itself.
+                                  onSecondaryTapUp:
+                                      widget.onSecondaryTap != null
+                                          ? (details) => widget.onSecondaryTap!(
+                                                asset,
+                                                details.globalPosition,
+                                              )
+                                          : kChatEnabled && isMcpChatAvailable()
+                                              ? (details) {
+                                                  showEditorAssetContextMenu(
+                                                    context,
+                                                    ref,
+                                                    details.globalPosition,
+                                                    asset,
+                                                  );
+                                                }
+                                              : null,
+                                )
+                              : GestureDetector(
+                                  // Runtime view: only secondary tap is
+                                  // handled here (chat context menu). Primary
+                                  // taps must pass through to the asset's
+                                  // own GestureDetectors. translucent keeps
+                                  // us from swallowing them.
+                                  behavior: HitTestBehavior.translucent,
+                                  onSecondaryTapUp:
+                                      kChatEnabled && isMcpChatAvailable()
+                                          ? (details) {
+                                              showAssetContextMenu(
+                                                context,
+                                                details.globalPosition,
+                                                () => debugAsset(ref, asset),
+                                              );
+                                            }
+                                          : null,
+                                ),
                         ),
                       ),
                     ),
@@ -484,7 +486,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                 ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
                 : GestureDetector(
                     behavior: HitTestBehavior.translucent,
-                    onSecondaryTapUp: isMcpChatAvailable()
+                    onSecondaryTapUp: kChatEnabled && isMcpChatAvailable()
                         ? (details) {
                             showAssetContextMenu(
                               context,
