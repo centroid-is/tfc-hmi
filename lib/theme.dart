@@ -47,73 +47,73 @@ abstract final class MutedColors {
 @immutable
 class HmiStateColors extends ThemeExtension<HmiStateColors> {
   const HmiStateColors({
-    required this.auto,
-    required this.manual,
-    required this.cleaning,
-    required this.stopped,
-    required this.fault,
-    required this.unknown,
+    required this.green,
+    required this.yellow,
+    required this.blue,
+    required this.grey,
+    required this.red,
+    required this.violet,
     required this.onState,
   });
 
-  /// Running in automatic mode.
-  final Color auto;
+  /// The scheme's green — running/auto by convention.
+  final Color green;
 
-  /// Running in manual mode.
-  final Color manual;
+  /// The scheme's yellow — manual mode by convention.
+  final Color yellow;
 
-  /// Cleaning mode.
-  final Color cleaning;
+  /// The scheme's blue — cleaning mode by convention.
+  final Color blue;
 
-  /// Stopped / idle.
-  final Color stopped;
+  /// The scheme's grey — stopped/idle by convention.
+  final Color grey;
 
-  /// Faulted / tripped — deliberately the most saturated state color.
-  final Color fault;
+  /// The scheme's red — faults/trips; deliberately the most saturated.
+  final Color red;
 
-  /// Unreadable or unrecognized state (misconfiguration, parse error).
-  final Color unknown;
+  /// The scheme's violet — unreadable/unrecognized state by convention.
+  final Color violet;
 
   /// Text/glyphs drawn on top of any of the state colors above.
   final Color onState;
 
   static const solarizedLight = HmiStateColors(
-    auto: SolarizedColors.green,
-    manual: SolarizedColors.yellow,
-    cleaning: SolarizedColors.blue,
-    stopped: SolarizedColors.base1,
-    fault: SolarizedColors.red,
-    unknown: SolarizedColors.magenta,
+    green: SolarizedColors.green,
+    yellow: SolarizedColors.yellow,
+    blue: SolarizedColors.blue,
+    grey: SolarizedColors.base1,
+    red: SolarizedColors.red,
+    violet: SolarizedColors.magenta,
     onState: SolarizedColors.base3,
   );
 
   static const solarizedDark = HmiStateColors(
-    auto: SolarizedColors.green,
-    manual: SolarizedColors.yellow,
-    cleaning: SolarizedColors.blue,
-    stopped: SolarizedColors.base01,
-    fault: SolarizedColors.red,
-    unknown: SolarizedColors.magenta,
+    green: SolarizedColors.green,
+    yellow: SolarizedColors.yellow,
+    blue: SolarizedColors.blue,
+    grey: SolarizedColors.base01,
+    red: SolarizedColors.red,
+    violet: SolarizedColors.magenta,
     onState: SolarizedColors.base3,
   );
 
   static const mutedLight = HmiStateColors(
-    auto: MutedColors.runningGreen,
-    manual: MutedColors.manualOchre,
-    cleaning: MutedColors.cleanBlue,
-    stopped: MutedColors.stoppedGray,
-    fault: MutedColors.alarmRed,
-    unknown: MutedColors.unknownViolet,
+    green: MutedColors.runningGreen,
+    yellow: MutedColors.manualOchre,
+    blue: MutedColors.cleanBlue,
+    grey: MutedColors.stoppedGray,
+    red: MutedColors.alarmRed,
+    violet: MutedColors.unknownViolet,
     onState: MutedColors.onState,
   );
 
   static const mutedDark = HmiStateColors(
-    auto: MutedColors.runningGreen,
-    manual: MutedColors.manualOchre,
-    cleaning: MutedColors.cleanBlue,
-    stopped: MutedColors.stoppedGrayDark,
-    fault: MutedColors.alarmRed,
-    unknown: MutedColors.unknownViolet,
+    green: MutedColors.runningGreen,
+    yellow: MutedColors.manualOchre,
+    blue: MutedColors.cleanBlue,
+    grey: MutedColors.stoppedGrayDark,
+    red: MutedColors.alarmRed,
+    violet: MutedColors.unknownViolet,
     onState: MutedColors.onState,
   );
 
@@ -127,21 +127,21 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
 
   @override
   HmiStateColors copyWith({
-    Color? auto,
-    Color? manual,
-    Color? cleaning,
-    Color? stopped,
-    Color? fault,
-    Color? unknown,
+    Color? green,
+    Color? yellow,
+    Color? blue,
+    Color? grey,
+    Color? red,
+    Color? violet,
     Color? onState,
   }) {
     return HmiStateColors(
-      auto: auto ?? this.auto,
-      manual: manual ?? this.manual,
-      cleaning: cleaning ?? this.cleaning,
-      stopped: stopped ?? this.stopped,
-      fault: fault ?? this.fault,
-      unknown: unknown ?? this.unknown,
+      green: green ?? this.green,
+      yellow: yellow ?? this.yellow,
+      blue: blue ?? this.blue,
+      grey: grey ?? this.grey,
+      red: red ?? this.red,
+      violet: violet ?? this.violet,
       onState: onState ?? this.onState,
     );
   }
@@ -150,12 +150,12 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
   HmiStateColors lerp(HmiStateColors? other, double t) {
     if (other == null) return this;
     return HmiStateColors(
-      auto: Color.lerp(auto, other.auto, t)!,
-      manual: Color.lerp(manual, other.manual, t)!,
-      cleaning: Color.lerp(cleaning, other.cleaning, t)!,
-      stopped: Color.lerp(stopped, other.stopped, t)!,
-      fault: Color.lerp(fault, other.fault, t)!,
-      unknown: Color.lerp(unknown, other.unknown, t)!,
+      green: Color.lerp(green, other.green, t)!,
+      yellow: Color.lerp(yellow, other.yellow, t)!,
+      blue: Color.lerp(blue, other.blue, t)!,
+      grey: Color.lerp(grey, other.grey, t)!,
+      red: Color.lerp(red, other.red, t)!,
+      violet: Color.lerp(violet, other.violet, t)!,
       onState: Color.lerp(onState, other.onState, t)!,
     );
   }
@@ -165,12 +165,12 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
 /// instead of a baked RGBA value. Assets that store an [HmiColorRole] follow
 /// the scheme when it changes; a literal color never does.
 enum HmiColorRole {
-  auto('Running'),
-  manual('Manual'),
-  cleaning('Cleaning'),
-  stopped('Stopped'),
-  fault('Fault'),
-  unknown('Unknown'),
+  green('Green'),
+  yellow('Yellow'),
+  blue('Blue'),
+  grey('Grey'),
+  red('Red'),
+  violet('Violet'),
   primary('Primary'),
   secondary('Secondary'),
   tertiary('Tertiary'),
@@ -187,18 +187,18 @@ enum HmiColorRole {
     final states = HmiStateColors.of(context);
     final scheme = Theme.of(context).colorScheme;
     switch (this) {
-      case HmiColorRole.auto:
-        return states.auto;
-      case HmiColorRole.manual:
-        return states.manual;
-      case HmiColorRole.cleaning:
-        return states.cleaning;
-      case HmiColorRole.stopped:
-        return states.stopped;
-      case HmiColorRole.fault:
-        return states.fault;
-      case HmiColorRole.unknown:
-        return states.unknown;
+      case HmiColorRole.green:
+        return states.green;
+      case HmiColorRole.yellow:
+        return states.yellow;
+      case HmiColorRole.blue:
+        return states.blue;
+      case HmiColorRole.grey:
+        return states.grey;
+      case HmiColorRole.red:
+        return states.red;
+      case HmiColorRole.violet:
+        return states.violet;
       case HmiColorRole.primary:
         return scheme.primary;
       case HmiColorRole.secondary:

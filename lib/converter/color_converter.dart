@@ -21,8 +21,8 @@ class AssetColor {
         role = null;
   const AssetColor.role(HmiColorRole this.role) : _literal = null;
 
-  static const auto = AssetColor.role(HmiColorRole.auto);
-  static const stopped = AssetColor.role(HmiColorRole.stopped);
+  static const green = AssetColor.role(HmiColorRole.green);
+  static const grey = AssetColor.role(HmiColorRole.grey);
   static const primary = AssetColor.role(HmiColorRole.primary);
   static const secondary = AssetColor.role(HmiColorRole.secondary);
 
@@ -58,7 +58,7 @@ class AssetColorConverter
       // An unknown role (config written by a newer build) must not take the
       // page down — degrade to the most neutral state color.
       return AssetColor.role(
-          HmiColorRole.values.asNameMap()[roleName] ?? HmiColorRole.stopped);
+          HmiColorRole.values.asNameMap()[roleName] ?? HmiColorRole.grey);
     }
     return AssetColor.literal(const ColorConverter().fromJson(json));
   }

@@ -135,14 +135,14 @@ class AirCab extends StatelessWidget {
     final ledConfigs = <LEDConfig>[
       LEDConfig(
         key: config.pressureKey,
-        onColor: AssetColor.auto,
+        onColor: AssetColor.green,
         offColor: const AssetColor.literal(Colors.white),
       )
         ..text = "Pressure"
         ..textPos = TextPos.right,
       LEDConfig(
         key: config.softStartKey,
-        onColor: AssetColor.auto,
+        onColor: AssetColor.green,
         offColor: const AssetColor.literal(Colors.white),
       )
         ..text = "Soft start"

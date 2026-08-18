@@ -41,7 +41,7 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       openTimeMs: (json['openTimeMs'] as num?)?.toInt() ?? 800,
       closeTimeMs: (json['closeTimeMs'] as num?)?.toInt(),
       openColor: json['openColor'] == null
-          ? AssetColor.auto
+          ? AssetColor.green
           : _colorFromJson(json['openColor']),
       closedColor: json['closedColor'] == null
           ? const AssetColor.literal(Colors.white)

@@ -147,8 +147,8 @@ class SpeedBatcher extends ConsumerWidget {
         LEDConfig(
           key: "",
           onColor: (e == 'Cleaning')
-              ? const AssetColor.role(HmiColorRole.cleaning)
-              : AssetColor.auto,
+              ? const AssetColor.role(HmiColorRole.blue)
+              : AssetColor.green,
           offColor: const AssetColor.literal(Colors.white),
         )
           ..text = e

@@ -13,12 +13,12 @@ void main() {
 
     test('default activeColor follows the scheme running color', () {
       final config = SensorConfig();
-      expect(config.activeColor, AssetColor.auto);
+      expect(config.activeColor, AssetColor.green);
     });
 
     test('default inactiveColor follows the scheme stopped color', () {
       final config = SensorConfig();
-      expect(config.inactiveColor, AssetColor.stopped);
+      expect(config.inactiveColor, AssetColor.grey);
     });
 
     test('default invertActivePolarity is false', () {
@@ -113,8 +113,8 @@ void main() {
       expect(config.risingEdgeDelayKey, '');
       expect(config.fallingEdgeDelayKey, '');
       expect(config.tag, isNull);
-      expect(config.activeColor, AssetColor.auto);
-      expect(config.inactiveColor, AssetColor.stopped);
+      expect(config.activeColor, AssetColor.green);
+      expect(config.inactiveColor, AssetColor.grey);
     });
 
     test('unknown SensorKind value falls back to redLight (forward-compat)',

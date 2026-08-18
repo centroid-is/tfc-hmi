@@ -22,12 +22,12 @@ Widget buildSchemeScenario(ThemeData theme) {
     home: Builder(builder: (context) {
       final states = HmiStateColors.of(context);
       final belts = {
-        'auto': states.auto,
-        'manual': states.manual,
-        'clean': states.cleaning,
-        'stopped': states.stopped,
-        'fault': states.fault,
-        'unknown': states.unknown,
+        'auto': states.green,
+        'manual': states.yellow,
+        'clean': states.blue,
+        'stopped': states.grey,
+        'fault': states.red,
+        'unknown': states.violet,
       };
       return Scaffold(
         body: Center(

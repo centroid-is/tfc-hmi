@@ -9,11 +9,11 @@ part of 'led.dart';
 LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
       key: json['key'] as String,
       onColor: json['on_color'] == null
-          ? AssetColor.auto
+          ? AssetColor.green
           : const AssetColorConverter()
               .fromJson(json['on_color'] as Map<String, dynamic>),
       offColor: json['off_color'] == null
-          ? AssetColor.stopped
+          ? AssetColor.grey
           : const AssetColorConverter()
               .fromJson(json['off_color'] as Map<String, dynamic>),
     )

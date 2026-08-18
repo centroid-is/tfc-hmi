@@ -651,14 +651,14 @@ class ConveyorColorPalette extends StatelessWidget {
             flex: 5,
             child: Column(
               children: [
-                _buildColorRow(states.auto, 'Auto', textColor: states.onState),
-                _buildColorRow(states.cleaning, 'Clean',
+                _buildColorRow(states.green, 'Auto', textColor: states.onState),
+                _buildColorRow(states.blue, 'Clean',
                     textColor: states.onState),
-                _buildColorRow(states.manual, 'Manual',
+                _buildColorRow(states.yellow, 'Manual',
                     textColor: states.onState),
-                _buildColorRow(states.stopped, 'Stopped',
+                _buildColorRow(states.grey, 'Stopped',
                     textColor: states.onState),
-                _buildColorRow(states.fault, 'Fault',
+                _buildColorRow(states.red, 'Fault',
                     textColor: states.onState),
               ],
             ),
@@ -1469,7 +1469,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         try {
           final isTripped = tripValue.asBool;
           if (isTripped) {
-            return states.fault; // Trip condition overrides everything
+            return states.red; // Trip condition overrides everything
           }
         } catch (_) {
           // If trip value can't be read as bool, continue with normal logic
@@ -1482,17 +1482,17 @@ class _ConveyorState extends ConsumerState<Conveyor>
         final fields = driveValue['p_stat_RunMode'].enumFields;
         final name = fields?[state]?.name;
         if (name == 'fault') {
-          return states.fault;
+          return states.red;
         } else if (name == 'stopped') {
-          return states.stopped;
+          return states.grey;
         } else if (name == 'auto') {
-          return states.auto;
+          return states.green;
         } else if (name == 'manual') {
-          return states.manual;
+          return states.yellow;
         } else if (name == 'clean') {
-          return states.cleaning;
+          return states.blue;
         }
-        return states.unknown;
+        return states.violet;
       }
 
       // If we only have frequency and trip, use frequency-based logic
@@ -1500,18 +1500,18 @@ class _ConveyorState extends ConsumerState<Conveyor>
         try {
           final frequency = frequencyValue.asDouble;
           if (frequency != 0) {
-            return states.auto; // Running
+            return states.green; // Running
           } else {
-            return states.stopped;
+            return states.grey;
           }
         } catch (_) {
-          return states.unknown; // Error reading frequency
+          return states.violet; // Error reading frequency
         }
       }
 
-      return states.stopped; // Default fallback
+      return states.grey; // Default fallback
     } catch (_) {
-      return states.unknown;
+      return states.violet;
     }
   }
 
@@ -1519,7 +1519,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
   Widget build(BuildContext context) {
     final states = HmiStateColors.of(context);
     if (widget.config.key == ConveyorConfig.previewStr) {
-      return _buildConveyorVisual(context, states.stopped);
+      return _buildConveyorVisual(context, states.grey);
     }
 
     // The "Simulate batches" toggle is independent of any PLC stream — it
@@ -1590,7 +1590,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
     // If no streams are configured, show error state
     if (streams.isEmpty) {
-      return _buildConveyorVisual(context, states.stopped, true);
+      return _buildConveyorVisual(context, states.grey, true);
     }
 
     return StreamBuilder<Map<String, DynamicValue>>(
@@ -1612,10 +1612,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
           _log.e(
             'Error fetching dynamic values, error: ${snapshot.error}',
           );
-          return _buildConveyorVisual(context, states.stopped, true);
+          return _buildConveyorVisual(context, states.grey, true);
         }
         if (!snapshot.hasData) {
-          return _buildConveyorVisual(context, states.stopped, true);
+          return _buildConveyorVisual(context, states.grey, true);
         }
 
         final dynValue = snapshot.data!;
@@ -2220,7 +2220,7 @@ class _JogButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color =
-        active ? HmiStateColors.of(context).auto : Theme.of(context).disabledColor;
+        active ? HmiStateColors.of(context).green : Theme.of(context).disabledColor;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [

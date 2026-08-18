@@ -88,11 +88,11 @@ class _SchemeSwatches extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (final color in [
-          states.auto,
-          states.manual,
-          states.cleaning,
-          states.stopped,
-          states.fault,
+          states.green,
+          states.yellow,
+          states.blue,
+          states.grey,
+          states.red,
         ])
           Container(
             width: 10,

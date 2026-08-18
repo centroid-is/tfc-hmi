@@ -243,8 +243,8 @@ class SensorConfig extends BaseAsset {
     AssetColor? activeColor,
     AssetColor? inactiveColor,
     this.tag,
-  })  : activeColor = activeColor ?? AssetColor.auto,
-        inactiveColor = inactiveColor ?? AssetColor.stopped {
+  })  : activeColor = activeColor ?? AssetColor.green,
+        inactiveColor = inactiveColor ?? AssetColor.grey {
     // Default label position — matches LED/Button convention (those default
     // to TextPos.right). Sensors carry short tag labels and read most
     // naturally below the glyph on a busy HMI canvas.

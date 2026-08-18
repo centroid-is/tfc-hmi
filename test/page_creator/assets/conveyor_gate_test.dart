@@ -62,7 +62,7 @@ void main() {
       expect(config.openAngleDegrees, 45.0);
       expect(config.openTimeMs, 800);
       expect(config.closeTimeMs, isNull);
-      expect(config.openColor, AssetColor.auto);
+      expect(config.openColor, AssetColor.green);
       expect(config.closedColor, const AssetColor.literal(Colors.white));
       expect(config.stateKey, '');
       expect(config.forceOpenKey, '');

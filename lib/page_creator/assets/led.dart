@@ -38,16 +38,16 @@ class LEDConfig extends BaseAsset {
 
   LEDConfig({
     required this.key,
-    this.onColor = AssetColor.auto,
-    this.offColor = AssetColor.stopped,
+    this.onColor = AssetColor.green,
+    this.offColor = AssetColor.grey,
   });
 
   static const previewStr = 'Led preview';
 
   LEDConfig.preview()
       : key = previewStr,
-        onColor = AssetColor.auto,
-        offColor = AssetColor.stopped {
+        onColor = AssetColor.green,
+        offColor = AssetColor.grey {
     textPos = TextPos.right;
   }
 

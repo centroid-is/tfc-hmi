@@ -177,8 +177,8 @@ class PageManager {
                 "text": "A light",
                 "textPos": "right",
                 "key": "Led preview",
-                "on_color": {"role": "auto"},
-                "off_color": {"role": "stopped"},
+                "on_color": {"role": "green"},
+                "off_color": {"role": "grey"},
                 "led_type": "circle"
               },
               {

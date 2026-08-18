@@ -138,7 +138,7 @@ class ConveyorGateConfig extends BaseAsset {
     this.openAngleDegrees = 45.0,
     this.openTimeMs = 800,
     this.closeTimeMs,
-    this.openColor = AssetColor.auto,
+    this.openColor = AssetColor.green,
     this.closedColor = const AssetColor.literal(Colors.white),
     this.sliderActiveOut = true,
     this.sliderLidAngleDegrees = 0.0,
