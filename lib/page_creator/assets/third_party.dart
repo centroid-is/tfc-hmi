@@ -700,7 +700,7 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
       offsetY: weight.dy,
       keepUpright: true,
       child: thirdPartyNumber(
-        units: 'g',
+        units: '',
         decimalPlaces: 0,
         size: slot,
       ),

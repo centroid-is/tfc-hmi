@@ -298,8 +298,11 @@ void main() {
         expect(right.offsetX, greaterThan(belt.offsetX));
         expect(left.child, isA<RatioNumberConfig>(),
             reason: 'Accept rate goes on the left.');
-        expect((right.child as NumberConfig).units, 'g',
+        expect(right.child, isA<NumberConfig>(),
             reason: 'Weight goes on the right.');
+        expect((right.child as NumberConfig).units, isEmpty,
+            reason: 'No unit is scaffolded — the operator sets it with the '
+                'tag, since the PLC value is not always grams.');
       }
     });
 
