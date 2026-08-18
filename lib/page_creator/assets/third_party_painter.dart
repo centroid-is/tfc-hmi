@@ -481,21 +481,23 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   /// Unit rect of the infeed flat conveyor lane — where a live Conveyor child
   /// is meant to sit. Exposed so the editor can offer a one-tap "drop a
   /// conveyor on this lane" without duplicating the geometry.
-  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.36, 0.47, 0.82);
+  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.41, 0.47, 0.82);
 
   /// Unit rect of the step-up conveyor lane.
-  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.36, 0.98, 0.82);
+  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.41, 0.98, 0.82);
 
   /// Unit frame of checkweigher 1 (the first one product reaches).
   ///
-  /// The bands run right down to the conveyor lanes (only a seam's worth of
-  /// gap at 0.36): a checkweigher belt is as wide as the lane feeding it, and
-  /// the dead strip the old 0.315 bottom left above the lanes read as a
+  /// The checkweighers are the stations this drawing exists for — the live
+  /// belts, the readouts — so they get the vertical room, taken from the two
+  /// lanes, which stay comfortably taller than they are wide. Even seams
+  /// (0.02) between the bands and down to the lanes: a checkweigher belt is
+  /// as wide as the lane feeding it, and any dead strip here read as a
   /// missing piece of machine.
-  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.20, 0.98, 0.345);
+  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.22, 0.98, 0.39);
 
   /// Unit frame of checkweigher 2 (the last station before discharge).
-  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.175);
+  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.20);
 
   /// The weigh belt inside a checkweigher frame.
   ///

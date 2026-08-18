@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus, PaneSection;
-import 'package:tfc/widgets/panes/side_pane.dart' show SidePane;
+import 'package:tfc/widgets/panes/side_pane.dart' show SidePane, closeSidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
@@ -73,12 +73,16 @@ Widget buildBody({
   );
 }
 
-/// Loads a real font for the populated golden.
+/// Loads real fonts for the populated and pane goldens.
 ///
 /// Without this every glyph renders as a filled black box — the Flutter test
 /// font draws no actual letterforms — which turns the readouts into bars and
 /// makes the golden useless for judging whether a weight beside a belt is
 /// legible. RobotoMono is already in the repo under `lib/fonts/`.
+///
+/// MaterialIcons is loaded too, from the Flutter SDK: the pane goldens carry
+/// icons (the header glyph, the status chip's dot) and without the icon font
+/// they render as tofu boxes, which is not what an operator sees.
 Future<void> loadRealFont() async {
   final data = File('lib/fonts/roboto-mono/RobotoMono-Regular.ttf')
       .readAsBytesSync()
@@ -86,6 +90,15 @@ Future<void> loadRealFont() async {
       .asByteData();
   final loader = FontLoader('Roboto')..addFont(Future.value(data));
   await loader.load();
+
+  final flutterRoot = Platform.environment['FLUTTER_ROOT'];
+  final iconFont = File(
+      '$flutterRoot/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
+  if (flutterRoot != null && iconFont.existsSync()) {
+    final iconLoader = FontLoader('MaterialIcons')
+      ..addFont(Future.value(iconFont.readAsBytesSync().buffer.asByteData()));
+    await iconLoader.load();
+  }
 }
 
 /// The scaffolded station with both checkweigher belts RUNNING.
@@ -313,6 +326,75 @@ void main() {
       await expectLater(
         find.byKey(_key),
         matchesGoldenFile('goldens/third_party_speedBatcher_status_pane.png'),
+      );
+    });
+
+    // The WHOLE reworked side pane, driven through the real widget — machine
+    // on the page, pane opened by the real tap. Live figures per
+    // checkweigher (each readout switched to its preview keys so it shows a
+    // value without a PLC), the diode section beneath, and none of the
+    // wiring the pane used to carry: no footprint, no run-status keys, no
+    // polarity wording, no inside-the-box inventory. This is the golden to
+    // judge the pane rework by.
+    testWidgets('speedBatcher — side pane', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(1000, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      addTearDown(closeSidePane);
+
+      final children =
+          buildSpeedBatcherStationChildren(acceptWindowMinutes: 30);
+      for (final entry in children) {
+        final child = entry.child;
+        if (child is NumberConfig) child.key = 'Number preview';
+        if (child is RatioNumberConfig) {
+          child.key1 = 'key1';
+          child.key2 = 'key2';
+        }
+      }
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        tag: 'SB-01',
+        children: children,
+      );
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          // Same parking trick as `buildRunningStation`: the readouts build
+          // and paint without a database, which is all a golden needs.
+          databaseProvider
+              .overrideWith((ref) => Completer<Database?>().future),
+        ],
+        child: RepaintBoundary(
+          key: _key,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            home: Scaffold(
+              backgroundColor: Colors.white,
+              // Machine on the left, clear of the docked pane, the way an
+              // operator sees both at once.
+              body: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 40),
+                  child: SizedBox(
+                    width: 280,
+                    height: 620,
+                    child: ThirdPartyEquipment(config: config),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_speedBatcher_side_pane.png'),
       );
     });
 
