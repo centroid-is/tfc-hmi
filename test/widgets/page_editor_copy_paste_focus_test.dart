@@ -1,18 +1,16 @@
 /// Copy/paste in the page editor must survive the operator touching anything
 /// else that takes keyboard focus.
 ///
-/// The editor's shortcuts hang off one `Focus(autofocus: true)` widget, which
-/// grabs focus exactly once, at mount. Transient thefts heal themselves: when
-/// a focused text field is *disposed* (palette closed, pane re-pointed), the
-/// enclosing scope's focus history pops back to the editor node. The
-/// persistent failure is a field that keeps focus while the operator returns
-/// to the canvas — above all the config side pane, which lives in the *root
-/// overlay*, entirely outside the editor's Focus subtree. Configure an asset,
-/// click that same asset (the pane stays open, its field keeps focus), press
-/// Ctrl/Cmd+C — and the key event never reaches the editor's handler at all.
+/// The shortcuts are handled globally, so focus cannot starve them of key
+/// events — but they deliberately stand down while a text field has focus,
+/// or typing would edit the canvas. The persistent danger is a field that
+/// *keeps* focus while the operator returns to the canvas — above all the
+/// config side pane, which lives in the root overlay: configure an asset,
+/// click that same asset (the pane stays open), press Ctrl/Cmd+C — if the
+/// pane's field still held focus, the shortcut would still be muted.
 ///
-/// The behaviour pinned here: any click on the canvas re-arms the shortcuts,
-/// whatever had focus before.
+/// The behaviour pinned here: any click on the canvas takes keyboard focus
+/// back from whatever text field held it, un-muting the shortcuts.
 library;
 
 import 'dart:typed_data';

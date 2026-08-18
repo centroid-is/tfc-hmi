@@ -481,27 +481,32 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   /// Unit rect of the infeed flat conveyor lane — where a live Conveyor child
   /// is meant to sit. Exposed so the editor can offer a one-tap "drop a
   /// conveyor on this lane" without duplicating the geometry.
-  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.36, 0.47, 0.82);
+  static const Rect infeedLane = Rect.fromLTRB(0.02, 0.41, 0.47, 0.82);
 
   /// Unit rect of the step-up conveyor lane.
-  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.36, 0.98, 0.82);
+  static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.41, 0.98, 0.82);
 
   /// Unit frame of checkweigher 1 (the first one product reaches).
-  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.185, 0.98, 0.315);
+  ///
+  /// The checkweighers are the stations this drawing exists for — the live
+  /// belts, the readouts — so they get the vertical room, taken from the two
+  /// lanes, which stay comfortably taller than they are wide. Even seams
+  /// (0.02) between the bands and down to the lanes: a checkweigher belt is
+  /// as wide as the lane feeding it, and any dead strip here read as a
+  /// missing piece of machine.
+  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.22, 0.98, 0.39);
 
   /// Unit frame of checkweigher 2 (the last station before discharge).
-  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.16);
+  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.20);
 
   /// The weigh belt inside a checkweigher frame.
   ///
-  /// Spans the FULL width of the frame: a checkweigher is a conveyor with a
-  /// load cell under it, not a box with a short belt in the middle. This is
-  /// the rect a live Conveyor child fills.
-  static Rect deckOf(Rect frame) {
-    final inset = frame.height * 0.08;
-    return Rect.fromLTRB(
-        frame.left, frame.top + inset, frame.right, frame.bottom - inset);
-  }
+  /// The FULL frame, edge to edge: a checkweigher is a conveyor with a load
+  /// cell under it, not a box with a belt floating in the middle — a margin
+  /// here read as the belt being narrower than its own station. This is the
+  /// rect a live Conveyor child fills; kept as the one seam between the
+  /// painter, the scaffold and the tests.
+  static Rect deckOf(Rect frame) => frame;
 
   /// Horizontal half-extent of `ConveyorPainter`'s direction arrow, as a
   /// fraction of the belt width.
@@ -595,12 +600,13 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
     }
   }
 
-  /// One checkweigher: the station frame and the belt bed filling it.
+  /// One checkweigher: the station frame, which IS the belt bed.
   ///
-  /// The belt is NOT drawn as machinery — only its bed. A live bidirectional
-  /// `ConveyorConfig` child fills the bed and animates off the real drive
+  /// The belt is NOT drawn as machinery — a live bidirectional
+  /// `ConveyorConfig` child fills the frame and animates off the real drive
   /// frequency; painting a belt underneath a real one reads as a double
-  /// image. Same treatment as the two conveyor lanes.
+  /// image. Same treatment as the two conveyor lanes. The deck now spans the
+  /// whole frame (`deckOf`), so there is no separate bed rect to draw.
   ///
   /// Nothing is drawn on the belt itself: the middle belongs to the
   /// conveyor's run-direction arrow, and the readouts sit either side of it.
@@ -613,9 +619,6 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   ) {
     canvas.drawRect(
         u.r(frame.left, frame.top, frame.right, frame.bottom), stroke);
-
-    final deck = deckOf(frame);
-    canvas.drawRect(u.r(deck.left, deck.top, deck.right, deck.bottom), detail);
   }
 }
 

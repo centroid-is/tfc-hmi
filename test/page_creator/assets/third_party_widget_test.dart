@@ -1,3 +1,4 @@
+import 'dart:async' show Completer;
 import 'dart:collection' show LinkedHashMap;
 
 import 'package:flutter/material.dart';
@@ -10,7 +11,9 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
+import 'package:tfc/providers/database.dart' show databaseProvider;
 import 'package:tfc/widgets/panes/side_pane.dart';
+import 'package:tfc_dart/core/database.dart' show Database;
 
 void main() {
   // ProviderScope + MaterialApp so showDialog has a Navigator. No provider
@@ -18,6 +21,20 @@ void main() {
   // yet), so no real StateMan is needed. Mirrors `sensor_widget_test.dart`.
   Widget wrap(Widget child) {
     return ProviderScope(
+      child: MaterialApp(home: Scaffold(body: Center(child: child))),
+    );
+  }
+
+  // For panes that embed the live readout widgets: their timeseries mixin
+  // arms timers only once `databaseProvider` resolves, and a widget test has
+  // neither a database nor the prefs it would read the config from. A future
+  // that never completes parks the mixin at its first await — the readout
+  // still builds and shows `---`, which is all these tests need.
+  Widget wrapWithParkedDatabase(Widget child) {
+    return ProviderScope(
+      overrides: [
+        databaseProvider.overrideWith((ref) => Completer<Database?>().future),
+      ],
       child: MaterialApp(home: Scaffold(body: Center(child: child))),
     );
   }
@@ -237,23 +254,51 @@ void main() {
       expect(find.text('Stopped'), findsNothing);
     });
 
-    testWidgets('the pane lists what is placed inside the box',
+    testWidgets(
+        'the pane reads the machine, not its wiring: live figures per '
+        'checkweigher, no key names, no footprint, no polarity',
         (tester) async {
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.speedBatcher,
-        runKey: '',
-        children: [ThirdPartyChildEntry(child: ConveyorConfig.preview())],
+        runKey: 'ST201.SB01.Running',
+        children: buildSpeedBatcherStationChildren(acceptWindowMinutes: 30),
       );
-      await tester.pumpWidget(wrap(SizedBox(
+      await tester.pumpWidget(wrapWithParkedDatabase(SizedBox(
         width: 300,
-        height: 400,
+        height: 600,
         child: ThirdPartyEquipment(config: config),
       )));
 
       await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      expect(find.text('INSIDE THE BOX'), findsOneWidget);
+      // One live accept-rate and one live weight row per checkweigher. The
+      // figures are the point — the operator opens the pane to read the
+      // machine.
+      expect(find.text('Accept rate CW1 (30 min)'), findsOneWidget);
+      expect(find.text('Accept rate CW2 (30 min)'), findsOneWidget);
+      expect(find.text('Weight CW1'), findsOneWidget);
+      expect(find.text('Weight CW2'), findsOneWidget);
+      // No PLC in this test, so the value is `---`, but the unit must be
+      // there: the belt readout has no room for it, the pane does. kg is
+      // the default when the child has no unit configured.
+      expect(find.text('--- kg'), findsNWidgets(2));
+
+      // Each figure carries a visible way into its chart — the readout's own
+      // tap-through is invisible, and an operator should not have to guess.
+      expect(find.byIcon(Icons.bar_chart), findsNWidgets(2),
+          reason: 'One accept/reject chart button per checkweigher.');
+      expect(find.byIcon(Icons.show_chart), findsNWidgets(2),
+          reason: 'One weight-trend button per checkweigher.');
+
+      // Wiring and boilerplate stay out: no key strings, no polarity
+      // wording, no footprint, no inventory of the box's children.
+      expect(find.text('INSIDE THE BOX'), findsNothing);
+      expect(find.text('RUN STATUS'), findsNothing);
+      expect(find.textContaining('ST201.SB01'), findsNothing,
+          reason: 'Key names are wiring, not operator information.');
+      expect(find.textContaining('running when'), findsNothing);
+      expect(find.text('Footprint'), findsNothing);
     });
 
     testWidgets('a SpeedBatcher pane carries the Status section with all '
@@ -272,9 +317,8 @@ void main() {
       await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      // The section shows even unconfigured — a `—` key row and five unknown
-      // diodes tell the operator the feature exists; a silently absent
-      // section would not.
+      // The section shows even unconfigured — five unknown diodes tell the
+      // operator the feature exists; a silently absent section would not.
       expect(find.text('STATUS'), findsOneWidget);
       for (final bit in speedBatcherStatusBits) {
         expect(find.text(bit.label), findsOneWidget,
@@ -447,7 +491,7 @@ void main() {
       }));
       await tester.pumpWidget(wrap(SizedBox(
         width: 320,
-        child: SpeedBatcherStatusDiodes(statusKey: 'SB1', status: status),
+        child: SpeedBatcherStatusDiodes(status: status),
       )));
 
       final painters = diodePaintersOf(tester);
@@ -469,19 +513,10 @@ void main() {
       }));
       await tester.pumpWidget(wrap(SizedBox(
         width: 320,
-        child: SpeedBatcherStatusDiodes(statusKey: 'SB1', status: status),
+        child: SpeedBatcherStatusDiodes(status: status),
       )));
 
       expect(diodePaintersOf(tester)[1].color, Colors.blue);
-    });
-
-    testWidgets('an empty key shows as an em dash, not a blank', (tester) async {
-      await tester.pumpWidget(wrap(const SizedBox(
-        width: 320,
-        child: SpeedBatcherStatusDiodes(statusKey: '', status: null),
-      )));
-
-      expect(find.text('—'), findsOneWidget);
     });
   });
 

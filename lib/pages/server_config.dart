@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 
+import '../core/server_config_db.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/connection_status_chip.dart';
 import '../widgets/preferences.dart';
@@ -41,6 +42,13 @@ class SecureEnvelope {
   static const int _kdfIterations =
       200000; // tune per device; higher = slower/stronger
 
+  /// Test hook: production-strength PBKDF2 takes tens of seconds per
+  /// derivation in the debug-mode test VM, which turns any test that
+  /// encrypts into a minutes-long run. Decrypt reads the iteration count
+  /// out of the envelope, so envelopes made with this set still round-trip.
+  @visibleForTesting
+  static int? kdfIterationsForTest;
+
   static List<int> _rand(int n) =>
       List<int>.generate(n, (_) => _rng.nextInt(256));
 
@@ -57,10 +65,11 @@ class SecureEnvelope {
 
     final passphrase = '$compiledPrefix$exportPostfix';
 
+    final iterations = kdfIterationsForTest ?? _kdfIterations;
     final salt = _rand(16);
     final kdf = crypto.Pbkdf2(
       macAlgorithm: crypto.Hmac.sha256(),
-      iterations: _kdfIterations,
+      iterations: iterations,
       bits: 256,
     );
     final key = await kdf.deriveKey(
@@ -83,7 +92,7 @@ class SecureEnvelope {
       'version': 1,
       'kdf': {
         'name': 'pbkdf2-hmac-sha256',
-        'iterations': _kdfIterations,
+        'iterations': iterations,
         'salt_b64': base64Encode(salt),
       },
       'cipher': {
@@ -2486,8 +2495,9 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
         helperText: hasSaved ? 'Saved — leave blank to keep it' : null,
         // Floats the label off the empty field so the hint dots above are
         // what reads as the field's content.
-        floatingLabelBehavior:
-            hasSaved ? FloatingLabelBehavior.always : FloatingLabelBehavior.auto,
+        floatingLabelBehavior: hasSaved
+            ? FloatingLabelBehavior.always
+            : FloatingLabelBehavior.auto,
         suffixIcon: hasSaved
             ? IconButton(
                 tooltip: 'Remove password',
@@ -2772,6 +2782,28 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
                         ),
                   )
                 : null;
+            final buttons = <Widget>[
+              FilledButton.icon(
+                onPressed: () => _onLoadFromDb(context, ref),
+                icon: const Icon(Icons.cloud_download_outlined),
+                label: const Text('Load from Database'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _onStoreToDb(context, ref),
+                icon: const Icon(Icons.cloud_upload_outlined),
+                label: const Text('Store in Database'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _onImport(context, ref),
+                icon: const Icon(Icons.file_upload),
+                label: const Text('Import File'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _onExport(context, ref),
+                icon: const Icon(Icons.file_download),
+                label: const Text('Export File'),
+              ),
+            ];
             if (isNarrow) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2785,17 +2817,10 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: () => _onImport(context, ref),
-                    icon: const Icon(Icons.file_upload),
-                    label: const Text('Import'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => _onExport(context, ref),
-                    icon: const Icon(Icons.file_download),
-                    label: const Text('Export'),
-                  ),
+                  for (final button in buttons) ...[
+                    button,
+                    if (button != buttons.last) const SizedBox(height: 8),
+                  ],
                   if (versionText != null) ...[
                     const SizedBox(height: 12),
                     Center(child: versionText),
@@ -2803,25 +2828,28 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
                 ],
               );
             }
-            return Row(
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.sync_alt, size: 20),
-                const SizedBox(width: 8),
-                Text('Import / Export',
-                    style: Theme.of(context).textTheme.titleMedium),
-                if (versionText != null)
-                  Expanded(child: Center(child: versionText)),
-                if (versionText == null) const Spacer(),
-                FilledButton.icon(
-                  onPressed: () => _onImport(context, ref),
-                  icon: const Icon(Icons.file_upload),
-                  label: const Text('Import'),
+                Row(
+                  children: [
+                    const Icon(Icons.sync_alt, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Import / Export',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    if (versionText != null)
+                      Expanded(
+                          child: Align(
+                              alignment: Alignment.centerRight,
+                              child: versionText)),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: () => _onExport(context, ref),
-                  icon: const Icon(Icons.file_download),
-                  label: const Text('Export'),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: buttons,
                 ),
               ],
             );
@@ -2834,14 +2862,7 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
   // -------------------- EXPORT --------------------
   Future<void> _onExport(BuildContext context, WidgetRef ref) async {
     try {
-      // Load current/saved config from prefs
-      final prefs = await ref.read(preferencesProvider.future);
-      final stateMan = await StateManConfig.fromPrefs(prefs);
-      final db = await DatabaseConfig.fromPrefs();
-
-      final rawJsonMap = stateMan.toJson();
-      final jsonMap = _scrubCertPaths(rawJsonMap);
-      jsonMap['database'] = db.toJson();
+      final jsonMap = await _collectExportJson(ref);
 
       final postfix = _generatePostfix(12);
       final envelope = await SecureEnvelope.encrypt(
@@ -2996,22 +3017,7 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
         postfix: postfix,
       );
 
-      // Persist Database first (so DB widget re-reads correct values)
-      if (decrypted['database'] != null) {
-        final db = DatabaseConfig.fromJson(decrypted['database']);
-        await db.toPrefs();
-        decrypted.remove('database');
-      }
-
-      // Persist StateManConfig to prefs as current config
-      final stateMan = StateManConfig.fromJson(decrypted);
-      final prefs = await ref.read(preferencesProvider.future);
-      await stateMan.toPrefs(prefs);
-
-      // Trigger rebuilds:
-      ref.invalidate(databaseProvider);
-      ref.invalidate(stateManProvider);
-      ref.read(refreshKeyProvider.notifier).increment();
+      await _applyDecryptedConfig(ref, decrypted);
 
       if (!context.mounted) return;
 
@@ -3030,6 +3036,323 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
             backgroundColor: Theme.of(context).colorScheme.error),
       );
     }
+  }
+
+  /// Persists a decrypted config map (StateManConfig JSON with an optional
+  /// 'database' entry) and rebuilds everything that reads it. Shared by the
+  /// file import and the database import.
+  Future<void> _applyDecryptedConfig(
+      WidgetRef ref, Map<String, dynamic> decrypted) async {
+    // Persist Database first (so DB widget re-reads correct values)
+    if (decrypted['database'] != null) {
+      final db = DatabaseConfig.fromJson(decrypted['database']);
+      await db.toPrefs();
+      decrypted.remove('database');
+    }
+
+    // Persist StateManConfig to prefs as current config
+    final stateMan = StateManConfig.fromJson(decrypted);
+    final prefs = await ref.read(preferencesProvider.future);
+    await stateMan.toPrefs(prefs);
+
+    // Trigger rebuilds:
+    ref.invalidate(databaseProvider);
+    ref.invalidate(stateManProvider);
+    ref.read(refreshKeyProvider.notifier).increment();
+  }
+
+  /// Collects the current config as the JSON map that gets encrypted:
+  /// StateManConfig with cert paths scrubbed, plus the database config.
+  /// Shared by the file export and the database export.
+  Future<Map<String, dynamic>> _collectExportJson(WidgetRef ref) async {
+    final prefs = await ref.read(preferencesProvider.future);
+    final stateMan = await StateManConfig.fromPrefs(prefs);
+    final db = await DatabaseConfig.fromPrefs();
+    final jsonMap = _scrubCertPaths(stateMan.toJson());
+    jsonMap['database'] = db.toJson();
+    return jsonMap;
+  }
+
+  // -------------------- STORE IN / LOAD FROM DATABASE --------------------
+
+  void _showError(BuildContext context, String message) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context).colorScheme.error),
+    );
+  }
+
+  /// Stores the current config in the shared database, encrypted with a
+  /// password the operator chooses. Any client connected to the same
+  /// database can then import it with that password — no file to carry
+  /// between machines.
+  Future<void> _onStoreToDb(BuildContext context, WidgetRef ref) async {
+    try {
+      final db = await ref.read(databaseProvider.future);
+      if (db == null) {
+        if (context.mounted) {
+          _showError(context,
+              'No database connection — configure and save the database first.');
+        }
+        return;
+      }
+
+      // Fetched only so the dialog can warn what gets replaced; a corrupt
+      // stored row must not block overwriting it with a good one.
+      StoredServerConfig? existing;
+      try {
+        existing = await ServerConfigDb.fetch(db.db);
+      } catch (_) {}
+
+      if (!context.mounted) return;
+      final password = await _promptStorePassword(context, existing);
+      if (password == null) return;
+
+      final jsonMap = await _collectExportJson(ref);
+      final envelope = await SecureEnvelope.encrypt(
+        jsonConfig: jsonMap,
+        compiledPrefix: ImportExportCard._compiledPrefix,
+        exportPostfix: password,
+      );
+
+      await ServerConfigDb.publish(
+        db.db,
+        StoredServerConfig(
+          savedAt: DateTime.now(),
+          savedBy: Platform.localHostname,
+          envelope: envelope,
+        ),
+      );
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Config stored in database. Other clients can import it with the password.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      _showError(context, 'Storing config in database failed: $e');
+    }
+  }
+
+  /// Imports the config another client stored in the shared database.
+  Future<void> _onLoadFromDb(BuildContext context, WidgetRef ref) async {
+    try {
+      final db = await ref.read(databaseProvider.future);
+      if (db == null) {
+        if (context.mounted) {
+          _showError(context,
+              'No database connection — configure and save the database first.');
+        }
+        return;
+      }
+
+      final stored = await ServerConfigDb.fetch(db.db);
+      if (stored == null) {
+        if (context.mounted) {
+          _showError(context, 'No config stored in the database yet.');
+        }
+        return;
+      }
+
+      if (!context.mounted) return;
+      final decrypted = await _promptLoadPassword(context, stored);
+      if (decrypted == null) return;
+
+      await _applyDecryptedConfig(ref, decrypted);
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Config imported from database. Please generate new certificates for the servers that need them.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      _showError(context, 'Loading config from database failed: $e');
+    }
+  }
+
+  static String _describeStored(StoredServerConfig stored) {
+    final when = stored.savedAt?.toLocal().toString().split('.').first;
+    final by = stored.savedBy;
+    if (when != null && by != null) return 'stored $when by $by';
+    if (when != null) return 'stored $when';
+    if (by != null) return 'stored by $by';
+    return 'already stored';
+  }
+
+  /// Asks the operator to choose (and confirm) the encryption password.
+  /// Returns null when cancelled.
+  Future<String?> _promptStorePassword(
+      BuildContext context, StoredServerConfig? existing) async {
+    // Not disposed, like the import-code dialog's controller: the dialog's
+    // dismissal animation still reads them after this future completes.
+    final passwordCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final error = ValueNotifier<String?>(null);
+    return await showStandardDialog<String?>(
+      context: context,
+      title: 'Store config in database',
+      icon: Icons.cloud_upload_outlined,
+      closeLabel: 'Cancel',
+      actionsBuilder: (ctx) => [
+        PaneAction.primary(
+          label: 'Store',
+          onPressed: () {
+            final password = passwordCtrl.text;
+            if (password.length < 6) {
+              error.value = 'Password must be at least 6 characters.';
+              return;
+            }
+            if (password != confirmCtrl.text) {
+              error.value = 'Passwords do not match.';
+              return;
+            }
+            Navigator.pop(ctx, password);
+          },
+        ),
+      ],
+      builder: (ctx) => SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'The server config — including credentials — is encrypted '
+              'with this password and stored in the shared database. Any '
+              'client connected to the same database can import it by '
+              'entering the same password.',
+            ),
+            if (existing != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'This replaces the config ${_describeStored(existing)}.',
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, color: Colors.orange),
+              ),
+            ],
+            const SizedBox(height: 16),
+            TextField(
+              controller: passwordCtrl,
+              decoration: const InputDecoration(labelText: 'Password'),
+              obscureText: true,
+              autofocus: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: confirmCtrl,
+              decoration: const InputDecoration(labelText: 'Confirm password'),
+              obscureText: true,
+            ),
+            ValueListenableBuilder<String?>(
+              valueListenable: error,
+              builder: (_, message, __) => message == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        message,
+                        style:
+                            TextStyle(color: Theme.of(ctx).colorScheme.error),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Asks for the password and decrypts [stored] right in the dialog, so a
+  /// wrong password shows an error and lets the operator retry instead of
+  /// dumping them back to the page. Returns the decrypted config map, or
+  /// null when cancelled.
+  Future<Map<String, dynamic>?> _promptLoadPassword(
+      BuildContext context, StoredServerConfig stored) async {
+    // Not disposed — see _promptStorePassword.
+    final passwordCtrl = TextEditingController();
+    final error = ValueNotifier<String?>(null);
+    var busy = false;
+    return await showStandardDialog<Map<String, dynamic>?>(
+      context: context,
+      title: 'Load config from database',
+      icon: Icons.cloud_download_outlined,
+      closeLabel: 'Cancel',
+      actionsBuilder: (ctx) => [
+        PaneAction.primary(
+          label: 'Decrypt & import',
+          onPressed: () async {
+            if (busy) return;
+            final password = passwordCtrl.text;
+            if (password.isEmpty) {
+              error.value = 'Enter the password.';
+              return;
+            }
+            busy = true;
+            try {
+              final decrypted = await SecureEnvelope.decrypt(
+                envelope: stored.envelope,
+                compiledPrefix: ImportExportCard._compiledPrefix,
+                postfix: password,
+              );
+              if (ctx.mounted) Navigator.pop(ctx, decrypted);
+            } catch (_) {
+              // AES-GCM authentication failure — wrong password (or a
+              // corrupt envelope, which reads the same from here).
+              error.value = 'Incorrect password.';
+            } finally {
+              busy = false;
+            }
+          },
+        ),
+      ],
+      builder: (ctx) => SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Config ${_describeStored(stored)}.'),
+            const SizedBox(height: 12),
+            const Text(
+              'Current server config will be overwritten!',
+              style:
+                  TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passwordCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                hintText: 'Password chosen when the config was stored',
+              ),
+              obscureText: true,
+              autofocus: true,
+            ),
+            ValueListenableBuilder<String?>(
+              valueListenable: error,
+              builder: (_, message, __) => message == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        message,
+                        style:
+                            TextStyle(color: Theme.of(ctx).colorScheme.error),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String _generatePostfix(int length) {

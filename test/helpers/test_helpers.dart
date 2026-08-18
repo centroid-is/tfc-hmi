@@ -131,6 +131,7 @@ Future<void> revealKeyCard(WidgetTester tester, String name) async {
 Widget buildTestableKeyRepository({
   KeyMappings? keyMappings,
   StateManConfig? stateManConfig,
+  StateMan? stateMan,
 }) {
   return ProviderScope(
     overrides: [
@@ -140,9 +141,10 @@ Widget buildTestableKeyRepository({
           )),
       databaseProvider.overrideWith((ref) async => null),
       // Override stateManProvider to avoid real network connections.
-      // Throwing makes valueOrNull return null and isLoading false.
-      stateManProvider
-          .overrideWith((ref) => throw StateError('No StateMan in tests')),
+      // With no [stateMan] given it throws, which the page treats as
+      // "nothing to probe".
+      stateManProvider.overrideWith((ref) =>
+          stateMan ?? (throw StateError('No StateMan in tests'))),
     ],
     child: MaterialApp(
       home: Scaffold(

@@ -209,6 +209,21 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   Timer? _statusFlushTimer;
   bool _statusDirty = false;
 
+  /// Keys still waiting to be probed, front first. [_prioritizeProbeQueue]
+  /// reorders this in place when the search query changes, so the cards the
+  /// operator is actually looking at get their status before the rest of
+  /// the repository.
+  final List<String> _probeQueue = [];
+
+  /// Bumped by [_probeKeys] so workers from a superseded run stop instead
+  /// of racing the new run for the queue.
+  int _probeGeneration = 0;
+
+  /// How many keys are probed at once. Each key on an unreachable server
+  /// holds its read for the full 5 s timeout, so probing strictly one at a
+  /// time turned a large repository into minutes of grey chips.
+  static const int _probeConcurrency = 6;
+
   /// Proposal state
   Map<String, dynamic>? _proposedMapping;
   bool _isProposal = false;
@@ -437,13 +452,37 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   Future<void> _probeKeys() async {
     if (_keyMappings == null || _keyMappings!.nodes.isEmpty) return;
 
-    final stateManAsync = ref.read(stateManProvider);
-    final stateMan = stateManAsync.valueOrNull;
-    if (stateMan == null) return;
+    // Await instead of peeking at valueOrNull: opening this page right
+    // after app start used to catch the provider still loading and
+    // silently skip probing, leaving every chip blank.
+    final StateMan stateMan;
+    try {
+      stateMan = await ref.read(stateManProvider.future);
+    } catch (_) {
+      return; // No StateMan configured; nothing to probe.
+    }
+    if (!mounted) return;
 
-    final keys = _keyMappings!.nodes.keys.toList();
-    for (final key in keys) {
-      if (!mounted) return;
+    _probeQueue
+      ..clear()
+      ..addAll(_keyMappings!.nodes.keys);
+    _prioritizeProbeQueue();
+    final generation = ++_probeGeneration;
+    final workers = _probeQueue.length < _probeConcurrency
+        ? _probeQueue.length
+        : _probeConcurrency;
+    for (var i = 0; i < workers; i++) {
+      unawaited(_probeWorker(stateMan, generation));
+    }
+  }
+
+  /// One probe worker: pulls keys off [_probeQueue] until it is empty or
+  /// this run is superseded.
+  Future<void> _probeWorker(StateMan stateMan, int generation) async {
+    while (mounted &&
+        generation == _probeGeneration &&
+        _probeQueue.isNotEmpty) {
+      final key = _probeQueue.removeAt(0);
       // The operator can rename or delete keys while a long probe runs.
       // Statuses are written in place now, so skip keys that are gone —
       // otherwise the map keeps entries no card will ever read, and a key
@@ -453,27 +492,55 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
         continue;
       }
       // Keys on a disabled server have nothing to probe — reading them
-      // would just burn the 5 s timeout each, one key at a time.
+      // would just burn the 5 s timeout each.
       if (stateMan.isKeyDisabled(key)) {
         _keyStatuses[key] = _KeyStatus.serverDisabled;
         _scheduleStatusFlush();
         continue;
       }
+      _KeyStatus status;
       try {
         await stateMan.read(key).timeout(const Duration(seconds: 5));
-        _keyStatuses[key] = _KeyStatus.ok;
+        status = _KeyStatus.ok;
       } on TimeoutException {
-        _keyStatuses[key] = _KeyStatus.serverDisconnected;
+        status = _KeyStatus.serverDisconnected;
       } catch (e) {
         final msg = e.toString().toLowerCase();
-        if (msg.contains('not found') || msg.contains('connect')) {
-          _keyStatuses[key] = _KeyStatus.serverDisconnected;
-        } else {
-          _keyStatuses[key] = _KeyStatus.error;
-        }
+        status = msg.contains('not found') || msg.contains('connect')
+            ? _KeyStatus.serverDisconnected
+            : _KeyStatus.error;
       }
-      _scheduleStatusFlush();
+      if (!mounted || generation != _probeGeneration) return;
+      // The key may have been renamed or deleted while the read ran.
+      if (_keyMappings!.nodes.containsKey(key)) {
+        _keyStatuses[key] = status;
+        _scheduleStatusFlush();
+      }
     }
+  }
+
+  /// Moves keys matching the current search to the front of [_probeQueue],
+  /// keeping relative order within both groups. Without this, a search
+  /// typed mid-probe kept fetching statuses in full-repository order and
+  /// the filtered cards sat blank behind thousands of hidden keys.
+  void _prioritizeProbeQueue() {
+    if (_probeQueue.isEmpty || _searchQuery.isEmpty) return;
+    final visible = {for (final row in _filteredEntries) row.key};
+    if (visible.isEmpty) return;
+    final front = <String>[];
+    final back = <String>[];
+    for (final key in _probeQueue) {
+      (visible.contains(key) ? front : back).add(key);
+    }
+    _probeQueue
+      ..clear()
+      ..addAll(front)
+      ..addAll(back);
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _searchQuery = value);
+    _prioritizeProbeQueue();
   }
 
   void _renameKey(String oldKey, String newKey) {
@@ -776,8 +843,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                                 border: OutlineInputBorder(),
                                 isDense: true,
                               ),
-                              onChanged: (value) =>
-                                  setState(() => _searchQuery = value),
+                              onChanged: _onSearchChanged,
                             ),
                             const SizedBox(height: 8),
                             ElevatedButton.icon(
@@ -826,8 +892,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                                     border: OutlineInputBorder(),
                                     isDense: true,
                                   ),
-                                  onChanged: (value) =>
-                                      setState(() => _searchQuery = value),
+                                  onChanged: _onSearchChanged,
                                 ),
                               ),
                               const SizedBox(width: 8),

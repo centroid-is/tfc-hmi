@@ -561,11 +561,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// builder leaves it here on the way past.
   BoxConstraints? _canvasConstraints;
 
-  /// The shortcut handler's own focus. `autofocus` arms it once at mount, but
-  /// focus wanders: the config pane docks in the root overlay — outside this
-  /// page's Focus subtree — and a text field there keeps keyboard focus until
-  /// something takes it back, leaving every canvas shortcut dead. Clicking the
-  /// canvas re-arms it (see the Listener around [ZoomableCanvas]).
+  /// The keys themselves are handled globally (see [_onShortcutKey]), so this
+  /// node no longer routes them; it exists to *take focus away*. The config
+  /// pane docks in the root overlay, and a text field there keeps keyboard
+  /// focus — muting every shortcut via the text-field guard — until something
+  /// pulls it back. Clicking the canvas does (see the Listener around
+  /// [ZoomableCanvas]), as does the pane closing.
   final FocusNode _shortcutFocus =
       FocusNode(debugLabel: 'PageEditor shortcuts');
   String? _copiedAssets;
@@ -658,6 +659,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   @override
   void initState() {
     super.initState();
+    // Global, like the side pane's Escape: the shortcuts must fire wherever
+    // keyboard focus happens to sit. A focus-scoped handler goes deaf the
+    // moment focus parks outside this page's subtree — the root-overlay
+    // config pane, a just-dismissed dialog — and an operator whose Ctrl+Z
+    // does nothing has no way to see why. [_onShortcutKey] stands down for
+    // text fields, stacked routes and floating dialogs instead.
+    HardwareKeyboard.instance.addHandler(_onShortcutKey);
     ref.read(pageManagerProvider.future).then((pageManager) {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
@@ -676,6 +684,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onShortcutKey);
     _stopAutoScroll();
     // The pane lives in the root overlay, so nothing else tears it down when
     // the editor goes away (an MCP proposal can navigate out from under it).
@@ -1011,9 +1020,78 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (_undoHistory.isNotEmpty) {
       setState(() {
         _temporaryPages = _undoHistory.removeLast();
+        // The restored pages are fresh copies, so whatever was selected is
+        // now dead instances: invisible on the canvas, yet a Delete on them
+        // would push a snapshot while removing nothing — and the next undo
+        // would pop that no-op and appear to do nothing.
+        _selectedAssets.clear();
         _updateCurrentJson();
       });
     }
+  }
+
+  /// The canvas shortcuts, registered on [HardwareKeyboard] for the editor's
+  /// lifetime rather than hung off a Focus node. Focus wanders — into the
+  /// root-overlay config pane, onto whatever button was clicked last — and
+  /// every place it can wander to is a place a focus-scoped handler goes
+  /// deaf. The guards below carve out the moments the shortcuts must yield.
+  bool _onShortcutKey(KeyEvent event) {
+    if (!mounted) return false;
+    // A menu or dialog route on top owns the keyboard; Delete there must
+    // never reach through to the canvas.
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+    // Same for the free-floating pane dialogs, which are overlay entries
+    // rather than routes.
+    if (!FloatingDialogs.isEmpty) return false;
+    // Don't intercept keys when a text field has focus — otherwise
+    // backspace/delete edit the canvas selection, R rotates it and space
+    // pans, all mid-keystroke. A focused text field's FocusNode attaches
+    // to a Focus widget *inside* EditableText's build, so the focused
+    // context's own widget is never EditableText — the EditableText is
+    // found among its ancestors.
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    if (focusContext != null &&
+        (focusContext.widget is EditableText ||
+            focusContext.findAncestorStateOfType<EditableTextState>() !=
+                null)) {
+      return false;
+    }
+    // Space is held, not pressed: it is the only thing that turns a drag
+    // on empty canvas from a marquee back into a canvas pan, so both
+    // edges matter. KeyRepeatEvent arrives while it is down and must not
+    // be read as a release.
+    if (event.logicalKey == LogicalKeyboardKey.space) {
+      final held = event is! KeyUpEvent;
+      if (held != _isPanKeyHeld) {
+        setState(() => _isPanKeyHeld = held);
+      }
+      return true;
+    }
+    if (event is KeyDownEvent) {
+      if (_isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
+        if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+          _handleUndo();
+          return true;
+        } else if (event.logicalKey == LogicalKeyboardKey.keyC) {
+          _handleCopy();
+          return true;
+        } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
+          _handlePaste();
+          return true;
+        }
+      } else if (event.logicalKey == LogicalKeyboardKey.delete ||
+          event.logicalKey == LogicalKeyboardKey.backspace) {
+        _handleDelete();
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.keyR) {
+        // Shift reverses it, the way the two menu entries pair up.
+        _handleRotateShortcut(
+          HardwareKeyboard.instance.isShiftPressed ? -90 : 90,
+        );
+        return true;
+      }
+    }
+    return false;
   }
 
   bool _isModifierPressed(Set<LogicalKeyboardKey> keysPressed) {
@@ -1021,8 +1099,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       return keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
           keysPressed.contains(LogicalKeyboardKey.controlRight);
     } else if (Platform.isMacOS) {
+      // Ctrl counts alongside Cmd: the same operator drives the plant's
+      // Linux panels with Ctrl all day, and a Ctrl+Z that silently does
+      // nothing on the Mac reads as "undo is broken", not "wrong key".
       return keysPressed.contains(LogicalKeyboardKey.metaLeft) ||
-          keysPressed.contains(LogicalKeyboardKey.metaRight);
+          keysPressed.contains(LogicalKeyboardKey.metaRight) ||
+          keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
+          keysPressed.contains(LogicalKeyboardKey.controlRight);
     }
     return false;
   }
@@ -1096,10 +1179,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final pasted = assetJson;
 
     _saveToHistory();
+    final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
     setState(() {
       _selectedAssets.clear();
-
-      final copiedAssets = AssetRegistry.parse(jsonDecode(pasted));
 
       if (at != null) {
         final placed = placeGroupAt(
@@ -1130,6 +1212,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       }
       _updateCurrentJson();
     });
+    _retargetConfigPane(copiedAssets);
+  }
+
+  /// Re-points an open config pane at what a paste just produced.
+  ///
+  /// An operator pasting with the pane up is duplicating the asset they are
+  /// configuring; the asset they want to edit next is the copy, not the
+  /// source. Only a lone pasted asset re-points the pane — a group paste has
+  /// no single asset for the pane to show, so it stays where it was.
+  void _retargetConfigPane(List<Asset> pasted) {
+    if (_configAsset == null || pasted.length != 1) return;
+    _openConfigPane(pasted.single);
   }
 
   /// The live canvas's width / height, or 16:9 before the first layout.
@@ -1187,6 +1281,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           ..add(asset);
         _updateCurrentJson();
       });
+      _retargetConfigPane([asset]);
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -1623,58 +1718,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         if (!hasFocus && _isPanKeyHeld) {
           setState(() => _isPanKeyHeld = false);
         }
-      },
-      onKeyEvent: (node, event) {
-        // Don't intercept keys when a text field has focus — otherwise
-        // backspace/delete edit the canvas selection, R rotates it and space
-        // pans, all mid-keystroke. A focused text field's FocusNode attaches
-        // to a Focus widget *inside* EditableText's build, so the focused
-        // context's own widget is never EditableText — the EditableText is
-        // found among its ancestors.
-        final focusContext = FocusManager.instance.primaryFocus?.context;
-        if (focusContext != null &&
-            (focusContext.widget is EditableText ||
-                focusContext.findAncestorStateOfType<EditableTextState>() !=
-                    null)) {
-          return KeyEventResult.ignored;
-        }
-        // Space is held, not pressed: it is the only thing that turns a drag
-        // on empty canvas from a marquee back into a canvas pan, so both
-        // edges matter. KeyRepeatEvent arrives while it is down and must not
-        // be read as a release.
-        if (event.logicalKey == LogicalKeyboardKey.space) {
-          final held = event is! KeyUpEvent;
-          if (held != _isPanKeyHeld) {
-            setState(() => _isPanKeyHeld = held);
-          }
-          return KeyEventResult.handled;
-        }
-        if (event is KeyDownEvent) {
-          if (_isModifierPressed(
-              HardwareKeyboard.instance.logicalKeysPressed)) {
-            if (event.logicalKey == LogicalKeyboardKey.keyZ) {
-              _handleUndo();
-              return KeyEventResult.handled;
-            } else if (event.logicalKey == LogicalKeyboardKey.keyC) {
-              _handleCopy();
-              return KeyEventResult.handled;
-            } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
-              _handlePaste();
-              return KeyEventResult.handled;
-            }
-          } else if (event.logicalKey == LogicalKeyboardKey.delete ||
-              event.logicalKey == LogicalKeyboardKey.backspace) {
-            _handleDelete();
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.keyR) {
-            // Shift reverses it, the way the two menu entries pair up.
-            _handleRotateShortcut(
-              HardwareKeyboard.instance.isShiftPressed ? -90 : 90,
-            );
-            return KeyEventResult.handled;
-          }
-        }
-        return KeyEventResult.ignored;
       },
       child: BaseScaffold(
         title: _isProposal ? 'Page Editor — AI Proposal' : 'Page Editor',

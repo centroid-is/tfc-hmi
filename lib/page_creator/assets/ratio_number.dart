@@ -485,50 +485,63 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
     return displayWidget;
   }
 
-  Future<List<TimeseriesData<dynamic>>> _getQueue(
-      Database db, String key, Duration sinceMinutes) async {
-    final endTime = widget.config.barsClockAligned
-        ? _clockAlignedEnd(DateTime.now(), sinceMinutes)
+  void _showBarChartDialog(
+          BuildContext context, Duration activeSinceMinutes) =>
+      showRatioAnalysisDialog(context, ref, widget.config,
+          interval: activeSinceMinutes);
+}
+
+/// Opens the accept/reject analysis window for [config] — the same one the
+/// RatioNumber readout opens when tapped.
+///
+/// Top-level rather than private to the widget's state so other surfaces —
+/// the 3rd-party side pane's chart button — can open it without faking a tap
+/// on the readout. Does nothing when there is no database to chart from.
+Future<void> showRatioAnalysisDialog(
+    BuildContext context, WidgetRef ref, RatioNumberConfig config,
+    {Duration? interval}) async {
+  final navigator = Navigator.of(context);
+  final activeSinceMinutes = interval ?? config.sinceMinutes;
+  final db = await ref.read(databaseProvider.future);
+  if (db == null || !navigator.context.mounted) return;
+
+  Future<List<TimeseriesData<dynamic>>> getQueue(String key) async {
+    final endTime = config.barsClockAligned
+        ? _clockAlignedEnd(DateTime.now(), activeSinceMinutes)
         : DateTime.now();
     try {
       return await db.queryTimeseriesData(
-          key, endTime.subtract(sinceMinutes * widget.config.howMany),
+          key, endTime.subtract(activeSinceMinutes * config.howMany),
           orderBy: 'time DESC');
     } catch (_) {
       return [];
     }
   }
 
-  void _showBarChartDialog(
-      BuildContext context, Duration activeSinceMinutes) async {
-    final navigator = Navigator.of(context);
-    final db = await ref.read(databaseProvider.future);
-    if (db == null || !mounted) return;
-    final results = await Future.wait([
-      _getQueue(db, widget.config.key1, activeSinceMinutes),
-      _getQueue(db, widget.config.key2, activeSinceMinutes),
-    ]);
-    if (!mounted) return;
-    final key1Queue = results[0];
-    final key2Queue = results[1];
+  final results = await Future.wait([
+    getQueue(config.key1),
+    getQueue(config.key2),
+  ]);
+  final dialogContext = navigator.context;
+  if (!dialogContext.mounted) return;
+  final key1Queue = results[0];
+  final key2Queue = results[1];
 
-    final size = MediaQuery.of(navigator.context).size;
-    showFloatingDialog(
-      context: navigator.context,
-      id: 'ratio:${identityHashCode(widget.config)}',
-      title:
-          widget.config.graphHeader ?? widget.config.text ?? 'Ratio Analysis',
-      icon: Icons.percent,
-      size: Size(size.width * 0.7, size.height * 0.7),
-      scrollable: false,
-      builder: (context) => RatioAnalysisView(
-        config: widget.config,
-        key1Queue: key1Queue,
-        key2Queue: key2Queue,
-        initialInterval: activeSinceMinutes,
-      ),
-    );
-  }
+  final size = MediaQuery.of(dialogContext).size;
+  showFloatingDialog(
+    context: dialogContext,
+    id: 'ratio:${identityHashCode(config)}',
+    title: config.graphHeader ?? config.text ?? 'Ratio Analysis',
+    icon: Icons.percent,
+    size: Size(size.width * 0.7, size.height * 0.7),
+    scrollable: false,
+    builder: (context) => RatioAnalysisView(
+      config: config,
+      key1Queue: key1Queue,
+      key2Queue: key2Queue,
+      initialInterval: activeSinceMinutes,
+    ),
+  );
 }
 
 class RatioAnalysisView extends ConsumerStatefulWidget {
