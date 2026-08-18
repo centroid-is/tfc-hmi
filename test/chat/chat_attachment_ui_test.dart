@@ -79,6 +79,7 @@ Widget _wrapInStackWithPrefs(Widget child) {
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 void main() {
+  setUp(Preferences.clearSecretCache);
   group('Chat attachment UI', () {
     testWidgets('attach button is visible in input bar', (tester) async {
       await tester.pumpWidget(_wrapInStackWithPrefs(const ChatOverlay()));
@@ -141,7 +142,9 @@ void main() {
         filename: 'test_drawing.pdf',
         mimeType: 'application/pdf',
       );
-      capturedRef.read(pendingAttachmentsProvider.notifier).state = [attachment];
+      capturedRef.read(pendingAttachmentsProvider.notifier).state = [
+        attachment
+      ];
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
@@ -170,7 +173,9 @@ void main() {
         filename: 'remove_me.pdf',
         mimeType: 'application/pdf',
       );
-      capturedRef.read(pendingAttachmentsProvider.notifier).state = [attachment];
+      capturedRef.read(pendingAttachmentsProvider.notifier).state = [
+        attachment
+      ];
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
@@ -275,7 +280,9 @@ void main() {
         filename: 'will_be_cleared.pdf',
         mimeType: 'application/pdf',
       );
-      capturedRef.read(pendingAttachmentsProvider.notifier).state = [attachment];
+      capturedRef.read(pendingAttachmentsProvider.notifier).state = [
+        attachment
+      ];
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
@@ -334,8 +341,7 @@ void main() {
         mimeType: 'application/pdf',
       );
 
-      final msg =
-          ChatMessage.user('Check this', attachments: [attachment]);
+      final msg = ChatMessage.user('Check this', attachments: [attachment]);
       expect(msg.attachments, isNotNull);
       expect(msg.attachments, hasLength(1));
       expect(msg.attachments!.first.filename, 'drawing.pdf');

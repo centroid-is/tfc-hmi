@@ -42,6 +42,10 @@ Future<Preferences> createTestPreferences({
   KeyMappings? keyMappings,
   StateManConfig? stateManConfig,
 }) async {
+  // The secret cache is static (process-wide) so stale entries from a
+  // previous test would shadow this test's fresh FakeSecureStorage contents.
+  Preferences.clearSecretCache();
+  DatabaseConfig.clearPrefsCache();
   final secureStorage = FakeSecureStorage();
   final prefs = Preferences(database: null, secureStorage: secureStorage);
 
@@ -137,8 +141,8 @@ Widget buildTestableKeyRepository({
       databaseProvider.overrideWith((ref) async => null),
       // Override stateManProvider to avoid real network connections.
       // Throwing makes valueOrNull return null and isLoading false.
-      stateManProvider.overrideWith((ref) =>
-          throw StateError('No StateMan in tests')),
+      stateManProvider
+          .overrideWith((ref) => throw StateError('No StateMan in tests')),
     ],
     child: MaterialApp(
       home: Scaffold(
@@ -288,8 +292,8 @@ Widget buildTestableServerConfig({
       // Override stateManProvider to avoid real network connections.
       // Throwing makes valueOrNull return null and isLoading false,
       // so connection status shows "Not active" (grey).
-      stateManProvider.overrideWith((ref) =>
-          throw StateError('No StateMan in tests')),
+      stateManProvider
+          .overrideWith((ref) => throw StateError('No StateMan in tests')),
     ],
     child: MaterialApp(
       // Keeps the debug ribbon out of the corner of golden captures.

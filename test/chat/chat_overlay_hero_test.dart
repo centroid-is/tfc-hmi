@@ -50,6 +50,7 @@ Preferences _createTestPreferences() {
 /// (title bar + ChatWidget + resize handle) so that PopupMenuButton
 /// in the title bar has an Overlay/Navigator ancestor for its popup.
 void main() {
+  setUp(Preferences.clearSecretCache);
   group('ChatOverlay HeroController isolation', () {
     testWidgets(
       'closing ChatOverlay does not orphan the root HeroController',
