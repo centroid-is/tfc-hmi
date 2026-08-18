@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'
+    show RenderConstrainedBox, BoxHitTestResult, BoxHitTestEntry;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -162,6 +164,61 @@ class AssetStack extends ConsumerStatefulWidget {
   ConsumerState<AssetStack> createState() => _AssetStackState();
 }
 
+/// A [SizedBox] whose hit test does not clamp to its own bounds.
+///
+/// Assets rotate INTERNALLY (`LayoutRotatedBox` reads `coordinates.angle`)
+/// and paint out of their unrotated w×h rect into the surrounding AABB. A
+/// plain [SizedBox] rejects any hit outside the unrotated rect before the
+/// asset's own rotation-aware hit test can consider it, which truncated a
+/// rotated asset's tappable area to the overlap sliver between the rotated
+/// visual and the unrotated rect. This box lays out exactly like a
+/// [SizedBox] but forwards every position to its child — the child still
+/// accepts or rejects against its own (rotation-aware) geometry, so the
+/// effective hit area is the visible glyph, never more.
+class _HitPermissiveSizedBox extends SingleChildRenderObjectWidget {
+  final double width;
+  final double height;
+
+  const _HitPermissiveSizedBox({
+    required this.width,
+    required this.height,
+    super.child,
+  });
+
+  BoxConstraints get _additionalConstraints =>
+      BoxConstraints.tightFor(width: width, height: height);
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderHitPermissiveConstrainedBox(
+      additionalConstraints: _additionalConstraints,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderHitPermissiveConstrainedBox renderObject,
+  ) {
+    renderObject.additionalConstraints = _additionalConstraints;
+  }
+}
+
+class _RenderHitPermissiveConstrainedBox extends RenderConstrainedBox {
+  _RenderHitPermissiveConstrainedBox({required super.additionalConstraints});
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    // Deliberately no `size.contains(position)` gate — see the widget doc.
+    // The child decides; we only record ourselves on the path when it hits.
+    if (hitTestChildren(result, position: position)) {
+      result.add(BoxHitTestEntry(this, position));
+      return true;
+    }
+    return false;
+  }
+}
+
 class _AssetStackState extends ConsumerState<AssetStack> {
   final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
 
@@ -279,6 +336,11 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
           positionedChildren.add(
             Positioned(
+              // Keyed by identity so a z-order change (send to back / bring
+              // to front) moves the existing element instead of rebuilding
+              // every asset at its new index — asset subtrees hold live
+              // state (subscriptions, futures) that a rebuild would restart.
+              key: ObjectKey(asset),
               left: cx - halfAabbW,
               top: cy - halfAabbH,
               width: aabbW,
@@ -297,20 +359,37 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                   //    escape the Stack's tight AABB constraints (Stack
                   //    would otherwise shrink the 40x10 visual to fit the
                   //    10x40 AABB).
-                  OverflowBox(
-                    minWidth: 0,
-                    minHeight: 0,
-                    maxWidth: double.infinity,
-                    maxHeight: double.infinity,
-                    child: SizedBox(
-                      width: assetW,
-                      height: assetH,
-                      child: Transform(
-                        alignment: Alignment.center,
-                        transform: asset.coordinates.angle != null
-                            ? _buildTransform(cfg)
-                            : Matrix4.identity(),
-                        child: RepaintBoundary(
+                  // The RepaintBoundary sits OUTSIDE the OverflowBox (sized
+                  // to the AABB) rather than hugging the asset: hugging it
+                  // both let the rotated overflow painting escape the
+                  // boundary and clamped hit tests to the unrotated rect
+                  // (RenderProxyBox.hitTest rejects positions outside its
+                  // own size).
+                  RepaintBoundary(
+                    child: OverflowBox(
+                      minWidth: 0,
+                      minHeight: 0,
+                      maxWidth: double.infinity,
+                      maxHeight: double.infinity,
+                      // NOT a plain SizedBox: a rotated asset paints out
+                      // into the AABB, and a SizedBox rejects hits outside
+                      // its unrotated w×h rect before the asset's
+                      // rotation-aware hit test
+                      // (`_RenderLayoutRotatedBox.hitTest`) gets a say —
+                      // truncating a rotated sensor's tappable area to the
+                      // sliver where the rotated visual and the unrotated
+                      // rect overlap. The permissive box lays out
+                      // identically but forwards every position to the
+                      // child, which still clamps to its own (rotated)
+                      // geometry.
+                      child: _HitPermissiveSizedBox(
+                        width: assetW,
+                        height: assetH,
+                        child: Transform(
+                          alignment: Alignment.center,
+                          transform: asset.coordinates.angle != null
+                              ? _buildTransform(cfg)
+                              : Matrix4.identity(),
                           child: widget.absorb
                               // In editor mode the asset's own
                               // GestureDetectors must NOT fire -- the
@@ -319,7 +398,13 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                               // because the overlay sits on top in the
                               // Stack and would otherwise compete with the
                               // asset's internal gestures.
-                              ? IgnorePointer(child: asset.build(context))
+                              // AssetEditModeScope lets assets that render
+                              // nothing at runtime (idle alarm beacons) draw
+                              // an editor-only placeholder instead of
+                              // disappearing from the canvas.
+                              ? IgnorePointer(
+                                  child: AssetEditModeScope(
+                                      child: asset.build(context)))
                               : asset.build(context),
                         ),
                       ),

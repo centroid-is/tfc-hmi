@@ -561,7 +561,9 @@ void main() {
   // ---------------------------------------------------------------------------
   group('SensorConfig.text routes through to tag (label-via-AssetStack contract)', () {
     test('Asset.text returns the tag value (so AssetStack paints it)', () {
-      final config = SensorConfig(tag: 'PE-101A');
+      // showTag gates the alias: the canvas label is opt-in (off by
+      // default), while the side pane reads `tag` directly.
+      final config = SensorConfig(tag: 'PE-101A', showTag: true);
       expect(config.text, 'PE-101A',
           reason: 'SensorConfig.text must expose `tag` so the page-view '
               'AssetStack picks it up via the Asset.text contract — same '

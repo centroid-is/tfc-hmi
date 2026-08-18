@@ -137,22 +137,46 @@ void main() {
       );
     }
 
-    testWidgets('shows the debounce setpoints from the struct', (tester) async {
+    testWidgets('shows the debounce as live read-only values', (tester) async {
       await tester.pumpWidget(wrap(SensorFbState.tryParse(
         fbStruct(onDelayMs: 50, offDelayMs: 20),
       )!));
 
       expect(find.text('On delay'), findsOneWidget);
       expect(find.text('Off delay'), findsOneWidget);
+      expect(find.text('50 ms'), findsOneWidget);
+      expect(find.text('20 ms'), findsOneWidget);
+    });
+
+    testWidgets('the setpoint fields sit folded behind Adjust',
+        (tester) async {
+      await tester.pumpWidget(wrap(SensorFbState.tryParse(
+        fbStruct(onDelayMs: 50, offDelayMs: 20),
+      )!));
+
+      // Retuning is a rare, deliberate act: no editable field may be
+      // reachable on the pane's first paint.
+      expect(find.byType(TextFormField), findsNothing);
+
+      await tester.tap(find.text('Adjust'));
+      await tester.pumpAndSettle();
+
       expect(find.widgetWithText(TextFormField, '50'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '20'), findsOneWidget);
     });
+
+    /// Opens the collapsed Adjust fold so the setpoint fields exist.
+    Future<void> expandAdjust(WidgetTester tester) async {
+      await tester.tap(find.text('Adjust'));
+      await tester.pumpAndSettle();
+    }
 
     testWidgets('submitting the on-delay field writes p_cfg_tOnDelay',
         (tester) async {
       await tester.pumpWidget(wrap(SensorFbState.tryParse(
         fbStruct(onDelayMs: 50, offDelayMs: 20),
       )!));
+      await expandAdjust(tester);
 
       final onDelay = find.byKey(const Key('sensor_on_delay_field-50'));
       await tester.enterText(onDelay, '120');
@@ -167,6 +191,7 @@ void main() {
       await tester.pumpWidget(wrap(SensorFbState.tryParse(
         fbStruct(onDelayMs: 50, offDelayMs: 20),
       )!));
+      await expandAdjust(tester);
 
       final offDelay = find.byKey(const Key('sensor_off_delay_field-20'));
       await tester.enterText(offDelay, '35');
@@ -181,6 +206,7 @@ void main() {
       await tester.pumpWidget(wrap(SensorFbState.tryParse(
         fbStruct(onDelayMs: 50),
       )!));
+      await expandAdjust(tester);
 
       final onDelay = find.byKey(const Key('sensor_on_delay_field-50'));
       await tester.enterText(onDelay, '-50');
@@ -228,15 +254,28 @@ void main() {
       expect(find.text('clear'), findsNothing);
     });
 
-    testWidgets('the raw NC row appears only on an NO/NC pair', (tester) async {
-      await tester
-          .pumpWidget(wrap(SensorFbState.tryParse(fbStruct(hasNC: false))!));
-      expect(find.text('Raw NC'), findsNothing);
-      expect(find.text('Raw NO'), findsOneWidget);
+    testWidgets('the raw NO/NC rows are gone — the Output row is the reading',
+        (tester) async {
+      await tester.pumpWidget(wrap(SensorFbState.tryParse(
+        fbStruct(rawNO: true, rawNC: true, hasNC: true),
+      )!));
+      expect(find.text('Raw NO'), findsNothing);
+      expect(find.text('Raw NC'), findsNothing,
+          reason: 'The undebounced bits are diagnostics, not operator '
+              'readings; the Fault row carries the message when the '
+              'contacts disagree.');
+    });
 
-      await tester
-          .pumpWidget(wrap(SensorFbState.tryParse(fbStruct(hasNC: true))!));
-      expect(find.text('Raw NC'), findsOneWidget);
+    testWidgets('no Binding section, no key strings — values only',
+        (tester) async {
+      await tester.pumpWidget(wrap(SensorFbState.tryParse(fbStruct())!));
+
+      expect(find.text('Binding'), findsNothing);
+      expect(find.text('BINDING'), findsNothing);
+      expect(find.text('Detection key'), findsNothing);
+      expect(find.textContaining('sensors.CVS01_CN01_PX01'), findsNothing,
+          reason: 'Key strings are wiring — an operator surface must not '
+              'show them, not even as the pane title.');
     });
 
     testWidgets('elapsed times are surfaced as metric tiles', (tester) async {
@@ -260,7 +299,7 @@ void main() {
       expect(find.byType(SwitchListTile), findsNothing);
     });
 
-    testWidgets('tag is shown when configured', (tester) async {
+    testWidgets('the tag names the pane', (tester) async {
       await tester.pumpWidget(wrap(
         SensorFbState.tryParse(fbStruct())!,
         config: SensorConfig(
@@ -269,6 +308,12 @@ void main() {
         ),
       ));
       expect(find.text('PE-101A'), findsOneWidget);
+    });
+
+    testWidgets('an untagged sensor falls back to a generic title',
+        (tester) async {
+      await tester.pumpWidget(wrap(SensorFbState.tryParse(fbStruct())!));
+      expect(find.text('Sensor'), findsOneWidget);
     });
   });
 }

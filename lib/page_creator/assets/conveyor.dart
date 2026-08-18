@@ -1780,6 +1780,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         angle: widget.config.coordinates.angle ?? 0.0,
         geometry: geometry,
         straightBeltWidth: beltWidth,
+        paintSize: paintSize,
       ),
     );
 
@@ -2339,6 +2340,10 @@ class ConveyorPainter extends CustomPainter {
   /// belts carry their width on [geometry] instead.
   final double? straightBeltWidth;
 
+  /// The box the painter is laid out at. [hitTest] needs it to place the
+  /// straight band inside the box; null keeps the whole box tappable.
+  final Size? paintSize;
+
   ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
@@ -2349,7 +2354,54 @@ class ConveyorPainter extends CustomPainter {
       required this.batches,
       required this.angle,
       this.geometry,
-      this.straightBeltWidth});
+      this.straightBeltWidth,
+      this.paintSize});
+
+  /// Belt outline used by [hitTest], resolved once per painter instance —
+  /// hit tests run on every pointer event, the outline never changes.
+  Path? _hitOutline;
+  bool _hitOutlineResolved = false;
+
+  /// Claim only the painted belt, not the whole box.
+  ///
+  /// A turned belt occupies a fraction of its bounding box, and a straight
+  /// belt with an explicit width is a band centred in it. Taps on the empty
+  /// remainder used to open the details pane anyway; letting them fall
+  /// through keeps the dead space inert and lets assets behind it stay
+  /// reachable.
+  @override
+  bool hitTest(Offset position) {
+    final g = geometry;
+    if (g == null) {
+      final band = straightBeltWidth;
+      final size = paintSize;
+      // No explicit band: the belt fills the box, so the box is the belt.
+      if (band == null || size == null) return true;
+      final rect =
+          Rect.fromLTWH(0, (size.height - band) / 2, size.width, band);
+      return RRect.fromRectAndRadius(
+        rect,
+        Radius.circular(rect.shortestSide * _endRadiusFactor),
+      ).contains(position);
+    }
+    if (!_hitOutlineResolved) {
+      _hitOutlineResolved = true;
+      _hitOutline = g.bandOutline(0, 1,
+          width: g.beltWidth, radius: g.beltWidth * _endRadiusFactor);
+    }
+    final outline = _hitOutline;
+    if (outline != null) return outline.contains(position);
+    // Over-wide belt: painted as a fat stroke of the centerline, so accept
+    // anything within half the belt width (plus border) of it.
+    const samples = 64;
+    final reach = g.beltWidth / 2 + 2;
+    for (var i = 0; i <= samples; i++) {
+      if ((g.tangentAt(i / samples).position - position).distance <= reach) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {

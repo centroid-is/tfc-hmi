@@ -811,26 +811,21 @@ Widget _sensorFbPane(BuildContext context, {bool fault = false}) {
 }
 
 /// A sensor's read-only details — the fallback shape, shown when the key is a
-/// plain BOOL node with no `FB_Sensor` behind it.
+/// plain BOOL node with no `FB_Sensor` behind it. Values only: the tag names
+/// the pane, wiring (key strings, polarity, delay keys) stays out.
 SidePane _sensorPane(BuildContext context) {
   return const SidePane(
-    title: 'Sensor',
-    subtitle: 'opticField',
+    title: 'CN04-S1',
+    subtitle: 'opticField · sensor',
     icon: Icons.sensors,
-    status: PaneStatus.running('Live'),
+    status: PaneStatus.running('Detected'),
     child: PaneSection(
-      title: 'Details',
+      title: 'Signal',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          PaneDetailRow(label: 'Kind', value: 'opticField'),
-          PaneDetailRow(label: 'Detection key', value: 'ST101.CN04.SEN01'),
-          PaneDetailRow(label: 'Detection state', value: '(see glyph)'),
-          PaneDetailRow(label: 'Active polarity inverted', value: 'no'),
-          PaneDetailRow(label: 'Rising edge delay key', value: '—'),
-          PaneDetailRow(label: 'Falling edge delay key', value: '—'),
-          PaneDetailRow(label: 'Tag', value: 'CN04-S1'),
+          PaneDetailRow(label: 'Detection state', value: 'true'),
         ],
       ),
     ),
@@ -1163,6 +1158,19 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/side_pane_sensor_fb_dark.png'),
+      );
+    });
+
+    // The Adjust fold open: the editable debounce setpoints are reachable,
+    // but only after a deliberate second tap — never on first paint.
+    testWidgets('sensor — FB_Sensor debounce fold open — dark',
+        (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _sensorFbPane);
+      await tester.tap(find.text('Adjust'));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_sensor_fb_adjust_dark.png'),
       );
     });
 

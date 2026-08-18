@@ -15,22 +15,28 @@ import 'boolean_expression.dart';
 import 'fuzzy_search_bar.dart';
 import 'proposal_visual.dart';
 
-extension AlarmNotificationColors on AlarmNotification {
-  /// Returns the background and text colors for this alarm level.
-  ///
-  /// Reads [AlarmColors], not the [ColorScheme]: alarm colors are the same
-  /// under every color scheme on purpose.
-  (Color, Color) getColors(BuildContext context) {
-    final colors = AlarmColors.of(context);
-    switch (rule.level) {
-      case AlarmLevel.info:
-        return (colors.info, colors.onInfo);
-      case AlarmLevel.warning:
-        return (colors.warning, colors.onWarning);
-      case AlarmLevel.error:
-        return (colors.error, colors.onError);
-    }
+/// The alarm system's (background, foreground) colour pair for a level —
+/// the single source every alarm surface reads: the list cards, the app-bar
+/// banner, and the alarm visibility beacon asset.
+///
+/// Reads [AlarmColors], not the [ColorScheme]: alarm colors are the same
+/// under every color scheme on purpose.
+(Color, Color) alarmLevelColors(BuildContext context, AlarmLevel level) {
+  final colors = AlarmColors.of(context);
+  switch (level) {
+    case AlarmLevel.info:
+      return (colors.info, colors.onInfo);
+    case AlarmLevel.warning:
+      return (colors.warning, colors.onWarning);
+    case AlarmLevel.error:
+      return (colors.error, colors.onError);
   }
+}
+
+extension AlarmNotificationColors on AlarmNotification {
+  /// Returns the background and text colors for this alarm level
+  (Color, Color) getColors(BuildContext context) =>
+      alarmLevelColors(context, rule.level);
 }
 
 class ListAlarms extends ConsumerStatefulWidget {
@@ -694,12 +700,17 @@ class ViewActiveAlarm extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  alarm.alarm.config.title,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: textColor,
-                        fontWeight: FontWeight.bold,
-                      ),
+                // Expanded so a long title wraps instead of overflowing —
+                // this card also renders at side-pane width (380) inside the
+                // alarm visibility asset's pane.
+                Expanded(
+                  child: Text(
+                    alarm.alarm.config.title,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: textColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
                 ),
                 if (onClose != null)
                   IconButton(
@@ -736,7 +747,11 @@ class ViewActiveAlarm extends ConsumerWidget {
               style: TextStyle(color: textColor),
             ),
             const SizedBox(height: 16),
-            Row(
+            // Wrap, not Row — at side-pane width the two chips can exceed
+            // the card and must break onto a second line, not overflow.
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -752,7 +767,6 @@ class ViewActiveAlarm extends ConsumerWidget {
                     style: TextStyle(color: textColor),
                   ),
                 ),
-                const SizedBox(width: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,

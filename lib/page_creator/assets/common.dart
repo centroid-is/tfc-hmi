@@ -282,6 +282,28 @@ abstract class BaseAsset implements Asset {
   }
 }
 
+/// Marks a subtree as living on the page-editor canvas.
+///
+/// `AssetStack` (in `lib/pages/page_view.dart`) wraps asset builds in this
+/// scope when it runs in editor mode (`absorb: true`). Assets whose runtime
+/// rendering can be invisible (e.g. an alarm beacon with no active alarm)
+/// check [isEditing] to draw a placeholder so they stay findable and
+/// selectable in the editor.
+///
+/// Lives here rather than in `page_view.dart` so assets can depend on it
+/// without importing the page machinery (which imports the asset registry —
+/// an import cycle).
+class AssetEditModeScope extends InheritedWidget {
+  const AssetEditModeScope({super.key, required super.child});
+
+  /// Whether [context] is inside the page editor's canvas.
+  static bool isEditing(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<AssetEditModeScope>() != null;
+
+  @override
+  bool updateShouldNotify(AssetEditModeScope oldWidget) => false;
+}
+
 class KeyField extends ConsumerStatefulWidget {
   final String? initialValue;
   final ValueChanged<String>? onChanged;
@@ -1372,21 +1394,21 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
       // LayoutRotatedBox is unreachable — see Phase 3 Plan 01
       // ELEV-19 / Pitfall 7 lock (children riding the elevator
       // platform must continue receiving taps mid-translation).
-      // Without forwarding, the elevator's `LayoutRotatedBox` would
-      // swallow taps before the embedded Sensor/Conveyor children's
-      // own GestureDetectors could fire. We still add ourselves so
-      // that consumers wrapping `LayoutRotatedBox` in their own outer
-      // GestureDetector (Sensor.dart, Elevator.dart, Conveyor.dart)
-      // continue to receive taps at the painter's pixels.
+      // The child's verdict decides ours: a painter that claims only its
+      // painted pixels (ConveyorPainter's belt) must keep the dead corners
+      // of the box inert for consumers wrapping us in a deferring
+      // GestureDetector, so we only add ourselves when the child was hit.
       if (position.dx >= 0 &&
           position.dx <= child!.size.width &&
           position.dy >= 0 &&
           position.dy <= child!.size.height) {
         // Probe the child first so deeper GestureDetectors record
         // entries in the arena ahead of ours.
-        child!.hitTest(result, position: position);
-        result.add(BoxHitTestEntry(this, position));
-        return true;
+        final childHit = child!.hitTest(result, position: position);
+        if (childHit) {
+          result.add(BoxHitTestEntry(this, position));
+        }
+        return childHit;
       }
       return false;
     }
@@ -1406,10 +1428,13 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
       // Forward the hit to the child in the child's local (un-rotated)
       // coordinate frame. Without this, descendant GestureDetectors
       // would never fire when the rotated box contains tappable
-      // children (mirrors the angle=0 fix above). See ELEV-19.
-      child!.hitTest(result, position: Offset(x0, y0));
-      result.add(BoxHitTestEntry(this, position));
-      return true;
+      // children (mirrors the angle=0 fix above). See ELEV-19. As above,
+      // the child's verdict decides ours.
+      final childHit = child!.hitTest(result, position: Offset(x0, y0));
+      if (childHit) {
+        result.add(BoxHitTestEntry(this, position));
+      }
+      return childHit;
     }
     return false;
   }

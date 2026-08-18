@@ -34,6 +34,7 @@ import '../../core/feature_flags.dart';
 import 'connection_info.dart';
 import 'drawing_viewer.dart';
 import 'third_party.dart';
+import 'alarm_visibility.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -85,6 +86,7 @@ class AssetRegistry {
     GateStatusConfig: GateStatusConfig.fromJson,
     DrawingViewerConfig: DrawingViewerConfig.fromJson,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.fromJson,
+    AlarmVisibilityConfig: AlarmVisibilityConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -136,6 +138,7 @@ class AssetRegistry {
     // round-trip instead of silently losing the asset on the next save.
     if (kKnowledgeEnabled) DrawingViewerConfig: DrawingViewerConfig.preview,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.preview,
+    AlarmVisibilityConfig: AlarmVisibilityConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(

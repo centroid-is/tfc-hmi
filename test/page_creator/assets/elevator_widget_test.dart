@@ -621,12 +621,13 @@ void main() {
       // Tap the Sensor child — the tap should land on the Sensor's own
       // GestureDetector and open ITS details dialog (sensor.dart:
       // _showDetailsDialog — Plan 04-05 / SENS-01). The locked label
-      // 'Detection key' is unique to the sensor details dialog.
+      // 'Detection state' is unique to the sensor details pane (the
+      // key-name rows were dropped: panes show values, not wiring).
       await tester.tap(find.byType(Sensor));
       await tester.pumpAndSettle();
 
       // Sensor's details dialog surface (locked Plan 04-05 surface).
-      expect(find.text('Detection key'), findsOneWidget,
+      expect(find.text('Detection state'), findsOneWidget,
           reason: 'Tap on a child during translation must reach the child\'s '
               'GestureDetector and open its details dialog (ELEV-19 + '
               'Plan 04-05).');

@@ -46,6 +46,12 @@ void main() {
       expect(config.tag, isNull);
     });
 
+    test('default showTag is false — tags stay off the canvas until asked',
+        () {
+      final config = SensorConfig();
+      expect(config.showTag, isFalse);
+    });
+
     test('displayName is "Sensor"', () {
       final config = SensorConfig();
       expect(config.displayName, 'Sensor');
@@ -79,6 +85,7 @@ void main() {
         activeColor: AssetColor.literal(Colors.cyan),
         inactiveColor: AssetColor.literal(Colors.orange),
         tag: 'PE-101A',
+        showTag: true,
       );
 
       final json = config.toJson();
@@ -115,6 +122,27 @@ void main() {
       expect(config.tag, isNull);
       expect(config.activeColor, AssetColor.green);
       expect(config.inactiveColor, AssetColor.grey);
+      expect(config.showTag, isFalse);
+    });
+
+    test('a pre-showTag page keeps its tag but stops painting it on canvas',
+        () {
+      // Pages persisted before `showTag` carried `text` == `tag`. On load the
+      // tag must survive (it names the side pane) while `text` goes null so
+      // AssetStack paints no label — hidden-by-default is the contract.
+      final legacyJson = <String, dynamic>{
+        'asset_name': 'SensorConfig',
+        'kind': 'opticField',
+        'detectionKey': '/legacy/key',
+        'tag': 'PE-101A',
+        'text': 'PE-101A',
+        'coordinates': {'x': 0.0, 'y': 0.0},
+        'size': {'width': 0.03, 'height': 0.03},
+      };
+      final config = SensorConfig.fromJson(legacyJson);
+      expect(config.tag, 'PE-101A');
+      expect(config.showTag, isFalse);
+      expect(config.text, isNull);
     });
 
     test('unknown SensorKind value falls back to redLight (forward-compat)',
