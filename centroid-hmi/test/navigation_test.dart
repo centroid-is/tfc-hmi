@@ -60,11 +60,29 @@ void main() {
           ]));
     });
 
-    test('History View is a top-level entry, not under Advanced', () {
+    test('History View defaults under Advanced, like before', () {
       final items = build(god: true);
+      expect(_byPath(items, '/history-view'), isNull, reason: 'not top-level until the operator moves it');
+      final advanced = _byPath(items, '/advanced')!;
+      expect(advanced.children.map((c) => c.path), contains('/history-view'));
+    });
+
+    test('a promoted History View moves to the top level and out of Advanced', () {
+      final items = buildTopLevelMenuItems(
+        god: true,
+        isLinux: false,
+        pageMenuItems: [_page('Home', '/')],
+        historyAtTopLevel: true,
+      );
       expect(_byPath(items, '/history-view'), isNotNull);
       final advanced = _byPath(items, '/advanced')!;
-      expect(advanced.children.map((c) => c.path), isNot(contains('/advanced/history-view')));
+      expect(advanced.children.map((c) => c.path), isNot(contains('/history-view')));
+    });
+
+    test('historyViewIsTopLevel is membership in the stored order', () {
+      expect(historyViewIsTopLevel(const []), isFalse);
+      expect(historyViewIsTopLevel(const ['/', '/alarm-view']), isFalse);
+      expect(historyViewIsTopLevel(const ['/history-view']), isTrue);
     });
 
     test('Alarm View is a top-level entry', () {
@@ -89,6 +107,7 @@ void main() {
         god: true,
         isLinux: false,
         pageMenuItems: [_page('Home', '/'), _page('Chiller', '/chiller')],
+        historyAtTopLevel: true,
       );
       expect(items.map((m) => m.path).take(4), ['/', '/chiller', '/alarm-view', '/history-view']);
       expect(items.last.path, '/advanced', reason: 'Advanced stays pinned last, outside the ordering');

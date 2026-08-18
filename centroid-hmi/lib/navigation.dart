@@ -13,15 +13,29 @@ import 'package:tfc/core/feature_flags.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/routes.dart';
 
+/// History View's menu entry. Lives under Advanced by default; the operator
+/// can move it to the top level from the page editor's Pages dialog, which
+/// records it in the persisted top-level order (see
+/// [historyViewIsTopLevel]).
+const historyViewMenuItem = MenuItem(label: 'History View', path: AppRoutes.historyView, icon: Icons.history);
+
+/// Whether the operator moved History View to the top level: membership in
+/// the persisted top-level order is the single source of truth, so there is
+/// no second placement key to drift out of sync. An install that never
+/// promoted it (or one whose order predates the promotion feature) keeps
+/// History under Advanced.
+bool historyViewIsTopLevel(List<String> topLevelOrder) => topLevelOrder.contains(AppRoutes.historyView);
+
 /// Top-level menu entries the app itself provides. They are not pages in the
 /// page editor, but they share the top level with the pages and order with
 /// them through `PageManager.sortTopLevel`. Home is *not* here: Home is an
 /// ordinary page in the page manager, deletable and reorderable like any
-/// other.
-const builtinTopLevelMenuItems = <MenuItem>[
-  MenuItem(label: 'Alarm View', path: AppRoutes.alarmView, icon: Icons.alarm),
-  MenuItem(label: 'History View', path: AppRoutes.historyView, icon: Icons.history),
-];
+/// other. History View joins only when the operator moved it out of
+/// Advanced.
+List<MenuItem> builtinTopLevelMenuItems({required bool historyAtTopLevel}) => [
+      const MenuItem(label: 'Alarm View', path: AppRoutes.alarmView, icon: Icons.alarm),
+      if (historyAtTopLevel) historyViewMenuItem,
+    ];
 
 /// Assembles the whole top-level menu in registration order: the pages, the
 /// built-ins, then Advanced pinned last. The persisted top-level order is
@@ -38,6 +52,7 @@ List<MenuItem> buildTopLevelMenuItems({
   required bool god,
   required bool isLinux,
   required List<MenuItem> pageMenuItems,
+  bool historyAtTopLevel = false,
 }) {
   final advancedChildren = <MenuItem>[
     if (isLinux) MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
@@ -45,6 +60,9 @@ List<MenuItem> buildTopLevelMenuItems({
     if (god) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
     if (god) MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
     if (god) MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
+    // History View's default home (its pre-#154 spot). The operator can
+    // promote it to the top level from the page editor.
+    if (!historyAtTopLevel) historyViewMenuItem,
     MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server.data),
     if (god) MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
     if (kKnowledgeEnabled)
@@ -53,7 +71,7 @@ List<MenuItem> buildTopLevelMenuItems({
 
   return [
     ...pageMenuItems,
-    ...builtinTopLevelMenuItems,
+    ...builtinTopLevelMenuItems(historyAtTopLevel: historyAtTopLevel),
     // An Advanced section with nothing in it would just be a dead menu entry.
     if (advancedChildren.isNotEmpty)
       MenuItem(
