@@ -31,6 +31,7 @@ import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
+import 'package:tfc/core/feature_flags.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc/page_creator/page.dart';
 
@@ -102,8 +103,7 @@ void main() {
   // match, at which point print() already reaches the file on its own.
   // Opening it here as well would write every line twice, so this direct
   // write is now only a fallback for runners that do not redirect.
-  final runnerRedirectsOutput =
-      Platform.environment['CENTROID_LOG_REDIRECTED'] == '1';
+  final runnerRedirectsOutput = Platform.environment['CENTROID_LOG_REDIRECTED'] == '1';
 
   if (debugMode && logFilePath != null && !runnerRedirectsOutput) {
     try {
@@ -117,16 +117,16 @@ void main() {
     initMarionette();
     _startApp(debugMode);
   } else {
-    runZonedGuarded(() {
-      WidgetsFlutterBinding.ensureInitialized();
-      _startApp(debugMode);
-    }, (error, stackTrace) {
-      stderr.writeln('Unhandled async error: $error');
-      stderr.writeln('$stackTrace');
-    },
-    zoneSpecification: debugMode
-        ? ZoneSpecification(print: _debugPrint)
-        : null,
+    runZonedGuarded(
+      () {
+        WidgetsFlutterBinding.ensureInitialized();
+        _startApp(debugMode);
+      },
+      (error, stackTrace) {
+        stderr.writeln('Unhandled async error: $error');
+        stderr.writeln('$stackTrace');
+      },
+      zoneSpecification: debugMode ? ZoneSpecification(print: _debugPrint) : null,
     );
   }
 }
@@ -231,8 +231,7 @@ Future<void> _startApp([bool debugMode = false]) async {
     child: UpgradeAlert(
       upgrader: upgrader,
       onUpdate: () {
-        final targetVersion =
-            upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
+        final targetVersion = upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
         unawaited(
           managerLauncher
               .launchForUpdate(
@@ -333,20 +332,23 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
             },
           ),
         ),
-    '/advanced/page-editor': (context, state, args) =>
-        BeamPage(key: const ValueKey('/advanced/page-editor'), title: 'Page Editor',
-                 child: PageEditor(proposalData: args is String ? args : null)),
+    '/advanced/page-editor': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/page-editor'),
+        title: 'Page Editor',
+        child: PageEditor(proposalData: args is String ? args : null)),
     '/advanced/preferences': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/preferences'), title: 'Preferences', child: PreferencesPage()),
-    '/advanced/alarm-editor': (context, state, args) =>
-        BeamPage(key: const ValueKey('/advanced/alarm-editor'), title: 'Alarm Editor',
-                 child: AlarmEditorPage(proposalData: args is String ? args : null)),
+    '/advanced/alarm-editor': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/alarm-editor'),
+        title: 'Alarm Editor',
+        child: AlarmEditorPage(proposalData: args is String ? args : null)),
     '/advanced/history-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
     '/advanced/server-config': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
     '/advanced/key-repository': (context, state, args) => BeamPage(
-        key: const ValueKey('/advanced/key-repository'), title: 'Key Repository',
+        key: const ValueKey('/advanced/key-repository'),
+        title: 'Key Repository',
         child: KeyRepositoryPage(proposalData: args is String ? args : null)),
     '/advanced/knowledge-base': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage()),
@@ -434,8 +436,11 @@ class MyApp extends ConsumerWidget {
     // Initialize MCP server lifecycle management
     ref.watch(mcpServerLifecycleProvider);
 
-    // Initialize chat lifecycle management (MCP bridge connect/disconnect)
-    ref.watch(chatLifecycleProvider);
+    // Initialize chat lifecycle management (MCP bridge connect/disconnect).
+    // Const-guarded so flag-off builds tree-shake the chat/LLM graph.
+    if (kChatEnabled) {
+      ref.watch(chatLifecycleProvider);
+    }
 
     // Expose the BeamerDelegate's navigator key so overlay widgets
     // (chat, drawings, FAB) can show dialogs / access Navigator.
@@ -445,8 +450,12 @@ class MyApp extends ConsumerWidget {
     });
 
     // Wire elicitation UI dialog into MCP bridge so write-tool proposals
-    // show a confirm/deny dialog instead of auto-accepting.
-    _wireElicitationHandler(ref);
+    // show a confirm/deny dialog instead of auto-accepting. Chat-only:
+    // the handler serves the in-process MCP client; external SSE clients
+    // run their own elicitation UI.
+    if (kChatEnabled) {
+      _wireElicitationHandler(ref);
+    }
 
     final app = MaterialApp.router(
       title: 'CentroidX',
@@ -464,7 +473,7 @@ class MyApp extends ConsumerWidget {
         return Consumer(
           builder: (context, ref, _) {
             final drawingVisible = ref.watch(drawingVisibleProvider);
-            final chatVisible = ref.watch(chatVisibleProvider);
+            final chatVisible = kChatEnabled && ref.watch(chatVisibleProvider);
             // Use select() to only rebuild when the SSE server running
             // state or port changes, NOT on every McpBridgeNotifier
             // notification (tool list updates, connection state
@@ -475,7 +484,7 @@ class MyApp extends ConsumerWidget {
             final mcpPort = ref.watch(mcpBridgeProvider.select(
               (b) => b.currentState.port,
             ));
-            final chatEnabled = ref.watch(mcpChatEnabledProvider).valueOrNull ?? false;
+            final chatEnabled = kChatEnabled && (ref.watch(mcpChatEnabledProvider).valueOrNull ?? false);
 
             // Feed new MCP proposals into universal state provider.
             // Proposals are surfaced inline in chat via the embedded proposal card.
@@ -493,7 +502,7 @@ class MyApp extends ConsumerWidget {
                 navigatorChild!, // existing HMI content
                 const ProposalBanner(),
                 if (drawingVisible) const DrawingOverlay(),
-                if (chatEnabled && chatVisible) const ChatOverlay(),
+                if (kChatEnabled && chatEnabled && chatVisible) const ChatOverlay(),
                 // Chat FAB and MCP indicator — hidden when a nav
                 // dropdown popup is open so the FAB does not render
                 // on top of the menu (the FAB lives above the
@@ -504,7 +513,7 @@ class MyApp extends ConsumerWidget {
                     return Stack(
                       children: [
                         // Chat FAB (when chat enabled but overlay closed)
-                        if (chatEnabled && !chatVisible && !navMenuOpen)
+                        if (kChatEnabled && chatEnabled && !chatVisible && !navMenuOpen)
                           Positioned(
                             bottom: 90,
                             right: 16,

@@ -28,6 +28,7 @@ import '../tech_docs/tech_doc_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../chat/ai_context_action.dart';
 import '../chat/asset_context_menu.dart' show buildEditorAssetMenuItems;
+import '../core/feature_flags.dart';
 import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../chat/chat_overlay.dart' show ChatContext;
 import '../chat/hamburger_context_menu.dart';
@@ -851,8 +852,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('AI update proposal not applied: '
-              '${result.error}')),
+          SnackBar(
+              content: Text('AI update proposal not applied: '
+                  '${result.error}')),
         );
       });
       return;
@@ -870,8 +872,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _temporaryPages.map((name, page) => MapEntry(name, page.toJson())));
   }
 
-  bool get _hasUnsavedChanges =>
-      _currentJson != _savedJson || _navOrderDirty;
+  bool get _hasUnsavedChanges => _currentJson != _savedJson || _navOrderDirty;
 
   String _assetsToJson(List<Asset> theAssets) {
     return jsonEncode({
@@ -1049,10 +1050,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       if (!mounted) return;
 
       final constraints = _canvasConstraints;
-      final canvasAspect =
-          constraints == null || constraints.maxHeight <= 0
-              ? 16 / 9
-              : constraints.maxWidth / constraints.maxHeight;
+      final canvasAspect = constraints == null || constraints.maxHeight <= 0
+          ? 16 / 9
+          : constraints.maxWidth / constraints.maxHeight;
       const widthFrac = 0.25;
       final heightFrac =
           (widthFrac * canvasAspect / ingest.aspectRatio).clamp(0.02, 0.9);
@@ -1243,7 +1243,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     Offset globalPosition,
     BoxConstraints constraints,
   ) async {
-    final aiItems = isMcpChatAvailable()
+    final aiItems = kChatEnabled && isMcpChatAvailable()
         ? buildEditorAssetMenuItems(asset)
         : const <AiMenuItem>[];
 
@@ -1413,7 +1413,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _alignAssets(targets, AlignAxis.vertical);
     } else if (choice == _deleteAction) {
       _deleteAssets(targets);
-    } else {
+    } else if (kChatEnabled) {
       await AiContextAction.runMenuItem(ref: ref, item: aiItems[choice]);
     }
   }
@@ -1773,22 +1773,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         bottom: 16,
                         child: Row(
                           children: [
-                            AiContextMenuWrapper(
-                              menuItems: buildHamburgerMenuItems(
-                                pageName: _currentPage ?? 'Untitled',
-                                assets: assets,
-                              ),
-                              child: FloatingActionButton(
-                                mini: true,
-                                heroTag: 'hamburger',
-                                backgroundColor:
-                                    Theme.of(context).colorScheme.primary,
-                                onPressed: () =>
-                                    setState(() => _showPalette = true),
-                                child:
-                                    const Icon(Icons.menu, color: Colors.white),
-                              ),
-                            ),
+                            _buildHamburgerFab(assets),
                             const SizedBox(width: 8),
                             FloatingActionButton(
                               mini: true,
@@ -1926,22 +1911,49 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             itemBuilder: (context, index) {
               final entry = entries[index];
               final previewAsset = entry.value();
-              return AiContextMenuWrapper(
-                menuItems: buildPaletteItemMenuItems(
-                  asset: previewAsset,
-                  pageName: _currentPage,
-                  existingAssetSummary: summarizeExistingAssets(assets),
-                ),
-                child: _PaletteItem(
-                  assetType: entry.key,
-                  asset: previewAsset,
-                ),
+              Widget item = _PaletteItem(
+                assetType: entry.key,
+                asset: previewAsset,
               );
+              if (kChatEnabled) {
+                item = AiContextMenuWrapper(
+                  menuItems: buildPaletteItemMenuItems(
+                    asset: previewAsset,
+                    pageName: _currentPage,
+                    existingAssetSummary: summarizeExistingAssets(assets),
+                  ),
+                  child: item,
+                );
+              }
+              return item;
             },
           ),
         ),
       ],
     );
+  }
+
+  /// The palette hamburger FAB, wrapped in the AI context menu only when the
+  /// chat feature is compiled in ([kChatEnabled] is const, so the flag-off
+  /// build tree-shakes the wrapper and its chat dependencies).
+  Widget _buildHamburgerFab(List<Asset> assets) {
+    Widget fab = FloatingActionButton(
+      mini: true,
+      heroTag: 'hamburger',
+      backgroundColor: Theme.of(context).colorScheme.primary,
+      onPressed: () => setState(() => _showPalette = true),
+      child: const Icon(Icons.menu, color: Colors.white),
+    );
+    if (kChatEnabled) {
+      fab = AiContextMenuWrapper(
+        menuItems: buildHamburgerMenuItems(
+          pageName: _currentPage ?? 'Untitled',
+          assets: assets,
+        ),
+        child: fab,
+      );
+    }
+    return fab;
   }
 
   /// Identifies one asset's pane. Assets have no stable id of their own, and
@@ -2169,8 +2181,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.visibility_off,
-                        size: 16,
-                        color: Theme.of(context).colorScheme.error),
+                        size: 16, color: Theme.of(context).colorScheme.error),
                     const SizedBox(width: 4),
                     Text(
                       'Draft',
@@ -2195,11 +2206,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (currentPagePath != null && currentPage != null) {
       return GestureDetector(
         onSecondaryTapUp: (details) {
-          _showPageSelectorContextMenu(
-            details.globalPosition,
-            currentPagePath,
-            currentPage,
-          );
+          if (kChatEnabled) {
+            _showPageSelectorContextMenu(
+              details.globalPosition,
+              currentPagePath,
+              currentPage,
+            );
+          } else {
+            // Without chat the only page-selector action is Create New Page.
+            _showCreateNewPageContextMenu(details.globalPosition);
+          }
         },
         child: selector,
       );
@@ -2391,8 +2407,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               // taller fixed box pushes the drop zone and the add buttons off
               // a short panel where they cannot be reached at all. Shrink to
               // whatever the frame can actually give, minus its own header.
-              height: math.min(
-                  550, MediaQuery.sizeOf(context).height * 0.8 - 120),
+              height:
+                  math.min(550, MediaQuery.sizeOf(context).height * 0.8 - 120),
               child: Column(
                 children: [
                   Text(
@@ -2491,137 +2507,139 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final isSection = page.menuItem.isNavigationSection;
     final isDraft = !page.published;
 
-    final row = AiContextMenuWrapper(
-      menuItems: [
-        AiMenuItem(
-          label: 'Describe this page',
-          prefillText:
-              'Describe page "$displayName" (key: $pageName) — what assets does it contain and what is it monitoring?',
-        ),
-        AiMenuItem(
-          label: 'Improve layout',
-          prefillText:
-              'Review page "$displayName" (key: $pageName) and suggest layout improvements or missing assets.',
-        ),
-        AiMenuItem(
-          label: 'Duplicate with AI',
-          prefillText:
-              'Create a new page similar to "$displayName" (key: $pageName) but for [describe the target system].',
-        ),
-      ],
-      child: ListTile(
-        dense: true,
-        leading: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ReorderableDragStartListener(
-              index: reorderIndex,
-              child: const Icon(Icons.drag_handle,
-                  size: 20, color: Colors.grey),
-            ),
-            const SizedBox(width: 4),
-            Icon(
-              page.menuItem.icon,
-              color: isSelected && !isSection
-                  ? Theme.of(dialogContext).colorScheme.primary
-                  : null,
-            ),
-          ],
-        ),
-        title: Text(
-          displayName,
-          style: TextStyle(
-            fontWeight: isSelected && !isSection
-                ? FontWeight.bold
-                : FontWeight.normal,
+    Widget row = ListTile(
+      dense: true,
+      leading: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ReorderableDragStartListener(
+            index: reorderIndex,
+            child: const Icon(Icons.drag_handle, size: 20, color: Colors.grey),
+          ),
+          const SizedBox(width: 4),
+          Icon(
+            page.menuItem.icon,
             color: isSelected && !isSection
                 ? Theme.of(dialogContext).colorScheme.primary
                 : null,
           ),
+        ],
+      ),
+      title: Text(
+        displayName,
+        style: TextStyle(
+          fontWeight:
+              isSelected && !isSection ? FontWeight.bold : FontWeight.normal,
+          color: isSelected && !isSection
+              ? Theme.of(dialogContext).colorScheme.primary
+              : null,
         ),
-        subtitle: _treeNodeSubtitle(isSection: isSection, isDraft: isDraft),
-        selected: isSelected && !isSection,
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isSection && depth < 3)
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.add, size: 18),
-                tooltip: 'Add child',
-                onSelected: (value) {
-                  _addItem(
-                    parentName: pageName,
-                    isSection: value == 'section',
-                    dialogSetState: dialogSetState,
-                    dialogContext: dialogContext,
-                  );
-                },
-                itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: 'page',
-                    child: Text('Add Page'),
-                  ),
-                  const PopupMenuItem(
-                    value: 'section',
-                    child: Text('Add Section'),
-                  ),
-                ],
-              )
-            else if (isSection)
-              IconButton(
-                icon: const Icon(Icons.add, size: 18),
-                tooltip: 'Add page',
-                onPressed: () => _addItem(
+      ),
+      subtitle: _treeNodeSubtitle(isSection: isSection, isDraft: isDraft),
+      selected: isSelected && !isSection,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isSection && depth < 3)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.add, size: 18),
+              tooltip: 'Add child',
+              onSelected: (value) {
+                _addItem(
                   parentName: pageName,
-                  isSection: false,
+                  isSection: value == 'section',
                   dialogSetState: dialogSetState,
                   dialogContext: dialogContext,
-                ),
-              ),
-            IconButton(
-              icon: Icon(
-                isDraft ? Icons.visibility_off : Icons.visibility,
-                size: 18,
-                color: isDraft ? Theme.of(dialogContext).colorScheme.error : null,
-              ),
-              onPressed: () =>
-                  _setPagePublished(pageName, isDraft, dialogSetState),
-              tooltip: isDraft
-                  ? (isSection
-                      ? 'Publish section'
-                      : 'Publish — operators can reach it')
-                  : (isSection
-                      ? 'Unpublish section and everything in it'
-                      : 'Unpublish — keep editing, hide from operators'),
-            ),
-            IconButton(
-              icon: const Icon(Icons.drive_file_move_outline, size: 18),
-              onPressed: () =>
-                  _showMoveDialog(pageName, dialogSetState, dialogContext),
-              tooltip: isSection ? 'Move section' : 'Move to section',
-            ),
-            IconButton(
-              icon: const Icon(Icons.edit, size: 18),
-              onPressed: () =>
-                  _editPage(pageName, page, dialogSetState, dialogContext),
-              tooltip: 'Edit',
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete, size: 18),
-              onPressed: () =>
-                  _deletePage(pageName, dialogSetState, dialogContext),
-              tooltip: 'Delete',
-            ),
-          ],
-        ),
-        onTap: isSection
-            ? null
-            : () {
-                setState(() => _currentPage = pageName);
-                Navigator.pop(dialogContext);
+                );
               },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'page',
+                  child: Text('Add Page'),
+                ),
+                const PopupMenuItem(
+                  value: 'section',
+                  child: Text('Add Section'),
+                ),
+              ],
+            )
+          else if (isSection)
+            IconButton(
+              icon: const Icon(Icons.add, size: 18),
+              tooltip: 'Add page',
+              onPressed: () => _addItem(
+                parentName: pageName,
+                isSection: false,
+                dialogSetState: dialogSetState,
+                dialogContext: dialogContext,
+              ),
+            ),
+          IconButton(
+            icon: Icon(
+              isDraft ? Icons.visibility_off : Icons.visibility,
+              size: 18,
+              color: isDraft ? Theme.of(dialogContext).colorScheme.error : null,
+            ),
+            onPressed: () =>
+                _setPagePublished(pageName, isDraft, dialogSetState),
+            tooltip: isDraft
+                ? (isSection
+                    ? 'Publish section'
+                    : 'Publish — operators can reach it')
+                : (isSection
+                    ? 'Unpublish section and everything in it'
+                    : 'Unpublish — keep editing, hide from operators'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.drive_file_move_outline, size: 18),
+            onPressed: () =>
+                _showMoveDialog(pageName, dialogSetState, dialogContext),
+            tooltip: isSection ? 'Move section' : 'Move to section',
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit, size: 18),
+            onPressed: () =>
+                _editPage(pageName, page, dialogSetState, dialogContext),
+            tooltip: 'Edit',
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete, size: 18),
+            onPressed: () =>
+                _deletePage(pageName, dialogSetState, dialogContext),
+            tooltip: 'Delete',
+          ),
+        ],
       ),
+      onTap: isSection
+          ? null
+          : () {
+              setState(() => _currentPage = pageName);
+              Navigator.pop(dialogContext);
+            },
     );
+
+    if (kChatEnabled) {
+      row = AiContextMenuWrapper(
+        menuItems: [
+          AiMenuItem(
+            label: 'Describe this page',
+            prefillText:
+                'Describe page "$displayName" (key: $pageName) — what assets does it contain and what is it monitoring?',
+          ),
+          AiMenuItem(
+            label: 'Improve layout',
+            prefillText:
+                'Review page "$displayName" (key: $pageName) and suggest layout improvements or missing assets.',
+          ),
+          AiMenuItem(
+            label: 'Duplicate with AI',
+            prefillText:
+                'Create a new page similar to "$displayName" (key: $pageName) but for [describe the target system].',
+          ),
+        ],
+        child: row,
+      );
+    }
 
     return Padding(
       key: ValueKey(pageName),
@@ -2804,14 +2822,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       final children = List<MenuItem>.from(parent.menuItem.children);
       final moved = children.removeAt(oldIndex);
       children.insert(newIndex, moved);
-      _temporaryPages[parentName] =
-          parent.copyWith(menuItem: parent.menuItem.copyWith(children: children));
+      _temporaryPages[parentName] = parent.copyWith(
+          menuItem: parent.menuItem.copyWith(children: children));
       // Update navigationPriority on each child page
       for (int i = 0; i < children.length; i++) {
         final childPath = children[i].path ?? '';
         final childPage = _temporaryPages[childPath];
         if (childPage != null) {
-          _temporaryPages[childPath] = childPage.copyWith(navigationPriority: i);
+          _temporaryPages[childPath] =
+              childPage.copyWith(navigationPriority: i);
         }
       }
       _updateCurrentJson();

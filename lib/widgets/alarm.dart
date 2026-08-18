@@ -7,6 +7,7 @@ import 'package:tfc_dart/core/boolean_expression.dart';
 import '../chat/ai_context_action.dart';
 import '../chat/asset_context_menu.dart' show buildAlarmContextBlock;
 import '../chat/chat_overlay.dart' show ChatContextType;
+import '../core/feature_flags.dart';
 import '../providers/alarm.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
@@ -74,30 +75,35 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                 a.config.rules.map((r) => r.expression.value.formula).join(' '),
           ]);
 
+          Widget addButton = IconButton(
+            key: const ValueKey('alarm-editor-add'),
+            icon: const Icon(Icons.add),
+            onPressed: () {
+              widget.onCreate?.call(null);
+            },
+          );
+          if (kChatEnabled) {
+            addButton = AiContextMenuWrapper(
+              menuItems: const [
+                AiMenuItem(
+                  label: 'Create alarm with AI',
+                  prefillText:
+                      'Create an alarm that [describe what should trigger '
+                      "the alarm, e.g. 'activates when pump pressure "
+                      "exceeds 50 bar']",
+                ),
+              ],
+              child: addButton,
+            );
+          }
+
           return Column(
             children: [
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Row(
                   children: [
-                    AiContextMenuWrapper(
-                      menuItems: const [
-                        AiMenuItem(
-                          label: 'Create alarm with AI',
-                          prefillText:
-                              'Create an alarm that [describe what should trigger '
-                              "the alarm, e.g. 'activates when pump pressure "
-                              "exceeds 50 bar']",
-                        ),
-                      ],
-                      child: IconButton(
-                        key: const ValueKey('alarm-editor-add'),
-                        icon: const Icon(Icons.add),
-                        onPressed: () {
-                          widget.onCreate?.call(null);
-                        },
-                      ),
-                    ),
+                    addButton,
                     Expanded(
                       child: FuzzySearchBar(
                         hintText: 'Search alarms...',
@@ -130,6 +136,47 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                   itemCount: alarms.length,
                   itemBuilder: (context, index) {
                     final alarm = alarms[index];
+                    Widget copyButton = IconButton(
+                      icon: const Icon(Icons.copy),
+                      onPressed: () {
+                        widget.onCreate?.call(alarm.config);
+                      },
+                    );
+                    Widget editButton = IconButton(
+                      icon: const Icon(Icons.edit),
+                      onPressed: () {
+                        widget.onEdit?.call(alarm.config);
+                      },
+                    );
+                    if (kChatEnabled) {
+                      copyButton = AiContextMenuWrapper(
+                        menuItems: [
+                          AiMenuItem(
+                            label: 'Duplicate alarm with AI',
+                            prefillText:
+                                'Create a new alarm similar to "${alarm.config.title}" '
+                                'but [describe what should be different]',
+                            contextBlock: buildAlarmContextBlock(alarm.config),
+                            contextLabel: alarm.config.title,
+                            contextType: ChatContextType.alarm,
+                          ),
+                        ],
+                        child: copyButton,
+                      );
+                      editButton = AiContextMenuWrapper(
+                        menuItems: [
+                          AiMenuItem(
+                            label: 'Edit alarm with AI',
+                            prefillText: 'Edit alarm "${alarm.config.title}" - '
+                                '[describe what you want to change]',
+                            contextBlock: buildAlarmContextBlock(alarm.config),
+                            contextLabel: alarm.config.title,
+                            contextType: ChatContextType.alarm,
+                          ),
+                        ],
+                        child: editButton,
+                      );
+                    }
                     return ListTile(
                       title: Text(alarm.config.title),
                       subtitle: Text(alarm.config.description),
@@ -138,46 +185,8 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            AiContextMenuWrapper(
-                              menuItems: [
-                                AiMenuItem(
-                                  label: 'Duplicate alarm with AI',
-                                  prefillText:
-                                      'Create a new alarm similar to "${alarm.config.title}" '
-                                      'but [describe what should be different]',
-                                  contextBlock:
-                                      buildAlarmContextBlock(alarm.config),
-                                  contextLabel: alarm.config.title,
-                                  contextType: ChatContextType.alarm,
-                                ),
-                              ],
-                              child: IconButton(
-                                icon: const Icon(Icons.copy),
-                                onPressed: () {
-                                  widget.onCreate?.call(alarm.config);
-                                },
-                              ),
-                            ),
-                            AiContextMenuWrapper(
-                              menuItems: [
-                                AiMenuItem(
-                                  label: 'Edit alarm with AI',
-                                  prefillText:
-                                      'Edit alarm "${alarm.config.title}" - '
-                                      '[describe what you want to change]',
-                                  contextBlock:
-                                      buildAlarmContextBlock(alarm.config),
-                                  contextLabel: alarm.config.title,
-                                  contextType: ChatContextType.alarm,
-                                ),
-                              ],
-                              child: IconButton(
-                                icon: const Icon(Icons.edit),
-                                onPressed: () {
-                                  widget.onEdit?.call(alarm.config);
-                                },
-                              ),
-                            ),
+                            copyButton,
+                            editButton,
                             IconButton(
                               icon: const Icon(Icons.delete),
                               onPressed: () async {
