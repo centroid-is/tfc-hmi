@@ -91,6 +91,21 @@ List<T> sendToBackOrder<T>(List<T> assets, Set<T> targets) {
   return [...moving, ...rest];
 }
 
+/// Reorders [assets] so that [targets] sit on top of everything else — the
+/// mirror image of [sendToBackOrder]. Members of [targets] keep their own
+/// relative stacking; only their position relative to the rest changes.
+///
+/// Returns a new list; [assets] is not modified.
+@visibleForTesting
+List<T> bringToFrontOrder<T>(List<T> assets, Set<T> targets) {
+  final moving = <T>[];
+  final rest = <T>[];
+  for (final asset in assets) {
+    (targets.contains(asset) ? moving : rest).add(asset);
+  }
+  return [...rest, ...moving];
+}
+
 /// Whether [targets] already occupy the back of the stack, i.e. the leading
 /// run of [assets]. Empty or absent targets count as already-at-back, since
 /// there is nothing to move.
@@ -101,6 +116,22 @@ bool isAlreadyAtBack<T>(List<T> assets, Set<T> targets) {
     if (targets.contains(assets[i])) {
       // Out of the leading run: something else is already below it.
       if (i != seen) return false;
+      seen++;
+    }
+  }
+  return true;
+}
+
+/// Whether [targets] already occupy the front of the stack, i.e. the trailing
+/// run of [assets]. Empty or absent targets count as already-at-front, since
+/// there is nothing to move. Mirrors [isAlreadyAtBack].
+@visibleForTesting
+bool isAlreadyAtFront<T>(List<T> assets, Set<T> targets) {
+  var seen = 0;
+  for (var i = assets.length - 1; i >= 0; i--) {
+    if (targets.contains(assets[i])) {
+      // Out of the trailing run: something else is already above it.
+      if (i != assets.length - 1 - seen) return false;
       seen++;
     }
   }
@@ -1334,9 +1365,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   static const int _editAction = -6;
   static const int _mirrorHorizontalAction = -7;
   static const int _mirrorVerticalAction = -8;
-  static const int _deleteAction = -9;
+  static const int _bringToFrontAction = -9;
   static const int _copyAction = -10;
   static const int _pasteAction = -11;
+  static const int _deleteAction = -12;
 
   /// Assets a canvas action applies to: the whole selection when the asset
   /// acted on is part of it, otherwise just that asset. Mirrors [_moveAsset].
@@ -1348,14 +1380,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   bool _canSendToBack(List<Asset> targets) =>
       !isAlreadyAtBack(assets, targets.toSet());
 
+  /// False when [targets] already sit on top, so the menu entry can be
+  /// disabled rather than pushing a no-op onto the undo history.
+  bool _canBringToFront(List<Asset> targets) =>
+      !isAlreadyAtFront(assets, targets.toSet());
+
   /// Moves [targets] beneath every other asset on the page.
   void _sendToBack(List<Asset> targets) {
     final moving = targets.toSet();
     if (isAlreadyAtBack(assets, moving)) return;
+    _applyOrder(sendToBackOrder(assets, moving));
+  }
 
+  /// Moves [targets] on top of every other asset on the page.
+  void _bringToFront(List<Asset> targets) {
+    final moving = targets.toSet();
+    if (isAlreadyAtFront(assets, moving)) return;
+    _applyOrder(bringToFrontOrder(assets, moving));
+  }
+
+  void _applyOrder(List<Asset> reordered) {
     _saveToHistory();
     setState(() {
-      final reordered = sendToBackOrder(assets, moving);
       // Mutate in place: AssetPage holds a reference to this same list.
       assets
         ..clear()
@@ -1467,6 +1513,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     final targets = _actionTargets(asset);
     final canSendToBack = _canSendToBack(targets);
+    final canBringToFront = _canBringToFront(targets);
     final canAlignHorizontal = _canAlign(targets, AlignAxis.horizontal);
     final canAlignVertical = _canAlign(targets, AlignAxis.vertical);
 
@@ -1587,6 +1634,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           ),
         ),
         PopupMenuItem<int>(
+          value: _bringToFrontAction,
+          enabled: canBringToFront,
+          child: ListTile(
+            leading: const Icon(Icons.flip_to_front),
+            title: Text(targets.length > 1
+                ? 'Bring ${targets.length} assets to front'
+                : 'Bring to front'),
+            dense: true,
+            enabled: canBringToFront,
+          ),
+        ),
+        PopupMenuItem<int>(
           value: _sendToBackAction,
           enabled: canSendToBack,
           child: ListTile(
@@ -1638,6 +1697,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       if (!identical(_configAsset, asset)) _openConfigPane(asset);
     } else if (choice == _sendToBackAction) {
       _sendToBack(targets);
+    } else if (choice == _bringToFrontAction) {
+      _bringToFront(targets);
     } else if (choice == _rotateClockwiseAction) {
       _rotateAssets(targets, 90, constraints);
     } else if (choice == _rotateCounterClockwiseAction) {
