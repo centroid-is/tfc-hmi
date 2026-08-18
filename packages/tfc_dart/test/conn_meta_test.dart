@@ -24,6 +24,9 @@ class FakeConnMetaSource implements ConnMetaSource {
   FakeConnMetaSource(this.metaAlias, this.current);
 
   @override
+  bool get isModbus => current.isModbus;
+
+  @override
   ConnMeta snapshot() => current;
 
   @override
@@ -134,6 +137,33 @@ void main() {
       expect(rate.ratePerSec, closeTo(10, 0.0001));
     });
 
+    test(
+        'a gap longer than the window resets it in O(window) — no '
+        'O(uptime) zero back-fill, no bogus spike from the gap delta', () {
+      var now = DateTime(2020);
+      final rate = RollingRate(windowSeconds: 5, clock: () => now);
+
+      // Steady traffic, then nobody reads the rate for 30 days.
+      rate.increment(50);
+      now = now.add(const Duration(seconds: 1));
+      expect(rate.ratePerSec, 50);
+      rate.increment(180000);
+      now = now.add(const Duration(days: 30));
+
+      // First read after the gap: fresh window, so 0 — not the gap's
+      // 180000 requests attributed to a single second, and without
+      // 2.6 million queued zeros.
+      final sw = Stopwatch()..start();
+      expect(rate.ratePerSec, 0);
+      sw.stop();
+      expect(sw.elapsedMilliseconds, lessThan(50));
+
+      // And it converges immediately on the next real second.
+      rate.increment(40);
+      now = now.add(const Duration(seconds: 1));
+      expect(rate.ratePerSec, 40);
+    });
+
     test('window drops old samples', () {
       var now = DateTime(2020);
       final rate = RollingRate(windowSeconds: 2, clock: () => now);
@@ -214,26 +244,28 @@ void main() {
     test('unknown alias throws naming known aliases', () {
       expect(
         () => router.read('@conn/nope/state'),
-        throwsA(isA<StateManException>().having(
-            (e) => e.message, 'message', allOf(contains('nope'), contains('plc1')))),
+        throwsA(isA<StateManException>().having((e) => e.message, 'message',
+            allOf(contains('nope'), contains('plc1')))),
       );
     });
 
     test('unknown field throws naming the valid fields', () {
       expect(
         () => router.read('@conn/plc1/bogus'),
-        throwsA(isA<StateManException>().having((e) => e.message, 'message',
-            allOf(contains('bogus'), contains('state'), contains('sourcePort')))),
+        throwsA(isA<StateManException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+                contains('bogus'), contains('state'), contains('sourcePort')))),
       );
     });
 
     test('wrong arity throws a format error', () {
-      expect(() => router.read('@conn/plc1'),
-          throwsA(isA<StateManException>()));
+      expect(
+          () => router.read('@conn/plc1'), throwsA(isA<StateManException>()));
       expect(() => router.read('@conn/plc1/state/extra'),
           throwsA(isA<StateManException>()));
-      expect(() => router.read('@conn'),
-          throwsA(isA<StateManException>()));
+      expect(() => router.read('@conn'), throwsA(isA<StateManException>()));
     });
 
     test('metaKeys lists every valid field for the alias', () {
@@ -246,7 +278,8 @@ void main() {
   });
 
   group('ConnMetaRouter.subscribe', () {
-    test('emits current value, then on state change and periodic tick, '
+    test(
+        'emits current value, then on state change and periodic tick, '
         'and cancels cleanly', () async {
       final src = FakeConnMetaSource('plc1', modbusMeta(requestsPerSec: 1));
       // Short tick so the periodic path is exercised without a real 1s wait.
@@ -291,6 +324,38 @@ void main() {
     });
   });
 
+  group('ConnMetaRouter.subscribeAll', () {
+    test(
+        'emits the whole field map from one subscription and errors on an '
+        'unknown alias', () async {
+      final source = FakeConnMetaSource('mb1', modbusMeta());
+      final router = ConnMetaRouter([source],
+          tickInterval: const Duration(milliseconds: 10));
+
+      final first = await router.subscribeAll('mb1').first;
+      expect(first.keys, containsAll(kConnMetaModbusFields));
+      expect(first['unitId']!.value, 1);
+
+      expect(
+          () => router.subscribeAll('nope'), throwsA(isA<StateManException>()));
+      source.dispose();
+    });
+
+    test('aliases lists every source with its protocol', () {
+      final router = ConnMetaRouter([
+        FakeConnMetaSource('mb1', modbusMeta()),
+        FakeConnMetaSource('plc1', opcuaMeta()),
+      ]);
+      expect(
+        router.aliases,
+        containsAll([
+          (alias: 'mb1', isModbus: true),
+          (alias: 'plc1', isModbus: false),
+        ]),
+      );
+    });
+  });
+
   group('StateMan integration', () {
     late StateMan stateMan;
 
@@ -313,6 +378,34 @@ void main() {
     });
 
     tearDown(() async => stateMan.close());
+
+    test(
+        'an unnamed server gets a stable synthetic host:port identity — '
+        'the SVN site config has every serverAlias null, and null is a '
+        'first-class alias everywhere else in StateMan', () async {
+      final cfg = ModbusConfig(
+        host: '10.0.0.9',
+        port: 502,
+        serverAlias: null,
+        enabled: true,
+        pollGroups: [ModbusPollGroupConfig(name: 'default', intervalMs: 500)],
+      );
+      final km = KeyMappings(nodes: {});
+      final sm = await StateMan.create(
+        config: StateManConfig(opcua: [], modbus: [cfg]),
+        keyMappings: km,
+        deviceClients: buildModbusDeviceClients([cfg], km),
+      );
+      try {
+        expect(sm.keys, contains('@conn/10.0.0.9:502/state'));
+        expect(sm.connMetaAliases,
+            contains((alias: '10.0.0.9:502', isModbus: true)));
+        final ip = await sm.read('@conn/10.0.0.9:502/destIp');
+        expect(ip.value, '10.0.0.9');
+      } finally {
+        await sm.close();
+      }
+    });
 
     test('keys() appends synthetic meta-keys for enabled servers', () {
       final keys = stateMan.keys;

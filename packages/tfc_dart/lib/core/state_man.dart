@@ -16,7 +16,8 @@ import 'package:jbtm/src/m2400_client_wrapper.dart' show M2400ClientWrapper;
 import 'package:tfc_dart/core/log_config.dart' show opcuaLogLevelFromEnv;
 import 'package:jbtm/src/msocket.dart' as jbtm show ConnectionStatus;
 
-import 'package:modbus_client/modbus_client.dart' show ModbusElementType, ModbusEndianness;
+import 'package:modbus_client/modbus_client.dart'
+    show ModbusElementType, ModbusEndianness;
 
 import 'collector.dart';
 import 'conn_meta.dart';
@@ -283,7 +284,8 @@ class ModbusPollGroupConfig {
   Map<String, dynamic> toJson() => _$ModbusPollGroupConfigToJson(this);
 
   @override
-  String toString() => 'ModbusPollGroupConfig(name: $name, intervalMs: $intervalMs)';
+  String toString() =>
+      'ModbusPollGroupConfig(name: $name, intervalMs: $intervalMs)';
 }
 
 /// Top-level configuration for a single Modbus TCP server connection.
@@ -371,7 +373,8 @@ class StateManConfig {
   @JsonKey(defaultValue: [])
   List<ModbusConfig> modbus;
 
-  StateManConfig({required this.opcua, this.jbtm = const [], this.modbus = const []});
+  StateManConfig(
+      {required this.opcua, this.jbtm = const [], this.modbus = const []});
 
   StateManConfig copy() => StateManConfig.fromJson(toJson());
 
@@ -379,8 +382,7 @@ class StateManConfig {
   List<ServerConfigEntry> get allServers => [...opcua, ...jbtm, ...modbus];
 
   /// Only the servers that should actually be connected to.
-  List<OpcUAConfig> get enabledOpcua =>
-      opcua.where((c) => c.enabled).toList();
+  List<OpcUAConfig> get enabledOpcua => opcua.where((c) => c.enabled).toList();
   List<M2400Config> get enabledJbtm => jbtm.where((c) => c.enabled).toList();
   List<ModbusConfig> get enabledModbus =>
       modbus.where((c) => c.enabled).toList();
@@ -521,7 +523,9 @@ class KeyMappingEntry {
   String? variableName;
 
   String? get server =>
-      opcuaNode?.serverAlias ?? m2400Node?.serverAlias ?? modbusNode?.serverAlias;
+      opcuaNode?.serverAlias ??
+      m2400Node?.serverAlias ??
+      modbusNode?.serverAlias;
 
   KeyMappingEntry({
     this.opcuaNode,
@@ -808,6 +812,9 @@ class ClientWrapper {
       if (_everConnected) _reconnectCount++;
       _everConnected = true;
       _connectedSince = DateTime.now();
+      // A successful connect supersedes the previous error — a stale
+      // message must not stay on the Connection Info card indefinitely.
+      _lastError = '';
     } else if (next == ConnectionStatus.disconnected) {
       _connectedSince = null;
     }
@@ -1044,7 +1051,8 @@ class StateMan {
   /// Returns the original value unchanged if [bitMask] is null.
   /// Single-bit mask returns bool; multi-bit returns int.
   /// Non-numeric values pass through unchanged.
-  static DynamicValue applyBitMask(DynamicValue value, int? bitMask, int? bitShift) {
+  static DynamicValue applyBitMask(
+      DynamicValue value, int? bitMask, int? bitShift) {
     if (bitMask == null) return value;
     final raw = value.value;
     if (raw is! num) return value;
@@ -1316,12 +1324,29 @@ class StateMan {
   late final ConnMetaRouter _connMeta = _buildConnMetaRouter();
 
   ConnMetaRouter _buildConnMetaRouter() {
+    // Unnamed servers are first-class here, like everywhere else in
+    // StateMan: a server with no alias gets a stable synthetic identity
+    // derived from its connection target (host:port), so its meta-keys
+    // exist and survive restarts. Duplicate identities get a #2/#3 suffix.
+    final taken = <String>{};
+    String claim(String candidate) {
+      var alias = candidate;
+      var n = 2;
+      while (!taken.add(alias)) {
+        alias = '$candidate#${n++}';
+      }
+      return alias;
+    }
+
     final sources = <ConnMetaSource>[];
     for (final wrapper in clients) {
       final wAlias = wrapper.config.serverAlias;
-      if (StateManConfig.normalizeAlias(wAlias) == null) continue;
+      final ep = parseOpcEndpoint(wrapper.config.endpoint);
+      final alias = claim(
+          StateManConfig.normalizeAlias(wAlias) ?? '${ep.host}:${ep.port}');
       sources.add(OpcUaConnMetaSource(
         wrapper,
+        metaAlias: alias,
         subscribedKeysFn: () => keyMappings.nodes.values
             .where((e) => e.opcuaNode?.serverAlias == wAlias)
             .length,
@@ -1329,7 +1354,6 @@ class StateMan {
     }
     for (final dc in deviceClients) {
       if (dc is! ModbusDeviceClientAdapter) continue;
-      if (StateManConfig.normalizeAlias(dc.serverAlias) == null) continue;
       final cfg = config.modbus
           .firstWhereOrNull((c) => c.serverAlias == dc.serverAlias);
       final minInterval = cfg == null || cfg.pollGroups.isEmpty
@@ -1337,7 +1361,10 @@ class StateMan {
           : cfg.pollGroups
               .map((g) => g.intervalMs)
               .reduce((a, b) => a < b ? a : b);
-      sources.add(ModbusConnMetaSource(dc, pollIntervalMs: minInterval));
+      final alias = claim(StateManConfig.normalizeAlias(dc.serverAlias) ??
+          '${dc.wrapper.host}:${dc.wrapper.port}');
+      sources.add(ModbusConnMetaSource(dc,
+          metaAlias: alias, pollIntervalMs: minInterval));
     }
     return ConnMetaRouter(sources);
   }
@@ -1361,8 +1388,8 @@ class StateMan {
 
   ClientWrapper _getClientWrapper(String key) {
     final alias = keyMappings.lookupServerAlias(key);
-    final wrapper = clients.firstWhereOrNull(
-        (wrapper) => wrapper.config.serverAlias == alias);
+    final wrapper = clients
+        .firstWhereOrNull((wrapper) => wrapper.config.serverAlias == alias);
     if (wrapper == null) {
       throw StateManException(
           'No OPC-UA client found for key "$key" (server alias: $alias)');
@@ -1519,13 +1546,15 @@ class StateMan {
         try {
           return await modbusDc.readUmasVariable(key);
         } catch (e) {
-          throw StateManException('Failed to read UMAS variable "$variableName" '
+          throw StateManException(
+              'Failed to read UMAS variable "$variableName" '
               'for key "$key": $e');
         }
       }
       final value = modbusDc.read(key);
       if (value == null) {
-        throw StateManException('No cached value for key: "$key" -- not polled yet');
+        throw StateManException(
+            'No cached value for key: "$key" -- not polled yet');
       }
       return value;
     }
@@ -1577,7 +1606,8 @@ class StateMan {
         // the existing "no cached value -> skip" semantics of
         // [DeviceClient.read]); the caller surfaces missing keys.
         final entry = keyMappings.nodes[key];
-        if (entry?.variableName != null && modbusDc is ModbusDeviceClientAdapter) {
+        if (entry?.variableName != null &&
+            modbusDc is ModbusDeviceClientAdapter) {
           try {
             results[key] = await modbusDc.readUmasVariable(key);
           } catch (_) {
@@ -1659,8 +1689,7 @@ class StateMan {
   Future<void> write(String key, DynamicValue value) async {
     // Connection metadata is read-only; never silently no-op.
     if (ConnMetaRouter.isMetaKey(key)) {
-      throw StateManException(
-          "connection metadata key '$key' is read-only");
+      throw StateManException("connection metadata key '$key' is read-only");
     }
 
     key = resolveKey(key);
@@ -1759,8 +1788,8 @@ class StateMan {
     // DynamicValue for the lifetime of the StateMan.
     for (final dc in deviceClients) {
       if (dc is ModbusDeviceClientAdapter) {
-        final newNames = buildVariableNamesFromKeyMappings(
-            newKeyMappings, dc.serverAlias);
+        final newNames =
+            buildVariableNamesFromKeyMappings(newKeyMappings, dc.serverAlias);
         // Preserve the null entries for non-UMAS keys the adapter knows
         // about so the merged map's "renamed" detection works (it
         // compares old non-null name vs new entry — missing entry =
@@ -1770,8 +1799,19 @@ class StateMan {
     }
   }
 
-  List<String> get keys =>
-      [...keyMappings.keys, ..._connMeta.metaKeys];
+  List<String> get keys => [...keyMappings.keys, ..._connMeta.metaKeys];
+
+  /// The connection aliases the `@conn` meta-key router answers for, with
+  /// their protocol (unnamed servers appear under their synthetic host:port
+  /// identity). This is what editor UIs should offer as suggestions.
+  List<({String alias, bool isModbus})> get connMetaAliases =>
+      _connMeta.aliases;
+
+  /// All `@conn` fields for [alias] as one stream — a single timer and one
+  /// snapshot per tick, unlike per-field [subscribe] calls. Throws
+  /// [StateManException] for an unknown alias.
+  Stream<Map<String, DynamicValue>> subscribeConnMeta(String alias) =>
+      _connMeta.subscribeAll(alias);
 
   /// Close the connection to the server.
   Future<void> close() async {
@@ -1922,8 +1962,8 @@ class StateMan {
         // Apply bit mask if configured on this key
         final entry = keyMappings.nodes[key];
         if (entry?.bitMask != null) {
-          stream = stream.map((value) =>
-              applyBitMask(value, entry!.bitMask, entry.bitShift));
+          stream = stream.map(
+              (value) => applyBitMask(value, entry!.bitMask, entry.bitShift));
         }
 
         // Wait for monitor to deliver first value. No asBroadcastStream()

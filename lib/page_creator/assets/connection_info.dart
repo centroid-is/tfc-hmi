@@ -18,12 +18,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
-import 'package:tfc_dart/core/conn_meta.dart';
-import 'package:tfc_dart/core/state_man.dart' show StateManConfig;
-
 import 'common.dart';
 import '../../providers/state_man.dart';
-import '../../providers/preferences.dart';
 
 part 'connection_info.g.dart';
 
@@ -76,16 +72,18 @@ class ConnectionInfoConfig extends BaseAsset {
   }
 
   /// Preview factory for the asset palette.
-  ConnectionInfoConfig.preview() : this(serverAlias: '', protocol: ConnectionProtocol.modbus);
+  ConnectionInfoConfig.preview()
+      : this(serverAlias: '', protocol: ConnectionProtocol.modbus);
 
   /// Back-fills the [BaseAsset] keys the generated `fromJson` reads
   /// unconditionally so a partial (or empty) map never throws.
   static Map<String, dynamic> _withDefaults(Map<String, dynamic> json) => {
         ...json,
         'asset_name': json['asset_name'] ?? 'ConnectionInfoConfig',
-        'coordinates': json['coordinates'] ?? <String, dynamic>{'x': 0.0, 'y': 0.0},
-        'size': json['size'] ??
-            <String, dynamic>{'width': 0.18, 'height': 0.16},
+        'coordinates':
+            json['coordinates'] ?? <String, dynamic>{'x': 0.0, 'y': 0.0},
+        'size':
+            json['size'] ?? <String, dynamic>{'width': 0.18, 'height': 0.16},
       };
 
   factory ConnectionInfoConfig.fromJson(Map<String, dynamic> json) =>
@@ -124,7 +122,8 @@ class ConnectionStateVisual {
     required String state,
     required String lastError,
   }) {
-    if (connected) return const ConnectionStateVisual(Colors.green, 'Connected');
+    if (connected)
+      return const ConnectionStateVisual(Colors.green, 'Connected');
     if (state.toLowerCase() == 'connecting') {
       return const ConnectionStateVisual(Colors.amber, 'Connecting');
     }
@@ -192,12 +191,8 @@ class _ConnectionInfoCardState extends ConsumerState<ConnectionInfoCard> {
     if (_hoistedKey != _keyFor(widget.config)) _hoist();
   }
 
-  String _keyFor(ConnectionInfoConfig c) => '${c.serverAlias}|${c.protocol.name}';
-
-  /// The valid field set for the configured protocol.
-  List<String> get _fields => widget.config.protocol == ConnectionProtocol.modbus
-      ? kConnMetaModbusFields
-      : kConnMetaOpcuaFields;
+  String _keyFor(ConnectionInfoConfig c) =>
+      '${c.serverAlias}|${c.protocol.name}';
 
   void _hoist() {
     final config = widget.config;
@@ -207,21 +202,14 @@ class _ConnectionInfoCardState extends ConsumerState<ConnectionInfoCard> {
       _stream = null;
       return;
     }
-    final fields = _fields;
-    _stream = ref.read(stateManProvider.future).asStream().switchMap((sm) {
-      // One subscription per field. `Future.wait` rejects if any key names an
-      // unknown alias/field, which surfaces as a stream error → "not found".
-      final subs = fields
-          .map((f) => sm.subscribe('$kConnMetaPrefix/$alias/$f'))
-          .toList();
-      return Stream.fromFuture(Future.wait(subs)).switchMap((streams) {
-        return Rx.combineLatestList(streams).map((values) {
-          return <String, DynamicValue>{
-            for (var i = 0; i < fields.length; i++) fields[i]: values[i],
-          };
-        });
-      });
-    });
+    // One subscription for the whole card: a single timer and one snapshot
+    // per tick, instead of a per-field subscription each running its own.
+    // An unknown alias throws inside switchMap, which surfaces as a stream
+    // error → "Connection not found".
+    _stream = ref
+        .read(stateManProvider.future)
+        .asStream()
+        .switchMap((sm) => sm.subscribeConnMeta(alias));
   }
 
   @override
@@ -301,12 +289,18 @@ class _ConnectionInfoCardState extends ConsumerState<ConnectionInfoCard> {
   }
 
   Widget _body(Map<String, DynamicValue> m) {
-    final isModbus = widget.config.protocol == ConnectionProtocol.modbus;
+    // The protocol comes from the data, not the operator's dropdown — a
+    // mis-set dropdown must not break a resolvable connection.
+    final isModbus = m.containsKey('unitId');
     final lastError = _s(m, 'lastError');
 
     final rows = <Widget>[
-      _Row(label: 'Requests', value: formatRequestsPerSec(_d(m, 'requestsPerSec'))),
-      _Row(label: 'Destination', value: '${_s(m, 'destIp')}:${_i(m, 'destPort')}'),
+      _Row(
+          label: 'Requests',
+          value: formatRequestsPerSec(_d(m, 'requestsPerSec'))),
+      _Row(
+          label: 'Destination',
+          value: '${_s(m, 'destIp')}:${_i(m, 'destPort')}'),
       _Row(label: 'Uptime', value: formatUptime(_d(m, 'uptimeSec'))),
       _Row(label: 'Reconnects', value: '${_i(m, 'reconnectCount')}'),
       if (isModbus) ...[
@@ -502,17 +496,19 @@ class _ConnectionInfoConfigEditorState
 
   Future<void> _loadSuggestions() async {
     try {
-      final prefs = await ref.read(preferencesProvider.future);
-      final config = await StateManConfig.fromPrefs(prefs);
-      final out = <_ServerSuggestion>[];
-      for (final c in config.opcua) {
-        out.add(_ServerSuggestion(
-            c.serverAlias ?? '__default', ConnectionProtocol.opcua));
-      }
-      for (final c in config.modbus) {
-        out.add(_ServerSuggestion(
-            c.serverAlias ?? c.host, ConnectionProtocol.modbus));
-      }
+      // Ask the live router rather than re-deriving aliases from the raw
+      // config: these are exactly the identities `@conn` keys resolve to
+      // (unnamed servers appear under their synthetic host:port identity),
+      // so every chip offered here is guaranteed to bind.
+      final sm = await ref.read(stateManProvider.future);
+      final out = <_ServerSuggestion>[
+        for (final a in sm.connMetaAliases)
+          _ServerSuggestion(
+              a.alias,
+              a.isModbus
+                  ? ConnectionProtocol.modbus
+                  : ConnectionProtocol.opcua),
+      ];
       if (mounted) setState(() => _suggestions = out);
     } catch (_) {
       // Suggestions are a convenience; the text field still works without them.

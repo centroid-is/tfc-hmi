@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -11,7 +9,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/connection_info.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
-import 'package:tfc_dart/core/state_man.dart' show StateMan;
+import 'package:tfc_dart/core/state_man.dart' show StateMan, StateManException;
 
 // ---------------------------------------------------------------------------
 // Fakes — a StateMan that answers `@conn/<alias>/<field>` subscribes with
@@ -38,6 +36,19 @@ class _FakeConnStateMan extends Fake implements StateMan {
     }
     return Stream<DynamicValue>.value(value);
   }
+
+  @override
+  Stream<Map<String, DynamicValue>> subscribeConnMeta(String alias) {
+    if (alias != knownAlias) {
+      throw StateManException(
+          "connection metadata key names unknown server alias '$alias'");
+    }
+    return Stream<Map<String, DynamicValue>>.value(fields);
+  }
+
+  @override
+  List<({String alias, bool isModbus})> get connMetaAliases =>
+      [(alias: knownAlias, isModbus: fields.containsKey('unitId'))];
 }
 
 Map<String, DynamicValue> _modbusFields({
@@ -214,7 +225,8 @@ void main() {
         (tester) async {
       final config = ConnectionInfoConfig(
           serverAlias: 'plc1', protocol: ConnectionProtocol.modbus);
-      final stateMan = _FakeConnStateMan(knownAlias: 'plc1', fields: _modbusFields());
+      final stateMan =
+          _FakeConnStateMan(knownAlias: 'plc1', fields: _modbusFields());
       await tester.pumpWidget(
           _wrap(ConnectionInfoCard(config: config), stateMan: stateMan));
       await tester.pumpAndSettle();
@@ -236,7 +248,8 @@ void main() {
         (tester) async {
       final config = ConnectionInfoConfig(
           serverAlias: 'opc1', protocol: ConnectionProtocol.opcua);
-      final stateMan = _FakeConnStateMan(knownAlias: 'opc1', fields: _opcuaFields());
+      final stateMan =
+          _FakeConnStateMan(knownAlias: 'opc1', fields: _opcuaFields());
       await tester.pumpWidget(
           _wrap(ConnectionInfoCard(config: config), stateMan: stateMan));
       await tester.pumpAndSettle();
@@ -263,7 +276,8 @@ void main() {
         (tester) async {
       final config = ConnectionInfoConfig(serverAlias: 'ghost');
       // Fake only knows 'plc1'; every subscribe for 'ghost' errors.
-      final stateMan = _FakeConnStateMan(knownAlias: 'plc1', fields: _modbusFields());
+      final stateMan =
+          _FakeConnStateMan(knownAlias: 'plc1', fields: _modbusFields());
       await tester.pumpWidget(
           _wrap(ConnectionInfoCard(config: config), stateMan: stateMan));
       await tester.pumpAndSettle();
@@ -294,82 +308,4 @@ void main() {
       expect(config.protocol, ConnectionProtocol.opcua);
     });
   });
-
-  // -------------------------------------------------------------------------
-  // Visual demo — a rendered PNG of the Modbus card. Best-effort: writes into
-  // the scratchpad shots dir via RepaintBoundary.toImage.
-  // -------------------------------------------------------------------------
-  testWidgets('renders demo PNG of the Modbus card', (tester) async {
-    await _loadFonts();
-    final captureKey = const ValueKey('connection-info-demo-capture');
-    final config = ConnectionInfoConfig(
-        serverAlias: 'plc1', protocol: ConnectionProtocol.modbus);
-    final stateMan = _FakeConnStateMan(knownAlias: 'plc1', fields: _modbusFields());
-
-    await tester.pumpWidget(ProviderScope(
-      overrides: [stateManProvider.overrideWith((ref) async => stateMan)],
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(useMaterial3: true, brightness: Brightness.light),
-        home: Scaffold(
-          backgroundColor: const Color(0xFFECEFF1),
-          body: Center(
-            child: RepaintBoundary(
-              key: captureKey,
-              child: SizedBox(
-                width: 280,
-                height: 240,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: ConnectionInfoCard(config: config),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    ));
-    await tester.pumpAndSettle();
-
-    final boundary =
-        tester.renderObject<RenderRepaintBoundary>(find.byKey(captureKey));
-    final image = await boundary.toImage(pixelRatio: 3.0);
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    const dir = '/private/tmp/claude-501/-Users-omar-sources-repos-tfc-hmi/'
-        'e193b4cd-8224-4a99-a549-87c8dbe55c19/scratchpad/shots';
-    final file = File('$dir/connection-info-demo.png');
-    file.parent.createSync(recursive: true);
-    file.writeAsBytesSync(bytes!.buffer.asUint8List());
-    expect(file.existsSync(), isTrue);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Fonts — otherwise the PNG is Ahem blocks. Best-effort; missing files are
-// skipped silently so the test never fails on a font path.
-// ---------------------------------------------------------------------------
-Future<void> _loadFonts() async {
-  Future<void> load(String family, String path) async {
-    final file = File(path);
-    if (!file.existsSync()) return;
-    await (FontLoader(family)
-          ..addFont(Future.value(ByteData.view(file.readAsBytesSync().buffer))))
-        .load();
-  }
-
-  await load('Roboto', 'lib/fonts/roboto-mono/RobotoMono-Regular.ttf');
-  for (final candidate in <String>[
-    if (Platform.environment['FLUTTER_ROOT'] != null)
-      '${Platform.environment['FLUTTER_ROOT']}/bin/cache/artifacts/'
-          'material_fonts/MaterialIcons-Regular.otf',
-    '/Users/omar/sources/repos/flutter/bin/cache/artifacts/material_fonts/'
-        'MaterialIcons-Regular.otf',
-    '/opt/homebrew/share/flutter/bin/cache/artifacts/material_fonts/'
-        'MaterialIcons-Regular.otf',
-  ]) {
-    if (File(candidate).existsSync()) {
-      await load('MaterialIcons', candidate);
-      break;
-    }
-  }
 }

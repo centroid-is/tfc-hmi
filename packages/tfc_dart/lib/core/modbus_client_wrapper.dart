@@ -302,8 +302,7 @@ class ModbusClientWrapper {
     // Emit disconnected synchronously before closing the stream, so
     // listeners see the final status before done. _cleanupClient is async
     // but its status-add is guarded by isClosed, so it will be a no-op.
-    if (!_status.isClosed &&
-        _status.value != ConnectionStatus.disconnected) {
+    if (!_status.isClosed && _status.value != ConnectionStatus.disconnected) {
       _status.add(ConnectionStatus.disconnected);
     }
     unawaited(_cleanupClient());
@@ -499,8 +498,7 @@ class ModbusClientWrapper {
       throw StateError('ModbusClientWrapper has been disposed');
     }
     if (connectionStatus != ConnectionStatus.connected || _client == null) {
-      throw StateError(
-          'Not connected -- cannot write (writes are not queued)');
+      throw StateError('Not connected -- cannot write (writes are not queued)');
     }
 
     final type = spec.registerType;
@@ -545,6 +543,10 @@ class ModbusClientWrapper {
         }
         _everConnected = true;
         _connectedSince = DateTime.now();
+        // A successful connect supersedes whatever went wrong before it —
+        // without this, one transient timeout stays on the Connection Info
+        // card as a red Error row forever.
+        _lastError = '';
         if (!_status.isClosed) {
           _status.add(ConnectionStatus.connected);
         }
@@ -673,8 +675,7 @@ class ModbusClientWrapper {
     try {
       // Rebuild coalesced groups if subscriptions changed
       if (group._dirty) {
-        group._cachedGroups =
-            _buildCoalescedGroups(group._subscriptions);
+        group._cachedGroups = _buildCoalescedGroups(group._subscriptions);
         group._dirty = false;
       }
 
@@ -696,8 +697,7 @@ class ModbusClientWrapper {
           }
         } catch (e) {
           _lastError = e.toString();
-          _log.w(
-              'Poll group "${group.name}" batch read error: $e');
+          _log.w('Poll group "${group.name}" batch read error: $e');
           // Continue to next group
         }
       }
@@ -765,8 +765,7 @@ class ModbusClientWrapper {
 
         // Start new batch if gap too large or would exceed Modbus limit
         if (gap > gapThreshold || batchRange > maxRange) {
-          groups.add(
-              ModbusElementsGroup(currentBatch.map((s) => s.element)));
+          groups.add(ModbusElementsGroup(currentBatch.map((s) => s.element)));
           currentBatch = [curr];
         } else {
           currentBatch.add(curr);
@@ -775,8 +774,7 @@ class ModbusClientWrapper {
 
       // Flush the final batch
       if (currentBatch.isNotEmpty) {
-        groups
-            .add(ModbusElementsGroup(currentBatch.map((s) => s.element)));
+        groups.add(ModbusElementsGroup(currentBatch.map((s) => s.element)));
       }
     }
 
@@ -795,7 +793,8 @@ class ModbusClientWrapper {
   ModbusElement _createElement(ModbusRegisterSpec spec) {
     final type = spec.registerType;
     final address = spec.address - spec.addressBase;
-    assert(address >= 0,
+    assert(
+        address >= 0,
         'Wire address must be >= 0 after applying addressBase offset: '
         'spec.address=${spec.address}, addressBase=${spec.addressBase}');
     final name = spec.key;
@@ -817,17 +816,41 @@ class ModbusClientWrapper {
       case ModbusDataType.uint16:
         return ModbusUint16Register(name: name, address: address, type: type);
       case ModbusDataType.int32:
-        return ModbusInt32Register(name: name, address: address, type: type, endianness: spec.endianness);
+        return ModbusInt32Register(
+            name: name,
+            address: address,
+            type: type,
+            endianness: spec.endianness);
       case ModbusDataType.uint32:
-        return ModbusUint32Register(name: name, address: address, type: type, endianness: spec.endianness);
+        return ModbusUint32Register(
+            name: name,
+            address: address,
+            type: type,
+            endianness: spec.endianness);
       case ModbusDataType.float32:
-        return ModbusFloatRegister(name: name, address: address, type: type, endianness: spec.endianness);
+        return ModbusFloatRegister(
+            name: name,
+            address: address,
+            type: type,
+            endianness: spec.endianness);
       case ModbusDataType.int64:
-        return ModbusInt64Register(name: name, address: address, type: type, endianness: spec.endianness);
+        return ModbusInt64Register(
+            name: name,
+            address: address,
+            type: type,
+            endianness: spec.endianness);
       case ModbusDataType.uint64:
-        return ModbusUint64Register(name: name, address: address, type: type, endianness: spec.endianness);
+        return ModbusUint64Register(
+            name: name,
+            address: address,
+            type: type,
+            endianness: spec.endianness);
       case ModbusDataType.float64:
-        return ModbusDoubleRegister(name: name, address: address, type: type, endianness: spec.endianness);
+        return ModbusDoubleRegister(
+            name: name,
+            address: address,
+            type: type,
+            endianness: spec.endianness);
       case ModbusDataType.bit:
         // bit for register type defaults to uint16
         return ModbusUint16Register(name: name, address: address, type: type);
@@ -854,8 +877,7 @@ class ModbusClientWrapper {
   /// Stops the client and emits disconnected status if appropriate.
   Future<void> _cleanupClient() async {
     await _cleanupClientInstance();
-    if (!_status.isClosed &&
-        _status.value != ConnectionStatus.disconnected) {
+    if (!_status.isClosed && _status.value != ConnectionStatus.disconnected) {
       _status.add(ConnectionStatus.disconnected);
     }
   }
@@ -887,8 +909,7 @@ class ModbusClientWrapper {
     }
   }
 
-  static Duration _clampDuration(
-      Duration value, Duration min, Duration max) {
+  static Duration _clampDuration(Duration value, Duration min, Duration max) {
     if (value < min) return min;
     if (value > max) return max;
     return value;

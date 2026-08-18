@@ -4,8 +4,7 @@ import 'dart:collection';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 
-import 'state_man.dart'
-    show ClientWrapper, ConnectionStatus, StateManException;
+import 'state_man.dart' show ClientWrapper, ConnectionStatus, StateManException;
 import 'modbus_device_client.dart' show ModbusDeviceClientAdapter;
 
 /// Per-connection metadata exposed as synthetic, subscribable StateMan keys.
@@ -155,6 +154,19 @@ class RollingRate {
     _lastSampleTime ??= now;
     final elapsed = now.difference(_lastSampleTime!).inSeconds;
     if (elapsed <= 0) return;
+    if (elapsed > windowSeconds) {
+      // Nothing sampled the rate for longer than the window covers
+      // (meta-keys sample lazily — this can be the first read after days).
+      // There is no per-second information for the gap: back-filling one
+      // zero per elapsed second would do O(uptime) work, and attributing
+      // the whole gap's delta to one in-window second would show a bogus
+      // spike. Start a fresh window instead — the rate reads 0 now and
+      // converges over the next [windowSeconds] seconds of real samples.
+      _window.clear();
+      _lastSampledCounter = _counter;
+      _lastSampleTime = now;
+      return;
+    }
     final delta = _counter - _lastSampledCounter;
     // The whole delta lands in the first elapsed second; any further elapsed
     // seconds were idle and contribute 0.
@@ -166,6 +178,8 @@ class RollingRate {
       _window.removeFirst();
     }
     _lastSampledCounter = _counter;
+    // Advance by whole seconds so the fractional remainder carries into the
+    // next sample instead of being dropped.
     _lastSampleTime = _lastSampleTime!.add(Duration(seconds: elapsed));
   }
 
@@ -288,6 +302,10 @@ abstract class ConnMetaSource {
   /// The server alias this source answers for.
   String get metaAlias;
 
+  /// Whether this source is a Modbus connection (decides the field set
+  /// without paying for a [snapshot] — key pickers call this per keystroke).
+  bool get isModbus;
+
   /// A fresh snapshot read from the underlying live client getters.
   ConnMeta snapshot();
 
@@ -311,10 +329,18 @@ class OpcUaConnMetaSource implements ConnMetaSource {
   /// closure so it tracks key-mapping edits.
   final int Function() subscribedKeysFn;
 
-  OpcUaConnMetaSource(this.wrapper, {required this.subscribedKeysFn});
+  /// The alias this source answers for in `@conn/<alias>/<field>` keys.
+  /// For unnamed servers the caller assigns a stable synthetic identity
+  /// (host:port) — see `StateMan._buildConnMetaRouter`.
+  @override
+  final String metaAlias;
+
+  OpcUaConnMetaSource(this.wrapper,
+      {required this.subscribedKeysFn, String? metaAlias})
+      : metaAlias = metaAlias ?? wrapper.config.serverAlias ?? '';
 
   @override
-  String get metaAlias => wrapper.config.serverAlias ?? '';
+  bool get isModbus => false;
 
   @override
   Stream<void> get changes => wrapper.connectionStream.map((_) {});
@@ -352,10 +378,15 @@ class ModbusConnMetaSource implements ConnMetaSource {
   /// configured poll groups. Null when the server declares none.
   final int? pollIntervalMs;
 
-  ModbusConnMetaSource(this.adapter, {this.pollIntervalMs});
+  /// See [OpcUaConnMetaSource.metaAlias].
+  @override
+  final String metaAlias;
+
+  ModbusConnMetaSource(this.adapter, {this.pollIntervalMs, String? metaAlias})
+      : metaAlias = metaAlias ?? adapter.serverAlias ?? '';
 
   @override
-  String get metaAlias => adapter.serverAlias ?? '';
+  bool get isModbus => true;
 
   @override
   Stream<void> get changes => adapter.wrapper.connectionStream.map((_) {});
@@ -404,10 +435,15 @@ class ConnMetaRouter {
       key == kConnMetaPrefix || key.startsWith('$kConnMetaPrefix/');
 
   /// The synthetic meta-keys for every source, for the key picker.
+  ///
+  /// Derived from the protocol alone — no [ConnMetaSource.snapshot] — since
+  /// key pickers call this on every keystroke.
   List<String> get metaKeys {
     final out = <String>[];
     for (final source in _byAlias.values) {
-      for (final field in source.snapshot().validFields) {
+      final fields =
+          source.isModbus ? kConnMetaModbusFields : kConnMetaOpcuaFields;
+      for (final field in fields) {
         out.add('$kConnMetaPrefix/${source.metaAlias}/$field');
       }
     }
@@ -473,4 +509,28 @@ class ConnMetaRouter {
       Stream<void>.periodic(tickInterval, (_) {}),
     ]).map((_) => current()).startWith(current());
   }
+
+  /// A live stream of ALL fields for [alias] from a single subscription:
+  /// one timer, one snapshot and one [ConnMeta.toFieldMap] per tick.
+  ///
+  /// This is what widgets that render a whole connection card should use —
+  /// per-field [subscribe] calls each run their own timer and take their own
+  /// snapshot, so a 14-field card would otherwise pay 14 snapshots per
+  /// second and rebuild up to 14 times a second.
+  Stream<Map<String, DynamicValue>> subscribeAll(String alias) {
+    final source = _sourceFor('$kConnMetaPrefix/$alias/*', alias);
+    Map<String, DynamicValue> current() => source.snapshot().toFieldMap();
+    return Rx.merge<void>([
+      source.changes,
+      Stream<void>.periodic(tickInterval, (_) {}),
+    ]).map((_) => current()).startWith(current());
+  }
+
+  /// The aliases this router can answer for with their protocol — what an
+  /// editor UI should offer as suggestions (unnamed servers appear under
+  /// their synthetic host:port identity).
+  List<({String alias, bool isModbus})> get aliases => [
+        for (final s in _byAlias.values)
+          (alias: s.metaAlias, isModbus: s.isModbus),
+      ];
 }
