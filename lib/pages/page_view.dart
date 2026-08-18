@@ -398,7 +398,13 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                               // because the overlay sits on top in the
                               // Stack and would otherwise compete with the
                               // asset's internal gestures.
-                              ? IgnorePointer(child: asset.build(context))
+                              // AssetEditModeScope lets assets that render
+                              // nothing at runtime (idle alarm beacons) draw
+                              // an editor-only placeholder instead of
+                              // disappearing from the canvas.
+                              ? IgnorePointer(
+                                  child: AssetEditModeScope(
+                                      child: asset.build(context)))
                               : asset.build(context),
                         ),
                       ),
