@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
 import 'package:dbus/dbus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
@@ -16,6 +15,7 @@ import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/widgets/route_redirect.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/pages/page_editor.dart';
 import 'package:tfc/pages/not_found.dart';
@@ -60,6 +60,7 @@ import 'package:tfc/widgets/proposal_banner.dart';
 import 'package:tfc/marionette/route_logger.dart';
 
 import 'marionette_init.dart';
+import 'navigation.dart';
 
 /// Enable with: --dart-define=MARIONETTE=true
 const _enableMarionette = bool.fromEnvironment('MARIONETTE');
@@ -159,9 +160,7 @@ Future<void> _startApp([bool debugMode = false]) async {
     // installs have their secrets under the amplify service name, so wrap
     // the new storage in a one-time migration that falls back to (and
     // copies from) the old storage on a read miss.
-    SecureStorage.setInstance(Platform.isMacOS
-        ? MacOsMigratingSecureStorage()
-        : OtherSecureStorage());
+    SecureStorage.setInstance(Platform.isMacOS ? MacOsMigratingSecureStorage() : OtherSecureStorage());
   }
 
   // Register your custom asset type
@@ -185,12 +184,6 @@ Future<void> _startApp([bool debugMode = false]) async {
 
   final registry = RouteRegistry();
 
-  final environmentVariableIsGod = Platform.environment['TFC_GOD'] == 'true';
-
-  registry.addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
-
-  registry.addMenuItem(const MenuItem(label: 'Alarm View', path: '/alarm-view', icon: Icons.alarm));
-
   // This is not ideal, if a second HMI adds a page, we will need to restart the app twice
   final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
   final pageManager = PageManager(pages: {}, prefs: prefs);
@@ -198,39 +191,28 @@ Future<void> _startApp([bool debugMode = false]) async {
 
   final extraMenuItems = pageManager.getRootMenuItems();
 
-  for (final menuItem in extraMenuItems) {
+  // Home comes from the page manager like every other page — it is not
+  // pinned here, so deleting it in the page editor really removes it.
+  // Built-ins (Alarm View, History View) and the pages share one persisted
+  // top-level order, editable in the page editor's Pages dialog.
+  final topLevelMenuItems = buildTopLevelMenuItems(
+    god: environmentVariableIsGod,
+    isLinux: Platform.isLinux,
+    pageMenuItems: extraMenuItems,
+  );
+  for (final menuItem in topLevelMenuItems) {
     registry.addMenuItem(menuItem);
   }
-
-  registry.addMenuItem(
-    MenuItem(
-      label: 'Advanced',
-      path: '/advanced',
-      icon: Icons.settings,
-      children: [
-        if (Platform.isLinux)
-          MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
-        if (Platform.isLinux) MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
-        if (environmentVariableIsGod) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
-        if (environmentVariableIsGod)
-          MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
-        if (environmentVariableIsGod)
-          MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
-        MenuItem(label: 'History View', path: '/advanced/history-view', icon: Icons.history),
-        MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server.data),
-        MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
-        if (kKnowledgeEnabled)
-          MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
-      ],
-    ),
-  );
 
   // Everything is registered; now put the top level — built-ins included — in
   // the order arranged in the page editor. No stored order leaves the
   // registration order above untouched.
   pageManager.sortTopLevel(registry.menuItems);
 
-  final locationBuilder = createLocationBuilder(extraMenuItems);
+  final locationBuilder = createLocationBuilder(
+    extraMenuItems,
+    pagePaths: pageManager.pages.keys,
+  );
 
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
@@ -270,7 +252,17 @@ final managerLauncher = ManagerLauncher(
   },
 );
 
-RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
+/// Builds the app's route table.
+///
+/// [extraMenuItems] are the reachable (published) pages from the page
+/// manager. [pagePaths] is every page path the manager knows, reachable or
+/// not: paths in it that end up without a route — unpublished drafts, or
+/// children of a draft section — are refused by redirecting to the fallback
+/// page instead of dead-ending on "not found".
+RoutesLocationBuilder createLocationBuilder(
+  List<MenuItem> extraMenuItems, {
+  Iterable<String> pagePaths = const [],
+}) {
   final routes = {
     // '/': (context, state, args) => BeamPage(
     //       // this will be replaced most likely
@@ -356,6 +348,10 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
         key: const ValueKey('/advanced/alarm-editor'),
         title: 'Alarm Editor',
         child: AlarmEditorPage(proposalData: args is String ? args : null)),
+    AppRoutes.historyView: (context, state, args) =>
+        BeamPage(key: const ValueKey(AppRoutes.historyView), title: 'History View', child: HistoryViewPage()),
+    // History View lives at the top level now; the old address keeps working
+    // for bookmarks and pages that link to it.
     '/advanced/history-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
     '/advanced/server-config': (context, state, args) =>
@@ -373,9 +369,7 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
   // build drops TechDocLibraryPage and everything it pulls in.
   if (kKnowledgeEnabled) {
     routes['/advanced/knowledge-base'] = (context, state, args) => BeamPage(
-        key: const ValueKey('/advanced/knowledge-base'),
-        title: 'Knowledge Base',
-        child: const TechDocLibraryPage());
+        key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage());
   }
 
   addRoute(MenuItem menuItem) {
@@ -399,6 +393,31 @@ RoutesLocationBuilder createLocationBuilder(List<MenuItem> extraMenuItems) {
 
   for (final menuItem in extraMenuItems) {
     addRoute(menuItem);
+  }
+
+  // '/' is an ordinary page and may have been deleted; the initial route must
+  // still land somewhere. First reachable page if there is one — when no
+  // pages exist at all the page manager has already regenerated the default
+  // Home, so this only stays null when every page is an unpublished draft.
+  final fallback = routes.containsKey('/') ? '/' : firstMenuPath(extraMenuItems);
+  if (fallback != null) {
+    if (!routes.containsKey('/')) {
+      routes['/'] = (context, state, args) => BeamPage(
+            key: const ValueKey('/'),
+            title: 'Home',
+            child: RouteRedirect(target: fallback),
+          );
+    }
+    // Refuse direct navigation to pages that exist but are not reachable
+    // (unpublished drafts and their subtrees).
+    for (final path in pagePaths) {
+      if (path.isEmpty || routes.containsKey(path)) continue;
+      routes[path] = (context, state, args) => BeamPage(
+            key: ValueKey('redirect-$path'),
+            title: 'Redirecting',
+            child: RouteRedirect(target: fallback),
+          );
+    }
   }
 
   return RoutesLocationBuilder(routes: routes);
