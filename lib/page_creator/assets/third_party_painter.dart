@@ -487,10 +487,15 @@ class SpeedBatcherPainter extends ThirdPartyMachinePainter {
   static const Rect stepUpLane = Rect.fromLTRB(0.53, 0.36, 0.98, 0.82);
 
   /// Unit frame of checkweigher 1 (the first one product reaches).
-  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.185, 0.98, 0.315);
+  ///
+  /// The bands run right down to the conveyor lanes (only a seam's worth of
+  /// gap at 0.36): a checkweigher belt is as wide as the lane feeding it, and
+  /// the dead strip the old 0.315 bottom left above the lanes read as a
+  /// missing piece of machine.
+  static const Rect checkweigher1Frame = Rect.fromLTRB(0.02, 0.20, 0.98, 0.345);
 
   /// Unit frame of checkweigher 2 (the last station before discharge).
-  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.16);
+  static const Rect checkweigher2Frame = Rect.fromLTRB(0.02, 0.03, 0.98, 0.175);
 
   /// The weigh belt inside a checkweigher frame.
   ///

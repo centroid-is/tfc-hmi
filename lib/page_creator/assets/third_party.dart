@@ -15,8 +15,9 @@ import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
-import 'number.dart' show NumberConfig;
-import 'ratio_number.dart' show RatioNumberConfig;
+import 'graph.dart' show GraphAssetConfig;
+import 'number.dart' show NumberConfig, NumberWidget;
+import 'ratio_number.dart' show RatioNumberConfig, RatioNumberWidget;
 import 'registry.dart';
 import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
@@ -500,6 +501,33 @@ bool? speedBatcherStatusBitOf(DynamicValue? status, String member) {
   return status[member].asBool;
 }
 
+/// Resolves the pane's header badge from the handshake struct.
+///
+/// The run key alone cannot tell "stopped" from "cleaning": during a wash the
+/// Running bit drops, and a runKey-only badge would claim Stopped while the
+/// machine is busy rinsing — which is exactly the lie the badge existed to
+/// avoid. Cleaning outranks Running because the struct can raise both at
+/// once mid-cycle. When neither bit is readable — no struct yet, no status
+/// key — the caller's runKey-derived [fallback] stands.
+PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
+  if (speedBatcherStatusBitOf(status, 'p_stat_Cleaning') == true) {
+    // Blue to match the Cleaning diode below it.
+    return const PaneStatus(
+      label: 'Cleaning',
+      color: Colors.blue,
+      icon: Icons.cleaning_services,
+    );
+  }
+  switch (speedBatcherStatusBitOf(status, 'p_stat_Running')) {
+    case true:
+      return const PaneStatus.running();
+    case false:
+      return const PaneStatus.stopped();
+    case null:
+      return fallback;
+  }
+}
+
 /// The Status section body: one diode row per handshake bit.
 ///
 /// Split out as its own widget — same seam as [ThirdPartyEquipmentBody] — so
@@ -508,13 +536,8 @@ bool? speedBatcherStatusBitOf(DynamicValue? status, String member) {
 class SpeedBatcherStatusDiodes extends StatelessWidget {
   const SpeedBatcherStatusDiodes({
     super.key,
-    required this.statusKey,
     required this.status,
   });
-
-  /// The configured struct key, shown so the operator can tell an
-  /// unconfigured pane from a dead subscription.
-  final String statusKey;
 
   /// Latest struct off the wire; `null` renders every diode unknown.
   final DynamicValue? status;
@@ -523,10 +546,6 @@ class SpeedBatcherStatusDiodes extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        PaneDetailRow(
-          label: 'Key',
-          value: statusKey.isEmpty ? '—' : statusKey,
-        ),
         for (final bit in speedBatcherStatusBits)
           PaneDetailRow(
             label: bit.label,
@@ -593,9 +612,10 @@ ThirdPartyMachinePainter thirdPartyPainterFor(
 /// and a one-way belt would draw an arrow that contradicts what the operator
 /// can see happening. `reverseDirection` stays off — the painter picks the
 /// arrow direction from the sign of the live frequency.
-ConveyorConfig thirdPartyConveyor({RelativeSize? size}) {
+ConveyorConfig thirdPartyConveyor({RelativeSize? size, double angleDegrees = 0}) {
   final conveyor = ConveyorConfig(bidirectional: true);
   if (size != null) conveyor.size = size;
+  if (angleDegrees != 0) conveyor.coordinates.angle = angleDegrees;
   return conveyor;
 }
 
@@ -671,8 +691,12 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
     entries.add(ThirdPartyChildEntry(
       offsetX: deck.center.dx,
       offsetY: deck.center.dy,
+      // Half a revolution: product runs right-to-left across the weigh
+      // belts on the real machine, so the belt drawing is turned to make a
+      // positive live frequency draw its arrow with the product flow.
       child: thirdPartyConveyor(
         size: RelativeSize(width: deck.width, height: deck.height),
+        angleDegrees: 180,
       ),
     ));
     // Readout slots, sitting ON the belt either side of the run-direction
@@ -902,6 +926,28 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   }
 
   void _showPane(BuildContext context) {
+    // Pane copies of the weight readouts: same key and format as on the
+    // mimic, but WITH a trend graph — the tap-through that would be a
+    // surprise on a nested child is exactly what the pane exists for.
+    // Cloned once per open, not per rebuild, so the graph dialog id and the
+    // value subscription stay stable while the pane repaints off the run
+    // and status notifiers.
+    final weights = <NumberConfig>[];
+    for (final entry in widget.config.children) {
+      final child = entry.child;
+      if (child is! NumberConfig) continue;
+      weights.add(NumberConfig(
+        key: child.key,
+        showDecimalPoint: child.showDecimalPoint,
+        decimalPlaces: child.decimalPlaces,
+        units: child.units,
+        scale: child.scale,
+        graphConfig: GraphAssetConfig.preview(
+            key: child.key.isEmpty ? null : child.key)
+          ..headerText = 'Weight CW${weights.length + 1} — trend',
+      ));
+    }
+
     showSidePane(
       context: context,
       id: _paneId,
@@ -911,14 +957,14 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
         listenable: Listenable.merge([_raw, _statusRaw]),
-        builder: (context, _) => _paneFor(_isRunning),
+        builder: (context, _) => _paneFor(_isRunning, weights),
       ),
     );
   }
 
-  Widget _paneFor(bool? isRunning) {
+  Widget _paneFor(bool? isRunning, List<NumberConfig> weights) {
     final config = widget.config;
-    final PaneStatus status;
+    PaneStatus status;
     if (config.runKey.isEmpty) {
       status = const PaneStatus.unknown('No key');
     } else if (isRunning == null) {
@@ -927,6 +973,19 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       status =
           isRunning ? const PaneStatus.running() : const PaneStatus.stopped();
     }
+    if (config.kind == ThirdPartyEquipmentKind.speedBatcher) {
+      // The handshake struct outranks the bare run bool: it can say
+      // "Cleaning", which the run key would misreport as Stopped.
+      status = speedBatcherPaneStatus(_statusRaw.value, status);
+    }
+
+    // The scaffolded accept-rate readouts, in checkweigher order. Surfaced
+    // as LIVE figures in the pane — the operator opens it to read the
+    // machine, not its wiring, so keys and static wording stay out.
+    final acceptRatios = [
+      for (final entry in config.children)
+        if (entry.child case final RatioNumberConfig ratio) ratio,
+    ];
 
     return SidePane(
       title: config.tag?.isNotEmpty == true
@@ -949,69 +1008,45 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   value:
                       config.kind.labelFor(strapMachines: config.strapMachines),
                 ),
-                PaneDetailRow(
-                  label: 'Footprint',
-                  value: config.kind
-                      .footprint(strapMachines: config.strapMachines),
-                ),
                 if (config.kind.hasStrapMachines)
                   PaneDetailRow(
                     label: 'Strappers on the line',
                     value: '${config.strapMachines}',
                   ),
-                if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
-                  // Spelled out here because the mimic only has room for the
-                  // short `% 30m` suffix beside the number.
+                // Live figures, not key names or static wording — the pane
+                // is for reading the machine, not its wiring. Charts stay
+                // behind a tap so the pane itself does not crowd: the accept
+                // figure opens its accept/reject bar chart (the
+                // RatioNumberWidget's own tap-through), the weight opens its
+                // trend.
+                for (final (i, ratio) in acceptRatios.indexed)
                   PaneDetailRow(
-                    label: 'Accept rate',
-                    value: 'rolling average over the last '
-                        '${config.acceptWindowMinutes} minutes',
+                    label: 'Accept rate CW${i + 1} '
+                        '(${config.acceptWindowMinutes} min)',
+                    child: SizedBox(
+                      height: 22,
+                      child: RatioNumberWidget(config: ratio),
+                    ),
                   ),
-              ],
-            ),
-          ),
-          PaneSection(
-            title: 'Run status',
-            child: Column(
-              children: [
-                PaneDetailRow(
-                  label: 'Key',
-                  value: config.runKey.isEmpty ? '—' : config.runKey,
-                ),
-                PaneDetailRow(
-                  label: 'Polarity',
-                  value: config.invertRunPolarity
-                      ? 'inverted — running when false'
-                      : 'normal — running when true',
-                ),
+                for (final (i, weight) in weights.indexed)
+                  PaneDetailRow(
+                    label: 'Weight CW${i + 1}',
+                    child: SizedBox(
+                      height: 22,
+                      child: NumberWidget(config: weight),
+                    ),
+                  ),
               ],
             ),
           ),
           if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
             // Always present for a SpeedBatcher, key configured or not: five
-            // grey `!` diodes and a `—` key row tell the operator the section
-            // exists and is unconfigured, which a silently absent section
-            // would not.
+            // grey `!` diodes tell the operator the section exists and is
+            // unconfigured, which a silently absent section would not.
             PaneSection(
               title: 'Status',
               child: SpeedBatcherStatusDiodes(
-                statusKey: config.statusKey,
                 status: _statusRaw.value,
-              ),
-            ),
-          if (config.children.isNotEmpty)
-            PaneSection(
-              title: 'Inside the box',
-              child: Column(
-                children: [
-                  for (final entry in config.children)
-                    PaneDetailRow(
-                      label: entry.child.displayName,
-                      value: entry.child.allKeys.isEmpty
-                          ? 'no keys'
-                          : entry.child.allKeys.join(', '),
-                    ),
-                ],
               ),
             ),
           if (config.notes != null && config.notes!.isNotEmpty)

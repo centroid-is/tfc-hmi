@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection' show LinkedHashMap;
 import 'dart:io' show File, Platform;
+import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FontLoader;
@@ -135,17 +136,23 @@ Widget buildRunningStation({double frequency = 50.0}) {
       top: rect.top,
       width: rect.width,
       height: rect.height,
-      child: CustomPaint(
-        size: beltSize,
-        painter: ConveyorPainter(
-          color: Colors.green,
-          bidirectional: true,
-          reverseDirection: false,
-          showFrequency: false,
-          frequency: frequency,
-          batches: const {},
-          angle: 0,
-          geometry: ConveyorPathGeometry.build(const [], beltSize),
+      // The scaffold turns the weigh belts half a revolution (product runs
+      // right-to-left), which `LayoutRotatedBox` applies for a live child;
+      // for 180 degrees a plain Transform.rotate lands on the same pixels.
+      child: Transform.rotate(
+        angle: pi,
+        child: CustomPaint(
+          size: beltSize,
+          painter: ConveyorPainter(
+            color: Colors.green,
+            bidirectional: true,
+            reverseDirection: false,
+            showFrequency: false,
+            frequency: frequency,
+            batches: const {},
+            angle: 180,
+            geometry: ConveyorPathGeometry.build(const [], beltSize),
+          ),
         ),
       ),
     );
@@ -259,7 +266,9 @@ void main() {
     // Running lit green, Cleaning lit blue, Batch ready off (white), and the
     // two bits absent from the struct — the way a PLC that does not expose
     // them hands it over — as the grey `!` unknown. This is the golden to
-    // judge the diode treatment by.
+    // judge the diode treatment by. The header badge comes through
+    // `speedBatcherPaneStatus` on the same struct, so it reads Cleaning here
+    // — the case that used to misreport as Stopped.
     testWidgets('speedBatcher — status pane diodes', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1000);
@@ -286,11 +295,11 @@ void main() {
                     title: 'SB-01',
                     subtitle: 'Marel SpeedBatcher',
                     icon: Icons.precision_manufacturing,
-                    status: const PaneStatus.running(),
+                    status: speedBatcherPaneStatus(
+                        status, const PaneStatus.stale()),
                     child: PaneSection(
                       title: 'Status',
                       child: SpeedBatcherStatusDiodes(
-                        statusKey: 'SB1',
                         status: status,
                       ),
                     ),

@@ -13,6 +13,7 @@ import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus;
 
 void main() {
   group('ThirdPartyEquipmentConfig defaults', () {
@@ -275,6 +276,10 @@ void main() {
         expect(conveyor.reverseDirection ?? false, isFalse,
             reason: 'Arrow direction comes from the sign of the live '
                 'frequency, not a static flag.');
+        expect(conveyor.coordinates.angle, 180,
+            reason: 'Product runs right-to-left across the weigh belts, so '
+                'the belt is turned half a revolution to make a positive '
+                'frequency point with the flow.');
       }
     });
 
@@ -705,6 +710,42 @@ void main() {
           speedBatcherStatusBitOf(
               DynamicValue(value: true), 'p_stat_Running'),
           isNull);
+    });
+  });
+
+  group('SpeedBatcher pane badge', () {
+    DynamicValue struct(Map<String, dynamic> members) =>
+        DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(members));
+    const fallback = PaneStatus.stale();
+
+    test('Cleaning wins, even while Running is still up', () {
+      // Mid-wash the struct can carry both bits; "Cleaning" is the truth an
+      // operator acts on. A runKey-only badge showed Stopped during a wash —
+      // the exact lie the badge exists to avoid.
+      final status = speedBatcherPaneStatus(
+          struct({'p_stat_Running': true, 'p_stat_Cleaning': true}), fallback);
+      expect(status.label, 'Cleaning');
+      expect(status.color, Colors.blue,
+          reason: 'Badge blue must match the Cleaning diode.');
+    });
+
+    test('Running bit drives Running/Stopped', () {
+      expect(
+          speedBatcherPaneStatus(
+              struct({'p_stat_Running': true, 'p_stat_Cleaning': false}),
+              fallback),
+          const PaneStatus.running());
+      expect(
+          speedBatcherPaneStatus(
+              struct({'p_stat_Running': false, 'p_stat_Cleaning': false}),
+              fallback),
+          const PaneStatus.stopped());
+    });
+
+    test('an unreadable struct leaves the runKey-derived fallback standing',
+        () {
+      expect(speedBatcherPaneStatus(null, fallback), fallback);
+      expect(speedBatcherPaneStatus(struct({}), fallback), fallback);
     });
   });
 }
