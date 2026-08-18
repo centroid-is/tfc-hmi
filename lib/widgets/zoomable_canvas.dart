@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show kMiddleMouseButton;
 import 'package:flutter/material.dart';
 
 class ZoomableCanvas extends StatefulWidget {
@@ -26,6 +27,15 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
   final TransformationController _transformationController =
       TransformationController();
 
+  /// True while a middle-mouse-button drag is in flight. The middle button
+  /// always pans, regardless of [ZoomableCanvas.panEnabled]: the page editor
+  /// reserves plain drags for its marquee and only enables pan while Space is
+  /// held, but a middle-button drag has no other meaning on the canvas.
+  /// `InteractiveViewer` consults `panEnabled` on every update, not just at
+  /// the start of a gesture, so flipping it on the button's own pointer-down
+  /// catches that same drag.
+  bool _middleButtonPanning = false;
+
   void _resetZoom() {
     _transformationController.value = Matrix4.identity();
   }
@@ -46,21 +56,38 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
         child: ClipRect(
           child: Stack(
             children: [
-              InteractiveViewer(
-                transformationController: _transformationController,
-                minScale: widget.minScale,
-                maxScale: widget.maxScale,
-                boundaryMargin: EdgeInsets.zero,
-                panEnabled: widget.panEnabled,
-                scaleEnabled: widget.scaleEnabled,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Container(
-                      color: colorScheme.surface,
-                    ),
-                    widget.child,
-                  ],
+              Listener(
+                onPointerDown: (event) {
+                  if (event.buttons & kMiddleMouseButton != 0) {
+                    setState(() => _middleButtonPanning = true);
+                  }
+                },
+                onPointerUp: (event) {
+                  if (_middleButtonPanning) {
+                    setState(() => _middleButtonPanning = false);
+                  }
+                },
+                onPointerCancel: (event) {
+                  if (_middleButtonPanning) {
+                    setState(() => _middleButtonPanning = false);
+                  }
+                },
+                child: InteractiveViewer(
+                  transformationController: _transformationController,
+                  minScale: widget.minScale,
+                  maxScale: widget.maxScale,
+                  boundaryMargin: EdgeInsets.zero,
+                  panEnabled: widget.panEnabled || _middleButtonPanning,
+                  scaleEnabled: widget.scaleEnabled,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Container(
+                        color: colorScheme.surface,
+                      ),
+                      widget.child,
+                    ],
+                  ),
                 ),
               ),
               Positioned(
@@ -78,10 +105,11 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
                       heroTag: null,
                       // Zoomed in is the only state where panning is possible
                       // — at 1:1 the child exactly fills the viewport — so
-                      // this is where the page editor's pan key is worth
+                      // this is where the page editor's pan gestures are worth
                       // mentioning, and this button is the only chrome that
                       // appears exactly then.
-                      tooltip: 'Reset zoom — hold Space and drag to pan',
+                      tooltip:
+                          'Reset zoom — middle-click drag or Space+drag to pan',
                       backgroundColor: colorScheme.primary,
                       onPressed: _resetZoom,
                       child:
