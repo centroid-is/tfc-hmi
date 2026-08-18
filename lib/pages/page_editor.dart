@@ -4,7 +4,8 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
+import 'package:flutter/gestures.dart'
+    show kMiddleMouseButton, kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/page_manager.dart';
@@ -1923,6 +1924,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                 Listener(
                                   behavior: HitTestBehavior.translucent,
                                   onPointerDown: (pointerEvent) {
+                                    // A middle-button drag is a canvas pan —
+                                    // ZoomableCanvas claims it — so starting a
+                                    // marquee here would clear the selection and
+                                    // rubber-band underneath the pan.
+                                    if (pointerEvent.buttons &
+                                            kMiddleMouseButton !=
+                                        0) {
+                                      return;
+                                    }
                                     // Check if we're clicking on an asset first.
                                     // The hit-test respects the asset's rotation
                                     // via marqueeHitTestRotatedAsset — without it
