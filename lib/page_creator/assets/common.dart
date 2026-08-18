@@ -1264,6 +1264,7 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
         name: _entry.collect!.name,
         sampleInterval: _entry.collect!.sampleInterval,
         sampleExpression: _useSampleExpression ? _sampleExpression : null,
+        sampleMembers: _entry.collect!.sampleMembers,
         retention: _entry.collect!.retention,
       );
     }

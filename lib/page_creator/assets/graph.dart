@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show jsonDecode;
 import 'dart:math' as math;
 
 import 'package:cristalyse/cristalyse.dart' as cs;
@@ -33,13 +34,47 @@ class GraphSeriesConfig {
   @OptionalColorConverter()
   Color? color;
 
-  GraphSeriesConfig({required this.key, required this.label, this.color});
+  /// Member path plucked out of each stored row, for keys collected with
+  /// `sample_members` (one table holding several members per sample — e.g. a
+  /// motor's frequency and current). Null charts the row value as-is — the
+  /// scalar-series behaviour every existing config has.
+  String? member;
+
+  GraphSeriesConfig(
+      {required this.key, required this.label, this.color, this.member});
 
   String get legend => label.isNotEmpty ? label : key;
 
   factory GraphSeriesConfig.fromJson(Map<String, dynamic> json) =>
       _$GraphSeriesConfigFromJson(json);
   Map<String, dynamic> toJson() => _$GraphSeriesConfigToJson(this);
+}
+
+/// Resolves a [GraphSeriesConfig.member] against one stored row value.
+///
+/// Collected rows cross the database boundary either as decoded maps or as
+/// raw JSON text depending on the path (historical query vs. notification
+/// payload), so both are accepted. Returns a chartable `num` (bools chart as
+/// 1/0), or `null` when the member is absent — that point is dropped.
+num? extractSeriesMemberValue(dynamic row, String member) {
+  var value = row;
+  if (value is String) {
+    try {
+      value = jsonDecode(value);
+    } catch (_) {
+      return null;
+    }
+  }
+  if (value is! Map) return null;
+  var current = value[member];
+  if (current is bool) return current ? 1 : 0;
+  if (current is num) return current;
+  if (current is String) {
+    if (current == 'true') return 1;
+    if (current == 'false') return 0;
+    return num.tryParse(current);
+  }
+  return null;
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -308,6 +343,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                               key: config.key,
                               label: value,
                               color: config.color,
+                              member: config.member,
                             );
                             onChanged(updated);
                           },
@@ -333,6 +369,28 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                         key: value,
                         label: config.label,
                         color: config.color,
+                        member: config.member,
+                      );
+                      onChanged(updated);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    initialValue: config.member ?? '',
+                    decoration: const InputDecoration(
+                      labelText: 'Struct member (optional)',
+                      hintText: 'e.g. p_stat_Frequency',
+                      helperText: 'For keys collected with sample_members: '
+                          'chart this member out of each stored row.',
+                      helperMaxLines: 2,
+                    ),
+                    onChanged: (value) {
+                      final updated = List<GraphSeriesConfig>.from(series);
+                      updated[idx] = GraphSeriesConfig(
+                        key: config.key,
+                        label: config.label,
+                        color: config.color,
+                        member: value.trim().isEmpty ? null : value.trim(),
                       );
                       onChanged(updated);
                     },
@@ -347,6 +405,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                         key: config.key,
                         label: config.label,
                         color: color,
+                        member: config.member,
                       );
                       onChanged(updated);
                     },
@@ -356,6 +415,7 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                         key: config.key,
                         label: config.label,
                         color: null,
+                        member: config.member,
                       );
                       onChanged(updated);
                     },
@@ -631,7 +691,11 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
           if (notification.data.containsKey('time') &&
               notification.data.containsKey('value')) {
             final time = DateTime.parse(notification.data['time']);
-            final value = notification.data['value'];
+            dynamic value = notification.data['value'];
+            if (series.member?.isNotEmpty ?? false) {
+              value = extractSeriesMemberValue(value, series.member!);
+              if (value == null) return;
+            }
             _dataMaxX = time.millisecondsSinceEpoch.toInt();
             final x = time.millisecondsSinceEpoch.toDouble();
             final axis = isPrimary ? 'y' : 'y2';
@@ -746,7 +810,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         }
         for (final e in data) {
           dynamic value = e.value;
-          if (value is bool) {
+          if (series.member?.isNotEmpty ?? false) {
+            value = extractSeriesMemberValue(value, series.member!);
+            if (value == null) continue;
+          } else if (value is bool) {
             value = e.value ? 1.0 : 0.0;
           }
           final x = e.time.millisecondsSinceEpoch.toDouble();

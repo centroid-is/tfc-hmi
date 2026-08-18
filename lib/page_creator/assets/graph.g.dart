@@ -12,6 +12,7 @@ GraphSeriesConfig _$GraphSeriesConfigFromJson(Map<String, dynamic> json) =>
       label: json['label'] as String,
       color: const OptionalColorConverter()
           .fromJson(json['color'] as Map<String, dynamic>?),
+      member: json['member'] as String?,
     );
 
 Map<String, dynamic> _$GraphSeriesConfigToJson(GraphSeriesConfig instance) =>
@@ -19,6 +20,7 @@ Map<String, dynamic> _$GraphSeriesConfigToJson(GraphSeriesConfig instance) =>
       'key': instance.key,
       'label': instance.label,
       'color': const OptionalColorConverter().toJson(instance.color),
+      'member': instance.member,
     };
 
 GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>

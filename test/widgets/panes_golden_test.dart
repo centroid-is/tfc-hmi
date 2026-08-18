@@ -807,6 +807,9 @@ Widget _sensorFbPane(BuildContext context, {bool fault = false}) {
     ),
     // Goldens never write; the pane is rendered, not driven.
     onWrite: (_, __) {},
+    // The key has data gathering configured, so the Output row carries the
+    // chart door to the blocked/clear trend.
+    trendKey: 'sensors.CVS01_CN04_PX01.HMI',
   );
 }
 

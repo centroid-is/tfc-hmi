@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry;
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
@@ -120,10 +121,43 @@ void main() {
     });
   });
 
+  group('sensorTrendAvailable', () {
+    test('a plain BOOL binding charts as soon as the key is gathered', () {
+      expect(
+          sensorTrendAvailable(
+              isStruct: false, collect: CollectEntry(key: '/k')),
+          isTrue);
+      expect(sensorTrendAvailable(isStruct: false, collect: null), isFalse);
+    });
+
+    test('a struct binding needs the output bit in sample_members', () {
+      expect(
+          sensorTrendAvailable(
+            isStruct: true,
+            collect: CollectEntry(
+                key: '/k', sampleMembers: [SensorFbFields.output]),
+          ),
+          isTrue);
+      expect(
+          sensorTrendAvailable(
+            isStruct: true,
+            collect:
+                CollectEntry(key: '/k', sampleMembers: ['p_stat_xRaw']),
+          ),
+          isFalse,
+          reason: 'Gathering other members does not make the output '
+              'chartable.');
+      expect(
+          sensorTrendAvailable(isStruct: true, collect: CollectEntry(key: '/k')),
+          isFalse,
+          reason: 'A whole-struct series has nothing the graph can draw.');
+    });
+  });
+
   group('SensorFbPane', () {
     late List<(String, Object?)> writes;
 
-    Widget wrap(SensorFbState state, {SensorConfig? config}) {
+    Widget wrap(SensorFbState state, {SensorConfig? config, String? trendKey}) {
       writes = [];
       return MaterialApp(
         home: Scaffold(
@@ -132,6 +166,7 @@ void main() {
                 SensorConfig(detectionKey: 'sensors.CVS01_CN01_PX01.HMI'),
             state: state,
             onWrite: (field, value) => writes.add((field, value)),
+            trendKey: trendKey,
           ),
         ),
       );
@@ -297,6 +332,23 @@ void main() {
       expect(find.byType(SegmentedButton<SensorKind>), findsNothing);
       expect(find.text('Detection State Key'), findsNothing);
       expect(find.byType(SwitchListTile), findsNothing);
+    });
+
+    testWidgets('a trend button appears on the Output row when the key is '
+        'gathered', (tester) async {
+      await tester.pumpWidget(wrap(
+        SensorFbState.tryParse(fbStruct())!,
+        trendKey: 'sensors.CVS01_CN01_PX01.HMI',
+      ));
+      expect(find.byIcon(Icons.show_chart), findsOneWidget);
+      expect(find.byTooltip('Blocked/clear trend'), findsOneWidget);
+    });
+
+    testWidgets('no trend button without data gathering', (tester) async {
+      await tester.pumpWidget(wrap(SensorFbState.tryParse(fbStruct())!));
+      expect(find.byIcon(Icons.show_chart), findsNothing,
+          reason: 'A chart door with nothing behind it is a broken '
+              'promise — the affordance must be absent, not disabled.');
     });
 
     testWidgets('the tag names the pane', (tester) async {

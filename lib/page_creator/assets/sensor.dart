@@ -7,12 +7,16 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry;
 import 'package:tfc_dart/core/state_man.dart';
 
 import '../../providers/state_man.dart';
+import '../../widgets/graph.dart' show GraphType, GraphAxisConfig;
 import 'common.dart';
+import 'graph.dart' show GraphAsset, GraphAssetConfig, GraphSeriesConfig;
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/panes/standard_dialog.dart';
 import 'sensor_painter.dart';
 
 part 'sensor.g.dart';
@@ -149,6 +153,70 @@ class SensorFbState {
   return (
     '${d.inHours}:${(d.inMinutes % 60).toString().padLeft(2, '0')}',
     'h:m'
+  );
+}
+
+/// Whether a sensor's bound key has chartable data gathering behind it.
+///
+/// A plain BOOL series charts as-is; a struct key is only chartable when the
+/// collect entry samples the debounced output bit into its rows
+/// (`sample_members` containing [SensorFbFields.output]) — a whole-struct
+/// series has nothing the graph can draw.
+bool sensorTrendAvailable({
+  required bool isStruct,
+  required CollectEntry? collect,
+}) {
+  if (collect == null) return false;
+  if (!isStruct) return true;
+  return collect.sampleMembers?.contains(SensorFbFields.output) ?? false;
+}
+
+/// Opens the blocked/clear history of a collected sensor key in a
+/// free-floating window — draggable off the mimic and left open, same as the
+/// number trend (`showNumberGraphDialog`).
+///
+/// [seriesKey] must be a key with data gathering configured (a
+/// `CollectEntry` on its key mapping). [member] picks the chartable bit out
+/// of each stored row for struct keys collected with `sample_members`
+/// (`p_stat_xOutput`); null charts the row value as-is (plain BOOL series).
+/// The y-axis renders as a boolean state timeline.
+void showSensorTrendDialog(
+  BuildContext context, {
+  required String seriesKey,
+  required String title,
+  String? member,
+}) {
+  final size = MediaQuery.of(context).size;
+  showFloatingDialog(
+    context: context,
+    id: 'sensor-trend:$seriesKey',
+    title: title,
+    icon: Icons.show_chart,
+    size: Size(size.width * 0.6, size.height * 0.5),
+    // A chart fills the window; it must not sit in a scroll view.
+    scrollable: false,
+    builder: (_) => GraphAsset(GraphAssetConfig(
+      graphType: GraphType.timeseries,
+      primarySeries: [
+        GraphSeriesConfig(key: seriesKey, label: 'blocked', member: member),
+      ],
+      yAxis: GraphAxisConfig(unit: '', boolean: true),
+      timeWindowMinutes: const Duration(minutes: 10),
+    )),
+  );
+}
+
+/// The small chart affordance next to a live row — the pane never shows the
+/// chart itself, only the door to it (house rule: charts behind a tap).
+Widget _trendButton(BuildContext context, String seriesKey, String title,
+    {String? member}) {
+  return IconButton(
+    icon: const Icon(Icons.show_chart, size: 16),
+    tooltip: 'Blocked/clear trend',
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints.tightFor(width: 26, height: 26),
+    onPressed: () => showSensorTrendDialog(context,
+        seriesKey: seriesKey, title: title, member: member),
   );
 }
 
@@ -463,11 +531,12 @@ class _SensorState extends ConsumerState<Sensor> {
   /// Live values only, per the pane house rules: no key names, no polarity
   /// wording, no debounce section (without a struct there is no live debounce
   /// to read). The tag is the pane's title, mirroring the 3rd-party pane.
-  Widget _staticPane(PaneStatus status, bool? liveState) {
+  Widget _staticPane(PaneStatus status, bool? liveState, {String? trendKey}) {
     final config = widget.config;
     final tagged = config.tag != null && config.tag!.isNotEmpty;
+    final title = tagged ? config.tag! : 'Sensor';
     return SidePane(
-      title: tagged ? config.tag! : 'Sensor',
+      title: title,
       subtitle: tagged ? '${config.kind.name} · sensor' : config.kind.name,
       icon: Icons.sensors,
       status: status,
@@ -479,13 +548,31 @@ class _SensorState extends ConsumerState<Sensor> {
           children: [
             PaneDetailRow(
               label: 'Detection state',
-              value: config.detectionKey.isEmpty
-                  ? 'no key configured'
-                  : liveState == null
-                      ? '(see glyph)'
-                      : liveState
-                          ? 'true'
-                          : 'false',
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      config.detectionKey.isEmpty
+                          ? 'no key configured'
+                          : liveState == null
+                              ? '(see glyph)'
+                              : liveState
+                                  ? 'true'
+                                  : 'false',
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  if (trendKey != null) ...[
+                    const SizedBox(width: 4),
+                    _trendButton(context, trendKey, title),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
@@ -537,6 +624,15 @@ class _SensorState extends ConsumerState<Sensor> {
 
             final (stateMan, dynValue) = snapshot.data!;
             final fb = SensorFbState.tryParse(dynValue);
+
+            // Data gathering on this key unlocks the trend affordance —
+            // see [sensorTrendAvailable] for the chartability rule.
+            final chartable = sensorTrendAvailable(
+              isStruct: fb != null,
+              collect: stateMan.keyMappings.nodes[key]?.collect,
+            );
+            final trendKey = chartable ? key : null;
+
             if (fb == null) {
               // Plain BOOL node — no FB behind this key, so no setpoints to
               // offer. Show the detail list with the live bit filled in.
@@ -546,12 +642,14 @@ class _SensorState extends ConsumerState<Sensor> {
                     ? const PaneStatus.running('Detected')
                     : const PaneStatus.stopped('Clear'),
                 raw,
+                trendKey: trendKey,
               );
             }
 
             return SensorFbPane(
               config: widget.config,
               state: fb,
+              trendKey: trendKey,
               // Copy-on-write, mirroring the conveyor pane: clone the struct,
               // set one member, write the whole thing back. The `p_stat_*`
               // members ride along unchanged and the FB overwrites them on the
@@ -689,11 +787,17 @@ class SensorFbPane extends StatelessWidget {
   final SensorFbState state;
   final void Function(String field, Object? value) onWrite;
 
+  /// Series key for the blocked/clear trend, or null when the bound key has
+  /// no chartable data gathering configured (no `CollectEntry`, or a struct
+  /// collected without a `sample_member`). Null hides the chart affordance.
+  final String? trendKey;
+
   const SensorFbPane({
     super.key,
     required this.config,
     required this.state,
     required this.onWrite,
+    this.trendKey,
   });
 
   @override
@@ -751,14 +855,37 @@ class SensorFbPane extends StatelessWidget {
                 const SizedBox(height: 8),
                 PaneDetailRow(
                   label: 'Output',
-                  // Under fault the FB's Q still follows the NO contact, but
-                  // that contact is the thing we cannot see — reporting
-                  // "clear" here would contradict the glyph, which greys out.
-                  value: state.fault
-                      ? 'unknown'
-                      : state.output
-                          ? 'blocked'
-                          : 'clear',
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          // Under fault the FB's Q still follows the NO
+                          // contact, but that contact is the thing we
+                          // cannot see — reporting "clear" here would
+                          // contradict the glyph, which greys out.
+                          state.fault
+                              ? 'unknown'
+                              : state.output
+                                  ? 'blocked'
+                                  : 'clear',
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (trendKey != null) ...[
+                        const SizedBox(width: 4),
+                        // The FB pane always charts the debounced output
+                        // member out of the struct's collected rows.
+                        _trendButton(context, trendKey!,
+                            tagged ? config.tag! : 'Sensor',
+                            member: SensorFbFields.output),
+                      ],
+                    ],
+                  ),
                 ),
                 // No raw NO/NC rows: the Output row already says what the
                 // sensor reports, and the undebounced bits are diagnostics,
@@ -1110,12 +1237,10 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
                 const SizedBox(width: 8),
                 Checkbox(
                   value: config.showTag,
-                  onChanged: (v) =>
-                      setState(() => config.showTag = v ?? false),
+                  onChanged: (v) => setState(() => config.showTag = v ?? false),
                 ),
                 GestureDetector(
-                  onTap: () =>
-                      setState(() => config.showTag = !config.showTag),
+                  onTap: () => setState(() => config.showTag = !config.showTag),
                   child: const Text('Show on screen'),
                 ),
               ],

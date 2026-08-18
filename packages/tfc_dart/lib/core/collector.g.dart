@@ -15,6 +15,9 @@ CollectEntry _$CollectEntryFromJson(Map<String, dynamic> json) => CollectEntry(
           ? null
           : ExpressionConfig.fromJson(
               json['sample_expression'] as Map<String, dynamic>),
+      sampleMembers: (json['sample_members'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
       retention: json['retention'] == null
           ? const RetentionPolicy(
               dropAfter: Duration(days: 365), scheduleInterval: null)
@@ -29,6 +32,7 @@ Map<String, dynamic> _$CollectEntryToJson(CollectEntry instance) =>
       'sample_interval_us':
           const DurationMicrosecondsConverter().toJson(instance.sampleInterval),
       'sample_expression': instance.sampleExpression?.toJson(),
+      'sample_members': instance.sampleMembers,
     };
 
 CollectorConfig _$CollectorConfigFromJson(Map<String, dynamic> json) =>

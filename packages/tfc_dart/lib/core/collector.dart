@@ -25,11 +25,26 @@ class CollectEntry {
   @JsonKey(name: 'sample_expression')
   ExpressionConfig? sampleExpression;
 
+  /// Dotted member paths sampled out of a structured value, e.g.
+  /// `[p_stat_xOutput, p_stat_tBlockedFor]` on an FB_Sensor's
+  /// `ST_Sensor_HMI` struct.
+  ///
+  /// Lets the collected key be the struct the HMI already binds to while the
+  /// timeseries carries only the chosen members — every sample is one row in
+  /// ONE table, stored as an object keyed by these paths. A chart picks a
+  /// member out of the row (`GraphSeriesConfig.member`), so several series
+  /// can ride the same table. Null/empty collects the whole value — the
+  /// legacy behaviour. Members missing from a sample are omitted from its
+  /// row; a sample where none resolve is skipped, not inserted.
+  @JsonKey(name: 'sample_members')
+  List<String>? sampleMembers;
+
   CollectEntry(
       {required this.key,
       this.name,
       this.sampleInterval,
       this.sampleExpression,
+      this.sampleMembers,
       this.retention = const RetentionPolicy(
           dropAfter: Duration(days: 365), scheduleInterval: null)}) {
     name ??= key;
@@ -37,6 +52,36 @@ class CollectEntry {
   Map<String, dynamic> toJson() => _$CollectEntryToJson(this);
   static CollectEntry fromJson(Map<String, dynamic> json) =>
       _$CollectEntryFromJson(json);
+}
+
+/// Resolves [path] (dotted member segments) inside a structured [value].
+///
+/// Returns `null` when any segment is missing or the current level is not a
+/// struct — the caller skips that member rather than inserting garbage. Pure
+/// function so the decode rules are unit-testable without a database.
+DynamicValue? extractSampleMember(DynamicValue value, String path) {
+  var current = value;
+  for (final segment in path.split('.')) {
+    if (!current.isObject || !current.contains(segment)) return null;
+    current = current[segment];
+  }
+  return current;
+}
+
+/// Builds the one-row-per-sample object for a `sample_members` collection:
+/// each resolvable path becomes a field keyed by the full dotted path.
+///
+/// Returns `null` when NO member resolves — that sample is skipped entirely.
+DynamicValue? extractSampleMembers(DynamicValue value, List<String> members) {
+  const converter = DynamicValueConverter();
+  final row = LinkedHashMap<String, dynamic>();
+  for (final path in members) {
+    final member = extractSampleMember(value, path);
+    if (member == null) continue;
+    row[path] = converter.toJson(member, slim: true);
+  }
+  if (row.isEmpty) return null;
+  return DynamicValue.fromMap(row);
 }
 
 // TODO: implement this
@@ -155,6 +200,25 @@ class Collector {
     _collectEntries[entry.key] = entry; // todo: duplicated for testing
     final name = entry.name ?? entry.key;
     await database.registerRetentionPolicy(name, entry.retention);
+
+    // Member extraction happens BEFORE the broadcast split so the insert
+    // path and the real-time chart stream agree on what a sample is.
+    final members = entry.sampleMembers;
+    if (members != null && members.isNotEmpty) {
+      var warned = false;
+      subscription = subscription
+          .map((value) {
+            final row = extractSampleMembers(value, members);
+            if (row == null && !warned) {
+              warned = true;
+              logger.w('[collector] $name: none of sample_members $members '
+                  'found in value — samples are being skipped');
+            }
+            return row;
+          })
+          .where((value) => value != null)
+          .cast<DynamicValue>();
+    }
 
     subscription = subscription.asBroadcastStream();
 

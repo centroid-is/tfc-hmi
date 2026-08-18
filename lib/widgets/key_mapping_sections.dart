@@ -899,6 +899,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
   late TextEditingController _sampleIntervalController;
   late TextEditingController _retentionDaysController;
   late TextEditingController _scheduleIntervalController;
+  late TextEditingController _sampleMembersController;
 
   @override
   void initState() {
@@ -912,6 +913,8 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
         text: collect?.retention.dropAfter.inDays.toString() ?? '365');
     _scheduleIntervalController = TextEditingController(
         text: collect?.retention.scheduleInterval?.inMinutes.toString() ?? '');
+    _sampleMembersController =
+        TextEditingController(text: collect?.sampleMembers?.join(', ') ?? '');
   }
 
   @override
@@ -927,6 +930,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
           collect?.retention.dropAfter.inDays.toString() ?? '365';
       _scheduleIntervalController.text =
           collect?.retention.scheduleInterval?.inMinutes.toString() ?? '';
+      _sampleMembersController.text = collect?.sampleMembers?.join(', ') ?? '';
     }
   }
 
@@ -936,6 +940,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
     _sampleIntervalController.dispose();
     _retentionDaysController.dispose();
     _scheduleIntervalController.dispose();
+    _sampleMembersController.dispose();
     super.dispose();
   }
 
@@ -951,6 +956,14 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
           : null,
       sampleInterval:
           sampleUs != null ? Duration(microseconds: sampleUs) : null,
+      sampleMembers: () {
+        final members = _sampleMembersController.text
+            .split(',')
+            .map((m) => m.trim())
+            .where((m) => m.isNotEmpty)
+            .toList();
+        return members.isEmpty ? null : members;
+      }(),
       retention: RetentionPolicy(
         dropAfter: Duration(days: retDays),
         scheduleInterval:
@@ -997,6 +1010,20 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                   labelText: 'Sample Interval (microseconds)',
                 ),
                 keyboardType: TextInputType.number,
+                onChanged: (_) => _notifyChanged(),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _sampleMembersController,
+                decoration: const InputDecoration(
+                  labelText: 'Struct members (optional, comma-separated)',
+                  hintText: 'e.g. p_stat_Frequency, p_stat_Current',
+                  helperText: 'For struct keys: collect only these members — '
+                      'one row per sample in one table, and each graph '
+                      'series picks a member out of it. Dotted paths '
+                      'allowed. Empty collects the whole value.',
+                  helperMaxLines: 3,
+                ),
                 onChanged: (_) => _notifyChanged(),
               ),
               const SizedBox(height: 12),
