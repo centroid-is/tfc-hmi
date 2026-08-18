@@ -157,7 +157,8 @@ void main() {
   group('SensorFbPane', () {
     late List<(String, Object?)> writes;
 
-    Widget wrap(SensorFbState state, {SensorConfig? config, String? trendKey}) {
+    Widget wrap(SensorFbState state,
+        {SensorConfig? config, Widget? trendTile}) {
       writes = [];
       return MaterialApp(
         home: Scaffold(
@@ -166,11 +167,19 @@ void main() {
                 SensorConfig(detectionKey: 'sensors.CVS01_CN01_PX01.HMI'),
             state: state,
             onWrite: (field, value) => writes.add((field, value)),
-            trendKey: trendKey,
+            trendTile: trendTile,
           ),
         ),
       );
     }
+
+    /// A provider-free stand-in for the real trend tile — the pane only
+    /// slots it in, so its contents are not under test here.
+    Widget cannedTrendTile() => PaneGraphTile(
+          height: 64,
+          preview: const SizedBox.expand(),
+          expandedBuilder: (_) => const SizedBox(),
+        );
 
     testWidgets('shows the debounce as live read-only values', (tester) async {
       await tester.pumpWidget(wrap(SensorFbState.tryParse(
@@ -334,21 +343,24 @@ void main() {
       expect(find.byType(SwitchListTile), findsNothing);
     });
 
-    testWidgets('a trend button appears on the Output row when the key is '
-        'gathered', (tester) async {
+    testWidgets('an inline trend tile appears when the key is gathered',
+        (tester) async {
       await tester.pumpWidget(wrap(
         SensorFbState.tryParse(fbStruct())!,
-        trendKey: 'sensors.CVS01_CN01_PX01.HMI',
+        trendTile: cannedTrendTile(),
       ));
-      expect(find.byIcon(Icons.show_chart), findsOneWidget);
-      expect(find.byTooltip('Blocked/clear trend'), findsOneWidget);
+      expect(find.text('TREND'), findsOneWidget,
+          reason: 'The trend rides its own PaneSection between Signal and '
+              'Debounce, like the conveyor pane.');
+      expect(find.byType(PaneGraphTile), findsOneWidget);
     });
 
-    testWidgets('no trend button without data gathering', (tester) async {
+    testWidgets('no trend section without data gathering', (tester) async {
       await tester.pumpWidget(wrap(SensorFbState.tryParse(fbStruct())!));
-      expect(find.byIcon(Icons.show_chart), findsNothing,
-          reason: 'A chart door with nothing behind it is a broken '
-              'promise — the affordance must be absent, not disabled.');
+      expect(find.text('TREND'), findsNothing,
+          reason: 'A chart with nothing behind it is a broken promise — '
+              'the section must be absent, not empty.');
+      expect(find.byType(PaneGraphTile), findsNothing);
     });
 
     testWidgets('the tag names the pane', (tester) async {
