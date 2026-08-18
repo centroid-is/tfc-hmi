@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
@@ -16,8 +17,8 @@ void main() {
         openAngleDegrees: 60.0,
         openTimeMs: 500,
         closeTimeMs: 300,
-        openColor: Colors.blue,
-        closedColor: Colors.red,
+        openColor: const AssetColor.literal(Colors.blue),
+        closedColor: const AssetColor.literal(Colors.red),
       );
 
       final json = config.toJson();
@@ -29,8 +30,8 @@ void main() {
       expect(restored.openAngleDegrees, 60.0);
       expect(restored.openTimeMs, 500);
       expect(restored.closeTimeMs, 300);
-      expect(restored.openColor.value, Colors.blue.value);
-      expect(restored.closedColor.value, Colors.red.value);
+      expect(restored.openColor.literal!.toARGB32(), Colors.blue.toARGB32());
+      expect(restored.closedColor.literal!.toARGB32(), Colors.red.toARGB32());
     });
 
     test('JSON roundtrip preserves null closeTimeMs', () {
@@ -41,8 +42,8 @@ void main() {
         openAngleDegrees: 45.0,
         openTimeMs: 800,
         closeTimeMs: null,
-        openColor: Colors.green,
-        closedColor: Colors.white,
+        openColor: const AssetColor.literal(Colors.green),
+        closedColor: const AssetColor.literal(Colors.white),
       );
 
       final json = config.toJson();
@@ -61,8 +62,8 @@ void main() {
       expect(config.openAngleDegrees, 45.0);
       expect(config.openTimeMs, 800);
       expect(config.closeTimeMs, isNull);
-      expect(config.openColor, Colors.green);
-      expect(config.closedColor, Colors.white);
+      expect(config.openColor, AssetColor.auto);
+      expect(config.closedColor, const AssetColor.literal(Colors.white));
       expect(config.stateKey, '');
       expect(config.forceOpenKey, '');
       expect(config.forceOpenFeedbackKey, '');
@@ -583,8 +584,8 @@ void main() {
           openAngleDegrees: 60.0,
           openTimeMs: 500,
           closeTimeMs: 300,
-          openColor: Colors.blue,
-          closedColor: Colors.red,
+          openColor: const AssetColor.literal(Colors.blue),
+          closedColor: const AssetColor.literal(Colors.red),
           forceOpenKey: 'ns=2;s=Gate1.ForceOpen',
         ),
       );
@@ -596,8 +597,8 @@ void main() {
       expect(restored.gate.openAngleDegrees, 60.0);
       expect(restored.gate.openTimeMs, 500);
       expect(restored.gate.closeTimeMs, 300);
-      expect(restored.gate.openColor.value, Colors.blue.value);
-      expect(restored.gate.closedColor.value, Colors.red.value);
+      expect(restored.gate.openColor.literal!.toARGB32(), Colors.blue.toARGB32());
+      expect(restored.gate.closedColor.literal!.toARGB32(), Colors.red.toARGB32());
       expect(restored.gate.forceOpenKey, 'ns=2;s=Gate1.ForceOpen');
     });
   });

@@ -5,9 +5,11 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/providers/state_man.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 import 'package:rxdart/rxdart.dart';
 
 part 'speedbatcher.g.dart';
@@ -144,8 +146,10 @@ class SpeedBatcher extends ConsumerWidget {
       ])
         LEDConfig(
           key: "",
-          onColor: (e == 'Cleaning') ? Colors.blue : Colors.green,
-          offColor: Colors.white,
+          onColor: (e == 'Cleaning')
+              ? const AssetColor.role(HmiColorRole.cleaning)
+              : AssetColor.auto,
+          offColor: const AssetColor.literal(Colors.white),
         )
           ..text = e
           ..size = config.size

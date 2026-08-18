@@ -200,13 +200,14 @@ class SensorConfig extends BaseAsset {
   /// See [risingEdgeDelayKey] — superseded by `p_cfg_tOffDelay`.
   String fallingEdgeDelayKey;
 
-  /// Per-instance active colour. Default `Colors.green` matches `led.dart`.
-  @ColorConverter()
-  Color activeColor;
+  /// Per-instance active colour. Defaults to the scheme's running colour,
+  /// matching `led.dart`.
+  @AssetColorConverter()
+  AssetColor activeColor;
 
-  /// Per-instance inactive colour. Default `Colors.grey.shade400`.
-  @ColorConverter()
-  Color inactiveColor;
+  /// Per-instance inactive colour. Defaults to the scheme's stopped colour.
+  @AssetColorConverter()
+  AssetColor inactiveColor;
 
   /// Optional human-readable label (e.g. `"PE-101A"`).
   String? tag;
@@ -239,11 +240,11 @@ class SensorConfig extends BaseAsset {
     this.invertActivePolarity = false,
     this.risingEdgeDelayKey = '',
     this.fallingEdgeDelayKey = '',
-    Color? activeColor,
-    Color? inactiveColor,
+    AssetColor? activeColor,
+    AssetColor? inactiveColor,
     this.tag,
-  })  : activeColor = activeColor ?? Colors.green,
-        inactiveColor = inactiveColor ?? Colors.grey.shade400 {
+  })  : activeColor = activeColor ?? AssetColor.auto,
+        inactiveColor = inactiveColor ?? AssetColor.stopped {
     // Default label position — matches LED/Button convention (those default
     // to TextPos.right). Sensors carry short tag labels and read most
     // naturally below the glyph on a busy HMI canvas.
@@ -403,26 +404,28 @@ class _SensorState extends ConsumerState<Sensor> {
     required bool isActive,
     required bool isStale,
   }) {
+    final activeColor = widget.config.activeColor.resolve(context);
+    final inactiveColor = widget.config.inactiveColor.resolve(context);
     switch (widget.config.kind) {
       case SensorKind.redLight:
         return RedLightBeamPainter(
           isActive: isActive,
-          activeColor: widget.config.activeColor,
-          inactiveColor: widget.config.inactiveColor,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
           isStale: isStale,
         );
       case SensorKind.opticField:
         return OpticFieldPainter(
           isActive: isActive,
-          activeColor: widget.config.activeColor,
-          inactiveColor: widget.config.inactiveColor,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
           isStale: isStale,
         );
       case SensorKind.inductiveField:
         return InductiveFieldPainter(
           isActive: isActive,
-          activeColor: widget.config.activeColor,
-          inactiveColor: widget.config.inactiveColor,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
           isStale: isStale,
         );
     }
@@ -947,25 +950,27 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
   /// `isActive: true` so the preview shows the active visual. The preview
   /// glyph is intentionally label-free — operators can read the tag in the
   /// adjacent `TextFormField` below.
-  CustomPainter _previewPainter(SensorConfig config) {
+  CustomPainter _previewPainter(BuildContext context, SensorConfig config) {
+    final activeColor = config.activeColor.resolve(context);
+    final inactiveColor = config.inactiveColor.resolve(context);
     switch (config.kind) {
       case SensorKind.redLight:
         return RedLightBeamPainter(
           isActive: true,
-          activeColor: config.activeColor,
-          inactiveColor: config.inactiveColor,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
         );
       case SensorKind.opticField:
         return OpticFieldPainter(
           isActive: true,
-          activeColor: config.activeColor,
-          inactiveColor: config.inactiveColor,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
         );
       case SensorKind.inductiveField:
         return InductiveFieldPainter(
           isActive: true,
-          activeColor: config.activeColor,
-          inactiveColor: config.inactiveColor,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
         );
     }
   }
@@ -986,7 +991,7 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
               child: SizedBox(
                 width: 150,
                 height: 150,
-                child: CustomPaint(painter: _previewPainter(config)),
+                child: CustomPaint(painter: _previewPainter(context, config)),
               ),
             ),
             const Divider(),
@@ -1063,7 +1068,7 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             const SizedBox(height: 16),
 
             // -- Active Color --
-            ColorPickerRow(
+            AssetColorPickerRow(
               label: 'Active Color',
               color: config.activeColor,
               onChanged: (c) => setState(() => config.activeColor = c),
@@ -1071,7 +1076,7 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
             const SizedBox(height: 8),
 
             // -- Inactive Color --
-            ColorPickerRow(
+            AssetColorPickerRow(
               label: 'Inactive Color',
               color: config.inactiveColor,
               onChanged: (c) => setState(() => config.inactiveColor = c),

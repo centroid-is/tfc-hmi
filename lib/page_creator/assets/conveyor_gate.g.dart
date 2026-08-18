@@ -41,11 +41,11 @@ ConveyorGateConfig _$ConveyorGateConfigFromJson(Map<String, dynamic> json) =>
       openTimeMs: (json['openTimeMs'] as num?)?.toInt() ?? 800,
       closeTimeMs: (json['closeTimeMs'] as num?)?.toInt(),
       openColor: json['openColor'] == null
-          ? Colors.green
-          : _colorFromJson((json['openColor'] as num).toInt()),
+          ? AssetColor.auto
+          : _colorFromJson(json['openColor']),
       closedColor: json['closedColor'] == null
-          ? Colors.white
-          : _colorFromJson((json['closedColor'] as num).toInt()),
+          ? const AssetColor.literal(Colors.white)
+          : _colorFromJson(json['closedColor']),
       sliderActiveOut: json['sliderActiveOut'] as bool? ?? true,
       sliderLidAngleDegrees:
           (json['sliderLidAngleDegrees'] as num?)?.toDouble() ?? 0.0,

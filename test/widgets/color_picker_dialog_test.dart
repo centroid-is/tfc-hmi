@@ -118,7 +118,7 @@ void main() {
       );
     }
 
-    testWidgets('preset tap + Done: two LEDs to blue without touching RGB',
+    testWidgets('theme swatch tap + Done: two LEDs recoloured without touching RGB',
         (tester) async {
       // The workflow that motivated the strip: same colour on two assets,
       // each in two taps.
@@ -143,14 +143,14 @@ void main() {
       for (final label in ['LED 1', 'LED 2']) {
         await tester.tap(find.text(label));
         await tester.pumpAndSettle();
-        await tester.tap(presetSwatch(tester, Colors.blue));
+        await tester.tap(presetSwatch(tester, Colors.black));
         await tester.pump();
         await tester.tap(find.text('Done'));
         await tester.pumpAndSettle();
       }
 
-      expect(led1.toARGB32(), Colors.blue.toARGB32());
-      expect(led2.toARGB32(), Colors.blue.toARGB32());
+      expect(led1.toARGB32(), Colors.black.toARGB32());
+      expect(led2.toARGB32(), Colors.black.toARGB32());
     });
 
     testWidgets('Done records a custom colour and the next dialog offers it',
@@ -195,8 +195,9 @@ void main() {
       expect((await RecentColors.load()).length, RecentColors.max);
     });
 
-    test('preset picks are not recorded as recents', () async {
-      await RecentColors.add(Colors.blue);
+    test('strip colours are not recorded as recents', () async {
+      await RecentColors.add(Colors.blue,
+          skipArgb: {Colors.blue.toARGB32()});
       expect(await RecentColors.load(), isEmpty);
     });
   });

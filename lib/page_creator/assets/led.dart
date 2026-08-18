@@ -27,27 +27,27 @@ class LEDConfig extends BaseAsset {
   String get category => 'Basic Indicators';
 
   String key;
-  @ColorConverter()
+  @AssetColorConverter()
   @JsonKey(name: 'on_color')
-  Color onColor;
-  @ColorConverter()
+  AssetColor onColor;
+  @AssetColorConverter()
   @JsonKey(name: 'off_color')
-  Color offColor;
+  AssetColor offColor;
   @JsonKey(name: 'led_type')
   LEDType ledType = LEDType.circle;
 
   LEDConfig({
     required this.key,
-    required this.onColor,
-    required this.offColor,
+    this.onColor = AssetColor.auto,
+    this.offColor = AssetColor.stopped,
   });
 
   static const previewStr = 'Led preview';
 
   LEDConfig.preview()
       : key = previewStr,
-        onColor = Colors.green,
-        offColor = Colors.green {
+        onColor = AssetColor.auto,
+        offColor = AssetColor.stopped {
     textPos = TextPos.right;
   }
 
@@ -126,7 +126,7 @@ class _ConfigContentState extends State<_ConfigContent> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  ColorPickerRow(
+                  AssetColorPickerRow(
                     label: 'On Color',
                     color: widget.config.onColor,
                     onChanged: (value) {
@@ -136,7 +136,7 @@ class _ConfigContentState extends State<_ConfigContent> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  ColorPickerRow(
+                  AssetColorPickerRow(
                     label: 'Off Color',
                     color: widget.config.offColor,
                     onChanged: (value) {
@@ -248,8 +248,9 @@ class LedRaw extends ConsumerWidget {
     if (config.key == LEDConfig.previewStr) {
       isOn = true;
     }
-    final color =
-        isOn == null ? null : (isOn ? config.onColor : config.offColor);
+    final color = isOn == null
+        ? null
+        : (isOn ? config.onColor : config.offColor).resolve(context);
 
     return CustomPaint(
       painter: LEDPainter(color: color, ledType: config.ledType),

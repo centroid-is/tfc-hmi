@@ -14,10 +14,10 @@ SensorConfig _$SensorConfigFromJson(Map<String, dynamic> json) => SensorConfig(
       invertActivePolarity: json['invertActivePolarity'] as bool? ?? false,
       risingEdgeDelayKey: json['risingEdgeDelayKey'] as String? ?? '',
       fallingEdgeDelayKey: json['fallingEdgeDelayKey'] as String? ?? '',
-      activeColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
-          json['activeColor'], const ColorConverter().fromJson),
-      inactiveColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
-          json['inactiveColor'], const ColorConverter().fromJson),
+      activeColor: _$JsonConverterFromJson<Map<String, dynamic>, AssetColor>(
+          json['activeColor'], const AssetColorConverter().fromJson),
+      inactiveColor: _$JsonConverterFromJson<Map<String, dynamic>, AssetColor>(
+          json['inactiveColor'], const AssetColorConverter().fromJson),
       tag: json['tag'] as String?,
     )
       ..variant = json['asset_name'] as String
@@ -42,8 +42,9 @@ Map<String, dynamic> _$SensorConfigToJson(SensorConfig instance) =>
       'invertActivePolarity': instance.invertActivePolarity,
       'risingEdgeDelayKey': instance.risingEdgeDelayKey,
       'fallingEdgeDelayKey': instance.fallingEdgeDelayKey,
-      'activeColor': const ColorConverter().toJson(instance.activeColor),
-      'inactiveColor': const ColorConverter().toJson(instance.inactiveColor),
+      'activeColor': const AssetColorConverter().toJson(instance.activeColor),
+      'inactiveColor':
+          const AssetColorConverter().toJson(instance.inactiveColor),
       'tag': instance.tag,
       'text': instance.text,
     };

@@ -8,10 +8,14 @@ part of 'led.dart';
 
 LEDConfig _$LEDConfigFromJson(Map<String, dynamic> json) => LEDConfig(
       key: json['key'] as String,
-      onColor: const ColorConverter()
-          .fromJson(json['on_color'] as Map<String, dynamic>),
-      offColor: const ColorConverter()
-          .fromJson(json['off_color'] as Map<String, dynamic>),
+      onColor: json['on_color'] == null
+          ? AssetColor.auto
+          : const AssetColorConverter()
+              .fromJson(json['on_color'] as Map<String, dynamic>),
+      offColor: json['off_color'] == null
+          ? AssetColor.stopped
+          : const AssetColorConverter()
+              .fromJson(json['off_color'] as Map<String, dynamic>),
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -32,8 +36,8 @@ Map<String, dynamic> _$LEDConfigToJson(LEDConfig instance) => <String, dynamic>{
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
-      'on_color': const ColorConverter().toJson(instance.onColor),
-      'off_color': const ColorConverter().toJson(instance.offColor),
+      'on_color': const AssetColorConverter().toJson(instance.onColor),
+      'off_color': const AssetColorConverter().toJson(instance.offColor),
       'led_type': _$LEDTypeEnumMap[instance.ledType]!,
     };
 

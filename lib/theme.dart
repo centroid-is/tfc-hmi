@@ -161,6 +161,60 @@ class HmiStateColors extends ThemeExtension<HmiStateColors> {
   }
 }
 
+/// A named slot in the active color scheme, for persisting "theme green"
+/// instead of a baked RGBA value. Assets that store an [HmiColorRole] follow
+/// the scheme when it changes; a literal color never does.
+enum HmiColorRole {
+  auto('Running'),
+  manual('Manual'),
+  cleaning('Cleaning'),
+  stopped('Stopped'),
+  fault('Fault'),
+  unknown('Unknown'),
+  primary('Primary'),
+  secondary('Secondary'),
+  tertiary('Tertiary'),
+  error('Error'),
+  surface('Surface'),
+  onSurface('Text');
+
+  const HmiColorRole(this.displayName);
+
+  /// Label shown in the color picker's theme strip.
+  final String displayName;
+
+  Color resolve(BuildContext context) {
+    final states = HmiStateColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    switch (this) {
+      case HmiColorRole.auto:
+        return states.auto;
+      case HmiColorRole.manual:
+        return states.manual;
+      case HmiColorRole.cleaning:
+        return states.cleaning;
+      case HmiColorRole.stopped:
+        return states.stopped;
+      case HmiColorRole.fault:
+        return states.fault;
+      case HmiColorRole.unknown:
+        return states.unknown;
+      case HmiColorRole.primary:
+        return scheme.primary;
+      case HmiColorRole.secondary:
+        return scheme.secondary;
+      case HmiColorRole.tertiary:
+        return scheme.tertiary;
+      case HmiColorRole.error:
+        return scheme.error;
+      case HmiColorRole.surface:
+        return scheme.surface;
+      case HmiColorRole.onSurface:
+        return scheme.onSurface;
+    }
+  }
+}
+
 /// The color schemes offered in preferences. [solarized] is the historical
 /// default; [muted] follows ISA-101's muted, gray-first guidance.
 enum AppColorScheme {

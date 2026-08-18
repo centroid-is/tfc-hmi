@@ -20,10 +20,14 @@ Map<String, dynamic> _$FeedbackConfigToJson(FeedbackConfig instance) =>
 
 ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
       key: json['key'] as String,
-      outwardColor: const ColorConverter()
-          .fromJson(json['outward_color'] as Map<String, dynamic>),
-      inwardColor: const ColorConverter()
-          .fromJson(json['inward_color'] as Map<String, dynamic>),
+      outwardColor: json['outward_color'] == null
+          ? AssetColor.primary
+          : const AssetColorConverter()
+              .fromJson(json['outward_color'] as Map<String, dynamic>),
+      inwardColor: json['inward_color'] == null
+          ? AssetColor.secondary
+          : const AssetColorConverter()
+              .fromJson(json['inward_color'] as Map<String, dynamic>),
       buttonType: $enumDecode(_$ButtonTypeEnumMap, json['button_type']),
       icon: json['icon'] == null
           ? null
@@ -64,8 +68,9 @@ Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
       'key': instance.key,
       'feedback': instance.feedback,
       'icon': instance.icon,
-      'outward_color': const ColorConverter().toJson(instance.outwardColor),
-      'inward_color': const ColorConverter().toJson(instance.inwardColor),
+      'outward_color':
+          const AssetColorConverter().toJson(instance.outwardColor),
+      'inward_color': const AssetColorConverter().toJson(instance.inwardColor),
       'button_type': _$ButtonTypeEnumMap[instance.buttonType]!,
       'is_toggle': instance.isToggle,
       'server_writes_low': instance.serverWritesLow,

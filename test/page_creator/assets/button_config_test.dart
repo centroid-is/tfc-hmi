@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/button.dart';
 
 /// JSON-level tests for the disabled-key / polarity / disabled-color
@@ -99,8 +100,8 @@ void main() {
     test('round-trips with all three new fields explicitly set', () {
       final config = ButtonConfig(
         key: 'btn/start',
-        outwardColor: const Color(0xFF00FF00),
-        inwardColor: const Color(0xFF808080),
+        outwardColor: const AssetColor.literal(Color(0xFF00FF00)),
+        inwardColor: const AssetColor.literal(Color(0xFF808080)),
         buttonType: ButtonType.square,
       )
         ..disabledKey = 'safety/interlock'
@@ -176,8 +177,8 @@ void main() {
     test('round-trips when textColor is set', () {
       final config = ButtonConfig(
         key: 'btn/start',
-        outwardColor: const Color(0xFF00FF00),
-        inwardColor: const Color(0xFF808080),
+        outwardColor: const AssetColor.literal(Color(0xFF00FF00)),
+        inwardColor: const AssetColor.literal(Color(0xFF808080)),
         buttonType: ButtonType.square,
       )..textColor = const Color(0xFFAB12CD);
 

@@ -2,8 +2,10 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
+import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/theme.dart';
 
 const _key = Key('conveyor_scheme_test');
@@ -14,7 +16,8 @@ Widget buildSchemeScenario(ThemeData theme) {
   final palette = ConveyorColorPaletteConfig()
     ..size = const RelativeSize(width: 0.25, height: 0.6);
   const beltSize = Size(240, 24);
-  return MaterialApp(
+  return ProviderScope(
+      child: MaterialApp(
     theme: theme,
     home: Builder(builder: (context) {
       final states = HmiStateColors.of(context);
@@ -43,6 +46,15 @@ Widget buildSchemeScenario(ThemeData theme) {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Default LED (role-backed AssetColor): on = running.
+                      Text('led (default on)',
+                          style: theme.textTheme.bodySmall),
+                      SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: LedRaw(LEDConfig(key: LEDConfig.previewStr)),
+                      ),
+                      const SizedBox(height: 8),
                       for (final entry in belts.entries) ...[
                         Text(entry.key, style: theme.textTheme.bodySmall),
                         SizedBox.fromSize(
@@ -69,7 +81,7 @@ Widget buildSchemeScenario(ThemeData theme) {
         ),
       );
     }),
-  );
+  ));
 }
 
 void main() {

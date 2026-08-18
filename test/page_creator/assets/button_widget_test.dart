@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/converter/color_converter.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc/page_creator/assets/button.dart';
@@ -83,8 +84,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
       )
         ..disabledKey = 'lock/key'
@@ -115,8 +116,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
       )
         ..disabledKey = 'lock/key'
@@ -147,8 +148,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
       )
         ..disabledKey = 'lock/key'
@@ -174,8 +175,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
       )
         ..disabledKey = 'lock/key'
@@ -226,8 +227,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: const Color(0xFFFF0000), // red
-        inwardColor: const Color(0xFF800000), // dark red
+        outwardColor: const AssetColor.literal(Color(0xFFFF0000)), // red
+        inwardColor: const AssetColor.literal(Color(0xFF800000)), // dark red
         buttonType: ButtonType.square,
       )..feedback = (FeedbackConfig()
         ..key = 'fb/key'
@@ -279,8 +280,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: const Color(0xFFFF0000),
-        inwardColor: const Color(0xFF800000),
+        outwardColor: const AssetColor.literal(Color(0xFFFF0000)),
+        inwardColor: const AssetColor.literal(Color(0xFF800000)),
         buttonType: ButtonType.square,
       )..feedback = (FeedbackConfig()
         ..key = 'fb/key'
@@ -325,8 +326,8 @@ void main() {
 
       final config = ButtonConfig(
         key: 'cmd/start',
-        outwardColor: const Color(0xFFFF0000),
-        inwardColor: const Color(0xFF800000),
+        outwardColor: const AssetColor.literal(Color(0xFFFF0000)),
+        inwardColor: const AssetColor.literal(Color(0xFF800000)),
         buttonType: ButtonType.square,
       )..feedback = (FeedbackConfig()
         ..key = 'fb/key'
