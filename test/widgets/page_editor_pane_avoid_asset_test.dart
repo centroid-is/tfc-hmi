@@ -12,6 +12,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/drawn_box.dart';
+import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 
 import '../helpers/page_editor_harness.dart';
@@ -112,6 +113,44 @@ void main() {
     expect(pane.width, lessThan(520),
         reason: 'the watch should have stepped the pane off the moving asset');
     expect(pane.left, greaterThanOrEqualTo(boxRect(tester).right));
+
+    await closePane(tester);
+  });
+
+  testWidgets('the pane steps aside when zoom carries the asset under it',
+      (tester) async {
+    // At 1:1 the box at x=0.45 is well clear of the pane. Pinch-zooming the
+    // canvas to 2x around a left-of-centre focal point carries it — bigger
+    // and further right — under the pane. Nothing about the asset's
+    // serialization changes, so this leans on the watch re-measuring the
+    // rendered box every tick.
+    await pumpEditorWith(tester, [editorBox(0.45, 0.4)]);
+    await openConfigPane(tester, 0.45, 0.4);
+    expect(paneRect(tester).width, 520);
+
+    final canvas = tester.getRect(find.byType(AssetStack));
+    final cy = canvas.center.dy;
+    final focal = canvas.left + 400;
+    final a = await tester.startGesture(Offset(focal - 40, cy));
+    final b = await tester.startGesture(Offset(focal + 40, cy));
+    await tester.pump(const Duration(milliseconds: 20));
+    // Spread to double the pointer distance in small steps: scale 2 about
+    // the (fixed) midpoint.
+    for (var i = 0; i < 8; i++) {
+      await a.moveBy(const Offset(-5, 0));
+      await b.moveBy(const Offset(5, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up();
+    await b.up();
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.pumpAndSettle();
+
+    final pane = paneRect(tester);
+    expect(pane.width, lessThan(520),
+        reason: 'zooming moved the asset under the pane, so it must narrow');
+    expect(pane.left, greaterThanOrEqualTo(boxRect(tester).right),
+        reason: 'the zoomed asset must stay visible beside the pane');
 
     await closePane(tester);
   });
