@@ -55,6 +55,35 @@ Matrix4 _buildTransform(AssetStackConfig cfg) {
 // inside any rectangular shape regardless of fillColor — that would swallow
 // runtime-mode primary taps before they reach the asset's own
 // GestureDetectors. Only paint the border when actually selected.
+/// Places chrome over an asset in that asset's own rotated frame.
+///
+/// The asset visual rotates internally (each asset reads `coordinates.angle`),
+/// so anything drawn over it -- the selection border, the AI-proposal outline
+/// -- must be rotated separately or it sits askew across a turned asset. The
+/// `OverflowBox` lets the unrotated size escape the parent's tight AABB
+/// constraints; `Transform.rotate` also transforms hit-tests, so a
+/// `GestureDetector` inside follows the rotated visual.
+///
+/// Shared by the selection and proposal overlays so the two cannot drift.
+Widget _rotatedAssetFrame({
+  required double angle,
+  required double width,
+  required double height,
+  required Widget child,
+}) {
+  return OverflowBox(
+    minWidth: 0,
+    minHeight: 0,
+    maxWidth: double.infinity,
+    maxHeight: double.infinity,
+    child: Transform.rotate(
+      angle: angle,
+      alignment: Alignment.center,
+      child: SizedBox(width: width, height: height, child: child),
+    ),
+  );
+}
+
 Widget _wrapWithSelectionBorder({
   required bool isSelected,
   required Widget child,
@@ -416,17 +445,10 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                   //    region (default `transformHitTests: true`) so the
                   //    GestureDetector hit area tracks the rotated visual
                   //    instead of the unrotated bounding rect.
-                  OverflowBox(
-                    minWidth: 0,
-                    minHeight: 0,
-                    maxWidth: double.infinity,
-                    maxHeight: double.infinity,
-                    child: Transform.rotate(
-                      angle: angleRadians,
-                      alignment: Alignment.center,
-                      child: SizedBox(
-                        width: assetW,
-                        height: assetH,
+                  _rotatedAssetFrame(
+                    angle: angleRadians,
+                    width: assetW,
+                    height: assetH,
                         // Container with a BoxDecoration hit-tests opaque for
                         // its full bounds even when only a border is set
                         // (BoxDecoration.hitTest returns true inside any
@@ -497,8 +519,6 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                                           : null,
                                 ),
                         ),
-                      ),
-                    ),
                   ),
                 ],
               ),
@@ -509,23 +529,42 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           if (isProposed) {
             positionedChildren.add(
               Positioned(
-                left: cx - halfW,
-                top: cy - halfH,
+                // Sized to the rotated AABB, like the asset's own Positioned.
+                // _rotatedAssetFrame uses an OverflowBox, which needs bounded
+                // constraints to size against -- on a left/top-only Positioned
+                // it receives unbounded ones and paints nothing.
+                left: cx - halfAabbW,
+                top: cy - halfAabbH,
+                width: aabbW,
+                height: aabbH,
                 child: IgnorePointer(
-                  child: SizedBox(
+                  // Rotate with the asset, exactly as the blue selection
+                  // border does (see the layering note above). Drawn
+                  // unrotated, the dashed box sat askew across a turned
+                  // conveyor and read as marking the wrong thing.
+                  child: _rotatedAssetFrame(
+                    angle: angleRadians,
                     width: assetW,
                     height: assetH,
                     child: Stack(
-                      children: [
-                        CustomPaint(
-                          size: Size(assetW, assetH),
-                          painter: DashedBorderPainter(color: Colors.amber),
-                        ),
-                        const Positioned(
-                          top: 2,
-                          right: 2,
-                          child: ProposalBadge(),
-                        ),
+                        clipBehavior: Clip.none,
+                        children: [
+                          CustomPaint(
+                            size: Size(assetW, assetH),
+                            painter: DashedBorderPainter(color: Colors.amber),
+                          ),
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            // The frame turns with the asset; the badge is a
+                            // label and stays upright so it is still readable
+                            // on a rotated or upside-down asset.
+                            child: Transform.rotate(
+                              angle: -angleRadians,
+                              alignment: Alignment.center,
+                              child: const ProposalBadge(),
+                            ),
+                          ),
                       ],
                     ),
                   ),

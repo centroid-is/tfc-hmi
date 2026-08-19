@@ -2,10 +2,19 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-/// Source-level assertions for key_repository.dart proposal enhancements.
+/// Source-level assertions for key_repository.dart proposal handling.
 ///
-/// KeyRepositoryPage depends on preferencesProvider, stateManProvider, and
-/// databaseProvider chains. Source assertions verify proposal support.
+/// KeyRepositoryPage depends on the preferencesProvider, stateManProvider and
+/// databaseProvider chains, which is why these are source assertions rather
+/// than widget tests.
+///
+/// The shape they pin changed on 2026-08-18. Proposals used to be staged one
+/// at a time and accepted from an inline amber bar inside this page. An MCP
+/// client fires create_key_mapping one call per mapping, so a batch of 28
+/// arrived as 28 proposals and cost 28 reviews and 28 saves — and the inline
+/// bar was a second place to act on a proposal, competing with the black
+/// banner. Both are gone: the page stages the whole queue and publishes
+/// commit/discard to the banner, which is now the only place to accept.
 void main() {
   late String source;
 
@@ -23,208 +32,93 @@ void main() {
     });
   });
 
-  group('_KeyMappingsSection proposal support', () {
-    test('has proposalData parameter', () {
-      // _KeyMappingsSection receives proposalData
-      expect(source, contains('_KeyMappingsSection'));
-      expect(source, contains('proposalData'));
+  group('proposals are staged as a batch, not one at a time', () {
+    test('stages every pending key_mapping proposal', () {
+      expect(source, contains('_stageKeyMappingProposals'));
     });
 
-    test('has _parseKeyMappingProposal method', () {
-      expect(source, contains('_parseKeyMappingProposal'));
+    test('keeps a list of staged mappings and their proposal ids', () {
+      expect(source, contains('_proposedMappings'));
+      expect(source, contains('_proposalIds'));
     });
 
-    test('has _proposedMapping field', () {
-      expect(source, contains('_proposedMapping'));
+    test('_isProposal is derived from the batch, not a separate flag', () {
+      expect(source, contains('bool get _isProposal => _proposedMappings.isNotEmpty'));
     });
 
-    test('has Accept button with green color', () {
-      expect(source, contains('Accept'));
-      expect(source, contains('Colors.green'));
+    test('skips ids already staged so re-entry cannot double-apply', () {
+      expect(source, contains('_proposalIds.contains(p.id)'));
     });
 
-    test('has Reject button with red color', () {
-      expect(source, contains('Reject'));
-      expect(source, contains('Colors.red'));
+    test('only accepts key_mapping proposals', () {
+      expect(source, contains("p.proposalType != 'key_mapping'"));
+      expect(source, contains("decoded['_proposal_type'] != 'key_mapping'"));
     });
 
-    test('imports proposal_state.dart', () {
-      expect(source, contains('proposal_state.dart'));
-    });
-
-    test('imports proposal_visual.dart', () {
-      expect(source, contains('proposal_visual.dart'));
-    });
-
-    test('uses proposalDecoration for proposed key mapping', () {
-      expect(source, contains('proposalDecoration'));
-    });
-
-    test('shows ProposalBadge on proposed key mapping', () {
-      expect(source, contains('ProposalBadge'));
-    });
-
-    test('handles invalid proposal JSON gracefully', () {
-      expect(source, contains('try'));
-      expect(source, contains('catch'));
+    test('tolerates a malformed proposal without dropping the batch', () {
+      expect(source, contains('jsonDecode(p.proposalJson)'));
+      expect(source, contains('is! Map<String, dynamic>'));
     });
   });
 
-  group('_parseKeyMappingProposal correctness', () {
-    test('checks _proposal_type is key_mapping before activating', () {
-      expect(source, contains("type != 'key_mapping'"));
+  group('the banner owns accept/reject — nothing inline', () {
+    test('publishes commit and discard to the banner', () {
+      expect(source, contains('proposalCommitProvider'));
+      expect(source, contains('proposalDiscardProvider'));
+      expect(source, contains('_commitProposals'));
+      expect(source, contains('_discardProposals'));
     });
 
-    test('validates decoded JSON is a Map before processing', () {
-      expect(source, contains('decoded is! Map<String, dynamic>'));
+    test('no inline Accept/Reject buttons remain in this page', () {
+      // The amber bar carried an ElevatedButton 'Accept' and an
+      // OutlinedButton 'Reject'. Two competing controls meant an operator
+      // could accept in one place while the other still showed it pending.
+      expect(source, isNot(contains("child: const Text('Accept')")));
+      expect(source, isNot(contains("child: const Text('Reject')")));
     });
 
-    test('sets _isProposal = true on valid proposal', () {
-      expect(source, contains('_isProposal = true'));
-    });
-
-    test('matches against proposalStateProvider for ID tracking', () {
-      expect(source, contains('ref.read(proposalStateProvider)'));
-      expect(source, contains('p.proposalJson == json'));
-    });
-
-    test('is called from initState with widget.proposalData', () {
-      expect(source, contains('_parseKeyMappingProposal(widget.proposalData)'));
-    });
-  });
-
-  group('Accept handler correctness', () {
-    test('extracts key from _proposedMapping before clearing', () {
+    test('clears the callbacks once the batch is resolved', () {
       expect(
-        source,
-        contains("final key = _proposedMapping!['key'] as String?"),
+        RegExp(r'proposalCommitProvider\.notifier\)\.state = null')
+            .allMatches(source)
+            .length,
+        greaterThanOrEqualTo(2),
+        reason: 'both commit and discard must clear the banner callbacks',
       );
     });
+  });
 
-    test('creates KeyMappingEntry from proposal opcua_node', () {
+  group('commit applies before it accepts', () {
+    test('saves the mappings, then marks the proposals accepted', () {
+      final commit = source.substring(source.indexOf('_commitProposals'));
+      final save = commit.indexOf('_saveKeyMappings()');
+      final accept = commit.indexOf('acceptProposal');
+      expect(save, greaterThan(-1));
+      expect(accept, greaterThan(-1));
+      expect(save, lessThan(accept),
+          reason: 'acceptProposal marks the row accepted in the database, so '
+              'doing it before the save would lose the mapping if the save '
+              'failed');
+    });
+
+    test('awaits each accept rather than firing and forgetting', () {
+      expect(source, contains('await notifier.acceptProposal(id)'));
+    });
+
+    test('applies the proposed opcua node onto a real KeyMappingEntry', () {
       expect(source, contains('OpcUANodeConfig.fromJson(opcuaNode)'));
-    });
-
-    test('inserts mapping into _keyMappings.nodes', () {
-      expect(source, contains('_keyMappings!.nodes[key] = mapping'));
-    });
-
-    test('calls _saveKeyMappings to persist', () {
-      // The Accept handler must call _saveKeyMappings() after adding the node
-      expect(source, contains('_saveKeyMappings()'));
-    });
-
-    test('calls acceptProposal on proposalStateProvider', () {
-      expect(source, contains('acceptProposal(_proposalId!)'));
-    });
-
-    test('reveals the accepted key using the captured `key` local', () {
-      // Regression test: the accepted key must be expanded and scrolled to
-      // via `key` (the captured local variable), NOT read back from
-      // _proposedMapping after it has been set to null. The old buggy
-      // pattern was:
-      //   _proposedMapping = null;
-      //   ... = _proposedMapping?['key']; // always null!
-      expect(source, contains('_expandedKeys.add(key)'));
-      expect(source, contains('if (key != null) _revealKey(key);'));
+      expect(source, contains('_keyMappings!.nodes[key] = entry'));
     });
   });
 
-  group('Reject handler correctness', () {
-    test('calls rejectProposal on proposalStateProvider', () {
-      expect(source, contains('rejectProposal(_proposalId!)'));
+  group('the proposed mappings are still shown inline', () {
+    test('highlighted rows remain — that is why you navigate here', () {
+      expect(source, contains('proposalDecoration()'));
+      expect(source, contains('ProposalBadge()'));
     });
 
-    test('clears _isProposal and _proposedMapping', () {
-      // Reject handler must clear proposal state
-      expect(source, contains('_isProposal = false'));
-      expect(source, contains('_proposedMapping = null'));
-    });
-
-    test('does not call _saveKeyMappings', () {
-      // Reject should NOT save. Find the Reject onPressed block and verify
-      // it doesn't contain _saveKeyMappings.
-      // We verify by checking the Reject button section specifically.
-      final rejectSection = RegExp(
-        r"child:\s*const\s*Text\('Reject'\)",
-      );
-      expect(source, matches(rejectSection));
-      // The Reject handler is the OutlinedButton.onPressed before 'Reject' text
-      // We use a pattern to extract the reject onPressed handler
-      final rejectHandler = RegExp(
-        r"OutlinedButton\(\s*onPressed:\s*\(\)\s*\{(.*?)\},\s*style:\s*OutlinedButton\.styleFrom\(\s*foregroundColor:\s*Colors\.red",
-        dotAll: true,
-      );
-      final match = rejectHandler.firstMatch(source);
-      expect(match, isNotNull, reason: 'Reject handler block must exist');
-      final handlerBody = match!.group(1)!;
-      expect(
-        handlerBody,
-        isNot(contains('_saveKeyMappings')),
-        reason: 'Reject handler must NOT save key mappings',
-      );
-    });
-  });
-
-  group('Proposal visual styling', () {
-    test('banner uses amber color scheme', () {
-      expect(source, contains('Colors.amber'));
-      expect(source, contains('Colors.amber.shade50'));
-    });
-
-    test('banner shows auto_awesome icon', () {
-      expect(source, contains('Icons.auto_awesome'));
-    });
-
-    test('proposal inline display uses proposalDecoration()', () {
-      // The inline ListTile should be wrapped in proposalDecoration
-      expect(source, contains('decoration: proposalDecoration()'));
-    });
-
-    test('proposal inline display shows ProposalBadge as leading widget', () {
-      expect(source, contains('leading: const ProposalBadge()'));
-    });
-
-    test('proposal banner and inline are conditional on _isProposal', () {
-      // Both banner and inline display should only show when _isProposal
-      expect(
-        source,
-        contains('if (_isProposal && _proposedMapping != null)'),
-      );
-    });
-
-    test('proposal inline display shows the proposed key name', () {
-      expect(source, contains("title: Text('\${_proposedMapping!['key']}')"));
-    });
-
-    test('proposal banner describes the mapping operation', () {
-      expect(source, contains("'AI Proposal: Map"));
-    });
-  });
-
-  group('Edge case handling', () {
-    test('proposal with missing key field does not crash Accept', () {
-      // Accept handler guards key != null before modifying _keyMappings
-      expect(source, contains('if (key != null && _keyMappings != null)'));
-    });
-
-    test('proposal with missing opcua_node still creates entry', () {
-      // opcuaNode is only set when the map is present, otherwise a bare
-      // KeyMappingEntry() is created (which is valid -- all nodes are optional)
-      expect(source, contains('if (opcuaNode is Map<String, dynamic>)'));
-    });
-
-    test('proposal with non-key_mapping type is silently ignored', () {
-      // _parseKeyMappingProposal returns early if type != 'key_mapping'
-      expect(source, contains("if (type != 'key_mapping') return"));
-    });
-
-    test('null proposalData does not trigger parsing', () {
-      expect(source, contains('if (json == null) return'));
-    });
-
-    test('non-Map decoded JSON is silently ignored', () {
-      expect(source, contains('if (decoded is! Map<String, dynamic>) return'));
+    test('the list is bounded so a large batch cannot fill the page', () {
+      expect(source, contains('maxHeight: 160'));
     });
   });
 }

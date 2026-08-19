@@ -24,53 +24,156 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   bool _create = false;
   AlarmConfig? _createTemplate;
 
-  /// The proposed alarm parsed from proposalData.
-  AlarmConfig? _proposedAlarm;
-  int? _proposalId;
-  bool _isProposal = false;
+  /// Proposals staged as a batch.
+  ///
+  /// An MCP client fires create_alarm one call per alarm, so a set of 38
+  /// arrives as 38 proposals. Staging one at a time meant 38 separate
+  /// reviews and 38 separate saves.
+  /// The banner's callback slots, captured when publishing.
+  ///
+  /// Riverpod forbids `ref` inside dispose() -- "Cannot use ref after the
+  /// widget was disposed" -- and these are plain (non-autoDispose)
+  /// StateProviders, so their controllers outlive this State and can be held.
+  StateController<Future<void> Function()?>? _commitSlot;
+  StateController<Future<void> Function()?>? _discardSlot;
+
+  final List<AlarmConfig> _proposedAlarms = [];
+  final List<int> _proposalIds = [];
+
+  bool get _isProposal => _proposedAlarms.isNotEmpty;
+
+  /// The alarm the form edits: the first of the batch. Accepting from the
+  /// form applies that one edited config and leaves the rest staged.
+  AlarmConfig? get _proposedAlarm =>
+      _proposedAlarms.isEmpty ? null : _proposedAlarms.first;
 
   @override
   void initState() {
     super.initState();
-    _parseAlarmProposal(widget.proposalData);
+    if (_stageAlarmProposals() == 0) _stageRoutedProposal(widget.proposalData);
   }
 
-  /// Parses alarm proposal JSON into an [AlarmConfig].
+  /// Stages the proposal the route carried, for callers that removed it from
+  /// state before navigating.
   ///
-  /// Sets [_proposedAlarm] and [_isProposal] on success.
-  /// Gracefully handles invalid JSON without crashing.
-  void _parseAlarmProposal(String? json) {
+  /// The chat batch card calls acceptAllOfType() -- which empties
+  /// proposalStateProvider -- and only then beams here with the JSON in tow.
+  /// Reading state alone would stage nothing and apply nothing, while every
+  /// proposal in the batch had already been marked accepted.
+  void _stageRoutedProposal(String? json) {
     if (json == null) return;
-
     try {
       final decoded = jsonDecode(json);
       if (decoded is! Map<String, dynamic>) return;
-
-      final type = decoded['_proposal_type'] as String?;
-      if (type != 'alarm' && type != 'alarm_create' && type != 'alarm_update') {
-        return;
-      }
-
-      // Remove the _proposal_type key before passing to AlarmConfig
-      final map = Map<String, dynamic>.from(decoded);
-      map.remove('_proposal_type');
-
-      _proposedAlarm = AlarmConfig.fromJson(map);
-      _isProposal = true;
-
-      // Match against universal proposal state for ID tracking.
-      try {
-        final state = ref.read(proposalStateProvider);
-        for (final p in state.proposals) {
-          if (p.proposalJson == json) {
-            _proposalId = p.id;
-            break;
-          }
-        }
-      } catch (_) {}
+      final map = Map<String, dynamic>.from(decoded)..remove('_proposal_type');
+      _proposedAlarms.add(AlarmConfig.fromJson(map));
+      _publishProposalCallbacks();
     } catch (_) {
-      // Graceful: malformed JSON ignored, show normal editor.
+      // Malformed JSON: nothing to stage.
     }
+  }
+
+  /// Stages every pending alarm proposal in one batch.
+  ///
+  /// Safe to re-enter: ids already staged are skipped, so a proposal landing
+  /// after the first joins the batch instead of being dropped on the floor.
+  ///
+  /// Returns how many were newly staged.
+  int _stageAlarmProposals() {
+    var added = 0;
+    try {
+      final state = ref.read(proposalStateProvider);
+      for (final p in state.proposals) {
+        if (p.proposalType != 'alarm' &&
+            p.proposalType != 'alarm_create' &&
+            p.proposalType != 'alarm_update') {
+          continue;
+        }
+        if (_proposalIds.contains(p.id)) continue;
+        try {
+          final decoded = jsonDecode(p.proposalJson);
+          if (decoded is! Map<String, dynamic>) continue;
+          final map = Map<String, dynamic>.from(decoded)
+            ..remove('_proposal_type');
+          _proposedAlarms.add(AlarmConfig.fromJson(map));
+          _proposalIds.add(p.id);
+          added++;
+        } catch (_) {
+          // A malformed proposal must not take the rest of the batch with it.
+        }
+      }
+    } catch (_) {
+      // Provider unavailable (tests) -- nothing to stage.
+    }
+    if (added > 0) _publishProposalCallbacks();
+    return added;
+  }
+
+  /// Hands the black banner the commit/discard actions for this batch.
+  ///
+  /// The inline amber Accept/Reject bar that used to sit above the editor is
+  /// gone: one place to act on a proposal, not two. The form below still
+  /// offers "Accept Proposal" for the alarm being edited, which is a
+  /// different job -- accepting an *edited* config.
+  void _publishProposalCallbacks() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final commitSlot = ref.read(proposalCommitProvider.notifier);
+      commitSlot.state = _commitProposals;
+      _commitSlot = commitSlot;
+      final discardSlot = ref.read(proposalDiscardProvider.notifier);
+      discardSlot.state = _discardProposals;
+      _discardSlot = discardSlot;
+    });
+  }
+
+  /// Applies every staged alarm, then marks the proposals accepted.
+  Future<void> _commitProposals() async {
+    if (_proposedAlarms.isEmpty) return;
+    // Deliberately NOT wrapped in a try: a failure here must abort before
+    // anything is marked accepted. Swallowing it and running the accept loop
+    // anyway would write zero alarms and still mark all N proposals accepted,
+    // which is exactly the loss the ordering below exists to prevent.
+    final alarmMan = await ref.read(alarmManProvider.future);
+    for (final a in _proposedAlarms) {
+      alarmMan.updateAlarm(a);
+    }
+    ref.invalidate(alarmManProvider);
+
+    // Awaited, and only after the alarms are in: acceptProposal marks the row
+    // accepted in the database, so doing it first would lose them on failure.
+    final notifier = ref.read(proposalStateProvider.notifier);
+    for (final id in _proposalIds) {
+      try {
+        await notifier.acceptProposal(id);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _proposedAlarms.clear();
+      _proposalIds.clear();
+      _show = null;
+    });
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
+  }
+
+  /// Drops the whole batch without adding any alarm.
+  Future<void> _discardProposals() async {
+    final notifier = ref.read(proposalStateProvider.notifier);
+    for (final id in _proposalIds) {
+      try {
+        await notifier.rejectProposal(id);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _proposedAlarms.clear();
+      _proposalIds.clear();
+      _show = null;
+    });
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
   }
 
   /// Accept the proposal with the (possibly edited) alarm config from the form.
@@ -88,10 +191,16 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       ref.invalidate(alarmManProvider);
     } catch (_) {}
 
-    if (_proposalId != null) {
-      try {
-        ref.read(proposalStateProvider.notifier).acceptProposal(_proposalId!);
-      } catch (_) {}
+    // Only the alarm the form was editing leaves the batch; anything else
+    // still staged stays for the banner to accept.
+    if (_proposalIds.isNotEmpty) {
+      // Removed only AFTER the await returns. Dropping it first meant a
+      // failed accept left the id out of _proposalIds while still in state,
+      // and the next listener tick re-staged it as a duplicate.
+      final id = _proposalIds.first;
+      await ref.read(proposalStateProvider.notifier).acceptProposal(id);
+      _proposalIds.removeAt(0);
+      if (_proposedAlarms.isNotEmpty) _proposedAlarms.removeAt(0);
     }
 
     if (!mounted) return;
@@ -101,46 +210,40 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
     );
 
     setState(() {
-      _isProposal = false;
-      _proposedAlarm = null;
       _show = null;
     });
+    if (_proposedAlarms.isEmpty) {
+      ref.read(proposalCommitProvider.notifier).state = null;
+      ref.read(proposalDiscardProvider.notifier).state = null;
+    }
   }
 
-  void _rejectProposal() {
-    if (_proposalId != null) {
-      try {
-        ref.read(proposalStateProvider.notifier).rejectProposal(_proposalId!);
-      } catch (_) {}
-    }
-
-    setState(() {
-      _isProposal = false;
-      _proposedAlarm = null;
-      _show = null;
-    });
+  @override
+  void dispose() {
+    // The banner holds these closures over this State. Left set, "Accept all"
+    // would call into a disposed State after navigating away: nothing saved,
+    // proposals still pending, and an uncaught async error.
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     // Reactively watch for new alarm proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
-      if (_isProposal) return; // Already showing a proposal.
-      final alarmProposals = next.proposals.where((p) =>
-          p.proposalType == 'alarm' ||
-          p.proposalType == 'alarm_create' ||
-          p.proposalType == 'alarm_update');
-      if (alarmProposals.isEmpty) return;
-      final proposal = alarmProposals.first;
-      _parseAlarmProposal(proposal.proposalJson);
-      if (_isProposal) setState(() {});
+      // No "already showing one" guard: a later proposal joins the batch.
+      if (_stageAlarmProposals() > 0) setState(() {});
     });
 
     return BaseScaffold(
       title: _isProposal ? 'Alarm Editor -- AI Proposal' : 'Alarms Editor',
       body: Column(
         children: [
-          if (_isProposal && _proposedAlarm != null)
+          // The inline amber Accept/Reject bar used to live here. Removed:
+          // the black banner is the one place proposals are acted on. What
+          // remains is a plain count, so a staged batch is still obvious.
+          if (_isProposal)
             Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -150,37 +253,11 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
                   const Icon(Icons.auto_awesome, color: Colors.amber),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(
-                      'AI Proposal: ${_proposedAlarm!.title}. '
-                      'Edit the fields below, then click Accept Proposal to save.',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    key: const ValueKey('alarm-proposal-accept'),
-                    onPressed: () {
-                      // Accept with the current proposed alarm config.
-                      // If the operator has edited fields in the form below,
-                      // the form's own "Accept Proposal" submit button captures
-                      // those edits. This banner button accepts the original
-                      // proposal as-is.
-                      _acceptProposalWithConfig(_proposedAlarm!);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('Accept'),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    key: const ValueKey('alarm-proposal-reject'),
-                    onPressed: _rejectProposal,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red,
-                      side: const BorderSide(color: Colors.red),
-                    ),
-                    child: const Text('Reject'),
+                    child: Text(_proposedAlarms.length == 1
+                        ? 'AI proposal: ${_proposedAlarm!.title}'
+                        : '${_proposedAlarms.length} AI alarm proposals '
+                            'staged - accept them from the banner above, or '
+                            'edit this one below and accept it on its own.'),
                   ),
                 ],
               ),
@@ -236,7 +313,7 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
                     flex: 3,
                     child: _isProposal && _proposedAlarm != null
                         ? AlarmForm(
-                            key: const ValueKey('alarm-proposal-form'),
+                            key: ValueKey('alarm-proposal-form-${_proposedAlarm!.uid}'),
                             initialConfig: _proposedAlarm!,
                             editable: true,
                             submitText: 'Accept Proposal',
