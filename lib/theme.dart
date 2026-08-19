@@ -37,7 +37,7 @@ abstract final class MutedColors {
   static const Color cleanBlue = Color(0xFF8197AC);
   static const Color stoppedGray = Color(0xFF8E8E8E);
   static const Color stoppedGrayDark = Color(0xFF636363);
-  static const Color alarmRed = Color(0xFFD32F2F);
+  static const Color alarmRed = Color(0xFFFF1744);
   static const Color unknownViolet = Color(0xFF9588A7);
   static const Color onState = Color(0xFFF5F5F5);
 }
