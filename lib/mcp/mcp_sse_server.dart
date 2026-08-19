@@ -59,7 +59,10 @@ class McpSseServer {
         );
         return tfcServer.mcpServer;
       },
-      host: 'localhost',
+      // Bind IPv4 loopback explicitly.  'localhost' resolved to ::1 only, so
+      // clients that try 127.0.0.1 first -- Node, and therefore mcp-remote and
+      // Claude Desktop -- got a connection refused.
+      host: '127.0.0.1',
       port: port,
       path: '/mcp',
     );

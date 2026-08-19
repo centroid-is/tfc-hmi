@@ -960,8 +960,13 @@ final chatLifecycleProvider = Provider<void>((ref) {
 
         // Create live data readers
         final stateReader = StateManStateReader(stateMan);
-        await stateReader.init();
         _chatLifecycle.activeStateReader = stateReader;
+        // Subscribe in the background -- see _startServer in
+        // providers/mcp_bridge.dart: init() can block indefinitely on an
+        // unreachable node, and the bridge must connect regardless.
+        unawaited(stateReader.init().catchError((Object e) {
+          io.stderr.writeln('chatLifecycleProvider: state reader init failed: $e');
+        }));
 
         final alarmReader = AlarmManAlarmReader(alarmMan);
 
@@ -1099,8 +1104,11 @@ final chatLifecycleProvider = Provider<void>((ref) {
           final stateMan = await ref.read(stateManProvider.future);
           final alarmMan = await ref.read(alarmManProvider.future);
           final stateReader = StateManStateReader(stateMan);
-          await stateReader.init();
           _chatLifecycle.activeStateReader = stateReader;
+          unawaited(stateReader.init().catchError((Object e) {
+            io.stderr
+                .writeln('chatLifecycleProvider: state reader init failed: $e');
+          }));
           final alarmReader = AlarmManAlarmReader(alarmMan);
           final dbWrapper = await ref.read(databaseProvider.future);
           if (dbWrapper == null) return;

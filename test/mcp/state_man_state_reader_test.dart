@@ -133,6 +133,45 @@ void main() {
       reader.dispose();
     });
 
+    test('a never-resolving subscribe does not stall the remaining keys',
+        () async {
+      // Regression: a key whose mapping names no server leaves
+      // StateMan.subscribe pending forever instead of throwing. Sequential
+      // warm-up used to stop dead there, leaving every later key null.
+      final controllers = {
+        for (final key in ['before', 'after1', 'after2'])
+          key: StreamController<DynamicValue>.broadcast(),
+      };
+
+      final reader = StateManStateReader.forTest(
+        keys: ['before', 'hangs', 'after1', 'after2'],
+        subscribe: (key) async {
+          if (key == 'hangs') return Completer<Stream<DynamicValue>>().future;
+          return controllers[key]!.stream;
+        },
+        subscribeTimeout: const Duration(milliseconds: 50),
+      );
+
+      await reader.init();
+
+      for (final entry in controllers.entries) {
+        expect(entry.value.hasListener, isTrue,
+            reason: '${entry.key} should have been subscribed');
+        entry.value.add(DynamicValue(value: 7));
+      }
+      await Future.delayed(Duration.zero);
+
+      expect(reader.getValue('before'), equals(7));
+      expect(reader.getValue('after1'), equals(7));
+      expect(reader.getValue('after2'), equals(7));
+      expect(reader.getValue('hangs'), isNull);
+
+      reader.dispose();
+      for (final c in controllers.values) {
+        await c.close();
+      }
+    });
+
     test('dispose cancels all subscriptions', () async {
       final controller = StreamController<DynamicValue>.broadcast();
       final reader = StateManStateReader.forTest(
