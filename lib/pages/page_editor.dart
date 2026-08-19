@@ -562,6 +562,12 @@ class PageEditor extends ConsumerStatefulWidget {
 
   const PageEditor({super.key, this.proposalData});
 
+  /// How many times the editor has re-encoded the whole page map. Encoding is
+  /// O(everything on every page), so tests pin that continuous gestures do
+  /// not do it per tick — see [_PageEditorState._currentJsonStale].
+  @visibleForTesting
+  static int debugJsonEncodes = 0;
+
   @override
   ConsumerState<PageEditor> createState() => _PageEditorState();
 }
@@ -632,6 +638,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       TextEditingController();
   String _savedJson = '';
   String _currentJson = '';
+
+  /// True while [_currentJson] lags the pages. Continuous gestures — a drag,
+  /// a held arrow key — change coordinates on every pointer event or key
+  /// repeat, and re-encoding every page each tick is what made moving assets
+  /// lag on big projects. Those paths set this flag instead and the encode
+  /// runs once when the gesture settles (pointer up / key up). While the flag
+  /// is up, [_hasUnsavedChanges] simply reports dirty: mid-gesture that is
+  /// always the right answer, and the settle recompute restores the exact
+  /// compare for the one case it is not (moved back onto the saved spot).
+  bool _currentJsonStale = false;
 
   /// Path of the tree row currently being dragged in the Pages dialog, so the
   /// drop zones can show whether they would take it.
@@ -1118,11 +1134,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _updateCurrentJson() {
+    PageEditor.debugJsonEncodes++;
     _currentJson = jsonEncode(
         _temporaryPages.map((name, page) => MapEntry(name, page.toJson())));
+    _currentJsonStale = false;
   }
 
-  bool get _hasUnsavedChanges => _currentJson != _savedJson || _navOrderDirty;
+  bool get _hasUnsavedChanges =>
+      _currentJsonStale || _currentJson != _savedJson || _navOrderDirty;
 
   String _assetsToJson(List<Asset> theAssets) {
     return jsonEncode({
@@ -1214,10 +1233,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
   }
 
-  void _updateState(VoidCallback fn) {
+  /// setState plus the dirty-check bookkeeping. One-shot edits re-encode the
+  /// pages right away; per-tick edits (drag updates, arrow-key repeats) pass
+  /// [deferJsonSync] and only raise [_currentJsonStale] — their settle point
+  /// (pointer up, key up) runs the encode once for the whole gesture.
+  void _updateState(VoidCallback fn, {bool deferJsonSync = false}) {
     setState(() {
       fn();
-      _updateCurrentJson();
+      if (deferJsonSync) {
+        _currentJsonStale = true;
+      } else {
+        _updateCurrentJson();
+      }
     });
   }
 
@@ -1287,6 +1314,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         (event is KeyDownEvent || event is KeyRepeatEvent) &&
         !_isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
       return _nudgeSelection(nudge, saveHistory: event is KeyDownEvent);
+    }
+    // A press-and-hold deferred its JSON syncs (see _nudgeSelection); the
+    // release is where it settles, so run the one encode that stands in for
+    // all of them. The release itself stays unclaimed, as it always was.
+    if (nudge != null && event is KeyUpEvent && _currentJsonStale) {
+      setState(_updateCurrentJson);
     }
     if (event is KeyDownEvent) {
       if (_isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
@@ -1574,7 +1607,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ? _nudgeStepPx * _nudgeShiftFactor
         : _nudgeStepPx;
     if (saveHistory) _saveToHistory();
-    _updateState(() {
+    // Key repeats arrive per frame while the arrow is held; the JSON sync
+    // waits for the key-up in _onShortcutKey.
+    _updateState(deferJsonSync: true, () {
       for (final asset in _selectedAssets) {
         asset.coordinates = Coordinates(
           x: (asset.coordinates.x + direction.dx * step / constraints.maxWidth)
@@ -2310,6 +2345,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                       _selectionStart = null;
                                       _selectionCurrent = null;
                                       _marqueeBaseSelection = {};
+                                      // A drag deferred its JSON syncs (see
+                                      // _moveAsset); this is where the gesture
+                                      // settles, so run the one encode that
+                                      // stands in for all of them.
+                                      if (_currentJsonStale) {
+                                        _updateCurrentJson();
+                                      }
                                     });
                                   },
                                 ),
@@ -2691,7 +2733,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       angleDegrees: asset.coordinates.angle ?? 0.0,
     );
 
-    _updateState(() {
+    // A drag delivers an update per pointer event; the JSON sync waits for
+    // the pointer up in the canvas Listener.
+    _updateState(deferJsonSync: true, () {
       for (final assetToMove in assetsToMove) {
         final newX =
             (assetToMove.coordinates.x + canvasDelta.dx / constraints.maxWidth)

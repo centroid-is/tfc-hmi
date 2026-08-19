@@ -44,9 +44,9 @@ class AssetStackConfig {
   Map<String, dynamic> toJson() => _$AssetStackConfigToJson(this);
 }
 
-Matrix4 _buildTransform(AssetStackConfig cfg) {
+Matrix4 _buildTransform(bool xMirror, bool yMirror) {
   return Matrix4.identity()
-    ..scale(cfg.xMirror ? -1.0 : 1.0, cfg.yMirror ? -1.0 : 1.0);
+    ..scale(xMirror ? -1.0 : 1.0, yMirror ? -1.0 : 1.0);
 }
 
 // Conditionally wraps the editor's selection chrome in a bordered Container.
@@ -251,6 +251,40 @@ class _RenderHitPermissiveConstrainedBox extends RenderConstrainedBox {
 class _AssetStackState extends ConsumerState<AssetStack> {
   final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
 
+  /// Read once per mount, not once per build. The stack rebuilds on every
+  /// drag tick while an asset is moved, and handing FutureBuilder a fresh
+  /// future each time meant a preferences read — and the extra rebuild its
+  /// completion schedules — per pointer event. Nothing writes this key after
+  /// startup, so a per-mount read loses nothing.
+  late final Future<AssetStackConfig> _configFuture =
+      prefs.getString('asset_stack_config').then((value) {
+    if (value == null) {
+      final cfg = AssetStackConfig();
+      prefs.setString('asset_stack_config', jsonEncode(cfg.toJson()));
+      return cfg;
+    }
+    return AssetStackConfig.fromJson(jsonDecode(value));
+  });
+
+  /// Label sizes by (text, style). Measuring text is the expensive part of
+  /// laying a label out, and during a drag neither the text nor its style
+  /// changes — only the position does — so the measure from the first frame
+  /// serves every following tick.
+  final Map<(String, TextStyle), Size> _labelSizeCache = {};
+
+  Size _measureLabel(String text, TextStyle style) {
+    if (_labelSizeCache.length > 512) _labelSizeCache.clear();
+    return _labelSizeCache.putIfAbsent((text, style), () {
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final size = tp.size;
+      tp.dispose();
+      return size;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // This will trigger a rebuild when the substitutions change
@@ -260,31 +294,22 @@ class _AssetStackState extends ConsumerState<AssetStack> {
     final H = widget.constraints.maxHeight;
 
     return FutureBuilder<AssetStackConfig>(
-      future: prefs.getString('asset_stack_config').then((value) {
-        if (value == null) {
-          final cfg = AssetStackConfig();
-          prefs.setString('asset_stack_config', jsonEncode(cfg.toJson()));
-          return cfg;
-        }
-        return AssetStackConfig.fromJson(jsonDecode(value));
-      }),
+      future: _configFuture,
       builder: (context, snap) {
         final cfg = snap.data ?? AssetStackConfig();
 
-        if (widget.mirroringDisabled) {
-          cfg.xMirror = false;
-          cfg.yMirror = false;
-        }
+        // Effective flags rather than writes back into cfg: the config now
+        // lives for the whole mount, so a build must not edit it in place.
+        final xMirror = !widget.mirroringDisabled && cfg.xMirror;
+        final yMirror = !widget.mirroringDisabled && cfg.yMirror;
 
         // We'll accumulate all Positioned children here
         final positionedChildren = <Widget>[];
 
         for (final asset in widget.assets) {
           // 1) normalized coords with optional mirroring
-          final fx =
-              cfg.xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
-          final fy =
-              cfg.yMirror ? 1 - asset.coordinates.y : asset.coordinates.y;
+          final fx = xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
+          final fy = yMirror ? 1 - asset.coordinates.y : asset.coordinates.y;
 
           // 2) canvas-pixel center point
           final cx = fx * W;
@@ -318,14 +343,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           // 4) measure text size if any
           Size textSize = Size.zero;
           if (asset.text != null && asset.text!.isNotEmpty) {
-            final tp = TextPainter(
-              text: TextSpan(
-                text: asset.text,
-                style: labelStyle,
-              ),
-              textDirection: TextDirection.ltr,
-            )..layout();
-            textSize = tp.size;
+            textSize = _measureLabel(asset.text!, labelStyle);
           }
 
           final isProposed = widget.proposedAssets.contains(asset);
@@ -417,7 +435,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                         child: Transform(
                           alignment: Alignment.center,
                           transform: asset.coordinates.angle != null
-                              ? _buildTransform(cfg)
+                              ? _buildTransform(xMirror, yMirror)
                               : Matrix4.identity(),
                           child: widget.absorb
                               // In editor mode the asset's own
@@ -576,10 +594,10 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           // B) add the label (if any)
           if (asset.text != null && asset.text!.isNotEmpty) {
             var pos = asset.textPos ?? TextPos.right;
-            if (cfg.xMirror && (pos == TextPos.left || pos == TextPos.right)) {
+            if (xMirror && (pos == TextPos.left || pos == TextPos.right)) {
               pos = pos == TextPos.left ? TextPos.right : TextPos.left;
             }
-            if (cfg.yMirror && (pos == TextPos.above || pos == TextPos.below)) {
+            if (yMirror && (pos == TextPos.above || pos == TextPos.below)) {
               pos = pos == TextPos.above ? TextPos.below : TextPos.above;
             }
             final labelOff = labelOffset(center, assetSize, textSize, pos);
