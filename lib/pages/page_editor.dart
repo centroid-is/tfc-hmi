@@ -590,6 +590,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Offset? _selectionCurrent;
   Set<Asset> _selectedAssets = {};
 
+  /// The selection as it stood when the marquee started. Every move recomputes
+  /// the selection as this snapshot XOR the boxed assets, so a Ctrl/Cmd-held
+  /// marquee toggles against what was already selected — the drag-shaped twin
+  /// of the modifier-click in [_handleAssetSelection] — instead of replacing
+  /// it. Snapshotting at pointer down (rather than reading the live selection)
+  /// keeps assets from flickering in and out as the box grows and shrinks over
+  /// them. Without a modifier the snapshot is empty and XOR degenerates to
+  /// "exactly what the box covers".
+  Set<Asset> _marqueeBaseSelection = {};
+
   /// True between an asset's pan start and the following pointer up, so a drag
   /// that began on an asset cannot also grow a marquee behind it.
   bool _isDraggingAsset = false;
@@ -2275,6 +2285,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                       final local = box
                                           .globalToLocal(pointerEvent.position);
                                       setState(() {
+                                        _marqueeBaseSelection =
+                                            Set.of(_selectedAssets);
                                         _selectionStart = local;
                                         _selectionCurrent = local;
                                       });
@@ -2294,7 +2306,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                         final bounds = Rect.fromPoints(
                                             _selectionStart!,
                                             _selectionCurrent!);
-                                        _selectedAssets = assets.where((asset) {
+                                        final boxed = assets.where((asset) {
                                           final cx = asset.coordinates.x *
                                               constraints.maxWidth;
                                           final cy = asset.coordinates.y *
@@ -2318,6 +2330,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                           );
                                           return bounds.overlaps(assetRect);
                                         }).toSet();
+                                        _selectedAssets = {
+                                          ..._marqueeBaseSelection
+                                              .difference(boxed),
+                                          ...boxed.difference(
+                                              _marqueeBaseSelection),
+                                        };
                                       });
                                     }
                                   },
@@ -2326,6 +2344,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                       _isDraggingAsset = false;
                                       _selectionStart = null;
                                       _selectionCurrent = null;
+                                      _marqueeBaseSelection = {};
                                       // A drag deferred its JSON syncs (see
                                       // _moveAsset); this is where the gesture
                                       // settles, so run the one encode that

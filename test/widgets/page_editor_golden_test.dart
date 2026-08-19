@@ -325,6 +325,34 @@ void main() {
       );
     });
 
+    // The modifier-held marquee, caught mid-drag: the top row was selected,
+    // and a second rubber band with Ctrl/Cmd held is passing over CN02. What
+    // to look at is that CN02's selection border is gone while the box covers
+    // it — the marquee toggles against the selection — and CN01/CN03 keep
+    // theirs.
+    testWidgets('a modifier marquee mid-drag, toggling one asset out',
+        (tester) async {
+      await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
+      await marquee(tester, 0.05, 0.12, 0.68, 0.45);
+
+      await tester.sendKeyDownEvent(editorModifier);
+      final gesture = await tester.startGesture(onCanvas(tester, 0.28, 0.14));
+      await tester.pump();
+      await gesture.moveTo(onCanvas(tester, 0.33, 0.20));
+      await tester.pump();
+      await gesture.moveTo(onCanvas(tester, 0.44, 0.38));
+      await tester.pump();
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_marquee_toggle_dark.png'),
+      );
+
+      await gesture.up();
+      await tester.sendKeyUpEvent(editorModifier);
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('the asset context menu', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
       await marquee(tester, 0.05, 0.12, 0.68, 0.45);
