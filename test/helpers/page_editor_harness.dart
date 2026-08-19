@@ -218,9 +218,18 @@ double canvasAspect(WidgetTester tester) {
 /// Rubber-bands from ([x1], [y1]) to ([x2], [y2]) in canvas-relative units.
 ///
 /// No mode to enter first: the editor rubber-bands on any drag that starts on
-/// empty canvas.
+/// empty canvas. With [addToSelection] the modifier is held, which toggles
+/// the boxed assets into or out of the existing selection instead of
+/// replacing it — the drag-shaped twin of [tapAsset]'s flag.
 Future<void> marquee(
-    WidgetTester tester, double x1, double y1, double x2, double y2) async {
+  WidgetTester tester,
+  double x1,
+  double y1,
+  double x2,
+  double y2, {
+  bool addToSelection = false,
+}) async {
+  if (addToSelection) await tester.sendKeyDownEvent(editorModifier);
   final gesture = await tester.startGesture(onCanvas(tester, x1, y1));
   await tester.pump();
   // Two moves: the first crosses the slop, the second lands on the corner.
@@ -229,6 +238,7 @@ Future<void> marquee(
   await gesture.moveTo(onCanvas(tester, x2, y2));
   await tester.pump();
   await gesture.up();
+  if (addToSelection) await tester.sendKeyUpEvent(editorModifier);
   await tester.pumpAndSettle();
 }
 
