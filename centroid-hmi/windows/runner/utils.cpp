@@ -70,16 +70,34 @@ void RedirectIOToFile(const char* path) {
   HANDLE hConsole = ::GetStdHandle(STD_OUTPUT_HANDLE);
   if (hConsole != nullptr && hConsole != INVALID_HANDLE_VALUE &&
       ::GetFileType(hConsole) != FILE_TYPE_UNKNOWN) {
+    // Take our own reference to the console/pipe before touching fd 1.
+    //
+    // fd 1 owns the handle GetStdHandle just returned, and the _dup2 below
+    // closes fd 1. That frees the handle *value*, and Windows hands out the
+    // lowest free value next -- which is the duplicate _dup2 immediately
+    // creates for the pipe. `hConsole` then silently becomes a second write
+    // end of the very pipe the pump reads from, and every line the pump
+    // forwards arrives back at it: the same bytes are copied to the log
+    // forever, at the speed of a memcpy loop.
+    HANDLE hConsoleOwned = nullptr;
+    if (!::DuplicateHandle(::GetCurrentProcess(), hConsole,
+                           ::GetCurrentProcess(), &hConsoleOwned, 0, FALSE,
+                           DUPLICATE_SAME_ACCESS)) {
+      hConsoleOwned = nullptr;
+    }
+
     HANDLE readEnd = nullptr, writeEnd = nullptr;
     SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     if (::CreatePipe(&readEnd, &writeEnd, &sa, 0)) {
       // Pump: everything written to fd 1/2 arrives here and is forwarded to
       // both sinks. Detached -- it ends when the process does.
-      std::thread([readEnd, hConsole, hFile]() {
+      std::thread([readEnd, hConsoleOwned, hFile]() {
         char buf[4096];
         DWORD got = 0, put = 0;
         while (::ReadFile(readEnd, buf, sizeof(buf), &got, nullptr) && got > 0) {
-          ::WriteFile(hConsole, buf, got, &put, nullptr);
+          if (hConsoleOwned != nullptr) {
+            ::WriteFile(hConsoleOwned, buf, got, &put, nullptr);
+          }
           ::WriteFile(hFile, buf, got, &put, nullptr);
           ::FlushFileBuffers(hFile);
         }
@@ -106,6 +124,9 @@ void RedirectIOToFile(const char* path) {
       // Pipe setup failed part-way: fall through to the plain redirect
       // below rather than losing output entirely.
       ::CloseHandle(readEnd);
+    }
+    if (hConsoleOwned != nullptr) {
+      ::CloseHandle(hConsoleOwned);
     }
   }
 
