@@ -243,6 +243,24 @@ void main() {
       );
     });
 
+    // An asset far enough right that the pane's preferred width would sit on
+    // top of it. What is under review: the pane has narrowed just enough to
+    // leave the asset visible beside it — daylight between box and pane, and
+    // a form that still lays out at the reduced width.
+    testWidgets('the pane steps aside from the asset it is editing',
+        (tester) async {
+      await _pumpEditor(
+        tester,
+        theme: dark,
+        pages: _onePage([_labelledBox(0.72, 0.4, 'CN04')]),
+      );
+      await _openConfigPane(tester, 0.72, 0.4);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_config_pane_step_aside.png'),
+      );
+    });
+
     // The widest editor in the registry: two columns, a subdevice list and a
     // dropdown. If the pane's default width is wrong, it shows here first.
     testWidgets('bus coupler — the densest editor', (tester) async {
