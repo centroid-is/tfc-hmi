@@ -158,18 +158,8 @@ class PageManager {
                 "key": "Button preview",
                 "feedback": null,
                 "icon": null,
-                "outward_color": {
-                  "red": 0.2980392156862745,
-                  "green": 0.6862745098039216,
-                  "blue": 0.3137254901960784,
-                  "alpha": 1.0
-                },
-                "inward_color": {
-                  "red": 0.2980392156862745,
-                  "green": 0.6862745098039216,
-                  "blue": 0.3137254901960784,
-                  "alpha": 1.0
-                },
+                "outward_color": {"role": "primary"},
+                "inward_color": {"role": "secondary"},
                 "button_type": "circle",
                 "is_toggle": false
               },
@@ -187,18 +177,8 @@ class PageManager {
                 "text": "A light",
                 "textPos": "right",
                 "key": "Led preview",
-                "on_color": {
-                  "red": 0.2980392156862745,
-                  "green": 0.6862745098039216,
-                  "blue": 0.3137254901960784,
-                  "alpha": 1.0
-                },
-                "off_color": {
-                  "red": 0.2980392156862745,
-                  "green": 0.6862745098039216,
-                  "blue": 0.3137254901960784,
-                  "alpha": 1.0
-                },
+                "on_color": {"role": "green"},
+                "off_color": {"role": "grey"},
                 "led_type": "circle"
               },
               {

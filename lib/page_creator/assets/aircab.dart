@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/page_creator/assets/button.dart';
@@ -134,15 +135,15 @@ class AirCab extends StatelessWidget {
     final ledConfigs = <LEDConfig>[
       LEDConfig(
         key: config.pressureKey,
-        onColor: Colors.green,
-        offColor: Colors.white,
+        onColor: AssetColor.green,
+        offColor: const AssetColor.literal(Colors.white),
       )
         ..text = "Pressure"
         ..textPos = TextPos.right,
       LEDConfig(
         key: config.softStartKey,
-        onColor: Colors.green,
-        offColor: Colors.white,
+        onColor: AssetColor.green,
+        offColor: const AssetColor.literal(Colors.white),
       )
         ..text = "Soft start"
         ..textPos = TextPos.right,
@@ -151,8 +152,8 @@ class AirCab extends StatelessWidget {
     // Big circular Button + optional feedback
     var buttonConfig = ButtonConfig(
       key: config.buttonKey,
-      outwardColor: Colors.red,
-      inwardColor: Colors.red.shade700,
+      outwardColor: const AssetColor.literal(Colors.red),
+      inwardColor: AssetColor.literal(Colors.red.shade700),
       buttonType: ButtonType.circle,
     )..textPos = TextPos.inside;
 

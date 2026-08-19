@@ -12,15 +12,21 @@ import 'package:tfc_dart/core/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
 import 'package:tfc/providers/state_man.dart';
 
 part 'conveyor_gate.g.dart';
 
-/// Color helpers for JSON serialization of Color objects.
-int _colorToJson(Color c) => c.value;
-Color _colorFromJson(int v) => Color(v);
+/// Color helpers for JSON serialization: legacy records hold a raw ARGB int
+/// (a literal), newer ones may hold `{"role": ...}` (follows the scheme).
+Object _colorToJson(AssetColor c) => c.role != null
+    ? const AssetColorConverter().toJson(c)
+    : c.literal!.toARGB32();
+AssetColor _colorFromJson(dynamic v) => v is int
+    ? AssetColor.literal(Color(v))
+    : const AssetColorConverter().fromJson((v as Map).cast<String, dynamic>());
 
 /// The type of gate mechanism.
 @JsonEnum()
@@ -95,10 +101,10 @@ class ConveyorGateConfig extends BaseAsset {
   int? closeTimeMs;
 
   @JsonKey(fromJson: _colorFromJson, toJson: _colorToJson)
-  Color openColor;
+  AssetColor openColor;
 
   @JsonKey(fromJson: _colorFromJson, toJson: _colorToJson)
-  Color closedColor;
+  AssetColor closedColor;
 
   /// For slider variant: when true, active/open state pushes lid OUT.
   /// When false, active state pulls lid IN (retracted).
@@ -132,8 +138,8 @@ class ConveyorGateConfig extends BaseAsset {
     this.openAngleDegrees = 45.0,
     this.openTimeMs = 800,
     this.closeTimeMs,
-    this.openColor = Colors.green,
-    this.closedColor = Colors.white,
+    this.openColor = AssetColor.green,
+    this.closedColor = const AssetColor.literal(Colors.white),
     this.sliderActiveOut = true,
     this.sliderLidAngleDegrees = 0.0,
     this.sliderLidLength = 0.55,
@@ -364,9 +370,9 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         if (!snapshot.hasData) {
           baseColor = Colors.grey; // DATA-06: grey when disconnected
         } else if (isOpen) {
-          baseColor = widget.config.openColor;
+          baseColor = widget.config.openColor.resolve(context);
         } else {
-          baseColor = widget.config.closedColor;
+          baseColor = widget.config.closedColor.resolve(context);
         }
 
         // If force feedback keys are configured, nest a second StreamBuilder
@@ -441,10 +447,10 @@ class _ForceDialogContent extends ConsumerWidget {
               stateColor = Colors.grey;
               stateLabel = 'Disconnected';
             } else if (snapshot.data!.asBool) {
-              stateColor = config.openColor;
+              stateColor = config.openColor.resolve(context);
               stateLabel = 'Open';
             } else {
-              stateColor = config.closedColor;
+              stateColor = config.closedColor.resolve(context);
               stateLabel = 'Closed';
             }
             return Row(
@@ -585,19 +591,20 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
   }
 
   /// Select the correct painter for the config editor live preview.
-  CustomPainter _previewPainter(ConveyorGateConfig config) {
+  CustomPainter _previewPainter(BuildContext context, ConveyorGateConfig config) {
+    final stateColor = config.openColor.resolve(context);
     switch (config.gateVariant) {
       case GateVariant.pneumatic:
         return PneumaticDiverterPainter(
           progress: _previewProgress,
-          stateColor: config.openColor,
+          stateColor: stateColor,
           openAngleDegrees: config.openAngleDegrees,
           side: config.side,
         );
       case GateVariant.slider:
         return SliderGatePainter(
           progress: _previewProgress,
-          stateColor: config.openColor,
+          stateColor: stateColor,
           side: config.side,
           activeOut: config.sliderActiveOut,
           lidAngleDegrees: config.sliderLidAngleDegrees,
@@ -607,7 +614,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
       case GateVariant.pusher:
         return PusherGatePainter(
           progress: _previewProgress,
-          stateColor: config.openColor,
+          stateColor: stateColor,
           side: config.side,
         );
     }
@@ -643,7 +650,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
                   width: 150,
                   height: 150,
                   child: CustomPaint(
-                    painter: _previewPainter(config),
+                    painter: _previewPainter(context, config),
                   ),
                 ),
                 IconButton(
@@ -799,7 +806,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           const SizedBox(height: 16),
 
           // -- Open Color --
-          ColorPickerRow(
+          AssetColorPickerRow(
             label: 'Open Color',
             color: config.openColor,
             onChanged: (color) => setState(() => config.openColor = color),
@@ -807,7 +814,7 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           const SizedBox(height: 12),
 
           // -- Closed Color --
-          ColorPickerRow(
+          AssetColorPickerRow(
             label: 'Closed Color',
             color: config.closedColor,
             onChanged: (color) => setState(() => config.closedColor = color),

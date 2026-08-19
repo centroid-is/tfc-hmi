@@ -19,6 +19,327 @@ abstract final class SolarizedColors {
   static const Color green = Color.fromARGB(255, 133, 153, 0);
 }
 
+/// ISA-101 inspired palette: gray surfaces, muted equipment-state colors,
+/// saturated red reserved for faults/alarms.
+abstract final class MutedColors {
+  static const Color surfaceLight = Color(0xFFECEDEE);
+  static const Color containerLight = Color(0xFFDEE1E3);
+  static const Color onSurfaceLight = Color(0xFF3C3F41);
+  static const Color surfaceDark = Color(0xFF232628);
+  static const Color containerDark = Color(0xFF2C3033);
+  static const Color onSurfaceDark = Color(0xFFC2C7CB);
+  static const Color slate = Color(0xFF4A6572);
+  static const Color slateBright = Color(0xFF7FA3B8);
+  static const Color gray = Color(0xFF78838B);
+
+  static const Color runningGreen = Color(0xFF8DA28A);
+  static const Color manualOchre = Color(0xFFB09F72);
+  static const Color cleanBlue = Color(0xFF8197AC);
+  static const Color stoppedGray = Color(0xFF8E8E8E);
+  static const Color stoppedGrayDark = Color(0xFF636363);
+  static const Color alarmRed = Color(0xFFD32F2F);
+  static const Color unknownViolet = Color(0xFF9588A7);
+  static const Color onState = Color(0xFFF5F5F5);
+}
+
+/// Semantic equipment-state colors (conveyors, drives, ...), themed per
+/// color scheme so assets don't hardcode `Colors.*`.
+@immutable
+class HmiStateColors extends ThemeExtension<HmiStateColors> {
+  const HmiStateColors({
+    required this.green,
+    required this.yellow,
+    required this.blue,
+    required this.grey,
+    required this.red,
+    required this.violet,
+    required this.onState,
+  });
+
+  /// The scheme's green — running/auto by convention.
+  final Color green;
+
+  /// The scheme's yellow — manual mode by convention.
+  final Color yellow;
+
+  /// The scheme's blue — cleaning mode by convention.
+  final Color blue;
+
+  /// The scheme's grey — stopped/idle by convention.
+  final Color grey;
+
+  /// The scheme's red — faults/trips; deliberately the most saturated.
+  final Color red;
+
+  /// The scheme's violet — unreadable/unrecognized state by convention.
+  final Color violet;
+
+  /// Text/glyphs drawn on top of any of the state colors above.
+  final Color onState;
+
+  static const solarizedLight = HmiStateColors(
+    green: SolarizedColors.green,
+    yellow: SolarizedColors.yellow,
+    blue: SolarizedColors.blue,
+    grey: SolarizedColors.base1,
+    red: SolarizedColors.red,
+    violet: SolarizedColors.magenta,
+    onState: SolarizedColors.base3,
+  );
+
+  static const solarizedDark = HmiStateColors(
+    green: SolarizedColors.green,
+    yellow: SolarizedColors.yellow,
+    blue: SolarizedColors.blue,
+    grey: SolarizedColors.base01,
+    red: SolarizedColors.red,
+    violet: SolarizedColors.magenta,
+    onState: SolarizedColors.base3,
+  );
+
+  static const mutedLight = HmiStateColors(
+    green: MutedColors.runningGreen,
+    yellow: MutedColors.manualOchre,
+    blue: MutedColors.cleanBlue,
+    grey: MutedColors.stoppedGray,
+    red: MutedColors.alarmRed,
+    violet: MutedColors.unknownViolet,
+    onState: MutedColors.onState,
+  );
+
+  static const mutedDark = HmiStateColors(
+    green: MutedColors.runningGreen,
+    yellow: MutedColors.manualOchre,
+    blue: MutedColors.cleanBlue,
+    grey: MutedColors.stoppedGrayDark,
+    red: MutedColors.alarmRed,
+    violet: MutedColors.unknownViolet,
+    onState: MutedColors.onState,
+  );
+
+  /// The theme's state colors, falling back to Solarized when the theme was
+  /// built without the extension (bare `MaterialApp` in tests).
+  static HmiStateColors of(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.extension<HmiStateColors>() ??
+        (theme.brightness == Brightness.dark ? solarizedDark : solarizedLight);
+  }
+
+  @override
+  HmiStateColors copyWith({
+    Color? green,
+    Color? yellow,
+    Color? blue,
+    Color? grey,
+    Color? red,
+    Color? violet,
+    Color? onState,
+  }) {
+    return HmiStateColors(
+      green: green ?? this.green,
+      yellow: yellow ?? this.yellow,
+      blue: blue ?? this.blue,
+      grey: grey ?? this.grey,
+      red: red ?? this.red,
+      violet: violet ?? this.violet,
+      onState: onState ?? this.onState,
+    );
+  }
+
+  @override
+  HmiStateColors lerp(HmiStateColors? other, double t) {
+    if (other == null) return this;
+    return HmiStateColors(
+      green: Color.lerp(green, other.green, t)!,
+      yellow: Color.lerp(yellow, other.yellow, t)!,
+      blue: Color.lerp(blue, other.blue, t)!,
+      grey: Color.lerp(grey, other.grey, t)!,
+      red: Color.lerp(red, other.red, t)!,
+      violet: Color.lerp(violet, other.violet, t)!,
+      onState: Color.lerp(onState, other.onState, t)!,
+    );
+  }
+}
+
+/// Alarm severity colors — deliberately identical in every scheme, so the
+/// alarm system is unaffected by the operator's color scheme choice: alarm
+/// colors must stay reserved and consistent (ISA-18.2). The values are what
+/// the alarm banners have always rendered under Solarized.
+@immutable
+class AlarmColors extends ThemeExtension<AlarmColors> {
+  const AlarmColors({
+    required this.info,
+    required this.onInfo,
+    required this.warning,
+    required this.onWarning,
+    required this.error,
+    required this.onError,
+  });
+
+  final Color info;
+  final Color onInfo;
+  final Color warning;
+  final Color onWarning;
+  final Color error;
+  final Color onError;
+
+  static const light = AlarmColors(
+    info: SolarizedColors.green,
+    onInfo: SolarizedColors.base2,
+    warning: SolarizedColors.yellow,
+    onWarning: SolarizedColors.base2,
+    error: SolarizedColors.red,
+    onError: SolarizedColors.base2,
+  );
+
+  static const dark = AlarmColors(
+    info: SolarizedColors.blue,
+    onInfo: SolarizedColors.base02,
+    warning: SolarizedColors.yellow,
+    onWarning: SolarizedColors.base02,
+    error: SolarizedColors.red,
+    onError: SolarizedColors.base02,
+  );
+
+  static AlarmColors of(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.extension<AlarmColors>() ??
+        (theme.brightness == Brightness.dark ? dark : light);
+  }
+
+  @override
+  AlarmColors copyWith({
+    Color? info,
+    Color? onInfo,
+    Color? warning,
+    Color? onWarning,
+    Color? error,
+    Color? onError,
+  }) {
+    return AlarmColors(
+      info: info ?? this.info,
+      onInfo: onInfo ?? this.onInfo,
+      warning: warning ?? this.warning,
+      onWarning: onWarning ?? this.onWarning,
+      error: error ?? this.error,
+      onError: onError ?? this.onError,
+    );
+  }
+
+  @override
+  AlarmColors lerp(AlarmColors? other, double t) {
+    if (other == null) return this;
+    return AlarmColors(
+      info: Color.lerp(info, other.info, t)!,
+      onInfo: Color.lerp(onInfo, other.onInfo, t)!,
+      warning: Color.lerp(warning, other.warning, t)!,
+      onWarning: Color.lerp(onWarning, other.onWarning, t)!,
+      error: Color.lerp(error, other.error, t)!,
+      onError: Color.lerp(onError, other.onError, t)!,
+    );
+  }
+}
+
+/// A named slot in the active color scheme, for persisting "theme green"
+/// instead of a baked RGBA value. Assets that store an [HmiColorRole] follow
+/// the scheme when it changes; a literal color never does.
+enum HmiColorRole {
+  green('Green'),
+  yellow('Yellow'),
+  blue('Blue'),
+  grey('Grey'),
+  red('Red'),
+  violet('Violet'),
+  primary('Primary'),
+  secondary('Secondary'),
+  tertiary('Tertiary'),
+  error('Error'),
+  surface('Surface'),
+  onSurface('Text');
+
+  const HmiColorRole(this.displayName);
+
+  /// Label shown in the color picker's theme strip.
+  final String displayName;
+
+  Color resolve(BuildContext context) {
+    final states = HmiStateColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    switch (this) {
+      case HmiColorRole.green:
+        return states.green;
+      case HmiColorRole.yellow:
+        return states.yellow;
+      case HmiColorRole.blue:
+        return states.blue;
+      case HmiColorRole.grey:
+        return states.grey;
+      case HmiColorRole.red:
+        return states.red;
+      case HmiColorRole.violet:
+        return states.violet;
+      case HmiColorRole.primary:
+        return scheme.primary;
+      case HmiColorRole.secondary:
+        return scheme.secondary;
+      case HmiColorRole.tertiary:
+        return scheme.tertiary;
+      case HmiColorRole.error:
+        return scheme.error;
+      case HmiColorRole.surface:
+        return scheme.surface;
+      case HmiColorRole.onSurface:
+        return scheme.onSurface;
+    }
+  }
+}
+
+/// The color schemes offered in preferences. [solarized] is the historical
+/// default; [muted] follows ISA-101's muted, gray-first guidance.
+enum AppColorScheme {
+  solarized('Solarized'),
+  muted('Muted');
+
+  const AppColorScheme(this.displayName);
+  final String displayName;
+}
+
+ThemeData _themeFromColorScheme(ColorScheme scheme, HmiStateColors states) {
+  return ThemeData(
+      colorScheme: scheme,
+      extensions: [
+        states,
+        scheme.brightness == Brightness.dark
+            ? AlarmColors.dark
+            : AlarmColors.light,
+      ],
+      fontFamily: 'roboto-mono',
+      textTheme: const TextTheme(),
+      textSelectionTheme: TextSelectionThemeData(
+        selectionColor: scheme.primary.withAlpha(100),
+        selectionHandleColor: scheme.primary,
+      ),
+      scrollbarTheme: const ScrollbarThemeData(
+          thumbVisibility: WidgetStatePropertyAll(true)),
+      useMaterial3: true,
+      inputDecorationTheme: const InputDecorationTheme(
+        border: OutlineInputBorder(),
+      ),
+      shadowColor: scheme.surfaceBright,
+      // The bottom sheet maximum is used for board datetime picker
+      bottomSheetTheme:
+          BottomSheetThemeData(constraints: BoxConstraints(maxWidth: 1000.0)));
+}
+
+(ThemeData, ThemeData) themesForScheme(AppColorScheme scheme) {
+  switch (scheme) {
+    case AppColorScheme.solarized:
+      return solarized();
+    case AppColorScheme.muted:
+      return muted();
+  }
+}
+
 (ThemeData, ThemeData) solarized() {
   ColorScheme solarizedDarkColorScheme = const ColorScheme.dark(
     brightness: Brightness.dark,
@@ -52,28 +373,49 @@ abstract final class SolarizedColors {
     surfaceContainerHighest: SolarizedColors.base2,
   );
 
-  ThemeData themeFromColorScheme(ColorScheme scheme) {
-    return ThemeData(
-        colorScheme: scheme,
-        fontFamily: 'roboto-mono',
-        textTheme: const TextTheme(),
-        textSelectionTheme: TextSelectionThemeData(
-          selectionColor: scheme.primary.withAlpha(100),
-          selectionHandleColor: scheme.primary,
-        ),
-        scrollbarTheme: const ScrollbarThemeData(
-            thumbVisibility: WidgetStatePropertyAll(true)),
-        useMaterial3: true,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
-        shadowColor: scheme.surfaceBright,
-        // The bottom sheet maximum is used for board datetime picker
-        bottomSheetTheme: BottomSheetThemeData(
-            constraints: BoxConstraints(maxWidth: 1000.0)));
-  }
-
-  final solarizedLight = themeFromColorScheme(solarizedLightColorScheme);
-  final solarizedDark = themeFromColorScheme(solarizedDarkColorScheme);
+  final solarizedLight = _themeFromColorScheme(
+      solarizedLightColorScheme, HmiStateColors.solarizedLight);
+  final solarizedDark = _themeFromColorScheme(
+      solarizedDarkColorScheme, HmiStateColors.solarizedDark);
   return (solarizedLight, solarizedDark);
+}
+
+(ThemeData, ThemeData) muted() {
+  ColorScheme isaDarkColorScheme = const ColorScheme.dark(
+    brightness: Brightness.dark,
+    primary: MutedColors.slateBright,
+    onPrimary: MutedColors.surfaceDark,
+    secondary: MutedColors.gray,
+    onSecondary: MutedColors.surfaceDark,
+    error: MutedColors.alarmRed,
+    onError: MutedColors.onState,
+    surface: MutedColors.surfaceDark,
+    onSurface: MutedColors.onSurfaceDark,
+    tertiary: MutedColors.manualOchre,
+    onTertiary: MutedColors.surfaceDark,
+    surfaceContainerLow: MutedColors.containerDark,
+    surfaceContainerHighest: MutedColors.containerDark,
+  );
+
+  ColorScheme isaLightColorScheme = const ColorScheme.light(
+    brightness: Brightness.light,
+    primary: MutedColors.slate,
+    onPrimary: MutedColors.surfaceLight,
+    secondary: MutedColors.gray,
+    onSecondary: MutedColors.surfaceLight,
+    error: MutedColors.alarmRed,
+    onError: MutedColors.onState,
+    surface: MutedColors.surfaceLight,
+    onSurface: MutedColors.onSurfaceLight,
+    tertiary: MutedColors.manualOchre,
+    onTertiary: MutedColors.surfaceLight,
+    surfaceContainerLow: MutedColors.containerLight,
+    surfaceContainerHighest: MutedColors.containerLight,
+  );
+
+  final isaLight =
+      _themeFromColorScheme(isaLightColorScheme, HmiStateColors.mutedLight);
+  final isaDark =
+      _themeFromColorScheme(isaDarkColorScheme, HmiStateColors.mutedDark);
+  return (isaLight, isaDark);
 }

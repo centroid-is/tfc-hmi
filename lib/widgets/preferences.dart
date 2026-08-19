@@ -19,9 +19,94 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
 import '../core/feature_flags.dart';
 import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
+import '../providers/theme.dart';
+import '../theme.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc/core/preferences.dart';
 import 'package:tfc_dart/core/database.dart';
+
+/// Appearance settings section for the preferences page.
+///
+/// Selects the default color scheme ([AppColorScheme], stored under
+/// `color_scheme`); light/dark stays on the app-bar brightness toggle.
+class AppearanceSection extends ConsumerWidget {
+  const AppearanceSection({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final schemeAsync = ref.watch(colorSchemeNotifierProvider);
+    final scheme = schemeAsync.valueOrNull ?? AppColorScheme.solarized;
+
+    return Card(
+      child: ListTile(
+        leading: const FaIcon(FontAwesomeIcons.palette, size: 20),
+        title: const Text('Color Scheme'),
+        subtitle: const Text('Default color scheme for the whole app'),
+        trailing: DropdownButton<AppColorScheme>(
+          value: scheme,
+          onChanged: (value) {
+            if (value == null) return;
+            ref.read(colorSchemeNotifierProvider.notifier).setScheme(value);
+          },
+          items: [
+            for (final option in AppColorScheme.values)
+              DropdownMenuItem(
+                value: option,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _SchemeSwatches(scheme: option),
+                    const SizedBox(width: 8),
+                    Text(option.displayName),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small strip of the scheme's equipment-state colors, so the dropdown
+/// shows what each option looks like before it is applied.
+class _SchemeSwatches extends StatelessWidget {
+  const _SchemeSwatches({required this.scheme});
+
+  final AppColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final HmiStateColors states = switch (scheme) {
+      AppColorScheme.solarized =>
+        dark ? HmiStateColors.solarizedDark : HmiStateColors.solarizedLight,
+      AppColorScheme.muted =>
+        dark ? HmiStateColors.mutedDark : HmiStateColors.mutedLight,
+    };
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final color in [
+          states.green,
+          states.yellow,
+          states.blue,
+          states.grey,
+          states.red,
+        ])
+          Container(
+            width: 10,
+            height: 14,
+            margin: const EdgeInsets.only(right: 2),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+      ],
+    );
+  }
+}
 
 /// MCP Server settings section for the preferences page.
 ///

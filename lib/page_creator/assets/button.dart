@@ -15,7 +15,7 @@ import 'icon.dart'; // Reuse IconConfig + IconAsset
 import '../../providers/state_man.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/converter/color_converter.dart'
-    show ColorConverter, OptionalColorConverter;
+    show AssetColor, AssetColorConverter, ColorConverter, OptionalColorConverter;
 
 part 'button.g.dart';
 
@@ -83,13 +83,13 @@ class ButtonConfig extends BaseAsset {
   @JsonKey(name: 'icon')
   IconConfig? icon;
 
-  @ColorConverter()
+  @AssetColorConverter()
   @JsonKey(name: 'outward_color')
-  Color outwardColor;
+  AssetColor outwardColor;
 
-  @ColorConverter()
+  @AssetColorConverter()
   @JsonKey(name: 'inward_color')
-  Color inwardColor;
+  AssetColor inwardColor;
 
   @JsonKey(name: 'button_type')
   ButtonType buttonType;
@@ -215,8 +215,8 @@ class ButtonConfig extends BaseAsset {
 
   ButtonConfig({
     required this.key,
-    required this.outwardColor,
-    required this.inwardColor,
+    this.outwardColor = AssetColor.primary,
+    this.inwardColor = AssetColor.secondary,
     required this.buttonType,
     this.icon,
     this.feedback,
@@ -232,8 +232,8 @@ class ButtonConfig extends BaseAsset {
 
   ButtonConfig.preview()
       : key = previewStr,
-        outwardColor = Colors.green,
-        inwardColor = Colors.grey,
+        outwardColor = AssetColor.primary,
+        inwardColor = AssetColor.secondary,
         buttonType = ButtonType.circle,
         icon = null,
         feedback = null,
@@ -376,8 +376,8 @@ class _ButtonState extends ConsumerState<Button> {
         final shouldShowPressed =
             widget.config.isToggle ? _isToggled : isPressed;
         return shouldShowPressed
-            ? widget.config.inwardColor
-            : widget.config.outwardColor;
+            ? widget.config.inwardColor.resolve(context)
+            : widget.config.outwardColor.resolve(context);
       },
     );
   }
@@ -511,13 +511,14 @@ class _ButtonState extends ConsumerState<Button> {
         return StreamBuilder<Color>(
           stream: colorStream(stateMan),
           builder: (context, snapshot) {
-            final color = snapshot.data ?? widget.config.outwardColor;
+            final color =
+                snapshot.data ?? widget.config.outwardColor.resolve(context);
             return _buildButton(color);
           },
         );
       },
-      loading: () => _buildButton(widget.config.outwardColor),
-      error: (_, __) => _buildButton(widget.config.outwardColor),
+      loading: () => _buildButton(widget.config.outwardColor.resolve(context)),
+      error: (_, __) => _buildButton(widget.config.outwardColor.resolve(context)),
     );
   }
 }
@@ -665,7 +666,7 @@ class _ConfigContentState extends State<_ConfigContent> {
         const SizedBox(height: 16),
 
         // Colors
-        ColorPickerRow(
+        AssetColorPickerRow(
           label: 'Outward Color',
           color: widget.config.outwardColor,
           onChanged: (value) {
@@ -676,7 +677,7 @@ class _ConfigContentState extends State<_ConfigContent> {
         ),
         const SizedBox(height: 16),
 
-        ColorPickerRow(
+        AssetColorPickerRow(
           label: 'Inward Color',
           color: widget.config.inwardColor,
           onChanged: (value) {

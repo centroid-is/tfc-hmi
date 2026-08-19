@@ -2,35 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../converter/color_converter.dart';
+import '../../theme.dart';
 import 'pane_chrome.dart';
 import 'standard_dialog.dart';
 
-/// The quick-pick palette: one swatch per material hue plus white and black.
-///
-/// These are the colours an HMI actually uses — running green, fault red,
-/// warning amber, "this belt" blue — so most picks are one tap here instead
-/// of a hunt through the HSV square. The full picker below stays for
-/// tweaking.
-const List<Color> kColorPickerPresets = [
-  Colors.red,
-  Colors.deepOrange,
-  Colors.orange,
-  Colors.amber,
-  Colors.yellow,
-  Colors.lime,
-  Colors.green,
-  Colors.teal,
-  Colors.cyan,
-  Colors.blue,
-  Colors.indigo,
-  Colors.purple,
-  Colors.pink,
-  Colors.brown,
-  Colors.grey,
-  Colors.blueGrey,
-  Colors.white,
-  Colors.black,
-];
+/// The quick-pick strip: the active color scheme's own colours — equipment
+/// states (running, manual, cleaning, stopped, fault, unknown) and the main
+/// theme roles — plus white and black. Most picks are one tap here instead
+/// of a hunt through the HSV square, and everything on offer already fits
+/// the scheme. The full picker below stays for tweaking.
+List<(HmiColorRole?, Color)> colorPickerSwatches(BuildContext context) => [
+      for (final role in HmiColorRole.values) (role, role.resolve(context)),
+      (null, Colors.white),
+      (null, Colors.black),
+    ];
 
 /// Colours the operator actually settled on, newest first, persisted across
 /// restarts.
@@ -64,10 +50,11 @@ abstract final class RecentColors {
     return _cache!;
   }
 
-  /// Records a confirmed pick: move-to-front, capped at [max]. Preset
-  /// colours are skipped — recording them would only duplicate the strip.
-  static Future<void> add(Color color) async {
-    if (kColorPickerPresets.any((p) => p.toARGB32() == color.toARGB32())) {
+  /// Records a confirmed pick: move-to-front, capped at [max]. Colours in
+  /// [skipArgb] (the theme strip on display) are skipped — recording them
+  /// would only duplicate the strip.
+  static Future<void> add(Color color, {Set<int> skipArgb = const {}}) async {
+    if (skipArgb.contains(color.toARGB32())) {
       return;
     }
     final list = List<Color>.of(await load())
@@ -178,6 +165,69 @@ class ColorPickerRow extends StatelessWidget {
   }
 }
 
+/// [ColorPickerRow] for [AssetColor] fields: the swatch shows the resolved
+/// colour, the trailing label names the role ("Running", "Primary") when the
+/// value follows the theme, and the dialog is role-aware.
+class AssetColorPickerRow extends StatelessWidget {
+  final String label;
+  final AssetColor color;
+  final ValueChanged<AssetColor> onChanged;
+  final String? subtitle;
+  final bool enableAlpha;
+
+  const AssetColorPickerRow({
+    super.key,
+    required this.label,
+    required this.color,
+    required this.onChanged,
+    this.subtitle,
+    this.enableAlpha = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: () => showAssetColorPickerDialog(
+        context: context,
+        title: label,
+        subtitle: subtitle,
+        initialColor: color,
+        onChanged: onChanged,
+        enableAlpha: enableAlpha,
+      ),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: color.resolve(context),
+                shape: BoxShape.circle,
+                border: Border.all(color: theme.colorScheme.outline),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(label)),
+            if (color.role case final role?) ...[
+              Text(
+                role.displayName,
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.outline),
+              ),
+              const SizedBox(width: 4),
+            ],
+            Icon(Icons.edit, size: 16, color: theme.colorScheme.outline),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 Future<Color?> showColorPickerDialog({
   required BuildContext context,
   required Color initialColor,
@@ -186,18 +236,74 @@ Future<Color?> showColorPickerDialog({
   String title = 'Select colour',
   String? subtitle,
   bool enableAlpha = true,
+}) async {
+  final picked = await _showPickerDialog(
+    context: context,
+    initial: AssetColor.literal(initialColor),
+    onChanged: onChanged == null ? null : (c) => onChanged(c.resolve(context)),
+    onCleared: onCleared,
+    title: title,
+    subtitle: subtitle,
+    enableAlpha: enableAlpha,
+    // Plain-Color callers can't store a role — a theme swatch tap becomes
+    // the swatch's current literal value.
+    roleAware: false,
+  );
+  if (picked == null) return null;
+  if (!context.mounted) return picked.literal;
+  return picked.resolve(context);
+}
+
+/// [showColorPickerDialog] for [AssetColor] fields: theme-strip picks return
+/// the *role* (so the asset follows scheme switches), HSV picks a literal.
+Future<AssetColor?> showAssetColorPickerDialog({
+  required BuildContext context,
+  required AssetColor initialColor,
+  ValueChanged<AssetColor>? onChanged,
+  String title = 'Select colour',
+  String? subtitle,
+  bool enableAlpha = true,
 }) {
-  var picked = initialColor;
-  return showStandardDialog<Color>(
+  return _showPickerDialog(
+    context: context,
+    initial: initialColor,
+    onChanged: onChanged,
+    onCleared: null,
+    title: title,
+    subtitle: subtitle,
+    enableAlpha: enableAlpha,
+    roleAware: true,
+  );
+}
+
+Future<AssetColor?> _showPickerDialog({
+  required BuildContext context,
+  required AssetColor initial,
+  required ValueChanged<AssetColor>? onChanged,
+  required VoidCallback? onCleared,
+  required String title,
+  required String? subtitle,
+  required bool enableAlpha,
+  required bool roleAware,
+}) {
+  final swatches = colorPickerSwatches(context);
+  final swatchArgb = {for (final (_, c) in swatches) c.toARGB32()};
+  var picked = initial;
+  return showStandardDialog<AssetColor>(
     context: context,
     title: title,
     subtitle: subtitle,
     icon: Icons.palette,
     width: 420,
-    builder: (_) => _ColorPickerContent(
-      initialColor: initialColor,
+    builder: (dialogContext) => _ColorPickerContent(
+      initialColor: initial.role != null
+          ? initial.resolve(dialogContext)
+          : initial.literal!,
+      initialRole: initial.role,
+      swatches: swatches,
+      roleAware: roleAware,
       enableAlpha: enableAlpha,
-      onColorChanged: (c) {
+      onPicked: (c) {
         picked = c;
         onChanged?.call(c);
       },
@@ -216,8 +322,11 @@ Future<Color?> showColorPickerDialog({
         label: 'Done',
         onPressed: () {
           // Fire-and-forget: the recents strip is a convenience, and a
-          // failed preferences write must not hold the dialog open.
-          RecentColors.add(picked);
+          // failed preferences write must not hold the dialog open. Role
+          // picks are not recorded — they are already in the strip.
+          if (picked.literal case final c?) {
+            RecentColors.add(c, skipArgb: swatchArgb);
+          }
           Navigator.of(dialogContext).pop(picked);
         },
       ),
@@ -225,21 +334,28 @@ Future<Color?> showColorPickerDialog({
   );
 }
 
-/// Quick-pick strip (recents + presets) over the full HSV picker.
+/// Quick-pick strip (recents + theme swatches) over the full HSV picker.
 ///
-/// Tapping a swatch is a full selection — it streams through [onColorChanged]
+/// Tapping a swatch is a full selection — it streams through [onPicked]
 /// like a drag would, and the HSV picker below jumps to it (its
 /// `didUpdateWidget` re-syncs from `pickerColor`), so a preset can still be
-/// tweaked before Done.
+/// tweaked before Done. In role-aware mode a theme swatch selects the *role*;
+/// any HSV/recents interaction demotes the pick back to a literal.
 class _ColorPickerContent extends StatefulWidget {
   final Color initialColor;
+  final HmiColorRole? initialRole;
+  final List<(HmiColorRole?, Color)> swatches;
+  final bool roleAware;
   final bool enableAlpha;
-  final ValueChanged<Color> onColorChanged;
+  final ValueChanged<AssetColor> onPicked;
 
   const _ColorPickerContent({
     required this.initialColor,
+    required this.initialRole,
+    required this.swatches,
+    required this.roleAware,
     required this.enableAlpha,
-    required this.onColorChanged,
+    required this.onPicked,
   });
 
   @override
@@ -248,6 +364,7 @@ class _ColorPickerContent extends StatefulWidget {
 
 class _ColorPickerContentState extends State<_ColorPickerContent> {
   late Color _current = widget.initialColor;
+  late HmiColorRole? _currentRole = widget.initialRole;
   List<Color> _recents = RecentColors._cache ?? const [];
 
   @override
@@ -260,16 +377,23 @@ class _ColorPickerContentState extends State<_ColorPickerContent> {
     });
   }
 
-  void _select(Color c) {
-    setState(() => _current = c);
-    widget.onColorChanged(c);
+  void _select(Color c, {HmiColorRole? role}) {
+    setState(() {
+      _current = c;
+      _currentRole = role;
+    });
+    widget.onPicked(widget.roleAware && role != null
+        ? AssetColor.role(role)
+        : AssetColor.literal(c));
   }
 
-  Widget _swatch(Color c) {
-    final selected = c.toARGB32() == _current.toARGB32();
+  Widget _swatch(Color c, {HmiColorRole? role}) {
+    final selected = role != null && widget.roleAware
+        ? role == _currentRole
+        : _currentRole == null && c.toARGB32() == _current.toARGB32();
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: () => _select(c),
+    final swatch = InkWell(
+      onTap: () => _select(c, role: role),
       borderRadius: BorderRadius.circular(6),
       child: Container(
         width: 28,
@@ -284,6 +408,8 @@ class _ColorPickerContentState extends State<_ColorPickerContent> {
         ),
       ),
     );
+    if (role == null) return swatch;
+    return Tooltip(message: role.displayName, child: swatch);
   }
 
   @override
@@ -303,10 +429,15 @@ class _ColorPickerContentState extends State<_ColorPickerContent> {
           ),
           const SizedBox(height: 8),
         ],
+        Text(widget.roleAware ? 'Theme (follows color scheme)' : 'Theme',
+            style: labelStyle),
+        const SizedBox(height: 4),
         Wrap(
           spacing: 6,
           runSpacing: 6,
-          children: [for (final c in kColorPickerPresets) _swatch(c)],
+          children: [
+            for (final (role, c) in widget.swatches) _swatch(c, role: role)
+          ],
         ),
         const SizedBox(height: 8),
         ColorPicker(
@@ -321,7 +452,8 @@ class _ColorPickerContentState extends State<_ColorPickerContent> {
             // rebuild here would fight it. _current still tracks the value
             // so the strip's selection ring is right on the next rebuild.
             _current = c;
-            widget.onColorChanged(c);
+            _currentRole = null;
+            widget.onPicked(AssetColor.literal(c));
           },
           pickerAreaHeightPercent: 0.8,
         ),

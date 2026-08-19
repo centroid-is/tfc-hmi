@@ -498,7 +498,9 @@ class MyApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeAsync = ref.watch(themeNotifierProvider);
-    final (light, dark) = solarized();
+    final schemeAsync = ref.watch(colorSchemeNotifierProvider);
+    final (light, dark) = themesForScheme(
+        schemeAsync.valueOrNull ?? AppColorScheme.solarized);
 
     // Initialize MCP server lifecycle management
     ref.watch(mcpServerLifecycleProvider);

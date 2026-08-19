@@ -9,6 +9,7 @@ import '../chat/asset_context_menu.dart' show buildAlarmContextBlock;
 import '../chat/chat_overlay.dart' show ChatContextType;
 import '../core/feature_flags.dart';
 import '../providers/alarm.dart';
+import '../theme.dart';
 import 'base_scaffold.dart';
 import 'boolean_expression.dart';
 import 'fuzzy_search_bar.dart';
@@ -17,23 +18,18 @@ import 'proposal_visual.dart';
 /// The alarm system's (background, foreground) colour pair for a level —
 /// the single source every alarm surface reads: the list cards, the app-bar
 /// banner, and the alarm visibility beacon asset.
+///
+/// Reads [AlarmColors], not the [ColorScheme]: alarm colors are the same
+/// under every color scheme on purpose.
 (Color, Color) alarmLevelColors(BuildContext context, AlarmLevel level) {
+  final colors = AlarmColors.of(context);
   switch (level) {
     case AlarmLevel.info:
-      return (
-        Theme.of(context).colorScheme.primaryContainer,
-        Theme.of(context).colorScheme.onPrimaryContainer
-      );
+      return (colors.info, colors.onInfo);
     case AlarmLevel.warning:
-      return (
-        Theme.of(context).colorScheme.tertiaryContainer,
-        Theme.of(context).colorScheme.onTertiaryContainer
-      );
+      return (colors.warning, colors.onWarning);
     case AlarmLevel.error:
-      return (
-        Theme.of(context).colorScheme.errorContainer,
-        Theme.of(context).colorScheme.onErrorContainer
-      );
+      return (colors.error, colors.onError);
   }
 }
 

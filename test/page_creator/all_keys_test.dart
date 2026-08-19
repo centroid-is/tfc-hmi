@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/converter/color_converter.dart';
 
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/page_creator/assets/number.dart';
@@ -20,8 +21,8 @@ void main() {
     test('LEDConfig returns single key', () {
       final led = LEDConfig(
         key: 'pump.running',
-        onColor: Colors.green,
-        offColor: Colors.red,
+        onColor: AssetColor.literal(Colors.green),
+        offColor: AssetColor.literal(Colors.red),
       );
       expect(led.allKeys, ['pump.running']);
     });
@@ -29,8 +30,8 @@ void main() {
     test('LEDConfig with empty key returns empty list', () {
       final led = LEDConfig(
         key: '',
-        onColor: Colors.green,
-        offColor: Colors.red,
+        onColor: AssetColor.literal(Colors.green),
+        offColor: AssetColor.literal(Colors.red),
       );
       expect(led.allKeys, isEmpty);
     });
@@ -58,8 +59,8 @@ void main() {
     test('ButtonConfig without feedback returns single key', () {
       final button = ButtonConfig(
         key: 'cmd.start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
       );
       expect(button.allKeys, ['cmd.start']);
@@ -69,8 +70,8 @@ void main() {
       final feedback = FeedbackConfig()..key = 'fb.running';
       final button = ButtonConfig(
         key: 'cmd.start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
         feedback: feedback,
       );
@@ -84,8 +85,8 @@ void main() {
       final feedback = FeedbackConfig(); // key defaults to "Default"
       final button = ButtonConfig(
         key: 'cmd.start',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
         feedback: feedback,
       );
@@ -191,9 +192,9 @@ void main() {
 
     test('LEDColumnConfig returns keys from all child LEDs', () {
       final ledCol = LEDColumnConfig(leds: [
-        LEDConfig(key: 'alarm.1', onColor: Colors.red, offColor: Colors.grey),
-        LEDConfig(key: 'alarm.2', onColor: Colors.red, offColor: Colors.grey),
-        LEDConfig(key: 'alarm.3', onColor: Colors.red, offColor: Colors.grey),
+        LEDConfig(key: 'alarm.1', onColor: AssetColor.literal(Colors.red), offColor: AssetColor.literal(Colors.grey)),
+        LEDConfig(key: 'alarm.2', onColor: AssetColor.literal(Colors.red), offColor: AssetColor.literal(Colors.grey)),
+        LEDConfig(key: 'alarm.3', onColor: AssetColor.literal(Colors.red), offColor: AssetColor.literal(Colors.grey)),
       ]);
       final keys = ledCol.allKeys;
       expect(keys, containsAll(['alarm.1', 'alarm.2', 'alarm.3']));
@@ -202,8 +203,8 @@ void main() {
 
     test('LEDColumnConfig deduplicates keys', () {
       final ledCol = LEDColumnConfig(leds: [
-        LEDConfig(key: 'alarm.1', onColor: Colors.red, offColor: Colors.grey),
-        LEDConfig(key: 'alarm.1', onColor: Colors.green, offColor: Colors.grey),
+        LEDConfig(key: 'alarm.1', onColor: AssetColor.literal(Colors.red), offColor: AssetColor.literal(Colors.grey)),
+        LEDConfig(key: 'alarm.1', onColor: AssetColor.literal(Colors.green), offColor: AssetColor.literal(Colors.grey)),
       ]);
       final keys = ledCol.allKeys;
       expect(keys, ['alarm.1']);
@@ -302,8 +303,8 @@ void main() {
       final feedback = FeedbackConfig()..key = 'same.key';
       final button = ButtonConfig(
         key: 'same.key',
-        outwardColor: Colors.green,
-        inwardColor: Colors.grey,
+        outwardColor: AssetColor.literal(Colors.green),
+        inwardColor: AssetColor.literal(Colors.grey),
         buttonType: ButtonType.circle,
         feedback: feedback,
       );
@@ -314,8 +315,8 @@ void main() {
     test('plcAssetKey is NOT included in allKeys', () {
       final led = LEDConfig(
         key: 'pump.running',
-        onColor: Colors.green,
-        offColor: Colors.red,
+        onColor: AssetColor.literal(Colors.green),
+        offColor: AssetColor.literal(Colors.red),
       );
       led.plcAssetKey = 'plc.pump_control';
       final keys = led.allKeys;

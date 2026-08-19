@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 
@@ -10,14 +11,14 @@ void main() {
       expect(config.kind, SensorKind.redLight);
     });
 
-    test('default activeColor is Colors.green', () {
+    test('default activeColor follows the scheme running color', () {
       final config = SensorConfig();
-      expect(config.activeColor, Colors.green);
+      expect(config.activeColor, AssetColor.green);
     });
 
-    test('default inactiveColor is Colors.grey.shade400', () {
+    test('default inactiveColor follows the scheme stopped color', () {
       final config = SensorConfig();
-      expect(config.inactiveColor.value, Colors.grey.shade400.value);
+      expect(config.inactiveColor, AssetColor.grey);
     });
 
     test('default invertActivePolarity is false', () {
@@ -81,8 +82,8 @@ void main() {
         invertActivePolarity: true,
         risingEdgeDelayKey: '/r',
         fallingEdgeDelayKey: '/f',
-        activeColor: Colors.cyan,
-        inactiveColor: Colors.orange,
+        activeColor: AssetColor.literal(Colors.cyan),
+        inactiveColor: AssetColor.literal(Colors.orange),
         tag: 'PE-101A',
         showTag: true,
       );
@@ -119,8 +120,8 @@ void main() {
       expect(config.risingEdgeDelayKey, '');
       expect(config.fallingEdgeDelayKey, '');
       expect(config.tag, isNull);
-      expect(config.activeColor, Colors.green);
-      expect(config.inactiveColor.value, Colors.grey.shade400.value);
+      expect(config.activeColor, AssetColor.green);
+      expect(config.inactiveColor, AssetColor.grey);
       expect(config.showTag, isFalse);
     });
 
