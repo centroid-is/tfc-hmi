@@ -33,22 +33,55 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   /// Test-only streams for subscription simulation.
   final Map<String, Stream<DynamicValue>> _testStreams;
 
+  /// Test-only stand-in for [StateMan.subscribe].
+  ///
+  /// When supplied, [init] awaits this instead of reading [_testStreams],
+  /// which lets a test exercise the *awaiting* half of a subscription --
+  /// including one that never resolves.
+  final Future<Stream<DynamicValue>> Function(String key)? _testSubscribe;
+
+  /// How long a single [StateMan.subscribe] may take before the key is
+  /// abandoned.
+  ///
+  /// A key whose mapping names no server -- or names one that is not
+  /// configured -- can leave `subscribe` pending forever rather than
+  /// throwing. Without a deadline that one key would stall the whole
+  /// warm-up and leave every later key permanently null.
+  final Duration subscribeTimeout;
+
+  /// Default deadline for a single subscription.
+  static const defaultSubscribeTimeout = Duration(seconds: 15);
+
+  /// How many keys are subscribed concurrently.
+  ///
+  /// Bounded so a large mapping (>1500 keys in a full plant config) does not
+  /// open every subscription against the OPC UA clients at once.
+  static const subscribeConcurrency = 32;
+
   /// Creates a [StateManStateReader] backed by the given [StateMan].
-  StateManStateReader(StateMan stateMan)
+  StateManStateReader(StateMan stateMan,
+      {this.subscribeTimeout = defaultSubscribeTimeout})
       : _stateMan = stateMan,
         _keys = stateMan.keyMappings.nodes.keys.toList(),
-        _testStreams = const {};
+        _testStreams = const {},
+        _testSubscribe = null;
 
   /// Creates a [StateManStateReader] for unit testing without a real [StateMan].
   ///
   /// Accepts a list of keys and a map of streams to simulate subscriptions.
   /// This avoids the need for a real OPC UA / FFI-backed StateMan instance.
+  ///
+  /// Pass [subscribe] instead of [streams] to simulate the await on
+  /// `StateMan.subscribe` itself -- e.g. a key that never resolves.
   StateManStateReader.forTest({
     required List<String> keys,
-    required Map<String, Stream<DynamicValue>> streams,
+    Map<String, Stream<DynamicValue>> streams = const {},
+    Future<Stream<DynamicValue>> Function(String key)? subscribe,
+    this.subscribeTimeout = defaultSubscribeTimeout,
   })  : _stateMan = null,
         _keys = keys,
-        _testStreams = streams;
+        _testStreams = streams,
+        _testSubscribe = subscribe;
 
   /// Subscribes to each key and populates the value cache.
   ///
@@ -56,41 +89,53 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   /// (int, double, bool, String, or null) via the `.value` property
   /// and stores it in the cache for synchronous access.
   ///
-  /// Keys that fail to subscribe (e.g., OPC UA disconnected) are silently
-  /// skipped -- they will return null from [getValue] until subscribed.
+  /// Keys that fail to subscribe (e.g., OPC UA disconnected) or that do not
+  /// resolve within [subscribeTimeout] are skipped -- they will return null
+  /// from [getValue], but they no longer hold up the remaining keys.
   Future<void> init() async {
-    for (final key in _keys) {
-      try {
-        Stream<DynamicValue> stream;
-        if (_stateMan == null) {
-          // Test mode: use provided streams
-          if (_testStreams.containsKey(key)) {
-            stream = _testStreams[key]!;
-          } else {
-            continue;
-          }
-        } else {
-          stream = await _stateMan.subscribe(key);
-        }
+    for (var i = 0; i < _keys.length; i += subscribeConcurrency) {
+      final batch = _keys.skip(i).take(subscribeConcurrency);
+      await Future.wait(batch.map(_subscribeKey));
+    }
+  }
 
-        final sub = stream.listen(
-          (dynamicValue) {
-            try {
-              _cache[key] = _extractValue(dynamicValue);
-            } catch (e) {
-              _cache[key] = dynamicValue.toString();
-            }
-          },
-          onError: (error) {
-            io.stderr.writeln(
-                'StateManStateReader: subscription error for key "$key": $error');
-          },
-        );
-        _subscriptions.add(sub);
-      } catch (e) {
-        io.stderr.writeln(
-            'StateManStateReader: failed to subscribe to key "$key": $e');
+  /// Subscribes a single key and wires its stream into [_cache].
+  ///
+  /// Never throws: subscription failures are logged and the key is left
+  /// uncached.
+  Future<void> _subscribeKey(String key) async {
+    try {
+      Stream<DynamicValue> stream;
+      if (_stateMan == null) {
+        // Test mode: await the injected subscriber, else use provided streams
+        if (_testSubscribe != null) {
+          stream = await _testSubscribe(key).timeout(subscribeTimeout);
+        } else if (_testStreams.containsKey(key)) {
+          stream = _testStreams[key]!;
+        } else {
+          return;
+        }
+      } else {
+        stream = await _stateMan.subscribe(key).timeout(subscribeTimeout);
       }
+
+      final sub = stream.listen(
+        (dynamicValue) {
+          try {
+            _cache[key] = _extractValue(dynamicValue);
+          } catch (e) {
+            _cache[key] = dynamicValue.toString();
+          }
+        },
+        onError: (error) {
+          io.stderr.writeln(
+              'StateManStateReader: subscription error for key "$key": $error');
+        },
+      );
+      _subscriptions.add(sub);
+    } catch (e) {
+      io.stderr.writeln(
+          'StateManStateReader: failed to subscribe to key "$key": $e');
     }
   }
 

@@ -141,8 +141,16 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
   try {
     final stateMan = await ref.read(stateManProvider.future);
     final reader = StateManStateReader(stateMan);
-    await reader.init();
     _serverLifecycle.activeStateReader = reader;
+    // Subscribe in the background.  init() awaits one subscribe per key,
+    // and StateMan._monitor waits on awaitConnect() with no timeout and
+    // then retries forever, so a single unreachable node blocks the loop
+    // permanently -- and even the happy path is one round trip per key.
+    // The server must come up regardless; the cache fills in as the
+    // subscriptions land, and getValue() returns null until then.
+    unawaited(reader.init().catchError((Object e) {
+      io.stderr.writeln('_startServer: state reader init failed: $e');
+    }));
     stateReader = reader;
   } catch (e) {
     io.stderr

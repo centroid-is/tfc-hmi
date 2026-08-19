@@ -178,6 +178,8 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
     final bridgeState = bridge.currentState;
     final isRunning =
         bridgeState.connectionState == McpConnectionState.connected;
+    final isStarting =
+        bridgeState.connectionState == McpConnectionState.connecting;
 
     return Card(
       child: ExpansionTile(
@@ -188,9 +190,15 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
               ? (bridgeState.port != null
                   ? 'Running on port ${bridgeState.port}'
                   : 'Running (in-process)')
-              : 'Stopped',
+              : isStarting
+                  ? 'Starting…'
+                  : 'Stopped',
           style: TextStyle(
-            color: isRunning ? Colors.green : Colors.grey,
+            color: isRunning
+                ? Colors.green
+                : isStarting
+                    ? Colors.orange
+                    : Colors.grey,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -288,7 +296,9 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
                           : bridgeState.connectionState ==
                                   McpConnectionState.error
                               ? 'Error: ${bridgeState.error}'
-                              : 'Server stopped',
+                              : isStarting
+                                  ? 'Server starting…'
+                                  : 'Server stopped',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -348,11 +358,13 @@ class _ClaudeDesktopConfigSnippet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Claude Desktop speaks Streamable HTTP directly -- the older
+    // `npx mcp-remote` stdio bridge is not needed.
     final config = '''{
   "mcpServers": {
     "centroid-hmi": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:$port/mcp"]
+      "type": "http",
+      "url": "http://127.0.0.1:$port/mcp"
     }
   }
 }''';
