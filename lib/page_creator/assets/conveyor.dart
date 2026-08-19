@@ -1531,9 +1531,43 @@ class _ConveyorState extends ConsumerState<Conveyor>
       _stopSimulateBatchesTimer();
     }
 
-    // Determine which streams to subscribe to
-    final streams = <Stream<DynamicValue>>[];
+    // Determine which streams to subscribe to.
+    //
+    // Nullable, because the decorative streams are allowed to be absent.
+    // See [optional] below.
+    final streams = <Stream<DynamicValue?>>[];
     final streamLabels = <String>[];
+
+    /// Wraps a stream whose failure must not take the whole conveyor down.
+    ///
+    /// `key` (the drive) is what the asset actually *is*: if it fails, the
+    /// conveyor genuinely has no state and rendering it grey is correct.
+    /// Batches, frequency, trip and auger RPM are decoration on top of that.
+    ///
+    /// They used to be fatal anyway, because CombineLatestStream propagates
+    /// an error from ANY input and the builder turns `snapshot.hasError`
+    /// into the disconnected visual. Binding `batchesKey` to a node the PLC
+    /// answered with BadDeviceFailure therefore greyed out every SPB
+    /// conveyor on the home page -- while their drive keys were healthy and
+    /// reading fine the whole time. Wet-area conveyors, which have no
+    /// `batchesKey`, were unaffected, which is what gave the game away.
+    ///
+    /// There is a second, quieter half to the same bug: CombineLatest does
+    /// not emit until EVERY input has produced a first value, so an optional
+    /// stream that merely stays silent leaves `!snapshot.hasData` and blanks
+    /// the asset just as effectively as an error does. Hence `startWith`.
+    ///
+    /// So: swallow the error to null, and seed a null up front. A dead
+    /// optional stream now costs its own overlay and nothing else, and it
+    /// starts working again by itself when the PLC serves that node.
+    Stream<DynamicValue?> optional(Stream<DynamicValue> source) => source
+        .map<DynamicValue?>((value) => value)
+        .transform(
+          StreamTransformer<DynamicValue?, DynamicValue?>.fromHandlers(
+            handleError: (error, stackTrace, sink) => sink.add(null),
+          ),
+        )
+        .startWith(null);
 
     if (widget.config.key != null && widget.config.key!.isNotEmpty) {
       streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
@@ -1547,44 +1581,48 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
     if (widget.config.batchesKey != null &&
         widget.config.batchesKey!.isNotEmpty) {
-      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+      streams.add(optional(
+          ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.batchesKey!)
                 .asStream()
                 .switchMap((s) => s),
-          ));
+          )));
       streamLabels.add('batches');
     }
 
     if (widget.config.frequencyKey != null &&
         widget.config.frequencyKey!.isNotEmpty) {
-      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+      streams.add(optional(
+          ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.frequencyKey!)
                 .asStream()
                 .switchMap((s) => s),
-          ));
+          )));
       streamLabels.add('frequency');
     }
 
     if (widget.config.tripKey != null && widget.config.tripKey!.isNotEmpty) {
-      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+      streams.add(optional(
+          ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.tripKey!)
                 .asStream()
                 .switchMap((s) => s),
-          ));
+          )));
       streamLabels.add('trip');
     }
 
     if (widget.config.augerRpmKey != null &&
         widget.config.augerRpmKey!.isNotEmpty) {
-      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
+      streams.add(optional(
+          ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
                 .subscribe(widget.config.augerRpmKey!)
                 .asStream()
                 .switchMap((s) => s),
-          ));
+          )));
       streamLabels.add('augerRpm');
     }
 
@@ -1596,10 +1634,14 @@ class _ConveyorState extends ConsumerState<Conveyor>
     return StreamBuilder<Map<String, DynamicValue>>(
       stream: CombineLatestStream(
         streams,
-        (List<DynamicValue> values) {
+        (List<DynamicValue?> values) {
           final result = <String, DynamicValue>{};
           for (int i = 0; i < streamLabels.length; i++) {
-            result[streamLabels[i]] = values[i];
+            // A null here is an optional stream that has failed or has not
+            // reported yet. Leaving the label out entirely keeps the
+            // downstream `dynValue['batches'] != null` checks honest.
+            final value = values[i];
+            if (value != null) result[streamLabels[i]] = value;
           }
           return result;
         },
