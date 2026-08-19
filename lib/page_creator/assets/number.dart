@@ -276,6 +276,18 @@ class _NumberConfigEditorState extends State<_NumberConfigEditor> {
   }
 }
 
+/// The text a readout actually renders: the value, and the units only when
+/// there are units.
+///
+/// The empty string is not a unit. It read like one to `units != null`, which
+/// appended the separator anyway and left a trailing space on every value. The
+/// readout is laid out with `FittedBox(BoxFit.contain)`, so that space is
+/// measured like any other glyph and the digits are scaled down to make room
+/// for it -- around a tenth of the available width, spent on nothing, on every
+/// unitless readout in the app.
+String numberDisplayText(String value, String? units) =>
+    (units == null || units.isEmpty) ? value : '$value $units';
+
 class NumberWidget extends ConsumerWidget {
   final NumberConfig config;
   const NumberWidget({super.key, required this.config});
@@ -325,7 +337,7 @@ class NumberWidget extends ConsumerWidget {
 
   Widget _buildDisplay(BuildContext context, String value,
       {WidgetRef? ref, DynamicValue? rawSnapshot}) {
-    final displayText = config.units != null ? '$value ${config.units}' : value;
+    final displayText = numberDisplayText(value, config.units);
 
     Widget displayWidget = FittedBox(
       fit: BoxFit.contain,
