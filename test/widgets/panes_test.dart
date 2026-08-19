@@ -199,6 +199,107 @@ void main() {
     });
   });
 
+  group('SidePane — programmatic width', () {
+    // What the page editor's step-aside leans on: it narrows the open pane
+    // off the asset being edited with [setSidePaneWidth], and widens it back
+    // later — all without disturbing the width the operator has chosen.
+    testWidgets('setSidePaneWidth resizes the open pane', (tester) async {
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          width: 380,
+          builder: (_) => demoPane(),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(SidePane)).width, 380);
+
+      setSidePaneWidth(340);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(SidePane)).width, 340);
+
+      setSidePaneWidth(380);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(SidePane)).width, 380);
+    });
+
+    testWidgets('it does not report through onWidthChanged', (tester) async {
+      // onWidthChanged is how a caller remembers the width the OPERATOR chose;
+      // a programmatic step-aside echoing through it would overwrite that
+      // memory with the temporary width.
+      final reported = <double>[];
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          width: 380,
+          resizable: true,
+          onWidthChanged: reported.add,
+          builder: (_) => demoPane(),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      setSidePaneWidth(340);
+      await tester.pumpAndSettle();
+      expect(reported, isEmpty);
+
+      // The drag handle still reports afterwards.
+      final pane = tester.getRect(find.byType(SidePane));
+      final gesture =
+          await tester.startGesture(Offset(pane.left + 5, pane.center.dy));
+      for (var i = 0; i < 4; i++) {
+        await gesture.moveBy(const Offset(-20, 0));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(reported, isNotEmpty);
+      expect(reported.last, greaterThan(360),
+          reason: 'an 80px drag left widens the pane from 340, and the drag '
+              'handle keeps reporting after a programmatic resize');
+    });
+
+    testWidgets('the width is floored at the pane minimum', (tester) async {
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          width: 380,
+          builder: (_) => demoPane(),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      setSidePaneWidth(10);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(SidePane)).width,
+          SidePaneDefaults.minWidth);
+    });
+
+    testWidgets('a mismatched id is a no-op', (tester) async {
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          width: 380,
+          builder: (_) => demoPane(),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      setSidePaneWidth(340, id: 'b');
+      await tester.pumpAndSettle();
+      expect(tester.getRect(find.byType(SidePane)).width, 380,
+          reason: 'only the pane asked for may be resized');
+    });
+  });
+
   group('SidePane — non-modal', () {
     testWidgets('the page behind stays interactive', (tester) async {
       var backgroundTaps = 0;

@@ -222,6 +222,15 @@ bool showSidePane({
 /// that opened it after a page change.
 void closeSidePane({String? id}) => SidePaneHost.close(id: id);
 
+/// Resizes the open pane (only the pane [id] when given), animated.
+///
+/// Unlike the drag handle this does not report through `onWidthChanged`: it
+/// exists for a caller stepping the pane aside temporarily — the page editor
+/// narrowing it off the asset being edited — and the width the operator chose
+/// must survive the detour.
+void setSidePaneWidth(double width, {String? id}) =>
+    SidePaneHost.setWidth(width, id: id);
+
 /// Whether a pane (optionally a specific [id]) is currently open.
 bool isSidePaneOpen({String? id}) =>
     SidePaneHost.openId != null && (id == null || SidePaneHost.openId == id);
@@ -274,6 +283,16 @@ abstract final class SidePaneHost {
       ),
     );
     overlay.insert(_entry!);
+  }
+
+  static void setWidth(double width, {String? id}) {
+    if (_openId == null) return;
+    if (id != null && id != _openId) return;
+    final next =
+        width < SidePaneDefaults.minWidth ? SidePaneDefaults.minWidth : width;
+    if (next == _width) return;
+    _width = next;
+    _shellKey?.currentState?._applyExternalWidth();
   }
 
   static void close({String? id}) {
@@ -400,6 +419,17 @@ class _SidePaneShellState extends State<_SidePaneShell>
     await _controller.reverse();
   }
 
+  /// Whether the pane's geometry glides to its next width. True for
+  /// [SidePaneHost.setWidth] — a programmatic step-aside should read as the
+  /// pane moving out of the way — and false for the drag handle, which must
+  /// track the pointer exactly.
+  bool _animateWidthChange = false;
+
+  void _applyExternalWidth() {
+    _animateWidthChange = true;
+    _paneEntry.markNeedsBuild();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Full-screen, but hit-transparent everywhere the pane is not: the
@@ -470,7 +500,11 @@ class _SidePaneShellState extends State<_SidePaneShell>
       );
     }
 
-    return Positioned(
+    return AnimatedPositioned(
+      duration: _animateWidthChange
+          ? const Duration(milliseconds: 180)
+          : Duration.zero,
+      curve: Curves.easeOutCubic,
       right: margin,
       top: top,
       bottom: bottom,
@@ -490,6 +524,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
     final next = (SidePaneHost._width + delta).clamp(minWidth, maxWidth);
     if (next == SidePaneHost._width) return;
     SidePaneHost._width = next;
+    _animateWidthChange = false;
     // The pane sits in its own route's OverlayEntry, which a plain setState
     // here would not reach.
     _paneEntry.markNeedsBuild();
