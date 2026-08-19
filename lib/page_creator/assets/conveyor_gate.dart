@@ -411,8 +411,11 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 }
 
 // ---------------------------------------------------------------------------
-// Force dialog content widget (shown inside AlertDialog)
+// Force pane content (shown inside the gate SidePane)
 // ---------------------------------------------------------------------------
+
+/// Tri-state force selection: force open, no force (release), force close.
+enum _ForceSelection { open, none, close }
 
 class _ForceDialogContent extends ConsumerWidget {
   final ConveyorGateConfig config;
@@ -423,10 +426,25 @@ class _ForceDialogContent extends ConsumerWidget {
     required this.writeForce,
   });
 
+  /// The opposite force is cleared before the requested one is set so the
+  /// PLC never sees both force commands high at once. `None` clears both —
+  /// this is the unforce path.
+  Future<void> _apply(_ForceSelection selection) async {
+    switch (selection) {
+      case _ForceSelection.open:
+        await writeForce(config.forceCloseKey, false);
+        await writeForce(config.forceOpenKey, true);
+      case _ForceSelection.close:
+        await writeForce(config.forceOpenKey, false);
+        await writeForce(config.forceCloseKey, true);
+      case _ForceSelection.none:
+        await writeForce(config.forceOpenKey, false);
+        await writeForce(config.forceCloseKey, false);
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final feedbackColor = Theme.of(context).colorScheme.tertiary;
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -472,65 +490,69 @@ class _ForceDialogContent extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
 
-        // -- Force Open button with feedback (INT-02, INT-03) --
-        _forceButton(
-          context: context,
-          ref: ref,
-          label: 'Force Open',
-          writeKey: config.forceOpenKey,
-          feedbackKey: config.forceOpenFeedbackKey,
-          feedbackColor: feedbackColor,
-        ),
-        const SizedBox(height: 8),
-
-        // -- Force Close button with feedback --
-        _forceButton(
-          context: context,
-          ref: ref,
-          label: 'Force Close',
-          writeKey: config.forceCloseKey,
-          feedbackKey: config.forceCloseFeedbackKey,
-          feedbackColor: feedbackColor,
-        ),
+        // -- Force selector (INT-02, INT-03) --
+        // Open / None / Close, mirroring the Low/None/High idiom of the IO
+        // module panes. Selection tracks the feedback keys; None releases
+        // any active force.
+        _forceSelector(context, ref),
       ],
     );
   }
 
-  Widget _forceButton({
-    required BuildContext context,
-    required WidgetRef ref,
-    required String label,
-    required String writeKey,
-    required String feedbackKey,
-    required Color feedbackColor,
-  }) {
-    return StreamBuilder<bool>(
+  Widget _forceSelector(BuildContext context, WidgetRef ref) {
+    final hasFeedback = config.forceOpenFeedbackKey.isNotEmpty ||
+        config.forceCloseFeedbackKey.isNotEmpty;
+
+    return StreamBuilder<_ForceSelection>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (sm) => _boolFeedback(sm, feedbackKey),
-          ),
-      builder: (context, fbSnapshot) {
-        final isActive = fbSnapshot.data ?? false;
-        return Row(
-          children: [
-            Expanded(
-              child: ElevatedButton(
-                onPressed:
-                    writeKey.isEmpty ? null : () => writeForce(writeKey, true),
-                child: Text(label),
-              ),
+            (sm) => Rx.combineLatest2(
+              _boolFeedback(sm, config.forceOpenFeedbackKey),
+              _boolFeedback(sm, config.forceCloseFeedbackKey),
+              (bool open, bool close) => open
+                  ? _ForceSelection.open
+                  : close
+                      ? _ForceSelection.close
+                      : _ForceSelection.none,
             ),
-            if (isActive) ...[
-              const SizedBox(width: 8),
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: feedbackColor,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ],
+          ),
+      builder: (context, snapshot) {
+        // Without feedback keys the live force state is unknown — show no
+        // selection instead of claiming None.
+        final selection = hasFeedback && snapshot.hasData
+            ? {snapshot.data!}
+            : <_ForceSelection>{};
+        return SegmentedButton<_ForceSelection>(
+          emptySelectionAllowed: true,
+          showSelectedIcon: false,
+          style: SegmentedButton.styleFrom(
+            selectedBackgroundColor:
+                Theme.of(context).colorScheme.tertiaryContainer,
+            selectedForegroundColor:
+                Theme.of(context).colorScheme.onTertiaryContainer,
+          ),
+          segments: [
+            ButtonSegment(
+              value: _ForceSelection.open,
+              label: const Text('Open'),
+              enabled: config.forceOpenKey.isNotEmpty,
+            ),
+            ButtonSegment(
+              value: _ForceSelection.none,
+              label: const Text('None'),
+              enabled: config.forceOpenKey.isNotEmpty ||
+                  config.forceCloseKey.isNotEmpty,
+            ),
+            ButtonSegment(
+              value: _ForceSelection.close,
+              label: const Text('Close'),
+              enabled: config.forceCloseKey.isNotEmpty,
+            ),
           ],
+          selected: selection,
+          // Re-tapping the highlighted segment yields an empty set — treat
+          // it as a release, same as picking None.
+          onSelectionChanged: (sel) =>
+              _apply(sel.isEmpty ? _ForceSelection.none : sel.first),
         );
       },
     );
