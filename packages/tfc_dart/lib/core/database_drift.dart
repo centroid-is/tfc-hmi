@@ -592,8 +592,12 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
   Future<void> createTable(
       String tableName, Map<String, String> columns) async {
-    final columnDefs =
-        columns.entries.map((e) => '${e.key} ${e.value}').join(', ');
+    // Quote column names: inserts and ALTERs quote them, so creation must
+    // too — unquoted mixed-case names fold to lowercase and every insert
+    // then fails with 42703 undefined column.
+    final columnDefs = columns.entries
+        .map((e) => '"${e.key.replaceAll('"', '""')}" ${e.value}')
+        .join(', ');
 
     await customStatement('''
       CREATE TABLE IF NOT EXISTS "$tableName" (
