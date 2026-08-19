@@ -320,14 +320,18 @@ void main() {
           body: Center(
             child: RepaintBoundary(
               key: _beaconKey,
-              child: Container(
+              // Material, not a ColoredBox — CheckboxListTile paints its ink
+              // on the nearest Material and newer Flutters assert on it.
+              child: Material(
                 color: light.colorScheme.surface,
-                width: 312,
-                padding: const EdgeInsets.all(8),
-                child: AlarmPickerList(
-                  alarms: alarms,
-                  selectedUids: ['cn3', 'cn7'],
-                  onSelectionChanged: () {},
+                child: Container(
+                  width: 312,
+                  padding: const EdgeInsets.all(8),
+                  child: AlarmPickerList(
+                    alarms: alarms,
+                    selectedUids: ['cn3', 'cn7'],
+                    onSelectionChanged: () {},
+                  ),
                 ),
               ),
             ),
