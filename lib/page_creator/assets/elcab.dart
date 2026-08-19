@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,7 +32,10 @@ class ElCabConfig extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    return ElCab(config: this);
+    return LayoutRotatedBox(
+      angle: (coordinates.angle ?? 0.0) * math.pi / 180,
+      child: ElCab(config: this),
+    );
   }
 
   @override
@@ -64,6 +69,7 @@ class _ElCabConfigEditorState extends State<_ElCabConfigEditor> {
           const SizedBox(height: 16),
           CoordinatesField(
             initialValue: widget.config.coordinates,
+            enableAngle: true,
             onChanged: (v) => setState(() => widget.config.coordinates = v),
           ),
         ],
