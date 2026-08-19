@@ -101,6 +101,47 @@ void main() {
       collector.stopCollect(entry);
     });
 
+    test('sample_members collects chosen struct members into ONE table',
+        () async {
+      // The motor case: the subscribed key is the HMI struct, the timeseries
+      // carries frequency + current as one row per sample in one table.
+      const testName = 'sample_members_test';
+      final streamController = StreamController<DynamicValue>();
+
+      final entry = CollectEntry(
+        key: testName,
+        name: testName,
+        sampleMembers: ['p_stat_Frequency', 'p_stat_Current'],
+      );
+      await collector.collectEntryImpl(entry, streamController.stream,
+          skipFirstSample: false);
+
+      DynamicValue struct(double freq, double current) =>
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+            'p_stat_Frequency': freq,
+            'p_stat_Current': current,
+            'p_stat_xRunning': true,
+          }));
+
+      streamController.add(struct(25.0, 3.2));
+      await waitUntilInserted(testName);
+      // A sample where no member resolves must be skipped, not inserted.
+      streamController.add(DynamicValue(value: 'not a struct'));
+      streamController.add(struct(50.0, 6.4));
+
+      final insertedData = await waitUntilInserted(testName, minCount: 2);
+      expect(insertedData.length, 2,
+          reason: 'The non-struct sample must have been skipped.');
+      // Each row is an object keyed by the member paths — the unchosen
+      // members do not ride along.
+      expect(insertedData[0].value, contains('p_stat_Frequency'));
+      expect(insertedData[0].value, contains('p_stat_Current'));
+      expect(insertedData[0].value, isNot(contains('p_stat_xRunning')));
+
+      streamController.close();
+      collector.stopCollect(entry);
+    });
+
     test('collectImpl fail if value type is not same', () async {
       // Arrange
       const testName = 'multi_test';

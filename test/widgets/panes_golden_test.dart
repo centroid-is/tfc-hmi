@@ -27,7 +27,14 @@ import 'package:tfc/page_creator/assets/conveyor.dart'
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/io_pane.dart';
 import 'package:tfc/page_creator/assets/sensor.dart'
-    show SensorConfig, SensorFbPane, SensorFbState, SensorKind;
+    show
+        SensorConfig,
+        SensorFbPane,
+        SensorFbState,
+        SensorKind,
+        kSensorTrendSeries,
+        kSensorTrendCompactPadding,
+        sensorTrendColors;
 import 'package:tfc/painter/beckhoff/io8.dart' show IOState;
 import 'package:tfc/theme.dart';
 import 'package:tfc/widgets/graph.dart';
@@ -807,7 +814,71 @@ Widget _sensorFbPane(BuildContext context, {bool fault = false}) {
     ),
     // Goldens never write; the pane is rendered, not driven.
     onWrite: (_, __) {},
+    // The key has data gathering configured, so the pane carries the inline
+    // blocked/clear trend — canned samples through the real chart, like the
+    // conveyor's `_TrendChart` above.
+    trendTile: PaneGraphTile(
+      height: 84,
+      preview: const _SensorTrendChart(compact: true),
+      expandedTitle: 'CN04-S1 — trend',
+      expandedBuilder: (_) => const _SensorTrendChart(),
+    ),
   );
+}
+
+/// Canned blocked/clear samples through the REAL chart machinery — the
+/// sensor-pane counterpart of [_TrendChart]. A photo eye blocking as batches
+/// pass: mostly clear, blocked a beat at a time.
+class _SensorTrendChart extends StatelessWidget {
+  const _SensorTrendChart({this.compact = false});
+
+  final bool compact;
+
+  /// 2026-08-11 09:00:00Z, then a sample every 20 s.
+  static const int _t0 = 1786532400000;
+  static const int _step = 20000;
+
+  static const List<int> _blocked = [
+    0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final data = <Map<String, dynamic>>[
+      for (var i = 0; i < _blocked.length; i++)
+        {
+          'x': (_t0 + i * _step).toDouble(),
+          'y': _blocked[i],
+          's': kSensorTrendSeries,
+        },
+    ];
+    // An explicit xRange, not xSpan — same reasoning as [_TrendChart]: the
+    // live chart windows on DateTime.now(), which would slide the canned
+    // samples out of view and churn this golden every run.
+    return Graph(
+      config: GraphConfig(
+        type: GraphType.timeseries,
+        xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
+        yAxis: const GraphAxisConfig(
+            unit: '', boolean: true, min: -0.1, max: 1.1),
+        xRange: DateTimeRange(
+          start: DateTime.fromMillisecondsSinceEpoch(_t0),
+          end: DateTime.fromMillisecondsSinceEpoch(
+            _t0 + (_blocked.length - 1) * _step,
+          ),
+        ),
+      ),
+      data: data,
+      showButtons: false,
+      categoryColors: sensorTrendColors,
+      chartTheme: Theme.of(context).brightness == Brightness.dark
+          ? darkChartTheme(
+              padding: compact ? kSensorTrendCompactPadding : kChartPadding)
+          : lightChartTheme(
+              padding: compact ? kSensorTrendCompactPadding : kChartPadding),
+      redraw: () {},
+    ).build(context);
+  }
 }
 
 /// A sensor's read-only details — the fallback shape, shown when the key is a

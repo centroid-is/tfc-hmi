@@ -7,10 +7,15 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry, Collector;
+import 'package:tfc_dart/core/database.dart' show TimeseriesData;
 import 'package:tfc_dart/core/state_man.dart';
 
+import '../../providers/collector.dart';
 import '../../providers/state_man.dart';
+import '../../widgets/graph.dart';
 import 'common.dart';
+import 'graph.dart' show extractSeriesMemberValue;
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'sensor_painter.dart';
@@ -150,6 +155,176 @@ class SensorFbState {
     '${d.inHours}:${(d.inMinutes % 60).toString().padLeft(2, '0')}',
     'h:m'
   );
+}
+
+/// Whether a sensor's bound key has chartable data gathering behind it.
+///
+/// A plain BOOL series charts as-is; a struct key is only chartable when the
+/// collect entry samples the debounced output bit into its rows
+/// (`sample_members` containing [SensorFbFields.output]) — a whole-struct
+/// series has nothing the graph can draw.
+bool sensorTrendAvailable({
+  required bool isStruct,
+  required CollectEntry? collect,
+}) {
+  if (collect == null) return false;
+  if (!isStruct) return true;
+  return collect.sampleMembers?.contains(SensorFbFields.output) ?? false;
+}
+
+/// Series name for the sensor trend, fixed so the small preview in the pane
+/// and the full chart in the floating dialog read as the same chart —
+/// mirrors `kConveyorFreqSeries` in `conveyor.dart`.
+const String kSensorTrendSeries = 'Blocked';
+
+const Map<String, Color> sensorTrendColors = {
+  kSensorTrendSeries: Colors.blue,
+};
+
+/// Gutters for the compact sensor preview. The boolean tick labels
+/// ("False"/"True") are wider than the bare numbers the shared
+/// [kCompactChartPadding] was sized for, so its left gutter clips them.
+const EdgeInsets kSensorTrendCompactPadding =
+    EdgeInsets.only(left: 48, right: 38, top: 12, bottom: 22);
+
+/// The blocked/clear history of a collected sensor key as a boolean state
+/// timeline. Mirrors `ConveyorStatsGraph`: the same widget serves the pane's
+/// small preview (`compact`, no buttons) and the floating full chart.
+///
+/// [member] picks the chartable bit out of each stored row for struct keys
+/// collected with `sample_members` (`p_stat_xOutput`); null charts the row
+/// value as-is (plain BOOL series).
+class SensorTrendGraph extends ConsumerWidget {
+  final Collector? collector;
+  final String keyName;
+  final String? member;
+
+  /// Pan/zoom/now buttons. Off in the pane preview, on in the floating chart.
+  final bool showButtons;
+
+  /// Visible window. The preview shows a short span so the line has shape;
+  /// the expanded chart shows more history.
+  final Duration xSpan;
+
+  /// Drops the axis units/labels — the ~60px pane preview has no room for
+  /// them and the tile caption names the chart instead.
+  final bool compact;
+
+  const SensorTrendGraph({
+    required this.collector,
+    required this.keyName,
+    this.member,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
+    super.key,
+  });
+
+  /// One stored row → one 0/1 point. Rows from `sample_members` collections
+  /// are objects ([member] plucks the bit); plain BOOL series cross the
+  /// boundary as bools or bool-ish strings.
+  num? _pointOf(dynamic value) {
+    if (member != null && member!.isNotEmpty) {
+      return extractSeriesMemberValue(value, member!);
+    }
+    if (value is bool) return value ? 1 : 0;
+    if (value is num) return value;
+    if (value is String) {
+      if (value == 'true') return 1;
+      if (value == 'false') return 0;
+      return num.tryParse(value);
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<List<TimeseriesData<dynamic>>>(
+      stream: collector?.collectStream(keyName, since: const Duration(hours: 2)),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
+
+        final data = <Map<String, dynamic>>[
+          for (final sample in snapshot.data!)
+            if (_pointOf(sample.value) case final num y)
+              {
+                'x': sample.time.millisecondsSinceEpoch.toDouble(),
+                'y': y,
+                's': kSensorTrendSeries,
+              },
+        ];
+
+        final graphConfig = GraphConfig(
+          type: GraphType.timeseries,
+          xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
+          // The boolean axis pins the ticks to true/false; a whisker of
+          // headroom keeps the trace off the frame edges.
+          yAxis: GraphAxisConfig(
+              unit: '', boolean: true, min: -0.1, max: 1.1),
+          xSpan: xSpan,
+        );
+
+        // The compact preview needs its own gutters — same trick as
+        // `ConveyorStatsGraph`, with a wider left gutter for the
+        // "False"/"True" tick labels.
+        final theme = compact
+            ? (Theme.of(context).brightness == Brightness.dark
+                ? darkChartTheme(padding: kSensorTrendCompactPadding)
+                : lightChartTheme(padding: kSensorTrendCompactPadding))
+            : ref.watch(chartThemeNotifierProvider);
+
+        return Graph(
+          config: graphConfig,
+          data: data,
+          showButtons: showButtons,
+          categoryColors: sensorTrendColors,
+          chartTheme: theme,
+          redraw: () {},
+        ).build(context);
+      },
+    );
+  }
+}
+
+/// Resolves the collector for [SensorTrendGraph] — mirrors
+/// `_ConveyorStatsGraphLoader`.
+class SensorTrendGraphLoader extends ConsumerWidget {
+  final String keyName;
+  final String? member;
+  final bool showButtons;
+  final Duration xSpan;
+  final bool compact;
+
+  const SensorTrendGraphLoader({
+    required this.keyName,
+    this.member,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Collector?>(
+      future: ref.watch(collectorProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return SensorTrendGraph(
+          collector: snapshot.data,
+          keyName: keyName,
+          member: member,
+          showButtons: showButtons,
+          xSpan: xSpan,
+          compact: compact,
+        );
+      },
+    );
+  }
 }
 
 /// The kind of sensor — drives painter dispatch and glyph appearance.
@@ -466,7 +641,7 @@ class _SensorState extends ConsumerState<Sensor> {
   /// Live values only, per the pane house rules: no key names, no polarity
   /// wording, no debounce section (without a struct there is no live debounce
   /// to read). The tag is the pane's title, mirroring the 3rd-party pane.
-  Widget _staticPane(PaneStatus status, bool? liveState) {
+  Widget _staticPane(PaneStatus status, bool? liveState, {Widget? trendTile}) {
     final config = widget.config;
     final tagged = config.tag != null && config.tag!.isNotEmpty;
     return SidePane(
@@ -474,13 +649,13 @@ class _SensorState extends ConsumerState<Sensor> {
       subtitle: tagged ? '${config.kind.name} · sensor' : config.kind.name,
       icon: Icons.sensors,
       status: status,
-      child: PaneSection(
-        title: 'Signal',
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            PaneDetailRow(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PaneSection(
+            title: 'Signal',
+            child: PaneDetailRow(
               label: 'Detection state',
               value: config.detectionKey.isEmpty
                   ? 'no key configured'
@@ -490,8 +665,12 @@ class _SensorState extends ConsumerState<Sensor> {
                           ? 'true'
                           : 'false',
             ),
+          ),
+          if (trendTile != null) ...[
+            const Divider(height: 1),
+            PaneSection(title: 'Trend', child: trendTile),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -540,6 +719,42 @@ class _SensorState extends ConsumerState<Sensor> {
 
             final (stateMan, dynValue) = snapshot.data!;
             final fb = SensorFbState.tryParse(dynValue);
+
+            // Data gathering on this key unlocks the inline trend — see
+            // [sensorTrendAvailable] for the chartability rule. The pane
+            // shows a small preview; the full chart floats behind a tap
+            // (same shape as the conveyor's trend tile).
+            final chartable = sensorTrendAvailable(
+              isStruct: fb != null,
+              collect: stateMan.keyMappings.nodes[key]?.collect,
+            );
+            Widget? trendTile;
+            if (chartable) {
+              final member = fb != null ? SensorFbFields.output : null;
+              final tag = widget.config.tag;
+              final title = tag != null && tag.isNotEmpty ? tag : key;
+              trendTile = PaneGraphTile(
+                // Shorter than the conveyor's two-axis 100px, but tall
+                // enough that the True/False ticks and the time row don't
+                // print over each other.
+                height: 84,
+                preview: SensorTrendGraphLoader(
+                  keyName: key,
+                  member: member,
+                  showButtons: false,
+                  compact: true,
+                  xSpan: const Duration(minutes: 5),
+                ),
+                expandedTitle: '$title — trend',
+                expandedSize: const Size(820, 420),
+                expandedBuilder: (context) => SensorTrendGraphLoader(
+                  keyName: key,
+                  member: member,
+                  xSpan: const Duration(minutes: 30),
+                ),
+              );
+            }
+
             if (fb == null) {
               // Plain BOOL node — no FB behind this key, so no setpoints to
               // offer. Show the detail list with the live bit filled in.
@@ -549,12 +764,14 @@ class _SensorState extends ConsumerState<Sensor> {
                     ? const PaneStatus.running('Detected')
                     : const PaneStatus.stopped('Clear'),
                 raw,
+                trendTile: trendTile,
               );
             }
 
             return SensorFbPane(
               config: widget.config,
               state: fb,
+              trendTile: trendTile,
               // Copy-on-write, mirroring the conveyor pane: clone the struct,
               // set one member, write the whole thing back. The `p_stat_*`
               // members ride along unchanged and the FB overwrites them on the
@@ -692,11 +909,19 @@ class SensorFbPane extends StatelessWidget {
   final SensorFbState state;
   final void Function(String field, Object? value) onWrite;
 
+  /// The inline blocked/clear trend tile (a [PaneGraphTile]), or null when
+  /// the bound key has no chartable data gathering configured (no
+  /// `CollectEntry`, or a struct collected without `p_stat_xOutput` among
+  /// its `sample_members`). Injected as a built widget so goldens and tests
+  /// can supply a canned, provider-free preview.
+  final Widget? trendTile;
+
   const SensorFbPane({
     super.key,
     required this.config,
     required this.state,
     required this.onWrite,
+    this.trendTile,
   });
 
   @override
@@ -776,6 +1001,17 @@ class SensorFbPane extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
+
+          // --- Trend -----------------------------------------------------
+          //
+          // A preview in the pane, the real chart in a floating dialog the
+          // operator can park next to the mimic (same shape as the
+          // conveyor's trend). Only present when the bound key's data
+          // gathering makes the output chartable.
+          if (trendTile != null) ...[
+            PaneSection(title: 'Trend', child: trendTile!),
+            const Divider(height: 1),
+          ],
 
           // --- Debounce --------------------------------------------------
           //
@@ -1115,12 +1351,10 @@ class _SensorConfigEditorState extends State<_SensorConfigEditor> {
                 const SizedBox(width: 8),
                 Checkbox(
                   value: config.showTag,
-                  onChanged: (v) =>
-                      setState(() => config.showTag = v ?? false),
+                  onChanged: (v) => setState(() => config.showTag = v ?? false),
                 ),
                 GestureDetector(
-                  onTap: () =>
-                      setState(() => config.showTag = !config.showTag),
+                  onTap: () => setState(() => config.showTag = !config.showTag),
                   child: const Text('Show on screen'),
                 ),
               ],
