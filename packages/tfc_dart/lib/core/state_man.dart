@@ -715,6 +715,24 @@ class ClientWrapper {
   final Set<AutoDisposingStream> streams = {};
   final Logger _logger = Logger();
 
+  // --- monitored-item accounting (diagnostics only) -----------------------
+  //
+  // Counts what this client has ASKED the server to create. One logical key
+  // is four monitored items: monitor() requests DataType, Value, Description
+  // and DisplayName.
+  //
+  // There is deliberately no matching "deleted" counter. The binding's
+  // onCancel is `() { subscription.cancel(); }` -- a block body that discards
+  // the inner future -- so a cancel completes locally the moment it is
+  // requested, never when the server acknowledges the delete. A counter fed
+  // from that would read healthy during exactly the leak it was added to
+  // catch. Until the binding surfaces the delete future, the honest figure is
+  // the create count and the retry count beside it.
+  int monitoredItemsCreated = 0;
+
+  /// One line summarising what this client has asked the server to create.
+  String get monitoredItemReport => 'created=$monitoredItemsCreated';
+
   /// Check if the subscription is dead and needs to be recreated.
   /// Only SubscriptionDeleted (server killed it) and SecureChannelClosed
   /// (connection lost) are fatal — Inactivity is transient and recovers
@@ -1912,18 +1930,44 @@ class StateMan {
     final (id, idx) = nodeId;
 
     int retries = 0;
+    // Attempt counter and start time, so a stuck key reports how long it has
+    // been stuck rather than just that it failed again.
+    var attempt = 0;
+    final startedAt = DateTime.now();
+    // First few attempts, then every tenth: enough to see a key spinning
+    // without a line per second per key forever.
+    bool shouldLog() => attempt <= 3 || attempt % 10 == 0;
     while (_shouldRun) {
+      attempt++;
       try {
         final wrapper = _getClientWrapper(key);
+        // The per-server alias, not StateMan's own `alias` -- the latter is
+        // usually empty, which made every one of these lines start with "[]"
+        // and gave no clue which PLC was involved.
+        final srv = wrapper.config.serverAlias ?? wrapper.config.endpoint;
         // Cancel any leftover subscription from a previous failed attempt
         // so we don't leak monitored items while retrying.
+        //
+        // NOTE: deliberately still not awaited -- this is instrumentation,
+        // not a fix. We only attach observers so the log can say whether the
+        // server ever acknowledges the delete before we create its
+        // replacement. If deleteAcked stops tracking deleteRequested, the
+        // items are accumulating on the PLC.
         _subscriptions[key]?._rawSub?.cancel();
         _subscriptions[key]?._rawSub = null;
 
         await client.awaitConnect();
 
-        if (wrapper.subscriptionId == null &&
-            await wrapper.worker.doTheWork()) {
+        final needsSubscription = wrapper.subscriptionId == null;
+        final gotWorker = needsSubscription && await wrapper.worker.doTheWork();
+        if (needsSubscription && !gotWorker && shouldLog()) {
+          // Another call owns subscription creation. If that one never
+          // finishes, every key on this server waits here.
+          logger.w('[$srv] $key: subscription being created elsewhere '
+              '(worker busy), attempt=$attempt');
+        }
+
+        if (needsSubscription && gotWorker) {
           try {
             // keepAliveCount=30 → inactivity after (100ms×30)+5s ≈ 8s.
             // Tolerates intermittent packet loss on unstable connections.
@@ -1933,21 +1977,51 @@ class StateMan {
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
             wrapper.startHeartbeat(wrapper.subscriptionId!);
-          } catch (e) {
-            logger.e('Failed to create subscription: $e');
+          } catch (e, st) {
+            logger.e('[$srv ${wrapper.config.endpoint}] Failed to create '
+                'subscription (attempt=$attempt): $e');
+            logger.e('[$srv] subscriptionCreate stack: $st');
           } finally {
             wrapper.worker.complete();
           }
         }
         if (wrapper.subscriptionId == null) {
+          // This was a silent `continue` on a tight loop: the one path that
+          // starves an entire server logged nothing at all, so a PLC that
+          // could not give us a subscription span here invisibly, at full
+          // speed, blocking every key queued behind it.
+          if (shouldLog()) {
+            final stuckFor = DateTime.now().difference(startedAt).inSeconds;
+            logger.e('[$srv ${wrapper.config.endpoint}] $key: still no '
+                'subscription id after $attempt attempt(s) over ${stuckFor}s. '
+                'Every key on this server is blocked behind this one.');
+          }
+          // Same ladder as the first-value path below. A station that refuses
+          // to hand out a subscription fails here instead, and this is
+          // per-key: on a flat interval ~140 keys retry once a second each,
+          // which is the storm all over again by another route.
+          retries++;
+          await Future<void>.delayed(_backoffFor(retries));
           continue;
         }
 
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
-        logger.d(
-            '[$alias] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
+        // Trace, not debug: this fired 13,013 times in one run. Note the
+        // default level is trace when CENTROID_LOG_LEVEL is unset, so this
+        // only bites once a deployment raises the level -- which is exactly
+        // when the volume matters.
+        logger.t(
+            '[$srv] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
+
+        // One monitor() call == 4 monitored items on the server.
+        wrapper.monitoredItemsCreated += 4;
+        // Report the gauge often enough to see it climb, rarely enough not to
+        // become the noise it is meant to expose.
+        if (wrapper.monitoredItemsCreated % 40 == 0) {
+          logger.w('[$srv] monitored items: ${wrapper.monitoredItemReport}');
+        }
 
         var stream = client.monitor(id, wrapper.subscriptionId!);
         // Count each monitored-item emission toward this server's
@@ -1969,29 +2043,77 @@ class StateMan {
         // Wait for monitor to deliver first value. No asBroadcastStream()
         // needed — subscribe() holds _rawSub, and cancel propagates
         // properly to delete monitored items on retry.
+        // Cleared per attempt: otherwise a timeout reports the previous
+        // attempt's error as the reason this one failed.
+        _subscriptions[key]?._lastRawError = null;
         final firstEmission = Completer<void>();
         final wrappedStream = stream.map((value) {
           if (!firstEmission.isCompleted) firstEmission.complete();
           return value;
         });
         ads.subscribe(wrappedStream, null);
-        await firstEmission.future.timeout(const Duration(seconds: 5));
+        // Record the last error the raw stream reported, so a first-value
+        // timeout can say whether the server actively refused (e.g.
+        // BadDeviceFailure) or simply stayed silent. "Timed out" alone does
+        // not distinguish those, and they have different causes.
+        await firstEmission.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            final last = _subscriptions[key]?._lastRawError;
+            throw TimeoutException(
+                'no first value for "$key" within 5s '
+                '(last raw stream error: ${last ?? "none -- server silent"})');
+          },
+        );
         logger.i('[$alias] Subscribed $key (replaced previous: $hadPrevious)');
 
         return ads.stream;
       } catch (e) {
         retries++;
-        if (retries > 10) {
-          logger.w('Failed to get initial value for $key: $e');
-          retries = 0;
+        // BadNodeIdUnknown is the server's final answer for as long as its
+        // address space stays the way it is, but the address space can change
+        // (a task starts, a symbol file reloads), so this backs off rather
+        // than gives up -- it just does so all the way to the 600s step.
+        final backoff = _backoffFor(retries);
+        // Log the first few attempts and then only occasionally: a storm must
+        // not be able to amplify itself through the log sink, which flushes
+        // per event.
+        if (retries <= kSubscribeBackoffSeconds.length || retries % 10 == 0) {
+          logger.w('Failed to get initial value for $key '
+              '(attempt $retries, next retry in ${backoff.inSeconds}s): $e');
         }
-        await Future.delayed(const Duration(seconds: 1));
+        await Future.delayed(backoff);
         continue;
       }
     }
     throw StateManException('StateMan closed while monitoring "$key"');
   }
 }
+
+/// Backoff ladder for a key whose subscribe keeps failing: 1s, then 10s, then
+/// 60s, then 600s for as long as it keeps failing.
+///
+/// A flat retry interval is what froze the HMI. Each attempt costs a 5s
+/// first-value timeout, four fresh monitored items on the server, a
+/// fire-and-forget delete and several log lines -- and nothing ever gave up.
+/// One run measured 13,013 subscribe attempts against 122 successes, with a
+/// single dead key asked for 248 times; at ~11 attempts/second the isolate
+/// never got a clear window and Flutter stopped painting frames.
+///
+/// The first step stays short so a genuine blip (a PLC that is mid-restart,
+/// a channel that just dropped) still recovers in about a second. Past that
+/// the interval grows fast, so a key that cannot succeed costs six attempts
+/// an hour instead of six hundred -- visible in the log, invisible in the
+/// frame budget. There is no give-up step: a node can come back when its PLC
+/// task is started again, and 600s is cheap enough to keep asking forever.
+const List<int> kSubscribeBackoffSeconds = <int>[1, 10, 60, 600];
+
+/// The ladder step for the nth consecutive failure, clamped at the last rung.
+Duration _backoffFor(int retries) => Duration(
+    seconds: kSubscribeBackoffSeconds[
+        retries <= kSubscribeBackoffSeconds.length
+            ? retries - 1
+            : kSubscribeBackoffSeconds.length - 1]);
 
 class AutoDisposingStream<T> {
   final String key;
@@ -2002,6 +2124,15 @@ class AutoDisposingStream<T> {
   StreamSubscription<T>? _rawSub;
   final Function(String key) _onDispose;
   T? _lastValue;
+
+  /// Set once a permanent (BadNodeIdUnknown) error has been reported for this
+  /// key, so the same dead mapping is not reprinted on every retry.
+  bool _loggedPermanentError = false;
+
+  /// Last error the raw stream reported, so a first-value timeout can name
+  /// the server's actual complaint instead of just saying it timed out.
+  String? _lastRawError;
+
   final Duration idleTimeout;
   AutoDisposingStream(this.key, this._onDispose,
       {this.idleTimeout = const Duration(minutes: 10)})
@@ -2033,7 +2164,21 @@ class AutoDisposingStream<T> {
         _subject.add(value);
       },
       onError: (error, stackTrace) {
-        _logger.e('[$key] raw stream error: $error');
+        // BadNodeIdUnknown is the server's final answer: that node does not
+        // exist in its address space, so every retry will get the same reply.
+        // Log it once at error level and then stay quiet, rather than
+        // reprinting the same dead mapping on every reconnect and burying the
+        // faults that are actually actionable.
+        _lastRawError = '$error';
+        final permanent = '$error'.contains('BadNodeIdUnknown');
+        if (permanent && _loggedPermanentError) {
+          // already reported; swallow the repeat
+        } else {
+          _logger.e('[$key] raw stream error: $error'
+              '${permanent ? " (node does not exist -- fix or remove this key "
+                  "mapping; further repeats suppressed)" : ""}');
+          if (permanent) _loggedPermanentError = true;
+        }
         if (!_subject.isClosed) {
           _subject.addError(error, stackTrace);
         }
