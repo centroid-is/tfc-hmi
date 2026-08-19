@@ -14,6 +14,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         McpConfig,
         McpDatabase,
         McpToolToggles,
+        NodeBrowser,
         StateReader,
         readMcpConfigFromPreferences;
 
@@ -21,6 +22,7 @@ import '../core/feature_flags.dart';
 import '../mcp/alarm_man_alarm_reader.dart';
 import '../mcp/mcp_lifecycle_state.dart';
 import '../mcp/mcp_bridge_notifier.dart';
+import '../mcp/state_man_node_browser.dart';
 import '../mcp/state_man_state_reader.dart';
 import 'alarm.dart';
 import 'database.dart' show databaseProvider;
@@ -136,10 +138,13 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     {required Ref ref}) async {
   StateReader stateReader;
   AlarmReader alarmReader;
+  // Null unless StateMan is up: browsing needs a live PLC session.
+  NodeBrowser? nodeBrowser;
 
   // Await live readers; fall back to empty no-ops only on actual error.
   try {
     final stateMan = await ref.read(stateManProvider.future);
+    nodeBrowser = StateManNodeBrowser(stateMan);
     final reader = StateManStateReader(stateMan);
     _serverLifecycle.activeStateReader = reader;
     // Subscribe in the background.  init() awaits one subscribe per key,
@@ -183,6 +188,7 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     database: database,
     identity: identity,
     toggles: config.toggles,
+    nodeBrowser: nodeBrowser,
     drawingIndex: DriftDrawingIndex(database),
     plcCodeIndex: ref.read(plcCodeIndexProvider),
     techDocIndex: DriftTechDocIndex(database),
