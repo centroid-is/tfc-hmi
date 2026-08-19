@@ -9,6 +9,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc_dart/core/state_man.dart';
+import '../../theme.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 
@@ -320,19 +321,9 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     showSidePane(
       context: context,
       id: _paneId,
-      builder: (_) => SidePane(
-        title: 'Gate',
-        subtitle: widget.config.stateKey.isEmpty
-            ? 'no state key'
-            : widget.config.stateKey,
-        icon: Icons.swap_horiz,
-        child: PaneSection(
-          title: 'Force',
-          child: _ForceDialogContent(
-            config: widget.config,
-            writeForce: _writeForce,
-          ),
-        ),
+      builder: (_) => _GateForcePane(
+        config: widget.config,
+        writeForce: _writeForce,
       ),
     );
   }
@@ -411,17 +402,21 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 }
 
 // ---------------------------------------------------------------------------
-// Force pane content (shown inside the gate SidePane)
+// Force pane (the gate's SidePane)
 // ---------------------------------------------------------------------------
 
 /// Tri-state force selection: force open, no force (release), force close.
 enum _ForceSelection { open, none, close }
 
-class _ForceDialogContent extends ConsumerWidget {
+/// Live gate state + force feedback, combined so one stream drives both the
+/// header chip and the selector highlight.
+typedef _GateSnapshot = ({bool? isOpen, bool forcedOpen, bool forcedClosed});
+
+class _GateForcePane extends ConsumerWidget {
   final ConveyorGateConfig config;
   final Future<void> Function(String key, bool value) writeForce;
 
-  const _ForceDialogContent({
+  const _GateForcePane({
     required this.config,
     required this.writeForce,
   });
@@ -443,118 +438,121 @@ class _ForceDialogContent extends ConsumerWidget {
     }
   }
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // -- Current gate state indicator (read-only) --
-        StreamBuilder<DynamicValue>(
-          stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-                (sm) => config.stateKey.isEmpty
-                    ? Stream<DynamicValue>.empty()
-                    : sm
-                        .subscribe(config.stateKey)
-                        .asStream()
-                        .switchMap((s) => s),
-              ),
-          builder: (context, snapshot) {
-            final Color stateColor;
-            final String stateLabel;
-            if (!snapshot.hasData) {
-              stateColor = Colors.grey;
-              stateLabel = 'Disconnected';
-            } else if (snapshot.data!.asBool) {
-              stateColor = config.openColor.resolve(context);
-              stateLabel = 'Open';
-            } else {
-              stateColor = config.closedColor.resolve(context);
-              stateLabel = 'Closed';
-            }
-            return Row(
-              children: [
-                Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: stateColor,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.grey.shade600),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(stateLabel),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 16),
+  String get _variantLabel => switch (config.gateVariant) {
+        GateVariant.pneumatic => 'Diverter gate',
+        GateVariant.slider => 'Slider gate',
+        GateVariant.pusher => 'Pusher gate',
+      };
 
-        // -- Force selector (INT-02, INT-03) --
-        // Open / None / Close, mirroring the Low/None/High idiom of the IO
-        // module panes. Selection tracks the feedback keys; None releases
-        // any active force.
-        _forceSelector(context, ref),
-      ],
-    );
+  /// Header chip: an active force wins (it is the reason to be in this
+  /// pane), then plain open/closed from the theme's state colors, unknown
+  /// grey while there is no data.
+  PaneStatus _status(BuildContext context, _GateSnapshot snap) {
+    if (snap.forcedOpen) return const PaneStatus.warning('Forced open');
+    if (snap.forcedClosed) return const PaneStatus.warning('Forced closed');
+    final isOpen = snap.isOpen;
+    if (isOpen == null) return const PaneStatus.unknown();
+    final hmi = HmiStateColors.of(context);
+    return isOpen
+        ? PaneStatus(label: 'Open', color: hmi.green)
+        : PaneStatus(label: 'Closed', color: hmi.grey);
   }
 
-  Widget _forceSelector(BuildContext context, WidgetRef ref) {
-    final hasFeedback = config.forceOpenFeedbackKey.isNotEmpty ||
-        config.forceCloseFeedbackKey.isNotEmpty;
+  /// Gate open/closed as a nullable bool — null until the first value
+  /// arrives, and forever when no state key is configured.
+  Stream<bool?> _gateState(StateMan sm) {
+    if (config.stateKey.isEmpty) return Stream<bool?>.value(null);
+    return sm
+        .subscribe(config.stateKey)
+        .asStream()
+        .asyncExpand((s) => s)
+        .map<bool?>((v) => v.asBool)
+        .startWith(null);
+  }
 
-    return StreamBuilder<_ForceSelection>(
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<_GateSnapshot>(
       stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (sm) => Rx.combineLatest2(
+            (sm) => Rx.combineLatest3(
+              _gateState(sm),
               _boolFeedback(sm, config.forceOpenFeedbackKey),
               _boolFeedback(sm, config.forceCloseFeedbackKey),
-              (bool open, bool close) => open
-                  ? _ForceSelection.open
-                  : close
-                      ? _ForceSelection.close
-                      : _ForceSelection.none,
+              (bool? isOpen, bool fo, bool fc) =>
+                  (isOpen: isOpen, forcedOpen: fo, forcedClosed: fc),
             ),
           ),
       builder: (context, snapshot) {
-        // Without feedback keys the live force state is unknown — show no
-        // selection instead of claiming None.
-        final selection = hasFeedback && snapshot.hasData
-            ? {snapshot.data!}
-            : <_ForceSelection>{};
-        return SegmentedButton<_ForceSelection>(
-          emptySelectionAllowed: true,
-          showSelectedIcon: false,
-          style: SegmentedButton.styleFrom(
-            selectedBackgroundColor:
-                Theme.of(context).colorScheme.tertiaryContainer,
-            selectedForegroundColor:
-                Theme.of(context).colorScheme.onTertiaryContainer,
+        final snap = snapshot.data ??
+            (isOpen: null, forcedOpen: false, forcedClosed: false);
+        return SidePane(
+          title: 'Gate',
+          subtitle: _variantLabel,
+          icon: Icons.swap_horiz,
+          status: _status(context, snap),
+          child: PaneSection(
+            title: 'Force',
+            // Open / None / Close, mirroring the Low/None/High idiom of
+            // the IO module panes. None releases any active force.
+            child: _forceSelector(context, snap, snapshot.hasData),
           ),
-          segments: [
-            ButtonSegment(
-              value: _ForceSelection.open,
-              label: const Text('Open'),
-              enabled: config.forceOpenKey.isNotEmpty,
-            ),
-            ButtonSegment(
-              value: _ForceSelection.none,
-              label: const Text('None'),
-              enabled: config.forceOpenKey.isNotEmpty ||
-                  config.forceCloseKey.isNotEmpty,
-            ),
-            ButtonSegment(
-              value: _ForceSelection.close,
-              label: const Text('Close'),
-              enabled: config.forceCloseKey.isNotEmpty,
-            ),
-          ],
-          selected: selection,
-          // Re-tapping the highlighted segment yields an empty set — treat
-          // it as a release, same as picking None.
-          onSelectionChanged: (sel) =>
-              _apply(sel.isEmpty ? _ForceSelection.none : sel.first),
         );
       },
+    );
+  }
+
+  Widget _forceSelector(BuildContext context, _GateSnapshot snap, bool live) {
+    final hasFeedback = config.forceOpenFeedbackKey.isNotEmpty ||
+        config.forceCloseFeedbackKey.isNotEmpty;
+    // Without feedback keys the live force state is unknown — show no
+    // selection instead of claiming None.
+    final selection = !hasFeedback || !live
+        ? <_ForceSelection>{}
+        : {
+            snap.forcedOpen
+                ? _ForceSelection.open
+                : snap.forcedClosed
+                    ? _ForceSelection.close
+                    : _ForceSelection.none
+          };
+
+    // Forced is orange throughout the pane system (PaneStatus.warning, the
+    // IO panes' forced markers); the active segment wears the same tint as
+    // the header chip.
+    const forced = Colors.orange;
+    return SegmentedButton<_ForceSelection>(
+      emptySelectionAllowed: true,
+      showSelectedIcon: false,
+      // Fill the section width so the pill sits on the pane grid instead of
+      // floating centered under the left-aligned section title.
+      expandedInsets: EdgeInsets.zero,
+      style: SegmentedButton.styleFrom(
+        selectedBackgroundColor: forced.withValues(alpha: 0.18),
+        selectedForegroundColor: forced,
+      ),
+      segments: [
+        ButtonSegment(
+          value: _ForceSelection.open,
+          label: const Text('Open'),
+          enabled: config.forceOpenKey.isNotEmpty,
+        ),
+        ButtonSegment(
+          value: _ForceSelection.none,
+          label: const Text('None'),
+          enabled: config.forceOpenKey.isNotEmpty ||
+              config.forceCloseKey.isNotEmpty,
+        ),
+        ButtonSegment(
+          value: _ForceSelection.close,
+          label: const Text('Close'),
+          enabled: config.forceCloseKey.isNotEmpty,
+        ),
+      ],
+      selected: selection,
+      // Re-tapping the highlighted segment yields an empty set — treat
+      // it as a release, same as picking None.
+      onSelectionChanged: (sel) =>
+          _apply(sel.isEmpty ? _ForceSelection.none : sel.first),
     );
   }
 }

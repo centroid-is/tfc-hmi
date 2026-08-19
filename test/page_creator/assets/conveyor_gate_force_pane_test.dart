@@ -5,6 +5,7 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/providers/state_man.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
@@ -53,6 +54,7 @@ void main() {
   tearDown(closeSidePane);
 
   ConveyorGateConfig pusherConfig({
+    String stateKey = '',
     String openKey = 'gate/force_open',
     String closeKey = 'gate/force_close',
     String openFbKey = '',
@@ -60,6 +62,7 @@ void main() {
   }) {
     return ConveyorGateConfig(
       gateVariant: GateVariant.pusher,
+      stateKey: stateKey,
       forceOpenKey: openKey,
       forceCloseKey: closeKey,
       forceOpenFeedbackKey: openFbKey,
@@ -212,6 +215,73 @@ void main() {
         [('gate/force_open', false)],
         reason: 'unforce must skip unconfigured keys',
       );
+    });
+  });
+
+  group('pane header', () {
+    testWidgets('active open force shows a Forced open chip', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', true);
+      fake.push('gate/fo_fb', true);
+      fake.push('gate/fc_fb', false);
+      await tester.pumpWidget(gate(
+        pusherConfig(
+          stateKey: 'gate/state',
+          openFbKey: 'gate/fo_fb',
+          closeFbKey: 'gate/fc_fb',
+        ),
+        fake,
+      ));
+      await openPane(tester);
+
+      expect(
+        find.descendant(
+          of: find.byType(PaneStatusChip),
+          matching: find.text('Forced open'),
+        ),
+        findsOneWidget,
+        reason: 'an active force must be visible in the header, '
+            'not only as a segment highlight',
+      );
+    });
+
+    testWidgets('plain open state shows an Open chip', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', true);
+      fake.push('gate/fo_fb', false);
+      fake.push('gate/fc_fb', false);
+      await tester.pumpWidget(gate(
+        pusherConfig(
+          stateKey: 'gate/state',
+          openFbKey: 'gate/fo_fb',
+          closeFbKey: 'gate/fc_fb',
+        ),
+        fake,
+      ));
+      await openPane(tester);
+
+      expect(
+        find.descendant(
+          of: find.byType(PaneStatusChip),
+          matching: find.text('Open'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('subtitle is the variant, never the raw key', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', false);
+      await tester.pumpWidget(gate(
+        pusherConfig(stateKey: 'gate/state'),
+        fake,
+      ));
+      await openPane(tester);
+
+      expect(find.text('Pusher gate'), findsOneWidget);
+      expect(find.text('gate/state'), findsNothing,
+          reason: 'panes show values, not wiring — '
+              'no raw OPC UA key names in the pane');
     });
   });
 }
