@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'assets/common.dart';
 import 'assets/registry.dart';
 
@@ -64,6 +65,24 @@ AssetUpdateResult applyAssetUpdate(
   final childId = target['child_id'] as String?;
   final targetIndex = target['index'] as int?;
 
+  /// Title match, against the label the operator actually sees.
+  ///
+  /// `text` is what gets painted on the page, but assets that hide their
+  /// label there (ThirdPartyEquipment and Sensor, via `showTag`) return null
+  /// from it while `tag` still names them in the side pane, the palette and
+  /// the proposal banner. Matching `text` alone made every one of those
+  /// unaddressable by title, and the failure surfaced as "the page may have
+  /// changed" -- which sends the operator looking for a problem that is not
+  /// there.
+  bool titleMatches(Asset a) {
+    if (a.text == title) return true;
+    try {
+      return (a as dynamic).tag == title;
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool keyMatches(Asset a) {
     try {
       return (a as dynamic).key == key;
@@ -76,7 +95,7 @@ AssetUpdateResult applyAssetUpdate(
   for (var i = 0; i < assets.length; i++) {
     final a = assets[i];
     if (a.runtimeType.toString() != assetType) continue;
-    if (title != null && a.text != title) continue;
+    if (title != null && !titleMatches(a)) continue;
     if (key != null && !keyMatches(a)) continue;
     candidates.add(i);
   }
@@ -114,7 +133,16 @@ AssetUpdateResult applyAssetUpdate(
     }
     index = candidates.single;
   }
-  final json = Map<String, dynamic>.from(assets[index].toJson());
+  // Round-trip through JSON rather than using toJson() directly.
+  //
+  // toJson() is shallow: nested values (coordinates, size, colours, the child
+  // assets inside a ThirdPartyEquipment) come back as live objects, not maps.
+  // Patching that and handing it to AssetRegistry.parse fails on the first
+  // nested field with "type 'Coordinates' is not a subtype of type
+  // 'Map<String, dynamic>'". Encoding and decoding forces the whole tree to
+  // plain JSON, which is what parse expects.
+  final json =
+      jsonDecode(jsonEncode(assets[index])) as Map<String, dynamic>;
   // The patch may not switch the asset to a different type.
   final cleanPatch = Map<String, dynamic>.from(patch)..remove(constAssetName);
 

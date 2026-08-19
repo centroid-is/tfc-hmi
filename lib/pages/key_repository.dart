@@ -224,20 +224,56 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   /// time turned a large repository into minutes of grey chips.
   static const int _probeConcurrency = 6;
 
-  /// Proposal state
-  Map<String, dynamic>? _proposedMapping;
-  bool _isProposal = false;
-  int? _proposalId;
+  /// Proposal state.
+  ///
+  /// A batch, not a single proposal: an MCP client fires create_key_mapping
+  /// one call at a time, so 28 mappings arrive as 28 proposals. Staging one
+  /// at a time meant 28 separate reviews and 28 separate saves.
+  /// The banner's callback slots, captured when publishing.
+  ///
+  /// Riverpod forbids `ref` inside dispose() -- "Cannot use ref after the
+  /// widget was disposed" -- and these are plain (non-autoDispose)
+  /// StateProviders, so their controllers outlive this State and can be held.
+  StateController<Future<void> Function()?>? _commitSlot;
+  StateController<Future<void> Function()?>? _discardSlot;
+
+  final List<Map<String, dynamic>> _proposedMappings = [];
+  final List<int> _proposalIds = [];
+  bool get _isProposal => _proposedMappings.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
     _loadKeyMappings();
-    _parseKeyMappingProposal(widget.proposalData);
+    // Whole queue, not just the one the banner routed us with -- but fall back
+    // to that one when state is empty, because the chat batch card empties
+    // proposalStateProvider before it navigates here.
+    if (_stageKeyMappingProposals() == 0) {
+      _stageRoutedProposal(widget.proposalData);
+    }
+  }
+
+  /// Stages the proposal the route carried, when state has none.
+  void _stageRoutedProposal(String? json) {
+    if (json == null) return;
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic>) return;
+      if (decoded['_proposal_type'] != 'key_mapping') return;
+      if (decoded['key'] is! String) return;
+      _proposedMappings.add(decoded);
+      _publishProposalCallbacks();
+    } catch (_) {
+      // Malformed JSON: nothing to stage.
+    }
   }
 
   @override
   void dispose() {
+    // The banner holds these closures over this State; left set they would
+    // fire into a disposed State after navigating away.
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
     _statusFlushTimer?.cancel();
     _listController.dispose();
     super.dispose();
@@ -252,36 +288,108 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     _filterCacheQuery = null;
   }
 
-  /// Parses key mapping proposal JSON.
+  /// Stages every pending `key_mapping` proposal in one batch.
   ///
-  /// Sets [_proposedMapping] and [_isProposal] on success.
-  /// Gracefully handles invalid JSON.
-  void _parseKeyMappingProposal(String? json) {
-    if (json == null) return;
-
+  /// Safe to re-enter: ids already staged are skipped, so a proposal landing
+  /// after the first joins the batch instead of being dropped.
+  ///
+  /// Returns how many were newly staged.
+  int _stageKeyMappingProposals() {
+    var added = 0;
     try {
-      final decoded = jsonDecode(json);
-      if (decoded is! Map<String, dynamic>) return;
-
-      final type = decoded['_proposal_type'] as String?;
-      if (type != 'key_mapping') return;
-
-      _proposedMapping = decoded;
-      _isProposal = true;
-
-      // Match against universal proposal state for ID tracking.
-      try {
-        final state = ref.read(proposalStateProvider);
-        for (final p in state.proposals) {
-          if (p.proposalJson == json) {
-            _proposalId = p.id;
-            break;
-          }
+      final state = ref.read(proposalStateProvider);
+      for (final p in state.proposals) {
+        if (p.proposalType != 'key_mapping') continue;
+        if (_proposalIds.contains(p.id)) continue;
+        try {
+          final decoded = jsonDecode(p.proposalJson);
+          if (decoded is! Map<String, dynamic>) continue;
+          if (decoded['_proposal_type'] != 'key_mapping') continue;
+          if (decoded['key'] is! String) continue;
+          _proposedMappings.add(decoded);
+          _proposalIds.add(p.id);
+          added++;
+        } catch (_) {
+          // A malformed proposal must not take the rest of the batch with it.
         }
-      } catch (_) {}
+      }
     } catch (_) {
-      // Graceful: malformed JSON ignored.
+      // Provider unavailable (tests) -- nothing to stage.
     }
+    if (added > 0) _publishProposalCallbacks();
+    return added;
+  }
+
+  /// Hands the black banner the commit/discard actions for this batch.
+  ///
+  /// The inline amber bar that used to carry Accept/Reject here is gone: one
+  /// place to act on a proposal, not two. What stays inline is the highlighted
+  /// row showing the proposed mapping, which is the point of navigating here.
+  void _publishProposalCallbacks() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final commitSlot = ref.read(proposalCommitProvider.notifier);
+      commitSlot.state = _commitProposals;
+      _commitSlot = commitSlot;
+      final discardSlot = ref.read(proposalDiscardProvider.notifier);
+      discardSlot.state = _discardProposals;
+      _discardSlot = discardSlot;
+    });
+  }
+
+  /// Applies every staged mapping, saves once, then marks them accepted.
+  Future<void> _commitProposals() async {
+    if (_keyMappings == null || _proposedMappings.isEmpty) return;
+    String? lastKey;
+    for (final m in _proposedMappings) {
+      final key = m['key'] as String?;
+      if (key == null) continue;
+      final entry = KeyMappingEntry();
+      final opcuaNode = m['opcua_node'];
+      if (opcuaNode is Map<String, dynamic>) {
+        entry.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
+      }
+      _keyMappings!.nodes[key] = entry;
+      _expandedKeys.add(key);
+      lastKey = key;
+    }
+    _invalidateDerived();
+    await _saveKeyMappings();
+
+    // Awaited, and only after the save has persisted: acceptProposal marks
+    // the row accepted in the database, so doing it first would lose the
+    // mappings if the save failed.
+    final notifier = ref.read(proposalStateProvider.notifier);
+    for (final id in _proposalIds) {
+      try {
+        await notifier.acceptProposal(id);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _proposedMappings.clear();
+      _proposalIds.clear();
+    });
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
+    if (lastKey != null) _revealKey(lastKey);
+  }
+
+  /// Drops the whole batch without touching the mappings.
+  Future<void> _discardProposals() async {
+    final notifier = ref.read(proposalStateProvider.notifier);
+    for (final id in _proposalIds) {
+      try {
+        await notifier.rejectProposal(id);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _proposedMappings.clear();
+      _proposalIds.clear();
+    });
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
   }
 
   Future<void> _loadKeyMappings() async {
@@ -666,13 +774,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   Widget build(BuildContext context) {
     // Reactively watch for new key mapping proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
-      if (_isProposal) return; // Already showing a proposal.
-      final keyProposals =
-          next.proposals.where((p) => p.proposalType == 'key_mapping');
-      if (keyProposals.isEmpty) return;
-      final proposal = keyProposals.first;
-      _parseKeyMappingProposal(proposal.proposalJson);
-      if (_isProposal) setState(() {});
+      // No "already showing one" guard: a later proposal joins the batch.
+      if (_stageKeyMappingProposals() > 0) setState(() {});
     });
 
     if (_isLoading) {
@@ -704,92 +807,35 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Proposal banner
-        if (_isProposal && _proposedMapping != null)
-          Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            color: Colors.amber.shade50,
-            child: Row(
-              children: [
-                const Icon(Icons.auto_awesome, color: Colors.amber),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'AI Proposal: Map \'${_proposedMapping!['key']}\' '
-                    'to OPC UA node',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () {
-                    final key = _proposedMapping!['key'] as String?;
-                    if (key != null && _keyMappings != null) {
-                      final opcuaNode = _proposedMapping!['opcua_node'];
-                      final mapping = KeyMappingEntry();
-                      if (opcuaNode is Map<String, dynamic>) {
-                        mapping.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
-                      }
-                      _keyMappings!.nodes[key] = mapping;
-                      _expandedKeys.add(key);
-                      // _saveKeyMappings() invalidates too, but only after
-                      // its first await — the setState below would otherwise
-                      // rebuild the list from a cache that predates this key.
-                      _invalidateDerived();
-                      _saveKeyMappings();
-                    }
-                    if (_proposalId != null) {
-                      try {
-                        ref
-                            .read(proposalStateProvider.notifier)
-                            .acceptProposal(_proposalId!);
-                      } catch (_) {}
-                    }
-                    setState(() {
-                      _isProposal = false;
-                      _proposedMapping = null;
-                    });
-                    if (key != null) _revealKey(key);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: const Text('Accept'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: () {
-                    if (_proposalId != null) {
-                      try {
-                        ref
-                            .read(proposalStateProvider.notifier)
-                            .rejectProposal(_proposalId!);
-                      } catch (_) {}
-                    }
-                    setState(() {
-                      _isProposal = false;
-                      _proposedMapping = null;
-                    });
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red,
-                    side: const BorderSide(color: Colors.red),
-                  ),
-                  child: const Text('Reject'),
-                ),
-              ],
-            ),
-          ),
-        // Proposed key mapping inline display
-        if (_isProposal && _proposedMapping != null)
+        // The inline amber Accept/Reject bar used to live here. Removed:
+        // the black banner is the one place proposals are acted on, and two
+        // competing controls meant the operator could accept in one place
+        // while the other still showed the change as pending.
+        //
+        // What stays inline is the proposed mapping itself -- highlighted
+        // rows are why you navigate here, the same role the yellow outline
+        // plays in the page editor.
+        if (_isProposal)
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            constraints: const BoxConstraints(maxHeight: 160),
             decoration: proposalDecoration(),
-            child: ListTile(
-              leading: const ProposalBadge(),
-              title: Text('${_proposedMapping!['key']}'),
-              subtitle: Text('AI Proposed key mapping'),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _proposedMappings.length,
+              itemBuilder: (context, i) {
+                final m = _proposedMappings[i];
+                final node = m['opcua_node'];
+                final ident = node is Map<String, dynamic>
+                    ? '${node['namespace']}:${node['identifier']}'
+                    : '';
+                return ListTile(
+                  dense: true,
+                  leading: const ProposalBadge(),
+                  title: Text('${m['key']}'),
+                  subtitle: Text(ident.isEmpty ? 'AI proposed key mapping' : ident),
+                );
+              },
             ),
           ),
         Expanded(

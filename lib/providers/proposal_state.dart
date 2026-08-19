@@ -146,3 +146,22 @@ final proposalStateProvider =
 
   return notifier;
 });
+
+
+/// How the banner commits a staged proposal.
+///
+/// Applying a proposal and saving it belongs to the page editor -- it owns the
+/// page data and the undo snapshot. The operator's accept/reject controls
+/// belong in one place, the notification banner, rather than being duplicated
+/// on an in-editor bar where one copy applied and the other silently did not.
+/// The editor publishes its commit here while it is showing a staged
+/// proposal; the banner calls it. Null when nothing is staged.
+final proposalCommitProvider =
+    StateProvider<Future<void> Function()?>((ref) => null);
+
+/// How the banner discards a staged proposal.
+///
+/// Counterpart to [proposalCommitProvider]: reverting the staged edit needs
+/// the editor's pre-proposal snapshot, which only the editor holds.
+final proposalDiscardProvider =
+    StateProvider<Future<void> Function()?>((ref) => null);

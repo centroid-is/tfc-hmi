@@ -50,6 +50,11 @@ void registerAssetWriteTools({
           description: 'Key of the page to add assets to (e.g., "/"). '
               'If omitted, assets are added to the current page.',
         ),
+        'index': JsonSchema.integer(
+          description: 'Optional position in the asset list of the page to '
+              'insert at. The list is the draw order, so a lower index puts '
+              'the new assets BEHIND those that follow. Omit to append on top.',
+        ),
         'children': JsonSchema.array(
           description: 'Child assets in the hierarchy',
           items: JsonSchema.object(
@@ -107,6 +112,11 @@ void registerAssetWriteTools({
       final title = args['title'] as String;
       final rawChildren = args['children'] as List<dynamic>;
       final pageKey = args['page_key'] as String?;
+      // Where in the page's asset list the new assets go. The list is the
+      // z-order -- page_view draws it front to back -- so appending puts
+      // everything on top. Anything meant to sit *behind* existing assets
+      // (a beacon under its sensor, say) needs to say where.
+      final index = args['index'] as int?;
 
       // Build children list with asset_name for AssetRegistry.parse
       final children = rawChildren.map((c) {
@@ -134,6 +144,7 @@ void registerAssetWriteTools({
         'title': title,
         'children': children,
         if (pageKey != null) 'page_key': pageKey,
+        if (index != null) 'index': index,
       };
 
       // Format hierarchy diff for elicitation
@@ -202,7 +213,7 @@ void registerAssetWriteTools({
         'patch': JsonSchema.object(
           description: 'Fields to change, shallow-merged onto the asset\'s '
               'JSON. Keys match the asset type\'s serialization fields, '
-              'e.g. {"key": "SB1.Running"} rebinds the tag, {"text": '
+              'e.g. {"key": "Line1.Running"} rebinds the tag, {"text": '
               '"Infeed"} relabels. The asset\'s type cannot be changed.',
         ),
       },
@@ -236,10 +247,23 @@ void registerAssetWriteTools({
       }
 
       final targetLabel = title ?? key ?? assetType;
+
+      // The banner and the toast show `title` and nothing else, so it has to
+      // say what actually changed -- "Update Machine 1" tells the
+      // operator nothing they can accept or reject on. Values are elided in
+      // the middle when long: the tail of a tag name is the part that
+      // distinguishes one sub-unit from another.
+      String short(Object? v) {
+        final s = '$v';
+        return s.length <= 34 ? s : '${s.substring(0, 14)}…${s.substring(s.length - 18)}';
+      }
+      final changes =
+          patch.entries.map((e) => '${e.key} → ${short(e.value)}').join(', ');
+
       final proposal = <String, dynamic>{
         // Top-level title is what ProposalService records and the
         // notification banner shows.
-        'title': 'Update $targetLabel',
+        'title': '$targetLabel: $changes',
         'page_key': pageKey,
         'target': {
           'asset_type': assetType,

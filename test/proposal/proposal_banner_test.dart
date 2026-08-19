@@ -5,6 +5,17 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:tfc/widgets/proposal_visual.dart';
 
+/// Widget tests for the proposal visuals, plus source-level assertions for
+/// the black ProposalBanner.
+///
+/// The banner's role changed on 2026-08-19. It used to hide any proposal
+/// whose editorRoute matched the current route, because each editor drew its
+/// own inline amber Accept/Reject bar and showing both at once was
+/// duplication. The inline bars are gone, so the banner is now the single
+/// place a proposal is accepted or rejected: it stays visible on the editor
+/// page, and Accept all / Reject all drive the commit/discard callbacks the
+/// editor publishes rather than marking rows accepted behind the editor's
+/// back.
 void main() {
   // ── DashedBorderPainter ─────────────────────────────────────────────
 
@@ -268,31 +279,26 @@ void main() {
     });
   });
 
-  // ── ProposalBanner route-aware visibility (Bug fix) ──────────────────
+  // ── ProposalBanner: the one place a proposal is acted on ─────────────
   //
-  // Regression tests for a bug where both the dark persistent ProposalBanner
-  // AND the amber in-editor banner showed simultaneously when the user was
-  // already on the correct editor page. The fix filters out proposals whose
-  // editorRoute matches the current Beamer route path.
+  // The banner used to hide any proposal whose editorRoute matched the
+  // current Beamer route, because the editor drew its own amber
+  // Accept/Reject bar and two banners at once was confusing. That inverted
+  // once the inline bars were removed: hiding here would leave the operator
+  // on a page showing a staged edit with nothing anywhere to accept it. The
+  // route filter and its _currentRoutePath helper are gone; the banner now
+  // shows every pending proposal and carries Accept all / Reject all.
   //
-  // ProposalBanner depends on proposalStateProvider, navigatorKeyProvider,
-  // and Beamer, so we use source-level assertions (same pattern as
+  // ProposalBanner depends on proposalStateProvider, navigatorKeyProvider
+  // and Beamer, so these are source-level assertions (same pattern as
   // alarm_editor_proposal_test.dart and page_editor_proposal_test.dart).
 
-  group('Bug fix: ProposalBanner hides when on matching editor route', () {
+  group('ProposalBanner visibility', () {
     late String bannerSource;
 
     setUpAll(() {
       bannerSource =
           File('lib/widgets/proposal_banner.dart').readAsStringSync();
-    });
-
-    test('has _currentRoutePath helper that reads Beamer route', () {
-      // The banner must be able to determine the current route to decide
-      // whether to hide proposals whose editor is already visible.
-      expect(bannerSource, contains('_currentRoutePath'));
-      expect(bannerSource, contains('Beamer.of'));
-      expect(bannerSource, contains('routeInformation'));
     });
 
     test('returns SizedBox.shrink when no pending proposals', () {
@@ -301,49 +307,27 @@ void main() {
       expect(bannerSource, contains('SizedBox.shrink()'));
     });
 
-    test('filters proposals by comparing editorRoute to current path', () {
-      // The core fix: proposals whose editorRoute matches the current path
-      // are filtered out, so the dark banner doesn't duplicate the amber
-      // in-editor banner.
-      expect(bannerSource, contains('currentPath'));
-      expect(bannerSource, contains('p.editorRoute'));
-      expect(bannerSource, contains('currentPath.contains(p.editorRoute!)'));
+    test('does not filter by the current route any more', () {
+      // Hiding a proposal because its editor is open was only safe while that
+      // editor drew its own Accept/Reject bar. It no longer does.
+      expect(bannerSource, isNot(contains('_currentRoutePath')));
+      expect(bannerSource, isNot(contains('currentPath')));
+      expect(bannerSource, isNot(contains('routeInformation')));
     });
 
-    test('only filters when currentPath is available', () {
-      // When Beamer context is unavailable (e.g. app startup), currentPath
-      // is null and no filtering occurs — all proposals are shown.
-      expect(bannerSource, contains('currentPath != null'));
-    });
-
-    test('returns SizedBox.shrink when all proposals are filtered out', () {
-      // If the user is on the editor page and ALL pending proposals target
-      // that editor, the filtered list is empty → SizedBox.shrink().
-      expect(bannerSource, contains('if (proposals.isEmpty) return const SizedBox.shrink()'));
-    });
-
-    test('filters use where clause that checks editorRoute null OR not matching', () {
-      // The filter keeps proposals where editorRoute is null (no known editor)
-      // OR the current path does NOT contain the editorRoute. This ensures
-      // proposals without a known route are always shown in the dark banner.
-      final whereClause = RegExp(
-        r'p\.editorRoute\s*==\s*null\s*\|\|\s*!currentPath\.contains\(p\.editorRoute!\)',
-      );
-      expect(
-        bannerSource,
-        matches(whereClause),
-        reason: 'Filter must keep proposals with null editorRoute or '
-            'non-matching editorRoute',
-      );
-    });
-
-    test('uses filtered list (not state.proposals) for rendering', () {
-      // After filtering, the banner must use the filtered `proposals` list
-      // (not `state.proposals`) when building single/multi proposal views.
-      // The count variable should be derived from the filtered list.
+    test('renders straight from state.proposals', () {
+      expect(bannerSource, contains('final proposals = state.proposals;'));
       expect(bannerSource, contains('final count = proposals.length'));
       expect(bannerSource, contains('_buildSingleProposal(proposals.first)'));
-      expect(bannerSource, contains('_buildMultipleProposals(proposals, count)'));
+      expect(
+          bannerSource, contains('_buildMultipleProposals(proposals, count)'));
+    });
+
+    test('still bails out when the list is empty', () {
+      expect(
+          bannerSource,
+          contains(
+              'if (proposals.isEmpty) return const SizedBox.shrink()'));
     });
 
     test('watches proposalStateProvider reactively', () {
@@ -352,15 +336,13 @@ void main() {
       expect(bannerSource, contains('ref.watch(proposalStateProvider)'));
     });
 
-    test('_currentRoutePath catches errors gracefully', () {
-      // If Beamer is not available (e.g. during testing or before the router
-      // is mounted), _currentRoutePath should return null, not throw.
-      expect(bannerSource, contains('catch (_)'));
-      expect(bannerSource, contains('return null'));
+    test('never auto-dismisses on a timer', () {
+      expect(bannerSource, isNot(contains('Future.delayed')));
+      expect(bannerSource, isNot(contains('Timer(')));
     });
   });
 
-  group('ProposalBanner multi-proposal route filtering', () {
+  group('ProposalBanner batch actions', () {
     late String bannerSource;
 
     setUpAll(() {
@@ -368,41 +350,105 @@ void main() {
           File('lib/widgets/proposal_banner.dart').readAsStringSync();
     });
 
-    test('with mixed proposals, only shows proposals for OTHER editors', () {
-      // Scenario: user is on /advanced/alarm-editor. There are 2 alarm
-      // proposals and 1 page proposal. The banner should show only the
-      // page proposal (alarm ones are handled by the amber in-editor banner).
-      //
-      // The filter: state.proposals.where((p) =>
-      //     p.editorRoute == null || !currentPath.contains(p.editorRoute!))
-      //
-      // For alarm proposal: editorRoute = '/advanced/alarm-editor'
-      //   currentPath.contains('/advanced/alarm-editor') → true → filtered OUT
-      // For page proposal: editorRoute = '/advanced/page-editor'
-      //   currentPath.contains('/advanced/page-editor') → false → kept
-      //
-      // This logic is validated by checking the source uses the where clause
-      // with contains() comparison on the editorRoute.
-      expect(bannerSource, contains('.where((p)'));
-      expect(bannerSource, contains('p.editorRoute == null'));
-      expect(bannerSource, contains('!currentPath.contains(p.editorRoute!)'));
+    String acceptAllBody() => bannerSource.substring(
+        bannerSource.indexOf('Widget _buildAcceptAllButton('),
+        bannerSource.indexOf('Widget _buildRejectAllButton('));
+
+    String rejectAllBody() => bannerSource.substring(
+        bannerSource.indexOf('Widget _buildRejectAllButton('),
+        bannerSource.indexOf('Widget _buildAcceptButton('));
+
+    test('a multi-proposal batch offers Accept all and Reject all', () {
+      // Accepting twenty-one bindings one row at a time is not review, it is
+      // data entry -- and the operator has already read the list.
+      expect(bannerSource, contains('_buildAcceptAllButton(proposals)'));
+      expect(bannerSource, contains('_buildRejectAllButton(proposals)'));
+      expect(bannerSource, contains(r"'Reject all (${proposals.length})'"));
     });
 
-    test('proposal routes in watcher match banner filter expectations', () {
-      // Verify that proposalRoutes in proposal_watcher.dart define the
-      // routes that ProposalBanner uses for filtering. Each editor must
-      // have a distinct route so proposals for other editors remain visible.
+    test('accept-all commits a staged batch through the editor', () {
+      // Deliberately NOT acceptProposal() per item: that marks a proposal
+      // accepted in the database and drops it from state without ever
+      // applying the patch, so the edit is silently lost. The editor publishes
+      // the save that applies and persists first.
+      final body = acceptAllBody();
+      expect(body, contains('ref.read(proposalCommitProvider)'));
+      expect(body, contains('commit();'));
+      expect(body, isNot(contains('acceptProposal')),
+          reason: 'accepting without applying loses the staged edit');
+    });
+
+    test('accept-all opens the editor when nothing is staged yet', () {
+      final body = acceptAllBody();
+      final commit = body.indexOf('final commit = ref.read(proposalCommitProvider);');
+      final beam = body.indexOf('beamToNamed');
+      expect(commit, greaterThan(-1));
+      expect(beam, greaterThan(-1));
+      expect(commit, lessThan(beam),
+          reason: 'a staged batch must be committed, not re-opened');
+      expect(body, contains('proposals.first.editorRoute'));
+    });
+
+    test('the button says what it will do', () {
+      // "Review all" until an editor has staged the queue and published its
+      // commit; "Accept all" once pressing it would actually save.
+      expect(bannerSource, contains('ref.watch(proposalCommitProvider) != null'));
+      expect(bannerSource, contains(r"? 'Accept all (${proposals.length})'"));
+      expect(bannerSource, contains(r": 'Review all (${proposals.length})'"));
+    });
+
+    test('reject-all reverts a staged batch through the editor', () {
+      // Mirrors accept-all: once the editor has applied the batch, rejecting
+      // has to undo those edits as well as mark the rows rejected, or the
+      // operator is left with an unsaved page full of unexplained changes.
+      final body = rejectAllBody();
+      final discard = body.indexOf('final discard = ref.read(proposalDiscardProvider);');
+      final fallback = body.indexOf('notifier.rejectProposal(p.id)');
+      expect(discard, greaterThan(-1));
+      expect(fallback, greaterThan(-1));
+      expect(discard, lessThan(fallback),
+          reason: 'plain rejectProposal would leave the staged edits on screen');
+      expect(body, contains('discard();'));
+    });
+
+    test('reject-all with nothing staged still clears every row', () {
+      expect(rejectAllBody(), contains('for (final p in proposals)'));
+    });
+
+    test('the expanded drawer is capped so a long queue cannot fill the page',
+        () {
+      expect(bannerSource, contains('maxHeight: 220'));
+      expect(bannerSource, contains('shrinkWrap: true'));
+    });
+  });
+
+  group('ProposalBanner navigation', () {
+    late String bannerSource;
+
+    setUpAll(() {
+      bannerSource =
+          File('lib/widgets/proposal_banner.dart').readAsStringSync();
+    });
+
+    test('editorRoute is used to navigate, not to hide', () {
+      expect(bannerSource, contains('proposal.editorRoute'));
+      expect(bannerSource, contains('beamToNamed(route, data:'));
+    });
+
+    test('every proposal type has an editor route to beam to', () {
+      // A type with no route leaves View and Review all dead, so the proposal
+      // can only be accepted blind from the banner.
       final watcherSource =
           File('lib/providers/proposal_watcher.dart').readAsStringSync();
 
-      // All known proposal types have routes defined
       expect(watcherSource, contains("'alarm': '/advanced/alarm-editor'"));
-      expect(watcherSource, contains("'key_mapping': '/advanced/key-repository'"));
+      expect(watcherSource, contains("'alarm_create': '/advanced/alarm-editor'"));
+      expect(watcherSource, contains("'alarm_update': '/advanced/alarm-editor'"));
+      expect(
+          watcherSource, contains("'key_mapping': '/advanced/key-repository'"));
       expect(watcherSource, contains("'page': '/advanced/page-editor'"));
       expect(watcherSource, contains("'asset': '/advanced/page-editor'"));
-
-      // The banner imports or uses editorRoute which reads from these routes
-      expect(bannerSource, contains('p.editorRoute'));
+      expect(watcherSource, contains("'asset_update': '/advanced/page-editor'"));
     });
 
     test('banner uses navigatorKeyProvider for Beamer context', () {
@@ -411,6 +457,11 @@ void main() {
       // use navigatorKeyProvider to get the correct context.
       expect(bannerSource, contains('navigatorKeyProvider'));
       expect(bannerSource, contains('navKey'));
+    });
+
+    test('navigation carries the proposal json to the editor', () {
+      expect(bannerSource, contains('data: proposal.proposalJson'));
+      expect(bannerSource, contains('data: proposals.first.proposalJson'));
     });
   });
 }

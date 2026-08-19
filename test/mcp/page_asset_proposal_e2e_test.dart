@@ -439,8 +439,8 @@ void main() {
       arguments: {
         'page_key': '/',
         'asset_type': 'ThirdPartyEquipmentConfig',
-        'title': 'SpeedBatcher',
-        'patch': {'runKey': 'SB1.Running'},
+        'title': 'Machine',
+        'patch': {'runKey': 'Line1.Running'},
       },
     ));
 
@@ -453,7 +453,7 @@ void main() {
     expect(proposal['page_key'], '/');
     expect((proposal['target'] as Map)['asset_type'],
         'ThirdPartyEquipmentConfig');
-    expect((proposal['patch'] as Map)['runKey'], 'SB1.Running');
+    expect((proposal['patch'] as Map)['runKey'], 'Line1.Running');
 
     // Wait for async DB write from ProposalService
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -461,7 +461,10 @@ void main() {
     final rows = await db.customSelect('SELECT * FROM mcp_proposal').get();
     expect(rows, hasLength(1));
     expect(rows.first.read<String>('proposal_type'), 'asset_update');
-    expect(rows.first.read<String>('title'), 'Update SpeedBatcher');
+    // The title carries the change itself, not just the target: the banner and
+    // the toast show this string and nothing else, so "Update Machine"
+    // gave the operator nothing to accept or reject on.
+    expect(rows.first.read<String>('title'), 'Machine: runKey → Line1.Running');
     expect(rows.first.read<String>('status'), 'pending');
 
     // Flutter side: ProposalWatcher detects and routes to the page editor

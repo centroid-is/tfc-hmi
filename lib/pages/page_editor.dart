@@ -639,7 +639,33 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// been saved by the operator.
   bool _isProposal = false;
   String? _proposalTitle;
-  int? _proposalId;
+
+  /// Every proposal folded into the pending edit.
+  ///
+  /// `asset_update` proposals are independent patches to different assets, so
+  /// a queue of them can be applied in one pass and accepted with one save --
+  /// otherwise binding N children means N accept-and-save round trips.
+  /// `page` and `asset` proposals replace or append wholesale, so those are
+  /// still applied one at a time.
+  final List<int> _proposalIds = [];
+
+  /// Ids already accepted or rejected. acceptProposal/rejectProposal each
+  /// await a database write before dropping the proposal from state, so their
+  /// removals land *after* the batch has been cleared -- and every removal
+  /// fires the state listener. Without this the listener treats whatever has
+  /// not been removed yet as a brand new batch and re-applies it, which is why
+  /// a reject could leave the change on the page.
+  /// The banner's callback slots, captured when publishing.
+  ///
+  /// Riverpod forbids `ref` inside dispose() -- "Cannot use ref after the
+  /// widget was disposed" -- and these are plain (non-autoDispose)
+  /// StateProviders, so their controllers outlive this State and can be held.
+  StateController<Future<void> Function()?>? _commitSlot;
+  StateController<Future<void> Function()?>? _discardSlot;
+
+  final Set<int> _consumedProposalIds = {};
+
+
 
   /// Assets that were added by the AI proposal (for visual indicators).
   Set<Asset> _proposedAssets = {};
@@ -705,7 +731,25 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _currentPage = pageManager.pages.keys.firstOrNull;
 
         // Apply proposal data if present.
-        _applyProposalData(widget.proposalData);
+        //
+        // Arriving from the banner's "Review all" hands us a single
+        // proposalJson, but the queue behind it is what the operator asked to
+        // review. Batch every pending asset_update instead of staging one and
+        // leaving the rest invisible -- the top banner hides proposals whose
+        // editor is on screen, so anything not applied here shows up nowhere
+        // at all.
+        var batched = 0;
+        try {
+          final pending = ref
+              .read(proposalStateProvider)
+              .proposals
+              .where((p) => p.proposalType == 'asset_update')
+              .toList();
+          if (pending.isNotEmpty) batched = _applyUpdateBatch(pending);
+        } catch (_) {
+          // Provider unavailable in tests -- fall through to the single path.
+        }
+        if (batched == 0) _applyProposalData(widget.proposalData);
 
         _updateCurrentJson();
         _savedJson =
@@ -717,6 +761,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onShortcutKey);
+    // The banner holds these closures over this State; left set they
+    // would fire into a disposed State after navigating away -- nothing
+    // saved, the proposals still pending, and an uncaught async error.
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
     _stopAutoScroll();
     // The pane lives in the root overlay, so nothing else tears it down when
     // the editor goes away (an MCP proposal can navigate out from under it).
@@ -738,6 +787,61 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// For `_proposal_type: 'asset'`: expects `key`, `title`, `children` (list
   /// of asset JSON). Adds assets to the page identified by `key`, or creates
   /// a new page.
+  /// Applies every queued `asset_update` proposal in one pass.
+  ///
+  /// Returns how many actually landed. Each patch targets a different asset
+  /// or child, so order does not matter and a failure to resolve one (a stale
+  /// index, say) leaves the rest intact.
+  int _applyUpdateBatch(List<PendingProposal> proposals) {
+    // An MCP client fires update_asset one call at a time, so a second wave
+    // lands while the first is still staged. Extend the open batch instead of
+    // restarting it: clearing _proposedAssets left only the newest asset
+    // outlined -- eight bindings arrived, one yellow box showed -- and
+    // re-snapshotting _preProposalPages over already-patched pages left
+    // reject-all with no way back to the original.
+    final extending = _preProposalPages != null;
+    if (!extending) {
+      _preProposalPages = PageManager.copyPages(_temporaryPages);
+      _proposedAssets = {};
+    }
+    var applied = 0;
+    for (final p in proposals) {
+      if (_proposalIds.contains(p.id)) continue; // already staged
+      if (_consumedProposalIds.contains(p.id)) continue; // already resolved
+      try {
+        final decoded = jsonDecode(p.proposalJson);
+        if (decoded is! Map<String, dynamic>) continue;
+        if (decoded['_proposal_type'] != 'asset_update') continue;
+        final before = _proposedAssets.length;
+        _applyUpdateProposal(decoded);
+        if (_proposedAssets.length > before) {
+          _proposalIds.add(p.id);
+          applied++;
+        }
+      } catch (_) {
+        // A malformed proposal must not take the rest of the batch with it.
+      }
+    }
+    if (applied > 0) {
+      _isProposal = true;
+      // Hand the banner a way to commit what we just staged.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          final commitSlot = ref.read(proposalCommitProvider.notifier);
+          commitSlot.state = _saveToPrefs;
+          _commitSlot = commitSlot;
+          final discardSlot = ref.read(proposalDiscardProvider.notifier);
+          discardSlot.state = _discardProposal;
+          _discardSlot = discardSlot;
+        }
+      });
+      final staged = _proposalIds.length;
+      _proposalTitle =
+          staged == 1 ? _proposalTitle : '$staged asset updates';
+    }
+    return applied;
+  }
+
   void _applyProposalData(String? proposalJson) {
     if (proposalJson == null) return;
 
@@ -761,7 +865,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         final state = ref.read(proposalStateProvider);
         for (final p in state.proposals) {
           if (p.proposalJson == proposalJson) {
-            _proposalId = p.id;
+            _proposalIds.add(p.id);
             break;
           }
         }
@@ -773,6 +877,26 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _applyAssetProposal(proposal);
       } else if (type == 'asset_update') {
         _applyUpdateProposal(proposal);
+      }
+
+      // Hand the banner a way to commit or revert what was just staged.
+      //
+      // Only the asset_update batch used to do this, so rejecting a `page` or
+      // `asset` proposal from the banner fell back to marking the rows
+      // rejected in the database -- the staged assets stayed on the page with
+      // nothing left to explain them. _preProposalPages was captured above,
+      // so the revert has always been possible; nobody was wired to ask for
+      // it.
+      if (_isProposal) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final commitSlot = ref.read(proposalCommitProvider.notifier);
+          commitSlot.state = _saveToPrefs;
+          _commitSlot = commitSlot;
+          final discardSlot = ref.read(proposalDiscardProvider.notifier);
+          discardSlot.state = _discardProposal;
+          _discardSlot = discardSlot;
+        });
       }
     } catch (_) {
       // Best-effort: if proposal JSON is malformed, ignore it.
@@ -926,7 +1050,17 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
     if (targetPage != null && _temporaryPages.containsKey(targetPage)) {
       // Add assets to existing page.
-      _temporaryPages[targetPage]!.assets.addAll(newAssets);
+      //
+      // The asset list IS the draw order (page_view walks it front to back),
+      // so appending always lands on top. A proposal may name the position it
+      // wants instead -- a beacon belongs under the sensor it sits behind.
+      final assets = _temporaryPages[targetPage]!.assets;
+      final at = proposal['index'];
+      if (at is int && at >= 0 && at <= assets.length) {
+        assets.insertAll(at, newAssets);
+      } else {
+        assets.addAll(newAssets);
+      }
       _currentPage = targetPage;
     } else {
       // Create a new page with the proposed assets.
@@ -970,7 +1104,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _currentPage = targetPage;
     _isProposal = true;
     _proposalTitle = updated.text ?? updated.runtimeType.toString();
-    _proposedAssets = {updated};
+    _proposedAssets = {..._proposedAssets, updated};
   }
 
   void _updateCurrentJson() {
@@ -986,6 +1120,35 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// Reverts a staged proposal and marks every folded-in proposal rejected.
+  ///
+  /// Lives here rather than in the banner because the pre-proposal snapshot
+  /// does: rejecting has to put the page back exactly as it was.
+  Future<void> _discardProposal() async {
+    final notifier = ref.read(proposalStateProvider.notifier);
+    _consumedProposalIds.addAll(_proposalIds);
+    for (final id in _proposalIds) {
+      try {
+        await notifier.rejectProposal(id);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      if (_preProposalPages != null) {
+        _temporaryPages = _preProposalPages!;
+        _currentPage = _temporaryPages.keys.firstOrNull;
+        _preProposalPages = null;
+      }
+      _isProposal = false;
+      _proposalIds.clear();
+      _proposedAssets = {};
+      _updateCurrentJson();
+      _savedJson = _currentJson;
+    });
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
+  }
+
   Future<void> _saveToPrefs() async {
     final pageManager = await ref.read(pageManagerProvider.future);
     pageManager.pages = PageManager.copyPages(_temporaryPages);
@@ -996,10 +1159,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     if (!mounted) return;
 
     // Update universal proposal state if this was a proposal accept.
-    if (_isProposal && _proposalId != null) {
-      try {
-        ref.read(proposalStateProvider.notifier).acceptProposal(_proposalId!);
-      } catch (_) {}
+    if (_isProposal && _proposalIds.isNotEmpty) {
+      final notifier = ref.read(proposalStateProvider.notifier);
+      _consumedProposalIds.addAll(_proposalIds);
+      for (final id in _proposalIds) {
+        try {
+          await notifier.acceptProposal(id);
+        } catch (_) {}
+      }
     }
 
     setState(() {
@@ -1007,6 +1174,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _savedJson = _currentJson;
       _navOrderDirty = false;
       _isProposal = false; // Proposal accepted and saved.
+      _proposalIds.clear();
+      ref.read(proposalCommitProvider.notifier).state = null;
+      ref.read(proposalDiscardProvider.notifier).state = null;
       _proposedAssets = {};
       _preProposalPages = null;
     });
@@ -1758,12 +1928,26 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Widget build(BuildContext context) {
     // Reactively watch for new page/asset proposals arriving via MCP.
     ref.listen<ProposalState>(proposalStateProvider, (prev, next) {
-      if (_isProposal) return; // Already showing a proposal.
-      final pageProposals = next.proposals
-          .where((p) => p.proposalType == 'page' || p.proposalType == 'asset');
+      final pageProposals = next.proposals.where((p) =>
+          p.proposalType == 'page' ||
+          p.proposalType == 'asset' ||
+          // asset_update arrives from the update_asset MCP tool. Without it
+          // the proposal reaches ProposalState but the editor never picks it
+          // up, so the operator sees nothing to save.
+          p.proposalType == 'asset_update');
       if (pageProposals.isEmpty) return;
-      final proposal = pageProposals.first;
-      _applyProposalData(proposal.proposalJson);
+      final updates =
+          pageProposals.where((p) => p.proposalType == 'asset_update').toList();
+      if (updates.isNotEmpty) {
+        // Whole queue at once -- one review, one save. Safe to re-enter while
+        // a batch is already staged: ids already applied are skipped, so a
+        // proposal arriving after the first joins the batch rather than being
+        // swallowed by an "already showing a proposal" guard.
+        _applyUpdateBatch(updates);
+      } else {
+        if (_isProposal) return; // Already showing a proposal.
+        _applyProposalData(pageProposals.first.proposalJson);
+      }
       if (_isProposal) {
         _updateCurrentJson();
         _savedJson = ''; // Mark unsaved for proposal.
@@ -1785,61 +1969,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         title: _isProposal ? 'Page Editor — AI Proposal' : 'Page Editor',
         body: Column(
           children: [
-            if (_isProposal)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                color: Colors.amber.shade50,
-                child: Row(
-                  children: [
-                    const Icon(Icons.auto_awesome, color: Colors.amber),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'AI Proposal: ${_proposalTitle ?? "Untitled"}. '
-                        'Review the proposed layout.',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: _saveToPrefs,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text('Accept'),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: () {
-                        if (_proposalId != null) {
-                          try {
-                            ref
-                                .read(proposalStateProvider.notifier)
-                                .rejectProposal(_proposalId!);
-                          } catch (_) {}
-                        }
-                        setState(() {
-                          if (_preProposalPages != null) {
-                            _temporaryPages = _preProposalPages!;
-                            _currentPage = _temporaryPages.keys.firstOrNull;
-                          }
-                          _isProposal = false;
-                          _proposedAssets = {};
-                          _preProposalPages = null;
-                          _updateCurrentJson();
-                          _savedJson = _currentJson;
-                        });
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red,
-                        side: const BorderSide(color: Colors.red),
-                      ),
-                      child: const Text('Reject'),
-                    ),
-                  ],
-                ),
-              ),
             Expanded(
                 child: Listener(
                     // Any click on the canvas re-arms the shortcuts. Selecting an
@@ -3422,6 +3551,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final box =
         _treeViewportKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !_treeScrollController.hasClients) {
+    // The banner holds these closures over this State; left set they
+    // would fire into a disposed State after navigating away -- nothing
+    // saved, the proposals still pending, and an uncaught async error.
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
       return;
     }
@@ -3439,6 +3573,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _autoScrollStep = ratio.clamp(-1.0, 1.0) * _autoScrollMaxStep;
 
     if (_autoScrollStep == 0) {
+    // The banner holds these closures over this State; left set they
+    // would fire into a disposed State after navigating away -- nothing
+    // saved, the proposals still pending, and an uncaught async error.
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
     } else {
       _autoScrollTimer ??= Timer.periodic(
@@ -3450,6 +3589,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   void _autoScrollTick() {
     if (!_treeScrollController.hasClients) {
+    // The banner holds these closures over this State; left set they
+    // would fire into a disposed State after navigating away -- nothing
+    // saved, the proposals still pending, and an uncaught async error.
+    ref.read(proposalCommitProvider.notifier).state = null;
+    ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
       return;
     }
