@@ -50,30 +50,46 @@ TEST(requesting_a_console_keeps_output_on_it) {
   CHECK(ChooseOutputTarget(inputs) == OutputTarget::kInherited);
 }
 
-TEST(an_explicit_log_file_wins_over_a_connected_stdout) {
+TEST(an_explicit_log_file_does_not_take_over_a_connected_stdout) {
   OutputTargetInputs inputs = WindowedLaunch();
   inputs.stdout_connected = true;
   inputs.explicit_log_file = true;
 
-  // Naming a file with CENTROID_LOG_FILE is unambiguous, and it is how you
-  // capture a session that is also being watched in a terminal.
-  CHECK(ChooseOutputTarget(inputs) == OutputTarget::kFile);
+  // This is run-hmi.ps1: CENTROID_LOG_FILE named, `flutter run` reading
+  // stdout. Naming a file says where the log goes, not that stdout should
+  // stop reaching its reader. The Dart side writes that file from inside the
+  // process, so redirecting here would give one file two writers -- and it
+  // is the redirect, not the in-process writer, that has to be right about
+  // handles for anything to be recorded at all.
+  CHECK(ChooseOutputTarget(inputs) == OutputTarget::kInherited);
 }
 
-TEST(an_explicit_log_file_wins_over_a_requested_console) {
+TEST(an_explicit_log_file_does_not_cancel_a_requested_console) {
   OutputTargetInputs inputs = WindowedLaunch();
   inputs.console_requested = true;
   inputs.explicit_log_file = true;
 
-  CHECK(ChooseOutputTarget(inputs) == OutputTarget::kFile);
+  // Same reasoning: the console was asked for and still gets the output; the
+  // file is written by the Dart side.
+  CHECK(ChooseOutputTarget(inputs) == OutputTarget::kInherited);
 }
 
-TEST(everything_at_once_still_resolves_to_the_explicit_file) {
+TEST(everything_at_once_leaves_the_streams_alone) {
   OutputTargetInputs inputs;
   inputs.explicit_log_file = true;
   inputs.console_requested = true;
   inputs.stdout_connected = true;
 
+  CHECK(ChooseOutputTarget(inputs) == OutputTarget::kInherited);
+}
+
+TEST(a_named_file_is_used_when_nothing_is_listening) {
+  OutputTargetInputs inputs = WindowedLaunch();
+  inputs.explicit_log_file = true;
+
+  // Windowed launch with a path named by hand: the runner is the only
+  // possible writer, so it takes the file and tells the Dart side to stand
+  // down via CENTROID_LOG_REDIRECTED.
   CHECK(ChooseOutputTarget(inputs) == OutputTarget::kFile);
 }
 
