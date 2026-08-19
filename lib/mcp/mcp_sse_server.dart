@@ -12,6 +12,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         PlcCodeIndex,
         TechDocIndex,
         McpToolToggles,
+        NodeBrowser,
         ProposalCallback;
 
 /// Hosts an MCP server using Streamable HTTP transport.
@@ -40,6 +41,7 @@ class McpSseServer {
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
+    NodeBrowser? nodeBrowser,
     ProposalCallback? onProposal,
   }) async {
     if (isRunning) return;
@@ -54,6 +56,7 @@ class McpSseServer {
           drawingIndex: drawingIndex,
           plcCodeIndex: plcCodeIndex,
           techDocIndex: techDocIndex,
+          nodeBrowser: nodeBrowser,
           toggles: toggles,
           onProposal: onProposal,
         );

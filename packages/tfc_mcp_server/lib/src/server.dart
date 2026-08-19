@@ -7,6 +7,7 @@ import 'identity/operator_identity.dart';
 import 'interfaces/alarm_reader.dart';
 import 'interfaces/drawing_index.dart';
 import 'interfaces/plc_code_index.dart';
+import 'interfaces/node_browser.dart';
 import 'interfaces/state_reader.dart';
 import 'interfaces/tech_doc_index.dart';
 import 'logging/stderr_logger.dart';
@@ -43,6 +44,7 @@ import 'tools/tech_doc_tools.dart';
 import 'tools/key_mapping_write_tools.dart';
 import 'tools/page_write_tools.dart';
 import 'tools/ping_tool.dart';
+import 'tools/browse_tools.dart';
 import 'tools/tag_tools.dart';
 import 'tools/tool_registry.dart';
 import 'tools/tool_toggles.dart';
@@ -68,6 +70,9 @@ class TfcMcpServer {
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
+    /// Live address-space browsing. Null in standalone/database-only mode,
+    /// where there is no PLC session to browse.
+    NodeBrowser? nodeBrowser,
     McpToolToggles toggles = McpToolToggles.allEnabled,
     McpServer? mcpServer,
     log.Logger? logger,
@@ -135,6 +140,11 @@ class TfcMcpServer {
 
     if (toggles.tagsEnabled) {
       registerTagTools(registry, tagService);
+      // Browsing rides with the tag group: same read-only, live-PLC nature,
+      // and it is only useful to someone already allowed to read tags.
+      if (nodeBrowser != null) {
+        registerBrowseTools(registry, nodeBrowser);
+      }
     }
     if (toggles.alarmsEnabled) {
       registerAlarmTools(registry, alarmService);

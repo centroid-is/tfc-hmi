@@ -15,7 +15,8 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         DrawingIndex,
         PlcCodeIndex,
         TechDocIndex,
-        McpToolToggles;
+        McpToolToggles,
+        NodeBrowser;
 
 import '../llm/llm_models.dart';
 import '../llm/llm_provider.dart';
@@ -564,6 +565,7 @@ class McpBridgeNotifier extends ChangeNotifier {
     DrawingIndex? drawingIndex,
     PlcCodeIndex? plcCodeIndex,
     TechDocIndex? techDocIndex,
+    NodeBrowser? nodeBrowser,
   }) async {
     if (_sseServer.isRunning) return;
 
@@ -579,6 +581,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         drawingIndex: drawingIndex,
         plcCodeIndex: plcCodeIndex,
         techDocIndex: techDocIndex,
+        nodeBrowser: nodeBrowser,
         onProposal: _onProposal,
       );
       _setState(McpBridgeState(

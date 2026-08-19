@@ -17,6 +17,7 @@ export 'src/interfaces/alarm_reader.dart';
 export 'src/interfaces/drawing_index.dart';
 export 'src/interfaces/plc_code_index.dart';
 export 'src/interfaces/tech_doc_index.dart';
+export 'src/interfaces/node_browser.dart';
 export 'src/interfaces/empty_readers.dart';
 export 'src/interfaces/server_alias_provider.dart';
 export 'src/identity/operator_identity.dart';
