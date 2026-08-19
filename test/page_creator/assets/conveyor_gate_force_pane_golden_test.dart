@@ -1,7 +1,7 @@
 import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show FontLoader;
+import 'package:flutter/services.dart' show ByteData, FontLoader;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
@@ -13,20 +13,39 @@ import 'package:tfc_dart/core/state_man.dart';
 
 import '../../helpers/golden_tolerance.dart';
 
-/// Loads a real font so the pane's labels render as letterforms instead of
-/// the test font's solid boxes — same pattern as `third_party_golden_test`.
+/// Loads real fonts so the pane's labels render as letterforms and its icons
+/// as glyphs instead of the test font's solid boxes — same patterns as
+/// `third_party_golden_test` (text) and `panes_golden_test` (MaterialIcons).
 Future<void> loadRealFont() async {
-  final data = File('lib/fonts/roboto-mono/RobotoMono-Regular.ttf')
-      .readAsBytesSync()
-      .buffer
-      .asByteData();
-  final loader = FontLoader('Roboto')..addFont(Future.value(data));
-  await loader.load();
+  Future<void> loadFont(String family, String path) async {
+    final bytes = File(path).readAsBytesSync();
+    await (FontLoader(family)
+          ..addFont(Future.value(ByteData.view(bytes.buffer))))
+        .load();
+  }
+
+  await loadFont('Roboto', 'lib/fonts/roboto-mono/RobotoMono-Regular.ttf');
+
+  // The header and chip carry icons; pull MaterialIcons out of the Flutter
+  // SDK cache, falling back to boxes rather than failing the suite.
+  final flutterRoot = Platform.environment['FLUTTER_ROOT'];
+  for (final candidate in <String>[
+    if (flutterRoot != null)
+      '$flutterRoot/bin/cache/artifacts/material_fonts/'
+          'MaterialIcons-Regular.otf',
+    '/opt/homebrew/share/flutter/bin/cache/artifacts/material_fonts/'
+        'MaterialIcons-Regular.otf',
+  ]) {
+    if (File(candidate).existsSync()) {
+      await loadFont('MaterialIcons', candidate);
+      break;
+    }
+  }
 }
 
 /// Golden of the gate force pane with its tri-state Open / None / Close
-/// selector — force-open feedback active, so the Open segment carries the
-/// tertiary highlight.
+/// selector — force-open feedback active, so the header carries the orange
+/// `Forced open` chip and the Open segment wears the same tint.
 void main() {
   // This golden is a full 800×600 app surface with real text, so the
   // cross-Flutter-version antialiasing drift the default 0.01% tolerance
