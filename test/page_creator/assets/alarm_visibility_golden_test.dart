@@ -301,5 +301,43 @@ void main() {
         matchesGoldenFile('goldens/alarm_visibility_pane_idle.png'),
       );
     });
+
+    testWidgets('config editor alarm picker: search on top, capped list, '
+        'selection summary', (tester) async {
+      final alarms = [
+        for (var i = 1; i <= 20; i++)
+          _alarmConfigFx(
+            uid: 'cn$i',
+            title: 'CN${i.toString().padLeft(2, '0')} conveyor stopped',
+            description: 'Drive fault on conveyor $i.',
+          ),
+      ];
+      final (light, _) = solarized();
+      await tester.pumpWidget(MaterialApp(
+        theme: light,
+        home: Scaffold(
+          backgroundColor: light.colorScheme.surface,
+          body: Center(
+            child: RepaintBoundary(
+              key: _beaconKey,
+              child: Container(
+                color: light.colorScheme.surface,
+                width: 312,
+                padding: const EdgeInsets.all(8),
+                child: AlarmPickerList(
+                  alarms: alarms,
+                  selectedUids: ['cn3', 'cn7'],
+                  onSelectionChanged: () {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_beaconKey),
+        matchesGoldenFile('goldens/alarm_visibility_config_picker.png'),
+      );
+    });
   });
 }

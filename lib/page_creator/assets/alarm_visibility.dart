@@ -10,6 +10,7 @@ import 'package:tfc_dart/core/alarm.dart';
 import '../../providers/alarm.dart';
 import '../../widgets/alarm.dart'
     show AlarmNotificationColors, ViewActiveAlarm, alarmLevelColors;
+import '../../widgets/fuzzy_search_bar.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
@@ -606,6 +607,123 @@ class AlarmVisibilityPaneView extends StatelessWidget {
 // Config editor
 // ---------------------------------------------------------------------------
 
+/// Searchable multi-select alarm list for the config editor.
+///
+/// A plant can have hundreds of alarms, so a flat checkbox column is
+/// unusable — this caps the list's height and puts the same fuzzy search on
+/// top as the alarm list page. Mutates [selectedUids] in place and calls
+/// [onSelectionChanged], preserving the editor's live-config contract.
+class AlarmPickerList extends StatefulWidget {
+  final List<AlarmConfig> alarms;
+  final List<String> selectedUids;
+  final VoidCallback onSelectionChanged;
+  final double maxHeight;
+
+  const AlarmPickerList({
+    super.key,
+    required this.alarms,
+    required this.selectedUids,
+    required this.onSelectionChanged,
+    this.maxHeight = 280,
+  });
+
+  @override
+  State<AlarmPickerList> createState() => _AlarmPickerListState();
+}
+
+class _AlarmPickerListState extends State<AlarmPickerList> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final sorted = [...widget.alarms]
+      ..sort((a, b) => a.title.compareTo(b.title));
+    final filtered = fuzzyFilter<AlarmConfig>(sorted, _query, [
+      (a) => a.title,
+      (a) => a.description,
+    ]);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FuzzySearchBar(
+          hintText: 'Search alarms...',
+          decoration: const InputDecoration(
+            hintText: 'Search alarms...',
+            prefixIcon: Icon(Icons.search),
+            isDense: true,
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (value) => setState(() => _query = value),
+        ),
+        const SizedBox(height: 4),
+        ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: widget.maxHeight),
+          child: filtered.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    'No alarms match the search.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                )
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) {
+                    final alarm = filtered[index];
+                    return CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: Text(alarm.title),
+                      subtitle: alarm.description.isEmpty
+                          ? null
+                          : Text(
+                              alarm.description,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                      value: widget.selectedUids.contains(alarm.uid),
+                      onChanged: (checked) {
+                        setState(() {
+                          if (checked == true) {
+                            widget.selectedUids.add(alarm.uid);
+                          } else {
+                            widget.selectedUids.remove(alarm.uid);
+                          }
+                        });
+                        widget.onSelectionChanged();
+                      },
+                    );
+                  },
+                ),
+        ),
+        if (widget.selectedUids.isNotEmpty)
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${widget.selectedUids.length} of ${widget.alarms.length} '
+                  'selected',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  setState(() => widget.selectedUids.clear());
+                  widget.onSelectionChanged();
+                },
+                child: const Text('Clear'),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
 /// Editor body for [AlarmVisibilityConfig]. All edits mutate the live config
 /// instance in place — the page editor's config pane mirrors them back onto
 /// the canvas (same contract as `_SensorConfigEditor`).
@@ -667,8 +785,7 @@ class _AlarmVisibilityConfigEditorState
             style: Theme.of(context).textTheme.bodySmall,
           );
         }
-        final alarms = snapshot.data!.alarms.map((a) => a.config).toList()
-          ..sort((a, b) => a.title.compareTo(b.title));
+        final alarms = snapshot.data!.alarms.map((a) => a.config).toList();
         if (alarms.isEmpty) {
           return Text(
             'No alarms configured yet — this beacon will react to every '
@@ -676,35 +793,10 @@ class _AlarmVisibilityConfigEditorState
             style: Theme.of(context).textTheme.bodySmall,
           );
         }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final alarm in alarms)
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: Text(alarm.title),
-                subtitle: alarm.description.isEmpty
-                    ? null
-                    : Text(
-                        alarm.description,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                value: widget.config.alarmUids.contains(alarm.uid),
-                onChanged: (checked) {
-                  setState(() {
-                    if (checked == true) {
-                      widget.config.alarmUids.add(alarm.uid);
-                    } else {
-                      widget.config.alarmUids.remove(alarm.uid);
-                    }
-                  });
-                },
-              ),
-          ],
+        return AlarmPickerList(
+          alarms: alarms,
+          selectedUids: widget.config.alarmUids,
+          onSelectionChanged: () => setState(() {}),
         );
       },
     );
