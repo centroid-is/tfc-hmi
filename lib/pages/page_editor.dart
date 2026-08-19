@@ -1269,6 +1269,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       }
       return true;
     }
+    // Arrow keys nudge the selection. Repeats count — holding the key keeps
+    // moving — but only the initial press opens an undo entry, so a whole
+    // press-and-hold walks back in a single Ctrl/Cmd+Z.
+    final nudge = _arrowDirection(event.logicalKey);
+    if (nudge != null &&
+        (event is KeyDownEvent || event is KeyRepeatEvent) &&
+        !_isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
+      return _nudgeSelection(nudge, saveHistory: event is KeyDownEvent);
+    }
     if (event is KeyDownEvent) {
       if (_isModifierPressed(HardwareKeyboard.instance.logicalKeysPressed)) {
         if (event.logicalKey == LogicalKeyboardKey.keyZ) {
@@ -1523,6 +1532,50 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final constraints = _canvasConstraints;
     if (constraints == null || _selectedAssets.isEmpty) return;
     _rotateAssets(_selectedAssets.toList(), degrees, constraints);
+  }
+
+  /// One arrow press moves this many canvas pixels; Shift multiplies by ten.
+  /// The arrows are the precision tool the mouse isn't, so the base step is
+  /// the smallest one that shows.
+  static const double _nudgeStepPx = 1.0;
+  static const double _nudgeShiftFactor = 10.0;
+
+  /// Screen-space direction of an arrow key, or null for any other key.
+  static Offset? _arrowDirection(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.arrowLeft) return const Offset(-1, 0);
+    if (key == LogicalKeyboardKey.arrowRight) return const Offset(1, 0);
+    if (key == LogicalKeyboardKey.arrowUp) return const Offset(0, -1);
+    if (key == LogicalKeyboardKey.arrowDown) return const Offset(0, 1);
+    return null;
+  }
+
+  /// One keyboard nudge of the whole selection, clamped to the canvas like a
+  /// drag. Unlike a drag there is no rotated gesture frame to project out of:
+  /// [direction] is already in canvas space, so a screen-right press moves
+  /// screen-right whatever the assets' angles.
+  ///
+  /// False — leaving the key unclaimed — with nothing selected or no canvas
+  /// laid out, so the arrows keep whatever meaning the rest of the app gives
+  /// them.
+  bool _nudgeSelection(Offset direction, {required bool saveHistory}) {
+    final constraints = _canvasConstraints;
+    if (constraints == null || _selectedAssets.isEmpty) return false;
+    final step = HardwareKeyboard.instance.isShiftPressed
+        ? _nudgeStepPx * _nudgeShiftFactor
+        : _nudgeStepPx;
+    if (saveHistory) _saveToHistory();
+    _updateState(() {
+      for (final asset in _selectedAssets) {
+        asset.coordinates = Coordinates(
+          x: (asset.coordinates.x + direction.dx * step / constraints.maxWidth)
+              .clamp(0.0, 1.0),
+          y: (asset.coordinates.y + direction.dy * step / constraints.maxHeight)
+              .clamp(0.0, 1.0),
+          angle: asset.coordinates.angle,
+        );
+      }
+    });
+    return true;
   }
 
   /// Menu values for the editing actions; AI entries use their own list index,
