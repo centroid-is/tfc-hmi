@@ -11,6 +11,7 @@
 #include <cstdlib>  // free, _wdupenv_s
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 void CreateAndAttachConsole() {
@@ -56,6 +57,57 @@ void RedirectIOToFile(const char* path) {
       FILE_ATTRIBUTE_NORMAL,
       nullptr);
   if (hFile == INVALID_HANDLE_VALUE) return;
+
+  // If we already have a console (launched from a terminal or under an IDE
+  // that attaches one), tee instead of redirecting.
+  //
+  // Redirecting takes the output away from whoever is watching it. That is
+  // the wrong trade for the OPC UA stack in particular: open62541 logs
+  // through UA_Log_Stdout, i.e. straight to this file descriptor and never
+  // through Dart, so its session and channel messages are only ever visible
+  // wherever fd 1 happens to point. Sending them to a file blinds the
+  // operator; leaving them on the console blinds every tool. Tee gives both.
+  HANDLE hConsole = ::GetStdHandle(STD_OUTPUT_HANDLE);
+  if (hConsole != nullptr && hConsole != INVALID_HANDLE_VALUE &&
+      ::GetFileType(hConsole) != FILE_TYPE_UNKNOWN) {
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    if (::CreatePipe(&readEnd, &writeEnd, &sa, 0)) {
+      // Pump: everything written to fd 1/2 arrives here and is forwarded to
+      // both sinks. Detached -- it ends when the process does.
+      std::thread([readEnd, hConsole, hFile]() {
+        char buf[4096];
+        DWORD got = 0, put = 0;
+        while (::ReadFile(readEnd, buf, sizeof(buf), &got, nullptr) && got > 0) {
+          ::WriteFile(hConsole, buf, got, &put, nullptr);
+          ::WriteFile(hFile, buf, got, &put, nullptr);
+          ::FlushFileBuffers(hFile);
+        }
+      }).detach();
+
+      int pipeFd = _open_osfhandle(reinterpret_cast<intptr_t>(writeEnd),
+                                   _O_WRONLY | _O_TEXT);
+      if (pipeFd != -1) {
+        FILE* pipeFp = _fdopen(pipeFd, "w");
+        if (pipeFp) {
+          setvbuf(pipeFp, nullptr, _IONBF, 0);
+          *stdout = *pipeFp;
+          _dup2(pipeFd, 1);
+          _dup2(pipeFd, 2);
+          ::SetStdHandle(STD_OUTPUT_HANDLE, writeEnd);
+          ::SetStdHandle(STD_ERROR_HANDLE, writeEnd);
+          std::ios::sync_with_stdio(false);
+          std::ios::sync_with_stdio(true);
+          FlutterDesktopResyncOutputStreams();
+          return;
+        }
+        _close(pipeFd);
+      }
+      // Pipe setup failed part-way: fall through to the plain redirect
+      // below rather than losing output entirely.
+      ::CloseHandle(readEnd);
+    }
+  }
 
   // Associate the Win32 handle with a CRT file descriptor, then with stdout.
   int fd = _open_osfhandle(reinterpret_cast<intptr_t>(hFile), _O_WRONLY | _O_TEXT);
