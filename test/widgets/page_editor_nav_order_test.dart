@@ -130,7 +130,7 @@ void main() {
 
     expect(_rowY(tester, 'Advanced'), lessThan(_rowY(tester, 'Home')));
 
-    await tester.tap(find.text('Close'));
+    await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.save));
     await tester.pumpAndSettle();
@@ -157,7 +157,7 @@ void main() {
     final homeY = _rowY(tester, 'Home');
     final chillerY = _rowY(tester, 'Chiller');
     await _reorderBy(tester, 'Chiller', homeY - chillerY - 20);
-    await tester.tap(find.text('Close'));
+    await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.save));
     await tester.pumpAndSettle();

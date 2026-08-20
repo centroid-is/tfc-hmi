@@ -582,7 +582,7 @@ void main() {
 
       expect(find.byType(SidePane), findsOneWidget);
       expect(find.text('DI-3725-A'), findsOneWidget);
-      expect(find.text('Close'), findsOneWidget);
+      expect(find.byTooltip('Close'), findsOneWidget);
     });
 
     testWidgets('Close action dismisses the pane', (tester) async {
@@ -593,7 +593,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsNothing);
     });
@@ -1191,7 +1191,7 @@ void main() {
             expect(find.byType(SidePane), findsOneWidget,
                 reason: 'iteration $i: pane should open');
 
-            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.tap(find.byTooltip('Close'));
             await tester.pumpAndSettle();
             expect(find.byType(SidePane), findsNothing,
                 reason: 'iteration $i: pane should close');
@@ -1470,7 +1470,7 @@ void main() {
 
       expect(find.byType(SidePane), findsOneWidget);
       expect(find.text('DO-3705-A'), findsOneWidget);
-      expect(find.text('Close'), findsOneWidget);
+      expect(find.byTooltip('Close'), findsOneWidget);
     });
 
     testWidgets(
@@ -3199,7 +3199,7 @@ void main() {
 
         expect(find.byType(SidePane), findsOneWidget);
 
-        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
         expect(find.byType(SidePane), findsNothing);
       },
@@ -3218,7 +3218,7 @@ void main() {
 
         expect(find.byType(SidePane), findsOneWidget);
 
-        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
         expect(find.byType(SidePane), findsNothing);
       },

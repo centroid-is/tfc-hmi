@@ -728,7 +728,6 @@ class _KeyInsertionDialogState extends ConsumerState<_KeyInsertionDialog> {
       title: 'Insert OPC UA key',
       icon: Icons.link,
       width: 540,
-      closeLabel: 'Cancel',
       child: SizedBox(
         width: 500,
         height: 400,

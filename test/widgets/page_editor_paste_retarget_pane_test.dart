@@ -70,7 +70,7 @@ Future<void> deleteFromPane(WidgetTester tester) async {
 }
 
 Future<void> closePane(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(TextButton, 'Close'));
+  await tester.tap(find.byTooltip('Close'));
   await tester.pumpAndSettle();
 }
 

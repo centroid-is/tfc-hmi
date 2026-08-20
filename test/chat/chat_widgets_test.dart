@@ -490,7 +490,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Proposal'), findsOneWidget); // Dialog title
-      expect(find.text('Close'), findsOneWidget);
+      expect(find.byTooltip('Close'), findsOneWidget);
     });
   });
 

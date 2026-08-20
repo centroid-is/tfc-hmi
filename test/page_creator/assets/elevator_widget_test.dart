@@ -207,9 +207,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SidePane), findsOneWidget);
-      final closeBtn = find.widgetWithText(TextButton, 'Close');
+      final closeBtn = find.byTooltip('Close');
       expect(closeBtn, findsOneWidget,
-          reason: 'Details pane must have a TextButton labelled "Close".');
+          reason: 'Details pane must have a header close button.');
       await tester.tap(closeBtn);
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsNothing,

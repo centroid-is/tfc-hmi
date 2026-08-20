@@ -28,7 +28,7 @@ Future<void> openConfigPane(WidgetTester tester, double fx, double fy) =>
     chooseFromAssetMenu(tester, fx, fy, 'Edit');
 
 Future<void> closePane(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(TextButton, 'Close'));
+  await tester.tap(find.byTooltip('Close'));
   await tester.pumpAndSettle();
 }
 

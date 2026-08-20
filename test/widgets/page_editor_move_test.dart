@@ -203,7 +203,7 @@ Finder _topLevelDropZone() => find.byIcon(Icons.north);
 
 /// Closes the Pages dialog and presses Save, so the manager holds the result.
 Future<void> _closeAndSave(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(TextButton, 'Close'));
+  await tester.tap(find.byTooltip('Close'));
   await tester.pumpAndSettle();
   // The "Moved ..." SnackBar can sit over the save button; let it expire.
   if (find.byType(SnackBar).evaluate().isNotEmpty) {
@@ -678,7 +678,7 @@ void main() {
       await tester.tap(_destination(dialog, 'Freezer'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
 
       // The editor picks its undo modifier from the host platform.

@@ -31,7 +31,6 @@ class StandardDialog extends StatelessWidget {
   final List<PaneAction> actions;
   final Widget child;
   final VoidCallback? onClose;
-  final String closeLabel;
   final Widget? headerTrailing;
 
   /// Wraps the header, used by the floating variant to make it a drag handle.
@@ -52,7 +51,6 @@ class StandardDialog extends StatelessWidget {
     this.status,
     this.actions = const [],
     this.onClose,
-    this.closeLabel = 'Close',
     this.headerTrailing,
     this.headerWrap,
     this.scrollable = true,
@@ -83,12 +81,11 @@ class StandardDialog extends StatelessWidget {
               ? SingleChildScrollView(primary: false, child: body)
               : body,
         ),
-        PaneActionBar(
-          actions: actions,
-          onClose: onClose,
-          closeLabel: closeLabel,
-          endInset: actionBarEndInset,
-        ),
+        if (actions.isNotEmpty)
+          PaneActionBar(
+            actions: actions,
+            endInset: actionBarEndInset,
+          ),
       ],
     );
   }
@@ -111,10 +108,9 @@ class StandardDialogFrame extends StatelessWidget {
   final PaneStatus? status;
   final List<PaneAction> actions;
   final Widget child;
-  final String closeLabel;
 
-  /// Omit the automatic Close — for dialogs whose own actions already cover
-  /// dismissal (Cancel/Save), where a third button would just be noise.
+  /// Omit the header's close button — for dialogs whose own actions already
+  /// cover dismissal (Cancel/Save), where another affordance would be noise.
   final bool showClose;
 
   final double width;
@@ -129,7 +125,6 @@ class StandardDialogFrame extends StatelessWidget {
     this.icon,
     this.status,
     this.actions = const [],
-    this.closeLabel = 'Close',
     this.showClose = true,
     this.width = 520,
     this.height,
@@ -153,7 +148,6 @@ class StandardDialogFrame extends StatelessWidget {
             icon: icon,
             status: status,
             actions: actions,
-            closeLabel: closeLabel,
             scrollable: scrollable,
             onClose: showClose ? () => Navigator.of(context).pop() : null,
             child: child,
@@ -198,7 +192,6 @@ Future<T?> showStandardDialog<T>({
   double width = 520,
   double? height,
   bool barrierDismissible = true,
-  String closeLabel = 'Close',
 
   /// For callers that live ABOVE the app Navigator — overlay-hosted widgets
   /// like the chat window, whose own context has no Navigator to push onto.
@@ -225,7 +218,6 @@ Future<T?> showStandardDialog<T>({
             icon: icon,
             status: status,
             actions: actionsBuilder?.call(dialogContext) ?? const [],
-            closeLabel: closeLabel,
             onClose: () => Navigator.of(dialogContext).pop(),
             child: builder(dialogContext),
           ),
@@ -257,9 +249,14 @@ Future<bool> showConfirmDialog({
     context: context,
     title: title,
     icon: icon ?? (destructive ? Icons.warning_amber : Icons.help_outline),
-    closeLabel: cancelLabel,
     builder: (_) => Text(message),
     actionsBuilder: (dialogContext) => [
+      // The explicit "no" answer: unlike the chrome's close button this is
+      // part of the question, so it stays in the bar next to the confirm.
+      PaneAction(
+        label: cancelLabel,
+        onPressed: () => Navigator.of(dialogContext).pop(false),
+      ),
       destructive
           ? PaneAction.destructive(
               label: confirmLabel,
@@ -297,7 +294,6 @@ void showFloatingDialog({
   List<PaneAction> actions = const [],
   Size size = const Size(640, 480),
   Offset? position,
-  String closeLabel = 'Close',
   VoidCallback? onClosed,
 
   /// Set false for content that fills the window itself — a chart with an
@@ -316,7 +312,6 @@ void showFloatingDialog({
     builder: builder,
     size: size,
     position: position,
-    closeLabel: closeLabel,
     onClosed: onClosed,
     scrollable: scrollable,
   );
@@ -352,7 +347,6 @@ abstract final class FloatingDialogs {
     List<PaneAction> actions = const [],
     Size size = const Size(640, 480),
     Offset? position,
-    String closeLabel = 'Close',
     VoidCallback? onClosed,
     bool scrollable = true,
   }) {
@@ -369,7 +363,6 @@ abstract final class FloatingDialogs {
         icon: icon,
         status: status,
         actions: actions,
-        closeLabel: closeLabel,
         initialSize: size,
         initialPosition: position,
         cascade: cascade,
@@ -418,7 +411,6 @@ class _FloatingDialogShell extends StatefulWidget {
   final IconData? icon;
   final PaneStatus? status;
   final List<PaneAction> actions;
-  final String closeLabel;
   final Size initialSize;
   final Offset? initialPosition;
   final double cascade;
@@ -429,7 +421,6 @@ class _FloatingDialogShell extends StatefulWidget {
     required this.id,
     required this.title,
     required this.actions,
-    required this.closeLabel,
     required this.initialSize,
     required this.cascade,
     required this.builder,
@@ -572,7 +563,6 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
         icon: widget.icon,
         status: widget.status,
         actions: widget.actions,
-        closeLabel: widget.closeLabel,
         scrollable: widget.scrollable,
         onClose: () => FloatingDialogs.close(widget.id),
         // The header doubles as the window's title bar.

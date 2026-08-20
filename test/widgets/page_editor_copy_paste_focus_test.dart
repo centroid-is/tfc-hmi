@@ -75,7 +75,7 @@ Future<void> focusPaneField(WidgetTester tester) async {
 
 /// Closes the pane so its periodic watch timer does not outlive the test.
 Future<void> closePane(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(TextButton, 'Close'));
+  await tester.tap(find.byTooltip('Close'));
   await tester.pumpAndSettle();
 }
 

@@ -196,7 +196,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsNothing);
     });

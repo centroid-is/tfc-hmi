@@ -144,7 +144,7 @@ void main() {
         reason: 'keys aimed at a text field must never edit the canvas');
 
     // Close the pane so its watch timer does not outlive the test.
-    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
   });
 

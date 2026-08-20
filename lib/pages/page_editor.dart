@@ -3960,7 +3960,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         height: 460,
         // The list scrolls itself; an outer scroll would unbound its height.
         scrollable: false,
-        closeLabel: 'Cancel',
         child: ListView(
           children: [
             _buildMoveTarget(

@@ -116,7 +116,7 @@ void main() {
     // The row says so, in the dialog the engineer is looking at.
     expect(find.text('Draft — not published'), findsOneWidget);
 
-    await tester.tap(find.text('Close'));
+    await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
 
     final saved = await _saveAndReadPages(tester, prefs);
@@ -149,7 +149,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(_publishToggle(tester, 'Chiller'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Close'));
+    await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
 
     expect(_navigablePaths(await _saveAndReadPages(tester, prefs)),
@@ -162,7 +162,7 @@ void main() {
     await _openPages(tester);
     await tester.tap(_publishToggle(tester, 'Chiller'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Close'));
+    await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
 
     await pressUndo(tester);

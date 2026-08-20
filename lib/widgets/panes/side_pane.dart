@@ -55,8 +55,8 @@ class SidePane extends StatelessWidget {
   /// Live equipment state, rendered as a chip in the header.
   final PaneStatus? status;
 
-  /// Buttons pinned to the bottom of the pane. `Close` is added automatically
-  /// and always sits on the right.
+  /// Buttons pinned to the bottom of the pane. Closing lives in the header's
+  /// corner button; a pane without actions has no footer.
   final List<PaneAction> actions;
 
   /// Extra control in the header, left of the close button.
@@ -67,8 +67,6 @@ class SidePane extends StatelessWidget {
 
   /// Overrides the close behaviour. Defaults to [closeSidePane].
   final VoidCallback? onClose;
-
-  final String closeLabel;
 
   /// Whether the body scrolls when it does not fit. Leave `true` — the
   /// intent is that content fits, this is the safety net for small screens.
@@ -84,7 +82,6 @@ class SidePane extends StatelessWidget {
     this.actions = const [],
     this.headerTrailing,
     this.onClose,
-    this.closeLabel = 'Close',
     this.scrollable = true,
   });
 
@@ -114,11 +111,7 @@ class SidePane extends StatelessWidget {
                 )
               : body,
         ),
-        PaneActionBar(
-          actions: actions,
-          onClose: close,
-          closeLabel: closeLabel,
-        ),
+        if (actions.isNotEmpty) PaneActionBar(actions: actions),
       ],
     );
   }

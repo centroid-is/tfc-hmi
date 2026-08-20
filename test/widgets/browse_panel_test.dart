@@ -269,8 +269,8 @@ void main() {
       expect(find.text('23.5'), findsOneWidget);
 
       // Select button should be enabled
-      final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+      final selectButton = tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Select'));
       expect(selectButton.onPressed, isNotNull);
     });
 
@@ -375,15 +375,16 @@ void main() {
 
       await _showPanel(tester, ds, alias: 'opc.tcp://plc1:4840');
 
-      expect(find.text('Browse: opc.tcp://plc1:4840'), findsOneWidget);
+      expect(find.text('Browse'), findsOneWidget);
+      expect(find.text('opc.tcp://plc1:4840'), findsOneWidget);
     });
 
-    testWidgets('Cancel button dismisses dialog', (tester) async {
+    testWidgets('header close button dismisses dialog', (tester) async {
       final ds = FakeBrowseDataSource(roots: []);
 
       await _showPanel(tester, ds);
 
-      await tester.tap(find.text('Cancel'));
+      await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
 
       expect(find.byType(BrowsePanel), findsNothing);
@@ -397,8 +398,8 @@ void main() {
 
       await _showPanel(tester, ds);
 
-      final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+      final selectButton = tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Select'));
       expect(selectButton.onPressed, isNull);
     });
 
@@ -473,15 +474,15 @@ void main() {
         },
       );
 
+      BrowseNode? selection;
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: BrowsePanel(
               dataSource: ds,
-              serverAlias: 'TestServer',
               initialPath: 'Folder.A.Leaf2',
               onSelected: (_) {},
-              onCancelled: () {},
+              onSelectionChanged: (node) => selection = node,
             ),
           ),
         ),
@@ -500,10 +501,9 @@ void main() {
       expect(find.byType(VariableDetailStrip), findsOneWidget);
       expect(find.text('99'), findsOneWidget);
 
-      // Select button is enabled (variable selected).
-      final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
-      expect(selectButton.onPressed, isNotNull);
+      // The selection reached the enclosing dialog's callback, which is
+      // what enables its Select action.
+      expect(selection?.id, 'Folder.A.Leaf2');
 
       // resolvePath was hit exactly once.
       expect(ds.resolvePathCallCount, 1);
@@ -529,14 +529,14 @@ void main() {
         },
       );
 
+      BrowseNode? selection;
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: BrowsePanel(
               dataSource: ds,
-              serverAlias: 'TestServer',
               onSelected: (_) {},
-              onCancelled: () {},
+              onSelectionChanged: (node) => selection = node,
             ),
           ),
         ),
@@ -549,9 +549,7 @@ void main() {
 
       // No detail strip, no selection.
       expect(find.byType(VariableDetailStrip), findsNothing);
-      final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
-      expect(selectButton.onPressed, isNull);
+      expect(selection, isNull);
 
       // resolvePath was NOT called when initialPath is null.
       expect(ds.resolvePathCallCount, 0);
@@ -575,10 +573,8 @@ void main() {
           home: Scaffold(
             body: BrowsePanel(
               dataSource: ds,
-              serverAlias: 'TestServer',
               initialPath: 'Nonexistent.Path',
               onSelected: (_) {},
-              onCancelled: () {},
             ),
           ),
         ),

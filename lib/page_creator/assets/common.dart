@@ -474,7 +474,6 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
     return StandardDialogFrame(
       title: 'Search keys',
       icon: Icons.search,
-      closeLabel: 'Cancel',
       child: SizedBox(
         width: double.maxFinite,
         child: Column(
@@ -554,7 +553,6 @@ class _KeyFieldDialogState extends State<_KeyFieldDialog> {
     return StandardDialogFrame(
       title: 'Format OPC UA NodeId',
       icon: Icons.tag,
-      closeLabel: 'Cancel',
       actions: [
         PaneAction.primary(
           label: 'OK',
@@ -997,7 +995,6 @@ class _KeyMappingEntryDialogState extends ConsumerState<KeyMappingEntryDialog> {
     return StandardDialogFrame(
       title: 'Configure key mapping',
       icon: Icons.link,
-      closeLabel: 'Cancel',
       width: 540,
       actions: [PaneAction.primary(label: 'OK', onPressed: _submit)],
       child: SizedBox(

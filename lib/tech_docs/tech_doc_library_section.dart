@@ -839,7 +839,6 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       context: context,
       title: 'Document name',
       icon: Icons.edit,
-      closeLabel: 'Cancel',
       builder: (ctx) => TextField(
         controller: controller,
         autofocus: true,
