@@ -22,6 +22,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:tfc/page_creator/assets/analog_box.dart'
+    show AnalogBoxConfig, AnalogBoxPane;
 import 'package:tfc/page_creator/assets/conveyor.dart'
     show conveyorTrendColors, kConveyorFreqSeries, kConveyorCurrentSeries;
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -905,6 +907,44 @@ class _SensorTrendChart extends StatelessWidget {
   }
 }
 
+/// The analog box operator pane — the REAL [AnalogBoxPane], fed canned
+/// values instead of a PLC (the dialog→pane conversion under review).
+///
+/// [withRangeKeys] binds the sensor-range keys: bound, the pane carries the
+/// "Sensor range" section (live values + an Adjust fold); unbound, the
+/// section is absent entirely — the replacement for the old dialog's
+/// "Advanced" switch, which showed even for cleared keys.
+Widget _analogBoxPane(BuildContext context, {bool withRangeKeys = true}) {
+  final config = AnalogBoxConfig(
+    analogKey: 'sensors.PT2201',
+    analogSensorRangeMinKey: withRangeKeys ? 'sensors.PT2201.rangeMin' : null,
+    analogSensorRangeMaxKey: withRangeKeys ? 'sensors.PT2201.rangeMax' : null,
+    setpoint1Key: 'sensors.PT2201.sp1',
+    setpoint1HysteresisKey: 'sensors.PT2201.sp1Hyst',
+    setpoint2Key: 'sensors.PT2201.sp2',
+    minValue: 0,
+    maxValue: 10,
+    units: 'bar',
+  )..text = 'PT-2201';
+  return AnalogBoxPane(
+    config: config,
+    value: 4.21,
+    setpoint1: 4.8,
+    setpoint1Hysteresis: 0.2,
+    setpoint2: 5.5,
+    rangeMin: 0,
+    rangeMax: 10,
+    // Goldens never write; the pane is rendered, not driven.
+    onWrite: (_, __) {},
+    trendTile: PaneGraphTile(
+      height: 100,
+      preview: const _AnalogTrendChart(),
+      expandedTitle: 'PT-2201 — trend',
+      expandedBuilder: (_) => const _AnalogTrendChart(),
+    ),
+  );
+}
+
 /// A sensor's read-only details — the fallback shape, shown when the key is a
 /// plain BOOL node with no `FB_Sensor` behind it. Values only: the tag names
 /// the pane, wiring (key strings, polarity, delay keys) stays out.
@@ -1298,6 +1338,42 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/side_pane_gate_dark.png'),
+      );
+    });
+
+    // The analog box, running the real `AnalogBoxPane`: live value, trend,
+    // inline setpoints and the sensor-range section with its Adjust fold.
+    testWidgets('analog box — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _analogBoxPane);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_analog_box_dark.png'),
+      );
+    });
+
+    // The Adjust fold open: the range fields are reachable, but only after a
+    // deliberate second tap — never on first paint.
+    testWidgets('analog box — range fold open — dark', (tester) async {
+      await _pumpWithPane(tester, theme: dark, pane: _analogBoxPane);
+      await tester.tap(find.text('Adjust'));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_analog_box_adjust_dark.png'),
+      );
+    });
+
+    // No range keys bound → no Sensor range section, no Adjust fold — the
+    // old dialog's "Advanced" toggle is gone with nothing in its place.
+    testWidgets('analog box — no range keys — dark', (tester) async {
+      await _pumpWithPane(
+        tester,
+        theme: dark,
+        pane: (context) => _analogBoxPane(context, withRangeKeys: false),
+      );
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_analog_box_no_range_dark.png'),
       );
     });
   });
