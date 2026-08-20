@@ -59,6 +59,8 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
       children: [
         const Icon(Icons.auto_awesome, color: Colors.amber, size: 20),
         const SizedBox(width: 10),
+        _ActionChip(proposal.action),
+        const SizedBox(width: 8),
         Expanded(
           child: Text(
             'AI Proposal: ${proposal.title}',
@@ -107,14 +109,31 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                '$count AI Proposals',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w500,
+              // The collapsed header is all most operators read before
+              // pressing Accept all, so say up front what the batch does:
+              // "3 create · 1 delete" reads very differently from "4".
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    text: '$count AI Proposals',
+                    children: [
+                      TextSpan(
+                        text: '   ${_actionSummary(proposals)}',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                          fontWeight: FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const Spacer(),
               // Accepting twenty-one bindings one row at a time is not review,
               // it is data entry -- the operator has already read the list.
               // Kept beside the count so it is reachable without expanding.
@@ -143,6 +162,8 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
               child: Row(
                 children: [
                   const SizedBox(width: 30),
+                  _ActionChip(p.action),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       '${p.editorLabel}: ${p.title}',
@@ -292,6 +313,69 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       child: const Text('View'),
+    );
+  }
+
+  /// "2 create · 1 edit · 1 delete", listing only the actions present.
+  String _actionSummary(List<PendingProposal> proposals) {
+    final counts = <ProposalOp, int>{};
+    for (final p in proposals) {
+      counts[p.action] = (counts[p.action] ?? 0) + 1;
+    }
+    return [
+      if (counts.containsKey(ProposalOp.create))
+        '${counts[ProposalOp.create]} create',
+      if (counts.containsKey(ProposalOp.update))
+        '${counts[ProposalOp.update]} edit',
+      if (counts.containsKey(ProposalOp.delete))
+        '${counts[ProposalOp.delete]} delete',
+    ].join(' · ');
+  }
+}
+
+/// Small labelled tag saying what accepting the proposal does: CREATE,
+/// EDIT, or DELETE.
+///
+/// A title like "conveyor.speed" reads identically whether the AI wants to
+/// add the mapping or remove it; the operator should not have to open the
+/// editor to find out which. Delete gets the same red as Reject on purpose:
+/// it is the row where accepting destroys something.
+class _ActionChip extends StatelessWidget {
+  const _ActionChip(this.action);
+
+  final ProposalOp action;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, icon, color) = switch (action) {
+      ProposalOp.create => ('CREATE', Icons.add, Colors.greenAccent),
+      ProposalOp.update => ('EDIT', Icons.edit, Colors.lightBlueAccent),
+      ProposalOp.delete =>
+        ('DELETE', Icons.delete_outline, Colors.redAccent),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withAlpha(25),
+        border: Border.all(color: color.withAlpha(140)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:beamer/beamer.dart';
 import 'package:drift/drift.dart';
@@ -18,6 +19,10 @@ const proposalRoutes = <String, String>{
   'asset': '/advanced/page-editor',
   'asset_update': '/advanced/page-editor',
 };
+
+/// What accepting a proposal does to its target: bring it into existence,
+/// change it, or remove it.
+enum ProposalOp { create, update, delete }
 
 /// A pending proposal notification from the MCP server.
 class PendingProposal {
@@ -56,6 +61,33 @@ class PendingProposal {
   }
 
   String? get editorRoute => proposalRoutes[proposalType];
+
+  /// What accepting this proposal does, read from the `_op` field the
+  /// server stamps into the proposal JSON.
+  ///
+  /// Proposals recorded before `_op` existed fall back to the type name:
+  /// only the update types carried the action there ('asset_update',
+  /// 'alarm_update'); everything else was a create except key-mapping
+  /// deletes, which already marked themselves with `_op: delete`.
+  ProposalOp get action {
+    String? op;
+    try {
+      final decoded = jsonDecode(proposalJson);
+      if (decoded is Map<String, dynamic>) op = decoded['_op'] as String?;
+    } catch (_) {
+      // Malformed JSON: fall through to the type-name fallback.
+    }
+    switch (op) {
+      case 'create':
+        return ProposalOp.create;
+      case 'update':
+        return ProposalOp.update;
+      case 'delete':
+        return ProposalOp.delete;
+    }
+    if (proposalType.endsWith('_update')) return ProposalOp.update;
+    return ProposalOp.create;
+  }
 }
 
 /// Polls the database for new MCP proposals and notifies the UI.

@@ -101,13 +101,20 @@ class ProposalService {
   /// The `_proposal_type` field allows the Flutter UI to identify what
   /// kind of proposal this is (e.g., 'alarm', 'page') and route to the
   /// appropriate editor.
+  ///
+  /// [op] says what accepting the proposal does to its target: 'create',
+  /// 'update', or 'delete'. The type alone cannot carry this -- 'alarm' and
+  /// 'key_mapping' are used for both creates and updates -- so it is stamped
+  /// into the JSON as `_op` for the notification banner to label each row.
   Map<String, dynamic> wrapProposal(
     String type,
-    Map<String, dynamic> proposal,
-  ) {
+    Map<String, dynamic> proposal, {
+    String op = 'create',
+  }) {
     final wrapped = {
       ...proposal,
       '_proposal_type': type,
+      '_op': op,
     };
 
     // Fire-and-forget: record proposal in DB for cross-process notification.
