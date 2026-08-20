@@ -74,6 +74,48 @@ void main() {
       expect(find.text('new_key'), findsAtLeastNWidgets(1));
     });
 
+    testWidgets(
+        'new key appears at the top within a few frames '
+        'even with thousands of keys', (tester) async {
+      // Regression: the new key used to be appended at the *end* and revealed
+      // by jumping to maxScrollExtent. A lazy list has no real extent for
+      // unbuilt cards, so the sliver re-estimated every frame, building one
+      // more card each time — ~10 s of frame churn on a repository with
+      // thousands of keys. New keys now insert at the top, which is O(1) to
+      // reveal, so a handful of frames must suffice.
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          for (var i = 0; i < 3000; i++)
+            'AREA${i ~/ 100}.DEV${i % 100}.SUB$i': KeyMappingEntry(
+              opcuaNode: OpcUANodeConfig(namespace: 2, identifier: 'Ident$i'),
+            ),
+        }),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll away from the top so the reveal actually has to jump back.
+      await tester.drag(keyListScrollable, const Offset(0, -2000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Add Key'));
+      // Bounded pumping, deliberately not pumpAndSettle: the old behavior
+      // needed thousands of frames to settle and this must fail in that case.
+      await settle(tester);
+
+      expect(find.text('new_key'), findsAtLeastNWidgets(1),
+          reason: 'new key card must be on screen a few frames after Add Key');
+
+      // And it sits above the pre-existing first key. The new card is
+      // expanded and may fill the whole viewport, leaving the old first card
+      // unbuilt — that also proves the new key is at the top.
+      final firstOld = find.text('AREA0.DEV0.SUB0');
+      if (firstOld.evaluate().isNotEmpty) {
+        expect(tester.getTopLeft(find.text('new_key').first).dy,
+            lessThan(tester.getTopLeft(firstOld.first).dy),
+            reason: 'new key must be inserted at the top of the list');
+      }
+    });
+
     testWidgets('multiple Add Key taps create unique keys', (tester) async {
       await tester.pumpWidget(buildTestableKeyRepository());
       await tester.pumpAndSettle();
