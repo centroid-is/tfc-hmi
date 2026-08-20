@@ -48,6 +48,109 @@ Future<McpToolToggles> readTogglesFromPreferences(PreferencesApi prefs) async {
   return config.toggles;
 }
 
+/// Environment variable carrying the tool-toggle JSON for a spawned
+/// server subprocess.
+///
+/// The MCP config is device-local, so a subprocess cannot read it from
+/// the shared database; the spawning HMI passes the toggles along instead.
+const kMcpTogglesEnvVar = 'TFC_MCP_TOGGLES';
+
+/// Parses [McpToolToggles] from the [kMcpTogglesEnvVar] JSON payload.
+///
+/// Returns null when [json] is absent or malformed, so callers can fall
+/// back to another source.
+McpToolToggles? togglesFromEnvJson(String? json) {
+  if (json == null || json.isEmpty) return null;
+  try {
+    final map = jsonDecode(json);
+    if (map is! Map<String, dynamic>) return null;
+    return McpToolToggles.fromJson(map);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// One-time migration of the MCP config from the [shared]
+/// (database-backed) preference store to the [local] (device-only) store.
+///
+/// The MCP config is a per-device setting: each HMI station decides for
+/// itself whether to run the MCP server and which tools to expose. This
+/// moves any config the shared database still carries onto the device and
+/// deletes every MCP key from the database, so the setting no longer leaks
+/// across stations.
+///
+/// A config already present in [local] wins; the [shared] value only seeds
+/// a device that has no local config yet. Safe to call repeatedly.
+Future<void> migrateMcpConfigToDeviceLocal({
+  required PreferencesApi shared,
+  required PreferencesApi local,
+}) async {
+  // Capture the device-local blob first: the database-backed Preferences
+  // mirrors removals into its local cache, which is the same physical
+  // store as [local] — cleaning [shared] below may erase the key there.
+  final localJson = await local.getString(McpConfig.kPrefKey);
+
+  // Read whatever the shared store still carries.
+  McpConfig? sharedConfig;
+  final sharedJson = await shared.getString(McpConfig.kPrefKey);
+  if (sharedJson != null) {
+    try {
+      sharedConfig =
+          McpConfig.fromJson(jsonDecode(sharedJson) as Map<String, dynamic>);
+    } catch (_) {
+      // Corrupted blob -- nothing worth migrating.
+    }
+  }
+  sharedConfig ??= await _readLegacyConfigIfAny(shared);
+
+  // Drop every MCP key from the shared store.
+  await shared.remove(McpConfig.kPrefKey);
+  for (final key in McpConfig.legacyKeys) {
+    await shared.remove(key);
+  }
+
+  if (localJson != null) {
+    // Re-write in case cleaning [shared] wiped the mirrored copy.
+    await local.setString(McpConfig.kPrefKey, localJson);
+  } else if (sharedConfig != null) {
+    await writeMcpConfigToPreferences(local, sharedConfig);
+  }
+}
+
+/// Builds a config from legacy individual keys, or null when none exist.
+Future<McpConfig?> _readLegacyConfigIfAny(PreferencesApi prefs) async {
+  var found = false;
+  Future<bool?> readBool(String key) async {
+    final v = await prefs.getBool(key);
+    if (v != null) found = true;
+    return v;
+  }
+
+  final serverEnabled = await readBool('mcp_server_enabled');
+  final chatEnabled = await readBool('mcp_chat_enabled');
+  final port = await prefs.getInt('mcp_server_port');
+  if (port != null) found = true;
+
+  final toggles = McpToolToggles(
+    tagsEnabled: await readBool(McpToolToggles.kTagsEnabled) ?? true,
+    alarmsEnabled: await readBool(McpToolToggles.kAlarmsEnabled) ?? true,
+    configEnabled: await readBool(McpToolToggles.kConfigEnabled) ?? true,
+    drawingsEnabled: await readBool(McpToolToggles.kDrawingsEnabled) ?? true,
+    trendsEnabled: await readBool(McpToolToggles.kTrendsEnabled) ?? true,
+    plcCodeEnabled: await readBool(McpToolToggles.kPlcCodeEnabled) ?? true,
+    proposalsEnabled: await readBool(McpToolToggles.kProposalsEnabled) ?? true,
+    techDocsEnabled: await readBool(McpToolToggles.kTechDocsEnabled) ?? true,
+  );
+
+  if (!found) return null;
+  return McpConfig(
+    serverEnabled: serverEnabled ?? false,
+    chatEnabled: chatEnabled ?? false,
+    port: port ?? McpConfig.defaultPort,
+    toggles: toggles,
+  );
+}
+
 /// Migrates legacy individual preference keys into a consolidated
 /// [McpConfig] JSON blob.
 ///

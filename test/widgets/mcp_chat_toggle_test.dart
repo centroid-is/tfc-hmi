@@ -6,6 +6,7 @@ import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc/widgets/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart' show InMemoryPreferences;
 
 import '../helpers/test_helpers.dart';
 
@@ -15,6 +16,7 @@ Widget buildTestableMcpServerSection({McpBridgeNotifier? bridge}) {
       preferencesProvider.overrideWith(
         (ref) => createTestPreferences(),
       ),
+      localPreferencesProvider.overrideWithValue(InMemoryPreferences()),
       databaseProvider.overrideWith((ref) async => null),
       if (bridge != null) mcpBridgeProvider.overrideWith((ref) => bridge),
     ],

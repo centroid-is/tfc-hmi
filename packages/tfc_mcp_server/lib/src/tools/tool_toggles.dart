@@ -74,6 +74,17 @@ class McpConfig {
     );
   }
 
+  @override
+  bool operator ==(Object other) =>
+      other is McpConfig &&
+      other.serverEnabled == serverEnabled &&
+      other.chatEnabled == chatEnabled &&
+      other.port == port &&
+      other.toggles == toggles;
+
+  @override
+  int get hashCode => Object.hash(serverEnabled, chatEnabled, port, toggles);
+
   /// Legacy preference keys used before consolidation.
   ///
   /// Used by migration logic and the toggle-change listener to detect
@@ -118,6 +129,30 @@ class McpToolToggles {
 
   /// All groups enabled (default for new installations).
   static const allEnabled = McpToolToggles();
+
+  @override
+  bool operator ==(Object other) =>
+      other is McpToolToggles &&
+      other.tagsEnabled == tagsEnabled &&
+      other.alarmsEnabled == alarmsEnabled &&
+      other.configEnabled == configEnabled &&
+      other.drawingsEnabled == drawingsEnabled &&
+      other.trendsEnabled == trendsEnabled &&
+      other.plcCodeEnabled == plcCodeEnabled &&
+      other.proposalsEnabled == proposalsEnabled &&
+      other.techDocsEnabled == techDocsEnabled;
+
+  @override
+  int get hashCode => Object.hash(
+        tagsEnabled,
+        alarmsEnabled,
+        configEnabled,
+        drawingsEnabled,
+        trendsEnabled,
+        plcCodeEnabled,
+        proposalsEnabled,
+        techDocsEnabled,
+      );
 
   // ── JSON field names (used in the consolidated McpConfig blob) ──────
 

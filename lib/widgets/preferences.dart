@@ -13,7 +13,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         McpConfig,
         McpToolToggles,
-        readMcpConfigFromPreferences,
         writeMcpConfigToPreferences;
 
 import '../core/feature_flags.dart';
@@ -218,36 +217,28 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
     super.dispose();
   }
 
-  Future<void> _loadState(Preferences prefs) async {
+  Future<void> _loadState() async {
     if (_loaded) return;
-    _config = await readMcpConfigFromPreferences(prefs);
+    // mcpConfigProvider reads device-local preferences and runs the
+    // one-time migration off the shared database first.
+    _config = await ref.read(mcpConfigProvider.future);
     _portController.text = _config.port.toString();
     _loaded = true;
   }
 
-  /// Saves the current [_config] to preferences and invalidates providers.
-  Future<void> _saveConfig(Preferences prefs) async {
-    await writeMcpConfigToPreferences(prefs, _config);
+  /// Saves the current [_config] to device-local preferences and
+  /// invalidates providers.
+  Future<void> _saveConfig() async {
+    await writeMcpConfigToPreferences(
+        ref.read(localPreferencesProvider), _config);
     ref.invalidate(mcpConfigProvider);
   }
 
   @override
   Widget build(BuildContext context) {
-    // Use AsyncValue directly instead of FutureBuilder to avoid
-    // Future identity changes that destroy ExpansionTile state on rebuild.
-    final prefsAsync = ref.watch(preferencesProvider);
-
-    return prefsAsync.when(
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
-      data: (prefs) => _buildContent(context, prefs),
-    );
-  }
-
-  Widget _buildContent(BuildContext context, Preferences prefs) {
     if (!_loaded) {
       // Schedule initial load; will call setState when done.
-      _loadState(prefs).then((_) {
+      _loadState().then((_) {
         if (mounted) setState(() {});
       });
       return const SizedBox.shrink();
@@ -291,7 +282,7 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
             value: _config.serverEnabled,
             onChanged: (value) async {
               setState(() => _config = _config.copyWith(serverEnabled: value));
-              await _saveConfig(prefs);
+              await _saveConfig();
             },
           ),
 
@@ -306,7 +297,7 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
               value: _config.chatEnabled,
               onChanged: (value) async {
                 setState(() => _config = _config.copyWith(chatEnabled: value));
-                await _saveConfig(prefs);
+                await _saveConfig();
               },
             ),
 
@@ -323,7 +314,7 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
               onSubmitted: (v) async {
                 final port = int.tryParse(v) ?? McpConfig.defaultPort;
                 setState(() => _config = _config.copyWith(port: port));
-                await _saveConfig(prefs);
+                await _saveConfig();
               },
             ),
           ),
@@ -416,7 +407,7 @@ class _McpServerSectionState extends ConsumerState<McpServerSection> {
                       _config.toggles.copyWithToggle(meta.key, value);
                   setState(
                       () => _config = _config.copyWith(toggles: newToggles));
-                  await _saveConfig(prefs);
+                  await _saveConfig();
                   io.stderr.writeln(
                     'AUDIT: toggle_change key=${meta.key} '
                     'value=$value '
