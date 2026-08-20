@@ -1347,6 +1347,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
           _handlePaste();
           return true;
+        } else if (event.logicalKey == LogicalKeyboardKey.keyS) {
+          // The keyboard twin of the save FAB — same call, fire-and-forget,
+          // since a key handler must answer synchronously.
+          unawaited(_saveToPrefs());
+          return true;
         }
       } else if (event.logicalKey == LogicalKeyboardKey.delete ||
           event.logicalKey == LogicalKeyboardKey.backspace) {
