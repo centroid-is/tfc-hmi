@@ -199,55 +199,39 @@ void main() {
     });
   });
 
-  group('SidePane — programmatic width', () {
-    // What the page editor's step-aside leans on: it narrows the open pane
-    // off the asset being edited with [setSidePaneWidth], and widens it back
-    // later — all without disturbing the width the operator has chosen.
-    testWidgets('setSidePaneWidth resizes the open pane', (tester) async {
-      await tester.pumpWidget(host(
-        onOpen: (context) => showSidePane(
-          context: context,
-          id: 'a',
-          width: 380,
-          builder: (_) => demoPane(),
-        ),
-      ));
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-      expect(tester.getRect(find.byType(SidePane)).width, 380);
+  group('SidePane — the content inset', () {
+    // What [SidePaneInset] consumers (the plant view, the page editor's
+    // canvas) lean on: the host reports how much of the screen's right edge
+    // the pane occupies, frame by frame, so page content can re-fit beside
+    // the pane instead of being covered by it.
+    testWidgets('occupiedWidth follows the pane open, resize and close',
+        (tester) async {
+      expect(SidePaneHost.occupiedWidth.value, 0);
 
-      setSidePaneWidth(340);
-      await tester.pumpAndSettle();
-      expect(tester.getRect(find.byType(SidePane)).width, 340);
-
-      setSidePaneWidth(380);
-      await tester.pumpAndSettle();
-      expect(tester.getRect(find.byType(SidePane)).width, 380);
-    });
-
-    testWidgets('it does not report through onWidthChanged', (tester) async {
-      // onWidthChanged is how a caller remembers the width the OPERATOR chose;
-      // a programmatic step-aside echoing through it would overwrite that
-      // memory with the temporary width.
-      final reported = <double>[];
       await tester.pumpWidget(host(
         onOpen: (context) => showSidePane(
           context: context,
           id: 'a',
           width: 380,
           resizable: true,
-          onWidthChanged: reported.add,
           builder: (_) => demoPane(),
         ),
       ));
       await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
+      // Mid-slide the intrusion is partial — the inset must move WITH the
+      // pane, not jump ahead of it. (First pump mounts the shell and starts
+      // its ticker; the second is the mid-slide frame.)
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 110));
+      final midway = SidePaneHost.occupiedWidth.value;
+      expect(midway, greaterThan(0));
+      expect(midway, lessThan(380 + 2 * SidePaneDefaults.margin));
 
-      setSidePaneWidth(340);
       await tester.pumpAndSettle();
-      expect(reported, isEmpty);
+      expect(
+          SidePaneHost.occupiedWidth.value, 380 + 2 * SidePaneDefaults.margin);
 
-      // The drag handle still reports afterwards.
+      // The drag handle moves the pane's left edge; the occupation follows.
       final pane = tester.getRect(find.byType(SidePane));
       final gesture =
           await tester.startGesture(Offset(pane.left + 5, pane.center.dy));
@@ -257,46 +241,59 @@ void main() {
       }
       await gesture.up();
       await tester.pumpAndSettle();
-      expect(reported, isNotEmpty);
-      expect(reported.last, greaterThan(360),
-          reason: 'an 80px drag left widens the pane from 340, and the drag '
-              'handle keeps reporting after a programmatic resize');
+      expect(
+          SidePaneHost.occupiedWidth.value, 460 + 2 * SidePaneDefaults.margin);
+
+      closeSidePane();
+      await tester.pumpAndSettle();
+      expect(SidePaneHost.occupiedWidth.value, 0);
     });
 
-    testWidgets('the width is floored at the pane minimum', (tester) async {
-      await tester.pumpWidget(host(
-        onOpen: (context) => showSidePane(
-          context: context,
-          id: 'a',
-          width: 380,
-          builder: (_) => demoPane(),
+    testWidgets('SidePaneInset yields the pane strip and takes it back',
+        (tester) async {
+      const contentKey = Key('inset-content');
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              const Positioned.fill(
+                child: SidePaneInset(
+                  child: SizedBox.expand(
+                    child: ColoredBox(key: contentKey, color: Colors.black12),
+                  ),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Builder(
+                  builder: (context) => ElevatedButton(
+                    onPressed: () => showSidePane(
+                      context: context,
+                      id: 'a',
+                      width: 380,
+                      builder: (_) => demoPane(),
+                    ),
+                    child: const Text('open'),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ));
+      final full = tester.getSize(find.byKey(contentKey)).width;
+
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
+      final inset = tester.getRect(find.byKey(contentKey));
+      expect(inset.width, full - 380 - 2 * SidePaneDefaults.margin);
+      expect(inset.right, lessThan(tester.getRect(find.byType(SidePane)).left),
+          reason: 'the content ends with daylight before the pane begins');
 
-      setSidePaneWidth(10);
+      closeSidePane();
       await tester.pumpAndSettle();
-      expect(tester.getRect(find.byType(SidePane)).width,
-          SidePaneDefaults.minWidth);
-    });
-
-    testWidgets('a mismatched id is a no-op', (tester) async {
-      await tester.pumpWidget(host(
-        onOpen: (context) => showSidePane(
-          context: context,
-          id: 'a',
-          width: 380,
-          builder: (_) => demoPane(),
-        ),
-      ));
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-
-      setSidePaneWidth(340, id: 'b');
-      await tester.pumpAndSettle();
-      expect(tester.getRect(find.byType(SidePane)).width, 380,
-          reason: 'only the pane asked for may be resized');
+      expect(tester.getSize(find.byKey(contentKey)).width, full,
+          reason: 'the strip is a loan — content gets it back on close');
     });
   });
 

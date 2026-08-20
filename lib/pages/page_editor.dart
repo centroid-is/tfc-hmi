@@ -658,10 +658,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// without this a destination off screen could not be reached.
   final ScrollController _treeScrollController = ScrollController();
   final GlobalKey _treeViewportKey = GlobalKey();
-
-  /// The canvas's [AssetStack], so [_assetScreenRect] can measure an asset's
-  /// rendered box from the element tree instead of re-deriving the layout.
-  final GlobalKey _assetStackKey = GlobalKey();
   Timer? _autoScrollTimer;
   double _autoScrollStep = 0;
 
@@ -695,8 +691,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   final Set<int> _consumedProposalIds = {};
 
-
-
   /// Assets that were added by the AI proposal (for visual indicators).
   Set<Asset> _proposedAssets = {};
 
@@ -724,26 +718,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// coupler, an Advantys head) wants a lot more room than an LED, and the
   /// width you drag it to is the one the next asset opens at.
   double _configPaneWidth = 520;
-
-  /// The width the pane has been narrowed to so it does not cover the asset
-  /// it is editing, when that differs from [_configPaneWidth]. Null while the
-  /// pane sits at the operator's width — see [_stepPaneClearOfAsset].
-  double? _configPaneSteppedWidth;
-
-  /// True once the operator drags the pane's resize handle while this pane is
-  /// up. Their width then wins over the automatic step-aside — even back over
-  /// the asset — until the pane is next opened.
-  bool _configPaneUserSized = false;
-
-  /// Matches the pane's own slide, so the canvas chrome moves with it rather
-  /// than jumping ahead of it.
-  static const Duration _configPaneSlide = Duration(milliseconds: 220);
-
-  /// How far the canvas's right-hand chrome — the page selector and the mode
-  /// buttons — steps aside so the open pane does not sit on top of it.
-  double get _rightChromeInset => _configAsset == null
-      ? 0
-      : (_configPaneSteppedWidth ?? _configPaneWidth) + SidePaneDefaults.margin;
 
   List<Asset> get assets {
     if (_currentPage == null) {
@@ -877,8 +851,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         }
       });
       final staged = _proposalIds.length;
-      _proposalTitle =
-          staged == 1 ? _proposalTitle : '$staged asset updates';
+      _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset updates';
     }
     return applied;
   }
@@ -2098,7 +2071,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                         _shortcutFocus.requestFocus();
                       }
                     },
-                    child: ZoomableCanvas(
+                    // The open config pane docks over the right edge of the
+                    // screen; the inset re-fits the whole canvas — page,
+                    // chrome, selection, all of it — beside the pane instead
+                    // of letting the pane cover the asset being edited.
+                    child: SidePaneInset(
+                        child: ZoomableCanvas(
                       scaleEnabled: !_showPalette,
                       panEnabled: _isPanKeyHeld,
                       child: LayoutBuilder(
@@ -2152,7 +2130,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                 builder:
                                     (context, candidateData, rejectedData) {
                                   return AssetStack(
-                                    key: _assetStackKey,
                                     assets: assets,
                                     constraints: constraints,
                                     // A tap selects, always. Configuring used to be
@@ -2379,11 +2356,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     current: _selectionCurrent!,
                                   ),
                                 ),
-                              AnimatedPositioned(
-                                duration: _configPaneSlide,
-                                curve: Curves.easeOutCubic,
+                              Positioned(
                                 top: 16,
-                                right: 16 + _rightChromeInset,
+                                right: 16,
                                 child: _buildPageSelector(),
                               ),
                               Positioned(
@@ -2449,10 +2424,8 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                                     ),
                                   ),
                                 ),
-                              AnimatedPositioned(
-                                duration: _configPaneSlide,
-                                curve: Curves.easeOutCubic,
-                                right: 16 + _rightChromeInset,
+                              Positioned(
+                                right: 16,
                                 bottom: 16,
                                 // The mode toggle used to live at the bottom of this
                                 // column. There is only one mode now, so what is left
@@ -2489,7 +2462,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                           );
                         },
                       ),
-                    ))),
+                    )))),
           ],
         ),
       ),
@@ -2597,24 +2570,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _openConfigPane(Asset asset) {
     ref.read(currentPageAssetsProvider.notifier).state = assets;
 
-    // Opened narrowed when the operator's width would cover the asset — the
-    // pane slides in already clear of it instead of landing on top and then
-    // stepping aside.
-    _configPaneUserSized = false;
-    final width = _configPaneWidthClearOf(asset);
-
     // Tapping the asset whose pane is already open closes it; `showSidePane`
     // has already run `_onConfigPaneClosed` for us by then.
     final opened = showSidePane(
       context: context,
       id: _configPaneId(asset),
-      width: width,
+      width: _configPaneWidth,
       resizable: true,
-      onWidthChanged: (width) => setState(() {
-        _configPaneWidth = width;
-        _configPaneSteppedWidth = null;
-        _configPaneUserSized = true;
-      }),
+      onWidthChanged: (width) => setState(() => _configPaneWidth = width),
       builder: (paneContext) => _buildConfigPane(paneContext, asset),
       onClosed: _onConfigPaneClosed,
     );
@@ -2623,7 +2586,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     setState(() {
       _configAsset = asset;
       _configSnapshot = _assetSnapshot(asset);
-      _configPaneSteppedWidth = width == _configPaneWidth ? null : width;
     });
     _configWatch?.cancel();
     _configWatch =
@@ -2638,12 +2600,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _configSnapshot = null;
     if (!mounted) {
       _configAsset = null;
-      _configPaneSteppedWidth = null;
       return;
     }
     setState(() {
       _configAsset = null;
-      _configPaneSteppedWidth = null;
       // A last pass, in case the closing interaction itself was the edit.
       _updateCurrentJson();
     });
@@ -2717,84 +2677,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       return;
     }
 
-    // On the watch rather than the snapshot compare below: zoom and pan move
-    // the asset under the pane without changing its serialization.
-    _stepPaneClearOfAsset();
-
     final snapshot = _assetSnapshot(asset);
     if (snapshot == null || snapshot == _configSnapshot) return;
     setState(() {
       _configSnapshot = snapshot;
       _updateCurrentJson();
     });
-  }
-
-  /// Keeps the open pane from covering the asset it is editing.
-  ///
-  /// Narrows the pane just enough to leave the asset visible — down to the
-  /// pane minimum — and lets it back out to the operator's width once the
-  /// asset is clear again. Runs on the config watch, so it follows canvas
-  /// drags, arrow-key nudges, typed coordinates and zoom alike.
-  void _stepPaneClearOfAsset() {
-    if (_configPaneUserSized) return;
-    final asset = _configAsset;
-    if (asset == null) return;
-    final desired = _configPaneWidthClearOf(asset);
-    final current = _configPaneSteppedWidth ?? _configPaneWidth;
-    // Sub-pixel churn from a drag in flight is not worth re-animating for.
-    if ((desired - current).abs() < 0.5) return;
-    setSidePaneWidth(desired, id: _configPaneId(asset));
-    setState(() =>
-        _configPaneSteppedWidth = desired == _configPaneWidth ? null : desired);
-  }
-
-  /// The widest the config pane can be while leaving [asset] visible beside
-  /// it: capped at the operator's width, floored at the pane minimum — an
-  /// asset dragged into the pane's own corner cannot be cleared by width
-  /// alone, and a pane below minimum would be unusable anyway.
-  double _configPaneWidthClearOf(Asset asset) {
-    final rect = _assetScreenRect(asset);
-    if (rect == null) return _configPaneWidth;
-    // The pane's left edge sits at `screen - margin - width`; keep one more
-    // margin of daylight between it and the asset.
-    final room =
-        MediaQuery.sizeOf(context).width - 2 * SidePaneDefaults.margin -
-            rect.right;
-    if (room >= _configPaneWidth) return _configPaneWidth;
-    return math.max(SidePaneDefaults.minWidth, room);
-  }
-
-  /// Screen bounds of [asset]'s rendered box, or null before it has laid out.
-  ///
-  /// Measured off the render tree — the `Positioned` that `AssetStack` keys
-  /// by the asset's identity — rather than recomputed from the config, so
-  /// zoom, pan, page mirroring and the rotated bounding box all come for
-  /// free and cannot drift from what is actually painted.
-  Rect? _assetScreenRect(Asset asset) {
-    final stack = _assetStackKey.currentContext;
-    if (stack == null) return null;
-    final key = ObjectKey(asset);
-    Element? match;
-    void visit(Element element) {
-      if (match != null) return;
-      if (element.widget.key == key) {
-        match = element;
-        return;
-      }
-      // The asset boxes are Positioned siblings directly under the stack;
-      // nothing inside some other Positioned can be the one wanted, so the
-      // walk stays shallow instead of descending into every asset subtree.
-      if (element.widget is Positioned) return;
-      element.visitChildren(visit);
-    }
-
-    stack.visitChildElements(visit);
-    final box = match?.renderObject;
-    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
-    return Rect.fromPoints(
-      box.localToGlobal(Offset.zero),
-      box.localToGlobal(box.size.bottomRight(Offset.zero)),
-    );
   }
 
   /// [asset] as JSON, or null if it will not serialize — in which case the
@@ -3768,11 +3656,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final box =
         _treeViewportKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !_treeScrollController.hasClients) {
-    // The banner holds these closures over this State; left set they
-    // would fire into a disposed State after navigating away -- nothing
-    // saved, the proposals still pending, and an uncaught async error.
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+      // The banner holds these closures over this State; left set they
+      // would fire into a disposed State after navigating away -- nothing
+      // saved, the proposals still pending, and an uncaught async error.
+      ref.read(proposalCommitProvider.notifier).state = null;
+      ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
       return;
     }
@@ -3790,11 +3678,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _autoScrollStep = ratio.clamp(-1.0, 1.0) * _autoScrollMaxStep;
 
     if (_autoScrollStep == 0) {
-    // The banner holds these closures over this State; left set they
-    // would fire into a disposed State after navigating away -- nothing
-    // saved, the proposals still pending, and an uncaught async error.
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+      // The banner holds these closures over this State; left set they
+      // would fire into a disposed State after navigating away -- nothing
+      // saved, the proposals still pending, and an uncaught async error.
+      ref.read(proposalCommitProvider.notifier).state = null;
+      ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
     } else {
       _autoScrollTimer ??= Timer.periodic(
@@ -3806,11 +3694,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   void _autoScrollTick() {
     if (!_treeScrollController.hasClients) {
-    // The banner holds these closures over this State; left set they
-    // would fire into a disposed State after navigating away -- nothing
-    // saved, the proposals still pending, and an uncaught async error.
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+      // The banner holds these closures over this State; left set they
+      // would fire into a disposed State after navigating away -- nothing
+      // saved, the proposals still pending, and an uncaught async error.
+      ref.read(proposalCommitProvider.notifier).state = null;
+      ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
       return;
     }

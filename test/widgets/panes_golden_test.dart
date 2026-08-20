@@ -41,6 +41,7 @@ import 'package:tfc/widgets/graph.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/zoomable_canvas.dart';
 
 // ---------------------------------------------------------------------------
 // Screen scaffolding — a stand-in for a real HMI page
@@ -138,11 +139,16 @@ Widget _screenApp({required ThemeData theme, required Widget body}) {
 }
 
 /// Pumps the screen, opens [pane] docked, and settles.
+///
+/// With [inset] the plant view sits in the runtime page's own wrapper — an
+/// aspect-fitted [ZoomableCanvas] inside a [SidePaneInset] — so the golden
+/// shows the page re-fitting beside the pane instead of running under it.
 Future<void> _pumpWithPane(
   WidgetTester tester, {
   required ThemeData theme,
   required Widget Function(BuildContext context) pane,
   void Function(BuildContext context)? afterOpen,
+  bool inset = false,
 }) async {
   await tester.binding.setSurfaceSize(_screen);
   // 1:1 pixels: the goldens are for reading, and a 3× capture would put
@@ -157,7 +163,10 @@ Future<void> _pumpWithPane(
     theme: theme,
     body: Builder(builder: (context) {
       pageContext = context;
-      return const _MockPlantView();
+      const plant = _MockPlantView();
+      return inset
+          ? const SidePaneInset(child: ZoomableCanvas(child: plant))
+          : plant;
     }),
   ));
   showSidePane(context: pageContext, id: 'golden', builder: pane);
@@ -839,7 +848,22 @@ class _SensorTrendChart extends StatelessWidget {
   static const int _step = 20000;
 
   static const List<int> _blocked = [
-    0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1,
+    0,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0,
+    0,
+    1,
   ];
 
   @override
@@ -859,8 +883,8 @@ class _SensorTrendChart extends StatelessWidget {
       config: GraphConfig(
         type: GraphType.timeseries,
         xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
-        yAxis: const GraphAxisConfig(
-            unit: '', boolean: true, min: -0.1, max: 1.1),
+        yAxis:
+            const GraphAxisConfig(unit: '', boolean: true, min: -0.1, max: 1.1),
         xRange: DateTimeRange(
           start: DateTime.fromMillisecondsSinceEpoch(_t0),
           end: DateTime.fromMillisecondsSinceEpoch(
@@ -1118,6 +1142,19 @@ void main() {
       );
     });
 
+    // The runtime page's pane-avoidance: the plant view is an aspect-fitted
+    // canvas inside [SidePaneInset], so opening a pane re-fits the whole
+    // page beside it — the tapped device stays in view — rather than the
+    // pane covering the right-hand strip of the mimic.
+    testWidgets('the plant view insets beside the pane — dark', (tester) async {
+      await _pumpWithPane(tester,
+          theme: dark, pane: _conveyorPane, inset: true);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/side_pane_inset_plant_dark.png'),
+      );
+    });
+
     testWidgets('elevator — dark', (tester) async {
       await _pumpWithPane(tester, theme: dark, pane: _elevatorPane);
       await expectLater(
@@ -1234,8 +1271,7 @@ void main() {
 
     // The Adjust fold open: the editable debounce setpoints are reachable,
     // but only after a deliberate second tap — never on first paint.
-    testWidgets('sensor — FB_Sensor debounce fold open — dark',
-        (tester) async {
+    testWidgets('sensor — FB_Sensor debounce fold open — dark', (tester) async {
       await _pumpWithPane(tester, theme: dark, pane: _sensorFbPane);
       await tester.tap(find.text('Adjust'));
       await tester.pumpAndSettle();
