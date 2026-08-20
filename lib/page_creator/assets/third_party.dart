@@ -1045,8 +1045,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                 // trend.
                 for (final (i, ratio) in acceptRatios.indexed)
                   PaneDetailRow(
+                    // Non-breaking space inside the parenthesis: the label
+                    // column is narrow enough to wrap, and the break must
+                    // fall before "(30 min)", never inside it.
                     label: 'Accept rate CW${i + 1} '
-                        '(${config.acceptWindowMinutes} min)',
+                        '(${config.acceptWindowMinutes}\u{00A0}min)',
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
