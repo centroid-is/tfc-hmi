@@ -128,6 +128,13 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   /// poll-group at runtime.
   final Map<String, String> _umasPollGroupByKey = {};
 
+  /// Per-server poll-group intervals from [ModbusConfig.pollGroups],
+  /// retained past construction so [addUmasKey] can start a key in a
+  /// configured group that had no members at adapter build time (e.g. a
+  /// key added at runtime via the Key Repository) instead of silently
+  /// falling back to 'default' cadence.
+  final Map<String, Duration> _configuredGroupIntervals = {};
+
   /// Guard so we don't kick off two concurrent table-build attempts when
   /// a poll tick races with the connection-state listener.
   bool _umasTableBuildInFlight = false;
@@ -207,6 +214,7 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     for (final pg in pollGroups) {
       groupIntervals[pg.name] = pg.interval;
     }
+    _configuredGroupIntervals.addAll(groupIntervals);
     for (final entry in umasPollGroupByKey.entries) {
       final key = entry.key;
       if (_variableNames[key] == null) continue; // only UMAS-by-name
@@ -715,12 +723,20 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     }
     var group = _umasPollGroupByKey[key] ?? 'default';
     if (!_umasPollGroups.containsKey(group)) {
-      _log.w('UMAS addUmasKey: key "$key" wanted group "$group" but no '
-          'timer exists; falling back to default');
-      group = 'default';
-      // Make sure 'default' has at least the canonical interval so any
-      // future _startUmasTimers run schedules a tick for it.
-      _umasPollGroups.putIfAbsent('default', () => _defaultPollInterval);
+      final configured = _configuredGroupIntervals[group];
+      if (configured != null) {
+        // The group exists in the server config but had no members at
+        // adapter construction — activate it at its configured cadence
+        // so a runtime-added key polls at the interval the operator set.
+        _umasPollGroups[group] = configured;
+      } else {
+        _log.w('UMAS addUmasKey: key "$key" wanted group "$group" but no '
+            'timer exists; falling back to default');
+        group = 'default';
+        // Make sure 'default' has at least the canonical interval so any
+        // future _startUmasTimers run schedules a tick for it.
+        _umasPollGroups.putIfAbsent('default', () => _defaultPollInterval);
+      }
     }
     _umasKeysByGroup.putIfAbsent(group, () => <String>[]).add(key);
     _umasTableBuiltFor = null;
@@ -838,7 +854,19 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   ///
   /// New mappings are merged in place — adds and updates are absorbed;
   /// removals trigger [unsubscribeUmas].
-  void updateVariableNames(Map<String, String?> newVariableNames) {
+  ///
+  /// [umasPollGroupByKey] (optional) refreshes the per-key poll-group
+  /// mapping alongside the names, so a key added at runtime lands in the
+  /// poll group the operator configured rather than 'default'. Keys
+  /// already registered in a group keep their membership — the mapping is
+  /// only consulted by [addUmasKey] at registration time.
+  void updateVariableNames(Map<String, String?> newVariableNames,
+      {Map<String, String>? umasPollGroupByKey}) {
+    if (umasPollGroupByKey != null) {
+      _umasPollGroupByKey
+        ..clear()
+        ..addAll(umasPollGroupByKey);
+    }
     // Find removed keys (in old, missing from new or now null).
     final removed = <String>[];
     for (final key in _variableNames.keys) {
@@ -1454,8 +1482,11 @@ List<DeviceClient> buildModbusDeviceClients(
 //   - F-10 (cache survival across reconnect): the symbol cache is dropped
 //     on every UmasClient teardown. Would save one browse round-trip per
 //     reconnect.
-//   - In-place table mutation on Key Repository save: today the adapter
-//     is re-created when `key_mappings` changes (the stateManProvider
-//     listener invalidates and rebuilds), which transparently rebuilds
-//     the table. Mutating the live table without a full adapter rebuild
-//     is a possible optimisation but not required for correctness.
+//   - In-place table mutation on Key Repository save: the adapter is
+//     re-created only when the save actually touches a Modbus key —
+//     `StateMan.updateKeyMappings` reports `requiresReload` and the
+//     stateManProvider listener invalidates. Saves that only touch
+//     OPC UA / M2400 / UMAS-name-add mappings are applied live without
+//     rebuilding this adapter. Mutating the live table for register-spec
+//     edits without a full adapter rebuild remains a possible
+//     optimisation but is not required for correctness.
