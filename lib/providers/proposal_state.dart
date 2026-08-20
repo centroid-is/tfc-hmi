@@ -5,7 +5,7 @@ import 'package:tfc_dart/core/mcp_database.dart';
 import 'proposal_watcher.dart';
 import 'database.dart' show databaseProvider;
 
-export 'proposal_watcher.dart' show PendingProposal;
+export 'proposal_watcher.dart' show PendingProposal, ProposalOp;
 
 /// Immutable snapshot of all pending proposals across types.
 class ProposalState {

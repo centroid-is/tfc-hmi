@@ -273,7 +273,8 @@ void registerKeyMappingWriteTools(
         level: RiskLevel.medium,
       );
 
-      final wrapped = proposalService.wrapProposal('key_mapping', proposal);
+      final wrapped =
+          proposalService.wrapProposal('key_mapping', proposal, op: 'update');
       return CallToolResult(content: [TextContent(text: jsonEncode(wrapped))]);
     },
   );
@@ -320,10 +321,11 @@ void registerKeyMappingWriteTools(
         level: RiskLevel.high,
       );
 
-      final wrapped = proposalService.wrapProposal('key_mapping', {
-        'key': key,
-        '_op': 'delete',
-      });
+      final wrapped = proposalService.wrapProposal(
+        'key_mapping',
+        {'key': key},
+        op: 'delete',
+      );
       return CallToolResult(content: [TextContent(text: jsonEncode(wrapped))]);
     },
   );

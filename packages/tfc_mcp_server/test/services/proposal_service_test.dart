@@ -49,6 +49,29 @@ void main() {
       expect(rows.first.read<String>('status'), 'pending');
     });
 
+    test('wrapProposal stamps _op create by default', () {
+      final service = ProposalService();
+      final result = service.wrapProposal('alarm', {'title': 'Test'});
+
+      expect(result['_op'], 'create');
+    });
+
+    test('wrapProposal stamps the op it is given', () {
+      // 'alarm' and 'key_mapping' cover creates, updates and deletes alike,
+      // so the type cannot tell the notification banner what accepting the
+      // proposal does -- _op is what it labels each row with.
+      final service = ProposalService();
+
+      expect(
+        service.wrapProposal('alarm', {'title': 'T'}, op: 'update')['_op'],
+        'update',
+      );
+      expect(
+        service.wrapProposal('key_mapping', {'key': 'k'}, op: 'delete')['_op'],
+        'delete',
+      );
+    });
+
     test('wrapProposal without database does not throw', () {
       final service = ProposalService();
       final result = service.wrapProposal('page', {'title': 'My Page'});
