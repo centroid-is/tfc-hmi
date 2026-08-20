@@ -344,11 +344,34 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     for (final m in _proposedMappings) {
       final key = m['key'] as String?;
       if (key == null) continue;
-      final entry = KeyMappingEntry();
+
+      // A removal carries no fields to merge.
+      if (m['_op'] == 'delete') {
+        _removeKey(key);
+        continue;
+      }
+
+      // Start from what the key already has. This used to build a fresh
+      // KeyMappingEntry and assign only opcuaNode, so proposing a new node id
+      // silently discarded that key's collect settings -- its retention and
+      // sample interval -- along with any m2400/modbus/io binding on it. A
+      // proposal says what changes; everything it does not mention has to
+      // survive.
+      final entry = _keyMappings!.nodes[key] ?? KeyMappingEntry();
+
       final opcuaNode = m['opcua_node'];
       if (opcuaNode is Map<String, dynamic>) {
         entry.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
       }
+
+      final collect = m['collect'];
+      if (collect is Map<String, dynamic>) {
+        entry.collect = CollectEntry.fromJson(collect)..key = key;
+      } else if (collect == null && m.containsKey('collect')) {
+        // An explicit null turns collection off for this key.
+        entry.collect = null;
+      }
+
       _keyMappings!.nodes[key] = entry;
       _expandedKeys.add(key);
       lastKey = key;

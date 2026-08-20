@@ -18,7 +18,8 @@ RatioNumberConfig _$RatioNumberConfigFromJson(Map<String, dynamic> json) =>
               .fromJson(json['text_color'] as Map<String, dynamic>),
       sinceMinutes: json['since_minutes'] == null
           ? const Duration(minutes: 10)
-          : Duration(microseconds: (json['since_minutes'] as num).toInt()),
+          : const DurationMinutesConverterNonNull()
+              .fromJson((json['since_minutes'] as num).toInt()),
       howMany: (json['how_many'] as num?)?.toInt() ?? 10,
       pollInterval: json['poll_interval'] == null
           ? const Duration(seconds: 1)
@@ -57,7 +58,8 @@ Map<String, dynamic> _$RatioNumberConfigToJson(RatioNumberConfig instance) =>
       'key1_label': instance.key1Label,
       'key2_label': instance.key2Label,
       'text_color': const ColorConverter().toJson(instance.textColor),
-      'since_minutes': instance.sinceMinutes.inMicroseconds,
+      'since_minutes':
+          const DurationMinutesConverterNonNull().toJson(instance.sinceMinutes),
       'how_many': instance.howMany,
       'poll_interval': instance.pollInterval.inMicroseconds,
       'graph_header': instance.graphHeader,

@@ -121,4 +121,52 @@ void main() {
       expect(source, contains('maxHeight: 160'));
     });
   });
+
+  group('a proposal merges onto the existing entry', () {
+    // update_key_mapping used to build a fresh KeyMappingEntry and assign only
+    // opcuaNode, so proposing a new node id silently discarded that key's
+    // collect settings -- its retention and sample interval -- along with any
+    // m2400/modbus/io binding. The 28 sensor fault mappings were written that
+    // way. A proposal states what changes; the rest has to survive.
+    test('starts from the entry already stored under the key', () {
+      expect(source,
+          contains('_keyMappings!.nodes[key] ?? KeyMappingEntry()'));
+    });
+
+    test('does not construct a bare entry and overwrite the slot', () {
+      expect(source, isNot(contains('final entry = KeyMappingEntry();')));
+    });
+
+    test('applies a collect block when the proposal carries one', () {
+      expect(source, contains('CollectEntry.fromJson(collect)'));
+    });
+
+    test('keys the collect entry to the mapping it belongs to', () {
+      expect(source, contains('..key = key'));
+    });
+
+    test('an explicit null collect turns collection off', () {
+      expect(source, contains("m.containsKey('collect')"));
+      expect(source, contains('entry.collect = null'));
+    });
+  });
+
+  group('a delete proposal removes the key', () {
+    test('recognises the delete op', () {
+      expect(source, contains("m['_op'] == 'delete'"));
+    });
+
+    test('removes through _removeKey so derived caches are dropped too', () {
+      expect(source, contains('_removeKey(key)'));
+    });
+
+    test('a delete carries no fields to merge', () {
+      final applyLoop = source.substring(source.indexOf('for (final m in _proposedMappings)'));
+      final deleteAt = applyLoop.indexOf("m['_op'] == 'delete'");
+      final mergeAt = applyLoop.indexOf('?? KeyMappingEntry()');
+      expect(deleteAt, greaterThan(-1));
+      expect(mergeAt, greaterThan(deleteAt),
+          reason: 'the delete branch must return before any merge');
+    });
+  });
 }
