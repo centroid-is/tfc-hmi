@@ -97,11 +97,23 @@ final _serverLifecycle = McpLifecycleState();
 final mcpConfigMigrationProvider = FutureProvider<void>((ref) async {
   final local = ref.watch(localPreferencesProvider);
   try {
-    final shared = await ref.read(preferencesProvider.future);
+    // Watch, don't read: when the database comes up after an offline
+    // start, preferencesProvider is recreated and re-syncs Postgres rows
+    // into the device store — the migration must re-run at that moment
+    // to delete the stale mcp.config row before the next sync. It is
+    // idempotent, so re-running on every reconnect is safe.
+    //
+    // The timeout keeps the device-local MCP config independent of
+    // database health: if preferencesProvider stalls (e.g. a half-open
+    // connection), the config loads anyway and the migration re-runs
+    // when the provider eventually emits.
+    final shared = await ref
+        .watch(preferencesProvider.future)
+        .timeout(const Duration(seconds: 15));
     await migrateMcpConfigToDeviceLocal(shared: shared, local: local);
   } catch (e) {
-    // Shared preferences unavailable (e.g. no database) — the local
-    // store is authoritative anyway; migration will retry next run.
+    // Shared preferences unavailable — the local store is authoritative
+    // anyway; migration re-runs when preferencesProvider recovers.
     io.stderr.writeln('MCP config migration skipped: $e');
   }
 });

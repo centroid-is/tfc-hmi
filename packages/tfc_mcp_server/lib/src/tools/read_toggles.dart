@@ -48,6 +48,28 @@ Future<McpToolToggles> readTogglesFromPreferences(PreferencesApi prefs) async {
   return config.toggles;
 }
 
+/// Environment variable carrying the tool-toggle JSON for a spawned
+/// server subprocess.
+///
+/// The MCP config is device-local, so a subprocess cannot read it from
+/// the shared database; the spawning HMI passes the toggles along instead.
+const kMcpTogglesEnvVar = 'TFC_MCP_TOGGLES';
+
+/// Parses [McpToolToggles] from the [kMcpTogglesEnvVar] JSON payload.
+///
+/// Returns null when [json] is absent or malformed, so callers can fall
+/// back to another source.
+McpToolToggles? togglesFromEnvJson(String? json) {
+  if (json == null || json.isEmpty) return null;
+  try {
+    final map = jsonDecode(json);
+    if (map is! Map<String, dynamic>) return null;
+    return McpToolToggles.fromJson(map);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// One-time migration of the MCP config from the [shared]
 /// (database-backed) preference store to the [local] (device-only) store.
 ///

@@ -11,8 +11,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
-        McpToolToggles,
-        readMcpConfigFromPreferences;
+        kMcpTogglesEnvVar;
 
 import 'package:tfc_dart/core/preferences.dart' show Preferences;
 
@@ -1013,7 +1012,13 @@ final chatLifecycleProvider = Provider<void>((ref) {
         // Don't fall back if chat was closed during the attempt
         if (!ref.read(chatVisibleProvider)) return;
 
-        final dbEnv = getMcpServerEnv();
+        // The MCP config is device-local, so the subprocess cannot read
+        // the tool toggles from the shared database — pass them along.
+        final fallbackConfig = await ref.read(mcpConfigProvider.future);
+        final dbEnv = {
+          ...getMcpServerEnv(),
+          kMcpTogglesEnvVar: jsonEncode(fallbackConfig.toggles.toJson()),
+        };
         final operatorId = getMcpOperatorId();
         await bridge.connect(
           operatorId: operatorId,

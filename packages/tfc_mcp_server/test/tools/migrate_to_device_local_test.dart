@@ -133,6 +133,21 @@ void main() {
     });
   });
 
+  group('togglesFromEnvJson', () {
+    test('parses toggles from the env payload', () {
+      const toggles = McpToolToggles(tagsEnabled: false, trendsEnabled: false);
+      final parsed = togglesFromEnvJson(jsonEncode(toggles.toJson()));
+      expect(parsed, toggles);
+    });
+
+    test('returns null for absent, empty, or malformed payloads', () {
+      expect(togglesFromEnvJson(null), isNull);
+      expect(togglesFromEnvJson(''), isNull);
+      expect(togglesFromEnvJson('not json {'), isNull);
+      expect(togglesFromEnvJson('[1,2]'), isNull);
+    });
+  });
+
   group('McpConfig equality', () {
     test('equal values compare equal', () {
       const a = McpConfig(

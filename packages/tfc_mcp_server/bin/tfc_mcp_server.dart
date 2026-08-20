@@ -93,10 +93,15 @@ Future<void> main(List<String> arguments) async {
   final stateReader = EmptyStateReader();
   final alarmReader = EmptyAlarmReader();
 
-  // Read tool toggle state from flutter_preferences table.
-  // First tries consolidated McpConfig key, falls back to legacy keys.
-  final toggles = await _readTogglesFromDb(db);
-  logger.i('Tool toggles: tags=${toggles.tagsEnabled}, '
+  // Read tool toggle state. The HMI stores the MCP config device-locally
+  // and passes the toggles to spawned subprocesses via TFC_MCP_TOGGLES;
+  // the flutter_preferences table is only a fallback for pre-migration
+  // databases (standalone launches otherwise default to all-enabled).
+  final envToggles =
+      togglesFromEnvJson(Platform.environment[kMcpTogglesEnvVar]);
+  final toggles = envToggles ?? await _readTogglesFromDb(db);
+  logger.i('Tool toggles from ${envToggles != null ? 'environment' : 'database'}: '
+      'tags=${toggles.tagsEnabled}, '
       'alarms=${toggles.alarmsEnabled}, config=${toggles.configEnabled}, '
       'drawings=${toggles.drawingsEnabled}, trends=${toggles.trendsEnabled}, '
       'plcCode=${toggles.plcCodeEnabled}, proposals=${toggles.proposalsEnabled}');

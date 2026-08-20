@@ -84,6 +84,27 @@ void main() {
           reason: 'saving the MCP config must never touch the shared store');
     });
 
+    test('migration re-runs when preferencesProvider is recreated '
+        '(database reconnect after offline start)', () async {
+      final (shared, deviceStore) = createStores();
+      final container = createContainer(shared, deviceStore);
+      await container.read(mcpConfigProvider.future);
+
+      // Simulate a database coming online after startup: the recreated
+      // Preferences now carries an mcp.config row that the first
+      // migration pass could not delete.
+      const staleDbConfig = McpConfig(serverEnabled: true, port: 1111);
+      await shared.setString(
+          McpConfig.kPrefKey, jsonEncode(staleDbConfig.toJson()));
+      container.invalidate(preferencesProvider);
+
+      expect(await container.read(mcpConfigProvider.future), staleDbConfig,
+          reason: 'the re-run migration must adopt the synced value');
+      expect(await shared.getString(McpConfig.kPrefKey), isNull,
+          reason: 'the re-run migration must clean the shared store so the '
+              'row cannot be re-synced over the device config again');
+    });
+
     test('legacy database keys seed the device config and are removed',
         () async {
       final (shared, deviceStore) = createStores();
