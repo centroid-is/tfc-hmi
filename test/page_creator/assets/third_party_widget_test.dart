@@ -275,8 +275,10 @@ void main() {
       // One live accept-rate and one live weight row per checkweigher. The
       // figures are the point — the operator opens the pane to read the
       // machine.
-      expect(find.text('Accept rate CW1 (30 min)'), findsOneWidget);
-      expect(find.text('Accept rate CW2 (30 min)'), findsOneWidget);
+      // Non-breaking space before "min": the label column wraps, and the
+      // break must never split "(30 min)".
+      expect(find.text('Accept rate CW1 (30\u{00A0}min)'), findsOneWidget);
+      expect(find.text('Accept rate CW2 (30\u{00A0}min)'), findsOneWidget);
       expect(find.text('Weight CW1'), findsOneWidget);
       expect(find.text('Weight CW2'), findsOneWidget);
       // No PLC in this test, so the value is `---`, but the unit must be
