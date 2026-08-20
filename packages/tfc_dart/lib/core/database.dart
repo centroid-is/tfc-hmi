@@ -204,7 +204,7 @@ class DatabaseException implements Exception {
 // https://docs.tigerdata.com/api/latest/data-retention/add_retention_policy/
 @json.JsonSerializable(explicitToJson: true)
 class RetentionPolicy {
-  @DurationMinutesConverter()
+  @DurationMinutesConverterNonNull()
   @json.JsonKey(name: 'drop_after_min')
   final Duration
       dropAfter; // Chunks fully older than this interval when the policy is run are dropped

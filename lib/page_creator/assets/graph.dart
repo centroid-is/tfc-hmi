@@ -96,7 +96,7 @@ class GraphAssetConfig extends BaseAsset {
   GraphAxisConfig yAxis;
   @JsonKey(name: 'y_axis2')
   GraphAxisConfig? yAxis2;
-  @DurationMinutesConverter()
+  @DurationMinutesConverterNonNull()
   @JsonKey(name: 'time_window_min')
   Duration timeWindowMinutes;
   @JsonKey(name: 'header_text')

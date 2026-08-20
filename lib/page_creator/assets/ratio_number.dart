@@ -33,7 +33,7 @@ class RatioNumberConfig extends BaseAsset {
   @ColorConverter()
   @JsonKey(name: 'text_color')
   Color textColor;
-  @DurationMinutesConverter()
+  @DurationMinutesConverterNonNull()
   @JsonKey(name: 'since_minutes')
   Duration sinceMinutes;
   @JsonKey(name: 'how_many')

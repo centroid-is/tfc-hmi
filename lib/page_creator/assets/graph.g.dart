@@ -44,7 +44,8 @@ GraphAssetConfig _$GraphAssetConfigFromJson(Map<String, dynamic> json) =>
           : GraphAxisConfig.fromJson(json['y_axis2'] as Map<String, dynamic>),
       timeWindowMinutes: json['time_window_min'] == null
           ? const Duration(minutes: 10)
-          : Duration(microseconds: (json['time_window_min'] as num).toInt()),
+          : const DurationMinutesConverterNonNull()
+              .fromJson((json['time_window_min'] as num).toInt()),
       headerText: json['header_text'] as String?,
       aggregation:
           $enumDecodeNullable(_$AggregationEnumMap, json['aggregation']) ??
@@ -76,7 +77,8 @@ Map<String, dynamic> _$GraphAssetConfigToJson(GraphAssetConfig instance) =>
       'x_axis': instance.xAxis.toJson(),
       'y_axis': instance.yAxis.toJson(),
       'y_axis2': instance.yAxis2?.toJson(),
-      'time_window_min': instance.timeWindowMinutes.inMicroseconds,
+      'time_window_min': const DurationMinutesConverterNonNull()
+          .toJson(instance.timeWindowMinutes),
       'header_text': instance.headerText,
       'aggregation': _$AggregationEnumMap[instance.aggregation]!,
       'tooltip': instance.tooltip,
