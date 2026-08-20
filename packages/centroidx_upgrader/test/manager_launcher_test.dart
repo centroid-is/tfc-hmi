@@ -460,4 +460,67 @@ void main() {
       }
     });
   });
+
+  group('ManagerLauncher channels', () {
+    /// Launches an update with the given arguments and returns the CLI args
+    /// the manager was started with.
+    Future<List<String>> capturedUpdateArgs({
+      String? version,
+      String? channel,
+    }) async {
+      late List<String> capturedArgs;
+      final tempDir = await Directory.systemTemp.createTemp('mlchan_');
+      final managerPath = '${tempDir.path}/centroidx-manager';
+
+      try {
+        final launcher = ManagerLauncher(
+          processStarter: (exe, args, {mode = ProcessStartMode.normal}) async {
+            capturedArgs = List.unmodifiable(args);
+            return _FakeProcess(42);
+          },
+          pathResolver: () async => managerPath,
+          assetLoader: (_) async => _fakeAssetBytes,
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        if (channel != null) {
+          await launcher.launchForUpdate(
+            version: version,
+            channel: channel,
+            flutterPid: 9999,
+          );
+        } else {
+          await launcher.launchForUpdate(version: version, flutterPid: 9999);
+        }
+        return capturedArgs;
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    }
+
+    test('defaults to the stable channel', () async {
+      final args = await capturedUpdateArgs(version: '2026.4.1');
+
+      expect(
+          args,
+          containsAllInOrder(
+              ['--update', '--channel=stable', '--version=2026.4.1']));
+    });
+
+    test('passes the latest channel and omits the version when not given',
+        () async {
+      final args = await capturedUpdateArgs(channel: kUpdateChannelLatest);
+
+      expect(args, containsAllInOrder(['--update', '--channel=latest']));
+      expect(args.where((a) => a.startsWith('--version')), isEmpty,
+          reason: 'the manager resolves the newest release on the channel');
+    });
+
+    test('omits the version when it is empty', () async {
+      final args = await capturedUpdateArgs(version: '');
+
+      expect(args.where((a) => a.startsWith('--version')), isEmpty);
+    });
+  });
 }

@@ -32,6 +32,10 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Resolve build sha
+        shell: bash
+        run: echo "BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
@@ -90,7 +94,7 @@ jobs:
 
       - name: Build macOS release (unsigned — re-signed after build)
         working-directory: centroid-hmi
-        run: flutter build macos --release
+        run: flutter build macos --release --dart-define=GIT_SHA=${{ env.BUILD_SHA }}
 
       - name: Re-sign with hardened runtime for notarization
         if: env.CODESIGN_IDENTITY != ''

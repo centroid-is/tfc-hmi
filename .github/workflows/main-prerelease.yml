@@ -40,13 +40,19 @@ jobs:
     needs: [windows-build, macos-build, linux-build]
     runs-on: ubuntu-latest
     steps:
-      # Downloaded by name — the windows job also publishes an MSIX artifact,
-      # which the rolling prerelease deliberately does not ship.
       - name: Download Windows portable build
         uses: actions/download-artifact@v4
         with:
           name: centroid-hmi-windows-portable
           path: centroidx-windows-x64/
+
+      # The MSIX is what centroidx-manager installs on Windows — without it
+      # the "latest" update channel has nothing installable here.
+      - name: Download Windows MSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: centroid-hmi.msix
+          path: msix/
 
       - name: Download macOS DMG
         uses: actions/download-artifact@v4
@@ -69,8 +75,14 @@ jobs:
           # centroidx.exe plus the Flutter and VC++ runtime DLLs and data/.
           zip -qr release/centroidx_windows_x64.zip centroidx-windows-x64
 
+          # Canonical asset name the manager looks for (msix:create emits
+          # centroidx.msix). Renamed before checksumming so the checksum line
+          # matches the published filename.
+          mv msix/*.msix release/centroidx_windows_amd64.msix
+
           cd release
-          sha256sum centroidx_windows_x64.zip centroidx_darwin_arm64.dmg \
+          sha256sum centroidx_windows_x64.zip centroidx_windows_amd64.msix \
+                    centroidx_darwin_arm64.dmg \
                     centroidx_linux_x64.tar.gz > SHA256SUMS.txt
           ls -lh
           cat SHA256SUMS.txt
@@ -96,10 +108,12 @@ jobs:
           |----------|-------|
           | macOS (Apple Silicon) | \`centroidx_darwin_arm64.dmg\` — Developer ID signed; notarized only when Apple's notary service accepts the build |
           | Windows (x64) | \`centroidx_windows_x64.zip\` — portable exe + libs, no installer |
+          | Windows (x64) | \`centroidx_windows_amd64.msix\` — sideload installer, used by the in-app updater's latest channel |
           | Linux (x64) | \`centroidx_linux_x64.tar.gz\` — GTK3 desktop bundle |
 
           Checksums in \`SHA256SUMS.txt\`." \
             release/centroidx_windows_x64.zip \
+            release/centroidx_windows_amd64.msix \
             release/centroidx_darwin_arm64.dmg \
             release/centroidx_linux_x64.tar.gz \
             release/SHA256SUMS.txt

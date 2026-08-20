@@ -17,6 +17,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         writeMcpConfigToPreferences;
 
 import '../core/feature_flags.dart';
+import '../core/update_channel.dart';
 import '../providers/mcp_bridge.dart';
 import '../providers/preferences.dart';
 import '../providers/theme.dart';
@@ -63,6 +64,84 @@ class AppearanceSection extends ConsumerWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Update channel section for the preferences page.
+///
+/// Chooses which releases the app announces and installs: stable (tagged
+/// releases) or latest (the rolling main build, republished on every merge).
+/// Stored locally under [updateChannelPrefsKey]; the next update check picks
+/// the change up without a restart.
+class UpdateSection extends StatefulWidget {
+  const UpdateSection({
+    super.key,
+    this.readChannel = readUpdateChannel,
+    this.writeChannel = writeUpdateChannel,
+  });
+
+  /// Injectable for tests; defaults to the SharedPreferences-backed helpers.
+  final Future<String> Function() readChannel;
+  final Future<void> Function(String) writeChannel;
+
+  @override
+  State<UpdateSection> createState() => _UpdateSectionState();
+}
+
+class _UpdateSectionState extends State<UpdateSection> {
+  String _channel = updateChannelStable;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.readChannel().then((value) {
+      if (mounted) setState(() => _channel = value);
+    });
+  }
+
+  Future<void> _select(String? value) async {
+    if (value == null) return;
+    setState(() => _channel = value);
+    await widget.writeChannel(value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: const FaIcon(FontAwesomeIcons.arrowsRotate, size: 20),
+            title: const Text('Update Channel'),
+            subtitle: Text(
+              buildGitSha.isEmpty
+                  ? 'Which releases this HMI updates to'
+                  : 'Which releases this HMI updates to — build ${buildGitSha.length > 7 ? buildGitSha.substring(0, 7) : buildGitSha}',
+            ),
+          ),
+          RadioGroup<String>(
+            groupValue: _channel,
+            onChanged: _select,
+            child: const Column(
+              children: [
+                RadioListTile<String>(
+                  value: updateChannelStable,
+                  title: Text('Stable'),
+                  subtitle:
+                      Text('Tagged releases that went through release testing'),
+                ),
+                RadioListTile<String>(
+                  value: updateChannelLatest,
+                  title: Text('Latest'),
+                  subtitle: Text(
+                      'Newest development build from main — replaced on every merge, no release testing'),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

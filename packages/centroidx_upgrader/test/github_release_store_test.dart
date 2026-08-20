@@ -227,4 +227,190 @@ void main() {
       expect(hasAuth, isFalse);
     });
   });
+
+  group('GitHubReleaseStore latest channel', () {
+    final installedVersion = Version.parse('2026.3.26');
+
+    /// A store on the latest channel with a fake client that serves
+    /// [listBody] for the `/releases` list endpoint and records request paths.
+    GitHubReleaseStore latestStoreWith({
+      required String listBody,
+      String? buildSha,
+      List<String>? requestedPaths,
+      Future<String> Function()? channel,
+    }) {
+      final fakeClient = MockClient((request) async {
+        requestedPaths?.add(request.url.path);
+        if (request.url.path.endsWith('/releases/latest')) {
+          return http.Response(_releaseJson(tagName: '2026.3.26'), 200);
+        }
+        return http.Response(listBody, 200);
+      });
+      return GitHubReleaseStore(
+        owner: 'centroid-is',
+        repo: 'tfc-hmi',
+        httpClient: fakeClient,
+        channel: channel ?? () async => kUpdateChannelLatest,
+        buildSha: buildSha,
+      );
+    }
+
+    Map<String, dynamic> releaseEntry({
+      required String tagName,
+      required String publishedAt,
+      String body = '',
+      String htmlUrl = 'https://github.com/centroid-is/tfc-hmi/releases',
+      String targetCommitish = '',
+      bool draft = false,
+      bool prerelease = false,
+    }) {
+      return {
+        'tag_name': tagName,
+        'body': body,
+        'html_url': htmlUrl,
+        'published_at': publishedAt,
+        'target_commitish': targetCommitish,
+        'draft': draft,
+        'prerelease': prerelease,
+      };
+    }
+
+    Future<UpgraderVersionInfo> check(GitHubReleaseStore store) {
+      return store.getVersionInfo(
+        state: _fakeState(),
+        installedVersion: installedVersion,
+        country: null,
+        language: null,
+      );
+    }
+
+    test('queries the releases list, not releases/latest', () async {
+      final paths = <String>[];
+      final store = latestStoreWith(
+        listBody: jsonEncode([
+          releaseEntry(tagName: 'v2026.4.1', publishedAt: '2026-04-01T10:00:00Z'),
+        ]),
+        requestedPaths: paths,
+      );
+
+      await check(store);
+
+      expect(paths, hasLength(1));
+      expect(paths.single, endsWith('/releases'));
+    });
+
+    test('newest published tagged release wins by version comparison', () async {
+      final store = latestStoreWith(
+        listBody: jsonEncode([
+          releaseEntry(tagName: 'v2026.3.26', publishedAt: '2026-03-26T10:00:00Z'),
+          releaseEntry(tagName: 'v2026.4.1', publishedAt: '2026-04-01T10:00:00Z'),
+        ]),
+      );
+
+      final info = await check(store);
+
+      expect(info.appStoreVersion, equals(Version.parse('2026.4.1')));
+    });
+
+    test('rolling prerelease with differing sha announces a dated update', () async {
+      final store = latestStoreWith(
+        buildSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        listBody: jsonEncode([
+          releaseEntry(tagName: 'v2026.3.26', publishedAt: '2026-03-26T10:00:00Z'),
+          releaseEntry(
+            tagName: 'main-latest',
+            publishedAt: '2026-08-20T12:00:00Z',
+            targetCommitish: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            prerelease: true,
+            body: 'Automatically built from the tip of main.',
+          ),
+        ]),
+      );
+
+      final info = await check(store);
+
+      expect(info.appStoreVersion, equals(Version(2026, 8, 20)));
+      expect(info.releaseNotes, contains('bbbbbbb'));
+      expect(info.releaseNotes, contains('Automatically built'));
+    });
+
+    test('rolling prerelease with matching sha is not announced', () async {
+      final store = latestStoreWith(
+        // Abbreviated build sha must still match the full target commit.
+        buildSha: 'bbbbbbbbbb',
+        listBody: jsonEncode([
+          releaseEntry(
+            tagName: 'main-latest',
+            publishedAt: '2026-08-20T12:00:00Z',
+            targetCommitish: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            prerelease: true,
+          ),
+        ]),
+      );
+
+      final info = await check(store);
+
+      expect(info.appStoreVersion, equals(installedVersion));
+    });
+
+    test('rolling prerelease without a build sha is not announced', () async {
+      final store = latestStoreWith(
+        buildSha: null,
+        listBody: jsonEncode([
+          releaseEntry(
+            tagName: 'main-latest',
+            publishedAt: '2026-08-20T12:00:00Z',
+            targetCommitish: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            prerelease: true,
+          ),
+        ]),
+      );
+
+      final info = await check(store);
+
+      expect(info.appStoreVersion, equals(installedVersion));
+    });
+
+    test('draft releases are skipped', () async {
+      final store = latestStoreWith(
+        listBody: jsonEncode([
+          releaseEntry(
+            tagName: 'v2026.9.9',
+            publishedAt: '2026-09-09T10:00:00Z',
+            draft: true,
+          ),
+          releaseEntry(tagName: 'v2026.4.1', publishedAt: '2026-04-01T10:00:00Z'),
+        ]),
+      );
+
+      final info = await check(store);
+
+      expect(info.appStoreVersion, equals(Version.parse('2026.4.1')));
+    });
+
+    test('unknown channel value falls back to the stable endpoint', () async {
+      final paths = <String>[];
+      final store = latestStoreWith(
+        listBody: '[]',
+        requestedPaths: paths,
+        channel: () async => 'nightly',
+      );
+
+      final info = await check(store);
+
+      expect(paths.single, endsWith('/releases/latest'));
+      expect(info.appStoreVersion, equals(Version.parse('2026.3.26')));
+    });
+
+    test('throwing channel resolver falls back to installed version', () async {
+      final store = latestStoreWith(
+        listBody: '[]',
+        channel: () async => throw StateError('prefs unavailable'),
+      );
+
+      final info = await check(store);
+
+      expect(info.appStoreVersion, equals(installedVersion));
+    });
+  });
 }

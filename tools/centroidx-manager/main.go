@@ -2,8 +2,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"os"
 
 	"github.com/centroid-is/centroidx-manager/internal/ui"
+	"github.com/centroid-is/centroidx-manager/internal/update"
 )
 
 // Build-time variables — set via -ldflags at release time.
@@ -17,7 +20,8 @@ func main() {
 	// --- CLI flags ---
 	updateMode := flag.Bool("update", false, "Run in update mode (called by Flutter app)")
 	pickerMode := flag.Bool("picker", false, "Open version picker UI for rollback/manual install")
-	version := flag.String("version", "", "Target version to install (default: latest)")
+	version := flag.String("version", "", "Target version to install (default: newest on the channel)")
+	channel := flag.String("channel", "stable", "Release channel: 'stable' (tagged releases) or 'latest' (includes main prereleases)")
 	waitPID := flag.Int("wait-pid", 0, "PID of the running app to wait for before installing")
 	token := flag.String("token", "", "GitHub API token (optional; falls back to CENTROIDX_GITHUB_TOKEN env var)")
 	prsMode := flag.Bool("prs", false, "Show open PRs with CI artifacts to install from (dev/testing)")
@@ -25,6 +29,11 @@ func main() {
 	artifactURL := flag.String("artifact-url", "", "Download and install from a direct URL (dev/testing: CI artifact URLs)")
 
 	flag.Parse()
+
+	if !update.ValidChannel(*channel) {
+		fmt.Fprintf(os.Stderr, "unknown channel %q: expected %q or %q\n", *channel, update.ChannelStable, update.ChannelLatest)
+		os.Exit(2)
+	}
 
 	// --- Mode routing ---
 	mode := "picker" // default: show version picker
@@ -53,6 +62,7 @@ func main() {
 	ui.Run(ui.Options{
 		Mode:        mode,
 		Version:     *version,
+		Channel:     *channel,
 		WaitPID:     *waitPID,
 		Token:       *token,
 		Owner:       githubOwner,

@@ -19,6 +19,7 @@ import (
 type Options struct {
 	Mode        string // "install", "update", "picker", "local-install", "url-install"
 	Version     string
+	Channel     string // "stable" or "latest" — which releases to consider when Version is empty
 	WaitPID     int
 	Token       string
 	Owner       string
@@ -71,6 +72,15 @@ func Run(opts Options) {
 		}
 	}()
 	app.Main()
+}
+
+// displayVersion renders a release version for the UI: parseable versions get
+// the conventional "v" prefix, channel tags like "main-latest" are shown as-is.
+func displayVersion(version string) string {
+	if _, err := update.ParseVersion(version); err == nil {
+		return "v" + version
+	}
+	return version
 }
 
 // appState tracks the current UI state for the immediate-mode event loop.
@@ -186,7 +196,7 @@ func runUpdateMode(w *app.Window, th *material.Theme, eng *update.Engine, opts O
 
 	go func() {
 		ctx := context.Background()
-		info, err := eng.FetchReleaseInfo(ctx, opts.Version)
+		info, err := eng.FetchReleaseInfo(ctx, opts.Version, opts.Channel)
 		if err != nil {
 			state.err = err
 			state.status = userFriendlyMessage(err)
@@ -194,7 +204,7 @@ func runUpdateMode(w *app.Window, th *material.Theme, eng *update.Engine, opts O
 			return
 		}
 		releaseInfo = info
-		state.status = fmt.Sprintf("Update available: v%s", info.Version)
+		state.status = fmt.Sprintf("Update available: %s", displayVersion(info.Version))
 		w.Invalidate()
 	}()
 
@@ -215,6 +225,7 @@ func runUpdateMode(w *app.Window, th *material.Theme, eng *update.Engine, opts O
 						destDir := os.TempDir()
 						err := eng.Update(context.Background(), update.UpdateOptions{
 							Version: opts.Version,
+							Channel: opts.Channel,
 							WaitPID: opts.WaitPID,
 							DestDir: destDir,
 							OnProgress: func(dl, total int64) {
@@ -228,7 +239,7 @@ func runUpdateMode(w *app.Window, th *material.Theme, eng *update.Engine, opts O
 							state.err = err
 							state.status = userFriendlyMessage(err)
 						} else {
-							state.status = fmt.Sprintf("CentroidX v%s installed. Relaunching...", releaseInfo.Version)
+							state.status = fmt.Sprintf("CentroidX %s installed. Relaunching...", displayVersion(releaseInfo.Version))
 							state.done = true
 						}
 						w.Invalidate()
