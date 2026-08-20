@@ -25,13 +25,45 @@ class RecipesConfig extends BaseAsset {
   @override
   String get category => 'Application';
 
+  /// Legacy single key: one node holding an ARRAY of line recipes.
+  ///
+  /// This is how the old `GVL_BatchLines.recipes` published them -- one array
+  /// covering every line, which is why the line pills were numbered by array
+  /// position. Kept so existing pages keep working.
   String key;
+
+  /// One key per line, in the order the pills should appear.
+  ///
+  /// The current PLCs publish a separate `ST_LineRecipe` per station
+  /// (`SPB01.recipe`, `SPB02.recipe`, `SPB03.recipe`) rather than one array,
+  /// so a single key cannot reach them all. When this is non-empty it takes
+  /// precedence over [key], and each line is read and written on its own node
+  /// -- which also means sending a recipe to one line no longer rewrites the
+  /// others, as writing the whole array back did.
+  @JsonKey(defaultValue: <String>[])
+  List<String> keys;
+
   String label;
 
   RecipesConfig({
     required this.key,
     required this.label,
+    this.keys = const <String>[],
   });
+
+  /// The keys actually in play, whichever way this asset is configured.
+  List<String> get lineKeys => keys.isNotEmpty
+      ? keys
+      : (key.isEmpty ? const <String>[] : <String>[key]);
+
+  /// True when each line has its own node, so values are read and written
+  /// per line instead of as one array.
+  bool get perLineKeys => keys.isNotEmpty;
+
+  /// Where saved recipes live. Stable across a switch from [key] to [keys] so
+  /// presets defined before the move are not orphaned.
+  String get recipesBucket =>
+      key.isNotEmpty ? key : (keys.isEmpty ? '' : keys.first);
 
   factory RecipesConfig.fromJson(Map<String, dynamic> json) =>
       _$RecipesConfigFromJson(json);
@@ -45,6 +77,7 @@ class RecipesConfig extends BaseAsset {
 
   RecipesConfig.preview()
       : key = '',
+        keys = const <String>[],
         label = 'Line';
 
   @override
@@ -93,6 +126,47 @@ class _RecipesConfigEditorState extends State<_RecipesConfigEditor> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text('Keys, one per line',
+              style: Theme.of(context).textTheme.titleMedium),
+          const Text(
+            "Each key is one line's recipe node. The pills appear in this "
+            "order. Leave empty to use the single key below, which expects "
+            "one node holding an array of every line.",
+            style: TextStyle(fontSize: 12),
+          ),
+          for (var i = 0; i < widget.config.keys.length; i++)
+            Row(
+              children: [
+                Expanded(
+                  child: KeyField(
+                    initialValue: widget.config.keys[i],
+                    onChanged: (val) =>
+                        setState(() => widget.config.keys[i] = val),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle_outline),
+                  tooltip: 'Remove this line',
+                  onPressed: () =>
+                      setState(() => widget.config.keys.removeAt(i)),
+                ),
+              ],
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Add line'),
+              onPressed: () => setState(() {
+                // A growable copy: the generated fromJson can hand back a
+                // fixed-length list, which would throw on add.
+                widget.config.keys = [...widget.config.keys, ''];
+              }),
+            ),
+          ),
+          SizedBox(height: 16),
+          Text('Single key (legacy array)',
+              style: Theme.of(context).textTheme.titleMedium),
           KeyField(
             initialValue: widget.config.key,
             onChanged: (val) => setState(() => widget.config.key = val),
@@ -165,12 +239,32 @@ class Recipes extends ConsumerStatefulWidget {
 
 class _RecipesState extends ConsumerState<Recipes> {
   int selectedLine = 0;
+
+  /// The node the dialog is reading and writing right now.
+  ///
+  /// One key per line: the selected line's own node. Legacy single key: the
+  /// one array node, with [selectedLine] indexing inside the value instead.
+  String get _activeKey {
+    final keys = widget.config.lineKeys;
+    if (!widget.config.perLineKeys) return widget.config.key;
+    if (keys.isEmpty) return '';
+    return keys[selectedLine.clamp(0, keys.length - 1)];
+  }
+
+  /// The value for the selected line, whichever shape the config uses.
+  DynamicValue _lineValue(DynamicValue data) =>
+      widget.config.perLineKeys ? data : data[selectedLine];
+
+  /// How many line pills to draw.
+  int _lineCount(DynamicValue data) => widget.config.perLineKeys
+      ? widget.config.lineKeys.length
+      : data.asArray.length;
   int? selectedRecipeIndex;
   final _newRecipeNameController = TextEditingController();
 
   Future<List<Recipe>> _getRecipes() async {
     final prefs = await ref.read(preferencesProvider.future);
-    final prefKey = '${widget.config.key}.recipes';
+    final prefKey = '${widget.config.recipesBucket}.recipes';
     if (!(await prefs.containsKey(prefKey))) {
       var recipes = <Recipe>[];
       await prefs.setString(prefKey, jsonEncode(recipes));
@@ -184,7 +278,7 @@ class _RecipesState extends ConsumerState<Recipes> {
 
   Future<void> _saveRecipes(List<Recipe> recipes) async {
     final prefs = await ref.watch(preferencesProvider.future);
-    final prefKey = '${widget.config.key}.recipes';
+    final prefKey = '${widget.config.recipesBucket}.recipes';
     await prefs.setString(prefKey, jsonEncode(recipes));
   }
 
@@ -242,7 +336,7 @@ class _RecipesState extends ConsumerState<Recipes> {
                 width: 100,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: List.generate(data.asArray.length, (i) {
+                  children: List.generate(_lineCount(data), (i) {
                     final selected = i == selectedLine;
                     return InkWell(
                       onTap: () => dialogSetState(() {
@@ -327,7 +421,7 @@ class _RecipesState extends ConsumerState<Recipes> {
                                 labelText: 'New recipe',
                               ),
                               onSubmitted: (v) => _addRecipe(v, recipes,
-                                  data[selectedLine], dialogSetState),
+                                  _lineValue(data), dialogSetState),
                             ),
                           ),
                           Center(
@@ -337,7 +431,7 @@ class _RecipesState extends ConsumerState<Recipes> {
                               onPressed: () => _addRecipe(
                                   _newRecipeNameController.text,
                                   recipes,
-                                  data[selectedLine],
+                                  _lineValue(data),
                                   dialogSetState),
                             ),
                           ),
@@ -371,10 +465,20 @@ class _RecipesState extends ConsumerState<Recipes> {
                         children: [
                           ElevatedButton(
                             onPressed: () async {
-                              var newValue = DynamicValue.from(data);
-                              newValue[selectedLine] = DynamicValue.from(
+                              // Per-line keys write only the line that was
+                              // chosen. The legacy array shape has to send the
+                              // whole array back, which rewrites every other
+                              // line with whatever this dialog last read --
+                              // one reason per-line keys are preferable.
+                              final chosen = DynamicValue.from(
                                   recipes[selectedRecipeIndex!].value);
-                              await stateMan.write(widget.config.key, newValue);
+                              if (widget.config.perLineKeys) {
+                                await stateMan.write(_activeKey, chosen);
+                              } else {
+                                final newValue = DynamicValue.from(data);
+                                newValue[selectedLine] = chosen;
+                                await stateMan.write(_activeKey, newValue);
+                              }
                             },
                             child: Text('Send values ->'),
                           ),
@@ -395,7 +499,7 @@ class _RecipesState extends ConsumerState<Recipes> {
                           style: Theme.of(context).textTheme.titleMedium),
                       Divider(),
                       DynamicValueWidget(
-                        value: data[selectedLine],
+                        value: _lineValue(data),
                       ),
                       Spacer(),
                     ],
@@ -422,7 +526,7 @@ class _RecipesState extends ConsumerState<Recipes> {
       builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
         stream: ref.watch(stateManProvider.future).asStream().switchMap(
             (stateMan) => stateMan
-                .subscribe(widget.config.key)
+                .subscribe(_activeKey)
                 .asStream()
                 .map((stream) => Rx.combineLatest2(Stream.value(stateMan),
                     stream, (stateMan, value) => (stateMan, value)))
@@ -435,7 +539,10 @@ class _RecipesState extends ConsumerState<Recipes> {
             return Center(child: CircularProgressIndicator());
           }
           final (stateMan, data) = snapshot.data!;
-          if (!data.isArray) {
+          // With one key per line the node IS the line's recipe, so an array
+          // is neither expected nor required. Only the legacy single-key
+          // shape carries every line in one value.
+          if (!widget.config.perLineKeys && !data.isArray) {
             return Center(
                 child: Text(
                     'Unsupported type: ${data.type}, needs to be an array'));
