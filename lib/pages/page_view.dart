@@ -684,8 +684,10 @@ class AssetView extends ConsumerWidget {
     return BaseScaffold(
       title: 'Asset View',
       // An equipment pane (a tapped conveyor, a sensor) docks over the right
-      // edge; the inset re-fits the plant view beside it so the very device
-      // the operator tapped is never hidden behind its own pane.
+      // edge; when it would cover the very device the operator tapped — and
+      // only then — the inset re-fits the plant view beside it. Assets open
+      // their pane from their own build context, which is how `showSidePane`
+      // knows where the tapped device is.
       body: SidePaneInset(
           child: ZoomableCanvas(
         child: LayoutBuilder(

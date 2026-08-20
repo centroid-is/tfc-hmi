@@ -614,6 +614,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// builder leaves it here on the way past.
   BoxConstraints? _canvasConstraints;
 
+  /// The canvas `LayoutBuilder`'s context, stashed the same way as
+  /// [_canvasConstraints]: [_assetScreenRect] walks it to find a tapped
+  /// asset's rendered element, and [_openConfigPane] has no path to that
+  /// context of its own.
+  BuildContext? _canvasContext;
+
   /// The keys themselves are handled globally (see [_onShortcutKey]), so this
   /// node no longer routes them; it exists to *take focus away*. The config
   /// pane docks in the root overlay, and a text field there keeps keyboard
@@ -2086,9 +2092,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                       }
                     },
                     // The open config pane docks over the right edge of the
-                    // screen; the inset re-fits the whole canvas — page,
-                    // chrome, selection, all of it — beside the pane instead
-                    // of letting the pane cover the asset being edited.
+                    // screen; when it would cover the very asset being edited
+                    // (and only then), the inset re-fits the whole canvas —
+                    // page, chrome, selection, all of it — beside the pane.
                     child: SidePaneInset(
                         child: ZoomableCanvas(
                       scaleEnabled: !_showPalette,
@@ -2100,6 +2106,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                           // calling setState during build is not allowed, and nothing
                           // here needs a repaint — the next rotate simply reads it.
                           _canvasConstraints = constraints;
+                          _canvasContext = context;
                           return Stack(
                             fit: StackFit.expand,
                             children: [
@@ -2574,6 +2581,36 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   String _configPaneId(Asset asset) =>
       'page-editor-config:${identityHashCode(asset)}';
 
+  /// The asset's on-screen rectangle, straight from its rendered element.
+  ///
+  /// Walks the canvas subtree for the [ObjectKey] that [AssetStack] hangs on
+  /// each asset's `Positioned`, then reads the box's global rect — zoom,
+  /// mirroring and rotation included, none of that geometry re-derived here.
+  /// Null when the asset has no laid-out element yet (a paste opens its pane
+  /// before the canvas has rebuilt); `showSidePane` then falls back to this
+  /// page's own context and the canvas plays it safe by insetting.
+  Rect? _assetScreenRect(Asset asset) {
+    final canvas = _canvasContext;
+    if (canvas == null || !canvas.mounted) return null;
+    final key = ObjectKey(asset);
+    RenderBox? box;
+    void visit(Element element) {
+      if (box != null) return;
+      if (element.widget.key == key) {
+        final ro = element.renderObject;
+        if (ro is RenderBox && ro.hasSize) box = ro;
+        return;
+      }
+      element.visitChildElements(visit);
+    }
+
+    canvas.visitChildElements(visit);
+    final found = box;
+    if (found == null) return null;
+    return MatrixUtils.transformRect(
+        found.getTransformTo(null), Offset.zero & found.size);
+  }
+
   /// Docks [asset]'s configuration editor to the right of the canvas.
   ///
   /// This used to be a `showDialog`, which put a barrier over the canvas: the
@@ -2594,6 +2631,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       onWidthChanged: (width) => setState(() => _configPaneWidth = width),
       builder: (paneContext) => _buildConfigPane(paneContext, asset),
       onClosed: _onConfigPaneClosed,
+      // The canvas only steps aside when the pane would cover this very
+      // asset; measured before the pane opens, so while the canvas is still
+      // where the operator sees it.
+      avoidRect: _assetScreenRect(asset),
     );
     if (!opened) return;
 

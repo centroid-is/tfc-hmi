@@ -201,11 +201,41 @@ void main() {
 
   group('SidePane — the content inset', () {
     // What [SidePaneInset] consumers (the plant view, the page editor's
-    // canvas) lean on: the host reports how much of the screen's right edge
-    // the pane occupies, frame by frame, so page content can re-fit beside
-    // the pane instead of being covered by it.
-    testWidgets('occupiedWidth follows the pane open, resize and close',
+    // canvas) lean on: the host publishes the settled strip the pane claims
+    // from the screen's right edge — but only when the device that opened the
+    // pane (its avoidRect, defaulting to the opener's own box) would
+    // otherwise end up underneath it. A pane opened for something in plain
+    // view must not move the page at all.
+
+    /// At the test surface's 800 width, a 380-wide pane's strip starts at
+    /// 800 - 380 - 2*margin = 396. This rect reaches under it.
+    const coveredRect = Rect.fromLTWH(700, 100, 60, 60);
+
+    testWidgets('a pane opened for a device in plain view claims no strip',
         (tester) async {
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          width: 380,
+          builder: (_) => demoPane(),
+        ),
+      ));
+      // The 'open' button sits against the left edge, and its box is the
+      // default avoidRect — nowhere near the pane.
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SidePane), findsOneWidget);
+      expect(SidePaneHost.occupiedWidth.value, 0,
+          reason: 'nothing the operator tapped is covered — the page must '
+              'not move');
+
+      closeSidePane();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('occupiedWidth claims the strip for a covered device, '
+        'follows resize and releases on close', (tester) async {
       expect(SidePaneHost.occupiedWidth.value, 0);
 
       await tester.pumpWidget(host(
@@ -214,24 +244,16 @@ void main() {
           id: 'a',
           width: 380,
           resizable: true,
+          avoidRect: coveredRect,
           builder: (_) => demoPane(),
         ),
       ));
       await tester.tap(find.text('open'));
-      // Mid-slide the intrusion is partial — the inset must move WITH the
-      // pane, not jump ahead of it. (First pump mounts the shell and starts
-      // its ticker; the second is the mid-slide frame.)
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 110));
-      final midway = SidePaneHost.occupiedWidth.value;
-      expect(midway, greaterThan(0));
-      expect(midway, lessThan(380 + 2 * SidePaneDefaults.margin));
-
       await tester.pumpAndSettle();
       expect(
           SidePaneHost.occupiedWidth.value, 380 + 2 * SidePaneDefaults.margin);
 
-      // The drag handle moves the pane's left edge; the occupation follows.
+      // The drag handle moves the pane's left edge; the claim follows.
       final pane = tester.getRect(find.byType(SidePane));
       final gesture =
           await tester.startGesture(Offset(pane.left + 5, pane.center.dy));
@@ -249,8 +271,78 @@ void main() {
       expect(SidePaneHost.occupiedWidth.value, 0);
     });
 
-    testWidgets('SidePaneInset yields the pane strip and takes it back',
+    testWidgets('widening the pane over the device claims the strip then',
         (tester) async {
+      // right = 360 clears the 380-wide pane's strip (starts at 396) but not
+      // a 460-wide one (starts at 316).
+      const nearRect = Rect.fromLTWH(300, 100, 60, 60);
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          width: 380,
+          resizable: true,
+          avoidRect: nearRect,
+          builder: (_) => demoPane(),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(SidePaneHost.occupiedWidth.value, 0);
+
+      final pane = tester.getRect(find.byType(SidePane));
+      final gesture =
+          await tester.startGesture(Offset(pane.left + 5, pane.center.dy));
+      for (var i = 0; i < 4; i++) {
+        await gesture.moveBy(const Offset(-20, 0));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(
+          SidePaneHost.occupiedWidth.value, 460 + 2 * SidePaneDefaults.margin,
+          reason: 'the wider pane now covers the device — the page yields');
+
+      closeSidePane();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a claimed strip rides across a swap to another pane',
+        (tester) async {
+      var next = 0;
+      await tester.pumpWidget(host(
+        onOpen: (context) {
+          next++;
+          showSidePane(
+            context: context,
+            id: 'device-$next',
+            width: 380,
+            // The first device is covered; the second is in plain view.
+            avoidRect: next == 1 ? coveredRect : const Rect.fromLTWH(60, 100, 60, 60),
+            builder: (_) => demoPane(title: 'DEV-$next'),
+          );
+        },
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(
+          SidePaneHost.occupiedWidth.value, 380 + 2 * SidePaneDefaults.margin);
+
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(
+          SidePaneHost.occupiedWidth.value, 380 + 2 * SidePaneDefaults.margin,
+          reason: 'once yielded, the strip stays yielded for the life of the '
+              'pane — swapping devices must not bounce the page in and out');
+
+      closeSidePane();
+      await tester.pumpAndSettle();
+      expect(SidePaneHost.occupiedWidth.value, 0);
+    });
+
+    testWidgets(
+        'SidePaneInset yields the strip in one layout pass, glides the '
+        'appearance, and takes the strip back', (tester) async {
       const contentKey = Key('inset-content');
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -271,6 +363,7 @@ void main() {
                       context: context,
                       id: 'a',
                       width: 380,
+                      avoidRect: coveredRect,
                       builder: (_) => demoPane(),
                     ),
                     child: const Text('open'),
@@ -282,11 +375,26 @@ void main() {
         ),
       ));
       final full = tester.getSize(find.byKey(contentKey)).width;
+      final insetWidth = full - 380 - 2 * SidePaneDefaults.margin;
 
       await tester.tap(find.text('open'));
+      // Frame 1 mounts the shell and publishes the claim at frame's end;
+      // frame 2 starts the glide.
+      await tester.pump();
+      await tester.pump();
+      expect(tester.getSize(find.byKey(contentKey)).width, insetWidth,
+          reason: 'the pad lands in a single layout pass — re-laying the '
+              'page out per animation frame is what made the glide stutter');
+      // ...while the APPEARANCE (layout × paint transform) glides from the
+      // full width down to the inset one alongside the pane's slide.
+      await tester.pump(const Duration(milliseconds: 110));
+      final midway = tester.getRect(find.byKey(contentKey)).width;
+      expect(midway, greaterThan(insetWidth));
+      expect(midway, lessThan(full));
+
       await tester.pumpAndSettle();
       final inset = tester.getRect(find.byKey(contentKey));
-      expect(inset.width, full - 380 - 2 * SidePaneDefaults.margin);
+      expect(inset.width, insetWidth);
       expect(inset.right, lessThan(tester.getRect(find.byType(SidePane)).left),
           reason: 'the content ends with daylight before the pane begins');
 
@@ -294,6 +402,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.getSize(find.byKey(contentKey)).width, full,
           reason: 'the strip is a loan — content gets it back on close');
+      expect(tester.getRect(find.byKey(contentKey)).width, full,
+          reason: 'and the glide ends at identity — no transform left over');
     });
   });
 
