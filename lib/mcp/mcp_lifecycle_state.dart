@@ -2,9 +2,9 @@ import 'dart:async';
 
 /// Encapsulates mutable state for MCP lifecycle providers.
 ///
-/// Replaces module-level variables (`_activeStateReader`, `_reconnectTimer`,
-/// `_toggleListenerSetUp`) that were duplicated in both `chat.dart` and
-/// `mcp_bridge.dart`. Each lifecycle provider owns one instance.
+/// Replaces module-level variables (`_activeStateReader`, `_reconnectTimer`)
+/// that were duplicated in both `chat.dart` and `mcp_bridge.dart`. Each
+/// lifecycle provider owns one instance.
 class McpLifecycleState {
   /// The active state reader for the current session.
   ///
@@ -14,9 +14,6 @@ class McpLifecycleState {
 
   /// Debounce timer for toggle-change-triggered reconnects.
   Timer? reconnectTimer;
-
-  /// Guard to set up the toggle change subscription only once.
-  bool toggleListenerSetUp = false;
 
   /// Disposes the active state reader and nulls the reference.
   void disposeReader() {
@@ -30,10 +27,9 @@ class McpLifecycleState {
     reconnectTimer = null;
   }
 
-  /// Cleans up all state: disposes reader, cancels timer, resets listener guard.
+  /// Cleans up all state: disposes reader and cancels the timer.
   void dispose() {
     disposeReader();
     cancelTimer();
-    toggleListenerSetUp = false;
   }
 }

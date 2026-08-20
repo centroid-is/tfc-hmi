@@ -15,3 +15,11 @@ Future<Preferences> preferences(Ref ref) async {
 
   return await Preferences.create(db: db, localCache: localCache);
 }
+
+/// Device-local preferences that never touch the shared database.
+///
+/// Use this for per-station settings (e.g. the MCP server config) that
+/// must not be shared between HMI instances pointed at the same Postgres.
+final localPreferencesProvider = Provider<PreferencesApi>(
+  (ref) => SharedPreferencesWrapper(SharedPreferencesAsync()),
+);

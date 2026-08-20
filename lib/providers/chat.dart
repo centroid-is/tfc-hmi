@@ -1069,37 +1069,36 @@ final chatLifecycleProvider = Provider<void>((ref) {
     ref.onDispose(() => proposalSub.cancel());
   }
 
-  // Watch toggle preference changes for debounced reconnect
-  ref.listen<AsyncValue<Preferences>>(preferencesProvider, (prev, next) {
-    final prefs = next.valueOrNull;
-    if (prefs == null) return;
-    if (_chatLifecycle.toggleListenerSetUp) return;
-    _chatLifecycle.toggleListenerSetUp = true;
+  // Watch config changes (toggles) for debounced reconnect. The config
+  // lives in device-local preferences, so changes arrive through
+  // mcpConfigProvider (invalidated on every save), not through the
+  // database-backed preferences change stream.
+  ref.listen<AsyncValue<McpConfig>>(mcpConfigProvider, (prev, next) {
+    if (next is AsyncLoading) return;
+    final config = next.valueOrNull;
+    if (config == null) return;
+    if (prev?.valueOrNull == config) return;
+    if (!ref.read(chatVisibleProvider)) return;
 
-    final sub = prefs.onPreferencesChanged.listen((key) {
-      if (key != McpConfig.kPrefKey) return;
-      if (!ref.read(chatVisibleProvider)) return;
+    final bridge = ref.read(mcpBridgeProvider);
+    if (bridge.currentState.connectionState != McpConnectionState.connected) {
+      return;
+    }
 
-      final bridge = ref.read(mcpBridgeProvider);
-      if (bridge.currentState.connectionState != McpConnectionState.connected) {
-        return;
-      }
+    // Debounce: cancel previous timer, set new one
+    _chatLifecycle.cancelTimer();
+    _chatLifecycle.reconnectTimer =
+        Timer(const Duration(milliseconds: 800), () async {
+      try {
+        // Abort if chat was closed while the timer was pending.
+        if (!ref.read(chatVisibleProvider)) return;
 
-      // Debounce: cancel previous timer, set new one
-      _chatLifecycle.cancelTimer();
-      _chatLifecycle.reconnectTimer =
-          Timer(const Duration(milliseconds: 800), () async {
-        try {
-          // Abort if chat was closed while the timer was pending.
-          if (!ref.read(chatVisibleProvider)) return;
+        await bridge.disconnect();
 
-          await bridge.disconnect();
+        // Re-check after async gap.
+        if (!ref.read(chatVisibleProvider)) return;
 
-          // Re-check after async gap.
-          if (!ref.read(chatVisibleProvider)) return;
-
-          ref.invalidate(mcpConfigProvider);
-          final freshConfig = await ref.read(mcpConfigProvider.future);
+        final freshConfig = await ref.read(mcpConfigProvider.future);
 
           final stateMan = await ref.read(stateManProvider.future);
           final alarmMan = await ref.read(alarmManProvider.future);
@@ -1145,11 +1144,9 @@ final chatLifecycleProvider = Provider<void>((ref) {
           io.stderr.writeln('Toggle reconnect failed: $e');
         }
       });
-    });
+  });
 
-    ref.onDispose(() {
-      sub.cancel();
-      _chatLifecycle.dispose();
-    });
+  ref.onDispose(() {
+    _chatLifecycle.dispose();
   });
 });

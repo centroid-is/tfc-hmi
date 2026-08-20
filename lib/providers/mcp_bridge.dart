@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'package:tfc_dart/core/alarm.dart' show AlarmMan;
 import 'package:tfc_dart/core/state_man.dart' show StateMan;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
@@ -16,6 +15,7 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         McpToolToggles,
         NodeBrowser,
         StateReader,
+        migrateMcpConfigToDeviceLocal,
         readMcpConfigFromPreferences;
 
 import '../core/feature_flags.dart';
@@ -27,7 +27,7 @@ import '../mcp/state_man_state_reader.dart';
 import 'alarm.dart';
 import 'database.dart' show databaseProvider;
 import 'plc.dart' show plcCodeIndexProvider;
-import 'preferences.dart' show preferencesProvider;
+import 'preferences.dart' show localPreferencesProvider, preferencesProvider;
 import 'state_man.dart';
 
 export '../mcp/mcp_bridge_notifier.dart'
@@ -89,10 +89,30 @@ bool isMcpChatAvailable() {
 /// Mutable state for the MCP server lifecycle provider.
 final _serverLifecycle = McpLifecycleState();
 
+/// One-time (per run) migration of the MCP config out of the shared
+/// database-backed preferences into device-local preferences.
+///
+/// The MCP config is per-station: whether this device runs the MCP server
+/// must not be decided by another HMI writing to the same database.
+final mcpConfigMigrationProvider = FutureProvider<void>((ref) async {
+  final local = ref.watch(localPreferencesProvider);
+  try {
+    final shared = await ref.read(preferencesProvider.future);
+    await migrateMcpConfigToDeviceLocal(shared: shared, local: local);
+  } catch (e) {
+    // Shared preferences unavailable (e.g. no database) — the local
+    // store is authoritative anyway; migration will retry next run.
+    io.stderr.writeln('MCP config migration skipped: $e');
+  }
+});
+
 /// Provider for the consolidated MCP config (single JSON blob).
+///
+/// Stored in device-local preferences only — never in the database.
 final mcpConfigProvider = FutureProvider<McpConfig>((ref) async {
-  final prefs = await ref.watch(preferencesProvider.future);
-  return await readMcpConfigFromPreferences(prefs);
+  await ref.watch(mcpConfigMigrationProvider.future);
+  final local = ref.watch(localPreferencesProvider);
+  return await readMcpConfigFromPreferences(local);
 });
 
 /// Provider for the MCP server enabled preference.
@@ -228,40 +248,40 @@ final mcpServerLifecycleProvider = Provider<void>((ref) {
     }
   });
 
-  // Watch config preference changes for debounced server restart.
-  // Listens for changes to the consolidated McpConfig key.
-  ref.listen<AsyncValue<Preferences>>(preferencesProvider, (prev, next) {
-    final prefs = next.valueOrNull;
-    if (prefs == null) return;
-    if (_serverLifecycle.toggleListenerSetUp) return;
-    _serverLifecycle.toggleListenerSetUp = true;
+  // Watch config changes (port/toggles) for debounced server restart.
+  // The config lives in device-local preferences, so changes arrive
+  // through mcpConfigProvider (invalidated on every save), not through
+  // the database-backed preferences change stream.
+  ref.listen<AsyncValue<McpConfig>>(mcpConfigProvider, (prev, next) {
+    if (next is AsyncLoading) return;
+    final config = next.valueOrNull;
+    if (config == null) return;
 
-    final sub = prefs.onPreferencesChanged.listen((key) {
-      if (key != McpConfig.kPrefKey) return;
+    // AsyncLoading retains the previous value, so this compares the new
+    // config against the one the server was last started with.
+    if (prev?.valueOrNull == config) return;
 
-      final bridge = ref.read(mcpBridgeProvider);
-      if (!bridge.isRunning) return;
+    final bridge = ref.read(mcpBridgeProvider);
+    if (!bridge.isRunning) return;
+    // Enable/disable transitions are handled by the listener above.
+    if (!config.serverEnabled) return;
 
-      _serverLifecycle.cancelTimer();
-      _serverLifecycle.reconnectTimer =
-          Timer(const Duration(milliseconds: 800), () async {
-        try {
-          await bridge.stopSseServer();
-          _serverLifecycle.disposeReader();
+    _serverLifecycle.cancelTimer();
+    _serverLifecycle.reconnectTimer =
+        Timer(const Duration(milliseconds: 800), () async {
+      try {
+        await bridge.stopSseServer();
+        _serverLifecycle.disposeReader();
 
-          // Re-read config to get latest toggles/port.
-          ref.invalidate(mcpConfigProvider);
-          final port = await ref.read(mcpPortProvider.future);
-          await _startServer(bridge, port, ref: ref);
-        } catch (e) {
-          io.stderr.writeln('Toggle reconnect failed: $e');
-        }
-      });
+        final port = await ref.read(mcpPortProvider.future);
+        await _startServer(bridge, port, ref: ref);
+      } catch (e) {
+        io.stderr.writeln('Toggle reconnect failed: $e');
+      }
     });
+  });
 
-    ref.onDispose(() {
-      sub.cancel();
-      _serverLifecycle.dispose();
-    });
+  ref.onDispose(() {
+    _serverLifecycle.dispose();
   });
 });
