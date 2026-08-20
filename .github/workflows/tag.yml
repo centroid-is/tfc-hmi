@@ -111,6 +111,12 @@ jobs:
       - name: Generate SHA256SUMS.txt
         working-directory: release-artifacts
         run: |
+          # Canonical asset name the manager looks for (msix:create emits
+          # centroidx.msix; the manager still accepts the old name when
+          # rolling back to releases published before this rename).
+          for f in *.msix; do
+            [ "$f" = "centroidx_windows_amd64.msix" ] || mv "$f" centroidx_windows_amd64.msix
+          done
           echo "Artifacts to checksum:"
           ls -la
           sha256sum centroidx-manager_* centroidx_darwin_arm64.dmg *.msix > SHA256SUMS.txt

@@ -136,6 +136,13 @@ func installDarwin(runner CommandRunner, assetPath string) error {
 	// Always detach on exit, even if a later step fails.
 	defer runner.Run("hdiutil", "detach", mountPoint, "-quiet") //nolint:errcheck
 
+	// Remove the old bundle first: cp -R onto an existing .app merges into it,
+	// and files left over from the previous version break the new bundle's
+	// code signature — macOS kills a hardened-runtime app whose seal no longer
+	// matches its contents. Non-fatal so a fresh install (nothing to remove)
+	// proceeds.
+	runner.Run("rm", "-rf", "/Applications/CentroidX.app") //nolint:errcheck
+
 	_, err = runner.Run("cp", "-R", mountPoint+"/CentroidX.app", "/Applications/")
 	if err != nil {
 		return &commandError{op: "cp .app failed", cause: err}

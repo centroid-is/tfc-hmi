@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
 import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
+import 'package:tfc/core/update_channel.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
 import 'package:tfc/models/menu_item.dart';
@@ -233,11 +234,20 @@ Future<void> _startApp([bool debugMode = false]) async {
       if (item.path != null && item.path != '/advanced') item.path!,
   };
 
+  // The channel is re-read on every check, so a change in Preferences takes
+  // effect without a restart. buildGitSha comes from CI (--dart-define) and
+  // lets the latest channel tell whether the running main build is stale.
+  GitHubReleaseStore buildReleaseStore() => GitHubReleaseStore(
+        owner: 'centroid-is',
+        repo: 'tfc-hmi',
+        channel: readUpdateChannel,
+        buildSha: buildGitSha,
+      );
   final upgrader = Upgrader(
     storeController: UpgraderStoreController(
-      onWindows: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
-      onLinux: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
-      onMacOS: () => GitHubReleaseStore(owner: 'centroid-is', repo: 'tfc-hmi'),
+      onWindows: buildReleaseStore,
+      onLinux: buildReleaseStore,
+      onMacOS: buildReleaseStore,
     ),
     debugLogging: true,
   );
@@ -247,14 +257,19 @@ Future<void> _startApp([bool debugMode = false]) async {
       upgrader: upgrader,
       onUpdate: () {
         final targetVersion = upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
-        unawaited(
-          managerLauncher
-              .launchForUpdate(
-                version: targetVersion,
-                flutterPid: pid,
-              )
-              .then((_) => exit(0)),
-        );
+        // The update itself is done by forking the bundled centroidx-manager,
+        // which waits for this process to exit, installs, and relaunches.
+        unawaited(() async {
+          final channel = await readUpdateChannel();
+          await managerLauncher.launchForUpdate(
+            // On the latest channel the announced version is a date stand-in
+            // that matches no tag — let the manager resolve the channel head.
+            version: channel == updateChannelLatest ? null : targetVersion,
+            channel: channel,
+            flutterPid: pid,
+          );
+          exit(0);
+        }());
         return false;
       },
       child: MyApp(

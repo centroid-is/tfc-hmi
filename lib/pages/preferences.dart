@@ -14,6 +14,8 @@ class PreferencesPage extends StatelessWidget {
           children: [
             const AppearanceSection(),
             const SizedBox(height: 16),
+            const UpdateSection(),
+            const SizedBox(height: 16),
             const DatabaseConfigWidget(),
             const SizedBox(height: 16),
             const McpServerSection(),

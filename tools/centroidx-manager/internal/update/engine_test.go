@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +143,7 @@ func TestEngine_FetchReleaseInfo(t *testing.T) {
 
 	eng := NewEngine(client, inst)
 
-	info, err := eng.FetchReleaseInfo(context.Background(), "")
+	info, err := eng.FetchReleaseInfo(context.Background(), "", ChannelStable)
 	if err != nil {
 		t.Fatalf("FetchReleaseInfo returned error: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestEngine_FetchReleaseInfo_SpecificVersion(t *testing.T) {
 
 	eng := NewEngine(client, inst)
 
-	info, err := eng.FetchReleaseInfo(context.Background(), "2026.3.6")
+	info, err := eng.FetchReleaseInfo(context.Background(), "2026.3.6", ChannelStable)
 	if err != nil {
 		t.Fatalf("FetchReleaseInfo returned error: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestEngine_FetchReleaseInfo_VersionNotFound(t *testing.T) {
 
 	eng := NewEngine(client, inst)
 
-	_, err := eng.FetchReleaseInfo(context.Background(), "9999.1.1")
+	_, err := eng.FetchReleaseInfo(context.Background(), "9999.1.1", ChannelStable)
 	if err == nil {
 		t.Fatal("expected error for non-existent version, got nil")
 	}
@@ -590,5 +591,238 @@ func TestEngine_ListAllReleases_NetworkError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "list releases") {
 		t.Errorf("expected error to contain 'list releases', got: %v", err)
+	}
+}
+
+// ---- channel resolution ----------------------------------------------------
+
+// buildChannelRelease creates a release with explicit prerelease/draft flags
+// and publish time, for latest-channel resolution tests.
+func buildChannelRelease(tag string, prerelease, draft bool, publishedAt time.Time, assets []*gogithub.ReleaseAsset) *gogithub.RepositoryRelease {
+	return &gogithub.RepositoryRelease{
+		TagName:     gogithub.Ptr(tag),
+		Body:        gogithub.Ptr("notes for " + tag),
+		Prerelease:  gogithub.Ptr(prerelease),
+		Draft:       gogithub.Ptr(draft),
+		PublishedAt: &gogithub.Timestamp{Time: publishedAt},
+		Assets:      assets,
+	}
+}
+
+func platformAssets() []*gogithub.ReleaseAsset {
+	name := selectPlatformAssetName()
+	return []*gogithub.ReleaseAsset{buildAsset(name, "https://example.com/"+name)}
+}
+
+func TestEngine_FetchReleaseInfo_LatestChannel_PicksNewestPublished(t *testing.T) {
+	older := time.Date(2026, 3, 26, 10, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("v2026.3.26", false, false, older, platformAssets()),
+			// Rolling prerelease: tag does not parse as a version on purpose.
+			buildChannelRelease("main-latest", true, false, newer, platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	info, err := eng.FetchReleaseInfo(context.Background(), "", ChannelLatest)
+	if err != nil {
+		t.Fatalf("FetchReleaseInfo(latest) returned error: %v", err)
+	}
+	if info.Version != "main-latest" {
+		t.Errorf("expected main-latest prerelease to win on latest channel, got %q", info.Version)
+	}
+}
+
+func TestEngine_FetchReleaseInfo_LatestChannel_StableCanWin(t *testing.T) {
+	// A stable release published after the last main build wins on the latest
+	// channel too — "latest" means newest published, not "always prerelease".
+	older := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("main-latest", true, false, older, platformAssets()),
+			buildChannelRelease("v2026.8.20", false, false, newer, platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	info, err := eng.FetchReleaseInfo(context.Background(), "", ChannelLatest)
+	if err != nil {
+		t.Fatalf("FetchReleaseInfo(latest) returned error: %v", err)
+	}
+	if info.Version != "2026.8.20" {
+		t.Errorf("expected newest-published stable release, got %q", info.Version)
+	}
+}
+
+func TestEngine_FetchReleaseInfo_LatestChannel_SkipsDraftsAndAssetless(t *testing.T) {
+	oldest := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("draft-tag", true, true, newest, platformAssets()),
+			buildChannelRelease("main-latest", true, false, middle, nil), // no platform asset
+			buildChannelRelease("v2026.8.18", false, false, oldest, platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	info, err := eng.FetchReleaseInfo(context.Background(), "", ChannelLatest)
+	if err != nil {
+		t.Fatalf("FetchReleaseInfo(latest) returned error: %v", err)
+	}
+	if info.Version != "2026.8.18" {
+		t.Errorf("expected drafts and asset-less releases skipped, got %q", info.Version)
+	}
+}
+
+func TestEngine_FetchReleaseInfo_LatestChannel_NoInstallableRelease(t *testing.T) {
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), nil),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	_, err := eng.FetchReleaseInfo(context.Background(), "", ChannelLatest)
+	if err == nil {
+		t.Fatal("expected error when no release has an installable asset, got nil")
+	}
+	if !strings.Contains(err.Error(), "latest channel") {
+		t.Errorf("expected error to mention the latest channel, got: %v", err)
+	}
+}
+
+func TestEngine_FetchReleaseInfo_StableChannel_IgnoresPrereleases(t *testing.T) {
+	// Stable resolution goes through GetLatestRelease, which GitHub defines as
+	// excluding prereleases — the prerelease in the list must not leak through.
+	stable := buildChannelRelease("v2026.3.26", false, false, time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC), platformAssets())
+	client := &mockReleasesClient{
+		latest: stable,
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), platformAssets()),
+			stable,
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	for _, channel := range []string{ChannelStable, ""} {
+		info, err := eng.FetchReleaseInfo(context.Background(), "", channel)
+		if err != nil {
+			t.Fatalf("FetchReleaseInfo(%q) returned error: %v", channel, err)
+		}
+		if info.Version != "2026.3.26" {
+			t.Errorf("channel %q: expected stable 2026.3.26, got %q", channel, info.Version)
+		}
+	}
+}
+
+func TestEngine_FetchReleaseInfo_UnknownChannel(t *testing.T) {
+	eng := NewEngine(&mockReleasesClient{}, &mockInstaller{})
+
+	_, err := eng.FetchReleaseInfo(context.Background(), "", "nightly")
+	if err == nil {
+		t.Fatal("expected error for unknown channel, got nil")
+	}
+	if !strings.Contains(err.Error(), "nightly") {
+		t.Errorf("expected error to name the bad channel, got: %v", err)
+	}
+}
+
+func TestValidChannel(t *testing.T) {
+	for _, valid := range []string{"", ChannelStable, ChannelLatest} {
+		if !ValidChannel(valid) {
+			t.Errorf("expected %q to be a valid channel", valid)
+		}
+	}
+	for _, invalid := range []string{"nightly", "Stable", "LATEST", "main"} {
+		if ValidChannel(invalid) {
+			t.Errorf("expected %q to be rejected", invalid)
+		}
+	}
+}
+
+// ---- asset candidates ------------------------------------------------------
+
+func TestSelectAssetByNames_PriorityOrder(t *testing.T) {
+	canonical := buildAsset("centroidx_windows_amd64.msix", "https://example.com/canonical")
+	legacy := buildAsset("centroidx.msix", "https://example.com/legacy")
+	candidates := []string{"centroidx_windows_amd64.msix", "centroidx.msix"}
+
+	// Both present: canonical wins.
+	got := selectAssetByNames([]*gogithub.ReleaseAsset{legacy, canonical}, candidates)
+	if got == nil || got.GetName() != "centroidx_windows_amd64.msix" {
+		t.Errorf("expected canonical asset to win, got %v", got.GetName())
+	}
+
+	// Only legacy present (releases up to v2026.3.26): legacy matches.
+	got = selectAssetByNames([]*gogithub.ReleaseAsset{legacy}, candidates)
+	if got == nil || got.GetName() != "centroidx.msix" {
+		t.Error("expected legacy asset to match when canonical is absent")
+	}
+
+	// Neither present.
+	if selectAssetByNames([]*gogithub.ReleaseAsset{buildAsset("other.zip", "u")}, candidates) != nil {
+		t.Error("expected nil when no candidate matches")
+	}
+}
+
+func TestPlatformAssetCandidates(t *testing.T) {
+	candidates := platformAssetCandidates()
+	if len(candidates) == 0 {
+		t.Fatal("expected at least one candidate asset name")
+	}
+	if candidates[0] != selectPlatformAssetName() {
+		t.Errorf("expected canonical name first, got %q", candidates[0])
+	}
+	if runtime.GOOS == "windows" {
+		found := false
+		for _, c := range candidates {
+			if c == "centroidx.msix" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected legacy centroidx.msix candidate on windows")
+		}
+	}
+}
+
+// ---- TestEngine_Update_LatestChannel ---------------------------------------
+
+func TestEngine_Update_LatestChannel(t *testing.T) {
+	assetContent := "fake main-latest build content"
+	assetFilename := platformAssetName()
+
+	srv := newEngineTestServer(t, assetContent, assetFilename, "")
+	defer srv.Close()
+
+	assets := []*gogithub.ReleaseAsset{
+		buildAsset(assetFilename, srv.URL+"/asset"),
+		buildAsset("SHA256SUMS.txt", srv.URL+"/SHA256SUMS.txt"),
+	}
+	prerelease := buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), assets)
+
+	// latest is deliberately nil: if the stable path were taken by mistake the
+	// update would fail instead of silently passing.
+	client := &mockReleasesClient{releases: []*gogithub.RepositoryRelease{prerelease}}
+	inst := &mockInstaller{}
+	eng := NewEngine(client, inst)
+
+	err := eng.Update(context.Background(), UpdateOptions{
+		Channel: ChannelLatest,
+		DestDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Update on latest channel returned error: %v", err)
+	}
+	if len(inst.installed) == 0 {
+		t.Fatal("expected Install to be called for the prerelease")
+	}
+	if !inst.launchedApp {
+		t.Error("expected LaunchApp after installing the prerelease")
 	}
 }

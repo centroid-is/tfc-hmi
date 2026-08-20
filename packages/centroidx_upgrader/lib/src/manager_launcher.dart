@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'github_release_store.dart' show kUpdateChannelStable;
+
 /// Typedef for process starting — injectable for testing.
 typedef ProcessStarter = Future<Process> Function(
   String executable,
@@ -131,10 +133,15 @@ class ManagerLauncher {
   ///
   /// Returns the PID of the spawned manager process.
   ///
-  /// [version] — target version to install (passed as `--version=<v>`)
+  /// [version] — target version to install (passed as `--version=<v>`).
+  /// Omit it on the latest channel: prerelease builds have no version tag,
+  /// so the manager resolves the newest release on the channel itself.
+  /// [channel] — release channel, `stable` or `latest` (passed as
+  /// `--channel=<c>`).
   /// [flutterPid] — PID of the current Flutter process (passed as `--wait-pid=<pid>`)
   Future<int> launchForUpdate({
-    required String version,
+    String? version,
+    String channel = kUpdateChannelStable,
     int? flutterPid,
   }) async {
     await ensureExtracted();
@@ -147,7 +154,8 @@ class ManagerLauncher {
       path,
       [
         '--update',
-        '--version=$version',
+        '--channel=$channel',
+        if (version != null && version.isNotEmpty) '--version=$version',
         '--wait-pid=$effectivePid',
       ],
       mode: ProcessStartMode.detached,

@@ -18,6 +18,20 @@ import (
 	"github.com/centroid-is/centroidx-manager/internal/platform"
 )
 
+// Release channels. Stable follows tagged releases ("latest" in GitHub
+// Releases terms); Latest additionally follows prereleases such as the
+// rolling `main-latest` build published on every merge to main.
+const (
+	ChannelStable = "stable"
+	ChannelLatest = "latest"
+)
+
+// ValidChannel reports whether s names a known release channel.
+// The empty string is valid and means ChannelStable.
+func ValidChannel(s string) bool {
+	return s == "" || s == ChannelStable || s == ChannelLatest
+}
+
 // ReleaseInfo holds metadata about a GitHub release, returned by FetchReleaseInfo.
 type ReleaseInfo struct {
 	Version     string
@@ -28,8 +42,12 @@ type ReleaseInfo struct {
 
 // UpdateOptions controls the behaviour of Engine.Update.
 type UpdateOptions struct {
-	// Version to install. Empty means latest.
+	// Version to install. Empty means the newest on Channel.
 	Version string
+
+	// Channel selects which releases are considered when Version is empty:
+	// ChannelStable (default) or ChannelLatest.
+	Channel string
 
 	// WaitPID, if > 0, is the process ID to wait for before installing.
 	WaitPID int
@@ -63,10 +81,23 @@ func NewEngine(client github.ReleasesClient, installer platform.Installer) *Engi
 }
 
 // FetchReleaseInfo returns metadata for the requested release.
-// If version is empty the latest release is returned.
-// If version is specified, ListReleases is called and the matching tag is found.
-func (e *Engine) FetchReleaseInfo(ctx context.Context, version string) (*ReleaseInfo, error) {
+//
+// If version is non-empty, ListReleases is called and the matching tag is
+// found regardless of channel. With an empty version the channel decides:
+// ChannelStable (or "") returns the latest tagged release, ChannelLatest
+// returns the most recently published release — prereleases included — that
+// carries an installable asset for this platform. Prerelease tags like
+// `main-latest` do not parse as versions, so the latest channel orders by
+// publish date instead of semver.
+func (e *Engine) FetchReleaseInfo(ctx context.Context, version, channel string) (*ReleaseInfo, error) {
+	if !ValidChannel(channel) {
+		return nil, fmt.Errorf("fetch release: unknown channel %q (expected %q or %q)", channel, ChannelStable, ChannelLatest)
+	}
+
 	if version == "" {
+		if channel == ChannelLatest {
+			return e.fetchLatestChannelRelease(ctx)
+		}
 		release, err := e.client.GetLatestRelease(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("fetch release: network error: %w", err)
@@ -92,6 +123,35 @@ func (e *Engine) FetchReleaseInfo(ctx context.Context, version string) (*Release
 	return nil, fmt.Errorf("fetch release: version %q not found in GitHub Releases", version)
 }
 
+// fetchLatestChannelRelease picks the newest-published non-draft release that
+// has an installable asset for this platform, prereleases included.
+func (e *Engine) fetchLatestChannelRelease(ctx context.Context) (*ReleaseInfo, error) {
+	releases, err := e.client.ListReleases(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetch release: network error: %w", err)
+	}
+
+	var best *gogithub.RepositoryRelease
+	for _, r := range releases {
+		if r.GetDraft() {
+			continue
+		}
+		if selectAssetByNames(r.Assets, platformAssetCandidates()) == nil {
+			continue
+		}
+		if best == nil || r.GetPublishedAt().After(best.GetPublishedAt().Time) {
+			best = r
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf(
+			"fetch release: no release on the latest channel has an asset for platform %s/%s",
+			runtime.GOOS, runtime.GOARCH,
+		)
+	}
+	return releaseToInfo(best), nil
+}
+
 // ListAllReleases returns all releases from GitHub sorted newest-first using
 // CalVer semver comparison. Releases with unparseable version tags are silently
 // skipped. Returns an empty (non-nil) slice when there are no parseable releases.
@@ -108,7 +168,7 @@ func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
 		info    ReleaseInfo
 	}
 
-	targetAsset := selectPlatformAssetName()
+	targetAssets := platformAssetCandidates()
 	result := make([]tagged, 0, len(releases))
 	for _, r := range releases {
 		info := releaseToInfo(r)
@@ -118,7 +178,7 @@ func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
 			continue
 		}
 		// Only include releases that have a downloadable asset for this platform.
-		if !releaseHasAsset(info.Assets, targetAsset) {
+		if selectAssetByNames(info.Assets, targetAssets) == nil {
 			continue
 		}
 		result = append(result, tagged{version: v, info: *info})
@@ -136,14 +196,17 @@ func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
 	return out, nil
 }
 
-// releaseHasAsset checks if a release contains an asset with the given name.
-func releaseHasAsset(assets []*gogithub.ReleaseAsset, name string) bool {
-	for _, a := range assets {
-		if a.GetName() == name {
-			return true
+// selectAssetByNames returns the first asset whose name matches any of the
+// candidate names, in candidate priority order. Returns nil when none match.
+func selectAssetByNames(assets []*gogithub.ReleaseAsset, candidates []string) *gogithub.ReleaseAsset {
+	for _, name := range candidates {
+		for _, a := range assets {
+			if a.GetName() == name {
+				return a
+			}
 		}
 	}
-	return false
+	return nil
 }
 
 // releaseToInfo converts a GitHub API release to a ReleaseInfo.
@@ -164,23 +227,20 @@ func releaseToInfo(r *gogithub.RepositoryRelease) *ReleaseInfo {
 // from a release's asset list.
 // Returns (platformAsset, checksumAsset, error).
 func (e *Engine) SelectAsset(release *gogithub.RepositoryRelease) (*gogithub.ReleaseAsset, *gogithub.ReleaseAsset, error) {
-	targetName := selectPlatformAssetName()
+	candidates := platformAssetCandidates()
 
-	var platformAsset, checksumAsset *gogithub.ReleaseAsset
+	platformAsset := selectAssetByNames(release.Assets, candidates)
+	var checksumAsset *gogithub.ReleaseAsset
 	for _, a := range release.Assets {
-		name := a.GetName()
-		if name == targetName {
-			platformAsset = a
-		}
-		if name == "SHA256SUMS.txt" {
+		if a.GetName() == "SHA256SUMS.txt" {
 			checksumAsset = a
 		}
 	}
 
 	if platformAsset == nil {
 		return nil, nil, fmt.Errorf(
-			"select asset: no asset found for platform %s/%s (expected %q)",
-			runtime.GOOS, runtime.GOARCH, targetName,
+			"select asset: no asset found for platform %s/%s (expected one of %q)",
+			runtime.GOOS, runtime.GOARCH, candidates,
 		)
 	}
 	if checksumAsset == nil {
@@ -216,6 +276,19 @@ func selectPlatformAssetName() string {
 	return fmt.Sprintf("centroidx_%s_%s%s", runtime.GOOS, runtime.GOARCH, ext)
 }
 
+// platformAssetCandidates returns asset filenames accepted for this platform,
+// in priority order. The canonical centroidx_{os}_{arch}.{ext} name comes
+// first; legacy names shipped by earlier CI (the msix was published as plain
+// "centroidx.msix" up to v2026.3.26) stay accepted so rollbacks to those
+// releases keep working.
+func platformAssetCandidates() []string {
+	candidates := []string{selectPlatformAssetName()}
+	if runtime.GOOS == "windows" {
+		candidates = append(candidates, "centroidx.msix")
+	}
+	return candidates
+}
+
 // platformExt returns the installer file extension for the current OS.
 func platformExt() string {
 	switch runtime.GOOS {
@@ -240,7 +313,7 @@ func (e *Engine) Update(ctx context.Context, opts UpdateOptions) error {
 	}
 
 	// Step 1: Fetch release info.
-	info, err := e.FetchReleaseInfo(ctx, opts.Version)
+	info, err := e.FetchReleaseInfo(ctx, opts.Version, opts.Channel)
 	if err != nil {
 		// FetchReleaseInfo already wraps with "network error" context.
 		return err

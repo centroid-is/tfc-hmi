@@ -65,7 +65,7 @@ func layoutReleaseNotes(gtx layout.Context, th *material.Theme, info *update.Rel
 		gtx.Constraints.Max.X = gtx.Dp(unit.Dp(500))
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				lbl := material.H5(th, "Update Available: v"+info.Version)
+				lbl := material.H5(th, "Update Available: "+displayVersion(info.Version))
 				lbl.Color = ColorAccent()
 				return lbl.Layout(gtx)
 			}),

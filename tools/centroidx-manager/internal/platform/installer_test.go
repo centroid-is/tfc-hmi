@@ -170,23 +170,24 @@ func (m *mockRunnerSeq) Run(name string, args ...string) ([]byte, error) {
 }
 
 func TestDarwinInstaller_Install(t *testing.T) {
-	// Sequence: hdiutil attach → cp → xattr → hdiutil detach (deferred)
+	// Sequence: hdiutil attach → rm old bundle → cp → xattr → detach (deferred)
 	runner := &mockRunnerSeq{
 		outputs: [][]byte{
 			[]byte(`<string>/Volumes/CentroidX</string>`), // hdiutil output
+			nil, // rm -rf old bundle
 			nil, // cp
 			nil, // xattr
 			nil, // hdiutil detach (deferred)
 		},
-		errors: []error{nil, nil, nil, nil},
+		errors: []error{nil, nil, nil, nil, nil},
 	}
 
 	if err := installDarwin(runner, "/tmp/app.dmg"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(runner.calls) < 3 {
-		t.Fatalf("expected at least 3 calls, got %d: %v", len(runner.calls), runner.calls)
+	if len(runner.calls) < 4 {
+		t.Fatalf("expected at least 4 calls, got %d: %v", len(runner.calls), runner.calls)
 	}
 
 	// Call 0: hdiutil attach
@@ -198,22 +199,32 @@ func TestDarwinInstaller_Install(t *testing.T) {
 		t.Errorf("call 0: expected 'attach', got: %v", call0)
 	}
 
-	// Call 1: cp to /Applications/
+	// Call 1: rm -rf of the old bundle — cp -R onto an existing .app merges
+	// instead of replacing, leaving stale files that break the code signature.
 	call1 := allArgs(runner.calls[1])
-	if !hasArg(call1, "cp") {
-		t.Errorf("call 1: expected 'cp', got: %v", call1)
+	if !hasArg(call1, "rm") {
+		t.Errorf("call 1: expected 'rm', got: %v", call1)
 	}
-	if !hasArgContaining(call1, "/Applications/") {
-		t.Errorf("call 1: expected '/Applications/' in args, got: %v", call1)
+	if !hasArgContaining(call1, "/Applications/CentroidX.app") {
+		t.Errorf("call 1: expected old bundle path in args, got: %v", call1)
 	}
 
-	// Call 2: xattr
+	// Call 2: cp to /Applications/
 	call2 := allArgs(runner.calls[2])
-	if !hasArg(call2, "xattr") {
-		t.Errorf("call 2: expected 'xattr', got: %v", call2)
+	if !hasArg(call2, "cp") {
+		t.Errorf("call 2: expected 'cp', got: %v", call2)
 	}
-	if !hasArgContaining(call2, "com.apple.quarantine") {
-		t.Errorf("call 2: expected 'com.apple.quarantine' in args, got: %v", call2)
+	if !hasArgContaining(call2, "/Applications/") {
+		t.Errorf("call 2: expected '/Applications/' in args, got: %v", call2)
+	}
+
+	// Call 3: xattr
+	call3 := allArgs(runner.calls[3])
+	if !hasArg(call3, "xattr") {
+		t.Errorf("call 3: expected 'xattr', got: %v", call3)
+	}
+	if !hasArgContaining(call3, "com.apple.quarantine") {
+		t.Errorf("call 3: expected 'com.apple.quarantine' in args, got: %v", call3)
 	}
 }
 
@@ -222,13 +233,15 @@ func TestDarwinInstaller_Install_CleanupOnError(t *testing.T) {
 	runner := &mockRunnerSeq{
 		outputs: [][]byte{
 			[]byte(`<string>/Volumes/CentroidX</string>`), // hdiutil attach
+			nil, // rm -rf old bundle
 			nil, // cp (will error)
 			nil, // hdiutil detach (deferred)
 		},
 		errors: []error{
-			nil,                           // hdiutil attach succeeds
+			nil,                                 // hdiutil attach succeeds
+			nil,                                 // rm -rf succeeds
 			errors.New("cp: permission denied"), // cp fails
-			nil,                           // hdiutil detach succeeds
+			nil,                                 // hdiutil detach succeeds
 		},
 	}
 

@@ -131,17 +131,23 @@ jobs:
           codesign --force --sign "$IDENTITY" --timestamp "${{ matrix.artifact_name }}"
           echo "DMG signed"
 
-          # Notarize the DMG
-          xcrun notarytool submit "${{ matrix.artifact_name }}" \
+          # Notarize the DMG. Non-fatal, same policy as macos.yml: notarization
+          # depends on Apple's service and on the team's licence agreements
+          # being current, neither of which a code change can break. The DMG is
+          # still Developer ID signed — it just is not stapled, and macOS shows
+          # a Gatekeeper prompt on first launch.
+          if xcrun notarytool submit "${{ matrix.artifact_name }}" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
-          echo "Notarization complete"
-
-          # Staple the notarization ticket to the DMG
-          xcrun stapler staple "${{ matrix.artifact_name }}"
-          echo "Stapled notarization ticket"
+            --wait; then
+            echo "Notarization complete"
+            # Staple the notarization ticket to the DMG
+            xcrun stapler staple "${{ matrix.artifact_name }}"
+            echo "Stapled notarization ticket"
+          else
+            echo "::warning title=Notarization failed::${{ matrix.artifact_name }} is signed but NOT notarized or stapled. macOS will warn on first launch. Check the Apple Developer team's agreements and the notary service status."
+          fi
 
           # Cleanup keychain
           security delete-keychain "$KEYCHAIN_PATH"

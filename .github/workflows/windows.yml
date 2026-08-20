@@ -28,6 +28,10 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - name: Resolve build sha
+        shell: bash
+        run: echo "BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -61,7 +65,7 @@ jobs:
 
       - name: Build Windows
         working-directory: centroid-hmi
-        run: flutter build windows --release
+        run: flutter build windows --release --dart-define=GIT_SHA=${{ env.BUILD_SHA }}
 
       - name: Write certificate PFX from secret
         shell: powershell
@@ -72,7 +76,9 @@ jobs:
       - name: Build MSIX (sideload, signed)
         working-directory: centroid-hmi
         shell: powershell
-        run: echo "n" | dart run msix:create --certificate-password "${{ secrets.MSIX_CERT_PASSWORD }}"
+        # msix:create reruns "flutter build windows" itself, so the GIT_SHA
+        # define has to ride along or the packaged exe loses its build stamp.
+        run: echo "n" | dart run msix:create --certificate-password "${{ secrets.MSIX_CERT_PASSWORD }}" --windows-build-args "--dart-define=GIT_SHA=${{ env.BUILD_SHA }}"
 
       - name: Verify MSIX is signed
         working-directory: centroid-hmi
