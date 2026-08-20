@@ -1,13 +1,17 @@
-/// The canvas steps aside from the config pane — not the other way round.
+/// The canvas steps aside from the config pane — not the other way round,
+/// and only when it must.
 ///
 /// The pane docks over the right-hand strip of the screen, which is exactly
 /// where the asset being configured may live — and an editor you cannot see
-/// under the form that edits it defeats the point of a non-modal pane. So the
-/// editor gives the pane its strip outright: the canvas re-fits itself beside
-/// the open pane (it is an aspect-fitted box, so the whole page stays in
-/// view, just smaller), follows the pane's resize handle, and takes the strip
-/// back when the pane closes. The pane itself keeps the width the operator
-/// chose — no asset position can squeeze it.
+/// under the form that edits it defeats the point of a non-modal pane. So
+/// when the pane would cover the very asset it is editing, the editor gives
+/// it the strip outright: the canvas re-fits itself beside the open pane (it
+/// is an aspect-fitted box, so the whole page stays in view, just smaller),
+/// follows the pane's resize handle, and takes the strip back when the pane
+/// closes. The pane itself keeps the width the operator chose — no asset
+/// position can squeeze it. And when the asset is nowhere near the pane, the
+/// canvas does not move at all: a page that steps aside for every pane is a
+/// page that jumps around under the operator for no reason.
 library;
 
 import 'package:flutter/material.dart';
@@ -109,13 +113,57 @@ void main() {
     await closePane(tester);
   });
 
+  testWidgets('an asset in plain view leaves the canvas exactly where it was',
+      (tester) async {
+    // The other half of the contract: the strip is only yielded for an asset
+    // the pane would actually cover. At x=0.2 the box ends around 364 — the
+    // pane's strip starts at 856 — so opening its editor must not move the
+    // page at all.
+    await pumpEditorWith(tester, [editorBox(0.2, 0.4)]);
+    final before = canvasRect(tester);
+
+    await openConfigPane(tester, 0.2, 0.4);
+
+    expect(find.byType(SidePane), findsOneWidget);
+    expect(canvasRect(tester), before,
+        reason: 'nothing the operator tapped is covered — a page that steps '
+            'aside for every pane jumps around for no reason');
+    expect(boxRect(tester).right, lessThan(paneRect(tester).left),
+        reason: 'the asset was already in plain view');
+
+    await closePane(tester);
+    expect(canvasRect(tester), before);
+  });
+
+  testWidgets('a yielded strip rides across re-pointing the pane', (tester) async {
+    // Open on a covered asset (canvas insets), then edit an asset in plain
+    // view. The pane is one continuous surface to the operator; the canvas
+    // must not snap out and glide back in between two of its assets.
+    await pumpEditorWith(
+        tester, [editorBox(0.9, 0.4), editorBox(0.2, 0.6)]);
+    final fullWidth = canvasRect(tester).width;
+
+    await openConfigPane(tester, 0.9, 0.4);
+    final insetWidth = canvasRect(tester).width;
+    expect(insetWidth, lessThan(fullWidth));
+
+    await openConfigPane(tester, 0.2, 0.6);
+    expect(find.byType(SidePane), findsOneWidget);
+    expect(canvasRect(tester).width, insetWidth,
+        reason: 'once yielded, the strip stays yielded until the pane '
+            'closes — swapping assets must not bounce the canvas');
+
+    await closePane(tester);
+    expect(canvasRect(tester).width, fullWidth);
+  });
+
   testWidgets('a zoomed canvas is inset whole — nothing slides under the pane',
       (tester) async {
     // Zooming happens inside the canvas's own box; the inset moves that box.
     // Pinch to 2x with the pane open, and the viewport — whatever part of
     // the page it shows — must still end before the pane begins.
-    await pumpEditorWith(tester, [editorBox(0.45, 0.4)]);
-    await openConfigPane(tester, 0.45, 0.4);
+    await pumpEditorWith(tester, [editorBox(0.65, 0.4)]);
+    await openConfigPane(tester, 0.65, 0.4);
 
     final canvas = canvasRect(tester);
     final cy = canvas.center.dy;

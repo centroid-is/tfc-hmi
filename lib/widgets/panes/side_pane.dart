@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -190,6 +192,14 @@ abstract final class SidePaneDefaults {
 /// range from a colour swatch to a two-column subdevice manager, and no single
 /// width suits both. [onWidthChanged] reports each new width so the caller can
 /// hand the same one back the next time it opens the pane.
+///
+/// [avoidRect] is the on-screen rectangle that must stay visible beside the
+/// pane — the tapped device. It defaults to [context]'s own render box, which
+/// is exactly right for equipment panes (assets open their pane from their own
+/// build context). Only when it would end up under the pane does the page
+/// yield the strip (see [SidePaneInset]); a pane opened for something in
+/// plain view leaves the page exactly where it was. Callers whose [context]
+/// spans the whole page (the page editor) pass the device's rect explicitly.
 bool showSidePane({
   required BuildContext context,
   required String id,
@@ -199,6 +209,7 @@ bool showSidePane({
   VoidCallback? onClosed,
   bool resizable = false,
   ValueChanged<double>? onWidthChanged,
+  Rect? avoidRect,
 }) {
   if (SidePaneHost.openId == id) {
     closeSidePane();
@@ -213,8 +224,20 @@ bool showSidePane({
     onClosed: onClosed,
     resizable: resizable,
     onWidthChanged: onWidthChanged,
+    avoidRect: avoidRect ?? _paintRectOf(context),
   );
   return true;
+}
+
+/// The on-screen rect of [context]'s render box, the default "keep this
+/// visible" rect for [showSidePane]. Null when the context has no laid-out
+/// box to measure; the host then treats the pane as covering it, which keeps
+/// the safe behaviour — the page insets.
+Rect? _paintRectOf(BuildContext context) {
+  final ro = context.findRenderObject();
+  if (ro is! RenderBox || !ro.attached || !ro.hasSize) return null;
+  return MatrixUtils.transformRect(
+      ro.getTransformTo(null), Offset.zero & ro.size);
 }
 
 /// Closes the docked pane.
@@ -228,28 +251,144 @@ void closeSidePane({String? id}) => SidePaneHost.close(id: id);
 bool isSidePaneOpen({String? id}) =>
     SidePaneHost.openId != null && (id == null || SidePaneHost.openId == id);
 
-/// Keeps [child] clear of the docked pane.
+/// Keeps [child] clear of the docked pane — when it has to.
 ///
 /// Wrap a page's content in this and it yields the strip of screen the pane
-/// occupies instead of being covered by it. The padding tracks the pane frame
-/// by frame — the slide in, a resize drag, the slide back out — so content
-/// that fits itself to its box (the plant-view canvas) glides aside with the
-/// pane rather than jumping, and nothing the operator tapped ends up hidden
-/// behind the very pane it opened.
-class SidePaneInset extends StatelessWidget {
+/// occupies instead of being covered by it. The strip is only claimed when
+/// the device that opened the pane would otherwise end up underneath it
+/// ([showSidePane]'s `avoidRect`), so most panes open without the page moving
+/// at all.
+///
+/// When the strip is claimed or released, the pad is applied in a single
+/// layout pass and the 220ms glide between the two states is painted as a
+/// transform of the already-laid-out page. Padding the page frame by frame —
+/// the first version of this — re-laid-out and rebuilt the entire plant view
+/// on every frame of the pane's slide (every asset, every label remeasured),
+/// which made the animation stutter on a full page; a transform costs a
+/// matrix. The mapping assumes the child fits itself to its box as a
+/// centred canvas of [aspectRatio] — true of both consumers, whose child is
+/// a [ZoomableCanvas] — so mid-glide the transformed page sits exactly where
+/// a per-frame layout would have put it. A pane resize drag arrives as a
+/// stream of settled widths instead and is tracked 1:1, as before.
+class SidePaneInset extends StatefulWidget {
   final Widget child;
 
-  const SidePaneInset({super.key, required this.child});
+  /// Width / height of the aspect-fitted canvas inside [child]; shapes the
+  /// glide only — the settled layouts are exact regardless.
+  final double aspectRatio;
+
+  const SidePaneInset({
+    super.key,
+    required this.child,
+    this.aspectRatio = 16 / 9,
+  });
+
+  @override
+  State<SidePaneInset> createState() => _SidePaneInsetState();
+}
+
+class _SidePaneInsetState extends State<SidePaneInset>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
+
+  /// The glide runs from [_from] to [_target]; [_target] is also the pad the
+  /// child is laid out with, from the moment the glide starts.
+  double _from = SidePaneHost.occupiedWidth.value;
+  double _target = SidePaneHost.occupiedWidth.value;
+
+  /// Matches the pane's own slide: ease-out on the way in, ease-in out.
+  Curve _curve = Curves.easeOutCubic;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.value = 1;
+    SidePaneHost.occupiedWidth.addListener(_onTargetChanged);
+  }
+
+  @override
+  void dispose() {
+    SidePaneHost.occupiedWidth.removeListener(_onTargetChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Where the page appears to be inset to right now, mid-glide.
+  double get _apparent =>
+      _from + (_target - _from) * _curve.transform(_controller.value);
+
+  void _onTargetChanged() {
+    final next = SidePaneHost.occupiedWidth.value;
+    if (next == _target) return;
+    setState(() {
+      if (_target == 0 || next == 0) {
+        // The strip is being claimed or released: glide.
+        _from = _apparent;
+        _curve = next == 0 ? Curves.easeInCubic : Curves.easeOutCubic;
+        _target = next;
+        _controller.forward(from: 0);
+      } else {
+        // A resize drag (or a swap to a pane of another width): the pane is
+        // already in place, track it 1:1.
+        _from = next;
+        _target = next;
+        _controller.value = 1;
+      }
+    });
+  }
+
+  /// Where a centred, aspect-fitted canvas sits in a box of [size].
+  Rect _fittedRect(Size size) {
+    final h = math.min(size.height, size.width / widget.aspectRatio);
+    return Rect.fromCenter(
+      center: size.center(Offset.zero),
+      width: h * widget.aspectRatio,
+      height: h,
+    );
+  }
+
+  /// Maps the settled layout to its mid-glide appearance: the uniform scale
+  /// and shift that carries the canvas fitted beside the pane onto the canvas
+  /// as it would be fitted at the in-between inset.
+  Matrix4 _glideMatrix(Size outer) {
+    final inset = _apparent;
+    if (inset == _target) return Matrix4.identity();
+    final settled = _fittedRect(Size(outer.width - _target, outer.height));
+    final apparent = _fittedRect(Size(outer.width - inset, outer.height));
+    if (settled.height <= 0 || apparent.height <= 0) return Matrix4.identity();
+    // x' = s·x + (apparentCenter - s·settledCenter): scale about the origin,
+    // then carry the settled fit's centre onto the apparent one.
+    final scale = apparent.height / settled.height;
+    return Matrix4.identity()
+      ..setEntry(0, 0, scale)
+      ..setEntry(1, 1, scale)
+      ..setEntry(0, 3, apparent.center.dx - scale * settled.center.dx)
+      ..setEntry(1, 3, apparent.center.dy - scale * settled.center.dy);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<double>(
-      valueListenable: SidePaneHost.occupiedWidth,
-      builder: (context, inset, child) => Padding(
-        padding: EdgeInsets.only(right: inset),
-        child: child,
-      ),
-      child: child,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final outer = constraints.biggest;
+        return Padding(
+          padding: EdgeInsets.only(right: _target),
+          child: AnimatedBuilder(
+            animation: _controller,
+            // The Transform stays in the tree even when idle (identity), so
+            // the child's element — live subscriptions and all — is never
+            // reparented by a glide starting or ending.
+            builder: (context, child) => Transform(
+              transform: _glideMatrix(outer),
+              child: child,
+            ),
+            child: widget.child,
+          ),
+        );
+      },
     );
   }
 }
@@ -267,13 +406,28 @@ abstract final class SidePaneHost {
   /// The id of the pane currently showing, or null.
   static String? get openId => _openId;
 
-  /// How much of the screen's right edge the pane occupies right now, in
+  /// The strip of the screen's right edge the page must leave to the pane, in
   /// logical pixels from the edge to one [SidePaneDefaults.margin] left of the
-  /// pane. Animated: it follows the slide in/out and the resize drag frame by
-  /// frame, so [SidePaneInset] (its consumer) moves with the pane rather than
-  /// jumping ahead of it. Zero while no pane is showing.
+  /// pane. Zero while no pane is showing — and zero too while the device that
+  /// opened the pane (its `avoidRect`) sits clear of it, which is what keeps
+  /// the page from stepping aside for a pane that covers nothing it needs.
+  /// Published as settled values only — claim, resize, release — with the
+  /// glide between them left to [SidePaneInset], so the page is laid out once
+  /// per change instead of once per animation frame.
   static ValueListenable<double> get occupiedWidth => _occupied;
   static final ValueNotifier<double> _occupied = ValueNotifier<double>(0);
+
+  /// The on-screen rect the pane must not cover, in un-inset coordinates —
+  /// measured before the page moves. Null means "assume covered".
+  static Rect? _avoidRect;
+
+  /// Whether the page has yielded the strip. Ratchets: once the strip is
+  /// claimed it stays claimed until the pane closes — including across a swap
+  /// to another device's pane and a narrowing resize. Releasing it mid-open
+  /// would re-fit the page under the operator's pointer, and a rect measured
+  /// on the inset page cannot answer where the device would sit on the
+  /// un-inset one.
+  static bool _insetEngaged = false;
 
   static void _setOccupied(double value) {
     if (_occupied.value == value) return;
@@ -304,10 +458,15 @@ abstract final class SidePaneHost {
     VoidCallback? onClosed,
     bool resizable = false,
     ValueChanged<double>? onWidthChanged,
+    Rect? avoidRect,
   }) {
     // Replacing an open pane: drop the old one without its exit animation so
-    // the two never overlap.
-    _removeNow();
+    // the two never overlap. An engaged inset rides across the swap (see
+    // [_insetEngaged]) — without `keepInset` the page would snap out and
+    // glide back in for what the operator experiences as one open pane.
+    final keepInset = _openId != null && _insetEngaged;
+    _removeNow(keepInset: keepInset);
+    _avoidRect = avoidRect;
 
     final overlay = Overlay.of(context, rootOverlay: true);
     _width = width ?? SidePaneDefaults.width;
@@ -341,12 +500,16 @@ abstract final class SidePaneHost {
     shell.dismiss().then((_) => _removeNow());
   }
 
-  static void _removeNow() {
+  static void _removeNow({bool keepInset = false}) {
     _entry?.remove();
     _entry = null;
     _shellKey = null;
     _openId = null;
-    _setOccupied(0);
+    if (!keepInset) {
+      _insetEngaged = false;
+      _avoidRect = null;
+      _setOccupied(0);
+    }
     final onClosed = _onClosed;
     _onClosed = null;
     onClosed?.call();
@@ -361,6 +524,8 @@ abstract final class SidePaneHost {
     _entry = null;
     _shellKey = null;
     _openId = null;
+    _insetEngaged = false;
+    _avoidRect = null;
     _setOccupied(0);
     final onClosed = _onClosed;
     _onClosed = null;
@@ -414,7 +579,6 @@ class _SidePaneShellState extends State<_SidePaneShell>
   @override
   void initState() {
     super.initState();
-    _controller.addListener(_publishOccupied);
     _controller.forward();
     // Escape closes the pane wherever focus happens to be. A non-modal pane
     // never owns focus, so a focus-scoped shortcut would not fire.
@@ -451,18 +615,23 @@ class _SidePaneShellState extends State<_SidePaneShell>
   /// Runs the exit animation. The host removes the overlay entry afterwards.
   Future<void> dismiss() async {
     if (!mounted) return;
+    // Release the strip as the slide-out begins, so the page's glide back
+    // runs alongside the pane's exit rather than after it.
+    SidePaneHost._setOccupied(0);
     await _controller.reverse();
   }
 
-  /// Feeds [SidePaneHost.occupiedWidth]: the pane's current intrusion from
-  /// the screen's right edge, scaled by the slide so it grows in with the
-  /// pane and collapses back out with it.
+  /// Feeds [SidePaneHost.occupiedWidth]: the settled strip the pane claims —
+  /// or nothing, while the device that opened it is in plain view anyway.
   void _publishOccupied() {
+    if (!SidePaneHost._insetEngaged) {
+      SidePaneHost._setOccupied(0);
+      return;
+    }
     final width = SidePaneHost._width < SidePaneDefaults.minWidth
         ? SidePaneDefaults.minWidth
         : SidePaneHost._width;
-    SidePaneHost._setOccupied(
-        _slide.value * (width + 2 * SidePaneDefaults.margin));
+    SidePaneHost._setOccupied(width + 2 * SidePaneDefaults.margin);
   }
 
   @override
@@ -493,6 +662,25 @@ class _SidePaneShellState extends State<_SidePaneShell>
         : screen.width - margin * 2;
     final width =
         SidePaneHost._width.clamp(SidePaneDefaults.minWidth, maxWidth);
+
+    // Does the page have to yield the strip? Only if the device that opened
+    // the pane would otherwise end up underneath it. Horizontal overlap is
+    // the whole test — the strip spans the working height of the screen.
+    // Re-checked on every pane build so a resize drag (or a shrinking
+    // window) that pushes the pane over the device engages the inset then;
+    // disengaging is the host's job and only happens when the pane closes.
+    // `openId` goes null the moment the close begins: a rebuild during the
+    // exit animation must not re-claim the strip `dismiss` just released.
+    if (SidePaneHost._openId != null) {
+      if (!SidePaneHost._insetEngaged) {
+        final avoid = SidePaneHost._avoidRect;
+        final strip = width + 2 * margin;
+        if (avoid == null || avoid.right > screen.width - strip) {
+          SidePaneHost._insetEngaged = true;
+        }
+      }
+      _publishOccupied();
+    }
 
     // No shadow at all: on the dark solarized theme even a small elevation
     // renders as a black halo, which reads like a warning frame around the
