@@ -3016,14 +3016,17 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
         postfix: postfix,
       );
 
-      await _applyDecryptedConfig(ref, decrypted);
+      final missingCerts = await _applyDecryptedConfig(ref, decrypted);
 
       if (!context.mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Config imported. Please generate new certificates for the servers that need them.',
+            missingCerts == 0
+                ? 'Config imported. Existing certificates were kept.'
+                : 'Config imported. Please generate new certificates for '
+                    '$missingCerts server(s).',
           ),
         ),
       );
@@ -3040,24 +3043,93 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
   /// Persists a decrypted config map (StateManConfig JSON with an optional
   /// 'database' entry) and rebuilds everything that reads it. Shared by the
   /// file import and the database import.
-  Future<void> _applyDecryptedConfig(
-      WidgetRef ref, Map<String, dynamic> decrypted) async {
+  ///
+  /// [applyDatabase] is false for the database import: this client is
+  /// connected to the database right now through its local settings, and the
+  /// stored config's connection details — saved by another machine, possibly
+  /// reaching the same server by a different address or credentials — must
+  /// not replace a working connection. The file import keeps applying them;
+  /// that is how a fresh client gets its database config in the first place.
+  ///
+  /// Returns how many imported servers still need certificates generated
+  /// after this client's existing ones were reused.
+  Future<int> _applyDecryptedConfig(WidgetRef ref, Map<String, dynamic> decrypted,
+      {bool applyDatabase = true}) async {
     // Persist Database first (so DB widget re-reads correct values)
-    if (decrypted['database'] != null) {
+    if (applyDatabase && decrypted['database'] != null) {
       final db = DatabaseConfig.fromJson(decrypted['database']);
       await db.toPrefs();
-      decrypted.remove('database');
     }
+    decrypted.remove('database');
 
-    // Persist StateManConfig to prefs as current config
     final stateMan = StateManConfig.fromJson(decrypted);
     final prefs = await ref.read(preferencesProvider.future);
+
+    // Exports scrub certificates down to a placeholder. Where this client
+    // already holds real certificates for the same server, keep them — the
+    // server trusts that certificate already, so regenerating gains nothing
+    // and breaks the trust the PLC was configured with.
+    StateManConfig? current;
+    try {
+      current = await StateManConfig.fromPrefs(prefs);
+    } catch (_) {
+      // No (or unreadable) saved config — nothing to reuse.
+    }
+    final missingCerts = _reuseExistingCerts(stateMan, current);
+
     await stateMan.toPrefs(prefs);
 
     // Trigger rebuilds:
-    ref.invalidate(databaseProvider);
+    if (applyDatabase) ref.invalidate(databaseProvider);
     ref.invalidate(stateManProvider);
     ref.read(refreshKeyProvider.notifier).increment();
+    return missingCerts;
+  }
+
+  /// Replaces scrubbed certificate placeholders in [incoming] with this
+  /// client's existing certificates for the same server — matched by
+  /// endpoint, falling back to alias so a server that moved address keeps
+  /// its certificate too. Returns how many servers still hold the
+  /// placeholder afterwards.
+  int _reuseExistingCerts(StateManConfig incoming, StateManConfig? current) {
+    bool isPlaceholder(Uint8List? bytes) =>
+        bytes != null && String.fromCharCodes(bytes) == _certPlaceholder;
+    bool hasRealCerts(OpcUAConfig s) =>
+        s.sslCert != null &&
+        s.sslKey != null &&
+        !isPlaceholder(s.sslCert) &&
+        !isPlaceholder(s.sslKey);
+
+    final candidates =
+        (current?.opcua ?? const <OpcUAConfig>[]).where(hasRealCerts).toList();
+    var missing = 0;
+    for (final server in incoming.opcua) {
+      if (!isPlaceholder(server.sslCert) && !isPlaceholder(server.sslKey)) {
+        continue; // real certs, or none configured at all — leave untouched
+      }
+      OpcUAConfig? match;
+      for (final cand in candidates) {
+        if (cand.endpoint == server.endpoint) {
+          match = cand;
+          break;
+        }
+      }
+      if (match == null && server.serverAlias != null) {
+        for (final cand in candidates) {
+          if (cand.serverAlias == server.serverAlias) {
+            match = cand;
+            break;
+          }
+        }
+      }
+      if (match != null) {
+        server.sslCert = match.sslCert;
+        server.sslKey = match.sslKey;
+      } else {
+        missing++;
+      }
+    }
+    return missing;
   }
 
   /// Collects the current config as the JSON map that gets encrypted:
@@ -3163,13 +3235,17 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
       final decrypted = await _promptLoadPassword(context, stored);
       if (decrypted == null) return;
 
-      await _applyDecryptedConfig(ref, decrypted);
+      final missingCerts =
+          await _applyDecryptedConfig(ref, decrypted, applyDatabase: false);
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Config imported from database. Please generate new certificates for the servers that need them.',
+            missingCerts == 0
+                ? 'Config imported from database. Existing certificates were kept.'
+                : 'Config imported from database. Please generate new '
+                    'certificates for $missingCerts server(s).',
           ),
         ),
       );

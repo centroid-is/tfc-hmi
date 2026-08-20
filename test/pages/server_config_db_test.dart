@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:drift/drift.dart' show Value;
+import 'package:postgres/postgres.dart' as pg;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/preferences.dart';
@@ -51,6 +52,9 @@ void main() {
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
     SecureStorage.setInstance(FakeSecureStorage());
+    // The config cache is process-wide; a stale entry from a previous test
+    // would leak through the fresh FakeSecureStorage.
+    DatabaseConfig.clearPrefsCache();
     // Production-strength PBKDF2 takes tens of seconds per derivation in the
     // debug-mode test VM; the round-trip logic under test is unchanged.
     SecureEnvelope.kdfIterationsForTest = 10;
@@ -322,6 +326,135 @@ void main() {
       final saved = await StateManConfig.fromPrefs(prefs);
       expect(saved.opcua.single.serverAlias, 'imported_plc');
       expect(saved.opcua.single.endpoint, 'opc.tcp://10.9.9.9:4840');
+
+      await db.dispose();
+    });
+
+    testWidgets('load reuses this client\'s certificates for known servers',
+        (tester) async {
+      final appDb = AppDatabase.inMemoryForTest();
+      final db = Database(appDb);
+      addTearDown(() async => appDb.close());
+
+      final placeholder = base64Encode(utf8.encode('todo'));
+      String b64(String s) => base64Encode(utf8.encode(s));
+
+      // This client already holds real certificates for plc1 and plc2.
+      final prefs = await createTestPreferences(
+        stateManConfig: StateManConfig.fromJson({
+          'opcua': [
+            {
+              'endpoint': 'opc.tcp://10.0.0.1:4840',
+              'server_alias': 'plc1',
+              'ssl_cert': b64('real plc1 cert'),
+              'ssl_key': b64('real plc1 key'),
+            },
+            {
+              'endpoint': 'opc.tcp://10.0.0.2:4840',
+              'server_alias': 'plc2',
+              'ssl_cert': b64('real plc2 cert'),
+              'ssl_key': b64('real plc2 key'),
+            },
+          ],
+        }),
+      );
+
+      // Stored config: plc1 at the same endpoint, plc2 moved to a new
+      // address (alias match), plc3 unknown here — certs scrubbed to the
+      // placeholder by the export, as always.
+      final envelope = await SecureEnvelope.encrypt(
+        jsonConfig: {
+          'opcua': [
+            {
+              'endpoint': 'opc.tcp://10.0.0.1:4840',
+              'server_alias': 'plc1',
+              'ssl_cert': placeholder,
+              'ssl_key': placeholder,
+            },
+            {
+              'endpoint': 'opc.tcp://10.0.0.99:4840',
+              'server_alias': 'plc2',
+              'ssl_cert': placeholder,
+              'ssl_key': placeholder,
+            },
+            {
+              'endpoint': 'opc.tcp://10.9.9.9:4840',
+              'server_alias': 'plc3',
+              'ssl_cert': placeholder,
+              'ssl_key': placeholder,
+            },
+          ],
+        },
+        compiledPrefix: 'Flottur köttur:',
+        exportPostfix: 'hunter22',
+      );
+      await ServerConfigDb.publish(
+          appDb, StoredServerConfig(envelope: envelope));
+
+      await pumpAndLoad(tester, _buildCard(database: db, prefs: prefs));
+      await tester.tap(find.text('Load from Database'));
+      await settle(tester);
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Password'), 'hunter22');
+      await tester.tap(find.text('Decrypt & import'));
+      await settle(tester);
+
+      // Only the server this client has never seen needs a certificate.
+      expect(find.textContaining('generate new certificates for 1 server'),
+          findsOneWidget);
+
+      final saved = await StateManConfig.fromPrefs(prefs);
+      final byAlias = {for (final s in saved.opcua) s.serverAlias: s};
+      expect(utf8.decode(byAlias['plc1']!.sslCert!), 'real plc1 cert');
+      expect(utf8.decode(byAlias['plc1']!.sslKey!), 'real plc1 key');
+      // The alias match carries the certificate across an address change.
+      expect(byAlias['plc2']!.endpoint, 'opc.tcp://10.0.0.99:4840');
+      expect(utf8.decode(byAlias['plc2']!.sslCert!), 'real plc2 cert');
+      expect(utf8.decode(byAlias['plc2']!.sslKey!), 'real plc2 key');
+      // The unknown server keeps the placeholder — still needs generation.
+      expect(utf8.decode(byAlias['plc3']!.sslCert!), 'todo');
+
+      await db.dispose();
+    });
+
+    testWidgets('load keeps the local database connection settings',
+        (tester) async {
+      final appDb = AppDatabase.inMemoryForTest();
+      final db = Database(appDb);
+      addTearDown(() async => appDb.close());
+
+      // The connection this client is actually using right now.
+      await DatabaseConfig(
+        postgres: pg.Endpoint(host: 'local-host', database: 'hmi'),
+      ).toPrefs();
+
+      // Another machine stored the config with its own connection details.
+      final envelope = await SecureEnvelope.encrypt(
+        jsonConfig: {
+          'opcua': [],
+          'database': DatabaseConfig(
+            postgres: pg.Endpoint(host: 'other-host', database: 'hmi'),
+          ).toJson(),
+        },
+        compiledPrefix: 'Flottur köttur:',
+        exportPostfix: 'hunter22',
+      );
+      await ServerConfigDb.publish(
+          appDb, StoredServerConfig(envelope: envelope));
+
+      final prefs = await createTestPreferences();
+      await pumpAndLoad(tester, _buildCard(database: db, prefs: prefs));
+      await tester.tap(find.text('Load from Database'));
+      await settle(tester);
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Password'), 'hunter22');
+      await tester.tap(find.text('Decrypt & import'));
+      await settle(tester);
+
+      expect(find.textContaining('Config imported from database'),
+          findsOneWidget);
+      final local = await DatabaseConfig.fromPrefs();
+      expect(local.postgres?.host, 'local-host');
 
       await db.dispose();
     });
