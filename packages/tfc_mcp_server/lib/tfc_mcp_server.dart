@@ -55,6 +55,7 @@ export 'src/tools/alarm_write_tools.dart';
 export 'src/tools/key_mapping_write_tools.dart';
 export 'src/tools/page_write_tools.dart';
 export 'src/tools/asset_write_tools.dart';
+export 'src/tools/proposal_status_tools.dart';
 export 'src/tools/asset_type_catalog_tools.dart';
 export 'src/tools/tech_doc_tools.dart';
 export 'src/tools/read_toggles.dart';

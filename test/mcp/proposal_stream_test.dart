@@ -24,7 +24,7 @@ void main() {
         onProposal: (wrapped) => callbackFired.complete(wrapped),
       );
 
-      final result = service.wrapProposal('alarm', {
+      final result = await service.wrapProposal('alarm', {
         'title': 'Test Alarm',
         'key': 'test.key',
       });
@@ -38,14 +38,14 @@ void main() {
       expect(callbackResult['title'], 'Test Alarm');
     });
 
-    test('fires callback for each proposal type', () {
+    test('fires callback for each proposal type', () async {
       final received = <Map<String, dynamic>>[];
       final service = ProposalService(onProposal: received.add);
 
-      service.wrapProposal('alarm', {'title': 'Alarm'});
-      service.wrapProposal('page', {'title': 'Page'});
-      service.wrapProposal('asset', {'title': 'Asset'});
-      service.wrapProposal('key_mapping', {'key': 'k'});
+      await service.wrapProposal('alarm', {'title': 'Alarm'});
+      await service.wrapProposal('page', {'title': 'Page'});
+      await service.wrapProposal('asset', {'title': 'Asset'});
+      await service.wrapProposal('key_mapping', {'key': 'k'});
 
       expect(received, hasLength(4));
       expect(received[0]['_proposal_type'], 'alarm');
@@ -54,9 +54,9 @@ void main() {
       expect(received[3]['_proposal_type'], 'key_mapping');
     });
 
-    test('null callback does not throw', () {
+    test('null callback does not throw', () async {
       final service = ProposalService();
-      final result = service.wrapProposal('alarm', {'title': 'Test'});
+      final result = await service.wrapProposal('alarm', {'title': 'Test'});
       expect(result['_proposal_type'], 'alarm');
     });
   });
@@ -189,7 +189,7 @@ void main() {
         onProposal: bridge.testFireProposal,
       );
 
-      service.wrapProposal('alarm', {
+      await service.wrapProposal('alarm', {
         'uid': 'abc-123',
         'title': 'Pump Overcurrent',
         'key': 'pump3.overcurrent',

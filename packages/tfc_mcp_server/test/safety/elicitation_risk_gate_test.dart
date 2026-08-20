@@ -374,8 +374,8 @@ void main() {
       expect(result, contains('| severity | medium | high |'));
     });
 
-    test('wrapProposal adds _proposal_type field', () {
-      final wrapped = service.wrapProposal('alarm', {
+    test('wrapProposal adds _proposal_type field', () async {
+      final wrapped = await service.wrapProposal('alarm', {
         'name': 'pump3.high_temp',
         'expression': 'pump3.temp > 80',
       });

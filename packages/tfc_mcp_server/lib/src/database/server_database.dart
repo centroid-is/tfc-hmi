@@ -270,7 +270,7 @@ class ServerMcpProposalTable extends Table {
   /// Operator who triggered the proposal.
   TextColumn get operatorId => text()();
 
-  /// pending → notified → reviewed → dismissed.
+  /// pending → notified → viewed → accepted / rejected / dismissed.
   TextColumn get status =>
       text().withDefault(const Constant('pending'))();
 

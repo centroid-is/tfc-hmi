@@ -33,7 +33,7 @@ void main() {
       operatorId: 'claude-desktop-user',
     );
 
-    service.wrapProposal('alarm', {
+    await service.wrapProposal('alarm', {
       'title': 'Pump Overcurrent',
       'key': 'pump3.overcurrent',
     });
@@ -54,11 +54,11 @@ void main() {
   test('multiple proposals written and readable', () async {
     final service = ProposalService(database: db, operatorId: 'op');
 
-    service.wrapProposal('alarm', {'title': 'High Temp'});
+    await service.wrapProposal('alarm', {'title': 'High Temp'});
     await Future<void>.delayed(const Duration(milliseconds: 200));
-    service.wrapProposal('page', {'title': 'Dashboard'});
+    await service.wrapProposal('page', {'title': 'Dashboard'});
     await Future<void>.delayed(const Duration(milliseconds: 200));
-    service.wrapProposal('key_mapping', {'key': 'pump3.speed'});
+    await service.wrapProposal('key_mapping', {'key': 'pump3.speed'});
     await Future<void>.delayed(const Duration(milliseconds: 500));
 
     final rows = await db
