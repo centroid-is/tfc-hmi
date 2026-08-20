@@ -2043,8 +2043,14 @@ class StateMan {
 
   Future<Stream<DynamicValue>> _monitor(String key,
       {bool resub = false}) async {
-    if (_subscriptions.containsKey(key) && !resub) {
-      return _subscriptions[key]!.stream;
+    final existing = _subscriptions[key];
+    if (existing != null && !resub) {
+      // Belt and braces with the _onDispose in AutoDisposingStream.onDone: a
+      // spent entry can never deliver again, so reusing it silently costs the
+      // caller its data. Drop it and monitor afresh.
+      if (!existing.isSpent) return existing.stream;
+      logger.w('[$key] cached subscription is spent — re-monitoring');
+      _subscriptions.remove(key);
     }
 
     // Guard the retry loop below: without a client wrapper it would spin
@@ -2307,6 +2313,13 @@ class AutoDisposingStream<T> {
 
   Stream<T> get stream => _subject.stream;
 
+  /// True once the subject is closed and this entry can never deliver again.
+  ///
+  /// A closed subject hands a new listener the replay buffer and then `done`,
+  /// which looks to a widget exactly like a key that has stopped updating.
+  /// [StateMan._monitor] checks this before reusing a cached entry.
+  bool get isSpent => _subject.isClosed;
+
   void subscribe(Stream<T> raw, T? firstValue) {
     _logger.d('[$key] subscribe() called: '
         'subjectClosed=${_subject.isClosed}, '
@@ -2350,6 +2363,14 @@ class AutoDisposingStream<T> {
             'subject will close! listeners=$_listenerCount, '
             'subjectClosed=${_subject.isClosed}');
         _subject.close();
+        // Retire the entry as well. The idle path already does both -- it
+        // calls _onDispose before closing -- but this one used to close and
+        // leave the entry in StateMan._subscriptions, so the next subscriber
+        // for this key was handed a closed subject and saw nothing. That is
+        // what made a readout stay blank on returning to a page while
+        // selecting a different key worked: the different key had no cached
+        // entry to inherit.
+        _onDispose(key);
       },
     );
     _lastValue = firstValue;
