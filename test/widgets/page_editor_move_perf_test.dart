@@ -24,6 +24,7 @@ import 'package:shared_preferences_platform_interface/in_memory_shared_preferenc
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:shared_preferences_platform_interface/types.dart';
 
+import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/pages/page_editor.dart';
 
 import '../helpers/page_editor_harness.dart';
@@ -128,6 +129,34 @@ void main() {
     expect(PageEditor.debugJsonEncodes, 1,
         reason: 'nine nudges in one hold must settle in a single encode');
     expect(_showsUnsaved(tester), isTrue);
+  });
+
+  testWidgets('moving assets never re-parses the pages', (tester) async {
+    // The undo snapshot a gesture opens with used to be a live deep copy —
+    // encode, decode, re-parse of every asset on every page — which is what
+    // made a single arrow press lag behind the finger on big projects. The
+    // snapshot is an encoded string now; the parse belongs to the undo that
+    // actually restores it, never to the move itself.
+    await pumpEditorWith(tester, [editorBox(0.3, 0.3)]);
+    await tapAsset(tester, 0.3, 0.3);
+    AssetRegistry.debugParses = 0;
+
+    await _holdArrow(tester, LogicalKeyboardKey.arrowRight, repeats: 3);
+    expect(AssetRegistry.debugParses, 0,
+        reason: 'an arrow press must not deep-copy the pages');
+
+    final gesture = await _startAssetDrag(tester, 0.3, 0.3, const [
+      Offset(30, 0), // crosses the pan slop
+      Offset(8, 4),
+    ]);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(AssetRegistry.debugParses, 0,
+        reason: 'a drag must not deep-copy the pages either');
+
+    await pressUndo(tester);
+    expect(AssetRegistry.debugParses, greaterThan(0),
+        reason: 'undo is where the snapshot is finally decoded');
   });
 
   testWidgets('nudging back onto the saved spot reads as saved again',

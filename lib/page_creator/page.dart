@@ -291,7 +291,7 @@ class PageManager {
   }
 
   void fromJson(String jsonString) {
-    pages = PageManager._fromJson(jsonString);
+    pages = PageManager.pagesFromJson(jsonString);
   }
 
   PageManager copyWith({
@@ -309,7 +309,7 @@ class PageManager {
   static Map<String, AssetPage> copyPages(Map<String, AssetPage> otherPages) {
     final json = jsonEncode(
         otherPages.map((name, page) => MapEntry(name, page.toJson())));
-    return _fromJson(json);
+    return pagesFromJson(json);
   }
 
   /// Returns fully resolved root menu items with children looked up
@@ -540,7 +540,10 @@ class PageManager {
         .replaceAll(RegExp(r'\s+'), '-');
   }
 
-  static Map<String, AssetPage> _fromJson(String jsonString) {
+  /// Decodes an encoded page map — the inverse of [toJson]. Public because
+  /// the editor keeps its undo history as encoded strings (cheap to snapshot)
+  /// and only pays for this decode when an undo actually fires.
+  static Map<String, AssetPage> pagesFromJson(String jsonString) {
     final json = jsonDecode(jsonString) as Map<String, dynamic>;
     final result = <String, AssetPage>{};
     for (final entry in json.entries) {

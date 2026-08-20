@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:logger/logger.dart';
 import 'common.dart';
 import 'led.dart';
@@ -151,21 +152,29 @@ class AssetRegistry {
     defaultFactories[T] = preview;
   }
 
+  /// How many times [parse] has run. Parsing walks every JSON node and
+  /// reconstructs every asset, so tests pin that editor gestures (a nudge,
+  /// a drag) never trigger it — undo snapshots stay encoded strings.
+  @visibleForTesting
+  static int debugParses = 0;
+
   static List<Asset> parse(Map<String, dynamic> json) {
+    debugParses++;
     final List<Asset> foundWidgets = [];
+    // No per-node or per-asset logging in here: this crawl visits every JSON
+    // node of every page and runs on hot paths (page load, undo, paste,
+    // proposal staging). A trace record per node means thousands of
+    // stack-capturing console prints per call in debug runs, which is
+    // seconds of UI stall on a real project. Warnings and errors only.
     void crawlJson(dynamic jsonPart) {
       if (jsonPart is Map<String, dynamic>) {
-        // _log.t('Crawling object: $jsonPart');
         if (jsonPart.containsKey(constAssetName)) {
           final assetName = jsonPart[constAssetName] as String;
-          // _log.d('Found potential asset: $assetName');
-
           for (final factory in _fromJsonFactories.entries) {
             if (factory.key.toString() == assetName) {
               try {
                 final asset = factory.value(jsonPart);
                 foundWidgets.add(asset);
-                _log.d('Successfully parsed ${asset.assetName}');
                 return; // Found an asset, don't crawl deeper
               } catch (e, stackTrace) {
                 _log.e(
@@ -186,10 +195,8 @@ class AssetRegistry {
               're-saved by this build.');
         }
         // If not an asset, crawl deeper
-        _log.t('No asset found, crawling deeper');
         jsonPart.values.forEach(crawlJson);
       } else if (jsonPart is List) {
-        _log.t('Crawling list of length ${jsonPart.length}');
         jsonPart.forEach(crawlJson);
       }
     }

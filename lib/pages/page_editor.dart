@@ -573,7 +573,12 @@ class PageEditor extends ConsumerStatefulWidget {
 }
 
 class _PageEditorState extends ConsumerState<PageEditor> {
-  final List<Map<String, AssetPage>> _undoHistory = [];
+  /// Undo snapshots as encoded page maps, not live copies. A live deep copy
+  /// (encode + decode + re-parse of every asset on every page) on each
+  /// key-down made a single arrow nudge lag behind the finger on big
+  /// projects; the encoded string is already at hand in [_currentJson], so
+  /// taking a snapshot is free and the decode is deferred to the rare undo.
+  final List<String> _undoHistory = [];
   bool _showPalette = false;
 
   /// True while the pan key is held. The editor has one mode: a drag on empty
@@ -1236,8 +1241,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ...PageImageStore.referencedImageIds(
             _temporaryPages.map((name, page) => MapEntry(name, page.toJson()))),
         for (final snapshot in _undoHistory)
-          ...PageImageStore.referencedImageIds(
-              snapshot.map((name, page) => MapEntry(name, page.toJson()))),
+          ...PageImageStore.referencedImageIds(jsonDecode(snapshot)),
         if (_copiedAssets != null)
           ...PageImageStore.referencedImageIds(jsonDecode(_copiedAssets!)),
       };
@@ -1264,7 +1268,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   void _saveToHistory() {
-    _undoHistory.add(PageManager.copyPages(_temporaryPages));
+    // _currentJson tracks every settled edit (the same invariant the save
+    // button's dirty check leans on), so it IS the snapshot — except mid
+    // continuous gesture, where the sync was deferred and must run first.
+    // Empty means "never encoded" (a valid encode is at least '{}').
+    if (_currentJsonStale || _currentJson.isEmpty) _updateCurrentJson();
+    _undoHistory.add(_currentJson);
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
     }
@@ -1273,7 +1282,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _handleUndo() {
     if (_undoHistory.isNotEmpty) {
       setState(() {
-        _temporaryPages = _undoHistory.removeLast();
+        _temporaryPages = PageManager.pagesFromJson(_undoHistory.removeLast());
         // The restored pages are fresh copies, so whatever was selected is
         // now dead instances: invisible on the canvas, yet a Delete on them
         // would push a snapshot while removing nothing — and the next undo
