@@ -29,10 +29,10 @@ class MessageBubble extends ConsumerWidget {
     switch (message.role) {
       case ChatRole.user:
         // Operator-decision notes are injected feedback for the AI, not
-        // something the operator typed -- render as a system note, not a
-        // speech bubble.
+        // something the operator typed -- the operator already saw the
+        // action they clicked, so render nothing.
         if (message.content.startsWith(kOperatorDecisionPrefix)) {
-          return _buildOperatorDecisionNote(context);
+          return const SizedBox.shrink();
         }
         return _buildUserBubble(context);
       case ChatRole.assistant:
@@ -67,44 +67,6 @@ class MessageBubble extends ConsumerWidget {
             message.content,
             style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
           ),
-        ),
-      ),
-    );
-  }
-
-  /// A centered, muted chip for injected operator decisions on proposals.
-  Widget _buildOperatorDecisionNote(BuildContext context) {
-    final text = message.content
-        .substring(kOperatorDecisionPrefix.length)
-        .trimLeft();
-    final color = Theme.of(context).colorScheme.onSurfaceVariant;
-    return Align(
-      alignment: Alignment.center,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.80),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant,
-            width: 0.5,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.how_to_reg, size: 14, color: color),
-            const SizedBox(width: 6),
-            Flexible(
-              child: SelectableText(
-                text,
-                style: TextStyle(fontSize: 12, color: color),
-              ),
-            ),
-          ],
         ),
       ),
     );

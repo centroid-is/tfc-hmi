@@ -873,10 +873,11 @@ class ChatNotifier extends Notifier<ChatState> {
   /// Injects an operator decision on proposals into the conversation.
   ///
   /// The note carries the user role prefixed with [kOperatorDecisionPrefix],
-  /// so the AI reads it as coming from the operator on its next turn and
-  /// [MessageBubble] renders it as a system note. Deliberately does NOT
-  /// trigger a completion: a decision is context for the next exchange, not
-  /// a question that warrants spending a turn on "great, glad you accepted".
+  /// so the AI reads it as coming from the operator on its next turn while
+  /// [MessageBubble] renders nothing for it -- the operator already saw the
+  /// button they clicked. Deliberately does NOT trigger a completion: a
+  /// decision is context for the next exchange, not a question that warrants
+  /// spending a turn on "great, glad you accepted".
   void injectProposalFeedback(String text) {
     final messages = List<ChatMessage>.from(state.messages);
     messages.add(ChatMessage.user('$kOperatorDecisionPrefix $text'));

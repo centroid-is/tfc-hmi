@@ -13,8 +13,8 @@ export 'proposal_watcher.dart' show PendingProposal, ProposalOp;
 ///
 /// Notes carry the user role so every LLM provider keeps them in
 /// chronological order (Claude hoists system-role messages into the system
-/// parameter), and the prefix lets [MessageBubble] render them as a system
-/// note instead of an operator speech bubble.
+/// parameter), and the prefix lets [MessageBubble] hide them -- they are
+/// feedback for the AI, not something the operator needs shown back.
 const kOperatorDecisionPrefix = '[Operator decision]';
 
 /// An operator decision on AI proposals, relayed back to the AI.
