@@ -243,12 +243,11 @@ void main() {
       );
     });
 
-    // An asset far enough right that the pane's preferred width would sit on
-    // top of it. What is under review: the pane has narrowed just enough to
-    // leave the asset visible beside it — daylight between box and pane, and
-    // a form that still lays out at the reduced width.
-    testWidgets('the pane steps aside from the asset it is editing',
-        (tester) async {
+    // An asset far enough right that the pane would sit on top of it. What is
+    // under review: the whole canvas has re-fitted itself beside the pane —
+    // the page smaller but complete, daylight between canvas and pane, the
+    // asset in plain view, and the pane at its full preferred width.
+    testWidgets('the canvas insets beside the pane it opened', (tester) async {
       await _pumpEditor(
         tester,
         theme: dark,
@@ -257,7 +256,7 @@ void main() {
       await _openConfigPane(tester, 0.72, 0.4);
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFile('goldens/page_editor_config_pane_step_aside.png'),
+        matchesGoldenFile('goldens/page_editor_config_pane_inset.png'),
       );
     });
 

@@ -40,6 +40,30 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
     _transformationController.value = Matrix4.identity();
   }
 
+  /// The viewport measured on the last build, so a resize can be told apart
+  /// from the first layout.
+  Size? _viewportSize;
+
+  /// Re-clamps the pan after the viewport itself changes size — a docked
+  /// side pane opening insets the canvas out from under it. The transform is
+  /// in viewport pixels, so a pan that was flush against the old edge can
+  /// point past the new one, which would show a blank strip until the next
+  /// gesture. `InteractiveViewer` only clamps during gestures.
+  void _clampToViewport(Size viewport) {
+    final matrix = _transformationController.value;
+    final scale = matrix.getMaxScaleOnAxis();
+    final tx = matrix.storage[12];
+    final ty = matrix.storage[13];
+    // The child fills the viewport, scaled by `scale`: its image spans
+    // [t, t + scale * extent], which covers the viewport iff t is in
+    // [extent * (1 - scale), 0].
+    final cx = tx.clamp(viewport.width * (1 - scale), 0.0);
+    final cy = ty.clamp(viewport.height * (1 - scale), 0.0);
+    if (cx == tx && cy == ty) return;
+    _transformationController.value = matrix.clone()
+      ..setTranslationRaw(cx, cy, matrix.storage[14]);
+  }
+
   @override
   void dispose() {
     _transformationController.dispose();
@@ -54,72 +78,83 @@ class _ZoomableCanvasState extends State<ZoomableCanvas> {
       child: AspectRatio(
         aspectRatio: widget.aspectRatio,
         child: ClipRect(
-          child: Stack(
-            children: [
-              Listener(
-                onPointerDown: (event) {
-                  if (event.buttons & kMiddleMouseButton != 0) {
-                    setState(() => _middleButtonPanning = true);
-                  }
-                },
-                onPointerUp: (event) {
-                  if (_middleButtonPanning) {
-                    setState(() => _middleButtonPanning = false);
-                  }
-                },
-                onPointerCancel: (event) {
-                  if (_middleButtonPanning) {
-                    setState(() => _middleButtonPanning = false);
-                  }
-                },
-                child: InteractiveViewer(
-                  transformationController: _transformationController,
-                  minScale: widget.minScale,
-                  maxScale: widget.maxScale,
-                  boundaryMargin: EdgeInsets.zero,
-                  panEnabled: widget.panEnabled || _middleButtonPanning,
-                  scaleEnabled: widget.scaleEnabled,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Container(
-                        color: colorScheme.surface,
-                      ),
-                      widget.child,
-                    ],
+          child: LayoutBuilder(builder: (context, constraints) {
+            final viewport = constraints.biggest;
+            if (_viewportSize != null && _viewportSize != viewport) {
+              // Not inline: setting the controller mid-build would rebuild
+              // the InteractiveViewer during this very build.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _clampToViewport(viewport);
+              });
+            }
+            _viewportSize = viewport;
+            return Stack(
+              children: [
+                Listener(
+                  onPointerDown: (event) {
+                    if (event.buttons & kMiddleMouseButton != 0) {
+                      setState(() => _middleButtonPanning = true);
+                    }
+                  },
+                  onPointerUp: (event) {
+                    if (_middleButtonPanning) {
+                      setState(() => _middleButtonPanning = false);
+                    }
+                  },
+                  onPointerCancel: (event) {
+                    if (_middleButtonPanning) {
+                      setState(() => _middleButtonPanning = false);
+                    }
+                  },
+                  child: InteractiveViewer(
+                    transformationController: _transformationController,
+                    minScale: widget.minScale,
+                    maxScale: widget.maxScale,
+                    boundaryMargin: EdgeInsets.zero,
+                    panEnabled: widget.panEnabled || _middleButtonPanning,
+                    scaleEnabled: widget.scaleEnabled,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Container(
+                          color: colorScheme.surface,
+                        ),
+                        widget.child,
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: ValueListenableBuilder<Matrix4>(
-                  valueListenable: _transformationController,
-                  builder: (context, matrix, child) {
-                    final scale = matrix.getMaxScaleOnAxis();
-                    if (scale <= 1.0) {
-                      return const SizedBox.shrink();
-                    }
-                    return FloatingActionButton(
-                      mini: true,
-                      heroTag: null,
-                      // Zoomed in is the only state where panning is possible
-                      // — at 1:1 the child exactly fills the viewport — so
-                      // this is where the page editor's pan gestures are worth
-                      // mentioning, and this button is the only chrome that
-                      // appears exactly then.
-                      tooltip:
-                          'Reset zoom — middle-click drag or Space+drag to pan',
-                      backgroundColor: colorScheme.primary,
-                      onPressed: _resetZoom,
-                      child:
-                          const Icon(Icons.zoom_out_map, color: Colors.white),
-                    );
-                  },
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: ValueListenableBuilder<Matrix4>(
+                    valueListenable: _transformationController,
+                    builder: (context, matrix, child) {
+                      final scale = matrix.getMaxScaleOnAxis();
+                      if (scale <= 1.0) {
+                        return const SizedBox.shrink();
+                      }
+                      return FloatingActionButton(
+                        mini: true,
+                        heroTag: null,
+                        // Zoomed in is the only state where panning is possible
+                        // — at 1:1 the child exactly fills the viewport — so
+                        // this is where the page editor's pan gestures are worth
+                        // mentioning, and this button is the only chrome that
+                        // appears exactly then.
+                        tooltip:
+                            'Reset zoom — middle-click drag or Space+drag to pan',
+                        backgroundColor: colorScheme.primary,
+                        onPressed: _resetZoom,
+                        child:
+                            const Icon(Icons.zoom_out_map, color: Colors.white),
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            );
+          }),
         ),
       ),
     );

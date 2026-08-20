@@ -1,19 +1,20 @@
-/// The config pane steps aside from the asset it is editing.
+/// The canvas steps aside from the config pane — not the other way round.
 ///
-/// The pane docks over the right-hand strip of the canvas, which is exactly
+/// The pane docks over the right-hand strip of the screen, which is exactly
 /// where the asset being configured may live — and an editor you cannot see
 /// under the form that edits it defeats the point of a non-modal pane. So the
-/// editor narrows the pane just enough to leave the asset visible, follows the
-/// asset as it moves (drags, typed coordinates), widens back out once it is
-/// clear, and hands the width back to the operator the moment they touch the
-/// resize handle themselves.
+/// editor gives the pane its strip outright: the canvas re-fits itself beside
+/// the open pane (it is an aspect-fitted box, so the whole page stays in
+/// view, just smaller), follows the pane's resize handle, and takes the strip
+/// back when the pane closes. The pane itself keeps the width the operator
+/// chose — no asset position can squeeze it.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/drawn_box.dart';
-import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
+import 'package:tfc/widgets/zoomable_canvas.dart';
 
 import '../helpers/page_editor_harness.dart';
 
@@ -21,20 +22,6 @@ import '../helpers/page_editor_harness.dart';
 /// an operator does: right-click, then "Edit".
 Future<void> openConfigPane(WidgetTester tester, double fx, double fy) =>
     chooseFromAssetMenu(tester, fx, fy, 'Edit');
-
-/// Types [value] into the coordinate field labelled [label] in the open pane,
-/// then waits out one poll of the editor's config watch.
-Future<void> enterCoordinate(
-    WidgetTester tester, String label, String value) async {
-  final field = find.ancestor(
-    of: find.text(label),
-    matching: find.byType(TextFormField),
-  );
-  expect(field, findsOneWidget, reason: 'the pane should offer "$label"');
-  await tester.enterText(field, value);
-  await tester.pump(const Duration(milliseconds: 150));
-  await tester.pumpAndSettle();
-}
 
 Future<void> closePane(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(TextButton, 'Close'));
@@ -44,91 +31,93 @@ Future<void> closePane(WidgetTester tester) async {
 Rect paneRect(WidgetTester tester) => tester.getRect(find.byType(SidePane));
 Rect boxRect(WidgetTester tester) => tester.getRect(find.byType(DrawnBox));
 
+/// The canvas viewport: the clipped, aspect-fitted box the page renders in.
+/// (Not [AssetStack] — its global rect inflates with the zoom transform,
+/// while the box the operator actually sees is this clip.)
+Rect canvasRect(WidgetTester tester) => tester.getRect(find
+    .descendant(
+        of: find.byType(ZoomableCanvas), matching: find.byType(ClipRect))
+    // `.first` = the canvas's own aspect-fitted clip; the second is
+    // InteractiveViewer's internal one.
+    .first);
+
 void main() {
   setUp(setUpEditorEnvironment);
 
   // Geometry the cases below lean on, at the harness's 1400x1000 window: the
-  // canvas spans the full 1400px width, an `editorBox` is 168px wide, and the
-  // pane's preferred width is 520 — so its left edge sits at 868 and a box
-  // centred at x=0.65 (right edge 994) is covered, while at x=0.3 it is clear.
+  // canvas spans the full 1400px width, and the pane's preferred width is 520
+  // — so its left edge sits at 868 and a box centred at x=0.65 would be
+  // covered if the canvas stayed put.
 
-  testWidgets('the pane opens narrowed when it would cover the asset',
+  testWidgets('the canvas insets beside the pane, asset in plain view',
       (tester) async {
     await pumpEditorWith(tester, [editorBox(0.65, 0.4)]);
+    final fullWidth = canvasRect(tester).width;
+
     await openConfigPane(tester, 0.65, 0.4);
 
     final pane = paneRect(tester);
-    expect(pane.width, lessThan(520),
-        reason: 'the pane should give up width rather than cover the asset');
-    expect(pane.left, greaterThanOrEqualTo(boxRect(tester).right),
-        reason: 'the asset being edited must stay visible beside the pane');
+    expect(pane.width, 520,
+        reason: 'the pane keeps its width — the canvas is what moves');
+    expect(canvasRect(tester).right, lessThan(pane.left),
+        reason: 'the canvas ends with daylight before the pane begins');
+    expect(canvasRect(tester).width, lessThan(fullWidth));
+    expect(boxRect(tester).right, lessThan(pane.left),
+        reason: 'the asset being edited must be in plain view beside the '
+            'pane — wherever on the page it sits');
+
+    await closePane(tester);
+    expect(canvasRect(tester).width, fullWidth,
+        reason: 'the strip is a loan — the canvas gets it back on close');
+  });
+
+  testWidgets('an asset in the pane\'s own corner stays visible too',
+      (tester) async {
+    // Under #204's narrow-the-pane approach this was the unfixable case: not
+    // even a minimum-width pane cleared x=0.9. Re-fitting the canvas clears
+    // any position.
+    await pumpEditorWith(tester, [editorBox(0.9, 0.4)]);
+    await openConfigPane(tester, 0.9, 0.4);
+
+    expect(paneRect(tester).width, 520);
+    expect(boxRect(tester).right, lessThan(paneRect(tester).left));
 
     await closePane(tester);
   });
 
-  testWidgets('an asset in the clear gets the full preferred width',
-      (tester) async {
-    await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await openConfigPane(tester, 0.3, 0.4);
-
-    expect(paneRect(tester).width, 520,
-        reason: 'nothing to step aside from — no width to give up');
-
-    await closePane(tester);
-  });
-
-  testWidgets('the pane widens back out when the asset moves away',
-      (tester) async {
+  testWidgets('the canvas follows the pane\'s resize handle', (tester) async {
     await pumpEditorWith(tester, [editorBox(0.65, 0.4)]);
     await openConfigPane(tester, 0.65, 0.4);
-    expect(paneRect(tester).width, lessThan(520));
+    final before = canvasRect(tester);
 
-    await enterCoordinate(tester, 'X 0-100%', '30');
-
-    expect(paneRect(tester).width, 520,
-        reason: 'the step-aside is a loan, not a new width — the pane '
-            'returns to the operator\'s width once the asset is clear');
-
-    await closePane(tester);
-  });
-
-  testWidgets('the pane narrows as a drag brings the asset under it',
-      (tester) async {
-    await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await openConfigPane(tester, 0.3, 0.4);
-    expect(paneRect(tester).width, 520);
-
-    // Drag the box under the pane. Many small moves, as the asset's pan
-    // recognizer shares an arena with the canvas's InteractiveViewer.
-    final gesture = await tester.startGesture(onCanvas(tester, 0.3, 0.4));
-    await tester.pump(const Duration(milliseconds: 20));
-    for (var moved = 0.0; moved < 500; moved += 20) {
-      await gesture.moveBy(const Offset(20, 0));
-      await tester.pump(const Duration(milliseconds: 16));
+    // Drag the handle left: a wider pane leaves the canvas less room.
+    final pane = paneRect(tester);
+    final gesture =
+        await tester.startGesture(Offset(pane.left + 5, pane.center.dy));
+    for (var i = 0; i < 4; i++) {
+      await gesture.moveBy(const Offset(-20, 0));
+      await tester.pump();
     }
     await gesture.up();
     await tester.pumpAndSettle();
 
-    final pane = paneRect(tester);
-    expect(pane.width, lessThan(520),
-        reason: 'the watch should have stepped the pane off the moving asset');
-    expect(pane.left, greaterThanOrEqualTo(boxRect(tester).right));
+    expect(paneRect(tester).width, greaterThan(pane.width));
+    expect(canvasRect(tester).width, lessThan(before.width));
+    expect(canvasRect(tester).right, lessThan(paneRect(tester).left));
+    expect(boxRect(tester).right, lessThan(paneRect(tester).left));
 
     await closePane(tester);
   });
 
-  testWidgets('the pane steps aside when zoom carries the asset under it',
+  testWidgets('a zoomed canvas is inset whole — nothing slides under the pane',
       (tester) async {
-    // At 1:1 the box at x=0.45 is well clear of the pane. Pinch-zooming the
-    // canvas to 2x around a left-of-centre focal point carries it — bigger
-    // and further right — under the pane. Nothing about the asset's
-    // serialization changes, so this leans on the watch re-measuring the
-    // rendered box every tick.
+    // Zooming happens inside the canvas's own box; the inset moves that box.
+    // Pinch to 2x with the pane open, and the viewport — whatever part of
+    // the page it shows — must still end before the pane begins.
     await pumpEditorWith(tester, [editorBox(0.45, 0.4)]);
     await openConfigPane(tester, 0.45, 0.4);
-    expect(paneRect(tester).width, 520);
 
-    final canvas = tester.getRect(find.byType(AssetStack));
+    final canvas = canvasRect(tester);
     final cy = canvas.center.dy;
     final focal = canvas.left + 400;
     final a = await tester.startGesture(Offset(focal - 40, cy));
@@ -143,53 +132,11 @@ void main() {
     }
     await a.up();
     await b.up();
-    await tester.pump(const Duration(milliseconds: 150));
     await tester.pumpAndSettle();
 
-    final pane = paneRect(tester);
-    expect(pane.width, lessThan(520),
-        reason: 'zooming moved the asset under the pane, so it must narrow');
-    expect(pane.left, greaterThanOrEqualTo(boxRect(tester).right),
-        reason: 'the zoomed asset must stay visible beside the pane');
-
-    await closePane(tester);
-  });
-
-  testWidgets('it never narrows below the pane minimum', (tester) async {
-    // At x=0.9 not even a minimum-width pane clears the asset; width alone
-    // cannot help, and a pane below minimum would be unusable anyway.
-    await pumpEditorWith(tester, [editorBox(0.9, 0.4)]);
-    await openConfigPane(tester, 0.9, 0.4);
-
-    expect(paneRect(tester).width, SidePaneDefaults.minWidth);
-
-    await closePane(tester);
-  });
-
-  testWidgets('a hand-resized pane stays where the operator put it',
-      (tester) async {
-    await pumpEditorWith(tester, [editorBox(0.3, 0.4)]);
-    await openConfigPane(tester, 0.3, 0.4);
-
-    // The operator takes the width in hand: drag the resize handle.
-    final before = paneRect(tester);
-    final gesture =
-        await tester.startGesture(Offset(before.left + 5, before.center.dy));
-    for (var i = 0; i < 4; i++) {
-      await gesture.moveBy(const Offset(-20, 0));
-      await tester.pump();
-    }
-    await gesture.up();
-    await tester.pumpAndSettle();
-    final chosen = paneRect(tester).width;
-    expect(chosen, greaterThan(before.width));
-
-    // Now send the asset under the pane. The automatic step-aside must not
-    // fight a width the operator just chose by hand.
-    await enterCoordinate(tester, 'X 0-100%', '65');
-    expect(paneRect(tester).width, chosen,
-        reason: 'a hand-set width wins over the step-aside until the pane '
-            'is next opened');
+    expect(canvasRect(tester).right, lessThan(paneRect(tester).left),
+        reason: 'zoom lives inside the canvas box; the box itself stays '
+            'clear of the pane');
 
     await closePane(tester);
   });

@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import 'pane_chrome.dart';
@@ -222,18 +224,35 @@ bool showSidePane({
 /// that opened it after a page change.
 void closeSidePane({String? id}) => SidePaneHost.close(id: id);
 
-/// Resizes the open pane (only the pane [id] when given), animated.
-///
-/// Unlike the drag handle this does not report through `onWidthChanged`: it
-/// exists for a caller stepping the pane aside temporarily — the page editor
-/// narrowing it off the asset being edited — and the width the operator chose
-/// must survive the detour.
-void setSidePaneWidth(double width, {String? id}) =>
-    SidePaneHost.setWidth(width, id: id);
-
 /// Whether a pane (optionally a specific [id]) is currently open.
 bool isSidePaneOpen({String? id}) =>
     SidePaneHost.openId != null && (id == null || SidePaneHost.openId == id);
+
+/// Keeps [child] clear of the docked pane.
+///
+/// Wrap a page's content in this and it yields the strip of screen the pane
+/// occupies instead of being covered by it. The padding tracks the pane frame
+/// by frame — the slide in, a resize drag, the slide back out — so content
+/// that fits itself to its box (the plant-view canvas) glides aside with the
+/// pane rather than jumping, and nothing the operator tapped ends up hidden
+/// behind the very pane it opened.
+class SidePaneInset extends StatelessWidget {
+  final Widget child;
+
+  const SidePaneInset({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: SidePaneHost.occupiedWidth,
+      builder: (context, inset, child) => Padding(
+        padding: EdgeInsets.only(right: inset),
+        child: child,
+      ),
+      child: child,
+    );
+  }
+}
 
 /// Owns the single docked-pane [OverlayEntry].
 ///
@@ -247,6 +266,29 @@ abstract final class SidePaneHost {
 
   /// The id of the pane currently showing, or null.
   static String? get openId => _openId;
+
+  /// How much of the screen's right edge the pane occupies right now, in
+  /// logical pixels from the edge to one [SidePaneDefaults.margin] left of the
+  /// pane. Animated: it follows the slide in/out and the resize drag frame by
+  /// frame, so [SidePaneInset] (its consumer) moves with the pane rather than
+  /// jumping ahead of it. Zero while no pane is showing.
+  static ValueListenable<double> get occupiedWidth => _occupied;
+  static final ValueNotifier<double> _occupied = ValueNotifier<double>(0);
+
+  static void _setOccupied(double value) {
+    if (_occupied.value == value) return;
+    // A shell can go away mid-build — the whole overlay torn down by a route
+    // change or a test's next pumpWidget. Notifying listeners from inside
+    // that build would trip "setState during build", so defer to the frame's
+    // end; every other caller (animation ticks, drag updates) is outside it.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance
+          .addPostFrameCallback((_) => _setOccupied(value));
+      return;
+    }
+    _occupied.value = value;
+  }
 
   /// Width of the pane currently showing. Set per open, so a wide pane (the
   /// page editor's asset config) does not leave every equipment pane opened
@@ -285,16 +327,6 @@ abstract final class SidePaneHost {
     overlay.insert(_entry!);
   }
 
-  static void setWidth(double width, {String? id}) {
-    if (_openId == null) return;
-    if (id != null && id != _openId) return;
-    final next =
-        width < SidePaneDefaults.minWidth ? SidePaneDefaults.minWidth : width;
-    if (next == _width) return;
-    _width = next;
-    _shellKey?.currentState?._applyExternalWidth();
-  }
-
   static void close({String? id}) {
     if (_openId == null) return;
     if (id != null && id != _openId) return;
@@ -314,6 +346,7 @@ abstract final class SidePaneHost {
     _entry = null;
     _shellKey = null;
     _openId = null;
+    _setOccupied(0);
     final onClosed = _onClosed;
     _onClosed = null;
     onClosed?.call();
@@ -328,6 +361,7 @@ abstract final class SidePaneHost {
     _entry = null;
     _shellKey = null;
     _openId = null;
+    _setOccupied(0);
     final onClosed = _onClosed;
     _onClosed = null;
     onClosed?.call();
@@ -380,6 +414,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_publishOccupied);
     _controller.forward();
     // Escape closes the pane wherever focus happens to be. A non-modal pane
     // never owns focus, so a focus-scoped shortcut would not fire.
@@ -419,15 +454,15 @@ class _SidePaneShellState extends State<_SidePaneShell>
     await _controller.reverse();
   }
 
-  /// Whether the pane's geometry glides to its next width. True for
-  /// [SidePaneHost.setWidth] — a programmatic step-aside should read as the
-  /// pane moving out of the way — and false for the drag handle, which must
-  /// track the pointer exactly.
-  bool _animateWidthChange = false;
-
-  void _applyExternalWidth() {
-    _animateWidthChange = true;
-    _paneEntry.markNeedsBuild();
+  /// Feeds [SidePaneHost.occupiedWidth]: the pane's current intrusion from
+  /// the screen's right edge, scaled by the slide so it grows in with the
+  /// pane and collapses back out with it.
+  void _publishOccupied() {
+    final width = SidePaneHost._width < SidePaneDefaults.minWidth
+        ? SidePaneDefaults.minWidth
+        : SidePaneHost._width;
+    SidePaneHost._setOccupied(
+        _slide.value * (width + 2 * SidePaneDefaults.margin));
   }
 
   @override
@@ -456,7 +491,8 @@ class _SidePaneShellState extends State<_SidePaneShell>
     final maxWidth = screen.width - margin * 2 < SidePaneDefaults.minWidth
         ? SidePaneDefaults.minWidth
         : screen.width - margin * 2;
-    final width = SidePaneHost._width.clamp(SidePaneDefaults.minWidth, maxWidth);
+    final width =
+        SidePaneHost._width.clamp(SidePaneDefaults.minWidth, maxWidth);
 
     // No shadow at all: on the dark solarized theme even a small elevation
     // renders as a black halo, which reads like a warning frame around the
@@ -500,11 +536,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
       );
     }
 
-    return AnimatedPositioned(
-      duration: _animateWidthChange
-          ? const Duration(milliseconds: 180)
-          : Duration.zero,
-      curve: Curves.easeOutCubic,
+    return Positioned(
       right: margin,
       top: top,
       bottom: bottom,
@@ -524,7 +556,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
     final next = (SidePaneHost._width + delta).clamp(minWidth, maxWidth);
     if (next == SidePaneHost._width) return;
     SidePaneHost._width = next;
-    _animateWidthChange = false;
+    _publishOccupied();
     // The pane sits in its own route's OverlayEntry, which a plain setState
     // here would not reach.
     _paneEntry.markNeedsBuild();

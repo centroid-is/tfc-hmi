@@ -19,6 +19,7 @@ import '../providers/page_manager.dart';
 import '../providers/state_man.dart';
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
 import '../widgets/base_scaffold.dart';
+import '../widgets/panes/side_pane.dart';
 import '../widgets/zoomable_canvas.dart';
 
 part 'page_view.g.dart';
@@ -45,8 +46,7 @@ class AssetStackConfig {
 }
 
 Matrix4 _buildTransform(bool xMirror, bool yMirror) {
-  return Matrix4.identity()
-    ..scale(xMirror ? -1.0 : 1.0, yMirror ? -1.0 : 1.0);
+  return Matrix4.identity()..scale(xMirror ? -1.0 : 1.0, yMirror ? -1.0 : 1.0);
 }
 
 // Conditionally wraps the editor's selection chrome in a bordered Container.
@@ -467,76 +467,75 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                     angle: angleRadians,
                     width: assetW,
                     height: assetH,
-                        // Container with a BoxDecoration hit-tests opaque for
-                        // its full bounds even when only a border is set
-                        // (BoxDecoration.hitTest returns true inside any
-                        // rectangular shape regardless of fill). In runtime
-                        // mode the overlay's inner GestureDetector is
-                        // translucent so primary taps fall through to the
-                        // asset's own GestureDetectors — but the wrapping
-                        // Container would still consume the hit. Only wrap
-                        // in a Container when there is an actual border to
-                        // paint (i.e. when selected); otherwise the chrome
-                        // is just the bare GestureDetector.
-                        child: _wrapWithSelectionBorder(
-                          isSelected: isSelected,
-                          child: widget.absorb
-                              ? GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: widget.onTap != null
-                                      ? () => widget.onTap!(asset)
+                    // Container with a BoxDecoration hit-tests opaque for
+                    // its full bounds even when only a border is set
+                    // (BoxDecoration.hitTest returns true inside any
+                    // rectangular shape regardless of fill). In runtime
+                    // mode the overlay's inner GestureDetector is
+                    // translucent so primary taps fall through to the
+                    // asset's own GestureDetectors — but the wrapping
+                    // Container would still consume the hit. Only wrap
+                    // in a Container when there is an actual border to
+                    // paint (i.e. when selected); otherwise the chrome
+                    // is just the bare GestureDetector.
+                    child: _wrapWithSelectionBorder(
+                      isSelected: isSelected,
+                      child: widget.absorb
+                          ? GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: widget.onTap != null
+                                  ? () => widget.onTap!(asset)
+                                  : null,
+                              onDoubleTap: widget.onDoubleTap != null
+                                  ? () => widget.onDoubleTap!(asset)
+                                  : null,
+                              onPanUpdate: widget.onPanUpdate != null
+                                  ? (d) => widget.onPanUpdate!(asset, d)
+                                  : null,
+                              onPanStart: widget.onPanStart != null
+                                  ? (details) =>
+                                      widget.onPanStart!(asset, details)
+                                  : null,
+                              // The host's menu wins when supplied: it
+                              // carries editing actions that must be
+                              // reachable whether or not MCP chat is
+                              // available, and folds the AI entries in
+                              // itself.
+                              onSecondaryTapUp: widget.onSecondaryTap != null
+                                  ? (details) => widget.onSecondaryTap!(
+                                        asset,
+                                        details.globalPosition,
+                                      )
+                                  : kChatEnabled && isMcpChatAvailable()
+                                      ? (details) {
+                                          showEditorAssetContextMenu(
+                                            context,
+                                            ref,
+                                            details.globalPosition,
+                                            asset,
+                                          );
+                                        }
                                       : null,
-                                  onDoubleTap: widget.onDoubleTap != null
-                                      ? () => widget.onDoubleTap!(asset)
+                            )
+                          : GestureDetector(
+                              // Runtime view: only secondary tap is
+                              // handled here (chat context menu). Primary
+                              // taps must pass through to the asset's
+                              // own GestureDetectors. translucent keeps
+                              // us from swallowing them.
+                              behavior: HitTestBehavior.translucent,
+                              onSecondaryTapUp:
+                                  kChatEnabled && isMcpChatAvailable()
+                                      ? (details) {
+                                          showAssetContextMenu(
+                                            context,
+                                            details.globalPosition,
+                                            () => debugAsset(ref, asset),
+                                          );
+                                        }
                                       : null,
-                                  onPanUpdate: widget.onPanUpdate != null
-                                      ? (d) => widget.onPanUpdate!(asset, d)
-                                      : null,
-                                  onPanStart: widget.onPanStart != null
-                                      ? (details) =>
-                                          widget.onPanStart!(asset, details)
-                                      : null,
-                                  // The host's menu wins when supplied: it
-                                  // carries editing actions that must be
-                                  // reachable whether or not MCP chat is
-                                  // available, and folds the AI entries in
-                                  // itself.
-                                  onSecondaryTapUp:
-                                      widget.onSecondaryTap != null
-                                          ? (details) => widget.onSecondaryTap!(
-                                                asset,
-                                                details.globalPosition,
-                                              )
-                                          : kChatEnabled && isMcpChatAvailable()
-                                              ? (details) {
-                                                  showEditorAssetContextMenu(
-                                                    context,
-                                                    ref,
-                                                    details.globalPosition,
-                                                    asset,
-                                                  );
-                                                }
-                                              : null,
-                                )
-                              : GestureDetector(
-                                  // Runtime view: only secondary tap is
-                                  // handled here (chat context menu). Primary
-                                  // taps must pass through to the asset's
-                                  // own GestureDetectors. translucent keeps
-                                  // us from swallowing them.
-                                  behavior: HitTestBehavior.translucent,
-                                  onSecondaryTapUp:
-                                      kChatEnabled && isMcpChatAvailable()
-                                          ? (details) {
-                                              showAssetContextMenu(
-                                                context,
-                                                details.globalPosition,
-                                                () => debugAsset(ref, asset),
-                                              );
-                                            }
-                                          : null,
-                                ),
-                        ),
+                            ),
+                    ),
                   ),
                 ],
               ),
@@ -565,24 +564,24 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                     width: assetW,
                     height: assetH,
                     child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          CustomPaint(
-                            size: Size(assetW, assetH),
-                            painter: DashedBorderPainter(color: Colors.amber),
+                      clipBehavior: Clip.none,
+                      children: [
+                        CustomPaint(
+                          size: Size(assetW, assetH),
+                          painter: DashedBorderPainter(color: Colors.amber),
+                        ),
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          // The frame turns with the asset; the badge is a
+                          // label and stays upright so it is still readable
+                          // on a rotated or upside-down asset.
+                          child: Transform.rotate(
+                            angle: -angleRadians,
+                            alignment: Alignment.center,
+                            child: const ProposalBadge(),
                           ),
-                          Positioned(
-                            top: 2,
-                            right: 2,
-                            // The frame turns with the asset; the badge is a
-                            // label and stays upright so it is still readable
-                            // on a rotated or upside-down asset.
-                            child: Transform.rotate(
-                              angle: -angleRadians,
-                              alignment: Alignment.center,
-                              child: const ProposalBadge(),
-                            ),
-                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -684,7 +683,11 @@ class AssetView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return BaseScaffold(
       title: 'Asset View',
-      body: ZoomableCanvas(
+      // An equipment pane (a tapped conveyor, a sensor) docks over the right
+      // edge; the inset re-fits the plant view beside it so the very device
+      // the operator tapped is never hidden behind its own pane.
+      body: SidePaneInset(
+          child: ZoomableCanvas(
         child: LayoutBuilder(
           builder: (context, constraints) => FutureBuilder<PageManager>(
             future: ref.watch(pageManagerProvider.future),
@@ -709,7 +712,7 @@ class AssetView extends ConsumerWidget {
             },
           ),
         ),
-      ),
+      )),
     );
   }
 }
