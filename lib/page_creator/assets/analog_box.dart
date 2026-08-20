@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
@@ -10,11 +9,15 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
+import '../../providers/collector.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/state_man.dart';
+import 'package:tfc_dart/core/collector.dart';
+import 'package:tfc_dart/core/database.dart' show TimeseriesData;
 import 'package:tfc/converter/color_converter.dart';
 import 'graph.dart';
-import '../../widgets/graph.dart' show GraphType;
+import '../../widgets/graph.dart';
+import '../../widgets/panes/pane_chrome.dart';
+import '../../widgets/panes/side_pane.dart';
 
 part 'analog_box.g.dart';
 
@@ -82,11 +85,12 @@ class AnalogBoxConfig extends BaseAsset {
   @ColorConverter()
   Color hysteresisColor;
 
-  /// Whether tapping opens the detail dialog
+  /// Whether tapping opens the detail side pane. The JSON key predates the
+  /// dialog→pane conversion and is kept for persisted pages.
   @JsonKey(name: 'enable_dialog')
   bool enableDialog;
 
-  /// Dialog: include mini-graph
+  /// Pane: include the trend tile (small preview, full chart behind a tap)
   @JsonKey(name: 'graph_config')
   GraphAssetConfig? graphConfig;
 
@@ -326,13 +330,13 @@ class _AnalogBoxConfigEditorState extends State<_AnalogBoxConfigEditor> {
                 ),
                 const SizedBox(height: 12),
                 SwitchListTile(
-                  title: const Text('Enable tap dialog'),
+                  title: const Text('Enable tap pane'),
                   value: widget.config.enableDialog,
                   onChanged: (v) =>
                       setState(() => widget.config.enableDialog = v),
                 ),
                 SwitchListTile(
-                  title: const Text('Include Graph in dialog'),
+                  title: const Text('Include trend in pane'),
                   value: showGraph,
                   onChanged: (v) => setState(() {
                     showGraph = v;
@@ -372,8 +376,18 @@ class AnalogBox extends ConsumerWidget {
   final AnalogBoxConfig config;
   const AnalogBox({required this.config, super.key});
 
+  /// One pane per placed asset: the pane follows the config instance, and a
+  /// second tap on the same box toggles it shut ([showSidePane] semantics).
+  String get _paneId => 'analog_box:${identityHashCode(config)}';
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // The pane lives in the root overlay; owning it here closes it when the
+    // asset leaves the tree (page change), same contract as the sensor pane.
+    return SidePaneOwner(paneId: _paneId, child: _buildBox(context, ref));
+  }
+
+  Widget _buildBox(BuildContext context, WidgetRef ref) {
     final size = config.size.toSize(MediaQuery.of(context).size);
 
     // Preview
@@ -382,9 +396,7 @@ class AnalogBox extends ConsumerWidget {
         width: size.width,
         height: size.height,
         child: GestureDetector(
-          onTap: config.enableDialog
-              ? () => _showConfigDialog(context, ref)
-              : null,
+          onTap: config.enableDialog ? () => _showPane(context) : null,
           child: CustomPaint(
             painter: _AnalogBoxPainter(
               percent: .62,
@@ -541,9 +553,7 @@ class AnalogBox extends ConsumerWidget {
         );
 
         return GestureDetector(
-          onTap: config.enableDialog
-              ? () => _showConfigDialog(context, ref)
-              : null,
+          onTap: config.enableDialog ? () => _showPane(context) : null,
           child: SizedBox(
             width: size.width,
             height: size.height,
@@ -579,383 +589,618 @@ class AnalogBox extends ConsumerWidget {
     return p.clamp(0, 1);
   }
 
-  void _showConfigDialog(BuildContext context, WidgetRef ref) {
-    showDialog(
+  void _showPane(BuildContext context) {
+    showSidePane(
       context: context,
-      builder: (_) => _AnalogBoxDialog(config: config),
+      id: _paneId,
+      builder: (_) => _AnalogBoxPaneLoader(config: config),
     );
   }
 }
 
-/// DIALOG (user config + graph)
+/// OPERATOR PANE
 
-class _AnalogBoxDialog extends ConsumerStatefulWidget {
+/// A key that counts as configured: non-null AND non-empty. `KeyField`
+/// reports a cleared field as `''`, so both spellings mean "not bound" —
+/// an empty-string range key must not conjure an empty Sensor range section.
+String? _definedKey(String? key) => (key == null || key.isEmpty) ? null : key;
+
+/// Trims the trailing zeros off a 3-decimal rendering: `62.500` → `62.5`,
+/// `4.000` → `4`. Pane values are read at a glance; the padding is noise.
+String _fmtValue(double v) {
+  var s = v.toStringAsFixed(3);
+  if (s.contains('.')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
+  return s;
+}
+
+/// The pane's title. Key strings are wiring, not something an operator
+/// reads — with no label configured the pane names the device by what it is.
+String _paneTitle(AnalogBoxConfig config) =>
+    config.text?.isNotEmpty == true ? config.text! : 'Analog value';
+
+/// Subscribes the configured keys and feeds [AnalogBoxPane] plain values.
+///
+/// The subscriptions live and die with the pane — closing it releases them
+/// (same lifetime contract as the conveyor and sensor panes).
+class _AnalogBoxPaneLoader extends ConsumerWidget {
   final AnalogBoxConfig config;
-  const _AnalogBoxDialog({required this.config});
+  const _AnalogBoxPaneLoader({required this.config});
 
   @override
-  ConsumerState<_AnalogBoxDialog> createState() => _AnalogBoxDialogState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final keys = <String, String>{};
+    void put(String tag, String? key) {
+      final k = _definedKey(key);
+      if (k != null) keys[tag] = k;
+    }
+
+    put('analog', config.analogKey);
+    put('min', config.analogSensorRangeMinKey);
+    put('max', config.analogSensorRangeMaxKey);
+    put('sp1', config.setpoint1Key);
+    put('hyst', config.setpoint1HysteresisKey);
+    put('sp2', config.setpoint2Key);
+    put('error', config.errorKey);
+
+    // Each key's stream starts with null so the combine emits before every
+    // subscription has produced a value — fields fill in as data arrives
+    // instead of the whole pane waiting on the slowest key. A failing
+    // subscribe (stale key on a live page) blanks that field, not the pane.
+    final streams = [
+      for (final entry in keys.entries)
+        ref
+            .watch(stateManProvider.future)
+            .asStream()
+            .switchMap((sm) =>
+                sm.subscribe(entry.value).asStream().switchMap((s) => s))
+            .map<DynamicValue?>((dv) => dv)
+            .onErrorReturn(null)
+            .startWith(null)
+            .map((dv) => MapEntry(entry.key, dv)),
+    ];
+
+    final combined = CombineLatestStream.list(streams)
+        .map((entries) => <String, DynamicValue>{
+              for (final e in entries)
+                if (e.value != null) e.key: e.value!,
+            });
+
+    Future<void> write(String key, double val) async {
+      final sm = await ref.read(stateManProvider.future);
+      final curr = await sm.read(key);
+      curr.value = val;
+      await sm.write(key, curr);
+    }
+
+    // Trend tile — only when the page author opted the trend in. The small
+    // preview charts the primary series from the collector; the full chart
+    // behind the tap honours the whole GraphAssetConfig (extra series, time
+    // window), as the old dialog's embedded graph did.
+    Widget? trendTile;
+    final gc = config.graphConfig;
+    if (gc != null) {
+      if (gc.primarySeries.isEmpty && config.analogKey.isNotEmpty) {
+        gc.primarySeries = [
+          GraphSeriesConfig(
+            key: config.analogKey,
+            label: config.text ?? 'Value',
+          ),
+        ];
+      }
+      gc.graphType = GraphType.timeseries;
+      final series = gc.primarySeries.isNotEmpty ? gc.primarySeries.first : null;
+      if (series != null) {
+        trendTile = PaneGraphTile(
+          // Tall enough for a line chart to be readable rather than
+          // decorative — same height as the conveyor's trend tile.
+          height: 100,
+          preview: AnalogBoxTrendGraphLoader(
+            keyName: series.key,
+            member: series.member,
+            seriesLabel: series.label,
+            units: config.units,
+            showButtons: false,
+            compact: true,
+            xSpan: const Duration(minutes: 5),
+          ),
+          expandedTitle: '${_paneTitle(config)} — trend',
+          expandedSize: const Size(820, 520),
+          expandedBuilder: (_) => GraphAsset(gc),
+        );
+      }
+    }
+
+    return StreamBuilder<Map<String, DynamicValue>>(
+      stream: combined,
+      builder: (context, snapshot) {
+        final m = snapshot.data ?? const <String, DynamicValue>{};
+        double? numOf(String tag) {
+          final v = m[tag];
+          return (v != null && (v.isDouble || v.isInteger)) ? v.asDouble : null;
+        }
+
+        return AnalogBoxPane(
+          config: config,
+          value: numOf('analog'),
+          setpoint1: numOf('sp1'),
+          setpoint1Hysteresis: numOf('hyst'),
+          setpoint2: numOf('sp2'),
+          rangeMin: numOf('min'),
+          rangeMax: numOf('max'),
+          error: m['error']?.asBool ?? false,
+          trendTile: trendTile,
+          // A rejected write is reported rather than swallowed: the field
+          // snaps back on the next PLC update, and without this the operator
+          // sees their entry silently undone. Messenger resolved before the
+          // await so nothing reaches for a disposed context afterwards.
+          onWrite: (key, value) {
+            final messenger = ScaffoldMessenger.maybeOf(context);
+            write(key, value).catchError((Object e) {
+              messenger?.showSnackBar(
+                SnackBar(content: Text('Write failed: $e')),
+              );
+            });
+          },
+        );
+      },
+    );
+  }
 }
 
-class _AnalogBoxDialogState extends ConsumerState<_AnalogBoxDialog> {
-  bool showAdvanced = false;
-  Widget? _cachedGraph;
+/// The operator pane. Split from [_AnalogBoxPaneLoader] and fed plain values
+/// plus an [onWrite] callback so goldens and widget tests can pump it without
+/// a live `StateMan` behind it (same shape as [SensorFbPane]).
+///
+/// Sections appear only when the config binds the keys behind them: no
+/// setpoint keys, no Setpoints section — and no range keys, no Sensor range
+/// section. The range section replaces the old dialog's "Advanced" switch,
+/// whose `!= null` gate showed the toggle even for cleared (empty-string)
+/// keys with nothing behind it.
+class AnalogBoxPane extends StatelessWidget {
+  final AnalogBoxConfig config;
+  final double? value;
+  final double? setpoint1;
+  final double? setpoint1Hysteresis;
+  final double? setpoint2;
+  final double? rangeMin;
+  final double? rangeMax;
+  final bool error;
 
-  Widget _buildGraph() {
-    if (_cachedGraph != null) return _cachedGraph!;
-    final gc = widget.config.graphConfig!;
-    if (gc.primarySeries.isEmpty && widget.config.analogKey.isNotEmpty) {
-      gc.primarySeries = [
-        GraphSeriesConfig(
-          key: widget.config.analogKey,
-          label: widget.config.text ?? 'Value',
-        ),
-      ];
-    }
-    gc.graphType = GraphType.timeseries;
-    _cachedGraph = SizedBox(
-      width: 600,
-      height: 280,
-      child: GraphAsset(gc),
-    );
-    return _cachedGraph!;
-  }
+  /// The trend tile (a [PaneGraphTile]), or null when the page author left
+  /// the trend out. Injected as a built widget so tests can supply a canned,
+  /// provider-free preview.
+  final Widget? trendTile;
+
+  /// Called with the state key to write and the parsed value; only keys the
+  /// config binds are ever passed.
+  final void Function(String key, double value) onWrite;
+
+  const AnalogBoxPane({
+    super.key,
+    required this.config,
+    required this.onWrite,
+    this.value,
+    this.setpoint1,
+    this.setpoint1Hysteresis,
+    this.setpoint2,
+    this.rangeMin,
+    this.rangeMax,
+    this.error = false,
+    this.trendTile,
+  });
 
   @override
   Widget build(BuildContext context) {
-    // Build separate streams for values we want to show/edit
-    Stream<DynamicValue>? streamFor(String? key) {
-      if (key == null || key.isEmpty) return null;
-      return ref
-          .watch(stateManProvider.future)
-          .asStream()
-          .switchMap((sm) => sm.subscribe(key).asStream().switchMap((s) => s));
-    }
+    final sp1Key = _definedKey(config.setpoint1Key);
+    final hystKey = _definedKey(config.setpoint1HysteresisKey);
+    final sp2Key = _definedKey(config.setpoint2Key);
+    final rangeMinKey = _definedKey(config.analogSensorRangeMinKey);
+    final rangeMaxKey = _definedKey(config.analogSensorRangeMaxKey);
+    final units = config.units;
+    final rangeUnits = config.rangeUnits?.isNotEmpty == true
+        ? config.rangeUnits
+        : units;
 
-    final sp1$ = streamFor(widget.config.setpoint1Key);
-    final hyst$ = streamFor(widget.config.setpoint1HysteresisKey);
-    final sp2$ = streamFor(widget.config.setpoint2Key);
-    final analog$ = streamFor(widget.config.analogKey);
-    final min$ = streamFor(widget.config.analogSensorRangeMinKey);
-    final max$ = streamFor(widget.config.analogSensorRangeMaxKey);
-    final error$ = streamFor(widget.config.errorKey);
+    String withUnit(double? v, String? unit) => v == null
+        ? '---'
+        : unit == null || unit.isEmpty
+            ? _fmtValue(v)
+            : '${_fmtValue(v)} $unit';
 
-    Future<void> writeValue(String key, double val) async {
-      final sm = await ref.read(stateManProvider.future);
-      final currValue = await sm.read(key);
-      currValue.value = val;
-      await sm.write(key, currValue);
-    }
-
-    Widget valueField({
-      required String label,
-      required double? current,
-      required void Function(double) onSubmitted,
-      String? units,
-    }) {
-      final controller = TextEditingController(
-        text: current?.toStringAsFixed(3) ?? '',
-      );
-      return SizedBox(
-        width: 220,
-        child: TextFormField(
-          controller: controller,
-          decoration: InputDecoration(
-            labelText: label,
-            suffixText: units ?? widget.config.units,
+    return SidePane(
+      title: _paneTitle(config),
+      subtitle: config.text?.isNotEmpty == true ? 'Analog value' : null,
+      icon: Icons.speed,
+      // Fault outranks everything: with the error bit set the reading is not
+      // to be trusted, whatever the number says.
+      status: error
+          ? const PaneStatus.fault('Sensor error')
+          : value == null
+              ? const PaneStatus.unknown('No signal')
+              : const PaneStatus.running('Live'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // --- Live value ------------------------------------------------
+          PaneSection(
+            title: 'Signal',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PaneTileRow(
+                  children: [
+                    PaneMetricTile(
+                      label: 'Current',
+                      value: value != null ? _fmtValue(value!) : '---',
+                      unit: units,
+                      icon: Icons.speed,
+                      width: 150,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // The bar's display scale — what "full" means on the mimic.
+                PaneDetailRow(
+                  label: 'Scale',
+                  value:
+                      '${_fmtValue(config.minValue)} – ${withUnit(config.maxValue, units)}',
+                ),
+              ],
+            ),
           ),
-          keyboardType: const TextInputType.numberWithOptions(
-              decimal: true, signed: false),
-          onFieldSubmitted: (v) {
-            final d = double.tryParse(v);
-            if (d != null) onSubmitted(d);
-          },
-        ),
-      );
-    }
 
-    return StandardDialogFrame(
-      title: widget.config.text?.isNotEmpty == true
-          ? widget.config.text!
-          : widget.config.analogKey,
-      icon: Icons.tune,
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Error banner
-            if (error$ != null)
-              StreamBuilder<DynamicValue>(
-                stream: error$,
-                builder: (ctx, snap) {
-                  final active = snap.data?.asBool ?? false;
-                  if (!active) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Card(
-                      color: Colors.red.shade50,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 12),
-                        child: Row(
-                          children: [
-                            Icon(Icons.error, color: Colors.red),
-                            const SizedBox(width: 12),
-                            Text(
-                              'Sensor Error',
-                              style: TextStyle(
-                                color: Colors.red.shade900,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-            // Current value row with advanced toggle
-            if (analog$ != null)
-              StreamBuilder<DynamicValue>(
-                stream: analog$,
-                builder: (ctx, snap) {
-                  final dv = (snap.data);
-                  final val = (dv != null && (dv.isDouble || dv.isInteger))
-                      ? dv.asDouble
-                      : null;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          children: [
-                            Icon(Icons.speed,
-                                color: Theme.of(context).primaryColor),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                'Current: ${val?.toStringAsFixed(3) ?? '---'} ${widget.config.units ?? ''}',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                            ),
-                            if (widget.config.analogSensorRangeMinKey != null ||
-                                widget.config.analogSensorRangeMaxKey != null)
-                              _AdvancedSwitch(
-                                value: showAdvanced,
-                                onChanged: (value) {
-                                  setState(() {
-                                    showAdvanced = value;
-                                  });
-                                },
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-            // Editable setpoints
-            if (widget.config.setpoint1Key != null ||
-                widget.config.setpoint2Key != null)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.tune,
-                              color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Setpoints',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 16,
-                        runSpacing: 12,
-                        children: [
-                          if (widget.config.setpoint1Key != null)
-                            StreamBuilder<DynamicValue>(
-                              stream: sp1$,
-                              builder: (ctx, snap) {
-                                final val = (snap.data != null &&
-                                        (snap.data!.isDouble ||
-                                            snap.data!.isInteger))
-                                    ? snap.data!.asDouble
-                                    : null;
-                                return valueField(
-                                  label: 'Setpoint 1',
-                                  current: val,
-                                  onSubmitted: (d) => writeValue(
-                                      widget.config.setpoint1Key!, d),
-                                );
-                              },
-                            ),
-                          if (widget.config.setpoint1HysteresisKey != null)
-                            StreamBuilder<DynamicValue>(
-                              stream: hyst$,
-                              builder: (ctx, snap) {
-                                final val = (snap.data != null &&
-                                        (snap.data!.isDouble ||
-                                            snap.data!.isInteger))
-                                    ? snap.data!.asDouble
-                                    : null;
-                                return valueField(
-                                  label: 'SP1 Hysteresis (±)',
-                                  current: val,
-                                  onSubmitted: (d) => writeValue(
-                                      widget.config.setpoint1HysteresisKey!, d),
-                                );
-                              },
-                            ),
-                          if (widget.config.setpoint2Key != null)
-                            StreamBuilder<DynamicValue>(
-                              stream: sp2$,
-                              builder: (ctx, snap) {
-                                final val = (snap.data != null &&
-                                        (snap.data!.isDouble ||
-                                            snap.data!.isInteger))
-                                    ? snap.data!.asDouble
-                                    : null;
-                                return valueField(
-                                  label: 'Setpoint 2',
-                                  current: val,
-                                  onSubmitted: (d) => writeValue(
-                                      widget.config.setpoint2Key!, d),
-                                );
-                              },
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            const SizedBox(height: 16),
-
-            // Advanced: editable range keys (appears when toggle is on)
-            if (showAdvanced &&
-                (widget.config.analogSensorRangeMinKey != null ||
-                    widget.config.analogSensorRangeMaxKey != null))
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.tune,
-                              color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'Sensor range values',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 16,
-                        runSpacing: 12,
-                        children: [
-                          if (widget.config.analogSensorRangeMinKey != null)
-                            StreamBuilder<DynamicValue>(
-                              stream: min$,
-                              builder: (ctx, snap) {
-                                final val = (snap.data != null &&
-                                        (snap.data!.isDouble ||
-                                            snap.data!.isInteger))
-                                    ? snap.data!.asDouble
-                                    : null;
-                                return valueField(
-                                  label: 'Range Min',
-                                  current: val,
-                                  onSubmitted: (d) => writeValue(
-                                      widget.config.analogSensorRangeMinKey!,
-                                      d),
-                                  units: widget.config.rangeUnits,
-                                );
-                              },
-                            ),
-                          if (widget.config.analogSensorRangeMaxKey != null)
-                            StreamBuilder<DynamicValue>(
-                              stream: max$,
-                              builder: (ctx, snap) {
-                                final val = (snap.data != null &&
-                                        (snap.data!.isDouble ||
-                                            snap.data!.isInteger))
-                                    ? snap.data!.asDouble
-                                    : null;
-                                return valueField(
-                                  label: 'Range Max',
-                                  current: val,
-                                  onSubmitted: (d) => writeValue(
-                                      widget.config.analogSensorRangeMaxKey!,
-                                      d),
-                                  units: widget.config.rangeUnits,
-                                );
-                              },
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            // Graph (simple: one series of analogKey)
-            if (widget.config.graphConfig != null &&
-                widget.config.analogKey != null) ...[
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.show_chart,
-                              color: Theme.of(context).primaryColor),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Historical Data',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      _buildGraph(),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+          // --- Trend -----------------------------------------------------
+          //
+          // A preview in the pane, the real chart in a floating dialog the
+          // operator can park next to the mimic (conveyor/sensor shape).
+          if (trendTile != null) ...[
+            const Divider(height: 1),
+            PaneSection(title: 'Trend', child: trendTile!),
           ],
-        ),
+
+          // --- Setpoints -------------------------------------------------
+          //
+          // Inline, not behind a fold: adjusting a threshold is the routine
+          // operator act on an analog box. Committed on submit (Enter /
+          // focus-out) only — a half-typed value must not reach the PLC.
+          if (sp1Key != null || hystKey != null || sp2Key != null) ...[
+            const Divider(height: 1),
+            PaneSection(
+              title: 'Setpoints',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (sp1Key != null)
+                        Expanded(
+                          child: _ValueField(
+                            fieldKey: 'analog_sp1_field',
+                            label: 'Setpoint 1',
+                            value: setpoint1,
+                            units: units,
+                            onSubmitted: (v) => onWrite(sp1Key, v),
+                          ),
+                        ),
+                      if (sp1Key != null && hystKey != null)
+                        const SizedBox(width: 8),
+                      if (hystKey != null)
+                        Expanded(
+                          child: _ValueField(
+                            fieldKey: 'analog_hyst_field',
+                            label: 'Hysteresis ±',
+                            value: setpoint1Hysteresis,
+                            units: units,
+                            onSubmitted: (v) => onWrite(hystKey, v),
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (sp2Key != null) ...[
+                    const SizedBox(height: 8),
+                    _ValueField(
+                      fieldKey: 'analog_sp2_field',
+                      label: 'Setpoint 2',
+                      value: setpoint2,
+                      units: units,
+                      onSubmitted: (v) => onWrite(sp2Key, v),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+
+          // --- Sensor range ----------------------------------------------
+          //
+          // What the old dialog kept behind its "Advanced" switch. Read-only
+          // live values up front; the editable fields sit folded behind
+          // "Adjust" — re-ranging a transmitter is a rare, deliberate act
+          // (same fold as the sensor pane's debounce).
+          if (rangeMinKey != null || rangeMaxKey != null) ...[
+            const Divider(height: 1),
+            PaneSection(
+              title: 'Sensor range',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (rangeMinKey != null)
+                    PaneDetailRow(
+                      label: 'Range min',
+                      value: withUnit(rangeMin, rangeUnits),
+                    ),
+                  if (rangeMaxKey != null)
+                    PaneDetailRow(
+                      label: 'Range max',
+                      value: withUnit(rangeMax, rangeUnits),
+                    ),
+                  ExpansionTile(
+                    key: const Key('analog_range_adjust'),
+                    title: Text(
+                      'Adjust',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    tilePadding: EdgeInsets.zero,
+                    // Top padding matters: the ExpansionTile clips its
+                    // children, and the fields' floating labels paint above
+                    // the field box — flush at the top they lose their upper
+                    // half to the clip.
+                    childrenPadding: const EdgeInsets.only(top: 8, bottom: 8),
+                    shape: const Border(),
+                    collapsedShape: const Border(),
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (rangeMinKey != null)
+                            Expanded(
+                              child: _ValueField(
+                                fieldKey: 'analog_range_min_field',
+                                label: 'Range min',
+                                value: rangeMin,
+                                units: rangeUnits,
+                                onSubmitted: (v) => onWrite(rangeMinKey, v),
+                              ),
+                            ),
+                          if (rangeMinKey != null && rangeMaxKey != null)
+                            const SizedBox(width: 8),
+                          if (rangeMaxKey != null)
+                            Expanded(
+                              child: _ValueField(
+                                fieldKey: 'analog_range_max_field',
+                                label: 'Range max',
+                                value: rangeMax,
+                                units: rangeUnits,
+                                onSubmitted: (v) => onWrite(rangeMaxKey, v),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'The transmitter\'s calibrated span. Change it only '
+                        'to match a re-ranged sensor.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
       ),
+    );
+  }
+}
+
+/// An analog write field. Commits on Enter / focus-out only. The key embeds
+/// the current value so the field resets when the PLC reports a different
+/// one (conveyor/sensor convention).
+class _ValueField extends StatelessWidget {
+  final String fieldKey;
+  final String label;
+  final double? value;
+  final String? units;
+  final ValueChanged<double> onSubmitted;
+
+  const _ValueField({
+    required this.fieldKey,
+    required this.label,
+    required this.value,
+    required this.onSubmitted,
+    this.units,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      key: Key('$fieldKey-$value'),
+      initialValue: value != null ? _fmtValue(value!) : '',
+      // Signed: analog spans go below zero (a -50…150 °C transmitter).
+      keyboardType:
+          const TextInputType.numberWithOptions(decimal: true, signed: true),
+      decoration: InputDecoration(
+        labelText: label,
+        suffixText: units,
+        isDense: true,
+      ),
+      onFieldSubmitted: (text) {
+        final parsed = double.tryParse(text.trim());
+        if (parsed == null) return;
+        onSubmitted(parsed);
+      },
+    );
+  }
+}
+
+/// The collected history of the analog value. Mirrors `ConveyorStatsGraph` /
+/// `SensorTrendGraph`: the same widget serves the pane's small preview
+/// (`compact`, no buttons) and could serve a full chart.
+///
+/// [member] picks the chartable number out of each stored row for struct
+/// keys collected with `sample_members`; null charts the row value as-is.
+class AnalogBoxTrendGraph extends ConsumerWidget {
+  final Collector? collector;
+  final String keyName;
+  final String? member;
+
+  /// Names the series, fixed by the caller so the preview and the expanded
+  /// chart read as the same chart.
+  final String seriesLabel;
+
+  /// Y-axis unit on the full chart; the compact preview drops it.
+  final String? units;
+
+  /// Pan/zoom/now buttons. Off in the pane preview.
+  final bool showButtons;
+
+  /// Visible window. The preview shows a short span so the line has shape.
+  final Duration xSpan;
+
+  /// Drops the axis units/labels — the pane preview has no room for them
+  /// and the tile caption names the chart instead.
+  final bool compact;
+
+  const AnalogBoxTrendGraph({
+    required this.collector,
+    required this.keyName,
+    required this.seriesLabel,
+    this.member,
+    this.units,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
+    super.key,
+  });
+
+  num? _pointOf(dynamic value) {
+    if (member?.isNotEmpty ?? false) {
+      return extractSeriesMemberValue(value, member!);
+    }
+    if (value is num) return value;
+    if (value is bool) return value ? 1 : 0;
+    if (value is String) return num.tryParse(value);
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<List<TimeseriesData<dynamic>>>(
+      stream:
+          collector?.collectStream(keyName, since: const Duration(hours: 2)),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
+
+        var minY = double.infinity;
+        var maxY = double.negativeInfinity;
+        final data = <Map<String, dynamic>>[];
+        for (final sample in snapshot.data!) {
+          final y = _pointOf(sample.value)?.toDouble();
+          if (y == null) continue;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          data.add({
+            'x': sample.time.millisecondsSinceEpoch.toDouble(),
+            'y': y,
+            's': seriesLabel,
+          });
+        }
+        if (data.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
+
+        // Headroom above and below: scaling to the exact extremes pins the
+        // trace to the plot frame where it runs into the tick labels (same
+        // rationale as the conveyor trend). A flat line gets a unit of span
+        // so it draws mid-plot instead of on the frame.
+        if (minY == maxY) maxY = minY + 1;
+        final margin = (maxY - minY) * 0.1;
+        minY -= margin;
+        maxY += margin;
+
+        final graphConfig = GraphConfig(
+          type: GraphType.timeseries,
+          xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
+          yAxis: GraphAxisConfig(
+            unit: compact ? '' : (units ?? ''),
+            min: minY,
+            max: maxY,
+          ),
+          xSpan: xSpan,
+        );
+
+        // The compact preview needs its own gutters — same trick as
+        // `ConveyorStatsGraph`.
+        final theme = compact
+            ? (Theme.of(context).brightness == Brightness.dark
+                ? darkChartTheme(padding: kCompactChartPadding)
+                : lightChartTheme(padding: kCompactChartPadding))
+            : ref.watch(chartThemeNotifierProvider);
+
+        return Graph(
+          config: graphConfig,
+          data: data,
+          showButtons: showButtons,
+          categoryColors: {seriesLabel: Colors.blue},
+          chartTheme: theme,
+          redraw: () {},
+        ).build(context);
+      },
+    );
+  }
+}
+
+/// Resolves the collector for [AnalogBoxTrendGraph] — mirrors
+/// `SensorTrendGraphLoader`.
+class AnalogBoxTrendGraphLoader extends ConsumerWidget {
+  final String keyName;
+  final String? member;
+  final String seriesLabel;
+  final String? units;
+  final bool showButtons;
+  final Duration xSpan;
+  final bool compact;
+
+  const AnalogBoxTrendGraphLoader({
+    required this.keyName,
+    required this.seriesLabel,
+    this.member,
+    this.units,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 5),
+    this.compact = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Collector?>(
+      future: ref.watch(collectorProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return AnalogBoxTrendGraph(
+          collector: snapshot.data,
+          keyName: keyName,
+          member: member,
+          seriesLabel: seriesLabel,
+          units: units,
+          showButtons: showButtons,
+          xSpan: xSpan,
+          compact: compact,
+        );
+      },
     );
   }
 }
@@ -1132,76 +1377,5 @@ class _AnalogBoxPainter extends CustomPainter {
         borderRadiusPct != old.borderRadiusPct ||
         labelAngleDeg != old.labelAngleDeg ||
         showError != old.showError;
-  }
-}
-
-/// Custom switch with embedded text
-class _AdvancedSwitch extends StatelessWidget {
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  const _AdvancedSwitch({
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onChanged(!value),
-      child: Container(
-        width: 110,
-        height: 32,
-        decoration: BoxDecoration(
-          color: value ? Theme.of(context).primaryColor : Colors.grey.shade300,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Stack(
-          children: [
-            // Text positioned dynamically based on switch state
-            Positioned(
-              left: value ? 12 : null, // Left side when ON
-              right: value ? null : 12, // Right side when OFF
-              top: 0,
-              bottom: 0,
-              child: Center(
-                child: Text(
-                  'Advanced',
-                  style: TextStyle(
-                    color: value ? Colors.white : Colors.grey.shade600,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            // Sliding circle
-            AnimatedAlign(
-              alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-              duration: const Duration(milliseconds: 200),
-              child: Container(
-                width: 28,
-                height: 28,
-                margin: EdgeInsets.only(
-                  left: value ? 0 : 2,
-                  right: value ? 2 : 0,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 2,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
