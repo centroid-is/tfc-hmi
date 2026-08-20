@@ -333,12 +333,23 @@ int selectedCount(WidgetTester tester) {
       .length;
 }
 
-/// Saves, then returns the persisted assets of the home page in page order.
+/// Saves via the save FAB, then returns the persisted assets of the home
+/// page in page order.
 Future<List<Map<String, dynamic>>> saveAndReadBack(
     WidgetTester tester, FakeEditorPreferences prefs) async {
   await tester.tap(find.byIcon(Icons.save));
   await tester.pumpAndSettle();
+  final saved = readBackHomeAssets(prefs);
+  if (saved == null) {
+    fail('no saved page found in preferences: ${prefs._store.keys}');
+  }
+  return saved;
+}
 
+/// The persisted assets of the home page, or null when nothing has been
+/// saved yet. The read-back half of [saveAndReadBack], for tests that save
+/// some other way than the FAB (e.g. Ctrl/Cmd+S).
+List<Map<String, dynamic>>? readBackHomeAssets(FakeEditorPreferences prefs) {
   // The manager writes the whole page map under a single key; find the entry
   // that parses as one and contains our page.
   for (final value in prefs._store.values) {
@@ -355,7 +366,7 @@ Future<List<Map<String, dynamic>>> saveAndReadBack(
       return (page['assets'] as List).cast<Map<String, dynamic>>();
     }
   }
-  fail('no saved page found in preferences: ${prefs._store.keys}');
+  return null;
 }
 
 /// The `coordinates` block of a persisted asset.
