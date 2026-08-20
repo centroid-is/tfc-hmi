@@ -260,7 +260,8 @@ abstract class BaseAsset implements Asset {
   /// JSON key-name pattern for tag-key fields.
   ///
   /// Matches:  key | key1 | key2 | fooKey | foo_key
-  static final RegExp _keyFieldPattern = RegExp(r'^key$|^key\d+$|Key$|_key$');
+  static final RegExp _keyFieldPattern =
+      RegExp(r'^key$|^keys$|^key\d+$|Key$|Keys$|_key$|_keys$');
 
   /// JSON field names that match [_keyFieldPattern] but are NOT tag keys.
   static const Set<String> _excludedFields = {
@@ -276,6 +277,14 @@ abstract class BaseAsset implements Asset {
       final value = entry.value;
       if (value is String && value.isNotEmpty) {
         keys.add(value);
+      } else if (value is List) {
+        // A key field may hold a list -- RecipesConfig.keys carries one node
+        // per line. Without this the asset reports using no keys at all, and
+        // anything asking which keys a page depends on (unused-key cleanup,
+        // for one) would be told they are free to delete.
+        for (final entry in value) {
+          if (entry is String && entry.isNotEmpty) keys.add(entry);
+        }
       }
     }
     return keys.toList();

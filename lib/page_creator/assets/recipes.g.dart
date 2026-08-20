@@ -10,6 +10,9 @@ RecipesConfig _$RecipesConfigFromJson(Map<String, dynamic> json) =>
     RecipesConfig(
       key: json['key'] as String,
       label: json['label'] as String,
+      keys:
+          (json['keys'] as List<dynamic>?)?.map((e) => e as String).toList() ??
+              [],
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -30,6 +33,7 @@ Map<String, dynamic> _$RecipesConfigToJson(RecipesConfig instance) =>
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
+      'keys': instance.keys,
       'label': instance.label,
     };
 
