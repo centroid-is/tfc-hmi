@@ -340,7 +340,11 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   /// Applies every staged mapping, saves once, then marks them accepted.
   Future<void> _commitProposals() async {
     if (_keyMappings == null || _proposedMappings.isEmpty) return;
-    String? lastKey;
+    // Fresh keys go to the *top* of the repository, like _addKey's: that is
+    // where _revealKey can land in O(1). A proposal for an existing key
+    // updates it in place, keeping its position.
+    final fresh = <String, KeyMappingEntry>{};
+    String? firstKey;
     for (final m in _proposedMappings) {
       final key = m['key'] as String?;
       if (key == null) continue;
@@ -349,9 +353,16 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       if (opcuaNode is Map<String, dynamic>) {
         entry.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
       }
-      _keyMappings!.nodes[key] = entry;
+      if (_keyMappings!.nodes.containsKey(key)) {
+        _keyMappings!.nodes[key] = entry;
+      } else {
+        fresh[key] = entry;
+      }
       _expandedKeys.add(key);
-      lastKey = key;
+      firstKey ??= key;
+    }
+    if (fresh.isNotEmpty) {
+      _keyMappings!.nodes = {...fresh, ..._keyMappings!.nodes};
     }
     _invalidateDerived();
     await _saveKeyMappings();
@@ -372,7 +383,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     });
     ref.read(proposalCommitProvider.notifier).state = null;
     ref.read(proposalDiscardProvider.notifier).state = null;
-    if (lastKey != null) _revealKey(lastKey);
+    if (firstKey != null) _revealKey(firstKey);
   }
 
   /// Drops the whole batch without touching the mappings.
@@ -457,13 +468,16 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
   /// Scrolls the newly added/duplicated [name] into view once it is laid out.
   ///
-  /// The list is lazy, so a card appended past the bottom of the viewport has
-  /// no element yet and [Scrollable.ensureVisible] has nothing to target. When
-  /// the key is the last one — which is where [_addKey] puts it — jump to the
-  /// end of the list and retry on the following frame. A key inserted mid-list
-  /// (a duplicate) sits next to its original, which is on screen, so its card
-  /// is already built; jumping to the end for that case would scroll the
-  /// operator somewhere they didn't ask to go.
+  /// The list is lazy, so a card outside the viewport has no element yet and
+  /// [Scrollable.ensureVisible] has nothing to target. When the key is the
+  /// first one — which is where [_addKey] and [_commitProposals] put new
+  /// keys — jump to the top and retry on the following frame. New keys go to
+  /// the top rather than the bottom because jumping to the *end* of a lazy
+  /// list has no known extent to land on: the sliver re-estimates every
+  /// frame, building one more card each time, which froze the page for ~10 s
+  /// on a repository with thousands of keys. A key inserted mid-list (a
+  /// duplicate) sits next to its original, which is on screen, so its card
+  /// is already built and the ensureVisible branch handles it.
   void _revealKey(String name) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final keyContext = _cardKeys[name]?.currentContext;
@@ -472,9 +486,9 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
             duration: const Duration(milliseconds: 300));
         return;
       }
-      final isLast = _keyMappings?.nodes.keys.lastOrNull == name;
-      if (!isLast || !_listController.hasClients) return;
-      _listController.jumpTo(_listController.position.maxScrollExtent);
+      final isFirst = _keyMappings?.nodes.keys.firstOrNull == name;
+      if (!isFirst || !_listController.hasClients) return;
+      _listController.jumpTo(_listController.position.minScrollExtent);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final ctx = _cardKeys[name]?.currentContext;
         if (ctx != null) Scrollable.ensureVisible(ctx);
@@ -493,9 +507,12 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     _cardKeys[name] = GlobalKey();
     _expandedKeys.add(name);
     setState(() {
-      _keyMappings!.nodes[name] = KeyMappingEntry(
-        opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
-      );
+      _keyMappings!.nodes = {
+        name: KeyMappingEntry(
+          opcuaNode: OpcUANodeConfig(namespace: 0, identifier: ''),
+        ),
+        ..._keyMappings!.nodes,
+      };
       _invalidateDerived();
     });
     _revealKey(name);
