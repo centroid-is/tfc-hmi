@@ -202,7 +202,6 @@ class _ConfigContentState extends State<_ConfigContent> {
       title: 'Select icon',
       icon: Icons.emoji_symbols,
       width: 640,
-      closeLabel: 'Cancel',
       builder: (context) => SizedBox(
         width: 600,
         height: 600,
@@ -463,7 +462,6 @@ class _ConfigContentState extends State<_ConfigContent> {
       title: 'Select icon for condition',
       icon: Icons.emoji_symbols,
       width: 640,
-      closeLabel: 'Cancel',
       actionsBuilder: (dialogContext) => [
         PaneAction(
           label: 'Clear icon',

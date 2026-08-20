@@ -1037,7 +1037,6 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                             title: 'Edit gate',
                             icon: Icons.swap_horiz,
                             width: 360,
-                            closeLabel: 'Done',
                             builder: (context) => SizedBox(
                               width: 300,
                               child: entry.gate.configure(context),

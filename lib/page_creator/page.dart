@@ -790,7 +790,6 @@ class _IconPickerDialogState extends State<_IconPickerDialog> {
       title: 'Select icon',
       icon: Icons.emoji_symbols,
       width: 400,
-      closeLabel: 'Cancel',
       child: SizedBox(
         width: 350,
         height: 450,

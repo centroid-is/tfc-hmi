@@ -2978,7 +2978,6 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
         context: context,
         title: 'Enter code to decrypt',
         icon: Icons.key,
-        closeLabel: 'Cancel',
         actionsBuilder: (ctx) => [
           PaneAction.primary(
             label: 'Decrypt',
@@ -3202,7 +3201,6 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
       context: context,
       title: 'Store config in database',
       icon: Icons.cloud_upload_outlined,
-      closeLabel: 'Cancel',
       actionsBuilder: (ctx) => [
         PaneAction.primary(
           label: 'Store',
@@ -3285,7 +3283,6 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
       context: context,
       title: 'Load config from database',
       icon: Icons.cloud_download_outlined,
-      closeLabel: 'Cancel',
       actionsBuilder: (ctx) => [
         PaneAction.primary(
           label: 'Decrypt & import',

@@ -40,7 +40,7 @@ Future<void> _openPages(WidgetTester tester) async {
 }
 
 Future<void> _saveEditor(WidgetTester tester) async {
-  await tester.tap(find.text('Close'));
+  await tester.tap(find.byTooltip('Close'));
   await tester.pumpAndSettle();
   await tester.tap(find.byIcon(Icons.save));
   await tester.pumpAndSettle();

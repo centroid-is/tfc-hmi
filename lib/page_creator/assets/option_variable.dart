@@ -809,7 +809,6 @@ class _ConfigContent extends ConsumerWidget {
       context: context,
       title: 'Delete option',
       icon: Icons.delete_outline,
-      closeLabel: 'Cancel',
       builder: (context) => Text(
           'Are you sure you want to delete "${config.options[index].label}"?'),
       actionsBuilder: (dialogContext) => [
@@ -861,7 +860,6 @@ class _OptionsEditorDialogState extends State<_OptionsEditorDialog> {
       icon: Icons.list,
       width: 520,
       height: 520,
-      closeLabel: 'Cancel',
       actions: [
         PaneAction.primary(
           label: 'Save',
@@ -1037,7 +1035,6 @@ class _OptionEditDialogState extends State<_OptionEditDialog> {
     return StandardDialogFrame(
       title: 'Edit option ${widget.index + 1}',
       icon: Icons.edit,
-      closeLabel: 'Cancel',
       actions: [
         PaneAction.primary(
           label: 'Save',

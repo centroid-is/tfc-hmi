@@ -1516,7 +1516,7 @@ void main() {
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/standard_dialog_modal_dark.png'),
       );
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
     });
   });

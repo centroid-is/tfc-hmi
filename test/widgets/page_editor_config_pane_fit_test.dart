@@ -59,7 +59,7 @@ void main() {
       }
 
       // Leave nothing running: the pane drives a periodic watch while open.
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
     });
   }

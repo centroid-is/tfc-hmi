@@ -1010,7 +1010,6 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
         title: 'Add child',
         icon: Icons.add,
         width: 360,
-        closeLabel: 'Cancel',
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,

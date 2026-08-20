@@ -216,7 +216,8 @@ void main() {
 
       await _showPanel(tester, client, alias: 'opc.tcp://plc1:4840');
 
-      expect(find.text('Browse: opc.tcp://plc1:4840'), findsOneWidget);
+      expect(find.text('Browse'), findsOneWidget);
+      expect(find.text('opc.tcp://plc1:4840'), findsOneWidget);
     });
 
     testWidgets('shows "No nodes found" for empty server', (tester) async {
@@ -302,7 +303,8 @@ void main() {
       await tester.pumpAndSettle();
 
       final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+          tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Select'));
       expect(selectButton.onPressed, isNotNull);
     });
 
@@ -358,14 +360,14 @@ void main() {
       expect(find.byType(BrowsePanel), findsNothing);
     });
 
-    testWidgets('Cancel button dismisses dialog', (tester) async {
+    testWidgets('header close button dismisses dialog', (tester) async {
       final client = FakeClientApi(
         browseResults: {NodeId.objectsFolder: []},
       );
 
       await _showPanel(tester, client);
 
-      await tester.tap(find.text('Cancel'));
+      await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
 
       expect(find.byType(BrowsePanel), findsNothing);
@@ -382,7 +384,8 @@ void main() {
       await _showPanel(tester, client);
 
       final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+          tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Select'));
       expect(selectButton.onPressed, isNull);
     });
 
@@ -503,7 +506,8 @@ void main() {
       await tester.pumpAndSettle();
 
       final selectButton =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+          tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Select'));
       expect(selectButton.onPressed, isNull);
     });
 
@@ -572,7 +576,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final selectButton = tester
-          .widget<TextButton>(find.widgetWithText(TextButton, 'Select'));
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Select'));
       expect(selectButton.onPressed, isNotNull);
     });
   });

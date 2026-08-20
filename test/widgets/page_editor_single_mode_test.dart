@@ -294,7 +294,7 @@ void main() {
       final moved = tester.getCenter(find.byType(DrawnBox).at(1));
       expect((moved.dx - canvas.left) / canvas.width, closeTo(0.9, 0.005));
 
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
     });
   });

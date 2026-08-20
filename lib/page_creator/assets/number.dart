@@ -497,7 +497,6 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
           : widget.config.key,
       subtitle: 'Write value',
       icon: Icons.edit,
-      closeLabel: 'Cancel',
       actions: [
         PaneAction.primary(
           label: 'Write',

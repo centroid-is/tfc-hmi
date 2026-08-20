@@ -334,22 +334,20 @@ class PaneHeader extends StatelessWidget {
   }
 }
 
-/// The pinned footer. Never scrolls away, so `Close` and the device's
-/// commands stay reachable no matter how tall the body grows.
+/// The pinned footer. Never scrolls away, so the device's commands stay
+/// reachable no matter how tall the body grows. Closing is the header's job
+/// ([PaneHeader]'s corner button) — the bar holds only the device actions,
+/// so panes and dialogs without any have no footer at all.
 class PaneActionBar extends StatelessWidget {
   final List<PaneAction> actions;
-  final VoidCallback? onClose;
-  final String closeLabel;
 
   /// Extra space at the trailing end. A floating dialog reserves room here
-  /// so its corner resize grip cannot swallow taps meant for Close.
+  /// so its corner resize grip cannot swallow taps meant for an action.
   final double endInset;
 
   const PaneActionBar({
     super.key,
     this.actions = const [],
-    this.onClose,
-    this.closeLabel = 'Close',
     this.endInset = 0,
   });
 
@@ -364,22 +362,10 @@ class PaneActionBar extends StatelessWidget {
           top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
         ),
       ),
-      child: Row(
-        children: [
-          // Device actions sit left, Close is anchored right so its position
-          // is identical in every popup.
-          Expanded(
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [for (final a in actions) a.build(context)],
-            ),
-          ),
-          if (onClose != null) ...[
-            const SizedBox(width: 8),
-            TextButton(onPressed: onClose, child: Text(closeLabel)),
-          ],
-        ],
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [for (final a in actions) a.build(context)],
       ),
     );
   }

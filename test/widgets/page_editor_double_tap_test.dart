@@ -18,7 +18,7 @@ import '../helpers/page_editor_harness.dart';
 /// Closes the pane the way an operator would, so no watch timer outlives the
 /// test.
 Future<void> closePane(WidgetTester tester) async {
-  await tester.tap(find.widgetWithText(TextButton, 'Close'));
+  await tester.tap(find.byTooltip('Close'));
   await tester.pumpAndSettle();
 }
 

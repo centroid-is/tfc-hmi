@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 
 import 'package:flutter/material.dart';
@@ -117,8 +118,8 @@ typedef BrowseErrorInfo = ({String summary, String detail});
 /// Return null to fall back to the default `e.toString()` display.
 typedef BrowseErrorMapper = BrowseErrorInfo? Function(Object error);
 
-/// Shows an address-space browser in a dialog sized at 80% of the screen.
-/// Returns the selected [BrowseNode] or null if cancelled.
+/// Shows an address-space browser in a standard modal dialog sized at 80% of
+/// the screen. Returns the selected [BrowseNode] or null if cancelled.
 ///
 /// When [initialPath] is non-null, the panel opens with that path
 /// pre-selected, the tree expanded down to it, and the detail strip
@@ -133,34 +134,65 @@ Future<BrowseNode?> showBrowseDialog({
 }) {
   return showDialog<BrowseNode>(
     context: context,
-    builder: (context) {
-      final cs = Theme.of(context).colorScheme;
-      final screenSize = MediaQuery.of(context).size;
-      return Dialog(
-        backgroundColor: cs.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: screenSize.width * 0.8,
-            maxHeight: screenSize.height * 0.8,
-            minHeight: 300,
-          ),
-          child: SizedBox(
-            width: screenSize.width * 0.8,
-            height: screenSize.height * 0.8,
-            child: BrowsePanel(
-              dataSource: dataSource,
-              serverAlias: serverAlias,
-              errorMapper: errorMapper,
-              initialPath: initialPath,
-              onSelected: (node) => Navigator.of(context).pop(node),
-              onCancelled: () => Navigator.of(context).pop(),
-            ),
-          ),
-        ),
-      );
-    },
+    builder: (context) => _BrowseDialog(
+      dataSource: dataSource,
+      serverAlias: serverAlias,
+      errorMapper: errorMapper,
+      initialPath: initialPath,
+    ),
   );
+}
+
+/// The standard-chrome frame around [BrowsePanel]: header with the server
+/// identity and close button, pinned action bar with `Select`. Holds the
+/// current selection so the action enables the moment a variable is picked.
+class _BrowseDialog extends StatefulWidget {
+  final BrowseDataSource dataSource;
+  final String serverAlias;
+  final BrowseErrorMapper? errorMapper;
+  final String? initialPath;
+
+  const _BrowseDialog({
+    required this.dataSource,
+    required this.serverAlias,
+    this.errorMapper,
+    this.initialPath,
+  });
+
+  @override
+  State<_BrowseDialog> createState() => _BrowseDialogState();
+}
+
+class _BrowseDialogState extends State<_BrowseDialog> {
+  BrowseNode? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.sizeOf(context);
+    return StandardDialogFrame(
+      title: 'Browse',
+      subtitle: widget.serverAlias,
+      icon: Icons.account_tree_outlined,
+      width: screenSize.width * 0.8,
+      height: screenSize.height * 0.8,
+      scrollable: false,
+      actions: [
+        PaneAction.primary(
+          label: 'Select',
+          onPressed: _selected != null && _selected!.isVariable
+              ? () => Navigator.of(context).pop(_selected)
+              : null,
+        ),
+      ],
+      child: BrowsePanel(
+        dataSource: widget.dataSource,
+        errorMapper: widget.errorMapper,
+        initialPath: widget.initialPath,
+        onSelected: (node) => Navigator.of(context).pop(node),
+        onSelectionChanged: (node) => setState(() => _selected = node),
+      ),
+    );
+  }
 }
 
 /// Protocol-agnostic browse panel that displays a tree of nodes from a
@@ -169,9 +201,15 @@ Future<BrowseNode?> showBrowseDialog({
 /// this widget directly.
 class BrowsePanel extends StatefulWidget {
   final BrowseDataSource dataSource;
-  final String serverAlias;
+
+  /// Called when the operator commits to a node — a double tap, or a second
+  /// tap on the already-selected variable.
   final ValueChanged<BrowseNode> onSelected;
-  final VoidCallback onCancelled;
+
+  /// Called whenever the highlighted node changes, so an enclosing dialog
+  /// can enable/disable its own `Select` action.
+  final ValueChanged<BrowseNode?>? onSelectionChanged;
+
   final BrowseErrorMapper? errorMapper;
 
   /// When non-null, after roots load the panel asks
@@ -187,9 +225,8 @@ class BrowsePanel extends StatefulWidget {
   const BrowsePanel({
     super.key,
     required this.dataSource,
-    required this.serverAlias,
     required this.onSelected,
-    required this.onCancelled,
+    this.onSelectionChanged,
     this.errorMapper,
     this.initialPath,
   });
@@ -388,6 +425,7 @@ class BrowsePanelState extends State<BrowsePanel> {
       _selected = entries.last;
       _staleInitialPath = null;
     });
+    widget.onSelectionChanged?.call(entries.last.node);
 
     // Trigger detail fetch for the leaf so the right-hand strip is
     // populated immediately, matching the post-click behavior.
@@ -527,6 +565,7 @@ class BrowsePanelState extends State<BrowsePanel> {
         widget.onSelected(treeNode.node);
       } else {
         setState(() => _selected = treeNode);
+        widget.onSelectionChanged?.call(treeNode.node);
         _loadVariableDetails(treeNode);
       }
     } else if (treeNode.isExpandable) {
@@ -597,34 +636,6 @@ class BrowsePanelState extends State<BrowsePanel> {
 
     return Column(
       children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerLow,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-          ),
-          child: Row(
-            children: [
-              FaIcon(FontAwesomeIcons.sitemap, size: 14, color: cs.onSurface),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Browse: ${widget.serverAlias}',
-                  style: TextStyle(
-                    color: cs.onSurface,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              InkWell(
-                onTap: widget.onCancelled,
-                child: Icon(Icons.close, size: 18, color: cs.secondary),
-              ),
-            ],
-          ),
-        ),
         // Breadcrumb
         Container(
           width: double.infinity,
@@ -757,30 +768,6 @@ class BrowsePanelState extends State<BrowsePanel> {
             dataType: _detailDataType,
             isLoading: _detailLoading,
           ),
-        Divider(height: 1, color: cs.surfaceContainerLow),
-        // Actions
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          color: cs.surfaceContainerLow,
-          child: Row(
-            children: [
-              TextButton(
-                onPressed: widget.onCancelled,
-                child: const Text('Cancel', style: TextStyle(fontSize: 12)),
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: _selected != null && _selected!.isVariable
-                    ? () => widget.onSelected(_selected!.node)
-                    : null,
-                style: TextButton.styleFrom(
-                  foregroundColor: SolarizedColors.cyan,
-                ),
-                child: const Text('Select', style: TextStyle(fontSize: 12)),
-              ),
-            ],
-          ),
-        ),
       ],
     );
   }

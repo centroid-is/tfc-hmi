@@ -96,7 +96,7 @@ void main() {
           reason: 'the pane occupies only the right-hand strip');
     });
 
-    testWidgets('Close in the pinned footer dismisses it', (tester) async {
+    testWidgets('the header close button dismisses it', (tester) async {
       await tester.pumpWidget(host(
         onOpen: (context) => showSidePane(
           context: context,
@@ -107,7 +107,7 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
       expect(find.byType(SidePane), findsNothing);
       expect(isSidePaneOpen(), isFalse);
@@ -688,11 +688,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(backgroundTaps, 1);
 
-      // Both the pane and the dialog carry a pinned Close — scope to the
-      // dialog's own footer.
+      // Both the pane and the dialog carry a header close button — scope to
+      // the dialog's own header.
       await tester.tap(find.descendant(
         of: find.byType(StandardDialog),
-        matching: find.widgetWithText(TextButton, 'Close'),
+        matching: find.byIcon(Icons.close),
       ));
       await tester.pumpAndSettle();
       expect(find.byType(StandardDialog), findsNothing);
@@ -907,7 +907,7 @@ void main() {
       ));
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
       expect(answer, isNull);
     });

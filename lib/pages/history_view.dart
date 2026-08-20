@@ -1178,7 +1178,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
       context: context,
       title: title,
       icon: Icons.edit,
-      closeLabel: 'Cancel',
       builder: (context) => TextField(
         controller: ctrl,
         autofocus: true,
@@ -1363,7 +1362,6 @@ class _HistoryViewPageState extends ConsumerState<HistoryViewPage> {
             title: 'Graph ${graphIndex + 1}',
             icon: Icons.stacked_line_chart,
             width: 520,
-            closeLabel: 'Cancel',
             actions: [
               // Remove graph (only if there are other graphs with keys)
               if (keysOnGraph.isNotEmpty ||

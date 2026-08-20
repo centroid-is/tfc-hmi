@@ -460,7 +460,6 @@ class _AddSlotDialogState extends State<AddSlotDialog> {
       subtitle:
           'Type: ${_typeLabels[widget.signal.sigType] ?? widget.signal.sigType}',
       icon: Icons.link,
-      closeLabel: 'Cancel',
       actions: [
         PaneAction.primary(
           label: 'Connect',
