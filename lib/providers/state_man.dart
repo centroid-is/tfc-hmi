@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:tfc_dart/core/modbus_device_client.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -37,14 +36,34 @@ Future<StateMan> stateMan(Ref ref) async {
 
   final keyMappings = await fetchKeyMappings(prefs);
 
-  // Watch for changes in specific preferences
+  // Watch for changes in specific preferences.
+  //
+  // A key_mappings save is applied incrementally: unchanged keys keep their
+  // connections and subscriptions untouched, edited OPC UA keys are
+  // re-pointed live, and only edits the adapters cannot absorb in place
+  // (classic-Modbus register specs, M2400 extraction) fall back to a full
+  // provider rebuild — the old "whole world awakens" path.
+  //
+  // Applications are serialized through [pendingApply] so two rapid saves
+  // cannot interleave their diffs out of order.
+  var pendingApply = Future<void>.value();
   final listener = prefs.onPreferencesChanged.listen(
     (key) {
       if (key == 'key_mappings') {
-        ref.read(stateManProvider.future).then((stateMan) async {
-          ref.read(preferencesProvider.future).then((newPrefs) async {
-            stateMan.updateKeyMappings(await fetchKeyMappings(newPrefs));
-          });
+        pendingApply = pendingApply.then((_) async {
+          try {
+            final stateMan = await ref.read(stateManProvider.future);
+            final newPrefs = await ref.read(preferencesProvider.future);
+            final result =
+                stateMan.updateKeyMappings(await fetchKeyMappings(newPrefs));
+            if (result.requiresReload) {
+              stderr.writeln('key_mappings: full reload required '
+                  '(${result.reloadReasons.join('; ')})');
+              ref.invalidateSelf();
+            }
+          } catch (error) {
+            stderr.writeln('Failed to apply key_mappings change: $error');
+          }
         });
       }
     },

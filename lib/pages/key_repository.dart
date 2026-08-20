@@ -468,7 +468,9 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       final json = _currentJson();
       await prefs.setString('key_mappings', json);
       _savedJson = json;
-      ref.invalidate(stateManProvider);
+      // No stateManProvider invalidate here: the provider's preferences
+      // listener diffs the save and applies it live — it only rebuilds the
+      // whole StateMan when an edit cannot be absorbed in place.
       if (!mounted) return;
       setState(() {});
 
@@ -1759,7 +1761,8 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
 
       final prefs = await ref.read(preferencesProvider.future);
       await prefs.setString('key_mappings', jsonEncode(imported.toJson()));
-      ref.invalidate(stateManProvider);
+      // Applied incrementally by the stateManProvider preferences listener;
+      // it self-invalidates only if the import touches Modbus/M2400 keys.
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

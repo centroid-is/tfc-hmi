@@ -23,7 +23,10 @@ import 'collector.dart';
 import 'conn_meta.dart';
 import 'modbus_client_wrapper.dart' show ModbusDataType;
 import 'modbus_device_client.dart'
-    show ModbusDeviceClientAdapter, buildVariableNamesFromKeyMappings;
+    show
+        ModbusDeviceClientAdapter,
+        buildUmasPollGroupsFromKeyMappings,
+        buildVariableNamesFromKeyMappings;
 import 'preferences.dart';
 
 part 'state_man.g.dart';
@@ -628,6 +631,49 @@ class KeyMappings {
   factory KeyMappings.fromJson(Map<String, dynamic> json) =>
       _$KeyMappingsFromJson(json);
   Map<String, dynamic> toJson() => _$KeyMappingsToJson(this);
+}
+
+/// What [StateMan.updateKeyMappings] applied in place, and whether the
+/// caller still needs to rebuild the whole StateMan.
+///
+/// The apply is incremental by design: unchanged keys are untouched (no
+/// reconnects, no resubscriptions), OPC UA edits are re-pointed live, and
+/// UMAS-by-name edits propagate through the adapter hooks. Only edits whose
+/// state is frozen at construction time (classic-Modbus register specs,
+/// M2400 extraction captured per widget stream) ask for a reload.
+class KeyMappingsUpdateResult {
+  /// Keys present in the new mappings but not the old.
+  final Set<String> added;
+
+  /// Keys present in the old mappings but not the new.
+  final Set<String> removed;
+
+  /// Keys present in both whose entry differs.
+  final Set<String> changed;
+
+  /// Changed keys whose live OPC UA monitor was re-pointed in place.
+  final Set<String> resubscribed;
+
+  /// Human-readable reasons a full StateMan rebuild is still required.
+  /// Empty when the whole edit was applied live.
+  final List<String> reloadReasons;
+
+  bool get requiresReload => reloadReasons.isNotEmpty;
+
+  const KeyMappingsUpdateResult({
+    required this.added,
+    required this.removed,
+    required this.changed,
+    required this.resubscribed,
+    required this.reloadReasons,
+  });
+
+  @override
+  String toString() =>
+      'KeyMappingsUpdateResult(added: ${added.length}, removed: '
+      '${removed.length}, changed: ${changed.length}, resubscribed: '
+      '${resubscribed.length}, requiresReload: $requiresReload'
+      '${requiresReload ? ', reasons: ${reloadReasons.join('; ')}' : ''})';
 }
 
 class StateManException implements Exception {
@@ -1796,8 +1842,30 @@ class StateMan {
     return _monitor(key);
   }
 
-  void updateKeyMappings(KeyMappings newKeyMappings) {
+  KeyMappingsUpdateResult updateKeyMappings(KeyMappings newKeyMappings) {
+    final old = keyMappings;
+    final added = <String>{};
+    final removed = <String>{};
+    final changed = <String>{};
+    for (final key in newKeyMappings.nodes.keys) {
+      if (!old.nodes.containsKey(key)) added.add(key);
+    }
+    for (final entry in old.nodes.entries) {
+      final newEntry = newKeyMappings.nodes[entry.key];
+      if (newEntry == null) {
+        removed.add(entry.key);
+      } else if (jsonEncode(newEntry.toJson()) !=
+          jsonEncode(entry.value.toJson())) {
+        changed.add(entry.key);
+      }
+    }
+
+    // Routing (read/write/subscribe, M2400 extraction, Modbus alias lookup,
+    // disabled-server checks) all consult [keyMappings] at call time, so the
+    // swap alone makes added keys and edited routes live for every FUTURE
+    // subscribe. The per-key work below re-points streams that already exist.
     keyMappings = newKeyMappings;
+
     // TD-003 (v1.1.x): propagate the new variableName mapping to every
     // Modbus adapter so per-key UMAS state (BehaviorSubject + cached
     // last value + MonitorPlc table) is released for keys that were
@@ -1812,9 +1880,103 @@ class StateMan {
         // about so the merged map's "renamed" detection works (it
         // compares old non-null name vs new entry — missing entry =
         // removed, so we don't need to inject null placeholders).
-        dc.updateVariableNames(Map<String, String?>.from(newNames));
+        dc.updateVariableNames(
+          Map<String, String?>.from(newNames),
+          umasPollGroupByKey:
+              buildUmasPollGroupsFromKeyMappings(newKeyMappings, dc.serverAlias),
+        );
       }
     }
+
+    // Removed keys with a live OPC UA monitor: tear down the monitored item
+    // and complete the stream, so widgets see a clean onDone (mirrors the
+    // UMAS removeUmasKey semantics) instead of silently streaming forever.
+    for (final key in removed) {
+      final ads = _subscriptions.remove(key);
+      if (ads == null) continue;
+      logger.i('[$alias] key mapping removed, closing live stream: $key');
+      ads._idleTimer?.cancel();
+      ads._rawSub?.cancel();
+      ads._rawSub = null;
+      if (!ads._subject.isClosed) ads._subject.close();
+    }
+
+    // Changed keys with a live OPC UA monitor: re-point the monitored item
+    // in place. The AutoDisposingStream subject survives, so widgets keep
+    // their stream and just start receiving values from the new node.
+    final resubscribed = <String>{};
+    for (final key in changed) {
+      final ads = _subscriptions[key];
+      if (ads == null) continue;
+      ads._rawSub?.cancel();
+      ads._rawSub = null;
+      if (newKeyMappings.nodes[key]?.opcuaNode == null) {
+        // The key switched protocols; the old OPC UA stream cannot carry
+        // the new routing, so complete it like a removal. Fresh subscribes
+        // route through the new protocol.
+        _subscriptions.remove(key);
+        ads._idleTimer?.cancel();
+        if (!ads._subject.isClosed) ads._subject.close();
+        continue;
+      }
+      logger.i('[$alias] key mapping changed, resubscribing live: $key');
+      resubscribed.add(key);
+      _monitor(key, resub: true).catchError((e, s) {
+        logger.e('[$alias] Failed to resubscribe changed key "$key": $e\n$s');
+        return Stream<DynamicValue>.error(
+            e is Object ? e : StateManException('resubscribe failed'));
+      });
+    }
+
+    // What could NOT be applied in place. Classic-Modbus register specs are
+    // frozen into the adapter at construction, and M2400 field extraction is
+    // captured per widget stream at subscribe time — edits there still need
+    // the caller to rebuild the StateMan. Everything else went live above.
+    bool isClassicModbus(KeyMappingEntry? e) =>
+        e?.modbusNode != null &&
+        (e?.variableName == null || e!.variableName!.isEmpty);
+    bool bitsChanged(KeyMappingEntry? a, KeyMappingEntry? b) =>
+        a?.bitMask != b?.bitMask || a?.bitShift != b?.bitShift;
+    String? modbusJson(KeyMappingEntry? e) =>
+        e?.modbusNode == null ? null : jsonEncode(e!.modbusNode!.toJson());
+    String? m2400Json(KeyMappingEntry? e) =>
+        e?.m2400Node == null ? null : jsonEncode(e!.m2400Node!.toJson());
+
+    final reloadReasons = <String>[];
+    for (final key in added) {
+      if (isClassicModbus(newKeyMappings.nodes[key])) {
+        reloadReasons.add('added Modbus register key "$key"');
+      }
+    }
+    for (final key in changed) {
+      final oldE = old.nodes[key];
+      final newE = newKeyMappings.nodes[key];
+      final modbusDelta = modbusJson(oldE) != modbusJson(newE) ||
+          oldE?.variableName != newE?.variableName ||
+          ((oldE?.modbusNode != null || newE?.modbusNode != null) &&
+              bitsChanged(oldE, newE));
+      if (modbusDelta) {
+        reloadReasons.add('changed Modbus key "$key"');
+      } else if (m2400Json(oldE) != m2400Json(newE)) {
+        reloadReasons.add('changed M2400 key "$key"');
+      }
+    }
+    for (final key in removed) {
+      final oldE = old.nodes[key];
+      if (isClassicModbus(oldE)) {
+        reloadReasons.add('removed Modbus register key "$key"');
+      } else if (oldE?.m2400Node != null) {
+        reloadReasons.add('removed M2400 key "$key"');
+      }
+    }
+
+    return KeyMappingsUpdateResult(
+      added: added,
+      removed: removed,
+      changed: changed,
+      resubscribed: resubscribed,
+      reloadReasons: reloadReasons,
+    );
   }
 
   List<String> get keys => [...keyMappings.keys, ..._connMeta.metaKeys];
