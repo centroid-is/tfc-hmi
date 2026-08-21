@@ -44,6 +44,7 @@ const _$TextPosEnumMap = {
 GateStatusConfig _$GateStatusConfigFromJson(Map<String, dynamic> json) =>
     GateStatusConfig(
       key: json['key'] as String,
+      invertPolarity: json['invertPolarity'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -64,4 +65,5 @@ Map<String, dynamic> _$GateStatusConfigToJson(GateStatusConfig instance) =>
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
+      'invertPolarity': instance.invertPolarity,
     };
