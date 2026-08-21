@@ -76,6 +76,11 @@ in the plant hierarchy. Pages are often associated with assets.
 When the AI suggests a configuration change, it generates a proposal that
 opens in the appropriate HMI editor (alarm editor, key repository, page
 editor). The operator reviews and saves -- the AI never commits changes.
+
+Each write tool result carries a `_proposal_id`. The operator's decision is
+relayed back two ways: decisions (accepted / viewed / rejected) appear in
+the chat conversation as operator-decision notes, and the AI can poll the
+`get_proposal_status` tool with proposal ids to check outcomes explicitly.
 ''';
 
 /// Registers the `scada://source/knowledge` resource on [mcpServer].

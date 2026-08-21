@@ -167,7 +167,7 @@ void registerAssetWriteTools({
         details: {'diff': diff},
       );
 
-      final wrapped = proposalService.wrapProposal('asset', proposal);
+      final wrapped = await proposalService.wrapProposal('asset', proposal);
       return CallToolResult(
         content: [TextContent(text: jsonEncode(wrapped))],
       );
@@ -294,8 +294,8 @@ void registerAssetWriteTools({
         details: {'diff': diff},
       );
 
-      final wrapped =
-          proposalService.wrapProposal('asset_update', proposal, op: 'update');
+      final wrapped = await proposalService.wrapProposal('asset_update', proposal,
+          op: 'update');
       return CallToolResult(
         content: [TextContent(text: jsonEncode(wrapped))],
       );

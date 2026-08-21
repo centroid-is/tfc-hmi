@@ -129,7 +129,7 @@ void registerPageWriteTools({
         details: {'diff': diff},
       );
 
-      final wrapped = proposalService.wrapProposal('page', proposal);
+      final wrapped = await proposalService.wrapProposal('page', proposal);
       return CallToolResult(
         content: [TextContent(text: jsonEncode(wrapped))],
       );

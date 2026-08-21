@@ -77,6 +77,14 @@ class ProposalAction extends ConsumerWidget {
         ),
         ElevatedButton.icon(
           onPressed: () {
+            // Report the view so the AI knows its proposal was opened.
+            final state = ref.read(proposalStateProvider);
+            for (final p in state.proposals) {
+              if (p.proposalJson == proposalJson) {
+                ref.read(proposalStateProvider.notifier).viewProposal(p.id);
+                break;
+              }
+            }
             try {
               Beamer.of(_navContext(ref, context))
                   .beamToNamed(route, data: proposalJson);

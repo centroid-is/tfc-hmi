@@ -16,9 +16,9 @@ void main() {
   });
 
   group('ProposalService', () {
-    test('wrapProposal adds _proposal_type field', () {
+    test('wrapProposal adds _proposal_type field', () async {
       final service = ProposalService();
-      final result = service.wrapProposal('alarm', {'title': 'Test'});
+      final result = await service.wrapProposal('alarm', {'title': 'Test'});
 
       expect(result['_proposal_type'], 'alarm');
       expect(result['title'], 'Test');
@@ -30,7 +30,7 @@ void main() {
         operatorId: 'testuser',
       );
 
-      service.wrapProposal('alarm', {
+      await service.wrapProposal('alarm', {
         'title': 'Pump Overcurrent',
         'key': 'pump3.overcurrent',
       });
@@ -49,34 +49,33 @@ void main() {
       expect(rows.first.read<String>('status'), 'pending');
     });
 
-    test('wrapProposal stamps _op create by default', () {
+    test('wrapProposal stamps _op create by default', () async {
       final service = ProposalService();
-      final result = service.wrapProposal('alarm', {'title': 'Test'});
+      final result = await service.wrapProposal('alarm', {'title': 'Test'});
 
       expect(result['_op'], 'create');
     });
 
-    test('wrapProposal stamps the op it is given', () {
+    test('wrapProposal stamps the op it is given', () async {
       // 'alarm' and 'key_mapping' cover creates, updates and deletes alike,
       // so the type cannot tell the notification banner what accepting the
       // proposal does -- _op is what it labels each row with.
       final service = ProposalService();
 
-      expect(
-        service.wrapProposal('alarm', {'title': 'T'}, op: 'update')['_op'],
-        'update',
-      );
-      expect(
-        service.wrapProposal('key_mapping', {'key': 'k'}, op: 'delete')['_op'],
-        'delete',
-      );
+      final updated =
+          await service.wrapProposal('alarm', {'title': 'T'}, op: 'update');
+      expect(updated['_op'], 'update');
+      final deleted = await service
+          .wrapProposal('key_mapping', {'key': 'k'}, op: 'delete');
+      expect(deleted['_op'], 'delete');
     });
 
-    test('wrapProposal without database does not throw', () {
+    test('wrapProposal without database does not throw', () async {
       final service = ProposalService();
-      final result = service.wrapProposal('page', {'title': 'My Page'});
+      final result = await service.wrapProposal('page', {'title': 'My Page'});
 
       expect(result['_proposal_type'], 'page');
+      expect(result.containsKey('_proposal_id'), isFalse);
     });
 
     test('derives title from proposal fields', () async {
@@ -86,11 +85,11 @@ void main() {
       );
 
       // Alarm with title
-      service.wrapProposal('alarm', {'title': 'High Temp'});
+      await service.wrapProposal('alarm', {'title': 'High Temp'});
       await Future<void>.delayed(const Duration(milliseconds: 200));
 
       // Key mapping with key
-      service.wrapProposal('key_mapping', {'key': 'pump3.speed'});
+      await service.wrapProposal('key_mapping', {'key': 'pump3.speed'});
       await Future<void>.delayed(const Duration(milliseconds: 200));
 
       final rows = await db
@@ -102,40 +101,39 @@ void main() {
       expect(rows[1].read<String>('title'), 'pump3.speed');
     });
 
-    test('onProposal callback fires synchronously with wrapped proposal', () {
+    test('onProposal callback fires with wrapped proposal', () async {
       final captured = <Map<String, dynamic>>[];
       final service = ProposalService(
         onProposal: (wrapped) => captured.add(wrapped),
       );
 
-      service.wrapProposal('alarm', {
+      await service.wrapProposal('alarm', {
         'title': 'Test Alarm',
         'key': 'pump3.fault',
       });
 
-      // Callback should have fired synchronously (no await needed)
       expect(captured, hasLength(1));
       expect(captured.first['_proposal_type'], 'alarm');
       expect(captured.first['title'], 'Test Alarm');
       expect(captured.first['key'], 'pump3.fault');
     });
 
-    test('onProposal callback receives the same map as return value', () {
+    test('onProposal callback receives the same map as return value', () async {
       Map<String, dynamic>? callbackResult;
       final service = ProposalService(
         onProposal: (wrapped) => callbackResult = wrapped,
       );
 
-      final returnValue = service.wrapProposal('page', {'title': 'My Page'});
+      final returnValue = await service.wrapProposal('page', {'title': 'My Page'});
 
       expect(callbackResult, isNotNull);
       expect(callbackResult, equals(returnValue));
     });
 
-    test('onProposal callback not invoked when null', () {
+    test('onProposal callback not invoked when null', () async {
       // No callback — should not throw
       final service = ProposalService();
-      final result = service.wrapProposal('alarm', {'title': 'Test'});
+      final result = await service.wrapProposal('alarm', {'title': 'Test'});
       expect(result['_proposal_type'], 'alarm');
     });
 
@@ -145,7 +143,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('alarm', {'key': 'pump3.overcurrent'});
+      await service.wrapProposal('alarm', {'key': 'pump3.overcurrent'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows = await db.customSelect('SELECT title FROM mcp_proposal').get();
@@ -158,7 +156,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('alarm', {'description': 'some desc'});
+      await service.wrapProposal('alarm', {'description': 'some desc'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows = await db.customSelect('SELECT title FROM mcp_proposal').get();
@@ -171,7 +169,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('page', {'key': 'dashboard-main'});
+      await service.wrapProposal('page', {'key': 'dashboard-main'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows = await db.customSelect('SELECT title FROM mcp_proposal').get();
@@ -184,7 +182,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('custom_type', {'title': 'Custom Title'});
+      await service.wrapProposal('custom_type', {'title': 'Custom Title'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows = await db.customSelect('SELECT title FROM mcp_proposal').get();
@@ -198,7 +196,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('custom_type', {'other': 'data'});
+      await service.wrapProposal('custom_type', {'other': 'data'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows = await db.customSelect('SELECT title FROM mcp_proposal').get();
@@ -211,7 +209,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('asset', {'key': 'pump3'});
+      await service.wrapProposal('asset', {'key': 'pump3'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows = await db.customSelect('SELECT title FROM mcp_proposal').get();
@@ -221,7 +219,7 @@ void main() {
     test('operatorId defaults to unknown when not provided', () async {
       final service = ProposalService(database: db);
 
-      service.wrapProposal('alarm', {'title': 'Test'});
+      await service.wrapProposal('alarm', {'title': 'Test'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows =
@@ -235,7 +233,7 @@ void main() {
         operatorId: 'op',
       );
 
-      service.wrapProposal('alarm', {'title': 'Test', 'uid': 'abc-123'});
+      await service.wrapProposal('alarm', {'title': 'Test', 'uid': 'abc-123'});
       await Future<void>.delayed(const Duration(milliseconds: 300));
 
       final rows =
@@ -243,6 +241,74 @@ void main() {
       final json = rows.first.read<String>('proposal_json');
       expect(json, contains('"_proposal_type":"alarm"'));
       expect(json, contains('"uid":"abc-123"'));
+    });
+
+    test('wrapProposal returns the mcp_proposal row id as _proposal_id',
+        () async {
+      final service = ProposalService(database: db, operatorId: 'op');
+
+      final first = await service.wrapProposal('alarm', {'title': 'A'});
+      final second = await service.wrapProposal('page', {'title': 'B'});
+
+      final rows = await db
+          .customSelect('SELECT id, title FROM mcp_proposal ORDER BY id ASC')
+          .get();
+      expect(first['_proposal_id'], rows[0].read<int>('id'));
+      expect(second['_proposal_id'], rows[1].read<int>('id'));
+    });
+
+    test('onProposal callback map carries _proposal_id', () async {
+      Map<String, dynamic>? callbackResult;
+      final service = ProposalService(
+        database: db,
+        operatorId: 'op',
+        onProposal: (wrapped) => callbackResult = wrapped,
+      );
+
+      final result = await service.wrapProposal('alarm', {'title': 'A'});
+
+      expect(callbackResult?['_proposal_id'], result['_proposal_id']);
+      expect(result['_proposal_id'], isA<int>());
+    });
+  });
+
+  group('ProposalService.getProposalStatuses', () {
+    test('returns empty without a database', () async {
+      final service = ProposalService();
+      expect(await service.getProposalStatuses(), isEmpty);
+    });
+
+    test('lists recorded proposals newest-first with status', () async {
+      final service = ProposalService(database: db, operatorId: 'op');
+      await service.wrapProposal('alarm', {'title': 'High Temp'});
+      await service.wrapProposal('page', {'title': 'Dashboard'});
+
+      final statuses = await service.getProposalStatuses();
+
+      expect(statuses, hasLength(2));
+      expect(statuses[0]['title'], 'Dashboard');
+      expect(statuses[0]['type'], 'page');
+      expect(statuses[0]['status'], 'pending');
+      expect(statuses[1]['title'], 'High Temp');
+      expect(statuses[0]['created_at'], isNotEmpty);
+    });
+
+    test('filters by ids and reflects status updates', () async {
+      final service = ProposalService(database: db, operatorId: 'op');
+      final a = await service.wrapProposal('alarm', {'title': 'A'});
+      await service.wrapProposal('alarm', {'title': 'B'});
+      final aId = a['_proposal_id'] as int;
+
+      await db.customStatement(
+        'UPDATE mcp_proposal SET status = ? WHERE id = ?',
+        ['accepted', aId],
+      );
+
+      final statuses = await service.getProposalStatuses(ids: [aId]);
+
+      expect(statuses, hasLength(1));
+      expect(statuses.first['id'], aId);
+      expect(statuses.first['status'], 'accepted');
     });
   });
 

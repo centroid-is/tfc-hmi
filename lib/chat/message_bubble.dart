@@ -28,6 +28,12 @@ class MessageBubble extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     switch (message.role) {
       case ChatRole.user:
+        // Operator-decision notes are injected feedback for the AI, not
+        // something the operator typed -- the operator already saw the
+        // action they clicked, so render nothing.
+        if (message.content.startsWith(kOperatorDecisionPrefix)) {
+          return const SizedBox.shrink();
+        }
         return _buildUserBubble(context);
       case ChatRole.assistant:
         return _buildAssistantBubble(context, ref);

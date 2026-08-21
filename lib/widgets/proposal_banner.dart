@@ -295,6 +295,8 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
   Widget _buildViewButton(PendingProposal proposal) {
     return TextButton(
       onPressed: () {
+        // Looking is not deciding, but the AI is told the proposal was opened.
+        ref.read(proposalStateProvider.notifier).viewProposal(proposal.id);
         final route = proposal.editorRoute;
         if (route != null) {
           try {

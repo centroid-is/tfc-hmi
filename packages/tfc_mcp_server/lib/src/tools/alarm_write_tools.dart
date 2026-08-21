@@ -170,7 +170,7 @@ void _registerCreateAlarm({
       );
 
       // Wrap with _proposal_type and return as JSON
-      final wrapped = proposalService.wrapProposal('alarm', proposal);
+      final wrapped = await proposalService.wrapProposal('alarm', proposal);
       return CallToolResult(
         content: [TextContent(text: jsonEncode(wrapped))],
       );
@@ -310,7 +310,7 @@ void _registerUpdateAlarm({
 
       // Wrap with _proposal_type and return as JSON
       final wrapped =
-          proposalService.wrapProposal('alarm', proposal, op: 'update');
+          await proposalService.wrapProposal('alarm', proposal, op: 'update');
       return CallToolResult(
         content: [TextContent(text: jsonEncode(wrapped))],
       );

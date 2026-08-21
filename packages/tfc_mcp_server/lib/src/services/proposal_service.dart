@@ -106,24 +106,80 @@ class ProposalService {
   /// 'update', or 'delete'. The type alone cannot carry this -- 'alarm' and
   /// 'key_mapping' are used for both creates and updates -- so it is stamped
   /// into the JSON as `_op` for the notification banner to label each row.
-  Map<String, dynamic> wrapProposal(
+  ///
+  /// When the database write succeeds, the wrapped map also carries
+  /// `_proposal_id` -- the mcp_proposal row id -- so the AI can look the
+  /// proposal up later with `get_proposal_status`, and the UI can track the
+  /// inline copy under its real id instead of a synthetic negative one.
+  Future<Map<String, dynamic>> wrapProposal(
     String type,
     Map<String, dynamic> proposal, {
     String op = 'create',
-  }) {
+  }) async {
     final wrapped = {
       ...proposal,
       '_proposal_type': type,
       '_op': op,
     };
 
-    // Fire-and-forget: record proposal in DB for cross-process notification.
-    _recordProposal(type, proposal, wrapped);
+    // Record the proposal in DB for cross-process notification. Awaited so
+    // the row id can be handed back to the AI in the tool result.
+    final id = await _recordProposal(type, proposal, wrapped);
+    if (id != null) {
+      wrapped['_proposal_id'] = id;
+    }
 
     // Notify in-process listener (e.g., Flutter chat UI) immediately.
     _onProposal?.call(wrapped);
 
     return wrapped;
+  }
+
+  /// Reads back the operator's decision on recorded proposals.
+  ///
+  /// Returns rows newest-first as maps with `id`, `type`, `title`, `status`
+  /// and `created_at`. When [ids] is given only those rows are returned;
+  /// otherwise the most recent [limit] rows.
+  Future<List<Map<String, dynamic>>> getProposalStatuses({
+    List<int>? ids,
+    int limit = 20,
+  }) async {
+    final db = _database;
+    if (db == null) return const [];
+
+    final String where;
+    final List<Variable> vars;
+    if (ids != null && ids.isNotEmpty) {
+      where = 'WHERE id IN (${List.filled(ids.length, '?').join(', ')})';
+      vars = [for (final id in ids) Variable.withInt(id)];
+    } else {
+      where = '';
+      vars = [];
+    }
+
+    final rows = await db
+        .customSelect(
+          _sql(
+            'SELECT id, proposal_type, title, status, created_at '
+            'FROM mcp_proposal $where '
+            'ORDER BY id DESC LIMIT ${limit.clamp(1, 100)}',
+          ),
+          variables: vars,
+        )
+        .get();
+
+    return [
+      for (final row in rows)
+        {
+          'id': row.read<int>('id'),
+          'type': row.read<String>('proposal_type'),
+          'title': row.read<String>('title'),
+          'status': row.read<String>('status'),
+          // Stored as ISO-8601 text on SQLite but as a native timestamp on
+          // PostgreSQL, so stringify whatever comes back.
+          'created_at': row.data['created_at']?.toString() ?? '',
+        },
+    ];
   }
 
   /// Derives a human-readable title from the proposal based on type.
@@ -148,31 +204,43 @@ class ProposalService {
     }
   }
 
-  Future<void> _recordProposal(
+  /// Inserts the proposal row and returns its id, or null when there is no
+  /// database or the write fails (notification is best-effort; the proposal
+  /// tool must not fail on it).
+  Future<int?> _recordProposal(
     String type,
     Map<String, dynamic> proposal,
     Map<String, dynamic> wrapped,
   ) async {
     final db = _database;
-    if (db == null) return;
+    if (db == null) return null;
 
     try {
       final title = _deriveTitle(type, proposal);
       final jsonStr = jsonEncode(wrapped);
       final now = DateTime.now().toUtc().toIso8601String();
 
-      await db.customStatement(
-        _sql(
-          'INSERT INTO mcp_proposal '
+      const insert = 'INSERT INTO mcp_proposal '
           '(proposal_type, title, proposal_json, operator_id, status, created_at) '
-          'VALUES (?, ?, ?, ?, ?, ?)',
-        ),
-        [type, title, jsonStr, _operatorId, 'pending', now],
+          'VALUES (?, ?, ?, ?, ?, ?)';
+      final values = [type, title, jsonStr, _operatorId, 'pending', now];
+
+      if (_isPostgres) {
+        final rows = await db.customSelect(
+          _sql('$insert RETURNING id'),
+          variables: [for (final v in values) Variable.withString(v)],
+        ).get();
+        return rows.isNotEmpty ? rows.first.read<int>('id') : null;
+      }
+      // SQLite: customInsert reports the generated rowid directly.
+      return await db.customInsert(
+        insert,
+        variables: [for (final v in values) Variable.withString(v)],
       );
     } catch (e) {
-      // Notification is best-effort; don't fail the proposal tool.
       // ignore: avoid_print
       print('[ProposalService] DB write failed: $e');
+      return null;
     }
   }
 }

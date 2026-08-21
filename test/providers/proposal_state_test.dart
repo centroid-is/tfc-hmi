@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc_dart/core/database_drift.dart';
@@ -562,6 +564,129 @@ void main() {
       ));
       expect(notifier.state.pendingCount, 1);
       expect(notifier.state.proposals.first.id, 2);
+    });
+  });
+
+  group('feedback events', () {
+    late StreamController<ProposalFeedback> feedback;
+    late List<ProposalFeedback> events;
+    late ProposalStateNotifier notifier;
+
+    setUp(() {
+      feedback = StreamController<ProposalFeedback>.broadcast(sync: true);
+      events = [];
+      feedback.stream.listen(events.add);
+      notifier = ProposalStateNotifier(null, feedback: feedback);
+    });
+
+    tearDown(() => feedback.close());
+
+    test('acceptProposal emits one accepted event with the proposal', () async {
+      notifier.addProposal(makeProposal(id: 1, title: 'High Temp'));
+      await notifier.acceptProposal(1);
+
+      expect(events, hasLength(1));
+      expect(events.first.action, 'accepted');
+      expect(events.first.proposals.single.title, 'High Temp');
+    });
+
+    test('rejectProposal and dismissProposal emit their actions', () async {
+      notifier.addProposal(makeProposal(id: 1, json: '{"uid":"1"}'));
+      notifier.addProposal(makeProposal(id: 2, json: '{"uid":"2"}'));
+      await notifier.rejectProposal(1);
+      await notifier.dismissProposal(2);
+
+      expect(events.map((e) => e.action), ['rejected', 'dismissed']);
+    });
+
+    test('decision on an id not in state emits nothing', () async {
+      await notifier.acceptProposal(999);
+      expect(events, isEmpty);
+    });
+
+    test('viewProposal keeps the proposal pending and emits viewed once',
+        () async {
+      notifier.addProposal(makeProposal(id: 1));
+
+      await notifier.viewProposal(1);
+      await notifier.viewProposal(1);
+
+      expect(notifier.state.pendingCount, 1);
+      expect(events, hasLength(1));
+      expect(events.first.action, 'viewed');
+    });
+
+    test('viewProposal writes status viewed to the DB', () async {
+      await db.customInsert(
+        'INSERT INTO mcp_proposal '
+        '(proposal_type, title, proposal_json, operator_id, status, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        variables: [
+          Variable.withString('alarm'),
+          Variable.withString('Viewed Alarm'),
+          Variable.withString('{}'),
+          Variable.withString('op1'),
+          Variable.withString('pending'),
+          Variable.withString(DateTime.now().toIso8601String()),
+        ],
+      );
+      final rows = await db
+          .customSelect('SELECT id FROM mcp_proposal ORDER BY id DESC LIMIT 1')
+          .get();
+      final id = rows.first.read<int>('id');
+
+      final dbNotifier = ProposalStateNotifier(db, feedback: feedback);
+      dbNotifier.addProposal(makeProposal(id: id));
+      await dbNotifier.viewProposal(id);
+
+      final dbRows = await db.customSelect(
+        'SELECT status FROM mcp_proposal WHERE id = ?',
+        variables: [Variable.withInt(id)],
+      ).get();
+      expect(dbRows.first.read<String>('status'), 'viewed');
+      // A view is not a decision -- still pending in state.
+      expect(dbNotifier.state.pendingCount, 1);
+    });
+
+    test('acceptAllOfType emits a single bulk event', () async {
+      notifier.addProposal(
+          makeProposal(id: 1, type: 'alarm', json: '{"uid":"1"}'));
+      notifier.addProposal(
+          makeProposal(id: 2, type: 'alarm', json: '{"uid":"2"}'));
+      notifier.addProposal(
+          makeProposal(id: 3, type: 'page', json: '{"uid":"3"}'));
+
+      await notifier.acceptAllOfType('alarm');
+
+      expect(events, hasLength(1));
+      expect(events.first.action, 'accepted');
+      expect(events.first.proposals, hasLength(2));
+    });
+
+    test('rejectAllOfType emits a single bulk event', () async {
+      notifier.addProposal(
+          makeProposal(id: 1, type: 'page', json: '{"uid":"1"}'));
+      notifier.addProposal(
+          makeProposal(id: 2, type: 'page', json: '{"uid":"2"}'));
+
+      await notifier.rejectAllOfType('page');
+
+      expect(events, hasLength(1));
+      expect(events.first.action, 'rejected');
+      expect(events.first.proposals, hasLength(2));
+    });
+
+    test('bulk call with no matching type emits nothing', () async {
+      await notifier.acceptAllOfType('alarm');
+      await notifier.rejectAllOfType('page');
+      expect(events, isEmpty);
+    });
+
+    test('closed feedback controller does not break decisions', () async {
+      notifier.addProposal(makeProposal(id: 1));
+      await feedback.close();
+      await notifier.acceptProposal(1);
+      expect(notifier.state.pendingCount, 0);
     });
   });
 

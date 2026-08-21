@@ -814,10 +814,12 @@ class ChatNotifier extends Notifier<ChatState> {
 
         ref.read(proposalStateProvider.notifier).addProposal(
               PendingProposal(
-                // Use a negative ID to distinguish inline proposals from
-                // DB-sourced ones. The DB-sourced ones will eventually arrive
-                // with a real positive ID and be deduplicated by proposalJson.
-                id: -DateTime.now().microsecondsSinceEpoch,
+                // Prefer the real mcp_proposal row id the server embeds, so
+                // accept/reject/viewed status lands on the actual DB row and
+                // the DB-sourced copy deduplicates by id. Fall back to a
+                // negative synthetic id when the server had no database.
+                id: (decoded['_proposal_id'] as num?)?.toInt() ??
+                    -DateTime.now().microsecondsSinceEpoch,
                 proposalType: proposalType,
                 title: title,
                 proposalJson: resultText,
@@ -868,6 +870,23 @@ class ChatNotifier extends Notifier<ChatState> {
     unawaited(saveConversation());
   }
 
+  /// Injects an operator decision on proposals into the conversation.
+  ///
+  /// The note carries the user role prefixed with [kOperatorDecisionPrefix],
+  /// so the AI reads it as coming from the operator on its next turn while
+  /// [MessageBubble] renders nothing for it -- the operator already saw the
+  /// button they clicked. Deliberately does NOT trigger a completion: a
+  /// decision is context for the next exchange, not a question that warrants
+  /// spending a turn on "great, glad you accepted".
+  void injectProposalFeedback(String text) {
+    final messages = List<ChatMessage>.from(state.messages);
+    messages.add(ChatMessage.user('$kOperatorDecisionPrefix $text'));
+    state = state.copyWith(messages: List.unmodifiable(messages));
+
+    // Fire-and-forget save.
+    unawaited(saveConversation());
+  }
+
   /// Clears all messages in the current conversation and resets to idle state.
   ///
   /// Also removes persisted messages for the active conversation.
@@ -891,6 +910,48 @@ class ChatNotifier extends Notifier<ChatState> {
 final chatProvider = NotifierProvider<ChatNotifier, ChatState>(
   () => ChatNotifier(),
 );
+
+/// Renders one operator decision as a line of feedback for the AI.
+///
+/// The text follows [kOperatorDecisionPrefix] in the injected note, so it
+/// reads as a sentence: `Accepted the alarm proposal "High temp" (#12).`
+/// Bulk decisions list up to five titles. Synthetic negative ids (proposals
+/// that never reached the database) are not shown.
+String describeProposalFeedback(
+    String action, List<PendingProposal> proposals) {
+  final verb = switch (action) {
+    'accepted' => 'Accepted',
+    'rejected' => 'Rejected',
+    'dismissed' => 'Dismissed',
+    'viewed' => 'Viewed',
+    _ => action,
+  };
+  final suffix = action == 'viewed' ? ' No decision yet.' : '';
+
+  String typeLabel(String type) => switch (type) {
+        'alarm' || 'alarm_create' || 'alarm_update' => 'alarm',
+        'key_mapping' => 'key mapping',
+        'page' => 'page',
+        'asset' => 'asset',
+        'asset_update' => 'asset update',
+        _ => 'config',
+      };
+
+  if (proposals.length == 1) {
+    final p = proposals.first;
+    final id = p.id > 0 ? ' (#${p.id})' : '';
+    return '$verb the ${typeLabel(p.proposalType)} proposal '
+        '"${p.title}"$id.$suffix';
+  }
+
+  final types = proposals.map((p) => typeLabel(p.proposalType)).toSet();
+  final label = types.length == 1 ? '${types.first} proposals' : 'proposals';
+  final titles = [
+    for (final p in proposals.take(5)) '"${p.title}"',
+    if (proposals.length > 5) 'and ${proposals.length - 5} more',
+  ].join(', ');
+  return '$verb ${proposals.length} $label: $titles.$suffix';
+}
 
 /// Creates an [LlmProvider] instance for the given type and API key.
 ///
@@ -1072,6 +1133,47 @@ final chatLifecycleProvider = Provider<void>((ref) {
       },
     );
     ref.onDispose(() => proposalSub.cancel());
+  }
+
+  // Relay operator decisions on proposals back into the conversation, so the
+  // AI learns whether its proposals were accepted, viewed, or rejected.
+  // Events are buffered briefly and merged into one note per action: the
+  // editor commit path accepts a batch one proposal at a time, and twenty
+  // "[Operator decision] Accepted …" lines is noise where one line will do.
+  {
+    final feedbackController = ref.read(proposalFeedbackProvider);
+    final buffered = <ProposalFeedback>[];
+    Timer? flushTimer;
+
+    void flush() {
+      final byAction = <String, List<PendingProposal>>{};
+      for (final event in buffered) {
+        final list = byAction.putIfAbsent(event.action, () => []);
+        for (final p in event.proposals) {
+          if (!list.any((existing) => existing.id == p.id)) list.add(p);
+        }
+      }
+      buffered.clear();
+      for (final entry in byAction.entries) {
+        try {
+          ref.read(chatProvider.notifier).injectProposalFeedback(
+              describeProposalFeedback(entry.key, entry.value));
+        } catch (e) {
+          io.stderr.writeln(
+              'chatLifecycleProvider: failed to inject proposal feedback: $e');
+        }
+      }
+    }
+
+    final feedbackSub = feedbackController.stream.listen((event) {
+      buffered.add(event);
+      flushTimer?.cancel();
+      flushTimer = Timer(const Duration(milliseconds: 300), flush);
+    });
+    ref.onDispose(() {
+      flushTimer?.cancel();
+      feedbackSub.cancel();
+    });
   }
 
   // Watch config changes (toggles) for debounced reconnect. The config
