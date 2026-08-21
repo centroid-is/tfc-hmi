@@ -75,21 +75,28 @@ void main() {
             ),
           );
 
-      // Seed alarm definitions
-      await db.into(db.serverAlarm).insert(
-            ServerAlarmCompanion.insert(
-              uid: 'alarm-1',
-              title: 'Pump 3 High Temp',
-              description: 'Temperature exceeds 80C',
-              rules: '[]',
-            ),
-          );
-      await db.into(db.serverAlarm).insert(
-            ServerAlarmCompanion.insert(
-              uid: 'alarm-2',
-              title: 'Tank 1 Overflow',
-              description: 'Level exceeds 100%',
-              rules: '[]',
+      // Seed alarm definitions where AlarmMan keeps them -- the `alarm`
+      // table is in the schema but nothing writes it.
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'alarm_man_config',
+              value: Value(jsonEncode({
+                'alarms': [
+                  {
+                    'uid': 'alarm-1',
+                    'title': 'Pump 3 High Temp',
+                    'description': 'Temperature exceeds 80C',
+                    'rules': [],
+                  },
+                  {
+                    'uid': 'alarm-2',
+                    'title': 'Tank 1 Overflow',
+                    'description': 'Level exceeds 100%',
+                    'rules': [],
+                  },
+                ],
+              })),
+              type: 'String',
             ),
           );
 
