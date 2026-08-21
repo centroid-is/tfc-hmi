@@ -24,8 +24,14 @@ permissions:
 # Two runs of this workflow on the same PR branch push the same `pr-NNN` tag,
 # so let a new push replace the one in flight rather than race it. Only for
 # pull requests — a main or tag build must finish and publish.
+#
+# `elinux-` prefix added on top of #235's block: tag.yml now calls this
+# workflow in the same run as macos.yml and windows.yml, and in a called run
+# `github.workflow` is the caller's ("Tag Release") for all three. Without a
+# per-file prefix they would share one group and queue behind each other. See
+# macos.yml for the full reasoning. The cancel guard is unchanged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: elinux-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

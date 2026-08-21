@@ -20,6 +20,14 @@ permissions:
   contents: write
   packages: write
 
+# `windows-` prefix, and the expression rather than bare `true`, for the
+# reasons spelled out in macos.yml: main-prerelease.yml and tag.yml each call
+# this workflow alongside others in a single run, where the github context is
+# the caller's.
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Job id stays `build` (main-prerelease.yml and tag.yml call this workflow);
   # `name` is what the status check context is called. See macos.yml.

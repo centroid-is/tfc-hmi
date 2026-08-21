@@ -29,8 +29,13 @@ permissions:
 # Two runs of this workflow on the same PR branch push the same `pr-NNN` tag,
 # so let a new push replace the one in flight rather than race it. Only for
 # pull requests — a main or tag build must finish and publish.
+#
+# `ivi-` prefix for consistency with the other workflow_call targets. This one
+# has no caller today, so the prefix changes nothing now; it keeps the group
+# unique if a caller is ever added. See macos.yml. The cancel guard is #235's,
+# unchanged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ivi-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
