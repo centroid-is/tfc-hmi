@@ -108,6 +108,37 @@ void main() {
     });
   });
 
+  group('a delete proposal removes the alarm', () {
+    test('recognises the delete op', () {
+      expect(source, contains("'_op'"));
+      expect(source, contains("'delete'"));
+    });
+
+    test('tracks which staged alarms are removals', () {
+      expect(source, contains('_proposedDeleteUids'));
+    });
+
+    test('commits a removal through removeAlarm, not updateAlarm', () {
+      // updateAlarm removes then re-adds, so routing a delete through it
+      // would write the alarm straight back and delete nothing.
+      final commit =
+          source.substring(source.indexOf('_commitProposals() async'));
+      expect(commit, contains('alarmMan.removeAlarm('));
+    });
+
+    test('the removal branch is chosen per alarm, not per batch', () {
+      // A batch can mix creates, updates and deletes -- they arrive as
+      // separate MCP calls and stage together.
+      expect(source, contains('_proposedDeleteUids.contains('));
+    });
+
+    test('a removal proposal is not offered as an editable form', () {
+      // Editing the fields of an alarm you are about to delete is
+      // meaningless, and submitting that form used to re-add it.
+      expect(source, contains('alarm-removal-form'));
+    });
+  });
+
   group('editing a single proposal still works', () {
     test('the form keeps its own Accept Proposal submit', () {
       expect(source, contains("submitText: 'Accept Proposal'"));

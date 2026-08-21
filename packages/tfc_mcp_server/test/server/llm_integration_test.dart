@@ -4,6 +4,8 @@
 /// Uses [MockMcpClient] → [TfcMcpServer] with in-memory SQLite, reusing
 /// the exact code paths from production. Tests the complete flow: initialize,
 /// list tools, call tools, read resources, get prompts.
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:test/test.dart';
@@ -70,14 +72,31 @@ void main() {
     });
 
     test('list_alarm_definitions with seeded alarm config', () async {
-      // Seed alarm config into the alarm table (ServerAlarm maps to 'alarm')
-      await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-            uid: 'alarm-001',
-            title: 'Pump 3 Overcurrent',
-            description: 'Motor current exceeds threshold',
-            rules:
-                '[{"level":"error","expression":{"value":{"formula":"pump3.current > 15"}}}]',
-          ));
+      // Seed alarm config where AlarmMan keeps it. The `alarm` table exists
+      // in the schema but nothing writes it, so seeding it proves nothing.
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'alarm_man_config',
+              value: Value(jsonEncode({
+                'alarms': [
+                  {
+                    'uid': 'alarm-001',
+                    'title': 'Pump 3 Overcurrent',
+                    'description': 'Motor current exceeds threshold',
+                    'rules': [
+                      {
+                        'level': 'error',
+                        'expression': {
+                          'value': {'formula': 'pump3.current > 15'}
+                        },
+                      },
+                    ],
+                  },
+                ],
+              })),
+              type: 'String',
+            ),
+          );
 
       final result = await client.callTool('list_alarm_definitions', {});
       expect(result.isError, isNot(true));
@@ -86,18 +105,28 @@ void main() {
     });
 
     test('list_alarm_definitions fuzzy filter works', () async {
-      await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-            uid: 'alarm-a',
-            title: 'Pump 3 Overcurrent',
-            description: 'Motor current',
-            rules: '[]',
-          ));
-      await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-            uid: 'alarm-b',
-            title: 'Tank High Level',
-            description: 'Water level',
-            rules: '[]',
-          ));
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'alarm_man_config',
+              value: Value(jsonEncode({
+                'alarms': [
+                  {
+                    'uid': 'alarm-a',
+                    'title': 'Pump 3 Overcurrent',
+                    'description': 'Motor current',
+                    'rules': [],
+                  },
+                  {
+                    'uid': 'alarm-b',
+                    'title': 'Tank High Level',
+                    'description': 'Water level',
+                    'rules': [],
+                  },
+                ],
+              })),
+              type: 'String',
+            ),
+          );
 
       final result =
           await client.callTool('list_alarm_definitions', {'filter': 'pump'});

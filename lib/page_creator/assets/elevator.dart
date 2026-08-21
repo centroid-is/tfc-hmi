@@ -870,11 +870,16 @@ class _ElevatorState extends ConsumerState<Elevator> {
   Widget build(BuildContext context) {
     final angleDeg = widget.config.coordinates.angle ?? 0.0;
     final activeColor = Theme.of(context).colorScheme.primary;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _showDetailsPane(context),
-      child: LayoutRotatedBox(
-        angle: angleDeg * pi / 180,
+    // The detector sits INSIDE the rotation, as on the sensor and the
+    // conveyor: an opaque detector outside it claims the unrotated w×h rect
+    // and nothing else, so on a turned elevator it both swallowed taps meant
+    // for whatever sits in that rect and ignored the part of the visual that
+    // rotates out of it.
+    return LayoutRotatedBox(
+      angle: angleDeg * pi / 180,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _showDetailsPane(context),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final Size paintSize;

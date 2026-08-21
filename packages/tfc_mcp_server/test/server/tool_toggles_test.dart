@@ -218,18 +218,18 @@ void main() {
       );
     }
 
-    test('allEnabled registers 24 tools (16 read + 8 write)', () async {
+    test('allEnabled registers 25 tools (16 read + 9 write)', () async {
       final server = createServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
         final tools = await client.listTools();
-                expect(tools, hasLength(24));
+        expect(tools, hasLength(25));
       } finally {
         await client.close();
       }
     });
 
-    test('tagsEnabled=false registers 21 tools', () async {
+    test('tagsEnabled=false registers 22 tools', () async {
       final server = createServer(
         toggles: const McpToolToggles(tagsEnabled: false),
       );
@@ -237,7 +237,7 @@ void main() {
       try {
         final tools = await client.listTools();
         final names = tools.map((t) => t.name).toSet();
-        expect(tools, hasLength(21));
+        expect(tools, hasLength(22));
         expect(names, isNot(contains('list_tags')));
         expect(names, isNot(contains('get_tag_value')));
       } finally {
@@ -255,9 +255,10 @@ void main() {
         final names = tools.map((t) => t.name).toSet();
         // alarmsEnabled=false removes: list_alarms, get_alarm_detail,
         // query_alarm_history (3 alarm read tools), diagnose_asset (needs
-        // both tagsEnabled && alarmsEnabled), create_alarm, update_alarm
-        // (write tools gated by alarmsEnabled inside proposalsEnabled block).
-        // 24 total - 6 = 18.
+        // both tagsEnabled && alarmsEnabled), create_alarm, update_alarm,
+        // delete_alarm (write tools gated by alarmsEnabled inside the
+        // proposalsEnabled block).
+        // 25 total - 7 = 18.
         expect(tools, hasLength(18));
         expect(names, isNot(contains('list_alarms')));
         expect(names, isNot(contains('get_alarm_detail')));
@@ -303,10 +304,11 @@ void main() {
         // Config read tools removed (6): list_pages, list_assets,
         // get_asset_detail, list_key_mappings, list_alarm_definitions,
         // list_asset_types.
-        // Config-dependent write tools removed (5): create_alarm, update_alarm
-        // (need configEnabled for update_alarm's lookup), create_key_mapping,
+        // Config-dependent write tools removed (6): create_alarm,
+        // update_alarm, delete_alarm (the alarm write tools need
+        // configEnabled for their lookups), create_key_mapping,
         // update_key_mapping, delete_key_mapping.
-        // 24 total - 11 = 13.
+        // 25 total - 12 = 13.
         expect(tools, hasLength(13));
         expect(names, isNot(contains('list_pages')));
         expect(names, isNot(contains('list_assets')));

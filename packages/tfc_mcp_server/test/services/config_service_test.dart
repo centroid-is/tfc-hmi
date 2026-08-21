@@ -108,23 +108,29 @@ void main() {
           );
     }
 
-    Future<void> insertAlarm({
+    /// Seeds the alarm definitions the way the app really stores them.
+    ///
+    /// AlarmMan keeps its whole config in the `alarm_man_config` preference
+    /// and never writes the `alarm` table, so a test that seeds the table
+    /// proves nothing about the alarms an operator can actually see.
+    Future<void> insertAlarms(List<Map<String, dynamic>> alarms) async {
+      await insertPreference('alarm_man_config', {'alarms': alarms});
+    }
+
+    Map<String, dynamic> alarmJson({
       required String uid,
       String? key,
       required String title,
       required String description,
-      String rules = '[]',
-    }) async {
-      await db.into(db.serverAlarm).insert(
-            ServerAlarmCompanion.insert(
-              uid: uid,
-              key: key != null ? Value(key) : const Value.absent(),
-              title: title,
-              description: description,
-              rules: rules,
-            ),
-          );
-    }
+      List<Map<String, dynamic>> rules = const [],
+    }) =>
+        {
+          'uid': uid,
+          if (key != null) 'key': key,
+          'title': title,
+          'description': description,
+          'rules': rules,
+        };
 
     group('listPages', () {
       test('returns page key+title summaries from page_editor_data', () async {
@@ -282,18 +288,20 @@ void main() {
 
     group('listAlarmDefinitions', () {
       test('returns alarm uid/title/description summaries', () async {
-        await insertAlarm(
-          uid: 'alarm-1',
-          key: 'pump3.temp',
-          title: 'Pump 3 High Temperature',
-          description: 'Temperature exceeds 80C',
-        );
-        await insertAlarm(
-          uid: 'alarm-2',
-          key: 'conveyor.speed',
-          title: 'Conveyor Overspeed',
-          description: 'Conveyor belt speed above limit',
-        );
+        await insertAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            key: 'pump3.temp',
+            title: 'Pump 3 High Temperature',
+            description: 'Temperature exceeds 80C',
+          ),
+          alarmJson(
+            uid: 'alarm-2',
+            key: 'conveyor.speed',
+            title: 'Conveyor Overspeed',
+            description: 'Conveyor belt speed above limit',
+          ),
+        ]);
 
         final alarms = await service.listAlarmDefinitions();
 
@@ -305,33 +313,183 @@ void main() {
       });
 
       test('respects limit parameter', () async {
-        for (var i = 0; i < 10; i++) {
-          await insertAlarm(
-            uid: 'alarm-$i',
-            title: 'Alarm $i',
-            description: 'Description $i',
-          );
-        }
+        await insertAlarms([
+          for (var i = 0; i < 10; i++)
+            alarmJson(
+              uid: 'alarm-$i',
+              title: 'Alarm $i',
+              description: 'Description $i',
+            ),
+        ]);
 
         final alarms = await service.listAlarmDefinitions(limit: 5);
         expect(alarms, hasLength(5));
       });
 
       test('supports fuzzy filter', () async {
-        await insertAlarm(
-          uid: 'alarm-1',
-          title: 'Pump 3 High Temperature',
-          description: 'Temperature exceeds 80C',
-        );
-        await insertAlarm(
-          uid: 'alarm-2',
-          title: 'Conveyor Overspeed',
-          description: 'Belt speed above limit',
-        );
+        await insertAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Pump 3 High Temperature',
+            description: 'Temperature exceeds 80C',
+          ),
+          alarmJson(
+            uid: 'alarm-2',
+            title: 'Conveyor Overspeed',
+            description: 'Belt speed above limit',
+          ),
+        ]);
 
         final alarms = await service.listAlarmDefinitions(filter: 'pump');
         expect(alarms, hasLength(1));
         expect(alarms.first['title'], contains('Pump'));
+      });
+
+      test('an empty alarm table does not hide the configured alarms',
+          () async {
+        // The regression this pins: the lookup used to read the `alarm`
+        // table, which nothing writes. list_alarm_definitions answered "No
+        // alarm definitions configured" on a plant running 45 of them.
+        await insertAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Only In Preferences',
+            description: 'Never written to the alarm table',
+          ),
+        ]);
+
+        expect(await db.select(db.serverAlarm).get(), isEmpty);
+        final alarms = await service.listAlarmDefinitions();
+        expect(alarms, hasLength(1));
+        expect(alarms.first['uid'], 'alarm-1');
+      });
+
+      test('returns nothing when no alarms are configured', () async {
+        expect(await service.listAlarmDefinitions(), isEmpty);
+      });
+    });
+
+    group('getAlarmConfig', () {
+      test('returns the full config, rules included', () async {
+        await insertAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            key: 'pump3.temp',
+            title: 'Pump 3 High Temperature',
+            description: 'Temperature exceeds 80C',
+            rules: [
+              {
+                'level': 'error',
+                'expression': {
+                  'value': {'formula': 'pump3.temp > 80'}
+                },
+                'acknowledgeRequired': true,
+              },
+            ],
+          ),
+        ]);
+
+        final config = await service.getAlarmConfig('alarm-1');
+        expect(config, isNotNull);
+        expect(config!['uid'], 'alarm-1');
+        expect(config['key'], 'pump3.temp');
+        expect(config['title'], 'Pump 3 High Temperature');
+        expect(config['description'], 'Temperature exceeds 80C');
+        final rules = config['rules'] as List;
+        expect(rules, hasLength(1));
+        expect(
+            rules.first['expression']['value']['formula'], 'pump3.temp > 80');
+      });
+
+      test('returns null for an unknown uid', () async {
+        await insertAlarms([
+          alarmJson(uid: 'alarm-1', title: 'One', description: 'Only one'),
+        ]);
+
+        expect(await service.getAlarmConfig('nope'), isNull);
+      });
+
+      test('an alarm without a key reads back with a null key', () async {
+        await insertAlarms([
+          alarmJson(uid: 'alarm-1', title: 'No Key', description: 'Keyless'),
+        ]);
+
+        final config = await service.getAlarmConfig('alarm-1');
+        expect(config!['key'], isNull);
+      });
+    });
+
+    group('findAlarmReferences', () {
+      /// A page whose beacons watch specific alarm uids.
+      final pagesWithBeacons = {
+        'Home': {
+          'menu_item': {'label': 'Home', 'path': '/'},
+          'assets': [
+            {
+              'asset_name': 'AlarmVisibilityConfig',
+              'alarm_uids': ['alarm-1'],
+              'text': 'Line 1 beacon',
+            },
+            {
+              'asset_name': 'AlarmVisibilityConfig',
+              'alarm_uids': ['alarm-2', 'alarm-1'],
+              'text': 'Combined beacon',
+            },
+            {
+              'asset_name': 'ButtonConfig',
+              'key': 'line1.start',
+            },
+          ],
+        },
+        'Line 2': {
+          'menu_item': {'label': 'Line 2', 'path': '/line2'},
+          'assets': [
+            {
+              'asset_name': 'AlarmVisibilityConfig',
+              'alarm_uids': ['alarm-2'],
+            },
+          ],
+        },
+      };
+
+      test('finds every asset that names the uid', () async {
+        await insertPreference('page_editor_data', pagesWithBeacons);
+
+        final refs = await service.findAlarmReferences('alarm-1');
+        expect(refs, hasLength(2));
+        expect(refs.every((r) => r['page'] == 'Home'), isTrue);
+        expect(refs.map((r) => r['label']), contains('Line 1 beacon'));
+      });
+
+      test('reports the page each reference sits on', () async {
+        await insertPreference('page_editor_data', pagesWithBeacons);
+
+        final refs = await service.findAlarmReferences('alarm-2');
+        expect(refs.map((r) => r['page']).toSet(), {'Home', 'Line 2'});
+      });
+
+      test('an unreferenced uid comes back empty', () async {
+        await insertPreference('page_editor_data', pagesWithBeacons);
+
+        expect(await service.findAlarmReferences('alarm-99'), isEmpty);
+      });
+
+      test('a beacon watching every alarm is not a reference', () async {
+        // An empty alarm_uids list means "all alarms" -- it names no uid, so
+        // deleting one does not leave it bound to nothing.
+        await insertPreference('page_editor_data', {
+          'Home': {
+            'assets': [
+              {'asset_name': 'AlarmVisibilityConfig', 'alarm_uids': <String>[]},
+            ],
+          },
+        });
+
+        expect(await service.findAlarmReferences('alarm-1'), isEmpty);
+      });
+
+      test('no page config at all is not an error', () async {
+        expect(await service.findAlarmReferences('alarm-1'), isEmpty);
       });
     });
   });
