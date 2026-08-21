@@ -10,8 +10,12 @@ import 'sql_dialect.dart';
 /// Service for reading system configuration from the database.
 ///
 /// Provides methods to query pages, assets, key mappings, and alarm
-/// definitions. Data is stored as JSON blobs in the flutter_preferences
-/// table (page_editor_data, key_mappings) and as rows in the alarm table.
+/// definitions. All of it is stored as JSON blobs in the flutter_preferences
+/// table: page_editor_data, key_mappings and alarm_man_config.
+///
+/// The `alarm` table is *not* one of the sources. It exists in the schema but
+/// nothing writes it -- AlarmMan keeps every alarm in the alarm_man_config
+/// preference -- so reading it returned an empty result on every deployment.
 ///
 /// All list methods enforce a [limit] parameter to prevent context window
 /// overflow when used by the AI copilot.
@@ -248,30 +252,35 @@ class ConfigService implements KeyMappingLookup {
     return mappings.take(limit).toList();
   }
 
-  /// Returns alarm definition summaries from the alarm table.
+  /// Pulls the alarm list out of a decoded `alarm_man_config` preference.
+  ///
+  /// That preference is what AlarmMan loads its config from and writes back
+  /// to, so it is the only place the running alarms exist. Shape:
+  /// `{"alarms": [{uid, key, title, description, rules: [...]}]}`.
+  List<Map<String, dynamic>> _alarmsOf(Map<String, dynamic>? data) {
+    final alarms = data?['alarms'];
+    if (alarms is! List) return const [];
+    return alarms.whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// Returns alarm definition summaries.
   ///
   /// Each entry contains `uid`, `title`, and `description` fields.
   /// Supports optional fuzzy [filter] on title and description.
   /// Results are limited to [limit] entries (default 50).
-  ///
-  /// Uses raw SQL via [customSelect] because the alarm table is shared
-  /// with different row classes in AppDatabase vs ServerDatabase.
   Future<List<Map<String, dynamic>>> listAlarmDefinitions({
     String? filter,
     int limit = 50,
   }) {
     final cacheKey = '${filter ?? ''}:$limit';
     return _alarmDefCache.getOrCompute(cacheKey, () async {
-      final rows = await _db.customSelect(
-        _sql('SELECT uid, title, description FROM alarm LIMIT ?'),
-        variables: [Variable.withInt(limit)],
-      ).get();
+      final data = await _getPreferenceJson('alarm_man_config');
 
-      var alarms = rows
-          .map((row) => {
-                'uid': row.read<String>('uid'),
-                'title': row.read<String>('title'),
-                'description': row.read<String>('description'),
+      var alarms = _alarmsOf(data)
+          .map((a) => {
+                'uid': a['uid'] as String? ?? '',
+                'title': a['title'] as String? ?? '',
+                'description': a['description'] as String? ?? '',
               })
           .toList();
 
@@ -286,35 +295,80 @@ class ConfigService implements KeyMappingLookup {
         );
       }
 
-      return alarms;
+      return alarms.take(limit).toList();
     });
   }
 
   /// Returns the full alarm configuration for the given [uid].
   ///
   /// Returns a map with `uid`, `key`, `title`, `description`, and `rules`
-  /// (parsed from JSON string into a List). Returns `null` if no alarm
-  /// with the given UID exists.
-  ///
-  /// Uses raw SQL via [customSelect] because the alarm table is shared
-  /// with different row classes in AppDatabase vs ServerDatabase.
+  /// (a List in AlarmRule.toJson() shape). Returns `null` if no alarm with
+  /// the given UID exists.
   Future<Map<String, dynamic>?> getAlarmConfig(String uid) {
     return _alarmConfigCache.getOrCompute(uid, () async {
-      final rows = await _db.customSelect(
-        _sql(
-            'SELECT uid, key, title, description, rules FROM alarm WHERE uid = ?'),
-        variables: [Variable.withString(uid)],
-      ).get();
-      if (rows.isEmpty) return null;
+      final data = await _getPreferenceJson('alarm_man_config');
+      final alarm =
+          _alarmsOf(data).where((a) => a['uid'] == uid).firstOrNull;
+      if (alarm == null) return null;
 
-      final row = rows.first;
       return {
-        'uid': row.read<String>('uid'),
-        'key': row.readNullable<String>('key'),
-        'title': row.read<String>('title'),
-        'description': row.read<String>('description'),
-        'rules': jsonDecode(row.read<String>('rules')) as List<dynamic>,
+        'uid': uid,
+        'key': alarm['key'] as String?,
+        'title': alarm['title'] as String? ?? '',
+        'description': alarm['description'] as String? ?? '',
+        'rules': alarm['rules'] is List ? alarm['rules'] as List : const [],
       };
     });
+  }
+
+  /// Returns the page assets that name [uid] in their `alarm_uids` list.
+  ///
+  /// Alarm beacons ([AlarmVisibilityConfig]) bind to alarms by uid. Deleting
+  /// an alarm a beacon watches leaves the beacon bound to nothing -- it stays
+  /// on the page and never lights again -- so a delete has to be able to say
+  /// what it would orphan before the operator agrees to it.
+  ///
+  /// Each entry has `page` (the page_editor_data key) and, when the asset
+  /// carries one, `asset` (its type name) and `label` (its caption).
+  ///
+  /// An asset with an *empty* `alarm_uids` watches every alarm rather than a
+  /// named one, so it is not reported: nothing about it breaks when one alarm
+  /// goes away.
+  Future<List<Map<String, dynamic>>> findAlarmReferences(String uid) async {
+    final data = await _getPreferenceJson('page_editor_data');
+    if (data == null) return const [];
+
+    final refs = <Map<String, dynamic>>[];
+
+    // Walked rather than indexed: assets nest (groups hold children), and a
+    // reference one level down orphans a beacon just as thoroughly.
+    void visit(Object? node, String pageKey) {
+      if (node is List) {
+        for (final child in node) {
+          visit(child, pageKey);
+        }
+        return;
+      }
+      if (node is! Map<String, dynamic>) return;
+
+      final uids = node['alarm_uids'];
+      if (uids is List && uids.contains(uid)) {
+        refs.add({
+          'page': pageKey,
+          if (node['asset_name'] is String) 'asset': node['asset_name'],
+          if (node['text'] is String) 'label': node['text'],
+        });
+      }
+
+      for (final value in node.values) {
+        visit(value, pageKey);
+      }
+    }
+
+    for (final entry in data.entries) {
+      visit(entry.value, entry.key);
+    }
+
+    return refs;
   }
 }
