@@ -310,6 +310,31 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     await executor.ensureOpen(this);
   }
 
+  /// The one LISTEN/NOTIFY connection, opening it if nobody has yet.
+  ///
+  /// Caching the in-flight future is what makes concurrent subscribers share:
+  /// it is assigned before any await, so the eleven that used to arrive during
+  /// the open now join it instead of each starting one of their own.
+  ///
+  /// A future that *fails* is evicted rather than kept. Caching it would hand
+  /// the same rejected future to every later subscriber, so a single moment of
+  /// the database being unreachable would latch every channel shut for the
+  /// life of the process -- and this code exists on the reconnect path, where
+  /// the database being briefly unreachable is the normal case rather than the
+  /// exceptional one. Dropping it costs nothing: the next subscriber opens a
+  /// new one, which is what happened before the future was cached at all.
+  Future<pg.Connection?> _sharedNotificationConnection() {
+    final pending =
+        _notificationConnection ??= _createNotificationConnection();
+    return pending.catchError((Object error) {
+      // Only evict what we put there; a teardown may already have replaced it.
+      if (identical(_notificationConnection, pending)) {
+        _notificationConnection = null;
+      }
+      throw error;
+    });
+  }
+
   /// Get or create the dedicated channel connection
   Future<pg.Connection?> _createNotificationConnection() async {
     if (config.postgres == null) {
@@ -949,10 +974,9 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     controller = StreamController<String>(
       onListen: () async {
         try {
-          // Assigned before awaiting, so concurrent subscribers join this
-          // future instead of each opening a connection of their own.
-          final connection =
-              await (_notificationConnection ??= _createNotificationConnection());
+          // Shared, and not latched shut by an open that failed: see
+          // [_sharedNotificationConnection].
+          final connection = await _sharedNotificationConnection();
 
           if (connection == null) {
             logger.w('Cannot listen to channel: not using PostgreSQL');

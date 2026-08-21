@@ -38,18 +38,43 @@ class _FakeConnection {
 }
 
 /// The shape the fix uses: hold the in-flight *future*, assigned before any
-/// await, so concurrent callers join it instead of starting their own.
+/// await, so concurrent callers join it instead of starting their own -- and
+/// drop it again if it fails, so one bad moment does not latch the channel
+/// shut forever. Mirrors `AppDatabase._sharedNotificationConnection`.
 class _SharedHolder {
   Future<_FakeConnection>? _pending;
 
+  /// Set to make the next open fail, the way an unreachable database does.
+  bool failNext = false;
+
   Future<_FakeConnection> get({Duration delay = Duration.zero}) {
-    return _pending ??= Future(() async {
+    final pending = _pending ??= Future(() async {
       await Future<void>.delayed(delay);
+      if (failNext) throw StateError('database unreachable');
       return _FakeConnection();
+    });
+    return pending.catchError((Object error) {
+      if (identical(_pending, pending)) _pending = null;
+      throw error;
     });
   }
 
   void reset() => _pending = null;
+}
+
+/// Caching the future without evicting a failed one. Kept so the tests
+/// demonstrate that defect rather than merely assert the fix.
+class _LatchingHolder {
+  Future<_FakeConnection>? _pending;
+  bool failNext = false;
+
+  Future<_FakeConnection> get({Duration delay = Duration.zero}) {
+    return _pending ??= Future(() async {
+      await Future<void>.delayed(delay);
+      if (failNext) throw StateError('database unreachable');
+      return _FakeConnection();
+    });
+  }
 }
 
 /// The shape that was there before: a nullable value, assigned after the
@@ -119,6 +144,60 @@ void main() {
       shared.reset();
       await shared.get();
       expect(_FakeConnection.opened, 2);
+    });
+  });
+
+  group('an open that fails must not be cached', () {
+    // Caching the future fixes the leak but introduces a worse failure if the
+    // rejected future is kept: every later subscriber joins the same failure.
+    // This runs on the reconnect path, where an unreachable database is the
+    // normal case, so latching there would silently kill every channel in the
+    // process for good.
+    test('caching a rejected future latches the channel shut', () async {
+      final latching = _LatchingHolder()..failNext = true;
+      await expectLater(latching.get(), throwsA(isA<StateError>()));
+
+      // The database is back.
+      latching.failNext = false;
+      await expectLater(latching.get(), throwsA(isA<StateError>()),
+          reason: 'the defect: the rejected future is still cached, so a '
+              'healthy database cannot be reached again');
+      expect(_FakeConnection.opened, 0);
+    });
+
+    test('evicting it lets the next subscriber reconnect', () async {
+      final shared = _SharedHolder()..failNext = true;
+      await expectLater(shared.get(), throwsA(isA<StateError>()));
+
+      shared.failNext = false;
+      final connection = await shared.get();
+      expect(connection.id, 1);
+      expect(_FakeConnection.opened, 1,
+          reason: 'the retry must actually open one, not replay the failure');
+    });
+
+    test('concurrent subscribers all fail together, then all recover',
+        () async {
+      // Twelve arriving at once against a database that is down: they share
+      // the one failed attempt, and the next round shares one new connection.
+      final shared = _SharedHolder()..failNext = true;
+      final attempts = [
+        for (var i = 0; i < 12; i++)
+          shared.get(delay: const Duration(milliseconds: 5)).then<Object?>(
+              (c) => c, onError: (Object e) => e)
+      ];
+      final results = await Future.wait(attempts);
+      expect(results.every((r) => r is StateError), isTrue);
+      expect(_FakeConnection.opened, 0);
+
+      shared.failNext = false;
+      final recovered = await Future.wait([
+        for (var i = 0; i < 12; i++)
+          shared.get(delay: const Duration(milliseconds: 5))
+      ]);
+      expect(_FakeConnection.opened, 1,
+          reason: 'recovery must not reintroduce the leak it just fixed');
+      expect(recovered.map((c) => c.id).toSet(), {1});
     });
   });
 }
