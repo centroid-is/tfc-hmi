@@ -554,6 +554,122 @@ Offset projectDragDeltaToCanvas({
   );
 }
 
+/// Pairs the assets now on the canvas with the same assets in a restored undo
+/// snapshot: for each entry of [live], the index of its counterpart in
+/// [restored], or null where it has none (the undo removes it).
+///
+/// Undo re-parses the page, so every asset comes back as a fresh instance and
+/// anything the editor was holding — the selection, the open config pane —
+/// points at objects that are no longer on the canvas. Assets carry no id to
+/// re-find them by, so the pairing is made from what is at hand:
+///
+///  * assets that serialize identically pair up in list order. That covers
+///    everything the undone edit left alone, and — when the edit was a
+///    restack — everything it touched as well, which is why this pass runs
+///    before the positional one rather than instead of it.
+///  * whatever is left over on each side is what the edit changed, and pairs
+///    positionally: the operations that change an asset's contents never also
+///    move it in the list, so the leftovers still line up. Unequal leftover
+///    counts or a type mismatch means the undo added or removed assets rather
+///    than editing one, and those go unpaired.
+@visibleForTesting
+List<int?> matchAssetsAcrossUndo(
+  List<Map<String, dynamic>> live,
+  List<Map<String, dynamic>> restored,
+) {
+  final paired = List<int?>.filled(live.length, null);
+  final claimed = List<bool>.filled(restored.length, false);
+
+  final byEncoding = <String, List<int>>{};
+  for (var i = 0; i < restored.length; i++) {
+    (byEncoding[jsonEncode(restored[i])] ??= <int>[]).add(i);
+  }
+  final consumed = <String, int>{};
+  for (var i = 0; i < live.length; i++) {
+    final encoding = jsonEncode(live[i]);
+    final candidates = byEncoding[encoding];
+    if (candidates == null) continue;
+    final next = consumed[encoding] ?? 0;
+    if (next >= candidates.length) continue;
+    consumed[encoding] = next + 1;
+    paired[i] = candidates[next];
+    claimed[candidates[next]] = true;
+  }
+
+  final liveLeft = [
+    for (var i = 0; i < live.length; i++)
+      if (paired[i] == null) i
+  ];
+  final restoredLeft = [
+    for (var i = 0; i < restored.length; i++)
+      if (!claimed[i]) i
+  ];
+  if (liveLeft.length != restoredLeft.length) return paired;
+  for (var i = 0; i < liveLeft.length; i++) {
+    if (live[liveLeft[i]][constAssetName] !=
+        restored[restoredLeft[i]][constAssetName]) {
+      return paired;
+    }
+  }
+  for (var i = 0; i < liveLeft.length; i++) {
+    paired[liveLeft[i]] = restoredLeft[i];
+  }
+  return paired;
+}
+
+/// The names of the top-level properties whose values differ between two
+/// encodings of one asset, or null when either is not a JSON object and the
+/// question cannot be answered.
+///
+/// The config pane mutates its asset in place, so comparing its serialization
+/// is the only signal the editor gets that something changed (see
+/// [_PageEditorState._syncConfigEdits]); this says *what* changed, which is
+/// what lets a run of edits to the same property fold into one undo entry.
+@visibleForTesting
+Set<String>? changedTopLevelKeys(String before, String after) {
+  Map<String, dynamic>? asObject(String encoded) {
+    try {
+      final decoded = jsonDecode(encoded);
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final a = asObject(before);
+  final b = asObject(after);
+  if (a == null || b == null) return null;
+  final changed = <String>{};
+  for (final key in {...a.keys, ...b.keys}) {
+    if (jsonEncode(a[key]) != jsonEncode(b[key])) changed.add(key);
+  }
+  return changed;
+}
+
+/// One entry of the editor's undo history.
+///
+/// The pages travel as their encoded JSON rather than as a live copy — see
+/// [_PageEditorState._undoHistory] for why — but a page map on its own does
+/// not describe the editor. Which page is open and how the top level is
+/// ordered are edited here too, and the top-level order includes
+/// app-registered destinations that appear in no page's JSON at all, so both
+/// ride along: an undo that left them behind could strand the operator on a
+/// page the restored map no longer has.
+@immutable
+class _EditorSnapshot {
+  const _EditorSnapshot({
+    required this.pagesJson,
+    required this.currentPage,
+    required this.topLevelOrder,
+    required this.navOrderDirty,
+  });
+
+  final String pagesJson;
+  final String? currentPage;
+  final List<String> topLevelOrder;
+  final bool navOrderDirty;
+}
+
 class PageEditor extends ConsumerStatefulWidget {
   /// Optional proposal JSON passed via Beamer route data.
   /// When non-null, the editor pre-populates from the proposal instead of
@@ -578,7 +694,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// key-down made a single arrow nudge lag behind the finger on big
   /// projects; the encoded string is already at hand in [_currentJson], so
   /// taking a snapshot is free and the decode is deferred to the rare undo.
-  final List<String> _undoHistory = [];
+  final List<_EditorSnapshot> _undoHistory = [];
   bool _showPalette = false;
 
   /// True while the pan key is held. The editor has one mode: a drag on empty
@@ -719,6 +835,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   Timer? _configWatch;
   String? _configSnapshot;
 
+  /// The asset properties the open pane's current undo entry already covers,
+  /// or null when it has none open. Edits arrive one serialization diff at a
+  /// time — a keystroke, a slider tick — and an entry per diff would flush the
+  /// 50-deep history with one typed label, so a run of changes to the same
+  /// properties folds into the entry the first of them pushed. Reaching for a
+  /// different property, or doing anything else at all (see [_saveToHistory]),
+  /// ends the run.
+  Set<String>? _configEditKeys;
+
   /// How often the open pane is compared against the canvas. Short enough that
   /// typing reads as live; pointer events sync straight away regardless.
   static const Duration _configWatchInterval = Duration(milliseconds: 100);
@@ -797,8 +922,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // the editor goes away (an MCP proposal can navigate out from under it).
     _configWatch?.cancel();
     _configWatch = null;
-    final configAsset = _configAsset;
-    if (configAsset != null) closeSidePane(id: _configPaneId(configAsset));
+    _closeConfigPane();
     _treeScrollController.dispose();
     _paletteSearchController.dispose();
     _shortcutFocus.dispose();
@@ -1137,6 +1261,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _currentJson = jsonEncode(
         _temporaryPages.map((name, page) => MapEntry(name, page.toJson())));
     _currentJsonStale = false;
+    // The open pane's change detector compares its asset against the last
+    // time the editor looked at it, so every settled edit has to count as a
+    // look. Without this a nudge or a drag of the very asset being configured
+    // reads as a pane edit on the next watch tick, and pushes a second undo
+    // entry for a change that already has one — leaving the operator's first
+    // Ctrl+Z with nothing to do.
+    final configAsset = _configAsset;
+    if (configAsset != null) _configSnapshot = _assetSnapshot(configAsset);
   }
 
   bool get _hasUnsavedChanges =>
@@ -1220,7 +1352,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ...PageImageStore.referencedImageIds(
             _temporaryPages.map((name, page) => MapEntry(name, page.toJson()))),
         for (final snapshot in _undoHistory)
-          ...PageImageStore.referencedImageIds(jsonDecode(snapshot)),
+          ...PageImageStore.referencedImageIds(jsonDecode(snapshot.pagesJson)),
         if (_copiedAssets != null)
           ...PageImageStore.referencedImageIds(jsonDecode(_copiedAssets!)),
       };
@@ -1252,24 +1384,101 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // continuous gesture, where the sync was deferred and must run first.
     // Empty means "never encoded" (a valid encode is at least '{}').
     if (_currentJsonStale || _currentJson.isEmpty) _updateCurrentJson();
-    _undoHistory.add(_currentJson);
+    _undoHistory.add(_EditorSnapshot(
+      pagesJson: _currentJson,
+      currentPage: _currentPage,
+      topLevelOrder: List.of(_topLevelOrder),
+      navOrderDirty: _navOrderDirty,
+    ));
     if (_undoHistory.length > 50) {
       _undoHistory.removeAt(0);
     }
+    // Whatever this entry is for, it is not the run of config-pane edits that
+    // was folding into the last one, so the next pane edit opens its own.
+    _configEditKeys = null;
   }
 
   void _handleUndo() {
-    if (_undoHistory.isNotEmpty) {
-      setState(() {
-        _temporaryPages = PageManager.pagesFromJson(_undoHistory.removeLast());
-        // The restored pages are fresh copies, so whatever was selected is
-        // now dead instances: invisible on the canvas, yet a Delete on them
-        // would push a snapshot while removing nothing — and the next undo
-        // would pop that no-op and appear to do nothing.
-        _selectedAssets.clear();
-        _updateCurrentJson();
-      });
+    // An edit made in the pane within the last watch tick has not opened its
+    // undo entry yet; without this the operator's Ctrl+Z would skip straight
+    // past it and undo the action before it, leaving the pane edit applied.
+    _syncConfigEdits();
+    if (_undoHistory.isEmpty) return;
+    final snapshot = _undoHistory.removeLast();
+
+    // Where the assets the editor is holding sit in the page about to be
+    // replaced. The pairing below turns those positions back into live
+    // objects; taken now, while they are still on the canvas.
+    final before = List<Asset>.of(assets);
+    final configIndex =
+        _configAsset == null ? -1 : before.indexOf(_configAsset!);
+    final selectedIndices = [
+      for (final asset in _selectedAssets)
+        if (before.contains(asset)) before.indexOf(asset)
+    ];
+    final pageBefore = _currentPage;
+
+    setState(() {
+      _temporaryPages = PageManager.pagesFromJson(snapshot.pagesJson);
+      _topLevelOrder = List.of(snapshot.topLevelOrder);
+      _navOrderDirty = snapshot.navOrderDirty;
+      // Back to the page the edit was made on — unless the undo is what
+      // removed it, in which case anywhere real beats a page that is gone.
+      _currentPage = _temporaryPages.containsKey(snapshot.currentPage)
+          ? snapshot.currentPage
+          : _temporaryPages.keys.firstOrNull;
+      // The restored pages are fresh copies, so whatever was selected is now
+      // dead instances: invisible on the canvas, yet a Delete on them would
+      // push a snapshot while removing nothing — and the next undo would pop
+      // that no-op and appear to do nothing. They are re-pointed at the assets
+      // that came back, just below; anything with no counterpart stays gone.
+      _selectedAssets = {};
+      _updateCurrentJson();
+    });
+
+    final pairing = _currentPage == pageBefore ? _pairAcrossUndo(before) : null;
+    if (pairing == null) {
+      // A different page is showing now, so nothing the editor held is on it.
+      _closeConfigPane();
+      return;
     }
+    setState(() {
+      for (final index in selectedIndices) {
+        final paired = pairing[index];
+        if (paired != null) _selectedAssets.add(assets[paired]);
+      }
+    });
+    if (_configAsset == null) return;
+    final pairedConfig = configIndex < 0 ? null : pairing[configIndex];
+    if (pairedConfig == null) {
+      _closeConfigPane();
+    } else {
+      // Re-point rather than close: the operator is mid-configuration, and an
+      // undo of one property is no reason to take the whole form away.
+      final restored = assets[pairedConfig];
+      _configAsset = null; // Keeps the swap from syncing the dead instance.
+      _openConfigPane(restored);
+    }
+  }
+
+  /// [matchAssetsAcrossUndo] over the live assets, or null if the assets will
+  /// not serialize — in which case the editor keeps the old behaviour of
+  /// dropping what it was holding.
+  List<int?>? _pairAcrossUndo(List<Asset> before) {
+    try {
+      return matchAssetsAcrossUndo(
+        [for (final asset in before) asset.toJson()],
+        [for (final asset in assets) asset.toJson()],
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Shuts the config pane, if one is open for this editor.
+  void _closeConfigPane() {
+    final asset = _configAsset;
+    if (asset != null) closeSidePane(id: _configPaneId(asset));
   }
 
   /// The canvas shortcuts, registered on [HardwareKeyboard] for the editor's
@@ -2641,6 +2850,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     setState(() {
       _configAsset = asset;
       _configSnapshot = _assetSnapshot(asset);
+      // A fresh form: the first edit made in it opens an undo entry of its own
+      // rather than folding into whatever the last one was for.
+      _configEditKeys = null;
     });
     _configWatch?.cancel();
     _configWatch =
@@ -2652,14 +2864,22 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   void _onConfigPaneClosed() {
     _configWatch?.cancel();
     _configWatch = null;
-    _configSnapshot = null;
     if (!mounted) {
       _configAsset = null;
+      _configSnapshot = null;
+      _configEditKeys = null;
       return;
     }
+    // A last pass, in case the closing interaction itself was the edit: the
+    // watch ticks every 100 ms, and a change made on the way out would
+    // otherwise reach the canvas without the undo entry it is owed.
+    _syncConfigEdits();
+    _configSnapshot = null;
     setState(() {
       _configAsset = null;
-      // A last pass, in case the closing interaction itself was the edit.
+      _configEditKeys = null;
+      // Belt and braces for an asset that would not serialize, which is the
+      // one kind of edit the sync above cannot see.
       _updateCurrentJson();
     });
     // The pane may have held keyboard focus (its text fields live in the root
@@ -2732,8 +2952,28 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       return;
     }
 
+    final previous = _configSnapshot;
     final snapshot = _assetSnapshot(asset);
-    if (snapshot == null || snapshot == _configSnapshot) return;
+    if (snapshot == null || snapshot == previous) return;
+
+    // The pane writes straight into its asset, so this is the only place an
+    // undo entry can be opened for what it does — and it has to happen before
+    // the encode below, while [_currentJson] still holds the page as it was
+    // before this change. Without it Ctrl+Z skipped every pane edit and undid
+    // whatever came before them instead, silently keeping the edit.
+    //
+    // Mid-gesture on the canvas ([_currentJsonStale]) there is nothing to open:
+    // that gesture pushed its own entry at the start and its coordinates are
+    // what would be saved here.
+    if (previous != null && !_currentJsonStale) {
+      final changed = changedTopLevelKeys(previous, snapshot);
+      final open = _configEditKeys;
+      if (changed == null || open == null || !changed.every(open.contains)) {
+        _saveToHistory(); // Clears _configEditKeys.
+        _configEditKeys = changed ?? const {};
+      }
+    }
+
     setState(() {
       _configSnapshot = snapshot;
       _updateCurrentJson();
@@ -3058,6 +3298,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// arrangement into the order list and appends [path], so the promotion
   /// survives restarts (placement IS membership in the stored order).
   void _promoteBuiltin(String path, StateSetter dialogSetState) {
+    _saveToHistory();
     setState(() {
       _topLevelOrder = [
         ..._getTopLevelPaths().where((p) => p != path),
@@ -3070,6 +3311,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   /// Moves [path] back under Advanced by dropping it from the stored order.
   void _demoteBuiltin(String path, StateSetter dialogSetState) {
+    _saveToHistory();
     setState(() {
       _topLevelOrder = [..._topLevelOrder.where((p) => p != path)];
       _navOrderDirty = true;
@@ -3540,6 +3782,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     StateSetter dialogSetState,
   ) {
     if (oldIndex < newIndex) newIndex -= 1;
+    _saveToHistory();
     setState(() {
       final movedName = roots[oldIndex];
       roots.removeAt(oldIndex);
@@ -3566,6 +3809,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     StateSetter dialogSetState,
   ) {
     if (oldIndex < newIndex) newIndex -= 1;
+    _saveToHistory();
     setState(() {
       final parent = _temporaryPages[parentName]!;
       final children = List<MenuItem>.from(parent.menuItem.children);
@@ -3611,6 +3855,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             initialPage: childPage,
             basePath: _buildBasePath(mapKey),
             onSave: (updatedPage) {
+              _saveToHistory();
               setState(() {
                 // Update the child MenuItem in the parent's children list
                 final parentPage = _temporaryPages[mapKey]!;
@@ -4071,6 +4316,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 );
                 return;
               }
+              _saveToHistory();
               setState(() {
                 // Auto-assign priority: put at end of its level
                 final int priority;
@@ -4139,6 +4385,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 );
                 return;
               }
+              _saveToHistory();
               setState(() {
                 if (newPath != pagePath) {
                   _temporaryPages.remove(pagePath);
@@ -4214,6 +4461,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       destructive: true,
     ).then((confirmed) {
       if (!confirmed) return;
+      _saveToHistory();
       setState(() {
         _temporaryPages.remove(pagePath);
         // Remove from parent children lists
