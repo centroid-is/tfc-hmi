@@ -208,7 +208,35 @@ void main() {
     test('the default is small enough that many clients still fit', () {
       // 200 max_connections, minus reserved, divided by the default: there has
       // to be room for far more clients than the plant will ever run.
-      expect(resolvePoolSize(null) * 20, lessThan(195));
+      expect(poolConnectionCount(null) * 20, lessThan(195));
+    });
+
+    // The pool health monitor sits inside `pool.withConnection` for as long as
+    // the pool is open -- that is how it notices a socket dying. So the pool
+    // has to be opened one connection wider than the work it is sized for. A
+    // pool of exactly one gave the monitor the only connection there was, and
+    // the very first query -- drift asking Postgres its version while opening
+    // -- waited out the pool lock and threw `Failed to acquire pool lock`.
+    test('the pool is opened wider than the work, for the health monitor', () {
+      expect(poolConnectionCount(null),
+          greaterThan(resolvePoolSize(null)),
+          reason: 'the monitor holds one connection and never gives it back');
+    });
+
+    test('an unconfigured client can still run a query while monitored', () {
+      expect(poolConnectionCount(null) - kHealthMonitorConnections,
+          greaterThanOrEqualTo(1));
+    });
+
+    test('a configured size is the work budget, not the total', () {
+      // A collector asking for eight upstream drains gets eight to drain with;
+      // the monitor is not allowed to eat one of them.
+      expect(poolConnectionCount(8) - kHealthMonitorConnections, 8);
+    });
+
+    test('the ceiling still holds once the monitor is added', () {
+      expect(poolConnectionCount(10000),
+          kMaxPoolConnections + kHealthMonitorConnections);
     });
   });
 

@@ -39,6 +39,23 @@ int resolvePoolSize(int? configured) {
   return configured > kMaxPoolConnections ? kMaxPoolConnections : configured;
 }
 
+/// Connections the pool keeps for itself, on top of the work budget.
+///
+/// The pool health monitor sits inside `pool.withConnection` for as long as
+/// the pool is open -- awaiting the connection's `closed` future is how it
+/// notices a socket dying. That connection is never handed back.
+const int kHealthMonitorConnections = 1;
+
+/// Connections to open the pool with: the work budget plus the monitor's.
+///
+/// Sizing the pool to the work alone leaves nothing to do the work with. A
+/// pool of exactly one gave the monitor the only connection there was, and the
+/// first query -- drift asking Postgres its version while opening -- waited
+/// out the pool lock and threw `Failed to acquire pool lock`, so the database
+/// never opened at all.
+int poolConnectionCount(int? configured) =>
+    resolvePoolSize(configured) + kHealthMonitorConnections;
+
 // -- retry ------------------------------------------------------------------
 
 /// Longest wait between connection attempts.

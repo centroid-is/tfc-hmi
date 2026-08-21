@@ -82,12 +82,15 @@ class DatabaseConfig {
   pg.SslMode? sslMode;
   bool debug = false;
 
-  /// Connections this process may pool, or null for one.
+  /// Connections this process may pool for queries, or null for one.
   ///
   /// One is what a UI client needs and what the postgres package itself
   /// defaults to. Only a process that genuinely drains several sources in
   /// parallel -- the collector, roughly one connection per OPC UA server --
   /// should raise it, and [resolvePoolSize] caps whatever is set here.
+  ///
+  /// This is the budget for work. The pool is opened one wider than it, for
+  /// the health monitor's standing connection: see [poolConnectionCount].
   int? maxPoolConnections;
 
   /// Pool connect timeout (not serialized to JSON).
