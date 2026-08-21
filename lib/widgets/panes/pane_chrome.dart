@@ -593,6 +593,15 @@ class PaneGraphTile extends StatelessWidget {
   /// tile this small.
   final String? label;
 
+  /// Series names and their trace colours, drawn as dots in the tile header.
+  ///
+  /// A chart legend belongs beside the plot, but cristalyse puts it in a
+  /// column down the right-hand side, which at tile size takes more width
+  /// than the plot it explains. Naming the series up here instead lets the
+  /// preview run the full width of the card. Leave empty for a single-series
+  /// trend the pane has already named.
+  final Map<String, Color> legend;
+
   /// The compact preview drawn inside the pane (sparkline, gauge, mini bar).
   final Widget preview;
 
@@ -613,6 +622,7 @@ class PaneGraphTile extends StatelessWidget {
   const PaneGraphTile({
     super.key,
     this.label,
+    this.legend = const {},
     required this.preview,
     required this.expandedBuilder,
     this.expandedTitle,
@@ -638,23 +648,40 @@ class PaneGraphTile extends StatelessWidget {
           scrollable: false,
           builder: expandedBuilder,
         ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
+        // The header keeps its inset; the preview below only gets a hairline
+        // of it, so the plot uses the card rather than floating in it.
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Row(
                 children: [
                   if (label != null)
-                    Expanded(
+                    Flexible(
                       child: Text(
                         label!,
                         style: theme.textTheme.labelSmall,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    )
-                  else
+                    ),
+                  // The legend takes the slack rather than sharing it with a
+                  // Spacer — competing for the row is what wrapped two short
+                  // series names onto two lines.
+                  if (legend.isNotEmpty) ...[
+                    if (label != null) const SizedBox(width: 10),
+                    Expanded(
+                      child: Wrap(
+                        spacing: 10,
+                        runSpacing: 2,
+                        children: [
+                          for (final entry in legend.entries)
+                            _LegendDot(label: entry.key, color: entry.value),
+                        ],
+                      ),
+                    ),
+                  ] else
                     const Spacer(),
                   Icon(
                     Icons.open_in_full,
@@ -663,12 +690,39 @@ class PaneGraphTile extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              SizedBox(height: height, child: preview),
-            ],
-          ),
+            ),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+              child: SizedBox(height: height, child: preview),
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+/// One series in a [PaneGraphTile] header: the trace colour, then its name.
+class _LegendDot extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _LegendDot({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 5),
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+      ],
     );
   }
 }
@@ -733,6 +787,128 @@ class PaneExpandTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A [PaneDetailRow] whose value is a word an operator may not know, with the
+/// explanation folded in underneath it.
+///
+/// Use it where the honest answer is a term of art — a drive state, a fault
+/// name, an interlock — and the operator standing at the machine needs both
+/// "what does that word mean" and "what do I do about it". The row stays one
+/// line until it is asked; the detail is not a dialog, because reading it and
+/// acting on it happen at the same time and a dialog would cover the mimic.
+///
+/// Contrast with [PaneExpandTile], which is for *bulk* detail (a channel
+/// grid, a parameter table) and does open a dialog.
+class PaneExplainRow extends StatefulWidget {
+  final String label;
+
+  /// The short words, e.g. `Overcurrent`.
+  final String value;
+
+  /// Tints the value — pass the severity colour from the theme.
+  final Color? valueColor;
+
+  /// The explanation, revealed on tap. Built lazily.
+  final WidgetBuilder explanationBuilder;
+
+  /// Starts open. Useful for a fault that wants to be read.
+  final bool initiallyExpanded;
+
+  const PaneExplainRow({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.explanationBuilder,
+    this.valueColor,
+    this.initiallyExpanded = false,
+  });
+
+  @override
+  State<PaneExplainRow> createState() => _PaneExplainRowState();
+}
+
+class _PaneExplainRowState extends State<PaneExplainRow> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  void didUpdateWidget(PaneExplainRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A row that opened itself for one fault should not stay open over the
+    // next value — but never fold away something the operator opened.
+    if (widget.initiallyExpanded && !oldWidget.initiallyExpanded) {
+      _expanded = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 4,
+                  child: Text(widget.label, style: theme.textTheme.bodyMedium),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 5,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          widget.value,
+                          textAlign: TextAlign.right,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: widget.valueColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        _expanded ? Icons.expand_less : Icons.info_outline,
+                        size: 16,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          alignment: Alignment.topCenter,
+          child: _expanded
+              ? Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 4, bottom: 4),
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: widget.explanationBuilder(context),
+                )
+              : const SizedBox(width: double.infinity, height: 0),
+        ),
+      ],
     );
   }
 }

@@ -1,0 +1,38 @@
+name: Set up Flutter
+description: >
+  Installs the one Flutter version this repository pins, read from
+  `.flutter-version` at the repo root. Every workflow that needs Flutter goes
+  through here so the version cannot drift between them — and so a developer
+  can read the same file to match CI, which matters because the golden tests
+  compare rasterised images and different Flutter versions rasterise the same
+  drawing slightly differently.
+
+outputs:
+  version:
+    description: The Flutter version that was installed.
+    value: ${{ steps.read-version.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read pinned Flutter version
+      id: read-version
+      shell: bash
+      run: |
+        file="$GITHUB_WORKSPACE/.flutter-version"
+        if [ ! -f "$file" ]; then
+          echo "::error::$file is missing — the pinned Flutter version lives there."
+          exit 1
+        fi
+        version="$(tr -d '[:space:]' < "$file")"
+        if [ -z "$version" ]; then
+          echo "::error::$file is empty — it must contain exactly one Flutter version."
+          exit 1
+        fi
+        echo "Flutter $version (pinned in .flutter-version)"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - name: Install Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ steps.read-version.outputs.version }}

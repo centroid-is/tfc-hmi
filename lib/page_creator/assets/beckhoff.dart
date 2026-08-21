@@ -2070,7 +2070,10 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                     child: PaneGraphTile(
                       label: 'Analog inputs',
                       height: 130,
-                      preview: _el3054Graph(),
+                      // Compact in the tile, full chart behind the tap: the
+                      // legend column and the pan/zoom row belong in the
+                      // dialog, not in 130px of pane.
+                      preview: _el3054Graph(compact: true),
                       expandedTitle: '${config.nameOrId} — history',
                       expandedSize: const Size(820, 520),
                       expandedBuilder: (_) => _el3054Graph(),
@@ -2085,7 +2088,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
     );
   }
 
-  Widget _el3054Graph() => GraphAsset(
+  Widget _el3054Graph({bool compact = false}) => GraphAsset(
         GraphAssetConfig(
           graphType: GraphType.timeseries,
           primarySeries: [
@@ -2094,5 +2097,6 @@ class _BeckhoffEL3054 extends ConsumerWidget {
           yAxis: GraphAxisConfig(title: 'Value', unit: 'relative'),
           timeWindowMinutes: const Duration(minutes: 10),
         ),
+        compact: compact,
       );
 }

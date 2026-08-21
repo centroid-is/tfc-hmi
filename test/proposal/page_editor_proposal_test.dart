@@ -26,6 +26,20 @@ void main() {
     pageViewSource = File('lib/pages/page_view.dart').readAsStringSync();
   });
 
+  /// The text of one method, ending at the first line that closes at class
+  /// indentation.
+  ///
+  /// Slicing to end-of-file instead is what let three stray
+  /// `ref.read(proposalCommitProvider.notifier).state = null` lines sit in the
+  /// tree-drag auto-scroll code for months while the tests that meant to pin
+  /// dispose() and _saveToPrefs matched them and stayed green.
+  String bodyOf(String signature) {
+    final start = source.indexOf(signature);
+    expect(start, greaterThan(-1), reason: 'missing $signature');
+    return source.substring(
+        start, source.indexOf(RegExp(r'^  }', multiLine: true), start));
+  }
+
   group('PageEditor proposal enhancements', () {
     test('tracks proposed assets in a set', () {
       expect(source, contains('_proposedAssets'));
@@ -63,10 +77,13 @@ void main() {
           reason: 'a single staged id was what forced one review per proposal');
     });
 
-    test('applies the whole queued asset_update run in one pass', () {
+    test('applies the whole queued asset run in one pass', () {
+      // Was `_applyUpdateBatch`, which took `asset_update` only. New assets
+      // (`asset`, from propose_asset) went down the single-apply path and
+      // every one after the first was dropped, so the name no longer fit.
       expect(source,
-          contains('int _applyUpdateBatch(List<PendingProposal> proposals)'));
-      expect(source, contains('_applyUpdateBatch(updates)'));
+          contains('int _applyAssetBatch(List<PendingProposal> proposals)'));
+      expect(source, contains('_applyAssetBatch(assetProposals)'));
     });
 
     test('skips ids already staged so re-entry cannot double-apply', () {
@@ -116,12 +133,19 @@ void main() {
       // Only the asset_update batch used to, so rejecting a `page` or `asset`
       // proposal from the banner just marked the rows rejected -- the staged
       // assets stayed on the page with nothing left to explain them.
-      final apply =
-          source.substring(source.indexOf('void _applyProposalData('));
+      //
+      // Both staging paths now go through _publishProposalCallbacks rather
+      // than each writing the slots itself: publishing is also where the
+      // provider container the callbacks run on is captured, and one of two
+      // copies quietly missing that capture is the whole failure this file's
+      // disposal group exists to prevent.
+      final apply = bodyOf('void _applyProposalData(');
       expect(apply, contains('if (_isProposal) {'));
-      expect(apply, contains('proposalCommitProvider'),
+      expect(apply, contains('_publishProposalCallbacks()'),
           reason: '_applyProposalData must hand the banner a commit');
-      expect(apply, contains('proposalDiscardProvider'));
+      final publish = bodyOf('void _publishProposalCallbacks()');
+      expect(publish, contains('proposalCommitProvider'));
+      expect(publish, contains('proposalDiscardProvider'));
     });
 
     test('no inline amber Accept/Reject bar remains', () {
@@ -139,11 +163,40 @@ void main() {
       // The banner holds these closures over this State; left set they fire
       // into a disposed State after navigating away -- nothing saved, the
       // proposals still pending, and an uncaught async error.
-      final dispose = source.substring(source.indexOf('void dispose() {'));
-      expect(dispose,
-          contains('ref.read(proposalCommitProvider.notifier).state = null;'));
-      expect(dispose,
-          contains('ref.read(proposalDiscardProvider.notifier).state = null;'));
+      //
+      // Through the stored controllers, not `ref`: Riverpod throws on `ref`
+      // inside dispose(). This used to assert on `ref.read(...)` over a
+      // slice that ran to end-of-file, so what it actually matched was the
+      // auto-scroll code, not dispose() at all.
+      final dispose = bodyOf('void dispose() {');
+      expect(dispose, contains('commitSlot.state = null;'));
+      expect(dispose, contains('discardSlot.state = null;'));
+      for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+        expect(dispose, isNot(contains(use)));
+      }
+    });
+
+    test('the clear is deferred to after this frame', () {
+      // Navigating away disposes the editor from inside a build, and writing
+      // to a provider there trips riverpod's "tried to modify a provider
+      // while the widget tree was building".
+      final dispose = bodyOf('void dispose() {');
+      expect(dispose, contains('WidgetsBinding.instance.addPostFrameCallback'));
+    });
+
+    test('the deferred clear only retires our own closures', () {
+      // An editor that replaced this one has already published its callbacks
+      // into the same slots. Clearing unconditionally a frame later would
+      // take the banner's buttons away from a live batch.
+      final dispose = bodyOf('void dispose() {');
+      expect(dispose, contains('final commit = _saveToPrefs;'));
+      expect(dispose, contains('final discard = _discardProposal;'));
+      expect(dispose, contains('commitSlot.state == commit'));
+      expect(dispose, contains('discardSlot.state == discard'));
+      // And the slot itself may be gone by then -- the whole ProviderScope
+      // can tear down between dispose() and the next frame.
+      expect(dispose, contains('commitSlot.mounted'));
+      expect(dispose, contains('discardSlot.mounted'));
     });
 
     test('a staged batch is still announced in the title bar', () {
@@ -153,7 +206,10 @@ void main() {
     });
 
     test('a multi-proposal batch is titled by its count', () {
-      expect(source, contains(r"'$staged asset updates'"));
+      // "asset updates" was accurate while the batch only held asset_update.
+      // It now holds new assets too, and telling an operator staging seven
+      // new sensors that he has "7 asset updates" is simply wrong.
+      expect(source, contains(r"'$staged asset proposals'"));
     });
   });
 
@@ -196,12 +252,12 @@ void main() {
     });
 
     test('accept retires the banner callbacks', () {
-      final save =
-          source.substring(source.indexOf('Future<void> _saveToPrefs('));
-      expect(save,
-          contains('ref.read(proposalCommitProvider.notifier).state = null;'));
-      expect(save,
-          contains('ref.read(proposalDiscardProvider.notifier).state = null;'));
+      // Same change of mechanism as dispose(), and for the same reason: the
+      // banner can call this after the editor is gone, and `ref` throws then.
+      // The old slice ran to end-of-file and matched the auto-scroll code.
+      final save = bodyOf('Future<void> _saveToPrefs(');
+      expect(save, contains('_commitSlot?.state = null;'));
+      expect(save, contains('_discardSlot?.state = null;'));
     });
   });
 
@@ -450,6 +506,190 @@ void main() {
           pageViewSource.substring(pageViewSource.indexOf('class AssetView'));
       expect(assetViewSection.contains('proposedAssets:'), isFalse,
           reason: 'AssetView should use default empty proposedAssets');
+    });
+  });
+
+  // Seven `asset` proposals were pending. Accept all removed exactly one row
+  // and Review all then did nothing at all: the listener applied
+  // `pageProposals.first`, that set `_isProposal`, and every proposal behind
+  // it hit `if (_isProposal) return`. Nothing else was ever staged, so the
+  // commit slot stayed null and the banner kept offering a review that could
+  // not happen. `asset_update` had been batched since #197; `asset` never was.
+  group('a queue of new-asset proposals is staged whole', () {
+    test('the listener batches asset alongside asset_update', () {
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      expect(listener, contains("p.proposalType == 'asset' ||"));
+      expect(listener, contains('_applyAssetBatch(assetProposals)'));
+    });
+
+    test('the batch runs before the single-proposal guard', () {
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      final batched = listener.indexOf('_applyAssetBatch(assetProposals)');
+      final guard = listener.indexOf('if (_isProposal) return');
+      expect(batched, greaterThan(-1));
+      expect(guard, greaterThan(batched),
+          reason: 'the guard is what threw the other six away');
+    });
+
+    test('only page proposals still go one at a time', () {
+      // A `page` proposal replaces or creates a whole page, so folding a run
+      // of them together has no defined result. `asset` appends, which does.
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      final single = listener.indexOf('pageProposals.first.proposalJson');
+      final guard = listener.indexOf('if (_isProposal) return');
+      expect(single, greaterThan(-1));
+      expect(guard, lessThan(single),
+          reason: 'the single-apply path is the else branch, page only');
+    });
+
+    test('initState stages the same set the listener does', () {
+      // Opening the editor from the banner has to stage the whole queue too,
+      // or the first thing the operator sees is one of seven.
+      final init = bodyOf('void initState() {');
+      expect(init, contains("p.proposalType == 'asset' ||"));
+      expect(init, contains('_applyAssetBatch(pending)'));
+    });
+
+    test('the batch dispatches both asset kinds', () {
+      // One driver, two applies: a create builds new assets and appends them,
+      // an update patches one in place. The bookkeeping around them --
+      // snapshot once, skip staged ids, count what landed -- is identical,
+      // which is why they share the loop rather than each having one.
+      final batch = bodyOf('int _applyAssetBatch(List<PendingProposal>');
+      expect(batch, contains("_applyAssetProposal(decoded)"));
+      expect(batch, contains("_applyUpdateProposal(decoded)"));
+      expect(batch, contains('for (final p in proposals)'));
+    });
+
+    test('a proposal arriving mid-review joins the batch', () {
+      final batch = bodyOf('int _applyAssetBatch(List<PendingProposal>');
+      expect(batch, contains('_proposalIds.contains(p.id)'));
+      expect(batch, contains('_consumedProposalIds.contains(p.id)'));
+      expect(batch, contains('final extending = _preProposalPages != null;'),
+          reason: 're-snapshotting over already-staged pages would leave '
+              'reject-all with no way back to the original');
+    });
+
+    test('a new-asset proposal adds to the outline instead of replacing it',
+        () {
+      // `_proposedAssets = Set.of(newAssets)` meant the second create in a
+      // batch erased the first one's yellow outline.
+      final apply = bodyOf('void _applyAssetProposal(');
+      expect(apply, contains('_proposedAssets.addAll(newAssets)'));
+      expect(apply, isNot(contains('_proposedAssets = Set.of(newAssets)')));
+    });
+
+    test('a proposal that built nothing does not claim the batch', () {
+      // This is the second way a queue stranded: a proposal the registry
+      // could not build still ran to the bottom of _applyAssetProposal and
+      // set `_isProposal = true`, so the guard blocked every later one --
+      // with nothing staged to accept and no empty page worth creating.
+      final apply = bodyOf('void _applyAssetProposal(');
+      final bail = apply.indexOf('if (newAssets.isEmpty) return;');
+      final flag = apply.indexOf('_isProposal = true;');
+      expect(bail, greaterThan(-1));
+      expect(flag, greaterThan(bail));
+    });
+
+    test('one malformed proposal does not take the batch with it', () {
+      // Eleven proposals missing required fields left a queue of 25
+      // unusable. Each proposal is applied inside its own try, and a failure
+      // is reported rather than swallowed.
+      final batch = bodyOf('int _applyAssetBatch(List<PendingProposal>');
+      expect(batch, isNot(contains('catch (_) {}')));
+      expect(batch, contains('debugPrint('));
+      final caught = batch.indexOf('} catch (e)');
+      final counted = batch.indexOf('applied++');
+      expect(counted, greaterThan(-1));
+      expect(caught, greaterThan(counted),
+          reason: 'the catch belongs inside the loop, around one proposal');
+    });
+  });
+
+  // The banner outlives this editor: it is published once and stays up while
+  // the operator navigates, and accepting a batch rebuilds or navigates out
+  // from under this State. By the time Accept ran, `mounted` was false and
+  // `ref` was dead -- so the pages were written and not one proposal was
+  // marked accepted, and the same batch came back on the next load. That is
+  // the asset-proposal spelling of what a key-mapping batch of 16 hit on
+  // 2026-08-21; see key_repository_proposal_test.dart.
+  group('accept and reject survive the editor being disposed', () {
+    test('the container is captured where ref and context are known good', () {
+      final publish = bodyOf('void _publishProposalCallbacks()');
+      expect(
+          publish,
+          contains(
+              '_container = ProviderScope.containerOf(context, listen: false)'),
+          reason: 'the banner callbacks have no live ref of their own');
+    });
+
+    test('reject never reaches for ref', () {
+      final body = bodyOf('Future<void> _discardProposal()');
+      for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+        expect(body, isNot(contains(use)),
+            reason: 'reject runs from the banner, after this State may be gone');
+      }
+      expect(body, contains('final container = _container;'));
+      expect(body, contains('if (container == null) return;'));
+    });
+
+    test('the save prefers the captured container over ref', () {
+      // _saveToPrefs has two callers: the Save button, where `ref` is alive
+      // and no container was ever captured, and the banner, where it is not.
+      final save = bodyOf('Future<void> _saveToPrefs(');
+      expect(save, contains('final container = _container;'));
+      expect(save, contains('container.read(pageManagerProvider.future)'));
+      expect(save, contains('container.invalidate(pageManagerProvider)'));
+      expect(save, contains('container.read(proposalStateProvider.notifier)'));
+    });
+
+    test('the accept step is not behind a mounted guard', () {
+      // This is the bug: `if (!mounted) return;` sat between the save and the
+      // accept loop, so a proposal accepted from the banner wrote its pages
+      // and stayed pending. Only the rebuild may depend on `mounted`.
+      final save = bodyOf('Future<void> _saveToPrefs(');
+      expect(save, isNot(contains('if (!mounted) return;')));
+      final accepted = save.indexOf('acceptProposal');
+      final rebuilt = save.indexOf('if (mounted) setState');
+      expect(accepted, greaterThan(-1));
+      expect(rebuilt, greaterThan(accepted),
+          reason: 'the batch has to be marked accepted whether or not this '
+              'editor is still on screen');
+    });
+
+    test('a proposal that could not be marked resolved is reported', () {
+      // A bare `catch (_) {}` around the database write is what let the key
+      // repository lose a whole batch quietly for weeks.
+      for (final fn in [
+        'Future<void> _saveToPrefs(',
+        'Future<void> _discardProposal()'
+      ]) {
+        final body = bodyOf(fn);
+        expect(body, isNot(contains('catch (_) {}')));
+        expect(body, contains('debugPrint('));
+      }
+    });
+
+    test('dragging a row in the tree does not retire the banner', () {
+      // #197 copied dispose()'s slot-clearing block into the tree drag's
+      // auto-scroll path. _autoScrollStep is 0 for every drag update away
+      // from the list edges, so dragging a page while a batch was staged
+      // dropped the banner's Accept and Reject on the floor.
+      for (final fn in [
+        'void _updateAutoScroll(',
+        'void _autoScrollTick()',
+      ]) {
+        final body = bodyOf(fn);
+        expect(body, isNot(contains('proposalCommitProvider')),
+            reason: 'auto-scroll has nothing to do with proposals');
+        expect(body, isNot(contains('proposalDiscardProvider')));
+      }
     });
   });
 }

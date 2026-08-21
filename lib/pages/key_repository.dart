@@ -16,7 +16,6 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
-import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import '../widgets/fuzzy_search_bar.dart';
 import '../widgets/bit_mask_grid.dart';
@@ -238,24 +237,63 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   StateController<Future<void> Function()?>? _commitSlot;
   StateController<Future<void> Function()?>? _discardSlot;
 
-  /// Everything the banner's Accept and Reject need, resolved while this
-  /// section is still alive.
+  /// The provider container, taken while this section is still alive.
   ///
   /// The banner outlives this widget -- it is published once and stays up
   /// while the operator navigates. By the time they press a button, this state
   /// can be deactivated or disposed, and then `ref` throws
   /// (`Cannot use "ref" after the widget was disposed`) before any work
   /// happens. On 2026-08-21 that made a batch of 16 mappings impossible to
-  /// either accept or reject. A notifier and a future belong to the provider
-  /// container, which outlives the widget, so holding them is safe.
-  ProposalStateNotifier? _proposals;
-  Future<Preferences>? _prefsHandle;
+  /// either accept or reject.
+  ///
+  /// The container rather than the values read out of it. A resolved
+  /// `Future<Preferences>` names the instance that was current when the
+  /// proposal was staged, and preferences are invalidated under us -- a
+  /// server-config import and a reconnect re-sync both do it. Accepting after
+  /// one of those would write the whole batch through a handle whose database
+  /// is already closed. The container is what outlives the widget *and* stays
+  /// current, so each press reads today's preferences and today's notifier.
+  ProviderContainer? _container;
+
+  /// Context-derived, so there is no container to re-read these from.
+  ///
+  /// The colour is deliberately not re-derived at press time: `Theme.of` is an
+  /// ancestor lookup, and doing one off a dead element is the exact fault this
+  /// whole capture exists to avoid. Switching theme between staging a proposal
+  /// and accepting it therefore tints one snackbar with the old scheme's red,
+  /// which is a fair trade for not risking the accept.
   ScaffoldMessengerState? _messengerHandle;
   Color? _errorColourHandle;
 
   final List<Map<String, dynamic>> _proposedMappings = [];
   final List<int> _proposalIds = [];
   bool get _isProposal => _proposedMappings.isNotEmpty;
+
+  /// Where to report from. The handle whenever there is one -- every banner
+  /// path has one, and looking an ancestor up off a dead element throws.
+  /// The live lookup is for an ordinary Save, where no handle was ever taken
+  /// and the page is by definition on screen.
+  ScaffoldMessengerState? get _messenger {
+    final handle = _messengerHandle;
+    if (handle != null) return handle;
+    return mounted ? ScaffoldMessenger.maybeOf(context) : null;
+  }
+
+  Color? get _errorColour {
+    final handle = _errorColourHandle;
+    if (handle != null) return handle;
+    return mounted ? Theme.of(context).colorScheme.error : null;
+  }
+
+  /// Tells the operator something, from a path that may have outlived the
+  /// page. Silent when there is no messenger to tell -- better than throwing
+  /// out of the middle of an accept.
+  void _report(String message, {bool error = false}) {
+    _messenger?.showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: error ? _errorColour : null,
+    ));
+  }
 
   @override
   void initState() {
@@ -288,8 +326,32 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   void dispose() {
     // The banner holds these closures over this State; left set they would
     // fire into a disposed State after navigating away.
-    _commitSlot?.state = null;
-    _discardSlot?.state = null;
+    //
+    // After this frame, not during it: navigating away disposes us from
+    // inside a build, and writing to a provider there trips riverpod's
+    // "tried to modify a provider while the widget tree was building". Only
+    // if the slot still holds our own closure -- a section that replaced us
+    // has already published its own, and clearing that would take the
+    // banner's buttons away from a live batch.
+    final commitSlot = _commitSlot;
+    final discardSlot = _discardSlot;
+    final commit = _commitProposals;
+    final discard = _discardProposals;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // `mounted` on the controllers, not on us: a frame later the whole
+      // ProviderScope may be gone too -- the app shutting down, or a test
+      // ending -- and reading a disposed StateController throws.
+      if (commitSlot != null &&
+          commitSlot.mounted &&
+          commitSlot.state == commit) {
+        commitSlot.state = null;
+      }
+      if (discardSlot != null &&
+          discardSlot.mounted &&
+          discardSlot.state == discard) {
+        discardSlot.state = null;
+      }
+    });
     _statusFlushTimer?.cancel();
     _listController.dispose();
     super.dispose();
@@ -350,10 +412,11 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       final discardSlot = ref.read(proposalDiscardProvider.notifier);
       discardSlot.state = _discardProposals;
       _discardSlot = discardSlot;
-      // Resolved here, where `ref` and `context` are known good, because the
+      // Taken here, where `ref` and `context` are known good, because the
       // callbacks above can be invoked long after this section is gone.
-      _proposals = ref.read(proposalStateProvider.notifier);
-      _prefsHandle = ref.read(preferencesProvider.future);
+      // `listen: false`: this is not a build, so it must not register a
+      // dependency, only look the scope up.
+      _container = ProviderScope.containerOf(context, listen: false);
       _messengerHandle = ScaffoldMessenger.maybeOf(context);
       _errorColourHandle = Theme.of(context).colorScheme.error;
     });
@@ -415,12 +478,28 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     // Awaited, and only after the save has persisted: acceptProposal marks
     // the row accepted in the database, so doing it first would lose the
     // mappings if the save failed.
-    final notifier = _proposals;
+    final notifier = _container?.read(proposalStateProvider.notifier);
     if (notifier == null) return;
+    var failed = 0;
     for (final id in _proposalIds) {
       try {
         await notifier.acceptProposal(id);
-      } catch (_) {}
+      } catch (_) {
+        failed++;
+      }
+    }
+    // A swallowed failure is the quiet form of the bug this method already
+    // guards against: the mappings are in preferences, the rows are still
+    // pending in the database, and clearing the batch would tell the operator
+    // it is done while the next load brings it all back. Keep the batch up
+    // instead, so Accept can be pressed again -- both halves are idempotent.
+    if (failed > 0) {
+      _report(
+        '$failed of ${_proposalIds.length} proposals could not be marked '
+        'accepted. The mappings are saved; press Accept again.',
+        error: true,
+      );
+      return;
     }
     if (!mounted) return;
     setState(() {
@@ -434,12 +513,26 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
 
   /// Drops the whole batch without touching the mappings.
   Future<void> _discardProposals() async {
-    final notifier = _proposals;
+    final notifier = _container?.read(proposalStateProvider.notifier);
     if (notifier == null) return;
+    var failed = 0;
     for (final id in _proposalIds) {
       try {
         await notifier.rejectProposal(id);
-      } catch (_) {}
+      } catch (_) {
+        failed++;
+      }
+    }
+    // As in [_commitProposals]: a rejection that did not reach the database
+    // comes back on the next load, so the batch stays up rather than
+    // pretending it is gone.
+    if (failed > 0) {
+      _report(
+        '$failed of ${_proposalIds.length} proposals could not be marked '
+        'rejected. Press Reject again.',
+        error: true,
+      );
+      return;
     }
     if (!mounted) return;
     setState(() {
@@ -489,7 +582,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     if (_keyMappings == null) return false;
     // Unfocus active text field to commit pending changes (e.g. key rename)
     FocusManager.instance.primaryFocus?.unfocus();
-    // Captured before the first await. Showing a snackbar looks up an
+    // Resolved before the first await. Showing a snackbar looks up an
     // ancestor, and once this section has been deactivated that lookup throws
     // -- `mounted` is still true at that point, so it is not a sufficient
     // guard. Accepting a batch of proposals rebuilds this subtree, which is
@@ -497,18 +590,15 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     // threw, the catch threw again, and `_commitProposals` never reached
     // `acceptProposal`. The mappings were written but every proposal stayed
     // pending, so they came back on the next load.
-    // The handles when the banner drove us here, because looking an ancestor
-    // up off a dead element throws before any of the work below runs. Plain
-    // context for an ordinary Save, where no handle was ever taken and the
-    // page is by definition on screen.
-    final messenger = _messengerHandle ?? ScaffoldMessenger.maybeOf(context);
-    final errorColour =
-        _errorColourHandle ?? Theme.of(context).colorScheme.error;
+    final messenger = _messenger;
+    final errorColour = _errorColour;
     try {
-      // `_prefsHandle` when the banner drove us here, because `ref` is gone by
-      // then; `ref` for an ordinary Save, where the handle was never set.
-      final prefs =
-          await (_prefsHandle ?? ref.read(preferencesProvider.future));
+      // The container when the banner drove us here, because `ref` is gone by
+      // then; `ref` for an ordinary Save, where no container was ever taken.
+      // Either way the read happens now, so an invalidated preferencesProvider
+      // hands back the live instance rather than a closed one.
+      final prefs = await (_container?.read(preferencesProvider.future) ??
+          ref.read(preferencesProvider.future));
       // Unfocusing above may have committed a rename, so re-encode.
       _invalidateDerived();
       final json = _currentJson();

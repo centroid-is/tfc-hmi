@@ -13,6 +13,7 @@ DatabaseConfig _$DatabaseConfigFromJson(Map<String, dynamic> json) =>
       sslMode: _$JsonConverterFromJson<String, SslMode>(
           json['sslMode'], const SslModeConverter().fromJson),
       debug: json['debug'] as bool? ?? false,
+      maxPoolConnections: (json['maxPoolConnections'] as num?)?.toInt(),
     );
 
 Map<String, dynamic> _$DatabaseConfigToJson(DatabaseConfig instance) =>
@@ -22,6 +23,7 @@ Map<String, dynamic> _$DatabaseConfigToJson(DatabaseConfig instance) =>
       'sslMode': _$JsonConverterToJson<String, SslMode>(
           instance.sslMode, const SslModeConverter().toJson),
       'debug': instance.debug,
+      'maxPoolConnections': instance.maxPoolConnections,
     };
 
 Value? _$JsonConverterFromJson<Json, Value>(

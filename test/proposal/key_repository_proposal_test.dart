@@ -1,12 +1,23 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Source-level assertions for key_repository.dart proposal handling.
-///
-/// KeyRepositoryPage depends on the preferencesProvider, stateManProvider and
-/// databaseProvider chains, which is why these are source assertions rather
-/// than widget tests.
+import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/secure_storage/interface.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+import 'package:tfc/pages/key_repository.dart';
+import 'package:tfc/providers/database.dart';
+import 'package:tfc/providers/preferences.dart';
+import 'package:tfc/providers/proposal_state.dart';
+import 'package:tfc/providers/state_man.dart';
+
+import '../helpers/test_helpers.dart';
+
+/// Assertions for key_repository.dart proposal handling.
 ///
 /// The shape they pin changed on 2026-08-18. Proposals used to be staged one
 /// at a time and accepted from an inline amber bar inside this page. An MCP
@@ -15,6 +26,12 @@ import 'package:flutter_test/flutter_test.dart';
 /// bar was a second place to act on a proposal, competing with the black
 /// banner. Both are gone: the page stages the whole queue and publishes
 /// commit/discard to the banner, which is now the only place to accept.
+///
+/// Most of the file reads the source as a string, which pins shape and not
+/// behaviour. The 2026-08-21 incident — 16 mappings written with not one
+/// proposal marked accepted — went straight past assertions like those, so
+/// the paths that failed that day are covered by the widget tests at the
+/// bottom instead.
 void main() {
   late String source;
 
@@ -173,79 +190,349 @@ void main() {
     });
   });
 
-  // On 2026-08-21 a batch of 16 mappings was accepted. Every mapping was
-  // written to preferences, and not one proposal was marked accepted, so the
-  // whole batch came back on the next load and could not be cleared.
+  // ================== behaviour: the 2026-08-21 incident ==================
   //
-  // Accepting rebuilds this subtree, so by the time the save returned, the
-  // section was deactivated. `mounted` is still true then, but an ancestor
-  // lookup is not safe: the success snackbar threw, the catch block threw
-  // again on its own snackbar, and that escaped `_saveKeyMappings` --
-  // stopping `_commitProposals` before `acceptProposal` ever ran.
-  group('a snackbar cannot cost the accept step', () {
-    String saveBody() {
-      final start = source.indexOf('Future<bool> _saveKeyMappings()');
-      expect(start, greaterThan(-1),
-          reason: '_saveKeyMappings must report whether the save landed');
-      return source.substring(start, source.indexOf('\n  }', start));
-    }
+  // A batch of 16 mappings was accepted. Every mapping was written to
+  // preferences, and not one proposal was marked accepted, so the whole batch
+  // came back on the next load and could not be cleared. Rejecting failed
+  // too. Nothing above this line would have caught any of it.
+  //
+  // What these tests reproduce, and what they do not. The banner publishes
+  // commit/discard once and stays up while the operator navigates, and its
+  // button holds the callback captured on the banner's last build -- so the
+  // closure can be pressed after this page's subtree has gone. That is what
+  // these do: take the published closure, take the page out of the tree, call
+  // it.
+  //
+  // That yields a *disposed* state, not the deactivated-but-still-mounted one
+  // the incident hit. Flutter unmounts inactive elements in finalizeTree at
+  // the end of the frame that deactivated them, so no widget test can hold
+  // that window open across an await. The two differ only in where the old
+  // code died: deactivated, on the snackbar's ancestor lookup inside
+  // _saveKeyMappings; disposed, one line later on
+  // `ref.read(proposalStateProvider.notifier)` in _commitProposals. The
+  // outcome asserted here -- mappings written, nothing accepted -- is the
+  // same, and it is the outcome that cost the operator the batch.
+  group('accept and reject survive the page going away', () {
+    testWidgets('accept still saves the mappings and marks every proposal',
+        (tester) async {
+      final staged = await _stageBatch(tester);
+      final commit = staged.commit;
+      expect(commit, isNotNull,
+          reason: 'the page must publish a commit callback to the banner');
 
-    test('the messenger is resolved before the first await', () {
-      final body = saveBody();
-      final captureAt = body.indexOf('ScaffoldMessenger.maybeOf(context)');
-      final awaitAt = body.indexOf('await ');
-      expect(captureAt, greaterThan(-1));
-      expect(awaitAt, greaterThan(captureAt),
-          reason: 'after an await the ancestor lookup can throw');
+      await _removePage(tester, staged.container);
+      await commit!();
+      await tester.pump();
+
+      expect(staged.proposals.accepted, [_idOne, _idTwo],
+          reason: 'every staged proposal must be marked accepted, or the '
+              'batch comes back on the next load');
+      final saved = await _savedKeys(staged.prefs.last);
+      expect(saved, containsAll([_keyOne, _keyTwo]),
+          reason: 'the mappings must reach preferences');
     });
 
-    test('the save never looks an ancestor up unguarded', () {
-      // `.of(context)` throws on a dead element; the handles taken while the
-      // section was alive are what the banner path relies on.
-      final body = saveBody();
-      expect(body, isNot(contains('ScaffoldMessenger.of(context)')));
-      expect(body, contains('_messengerHandle ??'));
-      expect(body, contains('_errorColourHandle ??'));
-    });
+    testWidgets('reject still marks every proposal rejected', (tester) async {
+      final staged = await _stageBatch(tester);
+      final discard = staged.discard;
+      expect(discard, isNotNull);
 
-    test('the banner path never reaches for ref', () {
-      // `ref` throws outright once the widget is disposed, which is what made
-      // Reject fail as well as Accept.
-      final body = saveBody();
-      final prefsAt = body.indexOf('_prefsHandle ??');
-      expect(prefsAt, greaterThan(-1),
-          reason: 'the save must prefer the captured preferences handle');
-      for (final fn in ['_commitProposals', '_discardProposals']) {
-        final start = source.indexOf('Future<void> $fn()');
-        expect(start, greaterThan(-1));
-        final body = source.substring(start, source.indexOf('\n  }', start));
-        expect(body, isNot(contains('ref.read')),
-            reason: '$fn runs from the banner, after this state may be gone');
-      }
-    });
+      await _removePage(tester, staged.container);
+      await discard!();
+      await tester.pump();
 
-    test('the handles are taken where ref and context are known good', () {
-      final start = source.indexOf('void _publishProposalCallbacks()');
-      final body = source.substring(start, source.indexOf('\n  }', start));
-      expect(body, contains('_proposals = ref.read(proposalStateProvider.notifier)'));
-      expect(body, contains('_prefsHandle = ref.read(preferencesProvider.future)'));
-      expect(body, contains('_messengerHandle = ScaffoldMessenger.maybeOf(context)'));
-    });
-
-    test('the save reports success rather than throwing at the caller', () {
-      final body = saveBody();
-      expect(body, contains('return true'));
-      expect(body, contains('return false'));
-    });
-
-    test('proposals are only accepted when the mappings actually saved', () {
-      expect(source, contains('if (!await _saveKeyMappings()) return;'));
-      final commit = source.substring(source.indexOf('_commitProposals'));
-      final saveAt = commit.indexOf('_saveKeyMappings()');
-      final acceptAt = commit.indexOf('acceptProposal');
-      expect(saveAt, greaterThan(-1));
-      expect(acceptAt, greaterThan(saveAt),
-          reason: 'a proposal must not be marked accepted before its save');
+      expect(staged.proposals.rejected, [_idOne, _idTwo]);
+      final saved = await _savedKeys(staged.prefs.last);
+      expect(saved, isNot(contains(_keyOne)),
+          reason: 'reject must not touch the mappings');
     });
   });
+
+  // preferencesProvider is invalidated under a staged batch -- a server-config
+  // import does it, and so does the reconnect re-sync. A `Future<Preferences>`
+  // resolved when the proposal was staged still completes, with the instance
+  // that was current then, whose database may already be closed. Reading the
+  // container at press time is what keeps the write going to the live one.
+  group('a staged batch survives preferences being invalidated', () {
+    testWidgets('accept writes through the current preferences, not the one '
+        'that was current when the batch was staged', (tester) async {
+      final staged = await _stageBatch(tester);
+      final commit = staged.commit!;
+
+      staged.container.invalidate(preferencesProvider);
+      await tester.pump();
+
+      await commit();
+      await tester.pump();
+
+      expect(staged.prefs, hasLength(2),
+          reason: 'the accept must have built the replacement preferences');
+      expect(await _savedKeys(staged.prefs.last), containsAll([_keyOne, _keyTwo]),
+          reason: 'the batch must land in the live preferences');
+      expect(await _savedKeys(staged.prefs.first), isNot(contains(_keyOne)),
+          reason: 'writing through the superseded instance is the bug: its '
+              'database can already be closed');
+      expect(staged.proposals.accepted, [_idOne, _idTwo]);
+    });
+  });
+
+  group('a batch that did not fully land stays up', () {
+    testWidgets('a failed save accepts nothing and keeps the batch',
+        (tester) async {
+      final staged = await _stageBatch(tester, prefsBuilder: _failingPrefs);
+
+      await staged.commit!();
+      await tester.pump();
+
+      expect(staged.proposals.accepted, isEmpty,
+          reason: 'a proposal whose mappings did not save must stay pending, '
+              'or it is lost with nothing written');
+      expect(staged.commit, isNotNull,
+          reason: 'the banner must keep offering Accept');
+      expect(find.textContaining('Failed to save'), findsOneWidget);
+    });
+
+    testWidgets('an accept that only half took keeps the batch and says so',
+        (tester) async {
+      final staged = await _stageBatch(tester, failAccept: {_idTwo});
+
+      await staged.commit!();
+      await tester.pump();
+
+      expect(staged.proposals.accepted, [_idOne]);
+      expect(await _savedKeys(staged.prefs.last), containsAll([_keyOne, _keyTwo]),
+          reason: 'the save itself succeeded');
+      expect(staged.commit, isNotNull,
+          reason: 'the database still says pending for one of them, so the '
+              'operator must be able to press Accept again');
+      // Queued behind the save's own success snackbar.
+      await _drainSnackBars(tester);
+      expect(find.textContaining('could not be marked accepted'),
+          findsOneWidget);
+    });
+
+    testWidgets('a reject that only half took keeps the batch and says so',
+        (tester) async {
+      final staged = await _stageBatch(tester, failReject: {_idTwo});
+
+      await staged.discard!();
+      await tester.pump();
+
+      expect(staged.proposals.rejected, [_idOne]);
+      expect(staged.discard, isNotNull);
+      expect(find.textContaining('could not be marked rejected'),
+          findsOneWidget);
+    });
+  });
+
+  // dispose() retires the banner's slots a frame late, because navigating away
+  // disposes this page from inside a build and writing to a provider there
+  // trips riverpod's "tried to modify a provider while the widget tree was
+  // building" (#238). The deferral is right, but it hands the clear a window:
+  // between dispose() and the next frame the ProviderScope itself can go --
+  // the app shutting down, or a widget test ending -- and the controllers the
+  // clear kept a handle on go with it. Reading one then throws
+  // "Bad state: Tried to use StateController<...> after `dispose` was called",
+  // out of a post-frame callback where nothing catches it.
+  //
+  // #241 hit this for real doing the same work in the alarm and page editors.
+  group('the deferred clear survives the ProviderScope going too', () {
+    testWidgets('a slot disposed before the next frame is left alone',
+        (tester) async {
+      final proposals = _RecordingProposals();
+      proposals.addProposal(_proposal(_idOne, _keyOne));
+
+      // An owning ProviderScope, not the UncontrolledProviderScope the rest of
+      // this file uses: the container has to die *with* the page, in the same
+      // frame, which is what shutdown looks like and what a container kept
+      // alive by addTearDown never reproduces.
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          preferencesProvider.overrideWith((ref) async =>
+              createTestPreferences(keyMappings: KeyMappings(nodes: {}))),
+          databaseProvider.overrideWith((ref) async => null),
+          stateManProvider
+              .overrideWith((ref) => throw StateError('No StateMan in tests')),
+          proposalStateProvider.overrideWith((ref) => proposals),
+        ],
+        child: MaterialApp(home: Scaffold(body: KeyRepositoryContent())),
+      ));
+      await settle(tester);
+
+      // The scope unmounts alongside the page, so the container is disposed in
+      // the build phase of this frame and the deferred clear runs at the end
+      // of it, against controllers that are already gone.
+      await tester.pumpWidget(
+          const MaterialApp(home: Scaffold(body: SizedBox.shrink())));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull,
+          reason: 'the deferred clear must check the slots are still alive '
+              'before reading them; an uncaught error out of a post-frame '
+              'callback takes the shutdown down with it');
+    });
+  });
+}
+
+// ============================ widget test rig ============================
+
+const _idOne = 101;
+const _idTwo = 102;
+const _keyOne = 'PROPOSED.KEY.ONE';
+const _keyTwo = 'PROPOSED.KEY.TWO';
+
+/// A staged batch: the container the page is running in, the notifier its
+/// decisions land on, and every [Preferences] the provider has built.
+class _Staged {
+  _Staged(this.container, this.proposals, this.prefs);
+
+  final ProviderContainer container;
+  final _RecordingProposals proposals;
+  final List<Preferences> prefs;
+
+  /// Read fresh each time, exactly as the banner reads them: a resolved batch
+  /// clears both slots, so a non-null callback means the batch is still up.
+  Future<void> Function()? get commit =>
+      container.read(proposalCommitProvider);
+  Future<void> Function()? get discard =>
+      container.read(proposalDiscardProvider);
+}
+
+/// Pumps the key repository with a two-proposal `key_mapping` batch pending,
+/// and waits for it to publish its callbacks to the banner.
+Future<_Staged> _stageBatch(
+  WidgetTester tester, {
+  Set<int> failAccept = const {},
+  Set<int> failReject = const {},
+  Future<Preferences> Function()? prefsBuilder,
+}) async {
+  final proposals = _RecordingProposals(
+    failAccept: failAccept,
+    failReject: failReject,
+  );
+  proposals.addProposal(_proposal(_idOne, _keyOne));
+  proposals.addProposal(_proposal(_idTwo, _keyTwo));
+
+  final built = <Preferences>[];
+  final build =
+      prefsBuilder ?? () => createTestPreferences(keyMappings: KeyMappings(nodes: {}));
+  final container = ProviderContainer(overrides: [
+    preferencesProvider.overrideWith((ref) async {
+      final prefs = await build();
+      built.add(prefs);
+      return prefs;
+    }),
+    databaseProvider.overrideWith((ref) async => null),
+    stateManProvider
+        .overrideWith((ref) => throw StateError('No StateMan in tests')),
+    proposalStateProvider.overrideWith((ref) => proposals),
+  ]);
+  addTearDown(container.dispose);
+
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: MaterialApp(home: Scaffold(body: KeyRepositoryContent())),
+  ));
+  await settle(tester);
+
+  return _Staged(container, proposals, built);
+}
+
+/// Advances fake time far enough for a queued snackbar to replace the one in
+/// front of it (the default 4 s, plus both animations).
+Future<void> _drainSnackBars(WidgetTester tester) async {
+  for (var i = 0; i < 12; i++) {
+    await tester.pump(const Duration(milliseconds: 500));
+  }
+}
+
+/// Takes the page out of the tree, leaving the app (and its messenger) up.
+///
+/// The section's State is disposed by the end of this frame; the callbacks the
+/// banner captured are not.
+Future<void> _removePage(WidgetTester tester, ProviderContainer container) async {
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: const MaterialApp(home: Scaffold(body: SizedBox.shrink())),
+  ));
+  await tester.pump();
+}
+
+PendingProposal _proposal(int id, String key) => PendingProposal(
+      id: id,
+      proposalType: 'key_mapping',
+      title: 'map $key',
+      proposalJson: jsonEncode({
+        '_proposal_type': 'key_mapping',
+        'key': key,
+        'opcua_node':
+            OpcUANodeConfig(namespace: 2, identifier: key).toJson(),
+      }),
+      operatorId: 'ai',
+      createdAt: DateTime(2026, 8, 21),
+    );
+
+Future<Iterable<String>> _savedKeys(Preferences prefs) async {
+  final json = await prefs.getString('key_mappings');
+  if (json == null) return const [];
+  return KeyMappings.fromJson(jsonDecode(json)).nodes.keys;
+}
+
+/// Records what the page decided, and can refuse a decision the way a
+/// database that has gone away would.
+class _RecordingProposals extends ProposalStateNotifier {
+  _RecordingProposals({
+    this.failAccept = const {},
+    this.failReject = const {},
+  }) : super(null);
+
+  final Set<int> failAccept;
+  final Set<int> failReject;
+  final List<int> accepted = [];
+  final List<int> rejected = [];
+
+  @override
+  Future<void> acceptProposal(int id) async {
+    if (failAccept.contains(id)) throw StateError('database is gone');
+    accepted.add(id);
+    await super.acceptProposal(id);
+  }
+
+  @override
+  Future<void> rejectProposal(int id) async {
+    if (failReject.contains(id)) throw StateError('database is gone');
+    rejected.add(id);
+    await super.rejectProposal(id);
+  }
+}
+
+/// Preferences that load fine and refuse to save, so the accept path meets a
+/// save that did not land.
+class _FailingPreferences extends Preferences {
+  _FailingPreferences(MySecureStorage storage)
+      : super(database: null, secureStorage: storage);
+
+  bool explode = false;
+
+  @override
+  Future<void> setString(String key, String value,
+      {bool saveToDb = true, bool secret = false}) async {
+    if (explode) throw StateError('preferences database is closed');
+    return super.setString(key, value, saveToDb: saveToDb, secret: secret);
+  }
+}
+
+Future<Preferences> _failingPrefs() async {
+  Preferences.clearSecretCache();
+  final storage = FakeSecureStorage();
+  final prefs = _FailingPreferences(storage);
+  await prefs.setString(
+      'key_mappings', jsonEncode(KeyMappings(nodes: {}).toJson()));
+  await storage.write(
+    key: StateManConfig.configKey,
+    value: jsonEncode(StateManConfig(opcua: []).toJson()),
+  );
+  prefs.explode = true;
+  return prefs;
 }

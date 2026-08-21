@@ -34,9 +34,34 @@ Checksums: [`SHA256SUMS.txt`](https://github.com/centroid-is/tfc-hmi/releases/do
 
 ### Prerequisites
 
-- Flutter SDK (stable channel)
+- Flutter SDK — the version in [`.flutter-version`](.flutter-version)
 - Dart SDK
 - For NixOS: install the `mkhl.direnv` VSCode extension and run `direnv allow`
+
+`.flutter-version` is the single source for the Flutter version: every CI
+workflow reads it through `.github/actions/setup-flutter`, so nothing hardcodes
+a version any more.
+
+Match it locally. The widget tests compare rendered PNGs byte for byte
+(`test/**/goldens/`), and different Flutter versions rasterise the same drawing
+slightly differently — antialiasing along an edge shifts by a pixel or two.
+`test/helpers/golden_tolerance.dart` absorbs a hair of that drift, but a golden
+regenerated on a different Flutter than CI's will eventually go red on an image
+nobody touched. **Regenerate goldens on the pinned version:**
+
+```sh
+# the goldens CI verifies
+flutter test --update-goldens
+# plus the design-review ones, which carry @Tags(['golden']) and are skipped
+# by default in dart_test.yaml
+flutter test --update-goldens --run-skipped -t golden
+```
+
+Goldens compare only on macOS (`skip: !Platform.isMacOS`).
+
+When a golden fails on CI, the comparator writes the expected/actual/diff PNGs
+to a `failures/` directory next to the test; the `flutter-test` job uploads them
+as a `golden-failures-<os>` artifact on the run.
 
 ### Code generation
 

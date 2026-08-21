@@ -403,6 +403,20 @@ abstract final class FloatingDialogs {
   }
 }
 
+/// Where a floating dialog currently sits, as one immutable value so the
+/// window can move and resize without touching [State] fields.
+///
+/// [position] is null until the window has been laid out once — the shell
+/// centres it against the screen it finds itself on rather than guessing at
+/// construction time.
+@immutable
+class _DialogGeometry {
+  final Offset? position;
+  final Size size;
+
+  const _DialogGeometry(this.position, this.size);
+}
+
 /// Geometry, dragging, resizing and Escape handling for a floating dialog.
 class _FloatingDialogShell extends StatefulWidget {
   final String id;
@@ -438,8 +452,17 @@ class _FloatingDialogShell extends StatefulWidget {
 class _FloatingDialogShellState extends State<_FloatingDialogShell> {
   static const Size _minSize = Size(320, 240);
 
-  Offset? _position;
-  late Size _size = widget.initialSize;
+  /// Window geometry, held in a notifier rather than in [State] fields so that
+  /// moving or resizing the window repaints the frame ONLY.
+  ///
+  /// `setState` here would re-run [build], and with it `widget.builder` — a
+  /// fresh content subtree on every pointer move. For the charts these dialogs
+  /// mostly hold that means a torn-down subscription and a re-issued history
+  /// query per frame, so the window an operator was dragging aside flickers
+  /// back to "loading" the whole way across the screen.
+  late final ValueNotifier<_DialogGeometry> _geometry =
+      ValueNotifier(_DialogGeometry(widget.initialPosition, widget.initialSize));
+
   Size _screen = Size.zero;
 
   @override
@@ -452,6 +475,7 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     FloatingDialogs._forget(widget.id);
+    _geometry.dispose();
     super.dispose();
   }
 
@@ -469,12 +493,50 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
     return true;
   }
 
-  void _clamp() {
-    final maxX = (_screen.width - _size.width).clamp(0.0, double.infinity);
-    final maxY = (_screen.height - _size.height).clamp(0.0, double.infinity);
-    _position = Offset(
-      _position!.dx.clamp(0.0, maxX),
-      _position!.dy.clamp(0.0, maxY),
+  /// Shrinks the window to fit a screen smaller than it is.
+  Size _fit(Size size) => Size(
+        size.width.clamp(
+          _minSize.width,
+          _screen.width < _minSize.width ? _minSize.width : _screen.width,
+        ),
+        size.height.clamp(
+          _minSize.height,
+          _screen.height < _minSize.height ? _minSize.height : _screen.height,
+        ),
+      );
+
+  /// Centres a window that has not been placed yet, and keeps every window
+  /// on-screen — one dragged off the edge could never be grabbed again.
+  ///
+  /// Pure, so the clamping can happen while laying out rather than by writing
+  /// corrected geometry back into the notifier mid-build.
+  Offset _resolvePosition(Offset? position, Size size) {
+    final at = position ??
+        Offset(
+          (_screen.width - size.width) / 2 + widget.cascade,
+          (_screen.height - size.height) / 2 + widget.cascade,
+        );
+    final maxX = (_screen.width - size.width).clamp(0.0, double.infinity);
+    final maxY = (_screen.height - size.height).clamp(0.0, double.infinity);
+    return Offset(at.dx.clamp(0.0, maxX), at.dy.clamp(0.0, maxY));
+  }
+
+  /// The visible corner grip resizes by pointer *deltas*, so it has to read
+  /// the notifier rather than close over geometry from the last build: several
+  /// pointer moves can land between two frames, and a captured size would
+  /// silently drop every delta but the first.
+  void _onGripDrag(Offset delta) {
+    final geometry = _geometry.value;
+    final size = _fit(geometry.size);
+    final position = _resolvePosition(geometry.position, size);
+    _geometry.value = _DialogGeometry(
+      position,
+      Size(
+        (size.width + delta.dx)
+            .clamp(_minSize.width, _screen.width - position.dx),
+        (size.height + delta.dy)
+            .clamp(_minSize.height, _screen.height - position.dy),
+      ),
     );
   }
 
@@ -482,66 +544,47 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
   Widget build(BuildContext context) {
     _screen = MediaQuery.sizeOf(context);
 
-    // Shrink to fit small windows before deciding where to put it.
-    _size = Size(
-      _size.width.clamp(
-        _minSize.width,
-        _screen.width < _minSize.width ? _minSize.width : _screen.width,
-      ),
-      _size.height.clamp(
-        _minSize.height,
-        _screen.height < _minSize.height ? _minSize.height : _screen.height,
-      ),
-    );
+    return ValueListenableBuilder<_DialogGeometry>(
+      valueListenable: _geometry,
+      // Built HERE — once per real rebuild of the shell — and handed to the
+      // builder below as `surface`, which passes it through untouched. That is
+      // what keeps a drag or a resize from rebuilding the dialog's content;
+      // see [_geometry]. Anything the content depends on (theme, media query,
+      // the actions list) still reaches it, because a change to those rebuilds
+      // the shell itself rather than only the notifier.
+      child: _dialogSurface(context),
+      builder: (context, geometry, surface) {
+        final size = _fit(geometry.size);
+        final position = _resolvePosition(geometry.position, size);
 
-    _position ??= widget.initialPosition ??
-        Offset(
-          (_screen.width - _size.width) / 2 + widget.cascade,
-          (_screen.height - _size.height) / 2 + widget.cascade,
-        );
-    _clamp();
-
-    return Positioned(
-      left: _position!.dx,
-      top: _position!.dy,
-      child: SizedBox(
-        width: _size.width,
-        height: _size.height,
-        child: ResizableOverlayFrame(
-          position: _position!,
-          size: _size,
-          minSize: _minSize,
-          screenSize: _screen,
-          onResize: (newPosition, newSize) => setState(() {
-            _position = newPosition;
-            _size = newSize;
-          }),
-          child: Stack(children: [
-            Positioned.fill(child: _dialogSurface(context)),
-            // The frame's own handles are 6px of invisible edge — fine with a
-            // mouse, unusable with a finger and undiscoverable either way.
-            // This corner grip is visible and 44px square.
-            Positioned(
-              right: 0,
-              bottom: 0,
-              child: _ResizeGrip(
-                onDrag: (delta) => setState(() {
-                  _size = Size(
-                    (_size.width + delta.dx).clamp(
-                      _minSize.width,
-                      _screen.width - _position!.dx,
-                    ),
-                    (_size.height + delta.dy).clamp(
-                      _minSize.height,
-                      _screen.height - _position!.dy,
-                    ),
-                  );
-                }),
-              ),
+        return Positioned(
+          left: position.dx,
+          top: position.dy,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: ResizableOverlayFrame(
+              position: position,
+              size: size,
+              minSize: _minSize,
+              screenSize: _screen,
+              onResize: (newPosition, newSize) =>
+                  _geometry.value = _DialogGeometry(newPosition, newSize),
+              child: Stack(children: [
+                Positioned.fill(child: surface!),
+                // The frame's own handles are 6px of invisible edge — fine
+                // with a mouse, unusable with a finger and undiscoverable
+                // either way. This corner grip is visible and 44px square.
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: _ResizeGrip(onDrag: _onGripDrag),
+                ),
+              ]),
             ),
-          ]),
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -568,10 +611,16 @@ class _FloatingDialogShellState extends State<_FloatingDialogShell> {
         // The header doubles as the window's title bar.
         headerWrap: (context, header) => GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onPanUpdate: (d) => setState(() {
-            _position = _position! + d.delta;
-            _clamp();
-          }),
+          onPanUpdate: (d) {
+            // Reads the notifier live rather than capturing geometry: this
+            // closure is built once and then survives every drag.
+            final geometry = _geometry.value;
+            final size = _fit(geometry.size);
+            _geometry.value = _DialogGeometry(
+              _resolvePosition(geometry.position, size) + d.delta,
+              size,
+            );
+          },
           child: MouseRegion(
             cursor: SystemMouseCursors.move,
             child: header,

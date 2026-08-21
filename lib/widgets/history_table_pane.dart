@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 
 import '../providers/collector.dart';
@@ -46,10 +47,90 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
   // Debounce updates to reduce frequency
   Timer? _updateTimer;
 
+  /// The merged history stream, kept across rebuilds.
+  ///
+  /// Building it issues a `queryTimeseriesData` and hands `StreamBuilder` a
+  /// stream object it has never seen, so it resubscribes and falls back to its
+  /// spinner. Doing that from `build` meant every unrelated rebuild — a sort
+  /// toggle, a parent resizing — re-ran the query and blanked the table.
+  Stream<List<List<TimeseriesData<dynamic>>>>? _dataStream;
+
+  /// The inputs [_dataStream] was built from; a change here, and only here,
+  /// earns a new query.
+  String? _dataStreamKey;
+
   @override
   void dispose() {
     _updateTimer?.cancel();
     super.dispose();
+  }
+
+  Stream<List<List<TimeseriesData<dynamic>>>> _streamFor(Collector collector) {
+    final key = [
+      identityHashCode(collector),
+      widget.realtime,
+      widget.realtimeDuration.inMilliseconds,
+      widget.range?.start.toIso8601String(),
+      widget.range?.end.toIso8601String(),
+      widget.keys.join(','),
+    ].join('|');
+    final cached = _dataStream;
+    if (cached != null && _dataStreamKey == key) return cached;
+
+    Duration since;
+    DateTimeRange? fetchRange; // Extended range for fetching
+
+    if (widget.realtime) {
+      since = widget.realtimeDuration;
+    } else {
+      since = DateTime.now().difference(widget.range!.start);
+
+      // Calculate extended range: 50% more on each side
+      final rangeDuration = widget.range!.end.difference(widget.range!.start);
+      final extension = Duration(
+        milliseconds: (rangeDuration.inMilliseconds * 0.5).round(),
+      );
+
+      fetchRange = DateTimeRange(
+        start: widget.range!.start.subtract(extension),
+        end: widget.range!.end.add(extension),
+      );
+    }
+
+    final streams = widget.keys.map((k) {
+      if (widget.realtime) {
+        final liveStream = collector.collectStream(k, since: since);
+        final cutoff = DateTime.now().toUtc().subtract(since);
+        final dbStream = Stream.fromFuture(
+          collector.database
+              .queryTimeseriesData(k, DateTime.now().toUtc(), from: cutoff),
+        );
+        return Rx.combineLatest2<List<TimeseriesData<dynamic>>,
+            List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>>(
+          dbStream,
+          liveStream,
+          (dbData, liveData) {
+            final merged = <int, TimeseriesData<dynamic>>{};
+            for (final d in dbData) {
+              merged[d.time.millisecondsSinceEpoch] = d;
+            }
+            for (final d in liveData) {
+              merged[d.time.millisecondsSinceEpoch] = d;
+            }
+            final result = merged.values.toList()
+              ..sort((a, b) => a.time.compareTo(b.time));
+            return result;
+          },
+        );
+      } else {
+        // Use extended range for fetching
+        return Stream.fromFuture(collector.database
+            .queryTimeseriesData(k, fetchRange!.end, from: fetchRange!.start));
+      }
+    }).toList();
+
+    _dataStreamKey = key;
+    return _dataStream = Rx.combineLatestList(streams);
   }
 
   @override
@@ -64,67 +145,12 @@ class _HistoryTablePaneState extends ConsumerState<HistoryTablePane> {
         if (widget.keys.isEmpty) {
           return const Center(child: Text('Select keys to view history'));
         }
-
-        Duration since;
-        DateTimeRange? fetchRange; // Extended range for fetching
-
-        if (widget.realtime) {
-          since = widget.realtimeDuration;
-        } else {
-          if (widget.range == null) {
-            return const Center(child: Text('Pick a start & end date'));
-          }
-          since = DateTime.now().difference(widget.range!.start);
-
-          // Calculate extended range: 50% more on each side
-          final rangeDuration =
-              widget.range!.end.difference(widget.range!.start);
-          final extension = Duration(
-            milliseconds: (rangeDuration.inMilliseconds * 0.5).round(),
-          );
-
-          fetchRange = DateTimeRange(
-            start: widget.range!.start.subtract(extension),
-            end: widget.range!.end.add(extension),
-          );
+        if (!widget.realtime && widget.range == null) {
+          return const Center(child: Text('Pick a start & end date'));
         }
 
-        final streams = widget.keys.map((k) {
-          if (widget.realtime) {
-            final liveStream = collector.collectStream(k, since: since);
-            final cutoff = DateTime.now().toUtc().subtract(since);
-            final dbStream = Stream.fromFuture(
-              collector.database.queryTimeseriesData(
-                  k, DateTime.now().toUtc(),
-                  from: cutoff),
-            );
-            return Rx.combineLatest2<List<TimeseriesData<dynamic>>,
-                List<TimeseriesData<dynamic>>, List<TimeseriesData<dynamic>>>(
-              dbStream,
-              liveStream,
-              (dbData, liveData) {
-                final merged = <int, TimeseriesData<dynamic>>{};
-                for (final d in dbData) {
-                  merged[d.time.millisecondsSinceEpoch] = d;
-                }
-                for (final d in liveData) {
-                  merged[d.time.millisecondsSinceEpoch] = d;
-                }
-                final result = merged.values.toList()
-                  ..sort((a, b) => a.time.compareTo(b.time));
-                return result;
-              },
-            );
-          } else {
-            // Use extended range for fetching
-            return Stream.fromFuture(collector.database.queryTimeseriesData(
-                k, fetchRange!.end,
-                from: fetchRange!.start));
-          }
-        }).toList();
-
         return StreamBuilder<List<List<TimeseriesData<dynamic>>>>(
-          stream: Rx.combineLatestList(streams),
+          stream: _streamFor(collector),
           builder: (context, snap) {
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator());
