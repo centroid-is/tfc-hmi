@@ -275,25 +275,41 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     }
   }
 
-  Widget _buildGate(Color stateColor) {
+  /// Builds the gate, with its tap target INSIDE the rotation.
+  ///
+  /// The detector used to be added by each caller, around the whole of this
+  /// — outside `LayoutRotatedBox`. Every render object out there hit-tests
+  /// against its own box, and that box is the gate's *unrotated* rect, so a
+  /// gate that is not square and carries an angle only answered where the
+  /// rotated visual crosses that rect. Building it here keeps the detector
+  /// under the rotation, which hands it positions already mapped into the
+  /// unrotated frame. Same arrangement as the sensor and the conveyor.
+  Widget _buildGate(Color stateColor, {bool interactive = false}) {
+    Widget paint = LayoutBuilder(
+      builder: (context, constraints) {
+        // When placed inside a Positioned with explicit size (child-of-conveyor),
+        // use the constraints directly. Otherwise fall back to config.size (standalone).
+        final Size paintSize;
+        if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+          paintSize = Size(constraints.maxWidth, constraints.maxHeight);
+        } else {
+          paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
+        }
+        return CustomPaint(
+          size: paintSize,
+          painter: _createPainter(stateColor),
+        );
+      },
+    );
+    if (interactive) {
+      paint = GestureDetector(
+        onTap: () => _showForcePane(context),
+        child: paint,
+      );
+    }
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // When placed inside a Positioned with explicit size (child-of-conveyor),
-          // use the constraints directly. Otherwise fall back to config.size (standalone).
-          final Size paintSize;
-          if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
-            paintSize = Size(constraints.maxWidth, constraints.maxHeight);
-          } else {
-            paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
-          }
-          return CustomPaint(
-            size: paintSize,
-            painter: _createPainter(stateColor),
-          );
-        },
-      ),
+      child: paint,
     );
   }
 
@@ -335,10 +351,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 
     // When no state key is configured, render in grey (DATA-06).
     if (widget.config.stateKey.isEmpty) {
-      final gate = _buildGate(Colors.grey);
-      return isInteractive
-          ? GestureDetector(onTap: () => _showForcePane(context), child: gate)
-          : gate;
+      return _buildGate(Colors.grey, interactive: isInteractive);
     }
 
     final forcedColor = Theme.of(context).colorScheme.tertiary;
@@ -382,20 +395,13 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
             builder: (context, fbSnapshot) {
               final forceActive = fbSnapshot.data ?? false;
               final displayColor = forceActive ? forcedColor : baseColor;
-              final gate = _buildGate(displayColor);
-              return isInteractive
-                  ? GestureDetector(
-                      onTap: () => _showForcePane(context), child: gate)
-                  : gate;
+              return _buildGate(displayColor, interactive: isInteractive);
             },
           );
         }
 
         // No force feedback -- use base color directly.
-        final gate = _buildGate(baseColor);
-        return isInteractive
-            ? GestureDetector(onTap: () => _showForcePane(context), child: gate)
-            : gate;
+        return _buildGate(baseColor, interactive: isInteractive);
       },
     );
   }
