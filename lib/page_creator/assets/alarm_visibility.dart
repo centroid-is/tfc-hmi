@@ -636,8 +636,18 @@ class _AlarmPickerListState extends State<AlarmPickerList> {
 
   @override
   Widget build(BuildContext context) {
-    final sorted = [...widget.alarms]
-      ..sort((a, b) => a.title.compareTo(b.title));
+    // Selected alarms first, then alphabetical within each group.
+    //
+    // A plant has hundreds of alarms and the list is capped at maxHeight, so
+    // without this the handful a beacon actually watches are scattered
+    // through a scrolling list and there is no way to see the current
+    // selection without hunting for ticked boxes.
+    final sorted = [...widget.alarms]..sort((a, b) {
+        final aSelected = widget.selectedUids.contains(a.uid);
+        final bSelected = widget.selectedUids.contains(b.uid);
+        if (aSelected != bSelected) return aSelected ? -1 : 1;
+        return a.title.compareTo(b.title);
+      });
     final filtered = fuzzyFilter<AlarmConfig>(sorted, _query, [
       (a) => a.title,
       (a) => a.description,
@@ -853,15 +863,11 @@ class _AlarmVisibilityConfigEditorState
             const Divider(),
 
             // -- Alarm selection --
-            Text('Alarms', style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 4),
+            //
+            // No heading and no explanatory paragraph: the search field says
+            // "Search alarms..." and the ticked rows sit at the top, so the
+            // list explains itself and the pane keeps the space for alarms.
             _alarmPicker(context),
-            const SizedBox(height: 4),
-            Text(
-              'The beacon pulses in the colour of the highest active level. '
-              'No selection means it reacts to every alarm.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
             const SizedBox(height: 16),
 
             // -- Show idle marker --
