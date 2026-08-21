@@ -790,3 +790,125 @@ class PaneExpandTile extends StatelessWidget {
     );
   }
 }
+
+/// A [PaneDetailRow] whose value is a word an operator may not know, with the
+/// explanation folded in underneath it.
+///
+/// Use it where the honest answer is a term of art — a drive state, a fault
+/// name, an interlock — and the operator standing at the machine needs both
+/// "what does that word mean" and "what do I do about it". The row stays one
+/// line until it is asked; the detail is not a dialog, because reading it and
+/// acting on it happen at the same time and a dialog would cover the mimic.
+///
+/// Contrast with [PaneExpandTile], which is for *bulk* detail (a channel
+/// grid, a parameter table) and does open a dialog.
+class PaneExplainRow extends StatefulWidget {
+  final String label;
+
+  /// The short words, e.g. `Overcurrent`.
+  final String value;
+
+  /// Tints the value — pass the severity colour from the theme.
+  final Color? valueColor;
+
+  /// The explanation, revealed on tap. Built lazily.
+  final WidgetBuilder explanationBuilder;
+
+  /// Starts open. Useful for a fault that wants to be read.
+  final bool initiallyExpanded;
+
+  const PaneExplainRow({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.explanationBuilder,
+    this.valueColor,
+    this.initiallyExpanded = false,
+  });
+
+  @override
+  State<PaneExplainRow> createState() => _PaneExplainRowState();
+}
+
+class _PaneExplainRowState extends State<PaneExplainRow> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  void didUpdateWidget(PaneExplainRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A row that opened itself for one fault should not stay open over the
+    // next value — but never fold away something the operator opened.
+    if (widget.initiallyExpanded && !oldWidget.initiallyExpanded) {
+      _expanded = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 4,
+                  child: Text(widget.label, style: theme.textTheme.bodyMedium),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 5,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          widget.value,
+                          textAlign: TextAlign.right,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: widget.valueColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        _expanded ? Icons.expand_less : Icons.info_outline,
+                        size: 16,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          alignment: Alignment.topCenter,
+          child: _expanded
+              ? Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 4, bottom: 4),
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: widget.explanationBuilder(context),
+                )
+              : const SizedBox(width: double.infinity, height: 0),
+        ),
+      ],
+    );
+  }
+}

@@ -18,6 +18,7 @@ import '../../widgets/graph.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'auger_conveyor_painter.dart';
+import 'helper/atv320_diagnostics.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 import '../../theme.dart';
@@ -2117,15 +2118,28 @@ class _ConveyorState extends ConsumerState<Conveyor>
             final frequency = dynValue['p_stat_Frequency'].asDouble;
             final runMinutes = dynValue['p_stat_RunMinutes'].asInt;
 
+            // `p_stat_State` and `p_stat_LastFault` are the PLC enums
+            // `hmis_e` and `lft_e` — plain integers over OPC UA.
+            final driveState =
+                atv320DriveState(dynValue['p_stat_State'].asInt);
+            final lastFault = atv320Fault(dynValue['p_stat_LastFault'].asInt);
+
             return SidePane(
               title: widget.config.key!,
               subtitle: 'Conveyor',
               icon: Icons.conveyor_belt,
-              status: (jogFwd || jogBwd)
-                  ? const PaneStatus.running('Jogging')
-                  : frequency.abs() > 0.01
-                      ? const PaneStatus.running()
-                      : const PaneStatus.stopped(),
+              // A faulted or safety-stopped drive outranks the frequency
+              // reading: a belt sitting at 0 Hz because it tripped must not
+              // present itself as a healthy 'Stopped'.
+              status: driveState.severity == Atv320Severity.fault
+                  ? PaneStatus.fault(driveState.label)
+                  : driveState.code == 30 // STO — safety, not a trip
+                      ? PaneStatus.warning(driveState.label)
+                      : (jogFwd || jogBwd)
+                          ? const PaneStatus.running('Jogging')
+                          : frequency.abs() > 0.01
+                              ? const PaneStatus.running()
+                              : const PaneStatus.stopped(),
               // One command in the footer: three buttons wrap onto two rows
               // in a 380px pane and the pinned bar stops reading as a bar.
               // 'Reset run hours' sits on the Status section instead, next to
@@ -2245,13 +2259,29 @@ class _ConveyorState extends ConsumerState<Conveyor>
                           ],
                         ),
                         const SizedBox(height: 8),
-                        PaneDetailRow(
-                          label: 'HMIS',
-                          value: dynValue['p_stat_State'].toString(),
+                        // The drive's own two status words, in words rather
+                        // than in codes. Both are enums on the PLC side
+                        // (`hmis_e` / `lft_e`), so the integer is the whole
+                        // truth and the mnemonic is kept inside the
+                        // explanation for cross-referencing the keypad.
+                        PaneExplainRow(
+                          label: 'Drive state',
+                          value: driveState.label,
+                          valueColor: _severityColor(context, driveState),
+                          explanationBuilder: (context) =>
+                              _Atv320Explainer(explanation: driveState),
                         ),
-                        PaneDetailRow(
+                        PaneExplainRow(
                           label: 'Last fault',
-                          value: dynValue['p_stat_LastFault'].toString(),
+                          value: lastFault.label,
+                          valueColor: _severityColor(context, lastFault),
+                          // A live fault opens itself: the operator who just
+                          // walked over to a stopped belt should not have to
+                          // discover that the row is tappable.
+                          initiallyExpanded: !lastFault.isHealthy &&
+                              driveState.severity == Atv320Severity.fault,
+                          explanationBuilder: (context) =>
+                              _Atv320Explainer(explanation: lastFault),
                         ),
                       ],
                     ),
@@ -2335,6 +2365,143 @@ class _ConveyorState extends ConsumerState<Conveyor>
           },
         ),
       ),
+    );
+  }
+}
+
+/// Maps a decoded drive value onto the themed equipment-state colors.
+///
+/// Healthy states are deliberately left untinted — colouring "Ready" green
+/// would put as much ink on the normal case as on a trip.
+Color? _severityColor(BuildContext context, Atv320Explanation e) {
+  final colors = HmiStateColors.of(context);
+  switch (e.severity) {
+    case Atv320Severity.fault:
+      return colors.red;
+    case Atv320Severity.warning:
+      return colors.yellow;
+    case Atv320Severity.info:
+    case Atv320Severity.ok:
+      return null;
+  }
+}
+
+/// The panel behind a drive-state or fault row: what the word means, whether
+/// `Fault reset` can clear it, and what to actually do.
+///
+/// Wording comes from the ATV320 Programming Manual (NVE41295) — see
+/// `helper/atv320_diagnostics.dart`. The mnemonic and code lead, so an
+/// electrician can carry them straight to the drive keypad.
+class _Atv320Explainer extends StatelessWidget {
+  final Atv320Explanation explanation;
+
+  const _Atv320Explainer({required this.explanation});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.75),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Text(
+              explanation.mnemonic,
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text('code ${explanation.code}', style: muted),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(explanation.meaning, style: theme.textTheme.bodySmall),
+        if (explanation.clearing != null) ...[
+          const SizedBox(height: 8),
+          _ClearingNote(clearing: explanation.clearing!),
+        ],
+        if (explanation.remedy.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            explanation.documented ? 'WHAT TO DO' : 'NOT DOCUMENTED FOR ATV320',
+            style: theme.textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (final step in explanation.remedy)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('•  ', style: theme.textTheme.bodySmall),
+                  Expanded(
+                    child: Text(step, style: theme.textTheme.bodySmall),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The one line an operator most wants from a fault: can I reset this myself?
+class _ClearingNote extends StatelessWidget {
+  final Atv320Clearing clearing;
+
+  const _ClearingNote({required this.clearing});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = HmiStateColors.of(context);
+    final (icon, text, color) = switch (clearing) {
+      Atv320Clearing.selfClears => (
+          Icons.autorenew,
+          'Clears by itself once the cause is gone.',
+          colors.green,
+        ),
+      Atv320Clearing.faultReset => (
+          Icons.restart_alt,
+          'Fix the cause, then Fault reset clears it.',
+          colors.yellow,
+        ),
+      Atv320Clearing.powerCycle => (
+          Icons.power_settings_new,
+          'Fault reset will not clear this — the drive must be powered '
+              'down and back up after the cause is fixed.',
+          colors.red,
+        ),
+    };
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
