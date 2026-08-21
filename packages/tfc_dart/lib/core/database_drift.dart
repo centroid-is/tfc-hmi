@@ -138,7 +138,22 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       );
 
   final logger = Logger();
-  pg.Connection? _notificationConnection;
+
+  /// The one LISTEN/NOTIFY connection, held as the in-flight future rather
+  /// than the connection itself.
+  ///
+  /// `conn ??= await open()` looks like it shares, and does not: the null
+  /// check runs, the await suspends, and only then does the assignment land.
+  /// Every subscriber that arrives inside that window sees null and opens its
+  /// own. Twelve checkweigher series subscribing at startup left a
+  /// workstation holding twelve connections, eleven of them orphaned but open
+  /// with a LISTEN registered on each.
+  ///
+  /// Assigning the future before any await closes the window — later callers
+  /// join the one already in flight. A session can hold any number of
+  /// channels, and the driver's `channels` map demultiplexes them by name, so
+  /// one connection is all this ever needed.
+  Future<pg.Connection?>? _notificationConnection;
 
   @override
   DriftDatabaseOptions get options =>
@@ -934,16 +949,19 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     controller = StreamController<String>(
       onListen: () async {
         try {
-          _notificationConnection ??= await _createNotificationConnection();
+          // Assigned before awaiting, so concurrent subscribers join this
+          // future instead of each opening a connection of their own.
+          final connection =
+              await (_notificationConnection ??= _createNotificationConnection());
 
-          if (_notificationConnection == null) {
+          if (connection == null) {
             logger.w('Cannot listen to channel: not using PostgreSQL');
             await controller.close();
             return;
           }
 
           logger.i('Starting to listen on channel: $channelName');
-          final channel = _notificationConnection!.channels[channelName];
+          final channel = connection.channels[channelName];
 
           channelSubscription = channel.listen(
             (payload) {
@@ -969,9 +987,16 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
         try {
           await channelSubscription?.cancel();
         } catch (e) {
-          // If we get an error lets just close the connection
-          _notificationConnection?.close(force: true);
+          // If we get an error lets just close the connection. Cleared first
+          // so a subscriber arriving mid-teardown opens a fresh one rather
+          // than joining the future being torn down.
+          final pending = _notificationConnection;
           _notificationConnection = null;
+          try {
+            (await pending)?.close(force: true);
+          } catch (_) {
+            // The connection never opened; nothing to close.
+          }
         }
       },
     );
@@ -1100,7 +1125,11 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
   Future<void> _close() async {
     _healthPort?.close();
-    await _notificationConnection?.close();
+    try {
+      await (await _notificationConnection)?.close();
+    } catch (_) {
+      // Never opened, or already gone.
+    }
     await super.close();
     // Order matters. `PgDatabase.opened` passes `closeUnderlyingWhenClosed:
     // false`, so `super.close()` leaves the pool open -- nothing in the repo
