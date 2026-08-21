@@ -138,7 +138,22 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       );
 
   final logger = Logger();
-  pg.Connection? _notificationConnection;
+
+  /// The one LISTEN/NOTIFY connection, held as the in-flight future rather
+  /// than the connection itself.
+  ///
+  /// `conn ??= await open()` looks like it shares, and does not: the null
+  /// check runs, the await suspends, and only then does the assignment land.
+  /// Every subscriber that arrives inside that window sees null and opens its
+  /// own. Twelve checkweigher series subscribing at startup left a
+  /// workstation holding twelve connections, eleven of them orphaned but open
+  /// with a LISTEN registered on each.
+  ///
+  /// Assigning the future before any await closes the window — later callers
+  /// join the one already in flight. A session can hold any number of
+  /// channels, and the driver's `channels` map demultiplexes them by name, so
+  /// one connection is all this ever needed.
+  Future<pg.Connection?>? _notificationConnection;
 
   @override
   DriftDatabaseOptions get options =>
@@ -299,6 +314,31 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
   Future<void> open() async {
     await executor.ensureOpen(this);
+  }
+
+  /// The one LISTEN/NOTIFY connection, opening it if nobody has yet.
+  ///
+  /// Caching the in-flight future is what makes concurrent subscribers share:
+  /// it is assigned before any await, so the eleven that used to arrive during
+  /// the open now join it instead of each starting one of their own.
+  ///
+  /// A future that *fails* is evicted rather than kept. Caching it would hand
+  /// the same rejected future to every later subscriber, so a single moment of
+  /// the database being unreachable would latch every channel shut for the
+  /// life of the process -- and this code exists on the reconnect path, where
+  /// the database being briefly unreachable is the normal case rather than the
+  /// exceptional one. Dropping it costs nothing: the next subscriber opens a
+  /// new one, which is what happened before the future was cached at all.
+  Future<pg.Connection?> _sharedNotificationConnection() {
+    final pending =
+        _notificationConnection ??= _createNotificationConnection();
+    return pending.catchError((Object error) {
+      // Only evict what we put there; a teardown may already have replaced it.
+      if (identical(_notificationConnection, pending)) {
+        _notificationConnection = null;
+      }
+      throw error;
+    });
   }
 
   /// Get or create the dedicated channel connection
@@ -941,16 +981,18 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     controller = StreamController<String>(
       onListen: () async {
         try {
-          _notificationConnection ??= await _createNotificationConnection();
+          // Shared, and not latched shut by an open that failed: see
+          // [_sharedNotificationConnection].
+          final connection = await _sharedNotificationConnection();
 
-          if (_notificationConnection == null) {
+          if (connection == null) {
             logger.w('Cannot listen to channel: not using PostgreSQL');
             await controller.close();
             return;
           }
 
           logger.i('Starting to listen on channel: $channelName');
-          final channel = _notificationConnection!.channels[channelName];
+          final channel = connection.channels[channelName];
 
           channelSubscription = channel.listen(
             (payload) {
@@ -976,9 +1018,16 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
         try {
           await channelSubscription?.cancel();
         } catch (e) {
-          // If we get an error lets just close the connection
-          _notificationConnection?.close(force: true);
+          // If we get an error lets just close the connection. Cleared first
+          // so a subscriber arriving mid-teardown opens a fresh one rather
+          // than joining the future being torn down.
+          final pending = _notificationConnection;
           _notificationConnection = null;
+          try {
+            (await pending)?.close(force: true);
+          } catch (_) {
+            // The connection never opened; nothing to close.
+          }
         }
       },
     );
@@ -1107,7 +1156,11 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
   Future<void> _close() async {
     _healthPort?.close();
-    await _notificationConnection?.close();
+    try {
+      await (await _notificationConnection)?.close();
+    } catch (_) {
+      // Never opened, or already gone.
+    }
     await super.close();
     // Order matters. `PgDatabase.opened` passes `closeUnderlyingWhenClosed:
     // false`, so `super.close()` leaves the pool open -- nothing in the repo
