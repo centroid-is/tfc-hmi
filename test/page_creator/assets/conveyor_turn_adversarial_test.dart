@@ -34,22 +34,29 @@ void main() {
 
     // Whenever the belt is narrow enough to ever fit the box, the painted
     // area must be contained. A belt wider than the box may spill by design.
-    // Measure the ink itself — the band outline plus border — rather than
-    // inflating the centerline bounds on every side: the belt ends in flat
-    // caps, and the fit centers the ink, spending slack exactly where the
-    // band does not extend.
+    // Measure the ink itself — the band outline plus the half of the border
+    // that falls outside it, the stroke being centred on the outline —
+    // rather than inflating the centerline bounds on every side: the belt
+    // ends in flat caps, and the fit centers the ink, spending slack exactly
+    // where the band does not extend.
     if (g.beltWidth + 8 < size.shortestSide) {
       final band = g
               .bandOutline(0, 1,
                   width: g.beltWidth, radius: g.beltWidth * 0.2)
               ?.getBounds() ??
           g.path.getBounds().inflate(g.beltWidth / 2);
-      final painted = band.inflate(2);
-      expect(painted.left, greaterThanOrEqualTo(-0.5), reason: reason);
-      expect(painted.top, greaterThanOrEqualTo(-0.5), reason: reason);
-      expect(painted.right, lessThanOrEqualTo(size.width + 0.5),
+      final painted = band.inflate(1);
+      // The fit's clearance is a fraction of the box, so on a box under
+      // 135px across it is less than that pixel of border and the difference
+      // is ink over the edge — sub-pixel, and the alternative is an absolute
+      // length in the fit, which is what reshaped belts on a page re-fit.
+      final slop =
+          max(0.5, 1.0 - ConveyorPathGeometry.marginFor(size)) + 0.01;
+      expect(painted.left, greaterThanOrEqualTo(-slop), reason: reason);
+      expect(painted.top, greaterThanOrEqualTo(-slop), reason: reason);
+      expect(painted.right, lessThanOrEqualTo(size.width + slop),
           reason: reason);
-      expect(painted.bottom, lessThanOrEqualTo(size.height + 0.5),
+      expect(painted.bottom, lessThanOrEqualTo(size.height + slop),
           reason: reason);
     }
 
@@ -230,7 +237,8 @@ void main() {
           [ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)],
           const Size(400, 300),
           beltWidthOverride: 30)!;
-      const inset = 30 / 2 + 2;
+      final inset =
+          30 / 2 + ConveyorPathGeometry.marginFor(const Size(400, 300));
       final b = g.path.getBounds();
       expect(b.width, closeTo(400 - 2 * inset, 1.0));
       expect(b.height, closeTo(300 - 2 * inset, 1.0));
@@ -248,11 +256,13 @@ void main() {
                     width: g.beltWidth, radius: g.beltWidth * 0.2)
                 ?.getBounds() ??
             g.path.getBounds().inflate(g.beltWidth / 2);
-        final painted = band.inflate(2);
-        expect(painted.left, greaterThanOrEqualTo(-0.5));
-        expect(painted.top, greaterThanOrEqualTo(-0.5));
-        expect(painted.right, lessThanOrEqualTo(size.width + 0.5));
-        expect(painted.bottom, lessThanOrEqualTo(size.height + 0.5));
+        final painted = band.inflate(1);
+        final slop =
+            max(0.5, 1.0 - ConveyorPathGeometry.marginFor(size)) + 0.01;
+        expect(painted.left, greaterThanOrEqualTo(-slop));
+        expect(painted.top, greaterThanOrEqualTo(-slop));
+        expect(painted.right, lessThanOrEqualTo(size.width + slop));
+        expect(painted.bottom, lessThanOrEqualTo(size.height + slop));
       }
     });
 

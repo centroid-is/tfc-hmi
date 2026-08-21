@@ -197,9 +197,30 @@ void main() {
         thicknessFactor: 1.0,
       )!;
       expect(
-          geometry.bandOutline(0, 1,
-              width: geometry.beltWidth * 4, radius: 2),
+          geometry.bandOutline(0, 1, width: geometry.beltWidth * 4, radius: 2),
           isNull);
+    });
+
+    test('the fold verdict is the belt\'s, not its box\'s', () {
+      // It used to be read off samples of the path taken every few absolute
+      // pixels, so the same belt could be judged foldable at one size and not
+      // at another — and a page re-fit swapped a band for a stroked
+      // centerline under the operator.
+      List<ConveyorTurnEntry> turns() =>
+          [ConveyorTurnEntry(position: 0.5, angle: 90, radius: 0.6)];
+      double foldRatio(double scale) {
+        final g = ConveyorPathGeometry.build(
+            turns(), Size(189 * scale, 270 * scale),
+            thicknessFactor: 0.45)!;
+        return g.beltWidth / 2 / g.minTurnRadius;
+      }
+
+      final atFullSize = foldRatio(1.0);
+      for (final scale in [0.9, 0.8, 0.7, 0.6, 0.5]) {
+        expect(foldRatio(scale), closeTo(atFullSize, 1e-6),
+            reason: 'the belt is the same fraction of its own bend at every '
+                'size, so it folds at every size or at none');
+      }
     });
   });
 
