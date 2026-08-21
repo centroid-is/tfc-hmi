@@ -1425,34 +1425,38 @@ _HealthMonitor _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
 
   runZonedGuarded(() {
     Future<void> monitor() async {
+      // Borrowed per beat and released, not held for the life of the pool.
+      //
+      // This used to wrap the whole heartbeat loop in a single
+      // `withConnection`, so one connection stayed checked out for as long as
+      // the process ran. With one Database per OPC UA server that is one
+      // permanently-held connection each: the collector ran 8 databases and
+      // held 16 connections, exactly two apiece -- one for this monitor, one
+      // for the work. A pool sized to 1 could not have served both.
+      //
+      // What is lost by letting go between beats is the live signal:
+      // `conn.closed` used to fire the instant the socket died, because the
+      // monitor was sitting on it. Death is now noticed by the next beat
+      // failing instead, so detection is polled rather than immediate --
+      // which is why [kHealthBeatInterval] is sized against the 30 second
+      // health timeout rather than left at the old 15.
       while (pool.isOpen && !stop.isCompleted) {
         try {
           await pool.withConnection((conn) async {
-            port.send(true);
-            // Send periodic heartbeats to keep the health timeout timer fed.
-            // Without this, a healthy connection that stays open indefinitely
-            // would cause the 30-second health timeout to fire `false`.
-            while (pool.isOpen && !stop.isCompleted) {
-              port.send(true);
-              // Wait 15 seconds, or until the connection closes, or until we
-              // are asked to stop -- whichever comes first.
-              final closed = conn.closed.then((_) => true);
-              final timeout = Future.delayed(
-                  const Duration(seconds: 15), () => false);
-              final asked = stop.future.then((_) => true);
-              final didClose = await Future.any([closed, timeout, asked]);
-              if (didClose) break;
-            }
-            port.send(false);
+            await conn.execute('SELECT 1');
           });
+          port.send(true);
         } catch (e) {
+          // Continue rather than stop: the pool hands out a fresh connection
+          // on the next beat, which is how this recovers from a drop.
           port.send(false);
-          // Log but continue — pool will provide a new connection
         }
         if (stop.isCompleted || !pool.isOpen) break;
-        // Wait before retrying after a disconnection, unless asked to stop.
+        // Still raced against the stop signal. The beat itself is short now,
+        // but this sleep is not, and a close that had to sit out a full beat
+        // before the monitor noticed would be the slowest part of shutdown.
         await Future.any([
-          Future<void>.delayed(const Duration(seconds: 5)),
+          Future<void>.delayed(kHealthBeatInterval),
           stop.future,
         ]);
       }
