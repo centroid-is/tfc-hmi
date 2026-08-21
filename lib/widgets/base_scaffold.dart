@@ -11,8 +11,10 @@ import '../models/menu_item.dart';
 import '../route_registry.dart';
 import '../providers/theme.dart';
 import '../providers/alarm.dart';
+import '../providers/nav_alarm.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'alarm.dart';
+import 'nav_alarm_badge.dart';
 import '../routes.dart';
 // ===================
 // Provider Abstraction
@@ -204,6 +206,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
     // Retrieve the provider (if any)
     final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
+    // Which navigation entries are pulsing. Watched once here and handed down,
+    // so the bar holds one alarm subscription rather than one per destination.
+    //
+    // No alarm service — the page-editor harness, tests, a dropped connection —
+    // reads as quiet, the same way the beacon asset treats a stream error as
+    // idle. A broken alarm connection must not light up the navigation bar.
+    final navAlarmLevels =
+        ref.watch(navigationAlarmsProvider).valueOrNull ?? const {};
+    final navCurrentPath = currentBeamPath(context);
+
     return Scaffold(
       appBar: _isFullscreen
           ? null
@@ -345,10 +357,17 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 ...RouteRegistry().menuItems.map<Widget>((item) {
                   if (item.children.isEmpty) {
                     return NavigationDestination(
-                        icon: Icon(item.icon), label: item.label);
+                        icon: NavAlarmBadge(
+                          level: navigationAlarmLevelFor(item, navAlarmLevels,
+                              currentPath: navCurrentPath),
+                          child: Icon(item.icon),
+                        ),
+                        label: item.label);
                   }
                   return NavDropdown(
                     menuItem: item,
+                    alarmLevels: navAlarmLevels,
+                    currentPath: navCurrentPath,
                   );
                 }),
               ],

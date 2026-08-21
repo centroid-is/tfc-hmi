@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' show min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,10 +9,18 @@ import 'package:tfc_dart/core/alarm.dart';
 import '../../providers/alarm.dart';
 import '../../widgets/alarm.dart'
     show AlarmNotificationColors, ViewActiveAlarm, alarmLevelColors;
+import '../../widgets/alarm_pulse.dart';
 import '../../widgets/fuzzy_search_bar.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
+
+/// The beacon's painters live in `widgets/alarm_pulse.dart` so the navigation
+/// bar can draw the same pulse without depending on the asset library. Re-
+/// exported because they are part of this asset's surface as far as its
+/// callers and tests are concerned.
+export '../../widgets/alarm_pulse.dart'
+    show AlarmPulsePainter, AlarmIdlePainter;
 
 part 'alarm_visibility.g.dart';
 
@@ -117,119 +124,6 @@ class AlarmVisibilityConfig extends BaseAsset {
   Widget configure(BuildContext context) {
     return _AlarmVisibilityConfigEditor(config: this);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Painters
-// ---------------------------------------------------------------------------
-
-/// The active beacon: a solid centre dot plus [rings] concentric rings that
-/// expand from the dot to the asset edge and fade out, staggered evenly in
-/// phase so one ring is always mid-flight.
-///
-/// [progress] is the animation phase in [0, 1); the painter is pure so a
-/// static frame (palette thumbnail, config preview, goldens) is just a fixed
-/// progress value.
-///
-/// Takes the alarm system's (background, foreground) pair from
-/// [alarmLevelColors]. The rings and the dot fill carry [color] — the
-/// container role the alarm card is painted in, i.e. the colour operators
-/// already read as "this alarm" (Solarized: yellow warning, red error). The
-/// dot is outlined in [dotOutlineColor] (the card's text colour) for
-/// definition. The rings must NOT use the foreground role: it is chosen for
-/// contrast against the card surface, not the page — in the Solarized light
-/// theme it is the same cream as the scaffold, which made the rings vanish.
-class AlarmPulsePainter extends CustomPainter {
-  final Color color;
-  final Color dotOutlineColor;
-  final double progress;
-  final int rings;
-
-  AlarmPulsePainter({
-    required this.color,
-    required this.dotOutlineColor,
-    required this.progress,
-    this.rings = 3,
-    super.repaint,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final maxRadius = min(size.width, size.height) / 2;
-    final dotRadius = maxRadius * 0.22;
-
-    for (var i = 0; i < rings; i++) {
-      final t = (progress + i / rings) % 1.0;
-      // Linear fade: quadratic killed the ring before it reached the edge,
-      // so the expansion — the whole point of the beacon — went unseen.
-      final fade = (1 - t) * 0.9;
-      final paint = Paint()
-        ..color = color.withValues(alpha: fade)
-        ..style = PaintingStyle.stroke
-        // Rings thin out as they expand — reads as energy dissipating.
-        ..strokeWidth = 1.0 + 3.0 * (1 - t);
-      canvas.drawCircle(
-        center,
-        dotRadius + (maxRadius - dotRadius) * t,
-        paint,
-      );
-    }
-
-    canvas.drawCircle(
-      center,
-      dotRadius,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.fill,
-    );
-    canvas.drawCircle(
-      center,
-      dotRadius,
-      Paint()
-        ..color = dotOutlineColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0,
-    );
-  }
-
-  @override
-  bool shouldRepaint(AlarmPulsePainter oldDelegate) =>
-      color != oldDelegate.color ||
-      dotOutlineColor != oldDelegate.dotOutlineColor ||
-      progress != oldDelegate.progress ||
-      rings != oldDelegate.rings;
-}
-
-/// The idle marker: a small dot inside a thin outline ring. Faint on purpose —
-/// an inactive alarm must not compete with live process graphics, it only has
-/// to be findable (and tappable, to read what the beacon watches).
-class AlarmIdlePainter extends CustomPainter {
-  final Color color;
-
-  AlarmIdlePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final maxRadius = min(size.width, size.height) / 2;
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    canvas.drawCircle(center, maxRadius * 0.4, paint);
-    canvas.drawCircle(
-      center,
-      maxRadius * 0.12,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.fill,
-    );
-  }
-
-  @override
-  bool shouldRepaint(AlarmIdlePainter oldDelegate) =>
-      color != oldDelegate.color;
 }
 
 // ---------------------------------------------------------------------------
