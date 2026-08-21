@@ -10,6 +10,13 @@ import 'docker_compose.dart';
 
 // docker exec -it test-db /bin/ash -c "psql -d testdb --user testuser -c 'select * from test_timeseries;'"
 
+/// One line per row, for the `reason:` of a row-count expectation.
+///
+/// A bare `Expected: <3> Actual: <4>` on CI says nothing about which row is
+/// the extra one, and the runner is gone by the time anyone looks.
+String _describe(List<QueryRow> rows) =>
+    rows.map((r) => r.data).join('\n  ');
+
 /// Polls [condition] every 50 ms until it returns true or [timeout] elapses.
 /// Throws [TimeoutException] if the condition is not met in time.
 Future<void> waitUntil(
@@ -1088,15 +1095,20 @@ void main() {
           testTableName2: 'value',
         });
 
-        final result = await database.queryTimeseriesData(mvName, base);
+        await database.queryTimeseriesData(mvName, base);
 
         // Query MV
         final rows = await database.db.customSelect('''
       SELECT * FROM "$mvName" ORDER BY "time" ASC
     ''').get();
 
-        // Expect union of times: t0, t1, t2
-        expect(rows.length, 3);
+        // Expect union of times: t0, t1, t2.
+        //
+        // This has failed on CI with 4 rows. Print the rows when it does — an
+        // extra row is either a base-table timestamp this test did not write,
+        // or a duplicate insert at one of these timestamps fanning out through
+        // the LEFT JOIN, and the bare count cannot tell those apart.
+        expect(rows.length, 3, reason: 'view rows: ${_describe(rows)}');
 
         // Column names are <table>_<column> per implementation
         final c1 = '${testTableName}_value'; // test_timeseries_value
@@ -1140,7 +1152,7 @@ void main() {
               'SELECT * FROM "$mvName" ORDER BY "time" ASC',
             )
             .get();
-        expect(rows.length, 2);
+        expect(rows.length, 2, reason: 'view rows: ${_describe(rows)}');
 
         // Add new data and call createView again (old impl drops & recreates)
         final t2 = base.add(const Duration(minutes: 2));
@@ -1158,7 +1170,7 @@ void main() {
               'SELECT * FROM "$mvName" ORDER BY "time" ASC',
             )
             .get();
-        expect(rows.length, 3);
+        expect(rows.length, 3, reason: 'view rows: ${_describe(rows)}');
 
         final c1 = '${testTableName}_value';
         final c2 = '${testTableName2}_value';

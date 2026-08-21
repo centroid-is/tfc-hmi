@@ -17,6 +17,7 @@
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -258,21 +259,38 @@ class _TrendChart extends StatelessWidget {
     // An explicit xRange, not xSpan: the live chart windows on
     // DateTime.now(), which would slide the canned samples out of view and
     // make this golden change every run.
+    // Both axes through the same helper the live chart uses, so the golden
+    // shows the notched range an operator actually gets rather than a
+    // hand-picked one.
+    final freqRange = stableTrendRange(
+      _frequency.reduce(math.min),
+      _frequency.reduce(math.max),
+    );
+    // Current is framed from zero — see ConveyorStatsGraph.
+    final currentRange =
+        stableTrendRange(0, _current.reduce(math.max), floor: 0);
     return Graph(
       config: GraphConfig(
         type: GraphType.timeseries,
         xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
-        // Mirrors the 10% headroom ConveyorStatsGraph applies, so the traces
-        // sit inside the frame instead of on the tick labels.
-        yAxis: GraphAxisConfig(unit: compact ? '' : 'Hz', min: 39, max: 51),
-        // Current is framed from zero — see ConveyorStatsGraph.
-        yAxis2: GraphAxisConfig(unit: compact ? '' : 'A', min: 0, max: 3.6),
+        yAxis: GraphAxisConfig(
+          unit: compact ? '' : 'Hz',
+          min: freqRange.min,
+          max: freqRange.max,
+        ),
+        yAxis2: GraphAxisConfig(
+          unit: compact ? '' : 'A',
+          min: currentRange.min,
+          max: currentRange.max,
+        ),
         xRange: DateTimeRange(
           start: DateTime.fromMillisecondsSinceEpoch(_t0),
           end: DateTime.fromMillisecondsSinceEpoch(
             _t0 + (_frequency.length - 1) * _step,
           ),
         ),
+        // The pane preview names its traces in the tile header instead.
+        legend: !compact,
       ),
       data: data,
       showButtons: showButtons,
@@ -421,6 +439,7 @@ SidePane _conveyorPane(BuildContext context) {
         PaneSection(
           title: 'Trend',
           child: PaneGraphTile(
+            legend: conveyorTrendColors,
             height: 100,
             preview: const _TrendChart(compact: true),
             expandedBuilder: (_) => const _TrendChart(showButtons: true),
@@ -743,24 +762,30 @@ class _AnalogTrendChart extends StatelessWidget {
           's': 'Infeed',
         },
     ];
+    final range = stableTrendRange(
+      _samples.reduce(math.min),
+      _samples.reduce(math.max),
+    );
     return Graph(
       config: GraphConfig(
         type: GraphType.timeseries,
         xAxis: const GraphAxisConfig(unit: ''),
-        yAxis: const GraphAxisConfig(unit: '', min: 3.6, max: 4.8),
+        yAxis: GraphAxisConfig(unit: '', min: range.min, max: range.max),
         xRange: DateTimeRange(
           start: DateTime.fromMillisecondsSinceEpoch(_TrendChart._t0),
           end: DateTime.fromMillisecondsSinceEpoch(
             _TrendChart._t0 + (_samples.length - 1) * _TrendChart._step,
           ),
         ),
+        // One series, named by the tile header — see AnalogBoxTrendGraph.
+        legend: false,
       ),
       data: data,
       showButtons: false,
       categoryColors: const {'Infeed': Colors.blue},
       chartTheme: Theme.of(context).brightness == Brightness.dark
-          ? darkChartTheme(padding: kCompactChartPadding)
-          : lightChartTheme(padding: kCompactChartPadding),
+          ? darkChartTheme(padding: kCompactChartPaddingSingleAxis)
+          : lightChartTheme(padding: kCompactChartPaddingSingleAxis),
       redraw: () {},
     ).build(context);
   }
@@ -893,6 +918,8 @@ class _SensorTrendChart extends StatelessWidget {
             _t0 + (_blocked.length - 1) * _step,
           ),
         ),
+        // One series on a true/false axis — see SensorTrendGraph.
+        legend: !compact,
       ),
       data: data,
       showButtons: false,
@@ -937,6 +964,9 @@ Widget _analogBoxPane(BuildContext context, {bool withRangeKeys = true}) {
     // Goldens never write; the pane is rendered, not driven.
     onWrite: (_, __) {},
     trendTile: PaneGraphTile(
+      // The preview drops the chart's own legend to keep the width, so the
+      // header names the trace — as AnalogBoxConfig.build does.
+      label: 'PT-2201',
       height: 100,
       preview: const _AnalogTrendChart(),
       expandedTitle: 'PT-2201 — trend',

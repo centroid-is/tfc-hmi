@@ -1,0 +1,70 @@
+name: Build and push a Docker image
+description: >
+  `docker/build-push-action` with one automatic retry.
+
+  ghcr.io intermittently answers a push with `ERROR: failed to build: unknown
+  blob`. It is a registry-side hiccup with nothing to do with the change being
+  built — on 2026-08-21 it took out two unrelated PRs within twenty seconds of
+  each other — but it fails the job and puts a red X on somebody's PR. Building
+  is cached, so a second attempt costs little and clears it.
+
+  If the second attempt also fails the job fails, as it should: a Dockerfile
+  that is genuinely broken still stops the build.
+
+inputs:
+  context:
+    description: Build context path.
+    required: true
+  file:
+    description: Path to the Dockerfile. Defaults to `<context>/Dockerfile`.
+    required: false
+    default: ''
+  build-args:
+    description: Newline-separated build arguments.
+    required: false
+    default: ''
+  cache-from:
+    description: buildx cache sources.
+    required: false
+    default: ''
+  cache-to:
+    description: buildx cache destinations.
+    required: false
+    default: ''
+  tags:
+    description: Newline-separated image tags to push.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build and push
+      id: first-attempt
+      uses: docker/build-push-action@v6
+      continue-on-error: true
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        push: true
+        build-args: ${{ inputs.build-args }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+        tags: ${{ inputs.tags }}
+
+    - name: Note the retry
+      if: steps.first-attempt.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning::Docker build/push failed on the first attempt — retrying once."
+
+    - name: Build and push (retry)
+      if: steps.first-attempt.outcome == 'failure'
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.file }}
+        push: true
+        build-args: ${{ inputs.build-args }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+        tags: ${{ inputs.tags }}

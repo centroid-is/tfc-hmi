@@ -183,9 +183,10 @@ const Map<String, Color> sensorTrendColors = {
 
 /// Gutters for the compact sensor preview. The boolean tick labels
 /// ("False"/"True") are wider than the bare numbers the shared
-/// [kCompactChartPadding] was sized for, so its left gutter clips them.
+/// [kCompactChartPaddingSingleAxis] was sized for, so its left gutter clips
+/// them; everything else matches.
 const EdgeInsets kSensorTrendCompactPadding =
-    EdgeInsets.only(left: 48, right: 38, top: 12, bottom: 22);
+    EdgeInsets.only(left: 48, right: 30, top: 6, bottom: 20);
 
 /// The blocked/clear history of a collected sensor key as a boolean state
 /// timeline. Mirrors `ConveyorStatsGraph`: the same widget serves the pane's
@@ -264,6 +265,9 @@ class SensorTrendGraph extends ConsumerWidget {
           yAxis: GraphAxisConfig(
               unit: '', boolean: true, min: -0.1, max: 1.1),
           xSpan: xSpan,
+          // One series on a true/false axis — the legend column would only
+          // take width off a plot this small.
+          legend: !compact,
         );
 
         // The compact preview needs its own gutters — same trick as

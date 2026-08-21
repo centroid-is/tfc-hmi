@@ -223,15 +223,44 @@ class SpeedBatcher extends ConsumerWidget {
   }
 }
 
+/// Whether the gate should read as tripped, given its key and polarity.
+///
+/// Kept out of the widget so the decision can be tested without a `StateMan`,
+/// mirroring [sensorIsActive].
+bool gateIsTripped({
+  required bool rawBool,
+  required bool invertPolarity,
+}) {
+  return invertPolarity ? !rawBool : rawBool;
+}
+
 @JsonSerializable()
 class GateStatusConfig extends BaseAsset {
   String key;
 
+  /// When true, the key reads TRUE for a *healthy* gate.
+  ///
+  /// This asset was written against a "tripped" signal — true paints red. The
+  /// safety gates here publish the opposite: `FB_MonitorOSSD.q_xOk` is true
+  /// when the gate is safe, and it is the only one of the two that reaches
+  /// OPC UA (the PLC's `xGateTripped` is assigned twice and ends up carrying
+  /// the speedbatcher's emergency gate). A key mapping cannot bridge that —
+  /// it has `bitMask` and `bitShift`, neither of which negates a bool — so
+  /// the polarity lives here.
+  ///
+  /// Defaults to false, which is how every page persisted before this field
+  /// behaves.
+  @JsonKey(defaultValue: false)
+  bool invertPolarity;
+
   GateStatusConfig({
     required this.key,
+    this.invertPolarity = false,
   });
 
-  GateStatusConfig.preview() : key = "";
+  GateStatusConfig.preview()
+      : key = "",
+        invertPolarity = false;
 
   factory GateStatusConfig.fromJson(Map<String, dynamic> json) =>
       _$GateStatusConfigFromJson(json);
@@ -270,6 +299,17 @@ class _GateStatusConfigEditorState extends State<_GateStatusConfigEditor> {
             onChanged: (v) => setState(() => widget.config.key = v),
           ),
           const SizedBox(height: 8),
+          SwitchListTile(
+            title: const Text('Invert Polarity'),
+            subtitle: Text(
+              widget.config.invertPolarity
+                  ? 'Tripped when state is false (key reads OK, e.g. q_xOk)'
+                  : 'Tripped when state is true (key reads tripped)',
+            ),
+            value: widget.config.invertPolarity,
+            onChanged: (v) => setState(() => widget.config.invertPolarity = v),
+          ),
+          const SizedBox(height: 8),
           SizeField(
             initialValue: widget.config.size,
             onChanged: (size) => setState(() => widget.config.size = size),
@@ -303,7 +343,7 @@ class GateStatus extends ConsumerWidget {
     }
 
     if (config.key.isEmpty) {
-      return buildGate(Colors.grey);
+      return buildGate(HmiColorRole.grey.resolve(context));
     }
 
     return StreamBuilder<DynamicValue>(
@@ -311,11 +351,15 @@ class GateStatus extends ConsumerWidget {
           (stateMan) =>
               stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
       builder: (context, snapshot) {
+        // Scheme roles rather than literals, so the gate tracks a theme
+        // switch like every other status colour on the page.
         final color = !snapshot.hasData
-            ? Colors.grey
-            : snapshot.data!.asBool
-                ? Colors.red
-                : Colors.green;
+            ? HmiColorRole.grey.resolve(context)
+            : gateIsTripped(
+                    rawBool: snapshot.data!.asBool,
+                    invertPolarity: config.invertPolarity)
+                ? HmiColorRole.red.resolve(context)
+                : HmiColorRole.green.resolve(context);
         return buildGate(color);
       },
     );

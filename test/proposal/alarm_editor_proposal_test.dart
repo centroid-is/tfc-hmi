@@ -104,7 +104,10 @@ void main() {
     });
 
     test('rebuilds the alarm list after applying', () {
-      expect(source, contains('ref.invalidate(alarmManProvider)'));
+      // Through the captured container, not `ref`: every accept path here
+      // can outlive the page. See the disposal group below.
+      expect(source, contains('container.invalidate(alarmManProvider)'));
+      expect(source, isNot(contains('ref.invalidate(alarmManProvider)')));
     });
   });
 
@@ -148,6 +151,189 @@ void main() {
     test('accepting one edited alarm leaves the rest of the batch staged', () {
       expect(source, contains('_proposalIds.removeAt(0)'));
       expect(source, contains('_proposedAlarms.removeAt(0)'));
+    });
+  });
+
+  // The banner outlives this page: it is published once and stays up while the
+  // operator navigates. By the time Accept or Reject is pressed, this State
+  // can already be disposed, and `ref` throws outright then
+  // ("Cannot use ref after the widget was disposed") -- before a single alarm
+  // is written and before a single proposal is marked resolved. The same
+  // shape cost a key-mapping batch of 16 both its accept and its reject on
+  // 2026-08-21 (see key_repository_proposal_test.dart).
+  //
+  // Every provider these two callbacks need is therefore resolved through a
+  // container captured while the page was alive. A ProviderContainer belongs
+  // to the ProviderScope at the app root, so it outlives this widget.
+  group('accept and reject survive the page being disposed', () {
+    String bodyOf(String signature) {
+      final start = source.indexOf(signature);
+      expect(start, greaterThan(-1), reason: 'missing $signature');
+      return source.substring(
+          start, source.indexOf(RegExp(r'^  }', multiLine: true), start));
+    }
+
+    test('the container is captured where ref and context are known good', () {
+      final body = bodyOf('void _publishProposalCallbacks()');
+      expect(
+          body,
+          contains(
+              '_container = ProviderScope.containerOf(context, listen: false)'),
+          reason: 'the banner callbacks have no live ref of their own');
+    });
+
+    test('neither banner callback reaches for ref', () {
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final body = bodyOf('Future<void> $fn()');
+        for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+          expect(body, isNot(contains(use)),
+              reason: '$fn runs from the banner, after this State may be gone');
+        }
+      }
+    });
+
+    test('commit writes and refreshes through the captured container', () {
+      final body = bodyOf('Future<void> _commitProposals()');
+      expect(body, contains('container.read(alarmManProvider.future)'));
+      expect(body, contains('container.invalidate(alarmManProvider)'),
+          reason: 'the alarm list still has to rebuild for whoever is '
+              'watching it, even though this page is gone');
+    });
+
+    test('both callbacks bail when no container was ever captured', () {
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final body = bodyOf('Future<void> $fn()');
+        expect(body, contains('final container = _container;'));
+        expect(body, contains('if (container == null) return;'),
+            reason: 'writing nothing beats writing half and marking it done');
+      }
+    });
+
+    test('the banner slots are retired through the stored controllers', () {
+      // Not `ref.read(proposalCommitProvider.notifier)`: same disposed-ref
+      // problem, and these controllers were already being held for dispose().
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        expect(bodyOf('Future<void> $fn()'), contains('_clearStagedBatch()'));
+      }
+      final clear = bodyOf('void _clearStagedBatch()');
+      expect(clear, contains('_commitSlot?.state = null;'));
+      expect(clear, contains('_discardSlot?.state = null;'));
+      expect(clear, contains('if (mounted) setState'),
+          reason: 'the batch is dropped either way; only the rebuild is '
+              'conditional on this page still being on screen');
+    });
+
+    test('a proposal that could not be marked resolved is reported', () {
+      // A bare `catch (_) {}` around the database write is what let the key
+      // repository lose a whole batch quietly for weeks.
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final body = bodyOf('Future<void> $fn()');
+        expect(body, isNot(contains('catch (_) {}')));
+        expect(body, contains('debugPrint('));
+      }
+    });
+
+    test('clearing the batch clears the delete flags with it', () {
+      // _proposedDeleteUids is per-batch: it says which of the staged alarms
+      // accepting should *remove*. Survive the clear and it marks the next
+      // batch's alarm of the same uid as a removal, so an ordinary create
+      // deletes the alarm instead of writing it.
+      //
+      // #241 introduced _clearStagedBatch() on a branch cut before #233 added
+      // _proposedDeleteUids, so taking either side of that merge whole leaks
+      // it. alarm_editor_delete_batch_test.dart pins the behaviour.
+      expect(bodyOf('void _clearStagedBatch()'),
+          contains('_proposedDeleteUids.clear();'));
+    });
+  });
+
+  // #233 hardened the form's own Accept -- a different button from the
+  // banner's, and the same hazard. It awaits twice before it is finished with
+  // providers and with the messenger, and the operator can navigate away in
+  // either gap.
+  group("the form's own Accept survives the page going away", () {
+    String bodyOf(String signature) {
+      final start = source.indexOf(signature);
+      expect(start, greaterThan(-1), reason: 'missing $signature');
+      return source.substring(
+          start, source.indexOf(RegExp(r'^  }', multiLine: true), start));
+    }
+
+    test('it works through the container, not ref', () {
+      final body = bodyOf('Future<void> _acceptProposalWithConfig(');
+      for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+        expect(body, isNot(contains(use)),
+            reason: 'ref throws once this State is gone, and this method '
+                'still has an accept loop to run after its awaits');
+      }
+      expect(body, contains('container.read(alarmManProvider.future)'));
+      expect(body, contains('container.read(proposalStateProvider.notifier)'));
+    });
+
+    test('the snackbar goes through a handle taken before the awaits', () {
+      // `mounted` is not enough for an ancestor lookup: a *deactivated*
+      // element still reports mounted == true, and ScaffoldMessenger.of then
+      // walks ancestors that are already gone.
+      final body = bodyOf('Future<void> _acceptProposalWithConfig(');
+      expect(body, isNot(contains('ScaffoldMessenger.of(context)')));
+      expect(body, contains('final messenger = _messenger;'));
+      expect(body, contains('messenger?.showSnackBar('));
+    });
+
+    test('the handle is captured with the container', () {
+      expect(bodyOf('void _publishProposalCallbacks()'),
+          contains('_messengerHandle = ScaffoldMessenger.maybeOf(context)'));
+    });
+
+    test('the banner slots are retired through the stored controllers', () {
+      final body = bodyOf('Future<void> _acceptProposalWithConfig(');
+      expect(body, contains('_commitSlot?.state = null;'));
+      expect(body, contains('_discardSlot?.state = null;'));
+    });
+  });
+
+  // Ported from key_repository.dart (#238). dispose() runs from inside a
+  // build when the operator navigates away, and writing to a provider there
+  // trips riverpod's "tried to modify a provider while the widget tree was
+  // building".
+  group('dispose retires the banner after the frame, not during it', () {
+    String bodyOf(String signature) {
+      final start = source.indexOf(signature);
+      expect(start, greaterThan(-1), reason: 'missing $signature');
+      return source.substring(
+          start, source.indexOf(RegExp(r'^  }', multiLine: true), start));
+    }
+
+    test('the clear is deferred', () {
+      expect(bodyOf('void dispose()'),
+          contains('WidgetsBinding.instance.addPostFrameCallback'));
+    });
+
+    test('only this page\'s own closures are retired', () {
+      // An editor that replaced this one has already published its callbacks
+      // into the same slots; clearing those would take the banner's buttons
+      // away from a live batch.
+      final body = bodyOf('void dispose()');
+      expect(body, contains('final commit = _commitProposals;'));
+      expect(body, contains('final discard = _discardProposals;'));
+      expect(body, contains('commitSlot.state == commit'));
+      expect(body, contains('discardSlot.state == discard'));
+    });
+
+    test('a slot that is itself gone by then is left alone', () {
+      // The whole ProviderScope can tear down between dispose() and the next
+      // frame -- the app shutting down, or a widget test ending -- and
+      // reading a disposed StateController throws.
+      final body = bodyOf('void dispose()');
+      expect(body, contains('commitSlot.mounted'));
+      expect(body, contains('discardSlot.mounted'));
+    });
+
+    test('dispose never reaches for ref', () {
+      final body = bodyOf('void dispose()');
+      for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+        expect(body, isNot(contains(use)));
+      }
     });
   });
 }

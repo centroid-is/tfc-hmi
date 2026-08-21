@@ -35,8 +35,9 @@ void main() {
     test('single turn: the belt fills the box on both axes', () {
       final g = geom([ConveyorTurnEntry(position: 0.5, angle: 90, radius: 1.5)]);
       // The bend is fixed geometry; the runs stretch so the belt spans its
-      // box. The centerline is inset by half the belt width plus the border.
-      const inset = beltWidth / 2 + 2;
+      // box. The centerline is inset by half the belt width plus the fit's
+      // own clearance.
+      final inset = beltWidth / 2 + ConveyorPathGeometry.marginFor(box);
       final b = g.path.getBounds();
       expect(b.width, closeTo(box.width - 2 * inset, 1.0));
       expect(b.height, closeTo(box.height - 2 * inset, 1.0));
@@ -47,7 +48,7 @@ void main() {
       // With true geometry the belt's length is exactly determined: the two
       // runs reach the box, the fillet replaces the corner with a quarter
       // circle, and each tangent leg it eats equals its radius at 90.
-      const inset = beltWidth / 2 + 2;
+      final inset = beltWidth / 2 + ConveyorPathGeometry.marginFor(box);
       const r = 1.5 * beltWidth;
       final w = box.width - 2 * inset;
       final h = box.height - 2 * inset;
@@ -85,7 +86,7 @@ void main() {
     test('the belt spans its box for any loop radius that fits', () {
       // The runs absorb whatever length the box demands, so changing the
       // loop radius changes the shape but never leaves the box unfilled.
-      const inset = beltWidth / 2 + 2;
+      final inset = beltWidth / 2 + ConveyorPathGeometry.marginFor(box);
       for (final radius in [0.8, 1.2, 2.5]) {
         final g = geom([
           ConveyorTurnEntry(position: 0.15, angle: -30, radius: 1.0),
@@ -94,9 +95,11 @@ void main() {
           ConveyorTurnEntry(position: 0.85, angle: -30, radius: 1.0),
         ]);
         final b = g.path.getBounds();
-        expect(b.width, closeTo(box.width - 2 * inset, 1.0),
+        // The fill solve stops once it is within a fraction of a percent of
+        // the box, which on a box this size is about a pixel.
+        expect(b.width, closeTo(box.width - 2 * inset, 1.5),
             reason: 'radius $radius left the box unfilled across');
-        expect(b.height, closeTo(box.height - 2 * inset, 1.0),
+        expect(b.height, closeTo(box.height - 2 * inset, 1.5),
             reason: 'radius $radius left the box unfilled down');
       }
     });

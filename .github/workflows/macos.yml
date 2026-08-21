@@ -74,9 +74,7 @@ jobs:
           sed -i '' '/CODE_SIGN_ENTITLEMENTS/d' Runner.xcodeproj/project.pbxproj
 
       - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.44.9'
+        uses: ./.github/actions/setup-flutter
 
       - name: Get Flutter packages
         working-directory: centroid-hmi

@@ -649,30 +649,23 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
   }
 }
 
-class _NumberGraphBody extends StatefulWidget {
+// Title bar and close button come from the floating dialog now.
+//
+// This used to cache the GraphAsset because the floating dialog rebuilt its
+// content on every drag frame and GraphAsset refetched on every rebuild —
+// both fixed at the source (see `_FloatingDialogShell` and
+// `graphDataSignature`), so a plain rebuild is cheap and a real config change
+// now reaches the chart.
+class _NumberGraphBody extends StatelessWidget {
   final NumberConfig config;
   const _NumberGraphBody({required this.config});
 
   @override
-  State<_NumberGraphBody> createState() => _NumberGraphBodyState();
-}
-
-class _NumberGraphBodyState extends State<_NumberGraphBody> {
-  Widget? _cachedGraph;
-
-  Widget _buildGraph() {
-    if (_cachedGraph != null) return _cachedGraph!;
-    final gc = widget.config.graphConfig!;
-    if (gc.primarySeries.isEmpty && widget.config.key.isNotEmpty) {
-      gc.primarySeries = [
-        GraphSeriesConfig(key: widget.config.key, label: ''),
-      ];
+  Widget build(BuildContext context) {
+    final gc = config.graphConfig!;
+    if (gc.primarySeries.isEmpty && config.key.isNotEmpty) {
+      gc.primarySeries = [GraphSeriesConfig(key: config.key, label: '')];
     }
-    _cachedGraph = GraphAsset(gc);
-    return _cachedGraph!;
+    return GraphAsset(gc);
   }
-
-  // Title bar and close button come from the floating dialog now.
-  @override
-  Widget build(BuildContext context) => _buildGraph();
 }

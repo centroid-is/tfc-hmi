@@ -325,6 +325,54 @@ void main() {
           findsOneWidget);
     });
   });
+
+  // dispose() retires the banner's slots a frame late, because navigating away
+  // disposes this page from inside a build and writing to a provider there
+  // trips riverpod's "tried to modify a provider while the widget tree was
+  // building" (#238). The deferral is right, but it hands the clear a window:
+  // between dispose() and the next frame the ProviderScope itself can go --
+  // the app shutting down, or a widget test ending -- and the controllers the
+  // clear kept a handle on go with it. Reading one then throws
+  // "Bad state: Tried to use StateController<...> after `dispose` was called",
+  // out of a post-frame callback where nothing catches it.
+  //
+  // #241 hit this for real doing the same work in the alarm and page editors.
+  group('the deferred clear survives the ProviderScope going too', () {
+    testWidgets('a slot disposed before the next frame is left alone',
+        (tester) async {
+      final proposals = _RecordingProposals();
+      proposals.addProposal(_proposal(_idOne, _keyOne));
+
+      // An owning ProviderScope, not the UncontrolledProviderScope the rest of
+      // this file uses: the container has to die *with* the page, in the same
+      // frame, which is what shutdown looks like and what a container kept
+      // alive by addTearDown never reproduces.
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          preferencesProvider.overrideWith((ref) async =>
+              createTestPreferences(keyMappings: KeyMappings(nodes: {}))),
+          databaseProvider.overrideWith((ref) async => null),
+          stateManProvider
+              .overrideWith((ref) => throw StateError('No StateMan in tests')),
+          proposalStateProvider.overrideWith((ref) => proposals),
+        ],
+        child: MaterialApp(home: Scaffold(body: KeyRepositoryContent())),
+      ));
+      await settle(tester);
+
+      // The scope unmounts alongside the page, so the container is disposed in
+      // the build phase of this frame and the deferred clear runs at the end
+      // of it, against controllers that are already gone.
+      await tester.pumpWidget(
+          const MaterialApp(home: Scaffold(body: SizedBox.shrink())));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull,
+          reason: 'the deferred clear must check the slots are still alive '
+              'before reading them; an uncaught error out of a post-frame '
+              'callback takes the shutdown down with it');
+    });
+  });
 }
 
 // ============================ widget test rig ============================

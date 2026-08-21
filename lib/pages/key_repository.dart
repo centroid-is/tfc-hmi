@@ -338,10 +338,17 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     final commit = _commitProposals;
     final discard = _discardProposals;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (commitSlot != null && commitSlot.state == commit) {
+      // `mounted` on the controllers, not on us: a frame later the whole
+      // ProviderScope may be gone too -- the app shutting down, or a test
+      // ending -- and reading a disposed StateController throws.
+      if (commitSlot != null &&
+          commitSlot.mounted &&
+          commitSlot.state == commit) {
         commitSlot.state = null;
       }
-      if (discardSlot != null && discardSlot.state == discard) {
+      if (discardSlot != null &&
+          discardSlot.mounted &&
+          discardSlot.state == discard) {
         discardSlot.state = null;
       }
     });
