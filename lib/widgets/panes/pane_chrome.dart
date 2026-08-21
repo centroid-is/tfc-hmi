@@ -811,6 +811,11 @@ class PaneExplainRow extends StatefulWidget {
   /// Tints the value — pass the severity colour from the theme.
   final Color? valueColor;
 
+  /// A muted qualifier trailing the value, e.g. `cleared`. For saying what
+  /// kind of reading this is when the words alone would be read as a live
+  /// condition; deliberately quieter than the value it follows.
+  final String? valueNote;
+
   /// The explanation, revealed on tap. Built lazily.
   final WidgetBuilder explanationBuilder;
 
@@ -823,6 +828,7 @@ class PaneExplainRow extends StatefulWidget {
     required this.value,
     required this.explanationBuilder,
     this.valueColor,
+    this.valueNote,
     this.initiallyExpanded = false,
   });
 
@@ -869,13 +875,29 @@ class _PaneExplainRowState extends State<PaneExplainRow> {
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       Flexible(
-                        child: Text(
-                          widget.value,
+                        // One paragraph rather than two widgets, so a value
+                        // and its note wrap around each other instead of the
+                        // note squeezing the value onto two lines.
+                        child: Text.rich(
+                          TextSpan(children: [
+                            TextSpan(
+                              text: widget.value,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: widget.valueColor,
+                              ),
+                            ),
+                            if (widget.valueNote != null)
+                              TextSpan(
+                                text: '  ${widget.valueNote}',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.textTheme.bodySmall?.color
+                                      ?.withValues(alpha: 0.6),
+                                ),
+                              ),
+                          ]),
                           textAlign: TextAlign.right,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: widget.valueColor,
-                          ),
+                          style: theme.textTheme.bodyMedium,
                         ),
                       ),
                       const SizedBox(width: 4),
