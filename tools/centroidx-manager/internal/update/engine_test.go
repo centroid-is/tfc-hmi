@@ -478,7 +478,7 @@ func TestEngine_ListAllReleases_SortDescending(t *testing.T) {
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
 
-	result, err := eng.ListAllReleases(context.Background())
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
 	if err != nil {
 		t.Fatalf("ListAllReleases returned error: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestEngine_ListAllReleases_MonthBoundary(t *testing.T) {
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
 
-	result, err := eng.ListAllReleases(context.Background())
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
 	if err != nil {
 		t.Fatalf("ListAllReleases returned error: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestEngine_ListAllReleases_SkipsUnparseable(t *testing.T) {
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
 
-	result, err := eng.ListAllReleases(context.Background())
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
 	if err != nil {
 		t.Fatalf("ListAllReleases returned error: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestEngine_ListAllReleases_Empty(t *testing.T) {
 	client := &mockReleasesClient{releases: []*gogithub.RepositoryRelease{}}
 	eng := NewEngine(client, &mockInstaller{})
 
-	result, err := eng.ListAllReleases(context.Background())
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
 	if err != nil {
 		t.Fatalf("ListAllReleases returned error on empty: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestEngine_ListAllReleases_FiltersNoAssets(t *testing.T) {
 	client := &mockReleasesClient{releases: releases}
 	eng := NewEngine(client, &mockInstaller{})
 
-	result, err := eng.ListAllReleases(context.Background())
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
 	if err != nil {
 		t.Fatalf("ListAllReleases returned error: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestEngine_ListAllReleases_NetworkError(t *testing.T) {
 	client := &mockReleasesClient{err: errors.New("dial tcp: connection refused")}
 	eng := NewEngine(client, &mockInstaller{})
 
-	_, err := eng.ListAllReleases(context.Background())
+	_, err := eng.ListAllReleases(context.Background(), ChannelStable)
 	if err == nil {
 		t.Fatal("expected error from ListAllReleases when client fails, got nil")
 	}
@@ -824,5 +824,104 @@ func TestEngine_Update_LatestChannel(t *testing.T) {
 	}
 	if !inst.launchedApp {
 		t.Error("expected LaunchApp after installing the prerelease")
+	}
+}
+
+// ---- ListAllReleases channels ----------------------------------------------
+
+func TestEngine_ListAllReleases_LatestChannel_IncludesRollingPrerelease(t *testing.T) {
+	// The rolling prerelease is newer than the newest tag, so it heads the list
+	// — and it is only visible at all because publish date, not version,
+	// orders the latest channel.
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("v2026.3.26", false, false, time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC), platformAssets()),
+			buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC), platformAssets()),
+			buildChannelRelease("v2026.2.17", false, false, time.Date(2026, 2, 17, 0, 0, 0, 0, time.UTC), platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background(), ChannelLatest)
+	if err != nil {
+		t.Fatalf("ListAllReleases(latest) returned error: %v", err)
+	}
+	expected := []string{"main-latest", "2026.3.26", "2026.2.17"}
+	if len(result) != len(expected) {
+		t.Fatalf("expected %d releases, got %d", len(expected), len(result))
+	}
+	for i, want := range expected {
+		if result[i].Version != want {
+			t.Errorf("result[%d]: expected %q, got %q", i, want, result[i].Version)
+		}
+	}
+}
+
+func TestEngine_ListAllReleases_StableChannel_HidesRollingPrerelease(t *testing.T) {
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC), platformAssets()),
+			buildChannelRelease("v2026.3.26", false, false, time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC), platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
+	if err != nil {
+		t.Fatalf("ListAllReleases(stable) returned error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected only the tagged release, got %d: %+v", len(result), result)
+	}
+	if result[0].Version != "2026.3.26" {
+		t.Errorf("expected 2026.3.26, got %q", result[0].Version)
+	}
+}
+
+func TestEngine_ListAllReleases_SkipsDrafts(t *testing.T) {
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("v2026.9.9", false, true, time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC), platformAssets()),
+			buildChannelRelease("v2026.3.26", false, false, time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC), platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	for _, channel := range []string{ChannelStable, ChannelLatest} {
+		result, err := eng.ListAllReleases(context.Background(), channel)
+		if err != nil {
+			t.Fatalf("ListAllReleases(%q) returned error: %v", channel, err)
+		}
+		if len(result) != 1 || result[0].Version != "2026.3.26" {
+			t.Errorf("channel %q: expected drafts skipped, got %+v", channel, result)
+		}
+	}
+}
+
+func TestEngine_ListAllReleases_LatestChannel_StillNeedsAnAsset(t *testing.T) {
+	// A rolling prerelease that has not published a package for this platform
+	// must not be offered — the picker could not install it.
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC), nil),
+			buildChannelRelease("v2026.3.26", false, false, time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC), platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	result, err := eng.ListAllReleases(context.Background(), ChannelLatest)
+	if err != nil {
+		t.Fatalf("ListAllReleases(latest) returned error: %v", err)
+	}
+	if len(result) != 1 || result[0].Version != "2026.3.26" {
+		t.Errorf("expected the asset-less prerelease skipped, got %+v", result)
+	}
+}
+
+func TestEngine_ListAllReleases_UnknownChannel(t *testing.T) {
+	eng := NewEngine(&mockReleasesClient{}, &mockInstaller{})
+
+	if _, err := eng.ListAllReleases(context.Background(), "nightly"); err == nil {
+		t.Fatal("expected error for unknown channel, got nil")
 	}
 }

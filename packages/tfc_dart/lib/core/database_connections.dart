@@ -25,8 +25,15 @@ import 'dart:async';
 
 // -- pool sizing ------------------------------------------------------------
 
-/// Ceiling on a single process's pool, so a mistyped config cannot exhaust the
-/// server on its own.
+/// Ceiling on a single process's *work* budget, so a mistyped config cannot
+/// exhaust the server on its own.
+///
+/// Not the ceiling on the pool itself: [poolConnectionCount] adds the health
+/// monitor's standing connection on top of whatever [resolvePoolSize] allows,
+/// so the widest pool this code will ever open is one more than this --
+/// [kMaxPoolConnections] + [kHealthMonitorConnections]. The extra one is the
+/// point of that function and is deliberately outside the cap; capping the
+/// total instead would silently take a connection away from the work.
 const int kMaxPoolConnections = 16;
 
 /// Connections a process should pool, given what it asked for.
@@ -55,6 +62,60 @@ const int kHealthMonitorConnections = 1;
 /// never opened at all.
 int poolConnectionCount(int? configured) =>
     resolvePoolSize(configured) + kHealthMonitorConnections;
+
+/// Environment variable a process uses to raise its pool above the default.
+///
+/// Named for the field it fills, and for the other non-libpq setting beside it
+/// (`CENTROID_DB_DEBUG`); the `CENTROID_PG*` variables all mirror a libpq one,
+/// and there is no libpq variable for this.
+const String kMaxPoolConnectionsEnv = 'CENTROID_DB_MAX_POOL_CONNECTIONS';
+
+/// The work budget [env] asks for, or null for the default of one.
+///
+/// The collector is the one process that genuinely drains several sources at
+/// once, and it is configured entirely from the environment. Without this
+/// there was no way to reach `DatabaseConfig.maxPoolConnections` at all: the
+/// field documented an escape hatch that nothing could open.
+///
+/// A value that is not a number is treated as absent rather than fatal. A
+/// typo in a collector's environment should cost it the raise, not its start;
+/// [resolvePoolSize] caps whatever does parse.
+int? maxPoolConnectionsFromEnv(Map<String, String> env) {
+  final raw = env[kMaxPoolConnectionsEnv];
+  if (raw == null) return null;
+  return int.tryParse(raw.trim());
+}
+
+// -- shutdown ---------------------------------------------------------------
+
+/// Longest a pool close may take before it is abandoned to the server to reap.
+const Duration kPoolCloseTimeout = Duration(seconds: 5);
+
+/// Releases a pool that the health monitor is standing inside.
+///
+/// [close] is `pg.Pool.close`, and it has to be forced. A graceful close waits
+/// for every borrowed connection to come back, and the monitor's connection is
+/// borrowed for the pool's whole life -- it sits in `withConnection` awaiting
+/// that connection's `closed` future, which on a healthy socket never
+/// completes. Forcing closes the socket underneath it: `closed` fires, the
+/// monitor's `withConnection` returns, and the pool finishes closing. Nothing
+/// else is borrowing by then, because drift is closed first.
+///
+/// Bounded and swallowing, because `connectWithRetry` calls this on every
+/// attempt it throws away. A close that hung there would stall the retry loop
+/// against an already-unreachable database; a close that threw would leave the
+/// same orphaned pool the close exists to prevent.
+Future<void> releasePool(
+  Future<void> Function({bool force}) close, {
+  Duration timeout = kPoolCloseTimeout,
+  void Function(Object error)? onError,
+}) async {
+  try {
+    await close(force: true).timeout(timeout);
+  } catch (error) {
+    onError?.call(error);
+  }
+}
 
 // -- retry ------------------------------------------------------------------
 
