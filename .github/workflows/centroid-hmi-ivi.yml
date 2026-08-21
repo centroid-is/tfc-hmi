@@ -29,12 +29,20 @@ permissions:
 # Two runs of this workflow on the same PR branch push the same `pr-NNN` tag,
 # so let a new push replace the one in flight rather than race it. Only for
 # pull requests — a main or tag build must finish and publish.
+#
+# `ivi-` prefix for consistency with the other workflow_call targets. This one
+# has no caller today, so the prefix changes nothing now; it keeps the group
+# unique if a caller is ever added. See macos.yml. The cancel guard is #235's,
+# unchanged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ivi-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Same job ids as centroid-hmi.yml — see the note there. `name` keeps the two
+  # workflows' checks apart; the ids are unchanged.
   docker-build:
+    name: Docker Image (ivi-homescreen)
     runs-on: ubuntu-latest
     outputs:
       centroid_hmi_sha: ${{ steps.get_sha.outputs.sha }}
@@ -104,6 +112,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/centroid-hmi-ivi:pr-${{ github.event.pull_request.number }}
 
   backend-build:
+    name: Backend Image (ivi-homescreen)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

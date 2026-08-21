@@ -15,8 +15,18 @@ on:
 permissions:
   contents: read
 
+# `linux-` prefix, and the expression rather than bare `true`, for the reasons
+# spelled out in macos.yml: main-prerelease.yml calls this workflow alongside
+# macos and windows in a single run, where the github context is the caller's.
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Job id stays `build` (main-prerelease.yml calls this workflow); `name` is
+  # what the status check context is called. See macos.yml.
   build:
+    name: Linux Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

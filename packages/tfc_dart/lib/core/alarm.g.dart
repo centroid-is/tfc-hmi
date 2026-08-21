@@ -33,6 +33,7 @@ AlarmConfig _$AlarmConfigFromJson(Map<String, dynamic> json) => AlarmConfig(
       rules: (json['rules'] as List<dynamic>)
           .map((e) => AlarmRule.fromJson(e as Map<String, dynamic>))
           .toList(),
+      navigationIndicator: json['navigation_indicator'] as bool? ?? false,
     );
 
 Map<String, dynamic> _$AlarmConfigToJson(AlarmConfig instance) =>
@@ -42,6 +43,7 @@ Map<String, dynamic> _$AlarmConfigToJson(AlarmConfig instance) =>
       'title': instance.title,
       'description': instance.description,
       'rules': instance.rules,
+      'navigation_indicator': instance.navigationIndicator,
     };
 
 AlarmManConfig _$AlarmManConfigFromJson(Map<String, dynamic> json) =>

@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc_dart/core/database_drift.dart';
 
 import 'package:tfc/chat/batch_proposal_summary.dart';
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 PendingProposal _makeProposal({
   required int id,
@@ -47,10 +45,7 @@ void main() {
 
     testWidgets('renders nothing with only 1 proposal of a type',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(id: 1));
 
       await tester.pumpWidget(_wrap(
@@ -69,10 +64,7 @@ void main() {
 
     testWidgets('shows batch card when 2+ proposals of same type',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       for (var i = 1; i <= 5; i++) {
         notifier.addProposal(_makeProposal(
           id: i,
@@ -99,10 +91,7 @@ void main() {
     });
 
     testWidgets('shows Accept All and Reject All buttons', (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       for (var i = 1; i <= 3; i++) {
         notifier.addProposal(_makeProposal(
           id: i,
@@ -127,10 +116,7 @@ void main() {
 
     testWidgets('shows separate batch cards for different types',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       // 3 alarm proposals
       for (var i = 1; i <= 3; i++) {
         notifier.addProposal(_makeProposal(
@@ -174,10 +160,7 @@ void main() {
 
     testWidgets('does not show batch card for type with only 1 proposal',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       // 3 alarm proposals
       for (var i = 1; i <= 3; i++) {
         notifier.addProposal(_makeProposal(
@@ -215,10 +198,7 @@ void main() {
 
     testWidgets('Reject All removes proposals and hides batch card',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       for (var i = 1; i <= 3; i++) {
         notifier.addProposal(_makeProposal(
           id: i,
@@ -258,10 +238,7 @@ void main() {
 
     testWidgets('Accept All removes proposals from state',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       for (var i = 1; i <= 3; i++) {
         notifier.addProposal(_makeProposal(
           id: i,
@@ -299,10 +276,7 @@ void main() {
     testWidgets(
         'Accept All of one type preserves proposals of other types',
         (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       // 2 alarm proposals
       for (var i = 1; i <= 2; i++) {
         notifier.addProposal(_makeProposal(
@@ -358,10 +332,7 @@ void main() {
     // ─── Type label mapping ──────────────────────────────────────────
 
     testWidgets('maps alarm_create to Alarm label', (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       for (var i = 1; i <= 2; i++) {
         notifier.addProposal(_makeProposal(
           id: i,
@@ -384,10 +355,7 @@ void main() {
     });
 
     testWidgets('maps unknown type to Config label', (tester) async {
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       for (var i = 1; i <= 2; i++) {
         notifier.addProposal(_makeProposal(
           id: i,

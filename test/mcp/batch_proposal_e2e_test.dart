@@ -1,22 +1,19 @@
-/// End-to-end test: Multiple MCP create_alarm calls → multiple DB proposals.
+/// End-to-end test: multiple MCP create_alarm calls → multiple proposals.
 ///
 /// Verifies that when the LLM calls create_alarm 10 times (e.g., "create an
-/// alarm for all 10 motors"), each call produces a separate proposal in the
-/// database and each is independently trackable via ProposalWatcher and
-/// ProposalStateNotifier.
+/// alarm for all 10 motors"), each call delivers a separate proposal through
+/// the server's proposal callback and each is independently trackable in
+/// [ProposalStateNotifier].
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:drift/drift.dart' hide isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart';
 
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 /// Mock client that connects in-process to an MCP server.
 Future<McpClient> _connectClient(McpServer server) async {
@@ -61,6 +58,15 @@ class _EmptyAlarmReader implements AlarmReader {
   List<Map<String, dynamic>> get alarmConfigs => [];
 }
 
+PendingProposal _pending(Map<String, dynamic> wrapped) => PendingProposal(
+      id: nextLocalProposalId(),
+      proposalType: wrapped['_proposal_type'] as String,
+      title: wrapped['title'] as String,
+      proposalJson: jsonEncode(wrapped),
+      operatorId: 'local',
+      createdAt: DateTime.now(),
+    );
+
 void main() {
   late AppDatabase db;
 
@@ -72,22 +78,24 @@ void main() {
     await db.close();
   });
 
-  test('10 create_alarm calls produce 10 separate proposals in DB', () async {
+  test('10 create_alarm calls deliver 10 separate proposals', () async {
     final env = {'TFC_USER': 'test-operator'};
     final identity = EnvOperatorIdentity(environmentProvider: () => env);
 
+    final delivered = <Map<String, dynamic>>[];
     final server = TfcMcpServer(
       identity: identity,
       database: db,
       stateReader: _EmptyStateReader(),
       alarmReader: _EmptyAlarmReader(),
       toggles: const McpToolToggles(proposalsEnabled: true),
+      onProposal: delivered.add,
     );
 
     final client = await _connectClient(server.mcpServer);
 
     // Call create_alarm 10 times (simulating "create alarm for all 10 motors")
-    final proposals = <Map<String, dynamic>>[];
+    final returned = <Map<String, dynamic>>[];
     for (var i = 1; i <= 10; i++) {
       final result = await client.callTool(CallToolRequest(
         name: 'create_alarm',
@@ -104,37 +112,27 @@ void main() {
         },
       ));
 
-      final text = result.content
-          .whereType<TextContent>()
-          .map((c) => c.text)
-          .join();
-      final proposal = jsonDecode(text) as Map<String, dynamic>;
-      proposals.add(proposal);
+      final text =
+          result.content.whereType<TextContent>().map((c) => c.text).join();
+      returned.add(jsonDecode(text) as Map<String, dynamic>);
     }
 
     // Verify all 10 proposals are unique
-    expect(proposals, hasLength(10));
-    final uids = proposals.map((p) => p['uid'] as String).toSet();
+    expect(returned, hasLength(10));
+    final uids = returned.map((p) => p['uid'] as String).toSet();
     expect(uids, hasLength(10), reason: 'All UIDs should be unique');
 
-    // Verify all have correct type
-    for (final p in proposals) {
+    for (final p in returned) {
       expect(p['_proposal_type'], 'alarm');
     }
 
-    // Wait for async DB writes
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-
-    // Verify all 10 are in the database
-    final rows =
-        await db.customSelect('SELECT * FROM mcp_proposal ORDER BY id ASC').get();
-    expect(rows, hasLength(10));
-
+    // Every one of them reached the UI through the callback, in order, and
+    // carrying the same content the tool returned.
+    expect(delivered, hasLength(10));
     for (var i = 0; i < 10; i++) {
-      expect(rows[i].read<String>('proposal_type'), 'alarm');
-      expect(rows[i].read<String>('title'), 'Motor ${i + 1} Fault');
-      expect(rows[i].read<String>('status'), 'pending');
-      expect(rows[i].read<String>('operator_id'), 'test-operator');
+      expect(delivered[i]['_proposal_type'], 'alarm');
+      expect(delivered[i]['title'], 'Motor ${i + 1} Fault');
+      expect(jsonEncode(delivered[i]), jsonEncode(returned[i]));
     }
 
     // Cleanup
@@ -144,90 +142,53 @@ void main() {
 
   test('ProposalStateNotifier tracks 10 proposals and batch-accepts them',
       () async {
-    final notifier = ProposalStateNotifier(db);
+    final notifier = ProposalStateNotifier();
 
-    // Insert 10 proposals and add to notifier
     for (var i = 1; i <= 10; i++) {
-      await db.customInsert(
-        'INSERT INTO mcp_proposal '
-        '(proposal_type, title, proposal_json, operator_id, status, created_at) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
-        variables: [
-          Variable.withString('alarm'),
-          Variable.withString('Motor $i Fault'),
-          Variable.withString(
-              '{"_proposal_type":"alarm","uid":"motor-$i","title":"Motor $i Fault"}'),
-          Variable.withString('test-operator'),
-          Variable.withString('pending'),
-          Variable.withString(DateTime.now().toIso8601String()),
-        ],
-      );
-    }
-
-    final rows = await db
-        .customSelect('SELECT id, title, proposal_json FROM mcp_proposal ORDER BY id ASC')
-        .get();
-    for (final row in rows) {
-      notifier.addProposal(PendingProposal(
-        id: row.read<int>('id'),
-        proposalType: 'alarm',
-        title: row.read<String>('title'),
-        proposalJson: row.read<String>('proposal_json'),
-        operatorId: 'test-operator',
-        createdAt: DateTime.now(),
-      ));
+      notifier.addProposal(_pending({
+        '_proposal_type': 'alarm',
+        'uid': 'motor-$i',
+        'title': 'Motor $i Fault',
+      }));
     }
 
     expect(notifier.state.pendingCount, 10);
     expect(notifier.state.ofType('alarm'), hasLength(10));
 
-    // Batch accept all
     final accepted = await notifier.acceptAllOfType('alarm');
     expect(accepted, hasLength(10));
     expect(notifier.state.pendingCount, 0);
-
-    // Verify DB
-    final dbRows = await db
-        .customSelect(
-            "SELECT status FROM mcp_proposal WHERE status = 'accepted'")
-        .get();
-    expect(dbRows, hasLength(10));
   });
 
-  test('Inline proposals from tool results are deduped with DB proposals',
+  test('the same proposal arriving twice is deduplicated by its JSON',
       () async {
-    final notifier = ProposalStateNotifier(db);
+    // An in-app tool call surfaces a proposal twice: once from the server
+    // callback and once from the tool result. The two copies are minted
+    // separate ids, so only the JSON comparison can collapse them.
+    final notifier = ProposalStateNotifier();
 
-    // Simulate ChatNotifier._surfaceProposalFromToolResult adding inline proposals
-    // (negative IDs, as the real code does)
-    for (var i = 1; i <= 5; i++) {
-      notifier.addProposal(PendingProposal(
-        id: -i,
-        proposalType: 'alarm',
-        title: 'Motor $i Fault',
-        proposalJson:
-            '{"_proposal_type":"alarm","uid":"motor-$i","title":"Motor $i Fault"}',
-        operatorId: 'local',
-        createdAt: DateTime.now(),
-      ));
+    final wrapped = [
+      for (var i = 1; i <= 5; i++)
+        {
+          '_proposal_type': 'alarm',
+          'uid': 'motor-$i',
+          'title': 'Motor $i Fault',
+        }
+    ];
+
+    for (final w in wrapped) {
+      notifier.addProposal(_pending(w));
     }
-
     expect(notifier.state.pendingCount, 5);
 
-    // Now simulate DB-sourced proposals arriving with positive IDs but same JSON
-    for (var i = 1; i <= 5; i++) {
-      notifier.addProposal(PendingProposal(
-        id: i * 100, // positive DB IDs
-        proposalType: 'alarm',
-        title: 'Motor $i Fault',
-        proposalJson:
-            '{"_proposal_type":"alarm","uid":"motor-$i","title":"Motor $i Fault"}',
-        operatorId: 'test-operator',
-        createdAt: DateTime.now(),
-      ));
+    for (final w in wrapped) {
+      notifier.addProposal(_pending(w));
     }
-
-    // Deduplication by proposalJson should keep count at 5
     expect(notifier.state.pendingCount, 5);
+    expect(
+      notifier.state.proposals.map((p) => p.id).toSet(),
+      hasLength(5),
+      reason: 'ids stay unique even though the JSON collided',
+    );
   });
 }

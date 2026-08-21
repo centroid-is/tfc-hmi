@@ -4,12 +4,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc_dart/core/database_drift.dart';
 
 import 'package:tfc/chat/message_bubble.dart';
 import 'package:tfc/llm/llm_models.dart';
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -76,10 +74,7 @@ void main() {
         'title': 'Test Alarm',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(
         id: 1,
         json: proposalJson,
@@ -118,11 +113,8 @@ void main() {
         'title': 'Test Alarm',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
       // Empty notifier — no proposals pending
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
 
       await tester.pumpWidget(_wrap(
         MessageBubble(
@@ -158,10 +150,7 @@ void main() {
         'title': 'Test Alarm',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(
         id: 1,
         json: proposalJson,
@@ -219,10 +208,7 @@ void main() {
         'title': 'Pump Fault',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(
         id: 1,
         json: proposalJson,
@@ -262,10 +248,7 @@ void main() {
         'title': 'Pump Fault',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(
         id: 1,
         json: proposalJson,
@@ -310,10 +293,7 @@ void main() {
         'title': 'Pump Fault',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(
         id: 1,
         json: proposalJson,

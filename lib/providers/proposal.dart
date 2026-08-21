@@ -1,0 +1,99 @@
+import 'dart:convert';
+
+/// Routes proposal types to editor paths.
+const proposalRoutes = <String, String>{
+  'alarm': '/advanced/alarm-editor',
+  'alarm_create': '/advanced/alarm-editor',
+  'alarm_update': '/advanced/alarm-editor',
+  'key_mapping': '/advanced/key-repository',
+  'page': '/advanced/page-editor',
+  'asset': '/advanced/page-editor',
+  'asset_update': '/advanced/page-editor',
+};
+
+/// What accepting a proposal does to its target: bring it into existence,
+/// change it, or remove it.
+enum ProposalOp { create, update, delete }
+
+int _lastLocalProposalId = 0;
+
+/// Mints an id for a proposal arriving from the MCP server.
+///
+/// Ids are process-local handles, nothing more: a proposal lives in
+/// [ProposalStateNotifier] until the operator decides on it, and is then
+/// gone. They used to be `mcp_proposal` row ids; nothing is stored any more,
+/// so this counter is the only source.
+///
+/// A plain counter rather than the clock reading it replaces
+/// (`-DateTime.now().microsecondsSinceEpoch`): a batch of proposals is
+/// wrapped in one synchronous loop, and two of them landing in the same
+/// microsecond would get the same id and the second would be discarded as a
+/// duplicate. Negative so that anything still reading `id > 0` as "came from
+/// the database" keeps getting false.
+int nextLocalProposalId() => --_lastLocalProposalId;
+
+/// A proposal from the MCP server awaiting the operator's decision.
+class PendingProposal {
+  final int id;
+  final String proposalType;
+  final String title;
+  final String proposalJson;
+  final String operatorId;
+  final DateTime createdAt;
+
+  const PendingProposal({
+    required this.id,
+    required this.proposalType,
+    required this.title,
+    required this.proposalJson,
+    required this.operatorId,
+    required this.createdAt,
+  });
+
+  String get editorLabel {
+    switch (proposalType) {
+      case 'alarm':
+      case 'alarm_create':
+      case 'alarm_update':
+        return 'Alarm Editor';
+      case 'key_mapping':
+        return 'Key Repository';
+      case 'page':
+        return 'Page Editor';
+      case 'asset':
+      case 'asset_update':
+        return 'Page Editor';
+      default:
+        return 'Editor';
+    }
+  }
+
+  String? get editorRoute => proposalRoutes[proposalType];
+
+  /// What accepting this proposal does, read from the `_op` field the
+  /// server stamps into the proposal JSON.
+  ///
+  /// Proposals from a server old enough not to send `_op` fall back to the
+  /// type name: only the update types carried the action there
+  /// ('asset_update', 'alarm_update'); everything else was a create except
+  /// key-mapping deletes, which already marked themselves with `_op: delete`.
+  ProposalOp get action {
+    String? op;
+    try {
+      final decoded = jsonDecode(proposalJson);
+      if (decoded is Map<String, dynamic>) op = decoded['_op'] as String?;
+    } catch (_) {
+      // Malformed JSON: fall through to the type-name fallback.
+    }
+    switch (op) {
+      case 'create':
+        return ProposalOp.create;
+      case 'update':
+        return ProposalOp.update;
+      case 'delete':
+        return ProposalOp.delete;
+    }
+    if (proposalType.endsWith('_update')) return ProposalOp.update;
+    return ProposalOp.create;
+  }
+}

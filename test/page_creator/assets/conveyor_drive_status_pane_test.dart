@@ -16,15 +16,28 @@ import 'package:tfc_dart/core/state_man.dart';
 /// standing at a stopped belt what is wrong or what to do.
 ///
 /// These tests pin the decode (`p_stat_State` = `hmis_e`, `p_stat_LastFault`
-/// = `lft_e`) and the behaviour around it.
+/// = `lft_e`) and the behaviour around it: the rows keep the drive's own
+/// names, HMIS and LFT, and say the value as a keypad mnemonic plus words.
+///
+/// They also pin the live-vs-stored rule. HMIS is the drive's condition now;
+/// LFT is a record that outlives the trip it describes. Every real LFT code
+/// is a fault by nature, so colouring the row from the LFT's own severity
+/// left it permanently red — including on a belt running perfectly well long
+/// after a `Fault reset`.
 
 /// Serves one drive struct on the conveyor's `key`.
 class _DriveStateMan extends Fake implements StateMan {
-  _DriveStateMan({required this.driveKey, required this.state, this.fault = 0});
+  _DriveStateMan({
+    required this.driveKey,
+    required this.state,
+    this.fault = 0,
+    this.frequency = 0.0,
+  });
 
   final String driveKey;
   final int state;
   final int fault;
+  final double frequency;
 
   @override
   Future<Stream<DynamicValue>> subscribe(String key) async {
@@ -32,7 +45,7 @@ class _DriveStateMan extends Fake implements StateMan {
     final dv = DynamicValue();
     dv['p_stat_State'] = state;
     dv['p_stat_LastFault'] = fault;
-    dv['p_stat_Frequency'] = 0.0;
+    dv['p_stat_Frequency'] = frequency;
     dv['p_stat_Current'] = 0.0;
     dv['p_stat_RunMinutes'] = 0;
     dv['p_stat_JogFwd'] = false;
@@ -54,6 +67,7 @@ Future<void> _openPane(
   WidgetTester tester, {
   required int state,
   int fault = 0,
+  double frequency = 0.0,
 }) async {
   const key = 'Line1.Belt2.Drive';
   final config = ConveyorConfig(key: key)
@@ -67,7 +81,12 @@ Future<void> _openPane(
       collectorProvider.overrideWith((ref) async => null),
       stateManProvider.overrideWith(
         (ref) async =>
-            _DriveStateMan(driveKey: key, state: state, fault: fault),
+            _DriveStateMan(
+          driveKey: key,
+          state: state,
+          fault: fault,
+          frequency: frequency,
+        ),
       ),
     ],
     child: MaterialApp(
@@ -98,6 +117,12 @@ Future<void> _settlePane(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 400));
 }
 
+/// The status row under a given label — `HMIS` or `LFT`.
+PaneExplainRow _row(WidgetTester tester, String label) =>
+    tester.widgetList<PaneExplainRow>(find.byType(PaneExplainRow)).firstWhere(
+          (row) => row.label == label,
+        );
+
 void main() {
   // A real station is a 1080p panel, and the default 800x600 test surface is
   // short enough that the pane's pinned action bar sits on top of the status
@@ -118,16 +143,25 @@ void main() {
   testWidgets('a healthy drive reads in words, not codes', (tester) async {
     await _openPane(tester, state: 2); // hmis_e.rdy
 
-    expect(find.text('Ready'), findsOneWidget);
-    expect(find.text('No fault'), findsOneWidget);
+    expect(find.text('RDY · Ready'), findsOneWidget);
+    expect(find.text('NOF · No fault'), findsOneWidget);
     // The raw form the pane used to print.
     expect(find.textContaining('rdY('), findsNothing);
     expect(find.text('2'), findsNothing);
   });
 
+  testWidgets('the rows keep the names the drive keypad uses', (tester) async {
+    await _openPane(tester, state: 2);
+
+    // Not 'Drive state' / 'Last fault': an electrician cross-references the
+    // keypad and NVE41295, and those call the two parameters HMIS and LFT.
+    expect(find.text('HMIS'), findsOneWidget);
+    expect(find.text('LFT'), findsOneWidget);
+  });
+
   testWidgets('the running state is named', (tester) async {
     await _openPane(tester, state: 4); // hmis_e.run
-    expect(find.text('Running'), findsOneWidget);
+    expect(find.text('RUN · Running'), findsOneWidget);
   });
 
   testWidgets(
@@ -138,8 +172,8 @@ void main() {
 
       // 'Faulted' also lands in the header chip, which is the point of the
       // header change — scope to the row.
-      expect(_inRow('Faulted'), findsOneWidget);
-      expect(find.text('Overcurrent'), findsOneWidget);
+      expect(_inRow('FLT · Faulted'), findsOneWidget);
+      expect(find.text('OCF · Overcurrent'), findsOneWidget);
 
       // Auto-expanded: the operator should not have to discover the tap.
       expect(find.text('OCF'), findsOneWidget);
@@ -155,7 +189,7 @@ void main() {
     (tester) async {
       await _openPane(tester, state: 23, fault: 24); // lft_e.sof — overspeed
 
-      expect(find.text('Overspeed'), findsOneWidget);
+      expect(find.text('SOF · Overspeed'), findsOneWidget);
       expect(
         find.textContaining('Fault reset will not clear this'),
         findsOneWidget,
@@ -166,7 +200,7 @@ void main() {
   testWidgets('a resettable fault says so', (tester) async {
     await _openPane(tester, state: 23, fault: 17); // lft_e.olf
 
-    expect(find.text('Motor overload'), findsOneWidget);
+    expect(find.text('OLF · Motor overload'), findsOneWidget);
     expect(find.textContaining('Fault reset clears it'), findsOneWidget);
   });
 
@@ -175,16 +209,88 @@ void main() {
     (tester) async {
       await _openPane(tester, state: 3); // hmis_e.nst — freewheel
 
-      expect(find.text('Freewheel stop'), findsOneWidget);
-      expect(find.text('NST'), findsNothing);
+      expect(find.text('NST · Freewheel stop'), findsOneWidget);
+      // The panel behind the row leads with the bare mnemonic and the code.
+      expect(find.text('code 3'), findsNothing);
 
-      await tester.tap(find.text('Freewheel stop'));
+      await tester.tap(find.text('NST · Freewheel stop'));
       await _settlePane(tester);
 
-      expect(find.text('NST'), findsOneWidget);
+      expect(find.text('code 3'), findsOneWidget);
       expect(find.textContaining('coasting'), findsOneWidget);
     },
   );
+
+  // --- Live vs stored -------------------------------------------------------
+  //
+  // The regression this group exists for: every LFT code is intrinsically a
+  // fault, so a row coloured from the LFT's own severity is red forever.
+
+  testWidgets('a stored fault on a healthy drive is not painted as live',
+      (tester) async {
+    // The belt is running; the overcurrent it tripped on was reset hours ago
+    // and LFT still remembers it. Nothing is wrong now.
+    await _openPane(
+      tester,
+      state: 4, // hmis_e.run
+      fault: 9, // lft_e.ocf
+      frequency: 42.0,
+    );
+
+    final lft = _row(tester, 'LFT');
+    expect(lft.value, 'OCF · Overcurrent');
+    expect(lft.valueColor, isNull, reason: 'history must not read as a trip');
+    expect(lft.valueNote, 'cleared');
+
+    // And it does not shout for attention on its own.
+    expect(lft.initiallyExpanded, isFalse);
+
+    final chip = tester.widget<PaneStatusChip>(find.byType(PaneStatusChip));
+    expect(chip.status.label, 'Running');
+  });
+
+  testWidgets('a stored fault says it already happened', (tester) async {
+    await _openPane(tester, state: 4, fault: 9);
+
+    // By the label: with the `cleared` note the value is a span tree, not a
+    // single string.
+    await tester.tap(find.text('LFT'));
+    await _settlePane(tester);
+
+    expect(
+      find.textContaining('the drive is not faulted now'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the same fault is red while the drive is in it', (tester) async {
+    await _openPane(tester, state: 23, fault: 9); // hmis_e.fault + lft_e.ocf
+
+    final lft = _row(tester, 'LFT');
+    expect(lft.value, 'OCF · Overcurrent');
+    expect(lft.valueColor, isNotNull);
+    expect(lft.valueNote, isNull);
+    expect(lft.initiallyExpanded, isTrue);
+  });
+
+  testWidgets('a drive that never tripped carries no marker', (tester) async {
+    await _openPane(tester, state: 2); // hmis_e.rdy, LFT = NOF
+
+    final lft = _row(tester, 'LFT');
+    expect(lft.valueColor, isNull);
+    expect(lft.valueNote, isNull, reason: 'nothing to clear');
+  });
+
+  testWidgets('a lost link keeps its paired fault live', (tester) async {
+    // hmis_e 99 is FB_ATV320's own substitute, not a drive trip — but it is a
+    // fault-severity state and CNF is published with it, so the pair reads as
+    // one live condition rather than as a cleared record.
+    await _openPane(tester, state: 99, fault: 7);
+
+    final lft = _row(tester, 'LFT');
+    expect(lft.valueColor, isNotNull);
+    expect(lft.valueNote, isNull);
+  });
 
   testWidgets('a lost EtherCAT link is not blamed on the drive',
       (tester) async {
@@ -192,14 +298,14 @@ void main() {
     // state 99 paired with a CNF last fault.
     await _openPane(tester, state: 99, fault: 7);
 
-    expect(_inRow('No link to drive'), findsOneWidget);
+    expect(_inRow('LOST · No link to drive'), findsOneWidget);
 
     // The fault row auto-opens on CNF, and what it says matters: an
     // electrician must not go looking for a fieldbus fault inside a drive
     // the PLC simply cannot see.
     expect(find.textContaining('not a fault inside the drive'), findsOneWidget);
 
-    await tester.tap(_inRow('No link to drive'));
+    await tester.tap(_inRow('LOST · No link to drive'));
     await _settlePane(tester);
     expect(find.textContaining('cannot reach this drive over EtherCAT'),
         findsOneWidget);

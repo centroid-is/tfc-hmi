@@ -46,7 +46,7 @@ Future<void> _pumpBanner(
     ProviderScope(
       overrides: [
         proposalStateProvider.overrideWith((ref) {
-          final notifier = ProposalStateNotifier(null);
+          final notifier = ProposalStateNotifier();
           for (final p in proposals) {
             notifier.addProposal(p);
           }

@@ -4,11 +4,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc_dart/core/database_drift.dart';
 
 import 'package:tfc/chat/proposal_action.dart';
 import 'package:tfc/providers/proposal_state.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -76,10 +74,7 @@ void main() {
         'title': 'Test Alarm',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(id: 1, json: proposalJson));
 
       await tester.pumpWidget(_wrap(
@@ -114,11 +109,8 @@ void main() {
         'title': 'Test Alarm',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
       // Empty notifier — no proposals pending (simulates already processed)
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
 
       await tester.pumpWidget(_wrap(
         ProposalAction(proposalJson: proposalJson),
@@ -152,10 +144,7 @@ void main() {
         'title': 'Test Alarm',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(id: 1, json: proposalJson));
 
       await tester.pumpWidget(_wrap(
@@ -227,10 +216,7 @@ void main() {
         'title': 'Test Page',
       });
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(_makeProposal(
         id: 2,
         type: 'page',
@@ -272,9 +258,7 @@ void main() {
       final json =
           jsonEncode({'_proposal_type': 'unknown_xyz', 'data': 'stuff'});
 
-      final db = AppDatabase.inMemoryForTest();
-      addTearDown(() async => await db.close());
-      final notifier = ProposalStateNotifier(db);
+      final notifier = ProposalStateNotifier();
 
       await tester.pumpWidget(_wrap(
         ProposalAction(proposalJson: json),

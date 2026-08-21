@@ -5401,7 +5401,7 @@ class McpProposalTableData extends DataClass
   /// Operator who triggered the proposal.
   final String operatorId;
 
-  /// pending → notified → reviewed → dismissed.
+  /// pending → notified → viewed → accepted / rejected / dismissed.
   final String status;
   final DateTime createdAt;
   const McpProposalTableData(
