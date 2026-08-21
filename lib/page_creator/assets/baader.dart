@@ -33,24 +33,27 @@ class Baader221Config extends BaseAsset {
 
   @override
   Widget build(BuildContext context) {
-    final widget = LayoutRotatedBox(
-      angle: (coordinates.angle ?? 0.0) * math.pi / 180,
-      child: CustomPaint(
-        size: size.toSize(MediaQuery.of(context).size),
-        painter: Baader221CustomPainter(
-          color: color,
-          strokeWidth: strokeWidth,
-        ),
+    Widget paint = CustomPaint(
+      size: size.toSize(MediaQuery.of(context).size),
+      painter: Baader221CustomPainter(
+        color: color,
+        strokeWidth: strokeWidth,
       ),
     );
     if (beamUrl != null) {
-      return GestureDetector(
+      // Inside the rotation, not around it: a detector outside hit-tests
+      // against the unrotated w×h rect first, so a turned machine only
+      // navigated when tapped where the rotated glyph crosses that rect.
+      paint = GestureDetector(
         onTap: () => context.beamToNamed(beamUrl!),
-        child: widget,
+        child: paint,
       );
     }
 
-    return widget;
+    return LayoutRotatedBox(
+      angle: (coordinates.angle ?? 0.0) * math.pi / 180,
+      child: paint,
+    );
   }
 
   @override
