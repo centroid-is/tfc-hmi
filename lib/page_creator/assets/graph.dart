@@ -161,13 +161,14 @@ class GraphAssetConfig extends BaseAsset {
   @override
   Widget configure(BuildContext context) => GraphContentConfig(config: this);
 
-  GraphConfig toGraphConfig() => GraphConfig(
+  GraphConfig toGraphConfig({bool legend = true}) => GraphConfig(
         type: graphType,
         xAxis: xAxis,
         yAxis: yAxis,
         yAxis2: yAxis2,
         xSpan: timeWindowMinutes,
         tooltip: tooltip,
+        legend: legend,
       );
 
   Map<String, Color> get colorPalette => Map.fromEntries(
@@ -576,7 +577,16 @@ class GraphContentConfigState extends State<GraphContentConfig> {
 // The actual widget that displays the graph using the configuration
 class GraphAsset extends ConsumerStatefulWidget {
   final GraphAssetConfig config;
-  const GraphAsset(this.config, {super.key});
+
+  /// Draw for a pane trend tile rather than a full chart: no legend column,
+  /// no pan/zoom/now row, and gutters sized for bare tick labels.
+  ///
+  /// At ~130px tall the buttons and the legend between them take more of the
+  /// tile than the plot does. The full chart is one tap away in the floating
+  /// dialog, which is where those controls belong.
+  final bool compact;
+
+  const GraphAsset(this.config, {this.compact = false, super.key});
 
   @override
   ConsumerState<GraphAsset> createState() => _GraphAssetState();
@@ -603,13 +613,26 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       : _dataMinX = 0,
         _dataMaxX = 0;
 
+  /// The theme to draw with. A compact tile needs its own gutters, or the
+  /// tick labels print over the tile caption and the time row.
+  cs.ChartTheme _themeFor(cs.ChartTheme base) {
+    if (!widget.compact) return base;
+    return chartThemeWithPadding(
+      base,
+      widget.config.yAxis2 != null
+          ? kCompactChartPadding
+          : kCompactChartPaddingSingleAxis,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _chartTheme = ref.read(chartThemeNotifierProvider);
     _graph = Graph(
-        config: widget.config.toGraphConfig(),
+        config: widget.config.toGraphConfig(legend: !widget.compact),
         data: [],
+        showButtons: !widget.compact,
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanUpdate,
         onNowPressed: _onNowPressed,
@@ -621,14 +644,15 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         },
         tooltipBuilder: _buildTooltip,
         categoryColors: widget.config.colorPalette);
-    _graph.theme(_chartTheme);
+    _graph.theme(_themeFor(_chartTheme));
     _init();
   }
 
   Future<void> _init() async {
     _graph = Graph(
-        config: widget.config.toGraphConfig(),
+        config: widget.config.toGraphConfig(legend: !widget.compact),
         data: [],
+        showButtons: !widget.compact,
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanUpdate,
         onNowPressed: _onNowPressed,
@@ -640,7 +664,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         },
         tooltipBuilder: _buildTooltip,
         categoryColors: widget.config.colorPalette);
-    _graph.theme(ref.read(chartThemeNotifierProvider));
+    _graph.theme(_themeFor(ref.read(chartThemeNotifierProvider)));
     _stateMan = await ref.read(stateManProvider.future);
     _db = await ref.read(databaseProvider.future);
     if (!mounted) return;
@@ -670,7 +694,7 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _graph.theme(ref.watch(chartThemeNotifierProvider));
+    _graph.theme(_themeFor(ref.watch(chartThemeNotifierProvider)));
   }
 
   void _initRealtimeUpdates() async {

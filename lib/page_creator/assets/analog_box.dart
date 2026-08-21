@@ -693,6 +693,9 @@ class _AnalogBoxPaneLoader extends ConsumerWidget {
       final series = gc.primarySeries.isNotEmpty ? gc.primarySeries.first : null;
       if (series != null) {
         trendTile = PaneGraphTile(
+          // The preview drops the chart's own legend to keep the width, so
+          // the header names the trace instead.
+          label: series.label,
           // Tall enough for a line chart to be readable rather than
           // decorative — same height as the conveyor's trend tile.
           height: 100,
@@ -1101,50 +1104,62 @@ class AnalogBoxTrendGraph extends ConsumerWidget {
           return const Center(child: Text('No data'));
         }
 
+        // The collector hands over two hours of history but the plot only
+        // shows the last [xSpan] of it, so the y-range is taken from the
+        // samples inside that window. Scaling to all two hours is what made
+        // the trace sit flat and then jump the moment an old extreme aged
+        // out of the buffer — see [stableTrendRange].
+        final windowStart = DateTime.now()
+            .subtract(xSpan)
+            .millisecondsSinceEpoch
+            .toDouble();
         var minY = double.infinity;
         var maxY = double.negativeInfinity;
         final data = <Map<String, dynamic>>[];
         for (final sample in snapshot.data!) {
           final y = _pointOf(sample.value)?.toDouble();
           if (y == null) continue;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-          data.add({
-            'x': sample.time.millisecondsSinceEpoch.toDouble(),
-            'y': y,
-            's': seriesLabel,
-          });
+          final x = sample.time.millisecondsSinceEpoch.toDouble();
+          if (x >= windowStart) {
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+          data.add({'x': x, 'y': y, 's': seriesLabel});
         }
         if (data.isEmpty) {
           return const Center(child: Text('No data'));
         }
+        // Nothing inside the window yet — a key that has stopped updating.
+        // Frame the newest sample rather than drawing an empty axis.
+        if (minY > maxY) {
+          final last = data.last['y'] as double;
+          minY = last;
+          maxY = last;
+        }
 
-        // Headroom above and below: scaling to the exact extremes pins the
-        // trace to the plot frame where it runs into the tick labels (same
-        // rationale as the conveyor trend). A flat line gets a unit of span
-        // so it draws mid-plot instead of on the frame.
-        if (minY == maxY) maxY = minY + 1;
-        final margin = (maxY - minY) * 0.1;
-        minY -= margin;
-        maxY += margin;
+        final range = stableTrendRange(minY, maxY);
 
         final graphConfig = GraphConfig(
           type: GraphType.timeseries,
           xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
           yAxis: GraphAxisConfig(
             unit: compact ? '' : (units ?? ''),
-            min: minY,
-            max: maxY,
+            min: range.min,
+            max: range.max,
           ),
           xSpan: xSpan,
+          // One series, already named by the pane — the legend column would
+          // only take width off a plot this small.
+          legend: !compact,
         );
 
         // The compact preview needs its own gutters — same trick as
-        // `ConveyorStatsGraph`.
+        // `ConveyorStatsGraph`, minus the right gutter it keeps for its
+        // second axis.
         final theme = compact
             ? (Theme.of(context).brightness == Brightness.dark
-                ? darkChartTheme(padding: kCompactChartPadding)
-                : lightChartTheme(padding: kCompactChartPadding))
+                ? darkChartTheme(padding: kCompactChartPaddingSingleAxis)
+                : lightChartTheme(padding: kCompactChartPaddingSingleAxis))
             : ref.watch(chartThemeNotifierProvider);
 
         return Graph(
