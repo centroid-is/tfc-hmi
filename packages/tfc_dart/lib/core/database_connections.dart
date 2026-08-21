@@ -28,12 +28,10 @@ import 'dart:async';
 /// Ceiling on a single process's *work* budget, so a mistyped config cannot
 /// exhaust the server on its own.
 ///
-/// Not the ceiling on the pool itself: [poolConnectionCount] adds the health
-/// monitor's standing connection on top of whatever [resolvePoolSize] allows,
-/// so the widest pool this code will ever open is one more than this --
-/// [kMaxPoolConnections] + [kHealthMonitorConnections]. The extra one is the
-/// point of that function and is deliberately outside the cap; capping the
-/// total instead would silently take a connection away from the work.
+/// The ceiling on the pool, full stop. [poolConnectionCount] used to add the
+/// health monitor's standing connection on top, making the widest pool one
+/// more than this; the monitor no longer holds a connection, so the work
+/// budget and the pool size are now the same number.
 const int kMaxPoolConnections = 16;
 
 /// Connections a process should pool, given what it asked for.
@@ -46,30 +44,29 @@ int resolvePoolSize(int? configured) {
   return configured > kMaxPoolConnections ? kMaxPoolConnections : configured;
 }
 
-/// Headroom for the health monitor's beat, on top of the work budget.
+/// Connections to open the pool with.
 ///
-/// This used to be a *reservation*, and the distinction matters now. The
-/// monitor once sat inside `pool.withConnection` for the pool's whole life,
-/// awaiting the connection's `closed` future, and handed it back only on the
-/// way out -- so the slot was gone for good and the work budget had to be
-/// raised by one to compensate. A pool of exactly one could not open at all:
-/// the monitor took the only connection and drift's opening query waited out
-/// the pool lock and threw `Failed to acquire pool lock`.
+/// This used to be the work budget **plus one**, and the `+1` is now gone.
+/// It existed because the health monitor sat inside `pool.withConnection` for
+/// the pool's whole life, awaiting the connection's `closed` future: the slot
+/// was gone for good, so the budget had to be raised to compensate. A pool of
+/// exactly one could not even open -- the monitor took the only connection and
+/// drift's opening query waited out the pool lock and threw `Failed to acquire
+/// pool lock`.
 ///
-/// The monitor now borrows for the length of a `SELECT 1` and releases. The
-/// slot is no longer taken, so the `+1` is no longer needed for correctness --
-/// a pool of one would work, the beat and the work would simply take turns.
+/// The monitor now borrows for the length of a `SELECT 1` and lets go, so
+/// there is nothing to compensate for. Dropping the spare is not a tidy-up: it
+/// is where the connection saving actually comes from. Releasing the borrow
+/// alone changes nothing a server can see, because a pool keeps its sockets
+/// open between borrows -- measured against a real Postgres, a database still
+/// sat on two. Sizing the pool back down is what takes it to one, and on the
+/// collector's eight databases that is 16 connections down to 8.
 ///
-/// It is kept because taking turns is not free: without it every beat competes
-/// with real work, and on a pool sized to its workload that is a stall every
-/// [kHealthBeatInterval] on both sides. One spare connection per database is a
-/// cheap way to keep the heartbeat off the critical path, and it is now a
-/// deliberate margin rather than an accounting fix.
-const int kHealthMonitorConnections = 1;
-
-/// Connections to open the pool with: the work budget plus the monitor's beat.
-int poolConnectionCount(int? configured) =>
-    resolvePoolSize(configured) + kHealthMonitorConnections;
+/// What it costs: on a pool sized exactly to its workload the beat and the
+/// work now take turns. A `SELECT 1` every [kHealthBeatInterval] is a
+/// sub-millisecond wait for whichever arrives second, against a permanently
+/// occupied slot before.
+int poolConnectionCount(int? configured) => resolvePoolSize(configured);
 
 /// Environment variable a process uses to raise its pool above the default.
 ///
