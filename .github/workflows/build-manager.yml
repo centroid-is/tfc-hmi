@@ -20,6 +20,25 @@ on:
         type: string
         default: ''
 
+# One run per ref, so a second push to a PR replaces the run in flight instead
+# of stacking another on top of it.
+#
+# The group key is a hardcoded slug and deliberately does NOT use
+# `${{ github.workflow }}`. A called reusable workflow gets no run of its own —
+# its jobs join the caller's run and inherit the caller's `github` context — so
+# `github.workflow` here would be "Tag Release", the same value the three other
+# workflows tag.yml calls in that run would see. A shared group would let one
+# of them supersede another, and `create-release` needs this workflow's
+# artifacts by name: it would fail on a missing centroidx-manager binary. A
+# literal prefix cannot collide however this file is invoked.
+#
+# Cancelling is limited to pull requests for the same reason. Caller context
+# means caller event, and tag.yml is triggered by a tag `push`, so a release
+# can never be cancelled by someone's unrelated PR push.
+concurrency:
+  group: centroidx-manager-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     strategy:
