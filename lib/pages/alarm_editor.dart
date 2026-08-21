@@ -37,6 +37,21 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   StateController<Future<void> Function()?>? _commitSlot;
   StateController<Future<void> Function()?>? _discardSlot;
 
+  /// The provider container the banner's accept and reject work through,
+  /// captured while this page is still alive.
+  ///
+  /// Same reason the slots above are held: the banner outlives this page. It
+  /// is published once and stays up while the operator navigates, so by the
+  /// time a button is pressed this State can be gone and `ref` throws before
+  /// a single alarm is written. On 2026-08-21 that shape left a batch of 16
+  /// key mappings impossible to either accept or reject -- the mappings were
+  /// saved, no proposal was marked accepted, and the batch came back on the
+  /// next load. A ProviderContainer belongs to the ProviderScope at the app
+  /// root, so it outlives this widget and can be held safely; reading the
+  /// providers off it at call time also keeps them current across an
+  /// invalidate, which a cached notifier would not.
+  ProviderContainer? _container;
+
   final List<AlarmConfig> _proposedAlarms = [];
   final List<int> _proposalIds = [];
 
@@ -124,56 +139,77 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       final discardSlot = ref.read(proposalDiscardProvider.notifier);
       discardSlot.state = _discardProposals;
       _discardSlot = discardSlot;
+      // Taken here, where `ref` and `context` are known good, because the two
+      // callbacks above can be invoked long after this page is gone.
+      _container = ProviderScope.containerOf(context, listen: false);
     });
   }
 
   /// Applies every staged alarm, then marks the proposals accepted.
   Future<void> _commitProposals() async {
     if (_proposedAlarms.isEmpty) return;
+    // Through the container, never `ref`: this is the banner's accept, and by
+    // the time it runs this page may be disposed. `ref` throws then, and it
+    // throws again after the await below even when the page was alive at the
+    // start -- which is how a batch could be written and left pending.
+    final container = _container;
+    if (container == null) return;
     // Deliberately NOT wrapped in a try: a failure here must abort before
     // anything is marked accepted. Swallowing it and running the accept loop
     // anyway would write zero alarms and still mark all N proposals accepted,
     // which is exactly the loss the ordering below exists to prevent.
-    final alarmMan = await ref.read(alarmManProvider.future);
+    final alarmMan = await container.read(alarmManProvider.future);
     for (final a in _proposedAlarms) {
       alarmMan.updateAlarm(a);
     }
-    ref.invalidate(alarmManProvider);
+    container.invalidate(alarmManProvider);
 
     // Awaited, and only after the alarms are in: acceptProposal marks the row
     // accepted in the database, so doing it first would lose them on failure.
-    final notifier = ref.read(proposalStateProvider.notifier);
+    final notifier = container.read(proposalStateProvider.notifier);
     for (final id in _proposalIds) {
       try {
         await notifier.acceptProposal(id);
-      } catch (_) {}
+      } catch (e) {
+        // Reported rather than swallowed: an accept that silently fails to
+        // land leaves the proposal pending with its alarm already written,
+        // and the batch returns on the next load with nothing to explain it.
+        debugPrint('alarm proposal $id could not be marked accepted: $e');
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      _proposedAlarms.clear();
-      _proposalIds.clear();
-      _show = null;
-    });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _clearStagedBatch();
   }
 
   /// Drops the whole batch without adding any alarm.
   Future<void> _discardProposals() async {
-    final notifier = ref.read(proposalStateProvider.notifier);
+    // See [_commitProposals]: this is the banner's reject, and reaching for
+    // `ref` here is what threw "Cannot use ref after the widget was disposed"
+    // before a single proposal could be marked rejected.
+    final container = _container;
+    if (container == null) return;
+    final notifier = container.read(proposalStateProvider.notifier);
     for (final id in _proposalIds) {
       try {
         await notifier.rejectProposal(id);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('alarm proposal $id could not be marked rejected: $e');
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      _proposedAlarms.clear();
-      _proposalIds.clear();
-      _show = null;
-    });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _clearStagedBatch();
+  }
+
+  /// Drops the staged batch and retires the banner, whether or not this page
+  /// is still on screen.
+  ///
+  /// The slots go through the stored controllers rather than `ref.read`, for
+  /// the same reason the callbacks do; only the rebuild depends on [mounted].
+  void _clearStagedBatch() {
+    _proposedAlarms.clear();
+    _proposalIds.clear();
+    _show = null;
+    if (mounted) setState(() {});
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
   }
 
   /// Accept the proposal with the (possibly edited) alarm config from the form.

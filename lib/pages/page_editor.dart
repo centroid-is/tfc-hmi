@@ -816,6 +816,19 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   StateController<Future<void> Function()?>? _commitSlot;
   StateController<Future<void> Function()?>? _discardSlot;
 
+  /// The provider container the banner's accept and reject work through,
+  /// captured while this editor is still alive.
+  ///
+  /// Same reason the slots above are held: the banner outlives this editor.
+  /// It is published once and stays up while the operator navigates, and
+  /// accepting a batch can navigate out from under this State, so by the time
+  /// the work runs `ref` throws and `mounted` is false. That is how a batch
+  /// of asset updates got its pages written and not one of its proposals
+  /// marked accepted, and came back on the next load. A ProviderContainer
+  /// belongs to the ProviderScope at the app root, so it outlives this widget
+  /// and can be held safely.
+  ProviderContainer? _container;
+
   final Set<int> _consumedProposalIds = {};
 
   /// Assets that were added by the AI proposal (for visual indicators).
@@ -974,17 +987,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     }
     if (applied > 0) {
       _isProposal = true;
-      // Hand the banner a way to commit what we just staged.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          final commitSlot = ref.read(proposalCommitProvider.notifier);
-          commitSlot.state = _saveToPrefs;
-          _commitSlot = commitSlot;
-          final discardSlot = ref.read(proposalDiscardProvider.notifier);
-          discardSlot.state = _discardProposal;
-          _discardSlot = discardSlot;
-        }
-      });
+      _publishProposalCallbacks();
       final staged = _proposalIds.length;
       _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset updates';
     }
@@ -1037,19 +1040,32 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       // so the revert has always been possible; nobody was wired to ask for
       // it.
       if (_isProposal) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          final commitSlot = ref.read(proposalCommitProvider.notifier);
-          commitSlot.state = _saveToPrefs;
-          _commitSlot = commitSlot;
-          final discardSlot = ref.read(proposalDiscardProvider.notifier);
-          discardSlot.state = _discardProposal;
-          _discardSlot = discardSlot;
-        });
+        _publishProposalCallbacks();
       }
     } catch (_) {
       // Best-effort: if proposal JSON is malformed, ignore it.
     }
+  }
+
+  /// Hands the black banner the commit and discard actions for this batch,
+  /// and takes the handles they will need once this editor is gone.
+  ///
+  /// Both staging paths ([_applyUpdateBatch] and [_applyProposalData]) come
+  /// through here. They used to carry a copy of this block each, which is a
+  /// good way for one of them to miss the container capture below.
+  void _publishProposalCallbacks() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final commitSlot = ref.read(proposalCommitProvider.notifier);
+      commitSlot.state = _saveToPrefs;
+      _commitSlot = commitSlot;
+      final discardSlot = ref.read(proposalDiscardProvider.notifier);
+      discardSlot.state = _discardProposal;
+      _discardSlot = discardSlot;
+      // Taken here, where `ref` and `context` are known good, because the two
+      // callbacks above can be invoked long after this editor is gone.
+      _container = ProviderScope.containerOf(context, listen: false);
+    });
   }
 
   void _applyPageProposal(Map<String, dynamic> proposal) {
@@ -1285,12 +1301,23 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// Lives here rather than in the banner because the pre-proposal snapshot
   /// does: rejecting has to put the page back exactly as it was.
   Future<void> _discardProposal() async {
-    final notifier = ref.read(proposalStateProvider.notifier);
+    // Through the container, never `ref`: this is the banner's reject, and by
+    // the time it runs this editor may be disposed. `ref` throws then --
+    // "Cannot use ref after the widget was disposed" -- before a single
+    // proposal can be marked rejected.
+    final container = _container;
+    if (container == null) return;
+    final notifier = container.read(proposalStateProvider.notifier);
     _consumedProposalIds.addAll(_proposalIds);
     for (final id in _proposalIds) {
       try {
         await notifier.rejectProposal(id);
-      } catch (_) {}
+      } catch (e) {
+        // Reported rather than swallowed: a reject that silently fails to
+        // land leaves the proposal pending, and it reappears on the next
+        // load with the staged change already reverted.
+        debugPrint('proposal $id could not be marked rejected: $e');
+      }
     }
     if (!mounted) return;
     setState(() {
@@ -1305,41 +1332,64 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _updateCurrentJson();
       _savedJson = _currentJson;
     });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
   }
 
   Future<void> _saveToPrefs() async {
-    final pageManager = await ref.read(pageManagerProvider.future);
+    // Two callers, and only one of them has a live `ref`. The save button and
+    // Ctrl+S run with this editor on screen; the banner's accept runs from a
+    // notification that outlives it, after which `ref` throws. The container
+    // is captured when the callbacks are published, so it is set exactly when
+    // the banner path is possible and null for an ordinary save.
+    final container = _container;
+    final pageManager = container != null
+        ? await container.read(pageManagerProvider.future)
+        : await ref.read(pageManagerProvider.future);
     pageManager.pages = PageManager.copyPages(_temporaryPages);
     pageManager.topLevelOrder = List.of(_topLevelOrder);
     await pageManager.save();
     await _garbageCollectImages();
-    ref.invalidate(pageManagerProvider);
-    if (!mounted) return;
+    if (container != null) {
+      container.invalidate(pageManagerProvider);
+    } else {
+      ref.invalidate(pageManagerProvider);
+    }
 
-    // Update universal proposal state if this was a proposal accept.
+    // No `if (!mounted) return` in front of this any more. Accepting a batch
+    // from the banner can navigate out from under this editor, and the guard
+    // used to sit right here: the pages were written, the accept loop never
+    // ran, every proposal stayed pending, and the same batch came back on the
+    // next load. Only the rebuild at the end may depend on `mounted`.
     if (_isProposal && _proposalIds.isNotEmpty) {
-      final notifier = ref.read(proposalStateProvider.notifier);
+      final notifier = container != null
+          ? container.read(proposalStateProvider.notifier)
+          : ref.read(proposalStateProvider.notifier);
       _consumedProposalIds.addAll(_proposalIds);
       for (final id in _proposalIds) {
         try {
           await notifier.acceptProposal(id);
-        } catch (_) {}
+        } catch (e) {
+          // Reported rather than swallowed: an accept that silently fails to
+          // land is indistinguishable from this whole bug -- pages written,
+          // proposal still pending.
+          debugPrint('proposal $id could not be marked accepted: $e');
+        }
       }
     }
 
-    setState(() {
-      _updateCurrentJson();
-      _savedJson = _currentJson;
-      _navOrderDirty = false;
-      _isProposal = false; // Proposal accepted and saved.
-      _proposalIds.clear();
-      ref.read(proposalCommitProvider.notifier).state = null;
-      ref.read(proposalDiscardProvider.notifier).state = null;
-      _proposedAssets = {};
-      _preProposalPages = null;
-    });
+    _updateCurrentJson();
+    _savedJson = _currentJson;
+    _navOrderDirty = false;
+    _isProposal = false; // Proposal accepted and saved.
+    _proposalIds.clear();
+    _proposedAssets = {};
+    _preProposalPages = null;
+    // Through the stored controllers, for the same reason as everything else
+    // on this path.
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
+    if (mounted) setState(() {});
   }
 
   /// Deletes stored image blobs nothing points at any more. Runs on save —
@@ -1347,7 +1397,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// history or the copy buffer could still bring back.
   Future<void> _garbageCollectImages() async {
     try {
-      final store = await ref.read(pageImageStoreProvider.future);
+      // Through the captured container when there is one: this also runs on
+      // the banner's accept, where `ref` is dead and the failure would land
+      // in the swallow below, quietly leaving every orphan behind.
+      final container = _container;
+      final store = container != null
+          ? await container.read(pageImageStoreProvider.future)
+          : await ref.read(pageImageStoreProvider.future);
       final referenced = <String>{
         ...PageImageStore.referencedImageIds(
             _temporaryPages.map((name, page) => MapEntry(name, page.toJson()))),
@@ -1357,9 +1413,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           ...PageImageStore.referencedImageIds(jsonDecode(_copiedAssets!)),
       };
       await store.removeUnreferenced(referenced);
-    } catch (_) {
+    } catch (e) {
       // A failed cleanup must never break saving; orphans get another chance
-      // on the next save.
+      // on the next save. Still reported: a bare swallow here is how the
+      // banner path went months without anyone noticing it never ran.
+      debugPrint('image garbage collection skipped: $e');
     }
   }
 
@@ -3956,11 +4014,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     final box =
         _treeViewportKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !_treeScrollController.hasClients) {
-      // The banner holds these closures over this State; left set they
-      // would fire into a disposed State after navigating away -- nothing
-      // saved, the proposals still pending, and an uncaught async error.
-      ref.read(proposalCommitProvider.notifier).state = null;
-      ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
       return;
     }
@@ -3978,11 +4031,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _autoScrollStep = ratio.clamp(-1.0, 1.0) * _autoScrollMaxStep;
 
     if (_autoScrollStep == 0) {
-      // The banner holds these closures over this State; left set they
-      // would fire into a disposed State after navigating away -- nothing
-      // saved, the proposals still pending, and an uncaught async error.
-      ref.read(proposalCommitProvider.notifier).state = null;
-      ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
     } else {
       _autoScrollTimer ??= Timer.periodic(
@@ -3994,11 +4042,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   void _autoScrollTick() {
     if (!_treeScrollController.hasClients) {
-      // The banner holds these closures over this State; left set they
-      // would fire into a disposed State after navigating away -- nothing
-      // saved, the proposals still pending, and an uncaught async error.
-      ref.read(proposalCommitProvider.notifier).state = null;
-      ref.read(proposalDiscardProvider.notifier).state = null;
       _stopAutoScroll();
       return;
     }

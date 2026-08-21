@@ -119,4 +119,84 @@ void main() {
       expect(source, contains('_proposedAlarms.removeAt(0)'));
     });
   });
+
+  // The banner outlives this page: it is published once and stays up while the
+  // operator navigates. By the time Accept or Reject is pressed, this State
+  // can already be disposed, and `ref` throws outright then
+  // ("Cannot use ref after the widget was disposed") -- before a single alarm
+  // is written and before a single proposal is marked resolved. The same
+  // shape cost a key-mapping batch of 16 both its accept and its reject on
+  // 2026-08-21 (see key_repository_proposal_test.dart).
+  //
+  // Every provider these two callbacks need is therefore resolved through a
+  // container captured while the page was alive. A ProviderContainer belongs
+  // to the ProviderScope at the app root, so it outlives this widget.
+  group('accept and reject survive the page being disposed', () {
+    String bodyOf(String signature) {
+      final start = source.indexOf(signature);
+      expect(start, greaterThan(-1), reason: 'missing $signature');
+      return source.substring(
+          start, source.indexOf(RegExp(r'^  }', multiLine: true), start));
+    }
+
+    test('the container is captured where ref and context are known good', () {
+      final body = bodyOf('void _publishProposalCallbacks()');
+      expect(
+          body,
+          contains(
+              '_container = ProviderScope.containerOf(context, listen: false)'),
+          reason: 'the banner callbacks have no live ref of their own');
+    });
+
+    test('neither banner callback reaches for ref', () {
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final body = bodyOf('Future<void> $fn()');
+        for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+          expect(body, isNot(contains(use)),
+              reason: '$fn runs from the banner, after this State may be gone');
+        }
+      }
+    });
+
+    test('commit writes and refreshes through the captured container', () {
+      final body = bodyOf('Future<void> _commitProposals()');
+      expect(body, contains('container.read(alarmManProvider.future)'));
+      expect(body, contains('container.invalidate(alarmManProvider)'),
+          reason: 'the alarm list still has to rebuild for whoever is '
+              'watching it, even though this page is gone');
+    });
+
+    test('both callbacks bail when no container was ever captured', () {
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final body = bodyOf('Future<void> $fn()');
+        expect(body, contains('final container = _container;'));
+        expect(body, contains('if (container == null) return;'),
+            reason: 'writing nothing beats writing half and marking it done');
+      }
+    });
+
+    test('the banner slots are retired through the stored controllers', () {
+      // Not `ref.read(proposalCommitProvider.notifier)`: same disposed-ref
+      // problem, and these controllers were already being held for dispose().
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        expect(bodyOf('Future<void> $fn()'), contains('_clearStagedBatch()'));
+      }
+      final clear = bodyOf('void _clearStagedBatch()');
+      expect(clear, contains('_commitSlot?.state = null;'));
+      expect(clear, contains('_discardSlot?.state = null;'));
+      expect(clear, contains('if (mounted) setState'),
+          reason: 'the batch is dropped either way; only the rebuild is '
+              'conditional on this page still being on screen');
+    });
+
+    test('a proposal that could not be marked resolved is reported', () {
+      // A bare `catch (_) {}` around the database write is what let the key
+      // repository lose a whole batch quietly for weeks.
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final body = bodyOf('Future<void> $fn()');
+        expect(body, isNot(contains('catch (_) {}')));
+        expect(body, contains('debugPrint('));
+      }
+    });
+  });
 }
