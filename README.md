@@ -38,16 +38,32 @@ Checksums: [`SHA256SUMS.txt`](https://github.com/centroid-is/tfc-hmi/releases/do
 - Dart SDK
 - For NixOS: install the `mkhl.direnv` VSCode extension and run `direnv allow`
 
+### Flutter version
+
 `.flutter-version` is the single source for the Flutter version: every CI
 workflow reads it through `.github/actions/setup-flutter`, so nothing hardcodes
 a version any more.
 
-Match it locally. The widget tests compare rendered PNGs byte for byte
+**Match it locally, and check that you have:**
+
+```sh
+scripts/check-flutter-version.sh
+```
+
+It compares the `flutter` on your PATH against `.flutter-version` and exits
+non-zero if they differ. Run it before starting work — it costs a second and it
+is the only thing that catches either of the two failure modes below, both of
+which look green on your machine and red on `main`.
+
+**1. Goldens.** The widget tests compare rendered PNGs byte for byte
 (`test/**/goldens/`), and different Flutter versions rasterise the same drawing
 slightly differently — antialiasing along an edge shifts by a pixel or two.
 `test/helpers/golden_tolerance.dart` absorbs a hair of that drift, but a golden
 regenerated on a different Flutter than CI's will eventually go red on an image
-nobody touched. **Regenerate goldens on the pinned version:**
+nobody touched. The near-miss is worse than the miss: a golden authored on the
+wrong version that happens to land inside the 0.01% tolerance passes CI and
+leaves the next person an image already half-way to the threshold.
+**Regenerate goldens on the pinned version, never on anything else:**
 
 ```sh
 # the goldens CI verifies
@@ -62,6 +78,40 @@ Goldens compare only on macOS (`skip: !Platform.isMacOS`).
 When a golden fails on CI, the comparator writes the expected/actual/diff PNGs
 to a `failures/` directory next to the test; the `flutter-test` job uploads them
 as a `golden-failures-<os>` artifact on the run.
+
+**2. Framework assertions that only exist in the pinned version.** Flutter adds
+debug-mode assertions between releases. One of them — `ListTile` inside a
+`Container` with a `decoration`, "ink splashes may be invisible" — reddened
+`main` from a PR whose author had just run the whole suite locally and watched
+3181 tests pass. The assertion is not in the older Flutter's source at all, so
+no amount of local testing could have found it. This is not something more
+tests fix; only the right toolchain does.
+
+#### Getting onto the pinned version
+
+Nothing here touches a global Flutter install — on a machine shared with other
+projects that is not a decision to make casually, and no script in this repo
+makes it for you.
+
+- **A second SDK, on PATH only for this repo.** Clone the pinned tag somewhere
+  outside the repo and put its `bin` first on PATH in the shell you work in:
+
+  ```sh
+  git clone --depth 1 -b "$(cat .flutter-version)" \
+    https://github.com/flutter/flutter.git ~/flutter-sdks/"$(cat .flutter-version)"
+  export PATH="$HOME/flutter-sdks/$(cat .flutter-version)/bin:$PATH"
+  ```
+
+  Costs a few GB per version and leaves everything else alone. Every `flutter`
+  invocation in this repo's tooling then resolves to the right one with no
+  changes.
+
+- **Moving the global install** is fine if this is the only Flutter project on
+  the machine, and only then.
+
+- **[`fvm`](https://fvm.app)** manages per-project SDKs, but wants invocations
+  prefixed (`fvm flutter test`) and an IDE pointed at `.fvm/flutter_sdk`. It is
+  not used here; the scripts, skills, and workflows all call bare `flutter`.
 
 ### Code generation
 
