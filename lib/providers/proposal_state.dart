@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 
 import 'package:drift/drift.dart';
@@ -6,6 +7,7 @@ import 'package:tfc_dart/core/mcp_database.dart';
 
 import 'proposal_watcher.dart';
 import 'database.dart' show databaseProvider;
+import 'proposal_sql.dart';
 
 export 'proposal_watcher.dart' show PendingProposal, ProposalOp;
 
@@ -165,18 +167,23 @@ class ProposalStateNotifier extends StateNotifier<ProposalState> {
   }
 
   Future<void> _updateStatus(int id, String status) async {
-    if (_db == null) return;
+    final db = _db;
+    if (db == null) return;
     try {
-      await _db.customUpdate(
-        'UPDATE mcp_proposal SET status = ? WHERE id = ?',
+      await db.customUpdate(
+        proposalStatusUpdate(isPostgres: proposalDbIsPostgres(db)),
         variables: [
           Variable.withString(status),
           Variable.withInt(id),
         ],
         updates: {},
       );
-    } catch (_) {
-      // Best-effort DB update; don't block UI on transient errors.
+    } catch (e, s) {
+      // Still best-effort — a proposal the operator has already acted on must
+      // not block the UI. But it is reported now: this swallowed a *permanent*
+      // failure (`?` placeholders against Postgres) for as long as it existed,
+      // leaving every proposal pending and every batch reappearing.
+      debugPrint('Proposal $id: could not set status "$status": $e\n$s');
     }
   }
 

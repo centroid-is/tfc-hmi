@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc_dart/core/mcp_database.dart';
 
 import 'database.dart' show databaseProvider;
+import 'proposal_sql.dart';
 
 /// Routes proposal types to editor paths.
 const proposalRoutes = <String, String>{
@@ -118,8 +119,7 @@ class ProposalWatcher extends ChangeNotifier {
     _polling = true;
     try {
       final rows = await _db.customSelect(
-        'SELECT id, proposal_type, title, proposal_json, operator_id, created_at '
-        'FROM mcp_proposal WHERE id > ? AND status = ? ORDER BY id ASC',
+        proposalPollQuery(isPostgres: proposalDbIsPostgres(_db)),
         variables: [
           Variable.withInt(_lastSeenId),
           Variable.withString('pending'),
@@ -145,8 +145,11 @@ class ProposalWatcher extends ChangeNotifier {
 
       if (_disposed) return;
       notifyListeners();
-    } catch (_) {
-      // Best-effort polling; don't crash on transient DB errors.
+    } catch (e, s) {
+      // Best-effort polling, but reported: a permanent failure here (the `?`
+      // placeholders this used to send to Postgres) is indistinguishable from
+      // "no new proposals" when it is swallowed.
+      debugPrint('Proposal poll failed: $e\n$s');
     } finally {
       _polling = false;
     }
@@ -160,14 +163,18 @@ class ProposalWatcher extends ChangeNotifier {
 
     try {
       await _db.customUpdate(
-        'UPDATE mcp_proposal SET status = ? WHERE id = ?',
+        proposalStatusUpdate(isPostgres: proposalDbIsPostgres(_db)),
         variables: [
           Variable.withString('notified'),
           Variable.withInt(proposalId),
         ],
         updates: {},
       );
-    } catch (_) {}
+    } catch (e, s) {
+      // Reported rather than swallowed: while this failed silently, a proposal
+      // stayed `pending` for ever and was re-delivered on every restart.
+      debugPrint('Proposal $proposalId: could not mark notified: $e\n$s');
+    }
   }
 
   @override

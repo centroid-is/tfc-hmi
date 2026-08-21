@@ -1,6 +1,9 @@
 export 'src/server.dart';
 export 'src/logging/stderr_logger.dart';
 export 'src/database/server_database.dart';
+// The app's proposal providers bind against the same database and need
+// the same placeholder adaptation, so this is public rather than internal.
+export 'src/services/sql_dialect.dart' show adaptSql, isPostgresDb;
 export 'src/database/server_database_config.dart';
 export 'package:tfc_dart/tfc_dart_core.dart' show McpDatabase;
 export 'src/prompts/diagnose_equipment_prompt.dart';
