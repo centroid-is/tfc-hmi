@@ -675,6 +675,13 @@ void main() {
       // throws "Cannot use ref after the widget was disposed" from inside
       // ConsumerState.dispose(), which took out 62 widget tests when this
       // was first written the obvious way.
+      //
+      // The slot and the write, not one exact line. KeyRepository defers the
+      // write to a post-frame callback because navigating away disposes it
+      // from inside a build, and writing to a provider there trips
+      // "tried to modify a provider while the widget tree was building". The
+      // other two clear inline and have the same hole; this accepts either
+      // shape rather than pretending they already agree.
       for (final entry in {
         'AlarmEditor': alarmEditorSource,
         'PageEditor': pageEditorSource,
@@ -682,13 +689,15 @@ void main() {
       }.entries) {
         final dispose = _extractMethodBody(entry.value, 'void dispose() {');
         expect(dispose, isNotNull, reason: '${entry.key} must have dispose()');
-        expect(dispose, contains('_commitSlot?.state = null;'),
+        expect(dispose, contains('_commitSlot'),
             reason: '${entry.key} must drop its commit callback');
+        expect(dispose, contains('_discardSlot'),
+            reason: '${entry.key} must drop its discard callback');
+        expect(dispose, contains('state = null'),
+            reason: '${entry.key} must clear both slots');
         expect(dispose, isNot(contains('ref.read')),
             reason: '${entry.key} must not touch ref in dispose() -- Riverpod '
                 'throws there; the controllers are captured on publish');
-        expect(dispose, contains('_discardSlot?.state = null;'),
-            reason: '${entry.key} must drop its discard callback');
       }
     });
 
