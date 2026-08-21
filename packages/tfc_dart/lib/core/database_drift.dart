@@ -1121,12 +1121,26 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     // destroys the socket instead and leaves the server to notice, which it
     // does at its own pace -- and a server that is slow to notice is exactly
     // the one already short of connection slots.
+    //
+    // How long to wait comes from the pool's own connect timeout: a monitor
+    // caught mid-acquire cannot answer until that acquire lands, and giving up
+    // first is what leaked. See [monitorStopTimeout].
     final monitor = _healthMonitor;
     if (monitor != null) {
       monitor.stop();
+      var handedBack = true;
       await monitor.done
-          .timeout(kMonitorStopTimeout, onTimeout: () {})
+          .timeout(monitorStopTimeout(config.connectTimeout),
+              onTimeout: () => handedBack = false)
           .catchError((Object _) {});
+      if (!handedBack) {
+        // Worth saying out loud. The force close below can only reach
+        // connections the pool still knows about, so if the monitor is still
+        // holding one -- or still opening one -- this is the moment a socket
+        // gets orphaned, and it used to happen in silence.
+        logger.w('Health monitor did not hand its connection back in time; '
+            'closing the pool anyway, which may strand a connection');
+      }
     }
     final pool = _pool;
     if (pool != null) {
