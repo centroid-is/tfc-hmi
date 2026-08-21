@@ -150,4 +150,79 @@ void main() {
     await tester.pump();
     expect(find.byType(CheckboxListTile), findsOneWidget);
   });
+
+  group('selected alarms sort to the top', () {
+    // A plant has hundreds of alarms and the list is height-capped, so a
+    // selection scattered through it cannot be seen without hunting for
+    // ticked boxes.
+    testWidgets('a selected alarm appears above unselected ones that sort '
+        'before it alphabetically', (tester) async {
+      final alarms = [
+        _alarmFx('a', 'Aaa first alphabetically'),
+        _alarmFx('b', 'Bbb second'),
+        _alarmFx('z', 'Zzz last alphabetically'),
+      ];
+      final selected = <String>['z'];
+
+      await tester.pumpWidget(wrap(AlarmPickerList(
+        alarms: alarms,
+        selectedUids: selected,
+        onSelectionChanged: () {},
+      )));
+      await tester.pumpAndSettle();
+
+      final titles = tester
+          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+          .map((t) => (t.title as Text).data)
+          .toList();
+      expect(titles.first, 'Zzz last alphabetically');
+      expect(titles, [
+        'Zzz last alphabetically',
+        'Aaa first alphabetically',
+        'Bbb second',
+      ]);
+    });
+
+    testWidgets('unselected alarms stay alphabetical among themselves',
+        (tester) async {
+      final alarms = [
+        _alarmFx('c', 'Ccc'),
+        _alarmFx('a', 'Aaa'),
+        _alarmFx('b', 'Bbb'),
+      ];
+      await tester.pumpWidget(wrap(AlarmPickerList(
+        alarms: alarms,
+        selectedUids: <String>[],
+        onSelectionChanged: () {},
+      )));
+      await tester.pumpAndSettle();
+
+      final titles = tester
+          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+          .map((t) => (t.title as Text).data)
+          .toList();
+      expect(titles, ['Aaa', 'Bbb', 'Ccc']);
+    });
+
+    testWidgets('several selected alarms are alphabetical among themselves',
+        (tester) async {
+      final alarms = [
+        _alarmFx('a', 'Aaa'),
+        _alarmFx('m', 'Mmm'),
+        _alarmFx('z', 'Zzz'),
+      ];
+      await tester.pumpWidget(wrap(AlarmPickerList(
+        alarms: alarms,
+        selectedUids: <String>['z', 'm'],
+        onSelectionChanged: () {},
+      )));
+      await tester.pumpAndSettle();
+
+      final titles = tester
+          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+          .map((t) => (t.title as Text).data)
+          .toList();
+      expect(titles, ['Mmm', 'Zzz', 'Aaa']);
+    });
+  });
 }
