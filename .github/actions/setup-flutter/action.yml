@@ -36,3 +36,13 @@ runs:
       uses: subosito/flutter-action@v2
       with:
         flutter-version: ${{ steps.read-version.outputs.version }}
+
+    # Confirm the Flutter that ended up on PATH is the pinned one. Belt and
+    # braces against the installer resolving the request to something else —
+    # a cached SDK from another run, a version spec that matched loosely — and
+    # more importantly, this is the same script developers run locally
+    # (`scripts/check-flutter-version.sh`), so CI exercises it on every run and
+    # it cannot quietly rot into always passing.
+    - name: Verify the installed Flutter matches the pin
+      shell: bash
+      run: bash scripts/check-flutter-version.sh
