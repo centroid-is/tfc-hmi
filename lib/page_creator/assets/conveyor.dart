@@ -2211,6 +2211,20 @@ class _ConveyorState extends ConsumerState<Conveyor>
                 atv320DriveState(dynValue['p_stat_State'].asInt);
             final lastFault = atv320Fault(dynValue['p_stat_LastFault'].asInt);
 
+            // The two words are not the same kind of thing. HMIS is what the
+            // drive is doing *now*; LFT is a stored record that survives a
+            // `Fault reset` and stays there while the belt runs perfectly
+            // well. So the fault is only a live condition when the drive
+            // itself is in a fault state — otherwise LFT is history, and
+            // painting it red sends an electrician after nothing.
+            //
+            // Any fault-severity HMIS entry counts, not just FLT(23): FA and
+            // EP are trips in their own right, and LOST(99) is substituted by
+            // FB_ATV320 together with CNF, so the pair only makes sense read
+            // as one. Keyed off the severity so a new fault state added to
+            // `hmis_e` is covered without touching this.
+            final faultIsLive = driveState.severity == Atv320Severity.fault;
+
             return SidePane(
               title: widget.config.key!,
               subtitle: 'Conveyor',
@@ -2218,7 +2232,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
               // A faulted or safety-stopped drive outranks the frequency
               // reading: a belt sitting at 0 Hz because it tripped must not
               // present itself as a healthy 'Stopped'.
-              status: driveState.severity == Atv320Severity.fault
+              status: faultIsLive
                   ? PaneStatus.fault(driveState.label)
                   : driveState.code == 30 // STO — safety, not a trip
                       ? PaneStatus.warning(driveState.label)
@@ -2346,29 +2360,41 @@ class _ConveyorState extends ConsumerState<Conveyor>
                           ],
                         ),
                         const SizedBox(height: 8),
-                        // The drive's own two status words, in words rather
-                        // than in codes. Both are enums on the PLC side
-                        // (`hmis_e` / `lft_e`), so the integer is the whole
-                        // truth and the mnemonic is kept inside the
-                        // explanation for cross-referencing the keypad.
+                        // The drive's own two status words — under the names
+                        // the drive itself uses. HMIS and LFT are what the
+                        // keypad and NVE41295 call these parameters, so an
+                        // electrician can walk from the pane to the drive
+                        // without translating; the value carries the keypad
+                        // mnemonic and then says it in words, and the
+                        // explanation behind the row says the rest.
                         PaneExplainRow(
-                          label: 'Drive state',
-                          value: driveState.label,
+                          label: 'HMIS',
+                          value: '${driveState.mnemonic} · ${driveState.label}',
                           valueColor: _severityColor(context, driveState),
                           explanationBuilder: (context) =>
                               _Atv320Explainer(explanation: driveState),
                         ),
                         PaneExplainRow(
-                          label: 'Last fault',
-                          value: lastFault.label,
-                          valueColor: _severityColor(context, lastFault),
+                          label: 'LFT',
+                          value: '${lastFault.mnemonic} · ${lastFault.label}',
+                          // Stored, not live: only tinted while the drive is
+                          // actually in the fault. Otherwise the row is
+                          // ordinary history and says so.
+                          valueColor: faultIsLive
+                              ? _severityColor(context, lastFault)
+                              : null,
+                          valueNote: faultIsLive || lastFault.isHealthy
+                              ? null
+                              : 'cleared',
                           // A live fault opens itself: the operator who just
                           // walked over to a stopped belt should not have to
                           // discover that the row is tappable.
-                          initiallyExpanded: !lastFault.isHealthy &&
-                              driveState.severity == Atv320Severity.fault,
-                          explanationBuilder: (context) =>
-                              _Atv320Explainer(explanation: lastFault),
+                          initiallyExpanded:
+                              !lastFault.isHealthy && faultIsLive,
+                          explanationBuilder: (context) => _Atv320Explainer(
+                            explanation: lastFault,
+                            historical: !faultIsLive && !lastFault.isHealthy,
+                          ),
                         ),
                       ],
                     ),
@@ -2482,7 +2508,11 @@ Color? _severityColor(BuildContext context, Atv320Explanation e) {
 class _Atv320Explainer extends StatelessWidget {
   final Atv320Explanation explanation;
 
-  const _Atv320Explainer({required this.explanation});
+  /// True for a stored fault the drive is no longer in. Says so up front, so
+  /// the remedy underneath reads as "if it comes back" rather than "now".
+  final bool historical;
+
+  const _Atv320Explainer({required this.explanation, this.historical = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2509,6 +2539,14 @@ class _Atv320Explainer extends StatelessWidget {
             Text('code ${explanation.code}', style: muted),
           ],
         ),
+        if (historical) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Already cleared — the drive is not faulted now. This is the '
+            'record of the last trip, kept until the next one replaces it.',
+            style: muted,
+          ),
+        ],
         const SizedBox(height: 6),
         Text(explanation.meaning, style: theme.textTheme.bodySmall),
         if (explanation.clearing != null) ...[
