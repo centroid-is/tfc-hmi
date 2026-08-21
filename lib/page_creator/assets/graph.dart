@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:convert' show jsonDecode;
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' as math;
 
 import 'package:cristalyse/cristalyse.dart' as cs;
@@ -574,6 +574,30 @@ class GraphContentConfigState extends State<GraphContentConfig> {
 
 }
 
+/// What a [GraphAsset]'s data actually depends on, as a comparable string.
+///
+/// Deliberately not the whole `toJson()`: [BaseAsset] serialises the asset's
+/// coordinates and size, so dragging a graph around the page editor — or
+/// moving the floating dialog it sits in — would read as a config change and
+/// re-run every history query. Geometry is layout, not data.
+///
+/// [resolveKey] is `StateMan.resolveKey`, and its output is part of the
+/// signature because a substitution change points an otherwise identical
+/// config at different tables. Pass null before StateMan is available; the
+/// raw keys stand in until then.
+String graphDataSignature(
+  GraphAssetConfig config, {
+  String Function(String key)? resolveKey,
+}) {
+  final json = config.toJson()
+    ..remove('coordinates')
+    ..remove('size')
+    ..remove('textPos');
+  final resolved = [...config.primarySeries, ...config.secondarySeries]
+      .map((s) => resolveKey == null ? s.key : resolveKey(s.key));
+  return '${jsonEncode(json)}|${resolved.join(',')}';
+}
+
 // The actual widget that displays the graph using the configuration
 class GraphAsset extends ConsumerStatefulWidget {
   final GraphAssetConfig config;
@@ -608,6 +632,13 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
   /// The visible window size (ms) when data was last fetched with aggregation.
   /// Used to detect zoom changes that require re-fetching at a different bucket resolution.
   double _lastFetchWindowMs = 0;
+
+  /// [_dataSignature] as of the last [_init], so [didUpdateWidget] can tell a
+  /// config edit from a plain rebuild. Null until the first init finishes.
+  String? _initSignature;
+
+  /// Bumped by every [_init] so a superseded one can bail out at its awaits.
+  int _initGeneration = 0;
 
   _GraphAssetState()
       : _dataMinX = 0,
@@ -648,7 +679,15 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     _init();
   }
 
+  String _dataSignature() => graphDataSignature(
+        widget.config,
+        resolveKey: _stateMan?.resolveKey,
+      );
+
   Future<void> _init() async {
+    // Two inits can overlap — the awaits below are real — and the loser must
+    // not stomp the winner's data or leave a stale signature behind.
+    final generation = ++_initGeneration;
     _graph = Graph(
         config: widget.config.toGraphConfig(legend: !widget.compact),
         data: [],
@@ -667,7 +706,10 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     _graph.theme(_themeFor(ref.read(chartThemeNotifierProvider)));
     _stateMan = await ref.read(stateManProvider.future);
     _db = await ref.read(databaseProvider.future);
-    if (!mounted) return;
+    if (!mounted || generation != _initGeneration) return;
+    // Recorded only now: the signature resolves keys through StateMan, which
+    // was not available when this init started.
+    _initSignature = _dataSignature();
     final start =
         // 300% of the time window, refer to panUpdate method for more details
         DateTime.now().subtract(widget.config.timeWindowMinutes * 3);
@@ -683,10 +725,20 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
 
   @override
   void didUpdateWidget(GraphAsset oldWidget) {
-    // Todo this is hacky
-    // Needed when stateman substitutions change, resolve key
     super.didUpdateWidget(oldWidget);
     _chartTheme = ref.read(chartThemeNotifierProvider);
+    _graph.theme(_chartTheme);
+
+    // The page editor's form mutates the config in place and StateMan
+    // substitutions re-point the same config at another table, so there is
+    // nothing meaningful to compare by identity — compare what the data
+    // actually depends on instead. A rebuild that leaves that untouched (a
+    // move, a resize, a parent's setState) keeps the chart it already has,
+    // rather than dropping its subscriptions and re-running every history
+    // query while the operator watches.
+    final signature = _dataSignature();
+    if (_initSignature != null && signature == _initSignature) return;
+
     _cleanup();
     _init();
   }
