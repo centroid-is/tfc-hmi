@@ -10,6 +10,8 @@ import 'package:tfc/widgets/alarm.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 
+import '../helpers/golden_tolerance.dart';
+
 const _formKey = Key('alarm_form_golden');
 
 AlarmConfig _configFx({required bool navigationIndicator}) => AlarmConfig(
@@ -82,6 +84,14 @@ Future<void> _loadFonts() async {
 }
 
 void main() {
+  // These two are a text-heavy form surface, not the small painter drawings the
+  // default 0.01% is calibrated for: four text fields' worth of glyphs across
+  // 560x300. CI pins a different Flutter than local, and its text rasterisation
+  // differs by ~18 px — 0.0107%, a hair over the default and nothing to do with
+  // the switch these goldens exist to show. Same reasoning and value as
+  // conveyor_gate_force_pane_golden_test.
+  useTolerantGoldenComparator(tolerance: 0.002);
+
   setUpAll(_loadFonts);
 
   group('Alarm editor golden tests',
