@@ -33,6 +33,9 @@ type pickerState struct {
 	itemClicks     []widget.Clickable
 	installBtn     widget.Clickable
 	uninstallBtn   widget.Clickable
+	stableBtn      widget.Clickable
+	latestBtn      widget.Clickable
+	channel        string
 	loading        bool
 	err            error
 	installing     bool
@@ -42,28 +45,20 @@ type pickerState struct {
 }
 
 // runPickerMode fetches versions and runs the picker event loop.
-func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, installer PickerInstaller) {
+func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, installer PickerInstaller, channel string) {
+	if !update.ValidChannel(channel) || channel == "" {
+		channel = update.ChannelStable
+	}
 	state := &pickerState{
 		loading:     true,
 		selected:    -1,
+		channel:     channel,
 		isInstalled: installer.IsInstalled(),
 	}
 	state.listState.List.Axis = layout.Vertical
 	state.notesListState.List.Axis = layout.Vertical
 
-	go func() {
-		releases, err := eng.ListAllReleases(context.Background())
-		if err != nil {
-			state.err = err
-			state.loading = false
-			w.Invalidate()
-			return
-		}
-		state.releases = releases
-		state.itemClicks = make([]widget.Clickable, len(releases))
-		state.loading = false
-		w.Invalidate()
-	}()
+	loadReleases(state, eng, w)
 
 	var ops op.Ops
 	for {
@@ -79,28 +74,60 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, instal
 	}
 }
 
-// layoutPicker renders the split list + detail view.
+// loadReleases fetches the release list for the current channel in the
+// background and repaints when it lands. Selection and any previous error are
+// cleared, because they belong to the channel being replaced.
+func loadReleases(state *pickerState, eng *update.Engine, w *app.Window) {
+	state.loading = true
+	state.err = nil
+	state.selected = -1
+	state.releases = nil
+	state.itemClicks = nil
+	channel := state.channel
+
+	go func() {
+		releases, err := eng.ListAllReleases(context.Background(), channel)
+		// A slow response for a channel the user has since switched away from
+		// must not overwrite the current one.
+		if state.channel != channel {
+			return
+		}
+		if err != nil {
+			state.err = err
+			state.loading = false
+			w.Invalidate()
+			return
+		}
+		state.releases = releases
+		state.itemClicks = make([]widget.Clickable, len(releases))
+		state.loading = false
+		w.Invalidate()
+	}()
+}
+
+// layoutPicker renders the channel switcher above the split list + detail view.
 func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, eng *update.Engine, installer PickerInstaller, w *app.Window) layout.Dimensions {
-	if state.loading {
-		return layout.Center.Layout(gtx, material.H6(th, "Loading versions...").Layout)
+	// Channel switching is handled before the loading/error/empty returns, and
+	// the switcher is drawn above them — a channel with nothing installable is
+	// exactly when the user needs to switch back.
+	if state.stableBtn.Clicked(gtx) && state.channel != update.ChannelStable && !state.installing {
+		state.channel = update.ChannelStable
+		loadReleases(state, eng, w)
 	}
-	if state.err != nil {
-		lbl := material.H6(th, userFriendlyMessage(state.err))
-		lbl.Color = ColorError()
-		return layout.Center.Layout(gtx, lbl.Layout)
-	}
-	if len(state.releases) == 0 {
-		return layout.Center.Layout(gtx, material.H6(th, "No versions available.").Layout)
+	if state.latestBtn.Clicked(gtx) && state.channel != update.ChannelLatest && !state.installing {
+		state.channel = update.ChannelLatest
+		loadReleases(state, eng, w)
 	}
 
 	// Handle install button click
-	if state.installBtn.Clicked(gtx) && state.selected >= 0 && !state.installing {
+	if state.installBtn.Clicked(gtx) && state.selected >= 0 && state.selected < len(state.releases) && !state.installing {
 		state.installing = true
 		selected := state.releases[state.selected]
-		state.statusMsg = fmt.Sprintf("Installing v%s...", selected.Version)
+		state.statusMsg = fmt.Sprintf("Installing %s...", displayVersion(selected.Version))
 		go func() {
 			err := eng.Update(context.Background(), update.UpdateOptions{
 				Version: selected.Version,
+				Channel: state.channel,
 				DestDir: os.TempDir(),
 				OnProgress: func(dl, total int64) {
 					if total > 0 {
@@ -113,7 +140,7 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 				state.err = err
 				state.statusMsg = userFriendlyMessage(err)
 			} else {
-				state.statusMsg = fmt.Sprintf("CentroidX v%s installed!", selected.Version)
+				state.statusMsg = fmt.Sprintf("CentroidX %s installed!", displayVersion(selected.Version))
 				state.isInstalled = true
 			}
 			state.installing = false
@@ -145,6 +172,91 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 		}
 	}
 
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutChannelBar(gtx, th, state)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return horizontalRule(gtx)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layoutPickerBody(gtx, th, state, installer, w)
+		}),
+	)
+}
+
+// layoutChannelBar renders the Stable/Latest switcher and says what the
+// current channel means, so "development build" is never a surprise.
+func layoutChannelBar(gtx layout.Context, th *material.Theme, state *pickerState) layout.Dimensions {
+	channelBtn := func(gtx layout.Context, click *widget.Clickable, label, channel string) layout.Dimensions {
+		btn := material.Button(th, click, label)
+		if state.channel == channel {
+			btn.Background = ColorAccent()
+		} else {
+			btn.Background = ColorSurface()
+			btn.Color = ColorMuted()
+		}
+		return btn.Layout(gtx)
+	}
+
+	blurb := "Released versions, tested before release."
+	if state.channel == update.ChannelLatest {
+		blurb = "Development builds from main — no release testing."
+	}
+
+	return layout.Inset{
+		Top: unit.Dp(10), Bottom: unit.Dp(10),
+		Left: unit.Dp(12), Right: unit.Dp(12),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Body2(th, "Channel")
+				lbl.Color = ColorMuted()
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return channelBtn(gtx, &state.stableBtn, "Stable", update.ChannelStable)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return channelBtn(gtx, &state.latestBtn, "Latest", update.ChannelLatest)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Caption(th, blurb)
+				lbl.Color = ColorMuted()
+				return lbl.Layout(gtx)
+			}),
+		)
+	})
+}
+
+// layoutPickerBody renders whatever the current channel has to show: a
+// progress message, an error, an empty note, or the list + detail split.
+func layoutPickerBody(gtx layout.Context, th *material.Theme, state *pickerState, installer PickerInstaller, w *app.Window) layout.Dimensions {
+	if state.loading {
+		return layout.Center.Layout(gtx, material.H6(th, "Loading versions...").Layout)
+	}
+	if state.err != nil && len(state.releases) == 0 {
+		lbl := material.H6(th, userFriendlyMessage(state.err))
+		lbl.Color = ColorError()
+		return layout.Center.Layout(gtx, lbl.Layout)
+	}
+	if len(state.releases) == 0 {
+		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(material.H6(th, "No versions available on this channel.").Layout),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Body2(th, "Nothing published here has an installable package for this platform.")
+					lbl.Color = ColorMuted()
+					return lbl.Layout(gtx)
+				}),
+			)
+		})
+	}
+
 	// 35/65 split: list on left, detail on right
 	return layout.Flex{}.Layout(gtx,
 		layout.Flexed(0.35, func(gtx layout.Context) layout.Dimensions {
@@ -152,19 +264,31 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 		}),
 		// Separator line
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			w := gtx.Dp(unit.Dp(1))
+			wpx := gtx.Dp(unit.Dp(1))
 			h := gtx.Constraints.Max.Y
-			rect := image.Rect(0, 0, w, h)
+			rect := image.Rect(0, 0, wpx, h)
 			c := clip.Rect(rect).Push(gtx.Ops)
 			paint.ColorOp{Color: ColorMuted()}.Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 			c.Pop()
-			return layout.Dimensions{Size: image.Point{X: w, Y: h}}
+			return layout.Dimensions{Size: image.Point{X: wpx, Y: h}}
 		}),
 		layout.Flexed(0.65, func(gtx layout.Context) layout.Dimensions {
 			return layoutDetail(gtx, th, state)
 		}),
 	)
+}
+
+// horizontalRule draws a 1dp separator across the available width.
+func horizontalRule(gtx layout.Context) layout.Dimensions {
+	wpx := gtx.Constraints.Max.X
+	h := gtx.Dp(unit.Dp(1))
+	rect := image.Rect(0, 0, wpx, h)
+	c := clip.Rect(rect).Push(gtx.Ops)
+	paint.ColorOp{Color: ColorMuted()}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	c.Pop()
+	return layout.Dimensions{Size: image.Point{X: wpx, Y: h}}
 }
 
 // layoutVersionList renders the scrollable version list with Solarized styling.
@@ -189,7 +313,7 @@ func layoutVersionList(gtx layout.Context, th *material.Theme, state *pickerStat
 				}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							lbl := material.Body1(th, "v"+r.Version)
+							lbl := material.Body1(th, displayVersion(r.Version))
 							if i == state.selected {
 								lbl.Color = ColorAccent()
 							}
@@ -219,7 +343,7 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 					return lbl.Layout(gtx)
 				}
 				r := state.releases[state.selected]
-				lbl := material.H5(th, "v"+r.Version)
+				lbl := material.H5(th, displayVersion(r.Version))
 				lbl.Color = ColorAccent()
 				return lbl.Layout(gtx)
 			}),
