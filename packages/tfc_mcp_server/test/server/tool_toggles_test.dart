@@ -266,6 +266,7 @@ void main() {
         expect(names, isNot(contains('diagnose_asset')));
         expect(names, isNot(contains('create_alarm')));
         expect(names, isNot(contains('update_alarm')));
+        expect(names, isNot(contains('delete_alarm')));
       } finally {
         await client.close();
       }
@@ -282,8 +283,10 @@ void main() {
         expect(tools, hasLength(16));
         expect(names, isNot(contains('create_alarm')));
         expect(names, isNot(contains('update_alarm')));
+        expect(names, isNot(contains('delete_alarm')));
         expect(names, isNot(contains('create_key_mapping')));
         expect(names, isNot(contains('update_key_mapping')));
+        expect(names, isNot(contains('delete_key_mapping')));
         expect(names, isNot(contains('propose_page')));
         expect(names, isNot(contains('propose_asset')));
         expect(names, isNot(contains('update_asset')));
@@ -318,8 +321,10 @@ void main() {
         expect(names, isNot(contains('list_asset_types')));
         expect(names, isNot(contains('create_alarm')));
         expect(names, isNot(contains('update_alarm')));
+        expect(names, isNot(contains('delete_alarm')));
         expect(names, isNot(contains('create_key_mapping')));
         expect(names, isNot(contains('update_key_mapping')));
+        expect(names, isNot(contains('delete_key_mapping')));
       } finally {
         await client.close();
       }
