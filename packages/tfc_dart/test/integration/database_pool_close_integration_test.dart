@@ -26,6 +26,29 @@ Future<int> _backendCount(Connection control) async {
   return result.first.first as int;
 }
 
+/// One line per session on the test database, for failure messages.
+///
+/// A count on its own cannot tell a leaked pool connection from a TimescaleDB
+/// background worker, and the two are not the same bug -- one is ours, the
+/// other is the server deciding to run a job. Every failure of this file has
+/// so far been a bare number, which is not enough to act on.
+Future<String> _describeBackends(Connection control) async {
+  try {
+    final rows = await control.execute(
+      "SELECT pid, state, backend_type, application_name, "
+      "  to_char(backend_start, 'HH24:MI:SS') AS started, "
+      "  coalesce(left(query, 60), '') AS query "
+      "FROM pg_stat_activity WHERE datname = 'testdb' "
+      "ORDER BY backend_start",
+    );
+    return rows
+        .map((r) => '  ${r.map((v) => v ?? '').join(' | ')}')
+        .join('\n');
+  } catch (error) {
+    return '  <could not read pg_stat_activity: $error>';
+  }
+}
+
 /// Backends that may still be on their way out when a close has returned.
 ///
 /// `pool.close()` awaits its semaphore, and `withConnection`'s `finally`
@@ -93,7 +116,9 @@ void main() {
       expect(after, lessThanOrEqualTo(baseline),
           reason: 'connections left behind after close are the leak: the '
               'health monitor holds one for as long as the pool is open, and '
-              'nothing used to close the pool');
+              'nothing used to close the pool.\n'
+              'baseline was $baseline, still open:\n'
+              '${await _describeBackends(control)}');
       expect(db.poolForTest!.isOpen, isFalse);
     }, timeout: const Timeout(Duration(minutes: 2)));
 
@@ -117,7 +142,9 @@ void main() {
           () => _backendCount(control), (n) => n <= baseline + _settling);
       expect(after, lessThanOrEqualTo(baseline + _settling),
           reason: 'the cost of a discarded attempt must not scale with how '
-              'many were discarded');
+              'many were discarded.\n'
+              'baseline was $baseline, still open:\n'
+              '${await _describeBackends(control)}');
     }, timeout: const Timeout(Duration(minutes: 5)));
   });
 }
