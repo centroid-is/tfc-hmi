@@ -78,8 +78,11 @@ void main() {
     });
 
     test('clears the callbacks once the batch is resolved', () {
+      // Cleared through the stored slots rather than `ref.read(...)`: these
+      // run from the banner, which outlives this section, and `ref` throws
+      // once the widget is disposed. See the disposal group below.
       expect(
-        RegExp(r'proposalCommitProvider\.notifier\)\.state = null')
+        RegExp(r'_commitSlot\?\.state = null')
             .allMatches(source)
             .length,
         greaterThanOrEqualTo(2),
@@ -167,6 +170,82 @@ void main() {
       expect(deleteAt, greaterThan(-1));
       expect(mergeAt, greaterThan(deleteAt),
           reason: 'the delete branch must return before any merge');
+    });
+  });
+
+  // On 2026-08-21 a batch of 16 mappings was accepted. Every mapping was
+  // written to preferences, and not one proposal was marked accepted, so the
+  // whole batch came back on the next load and could not be cleared.
+  //
+  // Accepting rebuilds this subtree, so by the time the save returned, the
+  // section was deactivated. `mounted` is still true then, but an ancestor
+  // lookup is not safe: the success snackbar threw, the catch block threw
+  // again on its own snackbar, and that escaped `_saveKeyMappings` --
+  // stopping `_commitProposals` before `acceptProposal` ever ran.
+  group('a snackbar cannot cost the accept step', () {
+    String saveBody() {
+      final start = source.indexOf('Future<bool> _saveKeyMappings()');
+      expect(start, greaterThan(-1),
+          reason: '_saveKeyMappings must report whether the save landed');
+      return source.substring(start, source.indexOf('\n  }', start));
+    }
+
+    test('the messenger is resolved before the first await', () {
+      final body = saveBody();
+      final captureAt = body.indexOf('ScaffoldMessenger.maybeOf(context)');
+      final awaitAt = body.indexOf('await ');
+      expect(captureAt, greaterThan(-1));
+      expect(awaitAt, greaterThan(captureAt),
+          reason: 'after an await the ancestor lookup can throw');
+    });
+
+    test('the save never looks an ancestor up unguarded', () {
+      // `.of(context)` throws on a dead element; the handles taken while the
+      // section was alive are what the banner path relies on.
+      final body = saveBody();
+      expect(body, isNot(contains('ScaffoldMessenger.of(context)')));
+      expect(body, contains('_messengerHandle ??'));
+      expect(body, contains('_errorColourHandle ??'));
+    });
+
+    test('the banner path never reaches for ref', () {
+      // `ref` throws outright once the widget is disposed, which is what made
+      // Reject fail as well as Accept.
+      final body = saveBody();
+      final prefsAt = body.indexOf('_prefsHandle ??');
+      expect(prefsAt, greaterThan(-1),
+          reason: 'the save must prefer the captured preferences handle');
+      for (final fn in ['_commitProposals', '_discardProposals']) {
+        final start = source.indexOf('Future<void> $fn()');
+        expect(start, greaterThan(-1));
+        final body = source.substring(start, source.indexOf('\n  }', start));
+        expect(body, isNot(contains('ref.read')),
+            reason: '$fn runs from the banner, after this state may be gone');
+      }
+    });
+
+    test('the handles are taken where ref and context are known good', () {
+      final start = source.indexOf('void _publishProposalCallbacks()');
+      final body = source.substring(start, source.indexOf('\n  }', start));
+      expect(body, contains('_proposals = ref.read(proposalStateProvider.notifier)'));
+      expect(body, contains('_prefsHandle = ref.read(preferencesProvider.future)'));
+      expect(body, contains('_messengerHandle = ScaffoldMessenger.maybeOf(context)'));
+    });
+
+    test('the save reports success rather than throwing at the caller', () {
+      final body = saveBody();
+      expect(body, contains('return true'));
+      expect(body, contains('return false'));
+    });
+
+    test('proposals are only accepted when the mappings actually saved', () {
+      expect(source, contains('if (!await _saveKeyMappings()) return;'));
+      final commit = source.substring(source.indexOf('_commitProposals'));
+      final saveAt = commit.indexOf('_saveKeyMappings()');
+      final acceptAt = commit.indexOf('acceptProposal');
+      expect(saveAt, greaterThan(-1));
+      expect(acceptAt, greaterThan(saveAt),
+          reason: 'a proposal must not be marked accepted before its save');
     });
   });
 }
