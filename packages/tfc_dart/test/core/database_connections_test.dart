@@ -235,8 +235,95 @@ void main() {
     });
 
     test('the ceiling still holds once the monitor is added', () {
+      // One wider than kMaxPoolConnections on purpose: the cap is on the work
+      // budget, and taking the monitor's connection out of it would give a
+      // maxed-out collector one drain fewer than it asked for.
       expect(poolConnectionCount(10000),
           kMaxPoolConnections + kHealthMonitorConnections);
+    });
+  });
+
+  group('pool size from the environment', () {
+    // The field, its cap and its doc comment all shipped without a way to set
+    // it: `fromPrefs` does not, and `fromEnv` did not read anything for it. The
+    // collector is configured from the environment and is the process the doc
+    // says should raise it, so the environment is where the hatch belongs.
+    test('an unset variable leaves the default of one alone', () {
+      expect(maxPoolConnectionsFromEnv(const {}), isNull);
+      expect(resolvePoolSize(maxPoolConnectionsFromEnv(const {})), 1);
+    });
+
+    test('a collector can raise its budget', () {
+      final size = maxPoolConnectionsFromEnv(
+          const {kMaxPoolConnectionsEnv: '8'});
+      expect(size, 8);
+      expect(poolConnectionCount(size) - kHealthMonitorConnections, 8);
+    });
+
+    test('surrounding whitespace is not a typo worth failing over', () {
+      expect(maxPoolConnectionsFromEnv(const {kMaxPoolConnectionsEnv: ' 4 '}),
+          4);
+    });
+
+    test('a value that is not a number costs the raise, not the start', () {
+      expect(maxPoolConnectionsFromEnv(const {kMaxPoolConnectionsEnv: 'lots'}),
+          isNull);
+      expect(maxPoolConnectionsFromEnv(const {kMaxPoolConnectionsEnv: ''}),
+          isNull);
+    });
+
+    test('the cap still applies to whatever the environment asks for', () {
+      expect(
+          resolvePoolSize(maxPoolConnectionsFromEnv(
+              const {kMaxPoolConnectionsEnv: '9999'})),
+          kMaxPoolConnections);
+      expect(
+          resolvePoolSize(
+              maxPoolConnectionsFromEnv(const {kMaxPoolConnectionsEnv: '0'})),
+          1);
+    });
+  });
+
+  group('releasePool', () {
+    // The pool was never closed anywhere in the repo. `PgDatabase.opened` does
+    // not own what it is handed, so `AppDatabase.close()` left the pool -- and
+    // the health monitor's standing connection inside it -- running for the
+    // life of the process. On the `useIsolate: false` path, which is every
+    // collector acquisition isolate, there was no DriftIsolate to take it down
+    // either, so each thrown-away connect attempt cost a server slot.
+    test('forces the close, because the monitor never lets go on its own',
+        () async {
+      // A graceful close waits for borrowed connections to come back. The
+      // monitor's is borrowed until the socket underneath it dies, so a
+      // graceful close waits forever on a healthy one.
+      final forced = <bool>[];
+      await releasePool(({bool force = false}) async => forced.add(force));
+      expect(forced, [true]);
+    });
+
+    test('a close that hangs is abandoned rather than stalling the caller',
+        () async {
+      // connectWithRetry closes every attempt it throws away, against a
+      // database that is by definition already misbehaving.
+      final errors = <Object>[];
+      final stopwatch = Stopwatch()..start();
+      await releasePool(
+        ({bool force = false}) => Completer<void>().future,
+        timeout: const Duration(milliseconds: 50),
+        onError: errors.add,
+      );
+      stopwatch.stop();
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(errors.single, isA<TimeoutException>());
+    });
+
+    test('a close that throws does not become the caller\'s problem', () async {
+      final errors = <Object>[];
+      await releasePool(
+        ({bool force = false}) async => throw StateError('socket already gone'),
+        onError: errors.add,
+      );
+      expect(errors.single, isA<StateError>());
     });
   });
 
