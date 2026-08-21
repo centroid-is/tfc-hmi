@@ -19,9 +19,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.44.9'
+    - name: Set up Flutter
+      uses: ./.github/actions/setup-flutter
 
     - name: Install native dependencies (Linux)
       if: runner.os == 'Linux'
@@ -32,6 +31,18 @@ jobs:
 
     - name: Run pages tests
       run: flutter test test/
+
+    # A failed golden prints only "Pixel test failed, 1.18%, 1457px diff" — the
+    # images that would show *what* moved are written to a `failures/` directory
+    # next to the test and die with the runner. Keep them.
+    - name: Upload golden failure images
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: golden-failures-${{ matrix.os }}
+        path: '**/failures/**'
+        if-no-files-found: ignore
+        retention-days: 7
 
   modbus-lib-test:
     strategy:
