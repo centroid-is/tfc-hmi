@@ -13,7 +13,7 @@ import 'package:tfc/providers/proposal_state.dart';
 void main() {
   Widget wrap(ChatMessage message) => ProviderScope(
         overrides: [
-          proposalStateProvider.overrideWith((ref) => ProposalStateNotifier(null)),
+          proposalStateProvider.overrideWith((ref) => ProposalStateNotifier()),
         ],
         child: MaterialApp(
           home: Scaffold(body: MessageBubble(message: message)),
@@ -22,10 +22,10 @@ void main() {
 
   testWidgets('operator-decision note renders nothing', (tester) async {
     await tester.pumpWidget(wrap(ChatMessage.user(
-        '$kOperatorDecisionPrefix Accepted the alarm proposal "High Temp" (#12).')));
+        '$kOperatorDecisionPrefix Accepted the alarm proposal "High Temp".')));
 
     expect(find.text('$kOperatorDecisionPrefix Accepted the alarm proposal '
-        '"High Temp" (#12).'), findsNothing);
+        '"High Temp".'), findsNothing);
     expect(find.textContaining('Accepted'), findsNothing);
     expect(find.byType(Container), findsNothing);
   });

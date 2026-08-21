@@ -496,7 +496,7 @@ void main() {
 
   group('ProposalStateNotifier state changes trigger listener callbacks', () {
     test('addProposal changes state (would fire ref.listen)', () {
-      final notifier = ProposalStateNotifier(null);
+      final notifier = ProposalStateNotifier();
       final states = <ProposalState>[];
 
       notifier.addListener((state) {
@@ -512,7 +512,7 @@ void main() {
     test('a second proposal fires the listener again', () {
       // This is the case the old `if (_isProposal) return` guard threw away:
       // the state change arrives, but the editor refused to look at it.
-      final notifier = ProposalStateNotifier(null);
+      final notifier = ProposalStateNotifier();
       final states = <ProposalState>[];
       notifier.addListener(states.add);
 
@@ -526,7 +526,7 @@ void main() {
     });
 
     test('addProposal of wrong type does not match another editors filter', () {
-      final notifier = ProposalStateNotifier(null);
+      final notifier = ProposalStateNotifier();
       notifier.addProposal(
           makeProposal(id: 1, type: 'key_mapping', json: '{"uid":"k1"}'));
 
@@ -540,7 +540,7 @@ void main() {
     });
 
     test('duplicate addProposal does not re-trigger state change', () {
-      final notifier = ProposalStateNotifier(null);
+      final notifier = ProposalStateNotifier();
       final states = <ProposalState>[];
 
       notifier.addListener((state) {
@@ -557,7 +557,7 @@ void main() {
 
     test('acceptProposal removes from state (listener would see empty)',
         () async {
-      final notifier = ProposalStateNotifier(null);
+      final notifier = ProposalStateNotifier();
       notifier
           .addProposal(makeProposal(id: 1, type: 'alarm', json: '{"uid":"a1"}'));
       expect(notifier.state.proposals, hasLength(1));
@@ -575,7 +575,7 @@ void main() {
       // Each removal is its own state change, so each one fires the listener
       // while the rest are still pending. That is why every editor tracks the
       // ids it has already resolved instead of trusting the flag.
-      final notifier = ProposalStateNotifier(null);
+      final notifier = ProposalStateNotifier();
       for (var id = 1; id <= 3; id++) {
         notifier.addProposal(
             makeProposal(id: id, type: 'alarm', json: '{"uid":"a$id"}'));

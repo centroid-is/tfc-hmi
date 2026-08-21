@@ -77,10 +77,10 @@ When the AI suggests a configuration change, it generates a proposal that
 opens in the appropriate HMI editor (alarm editor, key repository, page
 editor). The operator reviews and saves -- the AI never commits changes.
 
-Each write tool result carries a `_proposal_id`. The operator's decision is
-relayed back two ways: decisions (accepted / viewed / rejected) appear in
-the chat conversation as operator-decision notes, and the AI can poll the
-`get_proposal_status` tool with proposal ids to check outcomes explicitly.
+The operator's decision comes back on its own: accepting, viewing or
+rejecting a proposal appends an operator-decision note to the chat
+conversation. There is nothing to poll -- proposals are not stored anywhere,
+so a proposal exists only for as long as it is on screen.
 ''';
 
 /// Registers the `scada://source/knowledge` resource on [mcpServer].

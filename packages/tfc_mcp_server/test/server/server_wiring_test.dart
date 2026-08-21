@@ -101,10 +101,9 @@ void main() {
           'propose_page',
           'propose_asset',
           'update_asset',
-          'get_proposal_status',
         ]));
 
-        expect(toolNames, hasLength(25));
+        expect(toolNames, hasLength(24));
       } finally {
         await client.close();
       }
@@ -195,8 +194,8 @@ void main() {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 25 tools are registered (drawing tools always present)
-        expect(toolNames, hasLength(25));
+        // All 24 tools are registered (drawing tools always present)
+        expect(toolNames, hasLength(24));
         expect(toolNames, contains('search_drawings'));
         expect(toolNames, contains('get_drawing_page'));
       } finally {

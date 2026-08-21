@@ -261,8 +261,7 @@ void registerAssetWriteTools({
           patch.entries.map((e) => '${e.key} → ${short(e.value)}').join(', ');
 
       final proposal = <String, dynamic>{
-        // Top-level title is what ProposalService records and the
-        // notification banner shows.
+        // Top-level title is what the notification banner shows.
         'title': '$targetLabel: $changes',
         'page_key': pageKey,
         'target': {
