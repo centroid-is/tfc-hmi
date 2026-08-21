@@ -158,6 +158,12 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   @visibleForTesting
   pg.Pool? get poolForTest => _pool;
 
+  /// The health monitor standing in [_pool], when it is ours to stop.
+  ///
+  /// Same split as [_pool]: only [create] has one, because [spawn]'s monitor
+  /// runs inside the DriftIsolate and dies with it.
+  _HealthMonitor? _healthMonitor;
+
   /// Set on the first [close] so repeat and concurrent calls share one
   /// teardown rather than racing each other through it.
   Future<void>? _closed;
@@ -332,7 +338,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
             queryTimeout: config.queryTimeout,
           ));
 
-      _startPoolHealthMonitor(pool, healthPort.sendPort);
+      final monitor = _startPoolHealthMonitor(pool, healthPort.sendPort);
 
       final db = AppDatabase._(
           config, PgDatabase.opened(pool, logStatements: config.debug));
@@ -340,6 +346,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       // `PgDatabase.opened` does not take ownership of what it is handed, so
       // nothing downstream of drift will ever close this pool. [close] has to.
       db._pool = pool;
+      db._healthMonitor = monitor;
       return db;
     }
     if (sqliteFolder != null) {
@@ -1105,14 +1112,27 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     // Order matters. `PgDatabase.opened` passes `closeUnderlyingWhenClosed:
     // false`, so `super.close()` leaves the pool open -- nothing in the repo
     // closed it at all, which is why the health monitor's standing connection
-    // outlived every database that used one. Releasing it here, after drift is
-    // done with it, leaves the monitor as the only borrower, and forcing is
-    // what gets it to let go: see [releasePool].
+    // outlived every database that used one.
+    //
+    // Ask the monitor to let go before closing the pool, rather than closing
+    // the pool out from under it. Both end up with the connection released,
+    // but only this order releases it *politely*: a returned connection is
+    // closed with a Terminate, and the backend exits on the spot. Forcing
+    // destroys the socket instead and leaves the server to notice, which it
+    // does at its own pace -- and a server that is slow to notice is exactly
+    // the one already short of connection slots.
+    final monitor = _healthMonitor;
+    if (monitor != null) {
+      monitor.stop();
+      await monitor.done
+          .timeout(kMonitorStopTimeout, onTimeout: () {})
+          .catchError((Object _) {});
+    }
     final pool = _pool;
     if (pool != null) {
       await releasePool(
         pool.close,
-        onError: (e) => logger.w('Abandoning a pool that would not close: $e'),
+        onError: (e) => logger.w('Pool close did not go quietly: $e'),
       );
     }
     // The spawn path keeps its pool inside the isolate, where [_pool] cannot
@@ -1310,32 +1330,64 @@ Future<Isolate> _spawnGuardedIsolate<T>(void Function(T) entryPoint, T arg) {
   }, null);
 }
 
+/// A running health monitor, so whoever started it can stop it again.
+///
+/// The monitor otherwise only ever exits by noticing the pool has closed, and
+/// noticing takes until its next heartbeat. [stop] tells it to let go now, and
+/// [done] completes once it actually has -- which is what lets the pool be
+/// closed gracefully rather than yanked out from under it.
+class _HealthMonitor {
+  _HealthMonitor(this._stop, this.done);
+
+  final Completer<void> _stop;
+
+  /// Completes when the monitor has returned its connection and exited.
+  final Future<void> done;
+
+  void stop() {
+    if (!_stop.isCompleted) _stop.complete();
+  }
+}
+
 /// Holds one pool connection and awaits its [closed] future.
 /// When TCP keepalive kills the connection, [closed] completes and we send
 /// `false` via [port], then re-acquire a new connection from the pool.
 /// This is running inside the drift spawned isolate.
 ///
+/// Every wait is raced against the stop signal, so a shutdown does not have to
+/// sit out a 15 second heartbeat or a 5 second retry delay before the monitor
+/// hands its connection back.
+///
 /// Wrapped in [runZonedGuarded] so that any unhandled exception (e.g.
 /// [SocketException] escaping the inner try-catch via native socket layer
 /// or Future chaining) is caught by the zone handler instead of killing
 /// the entire isolate.
-void _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
+_HealthMonitor _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
+  final stop = Completer<void>();
+  final done = Completer<void>();
+
+  void finish() {
+    if (!done.isCompleted) done.complete();
+  }
+
   runZonedGuarded(() {
     Future<void> monitor() async {
-      while (pool.isOpen) {
+      while (pool.isOpen && !stop.isCompleted) {
         try {
           await pool.withConnection((conn) async {
             port.send(true);
             // Send periodic heartbeats to keep the health timeout timer fed.
             // Without this, a healthy connection that stays open indefinitely
             // would cause the 30-second health timeout to fire `false`.
-            while (pool.isOpen) {
+            while (pool.isOpen && !stop.isCompleted) {
               port.send(true);
-              // Wait 15 seconds or until connection closes, whichever first
+              // Wait 15 seconds, or until the connection closes, or until we
+              // are asked to stop -- whichever comes first.
               final closed = conn.closed.then((_) => true);
               final timeout = Future.delayed(
                   const Duration(seconds: 15), () => false);
-              final didClose = await Future.any([closed, timeout]);
+              final asked = stop.future.then((_) => true);
+              final didClose = await Future.any([closed, timeout, asked]);
               if (didClose) break;
             }
             port.send(false);
@@ -1344,9 +1396,14 @@ void _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
           port.send(false);
           // Log but continue — pool will provide a new connection
         }
-        // Wait before retrying after a disconnection
-        await Future.delayed(const Duration(seconds: 5));
+        if (stop.isCompleted || !pool.isOpen) break;
+        // Wait before retrying after a disconnection, unless asked to stop.
+        await Future.any([
+          Future<void>.delayed(const Duration(seconds: 5)),
+          stop.future,
+        ]);
       }
+      finish();
     }
 
     unawaited(monitor());
@@ -1355,7 +1412,10 @@ void _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
     // (e.g. SocketException from native layer, Future chain edge cases).
     // This prevents the isolate from being killed.
     port.send(false);
+    finish();
   });
+
+  return _HealthMonitor(stop, done.future);
 }
 
 enum NotificationAction {
