@@ -263,6 +263,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
   late String _title;
   late String _description;
   late List<AlarmRule> _rules;
+  late bool _navigationIndicator;
 
   @override
   void initState() {
@@ -270,6 +271,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
     _title = widget.initialConfig?.title ?? '';
     _description = widget.initialConfig?.description ?? '';
     _rules = widget.initialConfig?.rules.toList() ?? [];
+    _navigationIndicator = widget.initialConfig?.navigationIndicator ?? false;
   }
 
   // Add a method to check if all expressions are valid
@@ -303,6 +305,21 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
               maxLines: null,
               keyboardType: TextInputType.multiline,
               enabled: widget.editable,
+            ),
+            const SizedBox(height: 16),
+            SwitchListTile(
+              key: const ValueKey('alarm-form-navigation-indicator'),
+              title: const Text('Show in navigation bar'),
+              subtitle: const Text(
+                'While active, pulses the navigation icon of any page holding '
+                'an Alarm asset for it — except the page you are on.',
+              ),
+              isThreeLine: true,
+              secondary: const Icon(Icons.navigation_outlined),
+              value: _navigationIndicator,
+              onChanged: widget.editable
+                  ? (v) => setState(() => _navigationIndicator = v)
+                  : null,
             ),
             const SizedBox(height: 16),
             ..._rules.asMap().entries.map((entry) {
@@ -409,9 +426,11 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                           final config = AlarmConfig(
                             uid: widget.initialConfig?.uid ??
                                 UniqueKey().toString(),
+                            key: widget.initialConfig?.key,
                             title: _title,
                             description: _description,
                             rules: _rules,
+                            navigationIndicator: _navigationIndicator,
                           );
                           widget.onSubmit?.call(config);
                         }
@@ -440,9 +459,11 @@ class CreateAlarm extends ConsumerWidget {
       onSubmit: (config) async {
         final newConfig = AlarmConfig(
           uid: UniqueKey().toString(),
+          key: config.key,
           title: config.title,
           description: config.description,
           rules: config.rules,
+          navigationIndicator: config.navigationIndicator,
         );
 
         final alarmMan = await ref.read(alarmManProvider.future);

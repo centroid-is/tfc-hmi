@@ -3,14 +3,27 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:beamer/beamer.dart';
+import 'package:tfc_dart/core/alarm.dart';
 import '../models/menu_item.dart';
+import '../providers/nav_alarm.dart' show navigationAlarmLevelFor;
 import '../route_registry.dart';
+import 'nav_alarm_badge.dart';
 
 class TopLevelNavIndicator extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool active;
-  const TopLevelNavIndicator(this.icon, this.label, this.active, {super.key});
+
+  /// Level to badge the icon at, or null for quiet. On a section this is the
+  /// worst alarm anywhere beneath it — the pages themselves have no icon of
+  /// their own until the menu is opened.
+  final AlarmLevel? alarmLevel;
+
+  /// Freezes the badge's pulse at a fixed phase. Golden tests only.
+  final double? alarmProgressOverride;
+
+  const TopLevelNavIndicator(this.icon, this.label, this.active,
+      {super.key, this.alarmLevel, this.alarmProgressOverride});
 
   @override
   Widget build(BuildContext context) {
@@ -23,7 +36,11 @@ class TopLevelNavIndicator extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 25),
+          NavAlarmBadge(
+            level: alarmLevel,
+            progressOverride: alarmProgressOverride,
+            child: Icon(icon, color: color, size: 25),
+          ),
           Padding(
               padding: const EdgeInsets.fromLTRB(8.0, 0, 0, 0),
               child:
@@ -45,9 +62,23 @@ class NavDropdown extends StatefulWidget {
 
   final MenuItem menuItem;
 
+  /// Page path -> active alarm level, for the whole app. Supplied by the
+  /// navigation bar, which owns the one alarm subscription for the whole bar
+  /// rather than one per destination.
+  ///
+  /// The map, not a single level: the section icon shows the worst alarm
+  /// beneath it, and the popup then badges the individual pages, which is the
+  /// only place the operator can see *which* page it was.
+  final Map<String, AlarmLevel> alarmLevels;
+
+  /// Path currently on screen; it never badges. See [navigationAlarmLevelFor].
+  final String? currentPath;
+
   const NavDropdown({
     super.key,
     required this.menuItem,
+    this.alarmLevels = const {},
+    this.currentPath,
   });
 
   @override
@@ -89,6 +120,10 @@ class NavDropdownState extends State<NavDropdown> {
     final items = <PopupMenuEntry<void>>[];
     for (final child in root.children) {
       final indent = EdgeInsets.only(left: depth * 16.0);
+      // Sections carry the worst level from their subtree, leaves their own —
+      // both fall out of the same walk.
+      final childLevel = navigationAlarmLevelFor(child, widget.alarmLevels,
+          currentPath: widget.currentPath);
       if (child.isNavigationSection) {
         // Section header (not clickable)
         items.add(PopupMenuItem<void>(
@@ -98,7 +133,8 @@ class NavDropdownState extends State<NavDropdown> {
             padding: indent,
             child: Row(
               children: [
-                Icon(child.icon, size: 20),
+                NavAlarmBadge(
+                    level: childLevel, child: Icon(child.icon, size: 20)),
                 const SizedBox(width: 12),
                 Text(child.label,
                     style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -116,7 +152,8 @@ class NavDropdownState extends State<NavDropdown> {
             padding: indent,
             child: Row(
               children: [
-                Icon(child.icon, size: 20),
+                NavAlarmBadge(
+                    level: childLevel, child: Icon(child.icon, size: 20)),
                 const SizedBox(width: 12),
                 Flexible(
                     child: Text(child.label, overflow: TextOverflow.ellipsis)),
@@ -221,6 +258,11 @@ class NavDropdownState extends State<NavDropdown> {
             widget.menuItem.icon,
             widget.menuItem.label,
             widget.menuItem == activeRoot,
+            alarmLevel: navigationAlarmLevelFor(
+              widget.menuItem,
+              widget.alarmLevels,
+              currentPath: widget.currentPath,
+            ),
           ),
         );
       },
