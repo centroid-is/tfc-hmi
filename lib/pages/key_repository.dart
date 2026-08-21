@@ -16,6 +16,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import '../widgets/fuzzy_search_bar.dart';
 import '../widgets/bit_mask_grid.dart';
@@ -237,6 +238,21 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   StateController<Future<void> Function()?>? _commitSlot;
   StateController<Future<void> Function()?>? _discardSlot;
 
+  /// Everything the banner's Accept and Reject need, resolved while this
+  /// section is still alive.
+  ///
+  /// The banner outlives this widget -- it is published once and stays up
+  /// while the operator navigates. By the time they press a button, this state
+  /// can be deactivated or disposed, and then `ref` throws
+  /// (`Cannot use "ref" after the widget was disposed`) before any work
+  /// happens. On 2026-08-21 that made a batch of 16 mappings impossible to
+  /// either accept or reject. A notifier and a future belong to the provider
+  /// container, which outlives the widget, so holding them is safe.
+  ProposalStateNotifier? _proposals;
+  Future<Preferences>? _prefsHandle;
+  ScaffoldMessengerState? _messengerHandle;
+  Color? _errorColourHandle;
+
   final List<Map<String, dynamic>> _proposedMappings = [];
   final List<int> _proposalIds = [];
   bool get _isProposal => _proposedMappings.isNotEmpty;
@@ -334,6 +350,12 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       final discardSlot = ref.read(proposalDiscardProvider.notifier);
       discardSlot.state = _discardProposals;
       _discardSlot = discardSlot;
+      // Resolved here, where `ref` and `context` are known good, because the
+      // callbacks above can be invoked long after this section is gone.
+      _proposals = ref.read(proposalStateProvider.notifier);
+      _prefsHandle = ref.read(preferencesProvider.future);
+      _messengerHandle = ScaffoldMessenger.maybeOf(context);
+      _errorColourHandle = Theme.of(context).colorScheme.error;
     });
   }
 
@@ -388,12 +410,13 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       _keyMappings!.nodes = {...fresh, ..._keyMappings!.nodes};
     }
     _invalidateDerived();
-    await _saveKeyMappings();
+    if (!await _saveKeyMappings()) return;
 
     // Awaited, and only after the save has persisted: acceptProposal marks
     // the row accepted in the database, so doing it first would lose the
     // mappings if the save failed.
-    final notifier = ref.read(proposalStateProvider.notifier);
+    final notifier = _proposals;
+    if (notifier == null) return;
     for (final id in _proposalIds) {
       try {
         await notifier.acceptProposal(id);
@@ -404,14 +427,15 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       _proposedMappings.clear();
       _proposalIds.clear();
     });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
     if (firstKey != null) _revealKey(firstKey);
   }
 
   /// Drops the whole batch without touching the mappings.
   Future<void> _discardProposals() async {
-    final notifier = ref.read(proposalStateProvider.notifier);
+    final notifier = _proposals;
+    if (notifier == null) return;
     for (final id in _proposalIds) {
       try {
         await notifier.rejectProposal(id);
@@ -422,8 +446,8 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       _proposedMappings.clear();
       _proposalIds.clear();
     });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
   }
 
   Future<void> _loadKeyMappings() async {
@@ -457,12 +481,34 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     return _currentJson() != _savedJson;
   }
 
-  Future<void> _saveKeyMappings() async {
-    if (_keyMappings == null) return;
+  /// Persists the mappings, reporting whether they actually landed.
+  ///
+  /// The result matters to [_commitProposals]: a proposal must stay pending
+  /// when its mappings did not save, or it is lost with nothing written.
+  Future<bool> _saveKeyMappings() async {
+    if (_keyMappings == null) return false;
     // Unfocus active text field to commit pending changes (e.g. key rename)
     FocusManager.instance.primaryFocus?.unfocus();
+    // Captured before the first await. Showing a snackbar looks up an
+    // ancestor, and once this section has been deactivated that lookup throws
+    // -- `mounted` is still true at that point, so it is not a sufficient
+    // guard. Accepting a batch of proposals rebuilds this subtree, which is
+    // exactly when it happened: the save persisted, the success snackbar
+    // threw, the catch threw again, and `_commitProposals` never reached
+    // `acceptProposal`. The mappings were written but every proposal stayed
+    // pending, so they came back on the next load.
+    // The handles when the banner drove us here, because looking an ancestor
+    // up off a dead element throws before any of the work below runs. Plain
+    // context for an ordinary Save, where no handle was ever taken and the
+    // page is by definition on screen.
+    final messenger = _messengerHandle ?? ScaffoldMessenger.maybeOf(context);
+    final errorColour =
+        _errorColourHandle ?? Theme.of(context).colorScheme.error;
     try {
-      final prefs = await ref.read(preferencesProvider.future);
+      // `_prefsHandle` when the banner drove us here, because `ref` is gone by
+      // then; `ref` for an ordinary Save, where the handle was never set.
+      final prefs =
+          await (_prefsHandle ?? ref.read(preferencesProvider.future));
       // Unfocusing above may have committed a rename, so re-encode.
       _invalidateDerived();
       final json = _currentJson();
@@ -471,21 +517,21 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       // No stateManProvider invalidate here: the provider's preferences
       // listener diffs the save and applies it live — it only rebuilds the
       // whole StateMan when an edit cannot be absorbed in place.
-      if (!mounted) return;
-      setState(() {});
+      if (mounted) setState(() {});
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger?.showSnackBar(
         const SnackBar(
             content: Text('Key mappings saved successfully!'),
             backgroundColor: Colors.green),
       );
+      return true;
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger?.showSnackBar(
         SnackBar(
             content: Text('Failed to save: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error),
+            backgroundColor: errorColour),
       );
+      return false;
     }
   }
 
