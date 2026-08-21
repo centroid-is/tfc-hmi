@@ -618,6 +618,52 @@ class ConveyorColorPaletteConfig extends BaseAsset {
   Map<String, dynamic> toJson() => _$ConveyorColorPaletteConfigToJson(this);
 }
 
+/// How a conveyor's drive reads.
+///
+/// [running] is the boolean-driven equivalent of [auto]: the belt is moving,
+/// and that is all the bit says. It is a separate value from [auto] so the
+/// decode stays honest about where the answer came from, but both mean the
+/// same thing on screen.
+enum DriveState { fault, stopped, auto, manual, clean, running, unknown }
+
+/// Reads a drive value, whether it is an `FB_ATV320` HMI struct or a plain
+/// BOOL.
+///
+/// A struct is preferred and answers with its `p_stat_RunMode`. A plain bool
+/// answers running/stopped. Anything else is [DriveState.unknown] rather than
+/// a guess — reading a frequency or a string as "stopped" would paint a belt
+/// grey that nobody has any information about.
+DriveState readDriveState(DynamicValue? value) {
+  if (value == null) return DriveState.unknown;
+  try {
+    final mode = value['p_stat_RunMode'];
+    final name = mode.enumFields?[mode.asInt]?.name;
+    switch (name) {
+      case 'fault':
+        return DriveState.fault;
+      case 'stopped':
+        return DriveState.stopped;
+      case 'auto':
+        return DriveState.auto;
+      case 'manual':
+        return DriveState.manual;
+      case 'clean':
+        return DriveState.clean;
+    }
+    return DriveState.unknown;
+  } catch (_) {
+    // Not a drive struct; fall through to the plain-bool reading.
+  }
+  if (value.value is bool) {
+    return value.value as bool ? DriveState.running : DriveState.stopped;
+  }
+  return DriveState.unknown;
+}
+
+/// Whether [state] means the belt is moving.
+bool driveStateIsMoving(DriveState state) =>
+    state == DriveState.auto || state == DriveState.running;
+
 class ConveyorColorPalette extends StatelessWidget {
   final ConveyorColorPaletteConfig config;
   const ConveyorColorPalette({required this.config});
@@ -710,6 +756,15 @@ class ConveyorConfig extends BaseAsset {
   String? batchesKey;
   String? frequencyKey;
   String? tripKey;
+
+  /// Optional plain BOOL key: true while the belt is running.
+  ///
+  /// For belts that have no `FB_ATV320` HMI struct to bind [key] to — the
+  /// ones driven over Modbus from the pallet system, for instance — a single
+  /// "is running" bit is all the PLC offers. Consulted only when [key] yields
+  /// nothing usable, so a drive struct always wins where there is one.
+  String? runningKey;
+
   bool? simulateBatches;
   bool? bidirectional;
   bool? reverseDirection;
@@ -779,6 +834,7 @@ class ConveyorConfig extends BaseAsset {
       this.batchesKey,
       this.frequencyKey,
       this.tripKey,
+      this.runningKey,
       this.simulateBatches,
       this.bidirectional,
       this.reverseDirection,
@@ -892,6 +948,12 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           initialValue: widget.config.tripKey,
           onChanged: (val) => setState(() => widget.config.tripKey = val),
           label: 'Trip key',
+        ),
+        const SizedBox(height: 8),
+        KeyField(
+          initialValue: widget.config.runningKey,
+          onChanged: (val) => setState(() => widget.config.runningKey = val),
+          label: 'Running key (plain true/false)',
         ),
         const SizedBox(height: 16),
         Row(
@@ -1460,9 +1522,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
   Color _getConveyorColor(HmiStateColors states,
       {DynamicValue? driveValue,
+      DynamicValue? runningValue,
       DynamicValue? frequencyValue,
       DynamicValue? tripValue}) {
     try {
+      // Trip is still checked first, below, so this only handles the shape of
+      // the drive value itself.
       // Check trip condition first if trip key is provided
       if (tripValue != null) {
         try {
@@ -1475,24 +1540,33 @@ class _ConveyorState extends ConsumerState<Conveyor>
         }
       }
 
-      // If we have drive value, use the original logic
-      if (driveValue != null) {
-        final state = driveValue['p_stat_RunMode'].asInt;
-        final fields = driveValue['p_stat_RunMode'].enumFields;
-        final name = fields?[state]?.name;
-        if (name == 'fault') {
-          return states.red;
-        } else if (name == 'stopped') {
-          return states.grey;
-        } else if (name == 'auto') {
-          return states.green;
-        } else if (name == 'manual') {
-          return states.yellow;
-        } else if (name == 'clean') {
-          return states.blue;
-        }
-        return states.violet;
+      // Drive struct first where there is one; the running bit only answers
+      // when the struct is absent or says nothing useful.
+      var reading = readDriveState(driveValue);
+      if (reading == DriveState.unknown && runningValue != null) {
+        reading = readDriveState(runningValue);
       }
+      if (reading != DriveState.unknown) {
+        switch (reading) {
+          case DriveState.fault:
+            return states.red;
+          case DriveState.stopped:
+            return states.grey;
+          case DriveState.auto:
+          // A boolean-driven belt looks the same as a struct-driven one in
+          // auto. Giving it a colour of its own would say something about the
+          // belt that the bit does not carry.
+          case DriveState.running:
+            return states.green;
+          case DriveState.manual:
+            return states.yellow;
+          case DriveState.clean:
+            return states.blue;
+          case DriveState.unknown:
+            return states.violet;
+        }
+      }
+      if (driveValue != null) return states.violet;
 
       // If we only have frequency and trip, use frequency-based logic
       if (frequencyValue != null) {
@@ -1602,6 +1676,18 @@ class _ConveyorState extends ConsumerState<Conveyor>
       streamLabels.add('frequency');
     }
 
+    if (widget.config.runningKey != null &&
+        widget.config.runningKey!.isNotEmpty) {
+      streams.add(optional(
+          ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.runningKey!)
+                .asStream()
+                .switchMap((s) => s),
+          )));
+      streamLabels.add('running');
+    }
+
     if (widget.config.tripKey != null && widget.config.tripKey!.isNotEmpty) {
       streams.add(optional(
           ref.watch(stateManProvider.future).asStream().switchMap(
@@ -1663,6 +1749,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         final color = _getConveyorColor(
           states,
           driveValue: dynValue['drive'],
+          runningValue: dynValue['running'],
           frequencyValue: dynValue['frequency'],
           tripValue: dynValue['trip'],
         );
