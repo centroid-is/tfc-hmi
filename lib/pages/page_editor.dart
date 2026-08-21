@@ -4193,7 +4193,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                 ? null
                 : Border.all(color: scheme.primary, width: 2),
           ),
-          child: draggable,
+          // Once a candidate hovers, this box has a background, and the row
+          // inside is a ListTile -- which inks on the nearest Material, below
+          // that background. Same trap as the proposal highlight. Transparent,
+          // so the hover highlight is unchanged; the radius matches the box.
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: BorderRadius.circular(8),
+            clipBehavior: Clip.antiAlias,
+            child: draggable,
+          ),
         );
       },
     );
