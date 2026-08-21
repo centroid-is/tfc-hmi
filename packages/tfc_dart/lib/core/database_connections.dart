@@ -50,7 +50,8 @@ int resolvePoolSize(int? configured) {
 ///
 /// The pool health monitor sits inside `pool.withConnection` for as long as
 /// the pool is open -- awaiting the connection's `closed` future is how it
-/// notices a socket dying. That connection is never handed back.
+/// notices a socket dying. It hands that connection back only on the way out,
+/// so for sizing purposes the pool never gets it.
 const int kHealthMonitorConnections = 1;
 
 /// Connections to open the pool with: the work budget plus the monitor's.
@@ -88,28 +89,48 @@ int? maxPoolConnectionsFromEnv(Map<String, String> env) {
 
 // -- shutdown ---------------------------------------------------------------
 
-/// Longest a pool close may take before it is abandoned to the server to reap.
+/// Longest either half of a pool close may take before it is given up on.
 const Duration kPoolCloseTimeout = Duration(seconds: 5);
 
-/// Releases a pool that the health monitor is standing inside.
+/// Longest to wait for the health monitor to hand its connection back.
 ///
-/// [close] is `pg.Pool.close`, and it has to be forced. A graceful close waits
-/// for every borrowed connection to come back, and the monitor's connection is
-/// borrowed for the pool's whole life -- it sits in `withConnection` awaiting
-/// that connection's `closed` future, which on a healthy socket never
-/// completes. Forcing closes the socket underneath it: `closed` fires, the
-/// monitor's `withConnection` returns, and the pool finishes closing. Nothing
-/// else is borrowing by then, because drift is closed first.
+/// Every wait inside the monitor is raced against its stop signal, so it lets
+/// go in milliseconds; this is only here so that a wedged one cannot hold up a
+/// close that must not hang.
+const Duration kMonitorStopTimeout = Duration(seconds: 2);
+
+/// Releases a pool: politely if it can, forcibly if it must.
 ///
-/// Bounded and swallowing, because `connectWithRetry` calls this on every
-/// attempt it throws away. A close that hung there would stall the retry loop
-/// against an already-unreachable database; a close that threw would leave the
-/// same orphaned pool the close exists to prevent.
+/// [close] is `pg.Pool.close`. The graceful call is tried first because of what
+/// it does on the wire -- returning a connection closes it with a Terminate,
+/// and the backend exits immediately. Forcing destroys the socket instead and
+/// leaves the server to work out that the peer is gone, which it does in its
+/// own time. That difference does not show up on a quiet machine, where both
+/// look instant, but it is the whole point on a loaded one: this code exists
+/// because a Postgres ran out of connection slots, and a slot released only
+/// when the server notices a dead socket is a slot still taken.
+///
+/// The graceful call only works because the caller stops the health monitor
+/// first: it waits for every borrowed connection to come back, and the
+/// monitor's is borrowed for the pool's whole life. If anything is still
+/// holding one, the graceful close cannot finish, the timeout fires, and the
+/// forced call guarantees the pool goes away regardless.
+///
+/// Bounded and swallowing throughout, because `connectWithRetry` calls this on
+/// every attempt it throws away. A close that hung there would stall the retry
+/// loop against an already-unreachable database; a close that threw would
+/// leave the same orphaned pool the close exists to prevent.
 Future<void> releasePool(
   Future<void> Function({bool force}) close, {
   Duration timeout = kPoolCloseTimeout,
   void Function(Object error)? onError,
 }) async {
+  try {
+    await close(force: false).timeout(timeout);
+    return;
+  } catch (error) {
+    onError?.call(error);
+  }
   try {
     await close(force: true).timeout(timeout);
   } catch (error) {
