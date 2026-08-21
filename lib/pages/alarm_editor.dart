@@ -37,6 +37,39 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   StateController<Future<void> Function()?>? _commitSlot;
   StateController<Future<void> Function()?>? _discardSlot;
 
+  /// The provider container the banner's accept and reject work through,
+  /// captured while this page is still alive.
+  ///
+  /// Same reason the slots above are held: the banner outlives this page. It
+  /// is published once and stays up while the operator navigates, so by the
+  /// time a button is pressed this State can be gone and `ref` throws before
+  /// a single alarm is written. On 2026-08-21 that shape left a batch of 16
+  /// key mappings impossible to either accept or reject -- the mappings were
+  /// saved, no proposal was marked accepted, and the batch came back on the
+  /// next load. A ProviderContainer belongs to the ProviderScope at the app
+  /// root, so it outlives this widget and can be held safely; reading the
+  /// providers off it at call time also keeps them current across an
+  /// invalidate, which a cached notifier would not.
+  ProviderContainer? _container;
+
+  /// The messenger to report through once a proposal is staged.
+  ///
+  /// Context-derived, so unlike the providers there is no container to
+  /// re-read it from. `mounted` is not enough of a guard for the lookup:
+  /// an element that has been *deactivated* still reports `mounted == true`,
+  /// and `ScaffoldMessenger.of` walks ancestors that are no longer there.
+  ScaffoldMessengerState? _messengerHandle;
+
+  /// Where to report from. The handle whenever there is one -- every path
+  /// that can outlive the page has one by then. The live lookup covers the
+  /// form being used before anything was staged, when the page is by
+  /// definition on screen.
+  ScaffoldMessengerState? get _messenger {
+    final handle = _messengerHandle;
+    if (handle != null) return handle;
+    return mounted ? ScaffoldMessenger.maybeOf(context) : null;
+  }
+
   final List<AlarmConfig> _proposedAlarms = [];
   final List<int> _proposalIds = [];
 
@@ -144,17 +177,27 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       final discardSlot = ref.read(proposalDiscardProvider.notifier);
       discardSlot.state = _discardProposals;
       _discardSlot = discardSlot;
+      // Taken here, where `ref` and `context` are known good, because the two
+      // callbacks above can be invoked long after this page is gone.
+      _container = ProviderScope.containerOf(context, listen: false);
+      _messengerHandle = ScaffoldMessenger.maybeOf(context);
     });
   }
 
   /// Applies every staged alarm, then marks the proposals accepted.
   Future<void> _commitProposals() async {
     if (_proposedAlarms.isEmpty) return;
+    // Through the container, never `ref`: this is the banner's accept, and by
+    // the time it runs this page may be disposed. `ref` throws then, and it
+    // throws again after the await below even when the page was alive at the
+    // start -- which is how a batch could be written and left pending.
+    final container = _container;
+    if (container == null) return;
     // Deliberately NOT wrapped in a try: a failure here must abort before
     // anything is marked accepted. Swallowing it and running the accept loop
     // anyway would write zero alarms and still mark all N proposals accepted,
     // which is exactly the loss the ordering below exists to prevent.
-    final alarmMan = await ref.read(alarmManProvider.future);
+    final alarmMan = await container.read(alarmManProvider.future);
     for (final a in _proposedAlarms) {
       // updateAlarm removes the uid then re-adds it, so routing a removal
       // through it would write the alarm straight back and delete nothing.
@@ -164,44 +207,59 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
         alarmMan.updateAlarm(a);
       }
     }
-    ref.invalidate(alarmManProvider);
+    container.invalidate(alarmManProvider);
 
     // Awaited, and only after the alarms are in: acceptProposal marks the row
     // accepted in the database, so doing it first would lose them on failure.
-    final notifier = ref.read(proposalStateProvider.notifier);
+    final notifier = container.read(proposalStateProvider.notifier);
     for (final id in _proposalIds) {
       try {
         await notifier.acceptProposal(id);
-      } catch (_) {}
+      } catch (e) {
+        // Reported rather than swallowed: an accept that silently fails to
+        // land leaves the proposal pending with its alarm already written,
+        // and the batch returns on the next load with nothing to explain it.
+        debugPrint('alarm proposal $id could not be marked accepted: $e');
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      _proposedAlarms.clear();
-      _proposalIds.clear();
-      _proposedDeleteUids.clear();
-      _show = null;
-    });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _clearStagedBatch();
   }
 
   /// Drops the whole batch without adding any alarm.
   Future<void> _discardProposals() async {
-    final notifier = ref.read(proposalStateProvider.notifier);
+    // See [_commitProposals]: this is the banner's reject, and reaching for
+    // `ref` here is what threw "Cannot use ref after the widget was disposed"
+    // before a single proposal could be marked rejected.
+    final container = _container;
+    if (container == null) return;
+    final notifier = container.read(proposalStateProvider.notifier);
     for (final id in _proposalIds) {
       try {
         await notifier.rejectProposal(id);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('alarm proposal $id could not be marked rejected: $e');
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      _proposedAlarms.clear();
-      _proposalIds.clear();
-      _proposedDeleteUids.clear();
-      _show = null;
-    });
-    ref.read(proposalCommitProvider.notifier).state = null;
-    ref.read(proposalDiscardProvider.notifier).state = null;
+    _clearStagedBatch();
+  }
+
+  /// Drops the staged batch and retires the banner, whether or not this page
+  /// is still on screen.
+  ///
+  /// The slots go through the stored controllers rather than `ref.read`, for
+  /// the same reason the callbacks do; only the rebuild depends on [mounted].
+  void _clearStagedBatch() {
+    _proposedAlarms.clear();
+    _proposalIds.clear();
+    // Cleared with the alarms it annotates. Left behind, a uid staged for
+    // deletion in one batch marks an unrelated alarm that happens to reuse
+    // the uid in the next one, and accepting that batch removes it instead
+    // of writing it.
+    _proposedDeleteUids.clear();
+    _show = null;
+    if (mounted) setState(() {});
+    _commitSlot?.state = null;
+    _discardSlot?.state = null;
   }
 
   /// Accept the proposal with the (possibly edited) alarm config from the form.
@@ -213,8 +271,22 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   /// This avoids duplicate alarms when accepting an update proposal.
   Future<void> _acceptProposalWithConfig(AlarmConfig editedConfig) async {
     final removing = _proposedDeleteUids.contains(editedConfig.uid);
+    // The form's own Accept starts with this page on screen, so `ref` would
+    // work for the first read -- but not after the awaits below, and this
+    // method awaits twice before it is done touching providers. The container
+    // is read off the captured handle for the same reason the banner's
+    // callbacks are: it outlives the page, and reading the providers off it
+    // at call time keeps them current across an invalidate.
+    var container = _container;
+    if (container == null && mounted) {
+      container = ProviderScope.containerOf(context, listen: false);
+    }
+    if (container == null) return;
+    // Taken before the first await, while the page is certainly on screen and
+    // an ancestor lookup is safe.
+    final messenger = _messenger;
     try {
-      final alarmMan = await ref.read(alarmManProvider.future);
+      final alarmMan = await container.read(alarmManProvider.future);
       if (removing) {
         alarmMan.removeAlarm(editedConfig);
       } else {
@@ -222,7 +294,7 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       }
 
       // Invalidate the provider so the alarm list rebuilds with the new alarm.
-      ref.invalidate(alarmManProvider);
+      container.invalidate(alarmManProvider);
     } catch (_) {}
 
     // Only the alarm the form was editing leaves the batch; anything else
@@ -232,7 +304,7 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       // failed accept left the id out of _proposalIds while still in state,
       // and the next listener tick re-staged it as a duplicate.
       final id = _proposalIds.first;
-      await ref.read(proposalStateProvider.notifier).acceptProposal(id);
+      await container.read(proposalStateProvider.notifier).acceptProposal(id);
       _proposalIds.removeAt(0);
       // The flag leaves with the alarm it marks: dropping it earlier would
       // leave a still-staged removal looking like an ordinary update.
@@ -241,20 +313,22 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       }
     }
 
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
+    // Told through the handle, not a fresh lookup: navigating away mid-accept
+    // deactivates this element, which still reports `mounted == true` while
+    // `ScaffoldMessenger.of` is already walking ancestors that are gone.
+    messenger?.showSnackBar(
       SnackBar(
           content:
               Text(removing ? 'Alarm removed.' : 'Alarm proposal accepted!')),
     );
 
-    setState(() {
-      _show = null;
-    });
+    _show = null;
+    if (mounted) setState(() {});
+    // Through the stored controllers, for the same reason: the accept may
+    // have outlived the page, and the banner still has to lose its buttons.
     if (_proposedAlarms.isEmpty) {
-      ref.read(proposalCommitProvider.notifier).state = null;
-      ref.read(proposalDiscardProvider.notifier).state = null;
+      _commitSlot?.state = null;
+      _discardSlot?.state = null;
     }
   }
 
@@ -263,8 +337,32 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
     // The banner holds these closures over this State. Left set, "Accept all"
     // would call into a disposed State after navigating away: nothing saved,
     // proposals still pending, and an uncaught async error.
-    _commitSlot?.state = null;
-    _discardSlot?.state = null;
+    //
+    // After this frame, not during it: navigating away disposes us from
+    // inside a build, and writing to a provider there trips riverpod's
+    // "tried to modify a provider while the widget tree was building". Only
+    // if the slot still holds our own closure -- an editor that replaced us
+    // has already published its own, and clearing that would take the
+    // banner's buttons away from a live batch.
+    final commitSlot = _commitSlot;
+    final discardSlot = _discardSlot;
+    final commit = _commitProposals;
+    final discard = _discardProposals;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // `mounted` on the controllers, not on us: a frame later the whole
+      // ProviderScope may be gone too -- the app shutting down, or a test
+      // ending -- and reading a disposed StateController throws.
+      if (commitSlot != null &&
+          commitSlot.mounted &&
+          commitSlot.state == commit) {
+        commitSlot.state = null;
+      }
+      if (discardSlot != null &&
+          discardSlot.mounted &&
+          discardSlot.state == discard) {
+        discardSlot.state = null;
+      }
+    });
     super.dispose();
   }
 
