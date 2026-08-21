@@ -2265,6 +2265,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   PaneSection(
                     title: 'Trend',
                     child: PaneGraphTile(
+                      // Two traces on two axes, so they do have to be named —
+                      // but up here, where naming them costs a text row
+                      // instead of half the plot's width.
+                      legend: conveyorTrendColors,
                       // Tall enough for a two-axis line chart to be readable
                       // rather than decorative, and no taller — the setpoint
                       // fields below it have to fit on the same screen.
@@ -2903,10 +2907,18 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
         final currentData = <List<double>>[];
         final freqData = <List<double>>[];
 
-        double minFreq = 1000;
-        double maxFreq = 0;
-        double minCurrent = 1000;
-        double maxCurrent = 0;
+        // The collector hands over two hours of history but the plot only
+        // shows the last [xSpan] of it, so both axes are scaled from the
+        // samples inside that window. Scaling to all two hours is what made
+        // the traces sit flat and then jump the moment an old extreme aged
+        // out of the buffer — see [stableTrendRange].
+        final windowStart = DateTime.now()
+            .subtract(widget.xSpan)
+            .millisecondsSinceEpoch
+            .toDouble();
+        double minFreq = double.infinity;
+        double maxFreq = double.negativeInfinity;
+        double maxCurrent = double.negativeInfinity;
 
         for (final sample in samples) {
           final v = sample.value;
@@ -2917,38 +2929,25 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           currentData.add([time, current]);
           freqData.add([time, freq]);
 
+          if (time < windowStart) continue;
           if (freq < minFreq) minFreq = freq;
           if (freq > maxFreq) maxFreq = freq;
-          if (current < minCurrent) minCurrent = current;
           if (current > maxCurrent) maxCurrent = current;
         }
-        if (minCurrent == maxCurrent) {
-          maxCurrent++;
-        }
-        if (minFreq == maxFreq) {
-          maxFreq++;
-        }
-
-        // Headroom above and below the data.
-        //
-        // Scaling each axis to the exact extremes pins the traces to the top
-        // and bottom edges of the plot, where they run into the tick labels —
-        // the top reading and the top of the line end up drawn on each other.
-        // A 10% margin keeps the line inside the frame and the labels clear
-        // of it, on both axes.
-        (double, double) withHeadroom(double min, double max) {
-          final margin = (max - min) * 0.1;
-          return (min - margin, max + margin);
+        // Nothing inside the window yet — a drive that has stopped
+        // reporting. Frame the newest sample rather than an empty axis.
+        if (minFreq > maxFreq && freqData.isNotEmpty) {
+          minFreq = maxFreq = freqData.last[1];
+          maxCurrent = currentData.last[1];
         }
 
-        (minFreq, maxFreq) = withHeadroom(minFreq, maxFreq);
-        (_, maxCurrent) = withHeadroom(minCurrent, maxCurrent);
+        final freqRange = stableTrendRange(minFreq, maxFreq);
         // Current is framed from zero, not from its own minimum. Load tracks
         // speed, so scaling both axes to their own extremes maps the two
         // traces onto the same shape and the second one drawn simply hides
         // the first. Anchoring current at zero separates them — and zero is
         // the meaningful floor for a current reading anyway.
-        minCurrent = 0;
+        final currentRange = stableTrendRange(0, maxCurrent, floor: 0);
 
         // Time along the bottom, frequency on the LEFT axis and current on
         // the RIGHT — frequency is what an operator reads first, so it gets
@@ -2958,15 +2957,18 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           xAxis: GraphAxisConfig(unit: widget.compact ? '' : 'Time'),
           yAxis: GraphAxisConfig(
             unit: widget.compact ? '' : 'Hz',
-            min: minFreq,
-            max: maxFreq,
+            min: freqRange.min,
+            max: freqRange.max,
           ),
           yAxis2: GraphAxisConfig(
             unit: widget.compact ? '' : 'A',
-            min: minCurrent,
-            max: maxCurrent,
+            min: currentRange.min,
+            max: currentRange.max,
           ),
           xSpan: widget.xSpan,
+          // The preview names both traces in its tile header instead — the
+          // legend column costs it more width than the plot.
+          legend: !widget.compact,
         );
 
         final List<Map<String, dynamic>> data = [];

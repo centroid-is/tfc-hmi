@@ -71,6 +71,14 @@ class GraphConfig {
   @JsonKey(defaultValue: false)
   final bool tooltip;
 
+  /// Draw cristalyse's own legend down the right-hand side of the plot.
+  ///
+  /// Off for pane previews: at tile size that legend column costs more width
+  /// than the plot it explains — a 100px trend tile ends up half chart, half
+  /// series names. `PaneGraphTile` names the series in its header instead.
+  @JsonKey(defaultValue: true)
+  final bool legend;
+
   // Stroke or bar width or point size
   @JsonKey(defaultValue: 2)
   final double width;
@@ -106,6 +114,7 @@ class GraphConfig {
     this.width = 2,
     this.zoom = true,
     this.tooltip = false,
+    this.legend = true,
   });
 
   factory GraphConfig.fromJson(Map<String, dynamic> json) =>
@@ -329,11 +338,14 @@ class Graph {
                 )
               : null,
         )
-        .animate(duration: Duration.zero)
-        .legend(
-            position: cs.LegendPosition.right,
-            interactive: true,
-            showTitles: true);
+        .animate(duration: Duration.zero);
+
+    if (config.legend) {
+      chart.legend(
+          position: cs.LegendPosition.right,
+          interactive: true,
+          showTitles: true);
+    }
 
     for (final yaxis in [
       cs.YAxis.primary,
@@ -624,7 +636,108 @@ const EdgeInsets kChartPadding =
 /// the ticks there, so the gutters only have to fit bare numbers, but they do
 /// have to exist or the labels land on top of the surrounding text.
 const EdgeInsets kCompactChartPadding =
-    EdgeInsets.only(left: 34, right: 38, top: 12, bottom: 22);
+    EdgeInsets.only(left: 34, right: 38, top: 6, bottom: 20);
+
+/// Compact gutters for a preview with only a left-hand y-axis.
+///
+/// [kCompactChartPadding] reserves a right gutter wide enough for a second
+/// axis' tick labels; a single-axis trend only has to keep the last time
+/// label on the x-axis from running off the tile, which is half a label's
+/// width.
+const EdgeInsets kCompactChartPaddingSingleAxis =
+    EdgeInsets.only(left: 34, right: 30, top: 6, bottom: 20);
+
+/// [theme] with different gutters — the one thing a compact preview has to
+/// change about whatever chart theme the app resolved.
+///
+/// cristalyse's `ChartTheme` has no `copyWith`, and re-deriving light/dark
+/// from the widget tree would drift from the theme the rest of the chart is
+/// already drawn with.
+cs.ChartTheme chartThemeWithPadding(cs.ChartTheme theme, EdgeInsets padding) {
+  return cs.ChartTheme(
+    backgroundColor: theme.backgroundColor,
+    plotBackgroundColor: theme.plotBackgroundColor,
+    primaryColor: theme.primaryColor,
+    borderColor: theme.borderColor,
+    gridColor: theme.gridColor,
+    axisColor: theme.axisColor,
+    gridWidth: theme.gridWidth,
+    axisWidth: theme.axisWidth,
+    pointSizeDefault: theme.pointSizeDefault,
+    pointSizeMin: theme.pointSizeMin,
+    pointSizeMax: theme.pointSizeMax,
+    colorPalette: theme.colorPalette,
+    padding: padding,
+    axisTextStyle: theme.axisTextStyle,
+    axisLabelStyle: theme.axisLabelStyle,
+    categoryGradients: theme.categoryGradients,
+  );
+}
+
+/// A stable y-axis range for a live trend.
+///
+/// Two separate things make a naively auto-scaled trend jump. The range gets
+/// taken from every sample the collector holds — two hours — while the plot
+/// only shows the last few minutes, so the visible trace is squashed flat and
+/// then leaps when an old extreme finally ages out of the buffer. And the
+/// exact min/max moves with every arriving sample, so even inside one window
+/// the line breathes: the same signal is drawn small, then big, then small.
+///
+/// Feeding this the extremes of the *visible* samples fixes the first. The
+/// second is fixed by snapping the padded range outward onto a 1/2/5 x 10^n
+/// step, so the axis only moves when the signal genuinely leaves the notch it
+/// was sitting in, and holds still while it wanders inside one.
+///
+/// [floor] clamps the bottom of the range — pass 0 for a quantity like
+/// current where zero is the meaningful floor.
+({double min, double max}) stableTrendRange(
+  double min,
+  double max, {
+  double? floor,
+}) {
+  if (!min.isFinite || !max.isFinite || max < min) return (min: 0, max: 1);
+
+  // A dead-flat signal has no span to scale to. Open a window around it that
+  // grows with the reading's own magnitude, so a flat 4.2 bar and a flat
+  // 4200 rpm both draw down the middle instead of on the frame.
+  if (max == min) {
+    final half = math.max(min.abs() * 0.05, 0.5);
+    min -= half;
+    max += half;
+  } else {
+    // Headroom above and below: scaling to the exact extremes pins the trace
+    // to the plot frame, where it runs into the tick labels.
+    final margin = (max - min) * 0.1;
+    min -= margin;
+    max += margin;
+  }
+
+  final step = _niceStep((max - min) / 4);
+  var lo = (min / step).floorToDouble() * step;
+  var hi = (max / step).ceilToDouble() * step;
+  if (floor != null && lo < floor) lo = floor;
+  if (hi <= lo) hi = lo + step;
+  return (min: lo, max: hi);
+}
+
+/// The 1/2/5 x 10^n step nearest below [raw] — the tick spacings that read as
+/// round numbers on an axis.
+double _niceStep(double raw) {
+  if (raw <= 0 || !raw.isFinite) return 1;
+  final magnitude = math.pow(10, (math.log(raw) / math.ln10).floor()).toDouble();
+  final normalized = raw / magnitude;
+  final double nice;
+  if (normalized <= 1) {
+    nice = 1;
+  } else if (normalized <= 2) {
+    nice = 2;
+  } else if (normalized <= 5) {
+    nice = 5;
+  } else {
+    nice = 10;
+  }
+  return nice * magnitude;
+}
 
 /// The solarized-dark chart theme.
 ///
