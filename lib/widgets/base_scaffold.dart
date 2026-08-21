@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
@@ -190,7 +191,11 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
           return StreamBuilder(
             stream: Stream.periodic(const Duration(seconds: 1)),
             builder: (context, snapshot) {
-              final currentTime = DateTime.now();
+              // clock.now(), not DateTime.now(): a golden that renders the
+              // scaffold otherwise churns every run on the ticking header
+              // clock. Tests pin it with withClock(); in the app this is
+              // DateTime.now().
+              final currentTime = clock.now();
               return Text(
                 formatTimestamp(currentTime),
                 style: Theme.of(context).textTheme.bodyMedium,

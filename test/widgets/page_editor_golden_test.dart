@@ -22,6 +22,10 @@
 /// two-column subdevice manager is the widest config editor there is, and it
 /// is the one that decided the pane's default width.
 ///
+/// Every case pumps through [testGoldenWidgets] rather than `testWidgets`,
+/// which pins the scaffold's header clock. Without it these goldens re-render
+/// a new timestamp on every run and none of them can ever match.
+///
 /// To update: flutter test test/widgets/page_editor_golden_test.dart --update-goldens
 @Tags(['golden'])
 library;
@@ -204,7 +208,7 @@ void main() {
   setUp(setUpEditorEnvironment);
 
   group('asset config pane', () {
-    testWidgets('editor with no pane — the canvas as it was', (tester) async {
+    testGoldenWidgets('editor with no pane — the canvas as it was', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage([_textAsset()]));
       await expectLater(
         find.byType(MaterialApp),
@@ -212,7 +216,7 @@ void main() {
       );
     });
 
-    testWidgets('text asset — dark', (tester) async {
+    testGoldenWidgets('text asset — dark', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage([_textAsset()]));
       await _openConfigPane(tester, 0.22, 0.35);
       await expectLater(
@@ -221,7 +225,7 @@ void main() {
       );
     });
 
-    testWidgets('text asset — light', (tester) async {
+    testGoldenWidgets('text asset — light', (tester) async {
       await _pumpEditor(tester, theme: light, pages: _onePage([_textAsset()]));
       await _openConfigPane(tester, 0.22, 0.35);
       await expectLater(
@@ -234,7 +238,7 @@ void main() {
     // is about a pixel and an exact value was not reachable by dragging. The
     // drawn box is the one to look at: three sliders, label beside the track,
     // so the field has the least room to fit in.
-    testWidgets('sliders with typed values', (tester) async {
+    testGoldenWidgets('sliders with typed values', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage([_drawnBox()]));
       await _openConfigPane(tester, 0.22, 0.4);
       await expectLater(
@@ -247,7 +251,7 @@ void main() {
     // under review: the whole canvas has re-fitted itself beside the pane —
     // the page smaller but complete, daylight between canvas and pane, the
     // asset in plain view, and the pane at its full preferred width.
-    testWidgets('the canvas insets beside the pane it opened', (tester) async {
+    testGoldenWidgets('the canvas insets beside the pane it opened', (tester) async {
       await _pumpEditor(
         tester,
         theme: dark,
@@ -262,7 +266,7 @@ void main() {
 
     // The widest editor in the registry: two columns, a subdevice list and a
     // dropdown. If the pane's default width is wrong, it shows here first.
-    testWidgets('bus coupler — the densest editor', (tester) async {
+    testGoldenWidgets('bus coupler — the densest editor', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage([_busCoupler()]));
       await _openConfigPane(tester, 0.22, 0.4);
       await expectLater(
@@ -273,7 +277,7 @@ void main() {
   });
 
   group('unpublished pages', () {
-    testWidgets('Pages dialog — a draft beside a published page',
+    testGoldenWidgets('Pages dialog — a draft beside a published page',
         (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _pagesWithADraft());
       await tester.tap(find.byIcon(Icons.arrow_drop_down));
@@ -284,7 +288,7 @@ void main() {
       );
     });
 
-    testWidgets('canvas — editing a draft page', (tester) async {
+    testGoldenWidgets('canvas — editing a draft page', (tester) async {
       await _pumpEditor(
         tester,
         theme: dark,
@@ -299,7 +303,7 @@ void main() {
   });
 
   group('asset palette', () {
-    testWidgets('the full grid', (tester) async {
+    testGoldenWidgets('the full grid', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
       await tester.tap(find.byIcon(Icons.menu));
       await tester.pumpAndSettle();
@@ -312,7 +316,7 @@ void main() {
     // "multivac" names no tile — the machine lives inside the 3rd-party
     // umbrella asset. The search matches the per-kind keywords, so the tile
     // that CAN become a Multivac is the one result.
-    testWidgets('searching for a machine hidden in an umbrella tile',
+    testGoldenWidgets('searching for a machine hidden in an umbrella tile',
         (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
       await tester.tap(find.byIcon(Icons.menu));
@@ -327,7 +331,7 @@ void main() {
   });
 
   group('one editing mode', () {
-    testWidgets('a marquee selection, with no mode to enter first',
+    testGoldenWidgets('a marquee selection, with no mode to enter first',
         (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
 
@@ -347,7 +351,7 @@ void main() {
     // to look at is that CN02's selection border is gone while the box covers
     // it — the marquee toggles against the selection — and CN01/CN03 keep
     // theirs.
-    testWidgets('a modifier marquee mid-drag, toggling one asset out',
+    testGoldenWidgets('a modifier marquee mid-drag, toggling one asset out',
         (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
       await marquee(tester, 0.05, 0.12, 0.68, 0.45);
@@ -370,7 +374,7 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('the asset context menu', (tester) async {
+    testGoldenWidgets('the asset context menu', (tester) async {
       await _pumpEditor(tester, theme: dark, pages: _onePage(_line()));
       await marquee(tester, 0.05, 0.12, 0.68, 0.45);
 

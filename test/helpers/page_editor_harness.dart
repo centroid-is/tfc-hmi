@@ -15,12 +15,14 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:beamer/beamer.dart';
+import 'package:clock/clock.dart';
 import 'package:flutter/gestures.dart'
     show kDoubleTapMinTime, kDoubleTapTimeout, kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:meta/meta.dart' show isTest;
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc_dart/core/preferences.dart';
@@ -125,6 +127,27 @@ class _EditorLocation extends BeamLocation<BeamState> {
 
   @override
   List<Pattern> get pathPatterns => ['/advanced/page-editor'];
+}
+
+/// The moment every golden is taken at.
+///
+/// `BaseScaffold` puts a ticking clock in the header, so a golden of anything
+/// hosted by it re-renders a different string every run and never matches its
+/// committed PNG. [testGoldenWidgets] pins the clock to this instant so the
+/// only thing a golden can disagree about is the pixels under review.
+final Clock goldenClock = Clock.fixed(DateTime(2026, 1, 1, 12));
+
+/// [testWidgets] with the header clock frozen at [goldenClock].
+///
+/// The whole body runs inside the clock zone, so every build the test drives —
+/// including the rebuilds the header's one-second stream schedules — reads the
+/// pinned time rather than the wall clock.
+@isTest
+void testGoldenWidgets(String description, WidgetTesterCallback callback) {
+  testWidgets(
+    description,
+    (tester) => withClock(goldenClock, () => callback(tester)),
+  );
 }
 
 /// The real [PageEditor], wired up enough to pump.
