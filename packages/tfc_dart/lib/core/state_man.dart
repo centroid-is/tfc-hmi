@@ -1477,6 +1477,18 @@ class StateMan {
     return _substitutions[key];
   }
 
+  /// Refuses a key that still names a variable nothing has published.
+  ///
+  /// [resolveKey] returns the key unchanged when it cannot substitute, so
+  /// without this the caller subscribes to a node that cannot exist and gets
+  /// `null` -- the same thing it would get from a dead tag, a renamed node or
+  /// a mapping with no server alias. Four faults with one symptom is how a
+  /// templated key stays broken without anyone being able to say why.
+  void _throwIfUnresolved(String key) {
+    if (!key.contains('\$')) return;
+    throw StateManException(unresolvedKeyMessage(key));
+  }
+
   String resolveKey(String key) {
     if (!key.contains('\$')) return key;
 
@@ -1493,7 +1505,11 @@ class StateMan {
     }
 
     if (resolvedKey.contains('\$')) {
-      logger.e('Resolved key still contains \$: $resolvedKey');
+      // Callers refuse to act on this (see _throwIfUnresolved), so it is a
+      // transient startup condition rather than an error in itself: the
+      // readouts subscribe before the OptionVariable that owns the variable
+      // has published it.
+      logger.w('Key still has unresolved variables: $resolvedKey');
     }
 
     return resolvedKey;
@@ -1572,6 +1588,7 @@ class StateMan {
     if (ConnMetaRouter.isMetaKey(key)) return _connMeta.read(key);
 
     key = resolveKey(key);
+    _throwIfUnresolved(key);
     _throwIfDisabled(key);
 
     // Check M2400 key mappings first
@@ -1657,6 +1674,11 @@ class StateMan {
       }
 
       final key = resolveKey(keyToResolve);
+
+      // A key still naming an unpublished variable is absent from the result
+      // rather than fatal to the batch -- same treatment as a disabled
+      // server. Throwing here would fail every other key in the request.
+      if (key.contains('\$')) continue;
 
       // Keys on a disabled server are simply absent from the result, the
       // same as a key whose value has not been polled yet.
@@ -1757,6 +1779,7 @@ class StateMan {
     }
 
     key = resolveKey(key);
+    _throwIfUnresolved(key);
     _throwIfDisabled(key);
 
     // Check Modbus (and other DeviceClient protocols)
@@ -1817,6 +1840,7 @@ class StateMan {
     if (ConnMetaRouter.isMetaKey(key)) return _connMeta.subscribe(key);
 
     key = resolveKey(key);
+    _throwIfUnresolved(key);
     _throwIfDisabled(key);
 
     // Check M2400 key mappings first
@@ -2282,6 +2306,25 @@ Duration _backoffFor(int retries) => Duration(
         retries <= kSubscribeBackoffSeconds.length
             ? retries - 1
             : kSubscribeBackoffSeconds.length - 1]);
+
+/// The variable names still unresolved in [key], e.g. `{sb_line_stats_period}`
+/// for `Line1.$sb_line_stats_period`.
+///
+/// A key is templated when an `OptionVariable` asset supplies part of it.
+/// Until that asset has published its value, there is nothing to substitute
+/// and the key names a node that cannot exist.
+Set<String> unresolvedVariables(String key) => RegExp(r'\$([A-Za-z_][A-Za-z0-9_]*)')
+    .allMatches(key)
+    .map((m) => m.group(1)!)
+    .toSet();
+
+/// Message for a key that still names variables nothing has provided.
+String unresolvedKeyMessage(String key) {
+  final missing = unresolvedVariables(key).map((v) => '\$$v').join(', ');
+  return 'key "$key" is waiting on $missing -- no value has been published '
+      'for it yet. Templated keys resolve once the OptionVariable that owns '
+      'the variable has loaded.';
+}
 
 class AutoDisposingStream<T> {
   final String key;
