@@ -284,6 +284,43 @@ void main() {
     });
   });
 
+  group('monitorStopTimeout', () {
+    // The close used to wait a flat two seconds for the monitor to hand its
+    // connection back. The monitor races its *waits* against the stop signal,
+    // but it cannot race `pool.withConnection`'s acquire -- the stop flag is
+    // only read inside the callback, which does not run until the connection
+    // is open. So a monitor asked to stop mid-acquire answers only when that
+    // acquire lands, and the close gave up first, swallowed the timeout, and
+    // force-closed the pool with a socket still on its way in. That socket
+    // arrived untracked by a pool that no longer existed, and stayed idle on
+    // the server forever.
+    //
+    // In the integration config those two numbers were *identical* -- a 2s
+    // connect timeout and a 2s stop wait -- so it came down to a coin flip,
+    // which is why it only ever failed on a loaded CI runner.
+    test('leaves room for an acquire that takes the whole connect timeout', () {
+      expect(monitorStopTimeout(const Duration(seconds: 2)),
+          greaterThan(const Duration(seconds: 2)));
+    });
+
+    test('scales with the connect timeout rather than being flat', () {
+      expect(monitorStopTimeout(const Duration(seconds: 8)),
+          const Duration(seconds: 9));
+    });
+
+    test('never drops below the floor, however impatient the pool', () {
+      expect(monitorStopTimeout(Duration.zero), kMonitorStopTimeout);
+      expect(monitorStopTimeout(const Duration(milliseconds: 100)),
+          kMonitorStopTimeout);
+    });
+
+    test('is capped, because a close must not hang', () {
+      // A patiently configured pool must not turn shutdown into a stall.
+      expect(monitorStopTimeout(const Duration(minutes: 5)),
+          kMonitorStopCeiling);
+    });
+  });
+
   group('releasePool', () {
     // The pool was never closed anywhere in the repo. `PgDatabase.opened` does
     // not own what it is handed, so `AppDatabase.close()` left the pool -- and
