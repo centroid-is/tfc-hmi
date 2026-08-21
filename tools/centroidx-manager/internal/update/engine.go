@@ -152,30 +152,53 @@ func (e *Engine) fetchLatestChannelRelease(ctx context.Context) (*ReleaseInfo, e
 	return releaseToInfo(best), nil
 }
 
-// ListAllReleases returns all releases from GitHub sorted newest-first using
-// CalVer semver comparison. Releases with unparseable version tags are silently
-// skipped. Returns an empty (non-nil) slice when there are no parseable releases.
-// Returns a wrapped error if the GitHub client call fails.
-func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
+// ListAllReleases returns the installable releases on the given channel,
+// newest-first, for the version picker.
+//
+// On ChannelStable (or "") only releases with a parseable CalVer tag are
+// listed, ordered by version — drafts, prereleases and bad tags are skipped.
+// On ChannelLatest the rolling prerelease is listed too; its tag
+// (`main-latest`) never parses as a version, so the whole channel is ordered
+// by publish date instead, which keeps the rolling build in its true position
+// relative to the tagged releases.
+//
+// Releases without a downloadable asset for this platform are skipped on both
+// channels — the picker must not offer something it cannot install. Returns an
+// empty (non-nil) slice when nothing qualifies, or a wrapped error if the
+// GitHub client call fails.
+func (e *Engine) ListAllReleases(ctx context.Context, channel string) ([]ReleaseInfo, error) {
+	if !ValidChannel(channel) {
+		return nil, fmt.Errorf("list releases: unknown channel %q (expected %q or %q)", channel, ChannelStable, ChannelLatest)
+	}
+
 	releases, err := e.client.ListReleases(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list releases: %w", err)
 	}
 
 	// tagged pairs a parsed semver version with its ReleaseInfo for sorting.
+	// version is nil for releases whose tag is not a version (latest channel).
 	type tagged struct {
 		version *semver.Version
 		info    ReleaseInfo
 	}
 
+	latest := channel == ChannelLatest
 	targetAssets := platformAssetCandidates()
 	result := make([]tagged, 0, len(releases))
 	for _, r := range releases {
+		if r.GetDraft() {
+			continue
+		}
 		info := releaseToInfo(r)
 		v, err := ParseVersion(info.Version)
 		if err != nil {
-			// Silently skip releases with unparseable tags (drafts, bad tags, etc.)
-			continue
+			// Unparseable tags are the rolling prerelease's own shape, so they
+			// belong on the latest channel and nowhere else.
+			if !latest {
+				continue
+			}
+			v = nil
 		}
 		// Only include releases that have a downloadable asset for this platform.
 		if selectAssetByNames(info.Assets, targetAssets) == nil {
@@ -184,8 +207,12 @@ func (e *Engine) ListAllReleases(ctx context.Context) ([]ReleaseInfo, error) {
 		result = append(result, tagged{version: v, info: *info})
 	}
 
-	// Sort descending: newest version first.
 	sort.Slice(result, func(i, j int) bool {
+		if latest {
+			// Publish date: the only ordering that can place an unversioned
+			// rolling tag among versioned releases.
+			return result[i].info.PublishedAt.After(result[j].info.PublishedAt)
+		}
 		return result[i].version.GreaterThan(result[j].version)
 	})
 

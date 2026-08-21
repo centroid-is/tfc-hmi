@@ -5,6 +5,7 @@ package platform
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestIntegration_PowerShellAvailable verifies that PowerShell is present on
@@ -13,7 +14,12 @@ import (
 func TestIntegration_PowerShellAvailable(t *testing.T) {
 	requireCommand(t, "powershell")
 
-	stdout, stderr, err := runCommand(t,
+	// First PowerShell call in the suite: resolving a cmdlet the session has
+	// not loaded makes PowerShell scan every module path, which on a cold
+	// runner has overrun 30s and failed this test while the very next test
+	// went on to run Add-AppxPackage successfully. The generous deadline is
+	// for that one-time discovery, not for the cmdlet itself.
+	stdout, stderr, err := runCommandWithTimeout(t, 3*time.Minute,
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command", "Get-Command Add-AppxPackage",
