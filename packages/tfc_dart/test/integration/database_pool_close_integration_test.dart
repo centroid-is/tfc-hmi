@@ -19,27 +19,45 @@ import 'package:tfc_dart/core/database_drift.dart';
 
 import 'docker_compose.dart';
 
-/// Sessions the server currently has open on the test database.
-Future<int> _backendCount(Connection control) async {
+/// Client connections the server currently has on the test database, not
+/// counting the one asking.
+///
+/// Deliberately narrower than "rows in `pg_stat_activity` for this database".
+/// TimescaleDB keeps a background worker scheduler attached to every database
+/// it is installed in, and starts more workers when it has jobs to run -- on a
+/// database the other integration files have left hypertables and retention
+/// policies in, those come and go on the extension's own schedule. They are
+/// not connections anything here opened, and counting them made this test
+/// report a leak that was really the extension going about its business.
+/// A leaked pool connection is always a `client backend`, so nothing this
+/// test exists to catch can hide behind the filter.
+Future<int> _clientBackends(Connection control) async {
   final result = await control.execute(
-      "SELECT count(*)::int FROM pg_stat_activity WHERE datname = 'testdb'");
+      "SELECT count(*)::int FROM pg_stat_activity WHERE datname = 'testdb' "
+      "AND backend_type = 'client backend' AND pid <> pg_backend_pid()");
   return result.first.first as int;
 }
 
-/// Backends that may still be on their way out when a close has returned.
-///
-/// `pool.close()` awaits its semaphore, and `withConnection`'s `finally`
-/// calls `resource.release()` *before* it awaits `connection._dispose()`. So
-/// the close can complete while a socket is still being torn down, and the
-/// server reaps the backend a moment after that. This is slack for teardown in
-/// flight, not for leaking: the leak this file exists to catch is two backends
-/// *per database*, which on the repeated test below is ten, well clear of it.
-const int _settling = 2;
+/// Who those connections are, for a failure that explains itself.
+Future<String> _describeBackends(Connection control) async {
+  final result = await control.execute(
+      "SELECT coalesce(state,'?'), coalesce(nullif(application_name,''),'-'), "
+      "round(extract(epoch from (now()-backend_start)))::int, "
+      "coalesce(left(query, 60),'-') "
+      "FROM pg_stat_activity WHERE datname = 'testdb' "
+      "AND backend_type = 'client backend' AND pid <> pg_backend_pid() "
+      "ORDER BY backend_start");
+  if (result.isEmpty) return 'none';
+  return result
+      .map((r) => '[state=${r[0]} app=${r[1]} age=${r[2]}s q=${r[3]}]')
+      .join(' ');
+}
 
 /// Polls [read] until it satisfies [done], or gives up after [timeout].
 ///
 /// Generous, because these run on shared CI runners alongside Docker: a slow
-/// reap must not read as a leak.
+/// reap must not read as a leak. It costs nothing when the close was clean,
+/// because the first read already satisfies [done].
 Future<int> _waitForCount(
   Future<int> Function() read,
   bool Function(int) done, {
@@ -72,7 +90,7 @@ void main() {
 
     test('closing an in-isolate database hands every connection back',
         () async {
-      final baseline = await _backendCount(control);
+      final baseline = await _clientBackends(control);
 
       final db = await AppDatabase.create(getTestConfig());
       await db.open();
@@ -81,19 +99,20 @@ void main() {
       // server to actually show the database holding more than the control
       // connection before claiming anything about what close gives back.
       final busy = await _waitForCount(
-          () => _backendCount(control), (n) => n > baseline);
+          () => _clientBackends(control), (n) => n > baseline);
       expect(busy, greaterThan(baseline),
           reason: 'the database opened without taking a connection, so this '
               'test is not measuring what it thinks it is');
 
       await db.close().timeout(const Duration(seconds: 30));
 
-      final after =
-          await _waitForCount(() => _backendCount(control), (n) => n <= baseline);
+      final after = await _waitForCount(
+          () => _clientBackends(control), (n) => n <= baseline);
       expect(after, lessThanOrEqualTo(baseline),
           reason: 'connections left behind after close are the leak: the '
               'health monitor holds one for as long as the pool is open, and '
-              'nothing used to close the pool');
+              'nothing used to close the pool. Still connected: '
+              '${await _describeBackends(control)}');
       expect(db.poolForTest!.isOpen, isFalse);
     }, timeout: const Timeout(Duration(minutes: 2)));
 
@@ -102,7 +121,7 @@ void main() {
       // fix each of those leaked its monitor's connection, and the loop runs
       // every couple of seconds for as long as the server is unreachable --
       // which is how one backend ended up on 75 of 100 connections.
-      final baseline = await _backendCount(control);
+      final baseline = await _clientBackends(control);
 
       for (var i = 0; i < 5; i++) {
         final db = await AppDatabase.create(getTestConfig());
@@ -110,14 +129,17 @@ void main() {
         await db.close().timeout(const Duration(seconds: 30));
       }
 
-      // The leak was two backends per attempt, so five attempts cost ten and
-      // the count never comes back down. Anything inside [_settling] is
-      // teardown still in flight, and does not grow with the attempt count.
+      // No slack. The monitor is asked to let go before the pool is closed, so
+      // every connection is returned and closed with a Terminate and the
+      // backend is gone by the time close() returns -- there is no reaping to
+      // wait out. The leak this catches was two backends per attempt, so five
+      // attempts cost ten and the count never came back down at all.
       final after = await _waitForCount(
-          () => _backendCount(control), (n) => n <= baseline + _settling);
-      expect(after, lessThanOrEqualTo(baseline + _settling),
+          () => _clientBackends(control), (n) => n <= baseline);
+      expect(after, lessThanOrEqualTo(baseline),
           reason: 'the cost of a discarded attempt must not scale with how '
-              'many were discarded');
+              'many were discarded. Still connected: '
+              '${await _describeBackends(control)}');
     }, timeout: const Timeout(Duration(minutes: 5)));
   });
 }

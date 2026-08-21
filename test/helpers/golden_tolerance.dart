@@ -1,9 +1,9 @@
 /// Golden comparison that tolerates a hair of pixel drift.
 ///
 /// Goldens in this repo are generated on a developer's Mac and verified on a
-/// CI Mac (`skip: !Platform.isMacOS`), and the two do not run the same Flutter
-/// — CI pins a version in `.github/workflows/test.yml` while developers are on
-/// whatever they installed. Different Flutter versions rasterise the same
+/// CI Mac (`skip: !Platform.isMacOS`), and the two do not always run the same
+/// Flutter — CI installs the version in `.flutter-version` while a developer
+/// runs whatever is on their PATH. Different Flutter versions rasterise the same
 /// drawing very slightly differently, so an exact byte comparison eventually
 /// fails on an image nobody touched: `third_party_speedBatcher_populated.png`
 /// went red at 10 differing pixels out of 356,700 — 0.0028% — with no change
@@ -17,6 +17,12 @@
 ///
 /// This does not paper over a mismatch that matters. If a golden fails here,
 /// it changed by more than a rendering rounding error.
+///
+/// The tolerance is a safety net for drift nobody caused, not a licence to
+/// author goldens on the wrong Flutter — one generated off-version can land
+/// just inside the threshold, pass, and leave the next person an image already
+/// most of the way to failing. Run `scripts/check-flutter-version.sh` before
+/// `--update-goldens`.
 library;
 
 import 'package:flutter/foundation.dart';

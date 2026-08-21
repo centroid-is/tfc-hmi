@@ -291,18 +291,33 @@ void main() {
     // life of the process. On the `useIsolate: false` path, which is every
     // collector acquisition isolate, there was no DriftIsolate to take it down
     // either, so each thrown-away connect attempt cost a server slot.
-    test('forces the close, because the monitor never lets go on its own',
-        () async {
-      // A graceful close waits for borrowed connections to come back. The
-      // monitor's is borrowed until the socket underneath it dies, so a
-      // graceful close waits forever on a healthy one.
+    test('asks politely first, and stops there when that works', () async {
+      // Returning a connection closes it with a Terminate and the backend
+      // exits on the spot. Forcing destroys the socket and leaves the server
+      // to notice -- which on a busy server is the slot staying taken.
       final forced = <bool>[];
       await releasePool(({bool force = false}) async => forced.add(force));
-      expect(forced, [true]);
+      expect(forced, [false],
+          reason: 'a graceful close that succeeds must not be followed by a '
+              'forced one');
     });
 
-    test('a close that hangs is abandoned rather than stalling the caller',
-        () async {
+    test('forces the close when the polite one will not finish', () async {
+      // Something is still holding a connection -- a monitor that did not stop
+      // in time -- so the graceful close cannot complete. The pool still has
+      // to go away.
+      final forced = <bool>[];
+      await releasePool(
+        ({bool force = false}) {
+          forced.add(force);
+          return force ? Future<void>.value() : Completer<void>().future;
+        },
+        timeout: const Duration(milliseconds: 50),
+      );
+      expect(forced, [false, true]);
+    });
+
+    test('a close that hangs both ways is abandoned, not waited on', () async {
       // connectWithRetry closes every attempt it throws away, against a
       // database that is by definition already misbehaving.
       final errors = <Object>[];
@@ -314,7 +329,8 @@ void main() {
       );
       stopwatch.stop();
       expect(stopwatch.elapsed, lessThan(const Duration(seconds: 2)));
-      expect(errors.single, isA<TimeoutException>());
+      expect(errors, hasLength(2));
+      expect(errors.every((e) => e is TimeoutException), isTrue);
     });
 
     test('a close that throws does not become the caller\'s problem', () async {
@@ -323,7 +339,8 @@ void main() {
         ({bool force = false}) async => throw StateError('socket already gone'),
         onError: errors.add,
       );
-      expect(errors.single, isA<StateError>());
+      expect(errors, hasLength(2), reason: 'graceful threw, so force was tried');
+      expect(errors.every((e) => e is StateError), isTrue);
     });
   });
 
