@@ -36,8 +36,16 @@ jobs:
     uses: ./.github/workflows/linux.yml
     secrets: inherit
 
+  # The manager is only otherwise published on a tagged release, so the README
+  # served a manager as old as the last tag. Building it here keeps the
+  # download current with main — and a manager predating a fix cannot install
+  # anything, which is exactly how the Windows asset-name bug stayed invisible.
+  manager-build:
+    uses: ./.github/workflows/build-manager.yml
+    secrets: inherit
+
   publish:
-    needs: [windows-build, macos-build, linux-build]
+    needs: [windows-build, macos-build, linux-build, manager-build]
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows portable build
@@ -66,6 +74,15 @@ jobs:
           name: centroidx_linux_x64.tar.gz
           path: release/
 
+      # Manager binaries for all three platforms, named as the README links
+      # expect them.
+      - name: Download manager binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: centroidx-manager_*
+          path: manager/
+          merge-multiple: true
+
       - name: Assemble release assets
         run: |
           set -euo pipefail
@@ -80,10 +97,14 @@ jobs:
           # matches the published filename.
           mv msix/*.msix release/centroidx_windows_amd64.msix
 
+          mv manager/centroidx-manager_* release/
+          ls -lh manager/ 2>/dev/null || true
+
           cd release
           sha256sum centroidx_windows_x64.zip centroidx_windows_amd64.msix \
                     centroidx_darwin_arm64.dmg \
-                    centroidx_linux_x64.tar.gz > SHA256SUMS.txt
+                    centroidx_linux_x64.tar.gz \
+                    centroidx-manager_* > SHA256SUMS.txt
           ls -lh
           cat SHA256SUMS.txt
 
@@ -111,9 +132,14 @@ jobs:
           | Windows (x64) | \`centroidx_windows_amd64.msix\` — sideload installer, used by the in-app updater's latest channel |
           | Linux (x64) | \`centroidx_linux_x64.tar.gz\` — GTK3 desktop bundle |
 
+          The \`centroidx-manager_*\` assets are the version manager built from this same commit; its **Latest** channel installs the packages above.
+
           Checksums in \`SHA256SUMS.txt\`." \
             release/centroidx_windows_x64.zip \
             release/centroidx_windows_amd64.msix \
             release/centroidx_darwin_arm64.dmg \
             release/centroidx_linux_x64.tar.gz \
+            release/centroidx-manager_windows_amd64.exe \
+            release/centroidx-manager_darwin_arm64.dmg \
+            release/centroidx-manager_linux_amd64 \
             release/SHA256SUMS.txt
