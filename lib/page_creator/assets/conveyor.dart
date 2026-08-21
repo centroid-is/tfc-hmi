@@ -123,9 +123,22 @@ class ConveyorPathGeometry {
   final Path path;
   final double beltWidth;
   final double scale;
+
+  /// Radius of the tightest bend the centerline actually turns through, in
+  /// painted units — [double.infinity] for a belt whose corners all came out
+  /// sharp, which no band can be bent around anyway.
+  ///
+  /// Kept from the fit rather than measured off the path: [bandOutline] needs
+  /// it to know when a band is too wide for its own bend, and reading it back
+  /// from samples of the path made that judgement a function of how densely
+  /// the path happened to be sampled — which is to say, of how big the box
+  /// was. The same belt then folded on one screen and not another.
+  final double minTurnRadius;
+
   final PathMetric _metric;
 
-  ConveyorPathGeometry._(this.path, this.beltWidth, this.scale, this._metric);
+  ConveyorPathGeometry._(
+      this.path, this.beltWidth, this.scale, this.minTurnRadius, this._metric);
 
   double get length => _metric.length;
 
@@ -155,7 +168,23 @@ class ConveyorPathGeometry {
     final start = from.clamp(0.0, 1.0) * length;
     final span = to.clamp(0.0, 1.0) * length - start;
     if (span <= 0 || width <= 0) return Path();
+    // On the inside of a bend the edge cannot reach past the centre of
+    // curvature without crossing the centerline, which folds the outline into
+    // a bow tie. There is no honest band to draw at that point.
+    //
+    // Measured against the fit's own [minTurnRadius] rather than a curvature
+    // read back off samples of the path. The sampled estimate depended on how
+    // densely the path happened to be sampled, which was in absolute pixels,
+    // so the same belt was judged foldable on one box and not on another — a
+    // belt near the limit swapped between a band and a stroked centerline the
+    // moment a side pane re-fitted the page under it. With the radius exact
+    // and every length in the fit proportional, this verdict now depends on
+    // the belt alone.
+    //
+    // A little short of the radius: an edge that merely grazes the centre of
+    // curvature already leaves a cusp the border traces as a stray hair.
     final half = width / 2;
+    if (half > 0.98 * minTurnRadius) return null;
     // Same clamping an RRect applies when the radii do not fit the rect.
     final r = max(min(min(radius, half), span / 2), 0.0);
 
@@ -166,9 +195,12 @@ class ConveyorPathGeometry {
       return (half - r) + sqrt(max(r * r - k * k, 0));
     }
 
-    // Dense through the two corners, every few pixels along the middle.
+    // Dense through the two corners, and along the middle at a step set by
+    // the band's own width — a twenty-fourth of it, which is the ~4px this
+    // used to sample a full-page belt at. Relative rather than absolute so
+    // the same belt is drawn out of the same polygon whatever its box.
     const cornerSteps = 12;
-    final middleSteps = max((span / 4).ceil(), 2);
+    final middleSteps = max(min((span / (width / 24)).ceil(), 2048), 2);
     final offsets = <double>{0, span};
     for (var i = 0; i <= cornerSteps; i++) {
       offsets.add(r * i / cornerSteps);
@@ -189,36 +221,12 @@ class ConveyorPathGeometry {
     }
     if (samples.length < 2) return Path();
 
-    // Heading along the run, unwrapped so a bend does not read as a jump.
-    final heading = <double>[];
-    for (var i = 0; i < tangents.length; i++) {
-      var a = atan2(tangents[i].vector.dy, tangents[i].vector.dx);
-      if (i > 0) {
-        while (a - heading[i - 1] > pi) {
-          a -= 2 * pi;
-        }
-        while (heading[i - 1] - a > pi) {
-          a += 2 * pi;
-        }
-      }
-      heading.add(a);
-    }
-
     final left = <Offset>[];
     final right = <Offset>[];
     for (var i = 0; i < samples.length; i++) {
       final t = tangents[i];
       final normal = Offset(-t.vector.dy, t.vector.dx);
       final h = halfWidthAt(min(samples[i], span - samples[i]));
-      // On the inside of a bend the edge cannot reach past the centre of
-      // curvature without crossing the centerline, which folds the outline
-      // into a bow tie. There is no honest band to draw at that point.
-      final lo = max(i - 1, 0), hi = min(i + 1, samples.length - 1);
-      final ds = samples[hi] - samples[lo];
-      final curvature = ds > 1e-9 ? (heading[hi] - heading[lo]) / ds : 0.0;
-      // With a little margin: an edge that merely grazes the centre of
-      // curvature already leaves a cusp the border traces as a stray hair.
-      if (curvature.abs() > 1e-9 && h > 0.9 / curvature.abs()) return null;
       left.add(t.position + normal * h);
       right.add(t.position - normal * h);
     }
@@ -283,6 +291,43 @@ class ConveyorPathGeometry {
     return false;
   }
 
+  /// Clearance between the belt's ink and the box edge, as a fraction of the
+  /// box's short side.
+  ///
+  /// Proportional rather than the flat 2px this used to be, and that is the
+  /// whole point. Every other length the fit works in is relative — radii in
+  /// belt widths, positions in box fractions, the accept tests and the fold
+  /// test in ratios — so the belt it produces depends only on the *shape* of
+  /// its box. One absolute length among them breaks that: it makes the box
+  /// the belt is fitted into a slightly different shape at a different size,
+  /// which is enough to flip a belt sitting near any of those tests from the
+  /// box-filling solve to the uniform-fit fallback — from spanning its box to
+  /// a fraction of it. The plant view re-fits the whole page to ~0.68x when a
+  /// docked side pane opens over the tapped device, so the flip showed up as
+  /// a conveyor squeezing itself the moment its pane appeared, and, being a
+  /// threshold, only for some belts on some screens.
+  ///
+  /// The size is the old 2px, expressed against the box it was tuned on: a
+  /// conveyor 270px down the short side, which is roughly what one fills on
+  /// a plant page. Belts at that size are laid out exactly as before, bigger
+  /// ones get proportionally more clearance and smaller ones less — down to
+  /// less than the half-pixel of border that falls outside the band, on a
+  /// box narrower than 135px, where that fraction of the outline crosses the
+  /// box edge. Buying it back with a floor would put an absolute length back
+  /// into the fit, and a hair of antialiased outline over the edge of a
+  /// small asset is worth less than a belt that reshapes itself.
+  static const _marginFraction = 2 / 270;
+
+  /// How close the solved bounds must come to the box before the fill counts,
+  /// as a fraction of the inner box's short side — half a pixel at the size
+  /// this was measured at, and half a pixel's worth at every other size.
+  static const _fillTolerance = 0.5 / 171.5;
+
+  /// The clearance the fit keeps between the belt and the edge of a box of
+  /// [size]. Public so a test can say what "the belt fills its box" means
+  /// without copying the number out of here.
+  static double marginFor(Size size) => size.shortestSide * _marginFraction;
+
   static ConveyorPathGeometry? build(
     List<ConveyorTurnEntry> turns,
     Size size, {
@@ -298,8 +343,15 @@ class ConveyorPathGeometry {
     // can exceed the *width* in a tall narrow box and spill out sideways no
     // matter how the centerline is fitted. Cap it against the short side so
     // the box invariant always holds; for the usual wide box this is a no-op.
-    const margin = 2.0;
-    final containable = max(size.shortestSide - 2 * margin, 1.0);
+    final margin = size.shortestSide * _marginFraction;
+    // Across the box the belt has to leave room for the clearance *and* for
+    // the half-border that falls outside the band, whichever is larger. This
+    // is the one place a fixed number of pixels belongs: it only binds for a
+    // belt already as wide as its box, where there is no shape left for it to
+    // change, and it keeps that belt's outline off the box edge.
+    final containable = max(
+        size.shortestSide - 2 * max(margin, ConveyorPainter._borderWidth / 2),
+        1.0);
     // An explicit belt width is given in screen units, so the same number has
     // to mean the same belt everywhere — resizing the box must not silently
     // change it. Only the box-relative thickness is, by definition, bounded
@@ -400,8 +452,14 @@ class ConveyorPathGeometry {
     }
 
     var fillClamped = false;
+    // Radius of the tightest bend the last [buildPath] actually drew, before
+    // the final fit scale. Sharp corners are left out: they are not bends a
+    // band can be carried around, and a belt clamped to one is drawn by the
+    // fallback either way.
+    var builtMinRadius = double.infinity;
     Path buildPath(List<double> seg) {
       fillClamped = false;
+      builtMinRadius = double.infinity;
       // Tangent length each fillet eats out of the straights beside it —
       // shrink fillets that do not fit rather than dropping the straight:
       // first against each neighbouring run, then the pair sharing a run.
@@ -439,6 +497,7 @@ class ConveyorPathGeometry {
         final arcEnd = c + outDir * tangent[i];
         final effectiveRadius = tangent[i] / tan(sweeps[i].abs() / 2);
         if (tangent[i] > 0 && effectiveRadius.isFinite && effectiveRadius > 0) {
+          builtMinRadius = min(builtMinRadius, effectiveRadius);
           path.arcToPoint(
             arcEnd,
             radius: Radius.circular(effectiveRadius),
@@ -446,6 +505,9 @@ class ConveyorPathGeometry {
           );
         } else {
           // No room to round the corner — keep it sharp rather than skip it.
+          // A sharp corner carries no band around it at all, so it sets the
+          // minimum to zero and [bandOutline] hands the belt to the stroke.
+          builtMinRadius = 0;
           path.lineTo(arcEnd.dx, arcEnd.dy);
         }
         corner = c;
@@ -471,6 +533,7 @@ class ConveyorPathGeometry {
       for (final sweep in sweeps) {
         headings.add(headings.last + sweep);
       }
+      final tolerance = inner.shortestSide * _fillTolerance;
       var path = buildPath(trial);
       for (var iter = 0; iter < 40; iter++) {
         final b = path.getBounds();
@@ -479,8 +542,8 @@ class ConveyorPathGeometry {
         // and amputating runs — a belt that fits the box by no longer being
         // the belt that was configured. That case belongs to the fallback.
         if (!fillClamped &&
-            (b.width - inner.width).abs() < 0.5 &&
-            (b.height - inner.height).abs() < 0.5 &&
+            (b.width - inner.width).abs() < tolerance &&
+            (b.height - inner.height).abs() < tolerance &&
             _keepsProportions(seg, trial) &&
             !_selfOverlaps(path, beltWidth)) {
           solved = path;
@@ -502,7 +565,8 @@ class ConveyorPathGeometry {
     final double fit;
     if (solved != null) {
       // Solved: the belt fills the box at true scale. The residual is under
-      // half a pixel; squeeze it out rather than let the paint cross the box.
+      // [_fillTolerance]; squeeze it out rather than let the paint cross the
+      // box.
       final bounds = solved.getBounds();
       final clamp = min(
           1.0,
@@ -528,8 +592,9 @@ class ConveyorPathGeometry {
       final bounds = path.getBounds();
       final sx =
           bounds.width > 1e-6 ? inner.width / bounds.width : double.infinity;
-      final sy =
-          bounds.height > 1e-6 ? inner.height / bounds.height : double.infinity;
+      final sy = bounds.height > 1e-6
+          ? inner.height / bounds.height
+          : double.infinity;
       var f = min(sx, sy);
       if (!f.isFinite || f <= 0) f = 1.0;
       fit = f;
@@ -543,10 +608,13 @@ class ConveyorPathGeometry {
       );
       fitted = path.transform(matrix.storage);
     }
+    // The fit scales the whole skeleton, bends included, so the tightest
+    // bend on screen is the tightest one built times that scale.
+    final minTurnRadius = builtMinRadius * fit;
     final metrics = fitted.computeMetrics().toList();
     if (metrics.isEmpty) return null;
-    final geometry =
-        ConveyorPathGeometry._(fitted, beltWidth, fit, metrics.first);
+    final geometry = ConveyorPathGeometry._(
+        fitted, beltWidth, fit, minTurnRadius, metrics.first);
 
     // Center the ink, not the centerline. The band extends beltWidth/2 past
     // the centerline on the outer side of every run but ends in a flat cap,
@@ -572,11 +640,14 @@ class ConveyorPathGeometry {
     // Hostile configs (hand-edited JSON) can degenerate into non-finite
     // bounds; Path.shift asserts on NaN, and there is nothing to center.
     if (!shift.dx.isFinite || !shift.dy.isFinite) return geometry;
-    if (shift.distance < 0.01) return geometry;
+    // Proportional for the same reason [_marginFraction] is: nothing in the
+    // fit may depend on how big the box happens to be.
+    if (shift.distance < size.shortestSide * 1e-4) return geometry;
     final moved = fitted.shift(shift);
     final movedMetrics = moved.computeMetrics().toList();
     if (movedMetrics.isEmpty) return geometry;
-    return ConveyorPathGeometry._(moved, beltWidth, fit, movedMetrics.first);
+    return ConveyorPathGeometry._(
+        moved, beltWidth, fit, minTurnRadius, movedMetrics.first);
   }
 }
 
@@ -2501,6 +2572,14 @@ class ConveyorPainter extends CustomPainter {
   /// straight belt beside it at the same width.
   static const _endRadiusFactor = 0.2;
 
+  /// Width of the black outline around the belt, in logical pixels.
+  ///
+  /// A fixed width, so a small belt is outlined as heavily as a big one. The
+  /// fit reads it because that ink has to land inside the asset's box like
+  /// the rest of the belt, and it is the one length in the whole drawing that
+  /// does not scale with the box.
+  static const _borderWidth = 2.0;
+
   void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final borderRadius = Radius.circular(size.shortestSide * _endRadiusFactor);
@@ -2514,7 +2593,7 @@ class ConveyorPainter extends CustomPainter {
     final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+      ..strokeWidth = _borderWidth;
     canvas.drawRRect(rrect, border);
 
     // Draw exclamation mark if needed
@@ -2606,7 +2685,7 @@ class ConveyorPainter extends CustomPainter {
     final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+      ..strokeWidth = _borderWidth;
     _paintBand(canvas, g, 0, 1,
         width: g.beltWidth,
         radius: g.beltWidth * _endRadiusFactor,
