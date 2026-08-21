@@ -126,9 +126,9 @@ void main() {
         label: 'Advanced', path: '/advanced', icon: Icons.settings));
 
     alarmMan = _RecordingAlarmMan();
-    // A null database is a no-op status write, which is all the accept loop
-    // needs here; the state removal it does after that is real.
-    proposals = ProposalStateNotifier(null);
+    // Accepting no longer writes a status anywhere; all the accept loop does
+    // is remove the proposal from state, which is what this test watches.
+    proposals = ProposalStateNotifier();
   });
 
   // The notifier is disposed by the ProviderScope that overrode the provider

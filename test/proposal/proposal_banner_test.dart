@@ -438,17 +438,17 @@ void main() {
     test('every proposal type has an editor route to beam to', () {
       // A type with no route leaves View and Review all dead, so the proposal
       // can only be accepted blind from the banner.
-      final watcherSource =
-          File('lib/providers/proposal_watcher.dart').readAsStringSync();
+      final routeSource =
+          File('lib/providers/proposal.dart').readAsStringSync();
 
-      expect(watcherSource, contains("'alarm': '/advanced/alarm-editor'"));
-      expect(watcherSource, contains("'alarm_create': '/advanced/alarm-editor'"));
-      expect(watcherSource, contains("'alarm_update': '/advanced/alarm-editor'"));
+      expect(routeSource, contains("'alarm': '/advanced/alarm-editor'"));
+      expect(routeSource, contains("'alarm_create': '/advanced/alarm-editor'"));
+      expect(routeSource, contains("'alarm_update': '/advanced/alarm-editor'"));
       expect(
-          watcherSource, contains("'key_mapping': '/advanced/key-repository'"));
-      expect(watcherSource, contains("'page': '/advanced/page-editor'"));
-      expect(watcherSource, contains("'asset': '/advanced/page-editor'"));
-      expect(watcherSource, contains("'asset_update': '/advanced/page-editor'"));
+          routeSource, contains("'key_mapping': '/advanced/key-repository'"));
+      expect(routeSource, contains("'page': '/advanced/page-editor'"));
+      expect(routeSource, contains("'asset': '/advanced/page-editor'"));
+      expect(routeSource, contains("'asset_update': '/advanced/page-editor'"));
     });
 
     test('banner uses navigatorKeyProvider for Beamer context', () {

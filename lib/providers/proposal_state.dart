@@ -1,13 +1,10 @@
 import 'dart:async';
 
-import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/mcp_database.dart';
 
-import 'proposal_watcher.dart';
-import 'database.dart' show databaseProvider;
+import 'proposal.dart';
 
-export 'proposal_watcher.dart' show PendingProposal, ProposalOp;
+export 'proposal.dart' show PendingProposal, ProposalOp, nextLocalProposalId;
 
 /// Prefix marking operator-decision notes in the chat conversation.
 ///
@@ -36,8 +33,8 @@ class ProposalFeedback {
 
 /// Broadcast channel for [ProposalFeedback] events.
 ///
-/// Lives outside [proposalStateProvider] so listeners (the chat lifecycle)
-/// survive a notifier rebuild when the database connection changes.
+/// Lives outside [proposalStateProvider] so the chat lifecycle can subscribe
+/// once, independently of the notifier's own lifetime.
 final proposalFeedbackProvider =
     Provider<StreamController<ProposalFeedback>>((ref) {
   final controller = StreamController<ProposalFeedback>.broadcast();
@@ -60,13 +57,16 @@ class ProposalState {
       proposals.where((p) => p.proposalType == type).toList();
 }
 
-/// Manages proposal lifecycle with DB write-through for status changes.
+/// Holds the proposals the operator has not decided on yet.
+///
+/// Nothing here is persisted. A proposal exists from the moment a write tool
+/// hands it to the UI until the operator accepts, rejects or dismisses it.
+/// Accepting is what makes it durable, and that write belongs to the editor.
 class ProposalStateNotifier extends StateNotifier<ProposalState> {
-  ProposalStateNotifier(this._db, {StreamController<ProposalFeedback>? feedback})
+  ProposalStateNotifier({StreamController<ProposalFeedback>? feedback})
       : _feedback = feedback,
         super(const ProposalState());
 
-  final McpDatabase? _db;
   final StreamController<ProposalFeedback>? _feedback;
 
   /// Proposals already reported as viewed, so re-opening an editor does not
@@ -75,9 +75,12 @@ class ProposalStateNotifier extends StateNotifier<ProposalState> {
 
   /// Add a proposal if it is not already present.
   ///
-  /// Deduplicates by both ID and proposal JSON content, so inline proposals
-  /// surfaced immediately from tool results don't create duplicates when the
-  /// DB-sourced proposal arrives via [ProposalWatcher].
+  /// Deduplicates by both id and proposal JSON content. The JSON check is the
+  /// one that does the work: an in-app tool call surfaces the same proposal
+  /// twice, once from the server's proposal callback and once from the tool
+  /// result, and those two carry different locally-minted ids but identical
+  /// JSON -- the write tool returns the encoding of the very map the callback
+  /// was handed.
   void addProposal(PendingProposal proposal) {
     if (state.proposals.any((p) =>
         p.id == proposal.id || p.proposalJson == proposal.proposalJson)) {
@@ -88,96 +91,68 @@ class ProposalStateNotifier extends StateNotifier<ProposalState> {
     );
   }
 
-  /// Accept a proposal: update DB status to 'accepted' and remove from state.
+  /// Accept a proposal: report the decision and drop it from state.
+  ///
+  /// The `async` suspends nothing now that there is no write to wait for, so
+  /// the removal lands in the caller's own microtask. That is what closes the
+  /// "yellow boxes came back" race: a batch accept fired these without
+  /// awaiting the database round trip inside, and the editor's listener
+  /// re-staged whatever had not been removed yet. The [Future] stays because
+  /// every editor call site awaits it.
   Future<void> acceptProposal(int id) async {
-    await _updateStatus(id, 'accepted');
     _emitFeedback('accepted', id);
     _removeFromState(id);
   }
 
-  /// Reject a proposal: update DB status to 'rejected' and remove from state.
+  /// Reject a proposal: report the decision and drop it from state.
   Future<void> rejectProposal(int id) async {
-    await _updateStatus(id, 'rejected');
     _emitFeedback('rejected', id);
     _removeFromState(id);
   }
 
-  /// Dismiss a proposal: update DB status to 'dismissed' and remove from state.
+  /// Dismiss a proposal: report the decision and drop it from state.
   Future<void> dismissProposal(int id) async {
-    await _updateStatus(id, 'dismissed');
     _emitFeedback('dismissed', id);
     _removeFromState(id);
   }
 
   /// Record that the operator opened a proposal in its editor.
   ///
-  /// Writes status 'viewed' but keeps the proposal pending in state -- a look
-  /// is not a decision. Reported to the AI once per proposal.
+  /// Keeps the proposal pending -- a look is not a decision. Reported to the
+  /// AI once per proposal.
   Future<void> viewProposal(int id) async {
     if (!state.proposals.any((p) => p.id == id)) return;
     if (!_viewedIds.add(id)) return;
-    await _updateStatus(id, 'viewed');
     _emitFeedback('viewed', id);
   }
 
   /// Accept all proposals of a given type.
   ///
-  /// Updates each proposal's DB status to 'accepted' and removes them from
-  /// state. Returns the list of accepted proposals so the caller can route
-  /// them to editors.
-  ///
-  /// Note: only proposals present in state at the time of the call are
-  /// processed. The final state removal filters by type, so a proposal of
-  /// the same type added concurrently (via [addProposal] during an await
-  /// gap) will also be removed from local state — but since Dart is single-
-  /// threaded, this only happens if an external event (e.g. watcher
-  /// listener) fires between DB updates. The watcher will re-surface any
-  /// truly pending proposals on its next poll cycle.
+  /// Returns the accepted proposals so the caller can route them to editors.
+  /// Removes exactly the ids it reported on, so a proposal that arrives in
+  /// the meantime stays pending rather than being silently swallowed.
   Future<List<PendingProposal>> acceptAllOfType(String type) async {
-    final matching = state.proposals.where((p) => p.proposalType == type).toList();
+    final matching =
+        state.proposals.where((p) => p.proposalType == type).toList();
     final matchingIds = matching.map((p) => p.id).toSet();
-    for (final p in matching) {
-      await _updateStatus(p.id, 'accepted');
-    }
     _emitFeedbackAll('accepted', matching);
-    // Remove only the proposals we actually updated, not any that arrived
-    // concurrently with the same type.
     state = ProposalState(
-      proposals: state.proposals.where((p) => !matchingIds.contains(p.id)).toList(),
+      proposals:
+          state.proposals.where((p) => !matchingIds.contains(p.id)).toList(),
     );
     return matching;
   }
 
-  /// Reject all proposals of a given type.
-  ///
-  /// Updates each proposal's DB status to 'rejected' and removes them from
-  /// state. See [acceptAllOfType] for concurrency notes.
+  /// Reject all proposals of a given type. See [acceptAllOfType].
   Future<void> rejectAllOfType(String type) async {
-    final matching = state.proposals.where((p) => p.proposalType == type).toList();
+    final matching =
+        state.proposals.where((p) => p.proposalType == type).toList();
     final matchingIds = matching.map((p) => p.id).toSet();
-    for (final p in matching) {
-      await _updateStatus(p.id, 'rejected');
-    }
     _emitFeedbackAll('rejected', matching);
     state = ProposalState(
-      proposals: state.proposals.where((p) => !matchingIds.contains(p.id)).toList(),
+      proposals:
+          state.proposals.where((p) => !matchingIds.contains(p.id)).toList(),
     );
-  }
-
-  Future<void> _updateStatus(int id, String status) async {
-    if (_db == null) return;
-    try {
-      await _db.customUpdate(
-        'UPDATE mcp_proposal SET status = ? WHERE id = ?',
-        variables: [
-          Variable.withString(status),
-          Variable.withInt(id),
-        ],
-        updates: {},
-      );
-    } catch (_) {
-      // Best-effort DB update; don't block UI on transient errors.
-    }
   }
 
   void _removeFromState(int id) {
@@ -205,24 +180,14 @@ class ProposalStateNotifier extends StateNotifier<ProposalState> {
 
 /// Universal proposal state provider.
 ///
-/// Tracks all pending proposals across types (alarm, page, asset, key_mapping).
-/// Feeds from [proposalWatcherProvider] and writes status changes back to DB.
+/// Tracks all pending proposals across types (alarm, page, asset,
+/// key_mapping). Fed by `ChatNotifier`, which is where the MCP server's
+/// proposal callback lands. Deliberately depends on nothing else: it used to
+/// watch the database connection, so a reconnect rebuilt the notifier and
+/// dropped every proposal the operator had not yet acted on.
 final proposalStateProvider =
     StateNotifierProvider<ProposalStateNotifier, ProposalState>((ref) {
-  final dbAsync = ref.watch(databaseProvider);
-  final db = dbAsync.valueOrNull?.db;
-  final notifier =
-      ProposalStateNotifier(db, feedback: ref.watch(proposalFeedbackProvider));
-
-  // Listen to ProposalWatcher and feed new proposals into universal state.
-  ref.listen<ProposalWatcher?>(proposalWatcherProvider, (prev, next) {
-    if (next == null) return;
-    for (final p in next.pending) {
-      notifier.addProposal(p);
-    }
-  });
-
-  return notifier;
+  return ProposalStateNotifier(feedback: ref.watch(proposalFeedbackProvider));
 });
 
 

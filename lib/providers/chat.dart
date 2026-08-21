@@ -36,7 +36,6 @@ import 'llm.dart';
 import 'mcp_bridge.dart';
 import 'plc.dart' show plcCodeIndexProvider;
 import 'proposal_state.dart';
-import 'proposal_watcher.dart';
 import 'state_man.dart';
 
 /// Preference key for persisted chat history (legacy, migrated to conversations).
@@ -796,8 +795,7 @@ class ChatNotifier extends Notifier<ChatState> {
   }
 
   /// Extracts proposal JSON from a tool result and adds it to the
-  /// [ProposalStateNotifier] immediately, so the UI reflects it right away
-  /// without waiting for the 3-second DB poll cycle.
+  /// [ProposalStateNotifier].
   ///
   /// A proposal is a JSON object containing `_proposal_type`.
   void _surfaceProposalFromToolResult(String resultText) {
@@ -814,12 +812,11 @@ class ChatNotifier extends Notifier<ChatState> {
 
         ref.read(proposalStateProvider.notifier).addProposal(
               PendingProposal(
-                // Prefer the real mcp_proposal row id the server embeds, so
-                // accept/reject/viewed status lands on the actual DB row and
-                // the DB-sourced copy deduplicates by id. Fall back to a
-                // negative synthetic id when the server had no database.
-                id: (decoded['_proposal_id'] as num?)?.toInt() ??
-                    -DateTime.now().microsecondsSinceEpoch,
+                // A local handle. The same proposal reaching here twice (once
+                // from the server callback, once from the tool result of an
+                // in-app call) gets two different ids; addProposal
+                // deduplicates on the JSON, which is identical.
+                id: nextLocalProposalId(),
                 proposalType: proposalType,
                 title: title,
                 proposalJson: resultText,
@@ -914,9 +911,10 @@ final chatProvider = NotifierProvider<ChatNotifier, ChatState>(
 /// Renders one operator decision as a line of feedback for the AI.
 ///
 /// The text follows [kOperatorDecisionPrefix] in the injected note, so it
-/// reads as a sentence: `Accepted the alarm proposal "High temp" (#12).`
-/// Bulk decisions list up to five titles. Synthetic negative ids (proposals
-/// that never reached the database) are not shown.
+/// reads as a sentence: `Accepted the alarm proposal "High temp".` Bulk
+/// decisions list up to five titles. Proposal ids are not mentioned: they are
+/// process-local handles now, and quoting one at the AI would invite it to
+/// ask after a proposal that no longer exists anywhere.
 String describeProposalFeedback(
     String action, List<PendingProposal> proposals) {
   final verb = switch (action) {
@@ -939,9 +937,8 @@ String describeProposalFeedback(
 
   if (proposals.length == 1) {
     final p = proposals.first;
-    final id = p.id > 0 ? ' (#${p.id})' : '';
     return '$verb the ${typeLabel(p.proposalType)} proposal '
-        '"${p.title}"$id.$suffix';
+        '"${p.title}".$suffix';
   }
 
   final types = proposals.map((p) => typeLabel(p.proposalType)).toSet();
@@ -1108,8 +1105,9 @@ final chatLifecycleProvider = Provider<void>((ref) {
     }
   });
 
-  // Listen for proposals emitted by the MCP server's write tools.
-  // This covers both paths:
+  // Listen for proposals emitted by the MCP server's write tools. This is
+  // the whole delivery path -- a proposal is never stored anywhere, so if it
+  // does not arrive here it does not arrive at all. It covers both cases:
   //   (a) In-process: tool executed by ChatNotifier's tool loop — the tool
   //       result message already contains the proposal JSON, but this
   //       stream fires too (harmless: injectProposal deduplicates).

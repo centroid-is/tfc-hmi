@@ -47,8 +47,6 @@ import 'package:tfc/drawings/drawing_overlay.dart';
 import 'package:tfc/providers/chat.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/navigator_key.dart';
-import 'package:tfc/providers/proposal_watcher.dart';
-import 'package:tfc/providers/proposal_state.dart';
 import 'package:tfc/providers/scaffold_messenger_key.dart';
 
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
@@ -569,17 +567,6 @@ class MyApp extends ConsumerWidget {
               (b) => b.currentState.port,
             ));
             final chatEnabled = kChatEnabled && (ref.watch(mcpChatEnabledProvider).valueOrNull ?? false);
-
-            // Feed new MCP proposals into universal state provider.
-            // Proposals are surfaced inline in chat via the embedded proposal card.
-            ref.listen<ProposalWatcher?>(proposalWatcherProvider, (prev, next) {
-              if (next == null) return;
-              final stateNotifier = ref.read(proposalStateProvider.notifier);
-              for (final p in next.pending) {
-                stateNotifier.addProposal(p);
-                next.markNotified(p.id);
-              }
-            });
 
             return Stack(
               children: [

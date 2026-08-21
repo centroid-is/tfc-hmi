@@ -479,13 +479,18 @@ Future<Iterable<String>> _savedKeys(Preferences prefs) async {
   return KeyMappings.fromJson(jsonDecode(json)).nodes.keys;
 }
 
-/// Records what the page decided, and can refuse a decision the way a
-/// database that has gone away would.
+/// Records what the page decided, and can make a chosen id throw instead.
+///
+/// The throwing is what the partial-failure counter needs: the page reports
+/// how many of a batch went through, so a test has to be able to fail one
+/// decision and let the rest succeed. Nothing here reaches a database --
+/// accepting a proposal is an in-memory state change -- so the failure is
+/// injected directly rather than by taking a connection away.
 class _RecordingProposals extends ProposalStateNotifier {
   _RecordingProposals({
     this.failAccept = const {},
     this.failReject = const {},
-  }) : super(null);
+  }) : super();
 
   final Set<int> failAccept;
   final Set<int> failReject;

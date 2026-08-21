@@ -37,14 +37,14 @@ void main() {
     late MockMcpClient client;
     late ProposalService proposalService;
 
+    /// Proposals handed to the UI by [ProposalService]'s callback -- the
+    /// whole of what a write tool delivers, since nothing is persisted.
+    late List<Map<String, dynamic>> delivered;
+
     /// Sets up the MCP server with an [ElicitationRiskGate] and a
     /// client that responds to elicitation with [onElicit].
-    ///
-    /// If [withDatabase] is true, ProposalService is given a real
-    /// in-memory database for recording proposals.
     Future<void> setupWithElicitation({
       required Future<ElicitResult> Function(ElicitRequest) onElicit,
-      bool withDatabase = false,
     }) async {
       db = createTestDatabase();
       await db.customStatement('SELECT 1');
@@ -65,10 +65,8 @@ void main() {
         auditLogService: auditService,
       );
 
-      proposalService = ProposalService(
-        database: withDatabase ? db : null,
-        operatorId: 'op1',
-      );
+      delivered = [];
+      proposalService = ProposalService(onProposal: delivered.add);
 
       final configService = ConfigService(db);
 
@@ -90,7 +88,7 @@ void main() {
     }
 
     /// Sets up MCP server with a NoOpRiskGate (no elicitation).
-    Future<void> setupWithAutoConfirm({bool withDatabase = false}) async {
+    Future<void> setupWithAutoConfirm() async {
       db = createTestDatabase();
       await db.customStatement('SELECT 1');
 
@@ -110,10 +108,8 @@ void main() {
         auditLogService: auditService,
       );
 
-      proposalService = ProposalService(
-        database: withDatabase ? db : null,
-        operatorId: 'op1',
-      );
+      delivered = [];
+      proposalService = ProposalService(onProposal: delivered.add);
 
       final configService = ConfigService(db);
 
@@ -375,58 +371,38 @@ void main() {
     });
 
     // -----------------------------------------------------------------------
-    // Scenario: Proposal recorded in database
+    // Scenario: Proposal delivered to the UI
     // -----------------------------------------------------------------------
-    group('proposal persistence', () {
-      test('proposal is recorded in mcp_proposal table', () async {
-        await setupWithAutoConfirm(withDatabase: true);
+    group('proposal delivery', () {
+      test('proposal reaches the UI callback with the full proposal',
+          () async {
+        await setupWithAutoConfirm();
 
         await client.callTool('create_alarm', _validAlarmArgs());
 
-        // ProposalService._recordProposal is fire-and-forget; wait briefly.
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-
-        final rows =
-            await db.customSelect('SELECT * FROM mcp_proposal').get();
-
-        expect(rows, hasLength(1));
-        expect(rows.first.read<String>('proposal_type'), 'alarm');
-        expect(rows.first.read<String>('title'), 'Pump 3 Overcurrent');
-        expect(rows.first.read<String>('operator_id'), 'op1');
-        expect(rows.first.read<String>('status'), 'pending');
-
-        // Verify the stored JSON contains the full proposal
-        final storedJson =
-            jsonDecode(rows.first.read<String>('proposal_json'))
-                as Map<String, dynamic>;
-        expect(storedJson['_proposal_type'], 'alarm');
-        expect(storedJson['title'], 'Pump 3 Overcurrent');
-        expect(storedJson['uid'], isA<String>());
+        // Synchronous: no write to wait for, no poll to wait for.
+        expect(delivered, hasLength(1));
+        expect(delivered.first['_proposal_type'], 'alarm');
+        expect(delivered.first['title'], 'Pump 3 Overcurrent');
+        expect(delivered.first['uid'], isA<String>());
       });
 
-      test('proposal is recorded even when client declines elicitation',
+      test('proposal is delivered even when client declines elicitation',
           () async {
         await setupWithElicitation(
           onElicit: (request) async => const ElicitResult(action: 'decline'),
-          withDatabase: true,
         );
 
         await client.callTool('create_alarm', _validAlarmArgs());
 
-        // Wait for async DB write
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-
-        final rows =
-            await db.customSelect('SELECT * FROM mcp_proposal').get();
-
-        expect(rows, hasLength(1));
-        expect(rows.first.read<String>('proposal_type'), 'alarm');
-        expect(rows.first.read<String>('title'), 'Pump 3 Overcurrent');
+        expect(delivered, hasLength(1));
+        expect(delivered.first['_proposal_type'], 'alarm');
+        expect(delivered.first['title'], 'Pump 3 Overcurrent');
       });
 
       test('no alarm rows written to server_alarm table (proposal only)',
           () async {
-        await setupWithAutoConfirm(withDatabase: true);
+        await setupWithAutoConfirm();
 
         await client.callTool('create_alarm', _validAlarmArgs());
 
@@ -544,7 +520,6 @@ void main() {
         );
 
         proposalService = ProposalService(
-          operatorId: 'op1',
           onProposal: (wrapped) => captured.add(wrapped),
         );
 
@@ -592,7 +567,6 @@ void main() {
         );
 
         proposalService = ProposalService(
-          operatorId: 'op1',
           onProposal: (wrapped) => captured.add(wrapped),
         );
 

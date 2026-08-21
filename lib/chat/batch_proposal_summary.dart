@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/navigator_key.dart';
 import '../providers/proposal_state.dart';
-import '../providers/proposal_watcher.dart';
 
 /// Displays a summary card when multiple proposals of the same type are
 /// pending, with "Accept All" and "Reject All" batch actions.

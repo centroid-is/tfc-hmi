@@ -1,49 +1,30 @@
-import 'dart:async';
-import 'dart:convert';
-
-import 'package:drift/drift.dart';
-import 'package:tfc_dart/core/mcp_database.dart';
-
-import 'sql_dialect.dart';
-
 /// Callback type for proposal notifications.
 ///
-/// Invoked synchronously when [ProposalService.wrapProposal] produces a
-/// wrapped proposal map (with `_proposal_type` set). Used by the Flutter
-/// layer to inject proposals into the chat UI without waiting for database
-/// polling.
+/// Invoked synchronously by [ProposalService.wrapProposal] with the wrapped
+/// proposal map (with `_proposal_type` set). This is the whole transport: the
+/// MCP server is hosted inside the Flutter app, so the tool handler and the
+/// banner that shows its result are objects in the same isolate.
 typedef ProposalCallback = void Function(Map<String, dynamic> wrapped);
 
-/// Shared proposal diff formatting, tagging, and persistence for write tools.
+/// Shared proposal diff formatting and tagging for write tools.
 ///
 /// Every write tool produces a "proposal" (a preview of what the AI wants
 /// to create or modify) that is presented to the operator for confirmation.
 /// This service provides consistent markdown formatting for those proposals
-/// and optionally records them in the database for cross-process notification.
+/// and hands the wrapped result to the UI through [ProposalCallback].
 ///
-/// Uses raw SQL via [customStatement] for DB writes because the
-/// mcp_proposal table is a shared table defined in both AppDatabase
-/// (tfc_dart) and ServerDatabase (tfc_mcp_server) with different generated
-/// Drift types. Typed Drift operations (e.g. `db.into(table).insert(...)`)
-/// fail with a type error when the database is AppDatabase but the table
-/// class comes from ServerDatabase's codegen.
+/// Nothing about a proposal is persisted. Proposals used to be inserted into
+/// `mcp_proposal` so that a three-second poll on the Flutter side could read
+/// them back out again -- a database round trip to move a map between two
+/// objects in one isolate. That poll bound its parameters with `?` where
+/// Postgres needs `$1`, inside a bare `catch (_)`, so it never read a single
+/// row in production; 1018 rows accumulated, all still `pending`. Delivery
+/// has always in fact come from the callback below. The table is left in
+/// place (dropping it needs a migration) but is no longer read or written.
 class ProposalService {
-  ProposalService({
-    McpDatabase? database,
-    String? operatorId,
-    ProposalCallback? onProposal,
-  })  : _database = database,
-        _isPostgres = database != null ? isPostgresDb(database) : false,
-        _operatorId = operatorId ?? 'unknown',
-        _onProposal = onProposal;
+  ProposalService({ProposalCallback? onProposal}) : _onProposal = onProposal;
 
-  final McpDatabase? _database;
-  final bool _isPostgres;
-  final String _operatorId;
   final ProposalCallback? _onProposal;
-
-  /// Adapts SQL with `?` placeholders to `$N` for PostgreSQL.
-  String _sql(String query) => adaptSql(query, isPostgres: _isPostgres);
 
   /// Formats a markdown diff for a "create" proposal.
   ///
@@ -95,8 +76,8 @@ class ProposalService {
     return buffer.toString().trimRight();
   }
 
-  /// Adds a `_proposal_type` field to [proposal] for Phase 5 routing,
-  /// and records the proposal in the database for HMI notification.
+  /// Adds a `_proposal_type` field to [proposal] for Phase 5 routing, and
+  /// hands the wrapped map to the in-process listener.
   ///
   /// The `_proposal_type` field allows the Flutter UI to identify what
   /// kind of proposal this is (e.g., 'alarm', 'page') and route to the
@@ -107,10 +88,15 @@ class ProposalService {
   /// 'key_mapping' are used for both creates and updates -- so it is stamped
   /// into the JSON as `_op` for the notification banner to label each row.
   ///
-  /// When the database write succeeds, the wrapped map also carries
-  /// `_proposal_id` -- the mcp_proposal row id -- so the AI can look the
-  /// proposal up later with `get_proposal_status`, and the UI can track the
-  /// inline copy under its real id instead of a synthetic negative one.
+  /// The returned map is the same object the callback receives, and write
+  /// tools return its JSON encoding as the tool result. Both copies are
+  /// therefore byte-identical, which is what lets the UI deduplicate a
+  /// proposal that arrives once through the callback and once through the
+  /// tool result of an in-app tool call.
+  ///
+  /// Still returns a [Future] although nothing here awaits: every write tool
+  /// awaits this call, and the future completes without suspending, so the
+  /// callback runs before the tool handler continues.
   Future<Map<String, dynamic>> wrapProposal(
     String type,
     Map<String, dynamic> proposal, {
@@ -122,125 +108,8 @@ class ProposalService {
       '_op': op,
     };
 
-    // Record the proposal in DB for cross-process notification. Awaited so
-    // the row id can be handed back to the AI in the tool result.
-    final id = await _recordProposal(type, proposal, wrapped);
-    if (id != null) {
-      wrapped['_proposal_id'] = id;
-    }
-
-    // Notify in-process listener (e.g., Flutter chat UI) immediately.
     _onProposal?.call(wrapped);
 
     return wrapped;
-  }
-
-  /// Reads back the operator's decision on recorded proposals.
-  ///
-  /// Returns rows newest-first as maps with `id`, `type`, `title`, `status`
-  /// and `created_at`. When [ids] is given only those rows are returned;
-  /// otherwise the most recent [limit] rows.
-  Future<List<Map<String, dynamic>>> getProposalStatuses({
-    List<int>? ids,
-    int limit = 20,
-  }) async {
-    final db = _database;
-    if (db == null) return const [];
-
-    final String where;
-    final List<Variable> vars;
-    if (ids != null && ids.isNotEmpty) {
-      where = 'WHERE id IN (${List.filled(ids.length, '?').join(', ')})';
-      vars = [for (final id in ids) Variable.withInt(id)];
-    } else {
-      where = '';
-      vars = [];
-    }
-
-    final rows = await db
-        .customSelect(
-          _sql(
-            'SELECT id, proposal_type, title, status, created_at '
-            'FROM mcp_proposal $where '
-            'ORDER BY id DESC LIMIT ${limit.clamp(1, 100)}',
-          ),
-          variables: vars,
-        )
-        .get();
-
-    return [
-      for (final row in rows)
-        {
-          'id': row.read<int>('id'),
-          'type': row.read<String>('proposal_type'),
-          'title': row.read<String>('title'),
-          'status': row.read<String>('status'),
-          // Stored as ISO-8601 text on SQLite but as a native timestamp on
-          // PostgreSQL, so stringify whatever comes back.
-          'created_at': row.data['created_at']?.toString() ?? '',
-        },
-    ];
-  }
-
-  /// Derives a human-readable title from the proposal based on type.
-  String _deriveTitle(String type, Map<String, dynamic> proposal) {
-    switch (type) {
-      case 'alarm':
-        return proposal['title'] as String? ??
-            proposal['key'] as String? ??
-            'Alarm Proposal';
-      case 'page':
-        return proposal['title'] as String? ??
-            proposal['key'] as String? ??
-            'Page Proposal';
-      case 'asset':
-        return proposal['title'] as String? ??
-            proposal['key'] as String? ??
-            'Asset Proposal';
-      case 'key_mapping':
-        return proposal['key'] as String? ?? 'Key Mapping Proposal';
-      default:
-        return proposal['title'] as String? ?? 'Proposal';
-    }
-  }
-
-  /// Inserts the proposal row and returns its id, or null when there is no
-  /// database or the write fails (notification is best-effort; the proposal
-  /// tool must not fail on it).
-  Future<int?> _recordProposal(
-    String type,
-    Map<String, dynamic> proposal,
-    Map<String, dynamic> wrapped,
-  ) async {
-    final db = _database;
-    if (db == null) return null;
-
-    try {
-      final title = _deriveTitle(type, proposal);
-      final jsonStr = jsonEncode(wrapped);
-      final now = DateTime.now().toUtc().toIso8601String();
-
-      const insert = 'INSERT INTO mcp_proposal '
-          '(proposal_type, title, proposal_json, operator_id, status, created_at) '
-          'VALUES (?, ?, ?, ?, ?, ?)';
-      final values = [type, title, jsonStr, _operatorId, 'pending', now];
-
-      if (_isPostgres) {
-        final rows = await db.customSelect(
-          _sql('$insert RETURNING id'),
-          variables: [for (final v in values) Variable.withString(v)],
-        ).get();
-        return rows.isNotEmpty ? rows.first.read<int>('id') : null;
-      }
-      // SQLite: customInsert reports the generated rowid directly.
-      return await db.customInsert(
-        insert,
-        variables: [for (final v in values) Variable.withString(v)],
-      );
-    } catch (e) {
-      // ignore: avoid_print
-      print('[ProposalService] DB write failed: $e');
-      return null;
-    }
   }
 }

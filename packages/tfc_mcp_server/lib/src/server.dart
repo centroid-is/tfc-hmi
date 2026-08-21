@@ -44,7 +44,6 @@ import 'tools/tech_doc_tools.dart';
 import 'tools/key_mapping_write_tools.dart';
 import 'tools/page_write_tools.dart';
 import 'tools/ping_tool.dart';
-import 'tools/proposal_status_tools.dart';
 import 'tools/browse_tools.dart';
 import 'tools/tag_tools.dart';
 import 'tools/tool_registry.dart';
@@ -187,12 +186,7 @@ class TfcMcpServer {
     if (toggles.proposalsEnabled) {
       final riskGate = ElicitationRiskGate(_mcpServer);
       final expressionValidator = ExpressionValidator();
-      final proposalService = ProposalService(
-        database: _database,
-        operatorId:
-            identity.isAuthenticated ? identity.operatorId : 'unknown',
-        onProposal: onProposal,
-      );
+      final proposalService = ProposalService(onProposal: onProposal);
 
       if (toggles.alarmsEnabled && toggles.configEnabled) {
         registerAlarmWriteTools(
@@ -221,9 +215,6 @@ class TfcMcpServer {
         riskGate: riskGate,
         proposalService: proposalService,
       );
-      // Feedback loop: lets the AI ask what the operator did with its
-      // proposals (accepted / viewed / rejected).
-      registerProposalStatusTools(registry, proposalService);
     }
 
     // Resources (registered directly on McpServer, no identity/audit gate)

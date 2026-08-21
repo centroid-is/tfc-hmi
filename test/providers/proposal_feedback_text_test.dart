@@ -19,10 +19,10 @@ void main() {
       );
 
   group('describeProposalFeedback', () {
-    test('single proposal names the type, title, and id', () {
+    test('single proposal names the type and title', () {
       final text = describeProposalFeedback(
           'accepted', [proposal(id: 12, title: 'High Temp')]);
-      expect(text, 'Accepted the alarm proposal "High Temp" (#12).');
+      expect(text, 'Accepted the alarm proposal "High Temp".');
     });
 
     test('viewed carries a no-decision-yet suffix', () {
@@ -31,9 +31,14 @@ void main() {
       expect(text, startsWith('Viewed'));
     });
 
-    test('synthetic negative ids are not shown', () {
-      final text = describeProposalFeedback('rejected', [proposal(id: -42)]);
-      expect(text, isNot(contains('#')));
+    test('no id is quoted at the AI', () {
+      // Ids are process-local handles now that nothing about a proposal is
+      // stored; naming one would invite the AI to ask after a proposal that
+      // does not exist anywhere.
+      expect(describeProposalFeedback('rejected', [proposal(id: -42)]),
+          isNot(contains('#')));
+      expect(describeProposalFeedback('accepted', [proposal(id: 12)]),
+          isNot(contains('#')));
     });
 
     test('bulk decision of one type counts and lists titles', () {
