@@ -18,6 +18,7 @@ import 'package:logger/logger.dart';
 
 import 'alarm.dart';
 import 'database.dart';
+import 'database_connections.dart';
 import 'mcp_tables.dart';
 import 'mcp_database.dart';
 
@@ -308,7 +309,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       final healthPort = ReceivePort();
       final pool = pg.Pool.withEndpoints([config.postgres!],
           settings: pg.PoolSettings(
-            maxConnectionCount: 20,
+            maxConnectionCount: resolvePoolSize(config.maxPoolConnections),
             sslMode: config.sslMode,
             connectTimeout: config.connectTimeout,
             keepAliveInterval: const Duration(seconds: 5),
@@ -352,7 +353,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       final isolate = await DriftIsolate.spawn(() {
         final pool = pg.Pool.withEndpoints([config.postgres!],
             settings: pg.PoolSettings(
-              maxConnectionCount: 20,
+              maxConnectionCount: resolvePoolSize(config.maxPoolConnections),
               sslMode: config.sslMode,
               connectTimeout: config.connectTimeout,
               keepAliveInterval: const Duration(seconds: 5),

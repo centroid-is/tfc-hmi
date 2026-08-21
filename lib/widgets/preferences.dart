@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/database_stats_pane.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -587,7 +588,20 @@ class _DatabaseConfigEditorState extends ConsumerState<_DatabaseConfigEditor> {
       data: (prefs) => Card(
         child: ExpansionTile(
           leading: const FaIcon(FontAwesomeIcons.database, size: 20),
-          title: const Text('Database Configuration'),
+          title: Row(
+            children: [
+              const Text('Database Configuration'),
+              // Reaching the connection census through psql is exactly what
+              // stops working when the server runs out of connections, so the
+              // way in has to be here, in an app that already holds one.
+              IconButton(
+                icon: const Icon(Icons.info_outline, size: 18),
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Connection statistics',
+                onPressed: () => showDatabaseStatsPane(context),
+              ),
+            ],
+          ),
           subtitle: StreamBuilder<bool>(
             stream: prefs.database?.connectionState,
             initialData: false,

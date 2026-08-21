@@ -10,6 +10,7 @@ import 'package:logger/logger.dart';
 
 import 'secure_storage/secure_storage.dart';
 import 'database_drift.dart';
+import 'database_connections.dart';
 import '../converter/duration_converter.dart';
 
 part 'database.g.dart';
@@ -81,6 +82,14 @@ class DatabaseConfig {
   pg.SslMode? sslMode;
   bool debug = false;
 
+  /// Connections this process may pool, or null for one.
+  ///
+  /// One is what a UI client needs and what the postgres package itself
+  /// defaults to. Only a process that genuinely drains several sources in
+  /// parallel -- the collector, roughly one connection per OPC UA server --
+  /// should raise it, and [resolvePoolSize] caps whatever is set here.
+  int? maxPoolConnections;
+
   /// Pool connect timeout (not serialized to JSON).
   @json.JsonKey(includeFromJson: false, includeToJson: false)
   Duration connectTimeout;
@@ -93,6 +102,7 @@ class DatabaseConfig {
     this.postgres,
     this.sslMode,
     this.debug = false,
+    this.maxPoolConnections,
     this.connectTimeout = const Duration(seconds: 5),
     this.queryTimeout = const Duration(seconds: 30),
   });
@@ -272,40 +282,53 @@ class Database {
 
   /// Lightweight check if the database is reachable.
   /// Opens and immediately closes a single connection. Throws on failure.
+  ///
+  /// The close is scheduled on the open itself rather than awaited after the
+  /// timeout, because the timeout only stops us waiting -- it does not stop
+  /// the server finishing the handshake. A probe that gave up on a slow
+  /// server used to leave that connection open for the rest of the day.
   static Future<void> probe(DatabaseConfig config) async {
-    final conn = await pg.Connection.open(
-      config.postgres!,
-      settings: pg.ConnectionSettings(
-        sslMode: config.sslMode ?? pg.SslMode.disable,
+    await openThenClose<pg.Connection>(
+      pg.Connection.open(
+        config.postgres!,
+        settings: pg.ConnectionSettings(
+          sslMode: config.sslMode ?? pg.SslMode.disable,
+        ),
       ),
-    ).timeout(const Duration(seconds: 5));
-    await conn.close();
+      (conn) => conn.close(),
+      timeout: const Duration(seconds: 5),
+    );
   }
 
   /// Probe the database, create an [AppDatabase], and open the connection.
-  /// Retries every [retryDelay] until the database is reachable.
+  /// Retries with growing backoff until the database is reachable.
   /// Set [useIsolate] to false when already running inside an isolate.
+  ///
+  /// Every attempt that gets as far as building an [AppDatabase] is closed
+  /// again if opening it fails. Each spawned DriftIsolate carries a pool whose
+  /// health monitor holds a connection open by design, so an attempt left
+  /// lying around costs a server slot until the process exits -- and this loop
+  /// runs until it succeeds, which on a full server is never.
   static Future<Database> connectWithRetry(
     DatabaseConfig config, {
-    Duration retryDelay = const Duration(seconds: 2),
     bool useIsolate = true,
   }) async {
-    while (true) {
-      try {
-        await probe(config);
-        final appDb = useIsolate
-            ? await AppDatabase.spawn(config)
-            : await AppDatabase.create(config);
-        final db = Database(appDb);
+    return retryUntilOpen<Database>(
+      probe: () => probe(config),
+      build: () async => Database(useIsolate
+          ? await AppDatabase.spawn(config)
+          : await AppDatabase.create(config)),
+      open: (db) async {
         await db.db.open();
         logger.i('Database connected');
-        return db;
-      } catch (e) {
-        logger.w(
-            'Database not reachable, retrying in ${retryDelay.inSeconds}s: $e');
-        await Future.delayed(retryDelay);
-      }
-    }
+      },
+      dispose: (db) => db.close(),
+      delay: backoffForAttempt,
+      sleep: (d) => Future.delayed(d),
+      onError: (e, attempt) => logger.w(
+          'Database not reachable (attempt $attempt), retrying in '
+          '${backoffForAttempt(attempt).inSeconds}s: $e'),
+    );
   }
 
   AppDatabase db;
@@ -1256,8 +1279,19 @@ ORDER BY at.time;
     return true;
   }
 
+  /// Releases everything this object holds: its timers, the health
+  /// subscription, and the pool (with its DriftIsolate) underneath.
+  ///
+  /// [connectWithRetry] calls this on an attempt it is throwing away, so it
+  /// has to be complete. Leaving the batch flush timer running on a discarded
+  /// attempt would be the same leak in a different shape.
   Future<void> close() async {
+    _flushTimer?.cancel();
     _healthTimeoutTimer?.cancel();
+    await _healthSub?.cancel();
+    if (!_connectionStateController.isClosed) {
+      await _connectionStateController.close();
+    }
     await db.close();
   }
 }
