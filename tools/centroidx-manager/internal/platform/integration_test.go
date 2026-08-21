@@ -15,7 +15,16 @@ import (
 // tests; callers should use t.Helper() in their own wrappers where needed.
 func runCommand(t *testing.T, name string, args ...string) (string, string, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return runCommandWithTimeout(t, 30*time.Second, name, args...)
+}
+
+// runCommandWithTimeout is runCommand with an explicit deadline, for calls
+// that pay a cold-start cost the default 30s does not cover — notably the
+// first PowerShell cmdlet lookup on a fresh Windows runner, which triggers a
+// full module auto-discovery scan.
+func runCommandWithTimeout(t *testing.T, timeout time.Duration, name string, args ...string) (string, string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
