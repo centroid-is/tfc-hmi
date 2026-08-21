@@ -54,11 +54,9 @@ Future<String> _describeBackends(Connection control) async {
       "FROM pg_stat_activity WHERE datname = 'testdb' "
       "AND backend_type = 'client backend' AND pid <> pg_backend_pid() "
       "ORDER BY backend_start");
-  if (result.isEmpty) return 'none';
-  return result
-      .map((r) => '[state=${r[0]} app=${r[1]} age=${r[2]}s port=${r[3]} '
-          'idleAfter=${r[4]}s q=${r[5]}]')
-      .join(' ');
+  if (result.isEmpty) return 'none (proxy pairs: $proxyLivePairs)';
+  return 'proxy still holding $proxyLivePairs pair(s); ${result.map((r) => '[state=${r[0]} app=${r[1]} age=${r[2]}s port=${r[3]} '
+      'idleAfter=${r[4]}s q=${r[5]}]').join(' ')}';
 }
 
 /// Polls [read] until it satisfies [done], or gives up after [timeout].
