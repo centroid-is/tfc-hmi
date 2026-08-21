@@ -52,6 +52,24 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   /// invalidate, which a cached notifier would not.
   ProviderContainer? _container;
 
+  /// The messenger to report through once a proposal is staged.
+  ///
+  /// Context-derived, so unlike the providers there is no container to
+  /// re-read it from. `mounted` is not enough of a guard for the lookup:
+  /// an element that has been *deactivated* still reports `mounted == true`,
+  /// and `ScaffoldMessenger.of` walks ancestors that are no longer there.
+  ScaffoldMessengerState? _messengerHandle;
+
+  /// Where to report from. The handle whenever there is one -- every path
+  /// that can outlive the page has one by then. The live lookup covers the
+  /// form being used before anything was staged, when the page is by
+  /// definition on screen.
+  ScaffoldMessengerState? get _messenger {
+    final handle = _messengerHandle;
+    if (handle != null) return handle;
+    return mounted ? ScaffoldMessenger.maybeOf(context) : null;
+  }
+
   final List<AlarmConfig> _proposedAlarms = [];
   final List<int> _proposalIds = [];
 
@@ -162,6 +180,7 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       // Taken here, where `ref` and `context` are known good, because the two
       // callbacks above can be invoked long after this page is gone.
       _container = ProviderScope.containerOf(context, listen: false);
+      _messengerHandle = ScaffoldMessenger.maybeOf(context);
     });
   }
 
@@ -252,8 +271,22 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   /// This avoids duplicate alarms when accepting an update proposal.
   Future<void> _acceptProposalWithConfig(AlarmConfig editedConfig) async {
     final removing = _proposedDeleteUids.contains(editedConfig.uid);
+    // The form's own Accept starts with this page on screen, so `ref` would
+    // work for the first read -- but not after the awaits below, and this
+    // method awaits twice before it is done touching providers. The container
+    // is read off the captured handle for the same reason the banner's
+    // callbacks are: it outlives the page, and reading the providers off it
+    // at call time keeps them current across an invalidate.
+    var container = _container;
+    if (container == null && mounted) {
+      container = ProviderScope.containerOf(context, listen: false);
+    }
+    if (container == null) return;
+    // Taken before the first await, while the page is certainly on screen and
+    // an ancestor lookup is safe.
+    final messenger = _messenger;
     try {
-      final alarmMan = await ref.read(alarmManProvider.future);
+      final alarmMan = await container.read(alarmManProvider.future);
       if (removing) {
         alarmMan.removeAlarm(editedConfig);
       } else {
@@ -261,7 +294,7 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       }
 
       // Invalidate the provider so the alarm list rebuilds with the new alarm.
-      ref.invalidate(alarmManProvider);
+      container.invalidate(alarmManProvider);
     } catch (_) {}
 
     // Only the alarm the form was editing leaves the batch; anything else
@@ -271,7 +304,7 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       // failed accept left the id out of _proposalIds while still in state,
       // and the next listener tick re-staged it as a duplicate.
       final id = _proposalIds.first;
-      await ref.read(proposalStateProvider.notifier).acceptProposal(id);
+      await container.read(proposalStateProvider.notifier).acceptProposal(id);
       _proposalIds.removeAt(0);
       // The flag leaves with the alarm it marks: dropping it earlier would
       // leave a still-staged removal looking like an ordinary update.
@@ -280,20 +313,22 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       }
     }
 
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
+    // Told through the handle, not a fresh lookup: navigating away mid-accept
+    // deactivates this element, which still reports `mounted == true` while
+    // `ScaffoldMessenger.of` is already walking ancestors that are gone.
+    messenger?.showSnackBar(
       SnackBar(
           content:
               Text(removing ? 'Alarm removed.' : 'Alarm proposal accepted!')),
     );
 
-    setState(() {
-      _show = null;
-    });
+    _show = null;
+    if (mounted) setState(() {});
+    // Through the stored controllers, for the same reason: the accept may
+    // have outlived the page, and the banner still has to lose its buttons.
     if (_proposedAlarms.isEmpty) {
-      ref.read(proposalCommitProvider.notifier).state = null;
-      ref.read(proposalDiscardProvider.notifier).state = null;
+      _commitSlot?.state = null;
+      _discardSlot?.state = null;
     }
   }
 
@@ -302,8 +337,32 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
     // The banner holds these closures over this State. Left set, "Accept all"
     // would call into a disposed State after navigating away: nothing saved,
     // proposals still pending, and an uncaught async error.
-    _commitSlot?.state = null;
-    _discardSlot?.state = null;
+    //
+    // After this frame, not during it: navigating away disposes us from
+    // inside a build, and writing to a provider there trips riverpod's
+    // "tried to modify a provider while the widget tree was building". Only
+    // if the slot still holds our own closure -- an editor that replaced us
+    // has already published its own, and clearing that would take the
+    // banner's buttons away from a live batch.
+    final commitSlot = _commitSlot;
+    final discardSlot = _discardSlot;
+    final commit = _commitProposals;
+    final discard = _discardProposals;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // `mounted` on the controllers, not on us: a frame later the whole
+      // ProviderScope may be gone too -- the app shutting down, or a test
+      // ending -- and reading a disposed StateController throws.
+      if (commitSlot != null &&
+          commitSlot.mounted &&
+          commitSlot.state == commit) {
+        commitSlot.state = null;
+      }
+      if (discardSlot != null &&
+          discardSlot.mounted &&
+          discardSlot.state == discard) {
+        discardSlot.state = null;
+      }
+    });
     super.dispose();
   }
 

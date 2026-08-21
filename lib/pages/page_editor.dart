@@ -931,8 +931,32 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // The banner holds these closures over this State; left set they
     // would fire into a disposed State after navigating away -- nothing
     // saved, the proposals still pending, and an uncaught async error.
-    _commitSlot?.state = null;
-    _discardSlot?.state = null;
+    //
+    // After this frame, not during it: navigating away disposes us from
+    // inside a build, and writing to a provider there trips riverpod's
+    // "tried to modify a provider while the widget tree was building". Only
+    // if the slot still holds our own closure -- an editor that replaced us
+    // has already published its own, and clearing that would take the
+    // banner's buttons away from a live batch.
+    final commitSlot = _commitSlot;
+    final discardSlot = _discardSlot;
+    final commit = _saveToPrefs;
+    final discard = _discardProposal;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // `mounted` on the controllers, not on us: a frame later the whole
+      // ProviderScope may be gone too -- the app shutting down, or a test
+      // ending -- and reading a disposed StateController throws.
+      if (commitSlot != null &&
+          commitSlot.mounted &&
+          commitSlot.state == commit) {
+        commitSlot.state = null;
+      }
+      if (discardSlot != null &&
+          discardSlot.mounted &&
+          discardSlot.state == discard) {
+        discardSlot.state = null;
+      }
+    });
     _stopAutoScroll();
     // The pane lives in the root overlay, so nothing else tears it down when
     // the editor goes away (an MCP proposal can navigate out from under it).

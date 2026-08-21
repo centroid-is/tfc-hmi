@@ -169,8 +169,34 @@ void main() {
       // slice that ran to end-of-file, so what it actually matched was the
       // auto-scroll code, not dispose() at all.
       final dispose = bodyOf('void dispose() {');
-      expect(dispose, contains('_commitSlot?.state = null;'));
-      expect(dispose, contains('_discardSlot?.state = null;'));
+      expect(dispose, contains('commitSlot.state = null;'));
+      expect(dispose, contains('discardSlot.state = null;'));
+      for (final use in ['ref.read', 'ref.watch', 'ref.invalidate']) {
+        expect(dispose, isNot(contains(use)));
+      }
+    });
+
+    test('the clear is deferred to after this frame', () {
+      // Navigating away disposes the editor from inside a build, and writing
+      // to a provider there trips riverpod's "tried to modify a provider
+      // while the widget tree was building".
+      final dispose = bodyOf('void dispose() {');
+      expect(dispose, contains('WidgetsBinding.instance.addPostFrameCallback'));
+    });
+
+    test('the deferred clear only retires our own closures', () {
+      // An editor that replaced this one has already published its callbacks
+      // into the same slots. Clearing unconditionally a frame later would
+      // take the banner's buttons away from a live batch.
+      final dispose = bodyOf('void dispose() {');
+      expect(dispose, contains('final commit = _saveToPrefs;'));
+      expect(dispose, contains('final discard = _discardProposal;'));
+      expect(dispose, contains('commitSlot.state == commit'));
+      expect(dispose, contains('discardSlot.state == discard'));
+      // And the slot itself may be gone by then -- the whole ProviderScope
+      // can tear down between dispose() and the next frame.
+      expect(dispose, contains('commitSlot.mounted'));
+      expect(dispose, contains('discardSlot.mounted'));
     });
 
     test('a staged batch is still announced in the title bar', () {
