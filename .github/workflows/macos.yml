@@ -24,8 +24,34 @@ permissions:
   contents: write
   packages: write
 
+# Without this, every push to a PR stacked another full run instead of
+# superseding the one it replaced — the main source of macOS runner starvation
+# on GitHub Free (5 concurrent macOS jobs).
+#
+# The group is namespaced by this workflow file rather than by
+# `github.workflow` alone. A called workflow does not get its own run: its jobs
+# join the caller's run and the whole `github` context is the caller's. So
+# main-prerelease.yml (which calls macos, linux and windows) and tag.yml (which
+# calls macos, windows, centroid-hmi and build-manager) would hand every callee
+# in the run the identical group `Main Prerelease-<ref>` / `Tag Release-<ref>`,
+# and the callees would queue behind — or cancel — each other. The `macos-`
+# prefix is what keeps them apart.
+#
+# `cancel-in-progress` must stay an expression and never become bare `true`:
+# because the context is the caller's, `github.event_name` is that caller's
+# event, so this is false for main-prerelease's push to main and for tag.yml's
+# tag push. A PR push therefore can never cancel a release build.
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # The job id stays `build` — main-prerelease.yml and tag.yml call this
+  # workflow — but the `name` is what becomes the status check context, and
+  # three workflows all publishing a check called `build` made it impossible
+  # to require this one specifically in branch protection.
   build:
+    name: macOS Build
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
