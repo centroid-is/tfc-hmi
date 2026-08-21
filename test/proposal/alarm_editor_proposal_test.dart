@@ -108,6 +108,37 @@ void main() {
     });
   });
 
+  group('a delete proposal removes the alarm', () {
+    test('recognises the delete op', () {
+      expect(source, contains("'_op'"));
+      expect(source, contains("'delete'"));
+    });
+
+    test('tracks which staged alarms are removals', () {
+      expect(source, contains('_proposedDeleteUids'));
+    });
+
+    test('commits a removal through removeAlarm, not updateAlarm', () {
+      // updateAlarm removes then re-adds, so routing a delete through it
+      // would write the alarm straight back and delete nothing.
+      final commit =
+          source.substring(source.indexOf('_commitProposals() async'));
+      expect(commit, contains('alarmMan.removeAlarm('));
+    });
+
+    test('the removal branch is chosen per alarm, not per batch', () {
+      // A batch can mix creates, updates and deletes -- they arrive as
+      // separate MCP calls and stage together.
+      expect(source, contains('_proposedDeleteUids.contains('));
+    });
+
+    test('a removal proposal is not offered as an editable form', () {
+      // Editing the fields of an alarm you are about to delete is
+      // meaningless, and submitting that form used to re-add it.
+      expect(source, contains('alarm-removal-form'));
+    });
+  });
+
   group('editing a single proposal still works', () {
     test('the form keeps its own Accept Proposal submit', () {
       expect(source, contains("submitText: 'Accept Proposal'"));
@@ -187,6 +218,19 @@ void main() {
       expect(clear, contains('if (mounted) setState'),
           reason: 'the batch is dropped either way; only the rebuild is '
               'conditional on this page still being on screen');
+    });
+
+    test('clearing the batch clears the delete flags with it', () {
+      // _proposedDeleteUids is per-batch: it says which of the staged alarms
+      // accepting should *remove*. Survive the clear and it marks the next
+      // batch's alarm of the same uid as a removal, so an ordinary create
+      // deletes the alarm instead of writing it.
+      //
+      // #241 introduced _clearStagedBatch() on a branch cut before #233 added
+      // _proposedDeleteUids, so taking either side of that merge whole leaks
+      // it. alarm_editor_delete_batch_test.dart pins the behaviour.
+      expect(bodyOf('void _clearStagedBatch()'),
+          contains('_proposedDeleteUids.clear();'));
     });
 
     test('a proposal that could not be marked resolved is reported', () {

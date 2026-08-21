@@ -1706,13 +1706,13 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
         final hasMainKey =
             widget.config.key != null && widget.config.key!.isNotEmpty;
-        if (hasMainKey) {
-          return GestureDetector(
-            onTap: () => _showDetailsPane(context),
-            child: _buildConveyorVisual(context, color, null, freq),
-          );
-        }
-        return _buildConveyorVisual(context, color, null, freq);
+        return _buildConveyorVisual(
+          context,
+          color,
+          null,
+          freq,
+          hasMainKey ? () => _showDetailsPane(context) : null,
+        );
       },
     );
   }
@@ -1745,12 +1745,43 @@ class _ConveyorState extends ConsumerState<Conveyor>
     Color color, [
     bool? showExclamation,
     double? frequency,
+    VoidCallback? onTap,
   ]) {
-    return LayoutBuilder(
-      builder: (context, constraints) =>
-          _buildConveyorVisualSized(context, constraints, color,
-              showExclamation, frequency),
+    // Layering, outer → inner:
+    //   LayoutRotatedBox → GestureDetector → LayoutBuilder → CustomPaint
+    //
+    // The rotation must be the OUTERMOST of the three. Every render object
+    // above it hit-tests against its own box, and that box is the belt's
+    // *unrotated* rect — long and thin along x. A 90°-turned belt paints a
+    // strip along y instead, so anything outside the rotation only saw the
+    // square where the two rects cross: on a wet-area strapper conveyor
+    // (0.05 × 0.03 of the canvas, turned 90°) that is the middle third of
+    // the belt, and the proximity sensors sit on the same spot and take most
+    // of what is left. Both the detector and the LayoutBuilder used to sit
+    // out there. Inside, `LayoutRotatedBox.hitTest` hands them positions
+    // already mapped into the unrotated frame, so the whole painted belt
+    // answers. Same arrangement as `SensorState._buildPaint`.
+    return LayoutRotatedBox(
+      angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
+      child: _withTapTarget(
+        onTap,
+        LayoutBuilder(
+          builder: (context, constraints) => _buildConveyorVisualSized(
+              context, constraints, color, showExclamation, frequency),
+        ),
+      ),
     );
+  }
+
+  /// Wraps the belt in its tap target, or leaves it alone when there is no
+  /// main key to open a pane for.
+  ///
+  /// No `behavior:` on purpose — deferring to the child leaves
+  /// [ConveyorPainter.hitTest] the final word, which is what keeps the empty
+  /// corners of a turned belt's box inert.
+  Widget _withTapTarget(VoidCallback? onTap, Widget child) {
+    if (onTap == null) return child;
+    return GestureDetector(onTap: onTap, child: child);
   }
 
   Widget _buildConveyorVisualSized(
@@ -1774,16 +1805,13 @@ class _ConveyorState extends ConsumerState<Conveyor>
     final paintSize = constraints.constrain(requestedSize);
 
     if (widget.config.showAuger ?? false) {
-      return LayoutRotatedBox(
-        angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-        child: CustomPaint(
-          size: paintSize,
-          painter: AugerConveyorPainter(
-            stateColor: color,
-            phaseNotifier: _augerPhase,
-            showAuger: !(showExclamation ?? false),
-            openEnd: widget.config.augerOpenEnd,
-          ),
+      return CustomPaint(
+        size: paintSize,
+        painter: AugerConveyorPainter(
+          stateColor: color,
+          phaseNotifier: _augerPhase,
+          showAuger: !(showExclamation ?? false),
+          openEnd: widget.config.augerOpenEnd,
         ),
       );
     }
@@ -1846,10 +1874,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
-    return LayoutRotatedBox(
-      angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: content,
-    );
+    return content;
   }
 
   Widget _positionedChildGate(

@@ -55,7 +55,19 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   final List<AlarmConfig> _proposedAlarms = [];
   final List<int> _proposalIds = [];
 
+  /// Uids among [_proposedAlarms] that accepting should *remove*.
+  ///
+  /// Kept by uid rather than by index because a batch mixes creates, updates
+  /// and deletes -- they arrive as separate MCP calls -- and the form pops
+  /// entries off the front of the list as it accepts them one at a time.
+  final Set<String> _proposedDeleteUids = {};
+
   bool get _isProposal => _proposedAlarms.isNotEmpty;
+
+  /// Whether the alarm the form is showing is staged for removal.
+  bool get _proposedIsDelete =>
+      _proposedAlarm != null &&
+      _proposedDeleteUids.contains(_proposedAlarm!.uid);
 
   /// The alarm the form edits: the first of the batch. Accepting from the
   /// form applies that one edited config and leaves the rest staged.
@@ -81,7 +93,10 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       final decoded = jsonDecode(json);
       if (decoded is! Map<String, dynamic>) return;
       final map = Map<String, dynamic>.from(decoded)..remove('_proposal_type');
-      _proposedAlarms.add(AlarmConfig.fromJson(map));
+      final isDelete = map.remove('_op') == 'delete';
+      final config = AlarmConfig.fromJson(map);
+      _proposedAlarms.add(config);
+      if (isDelete) _proposedDeleteUids.add(config.uid);
       _publishProposalCallbacks();
     } catch (_) {
       // Malformed JSON: nothing to stage.
@@ -110,7 +125,12 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
           if (decoded is! Map<String, dynamic>) continue;
           final map = Map<String, dynamic>.from(decoded)
             ..remove('_proposal_type');
-          _proposedAlarms.add(AlarmConfig.fromJson(map));
+          // delete_alarm sends the whole config so it parses like any other
+          // proposal; only `_op` says what accepting it does.
+          final isDelete = map.remove('_op') == 'delete';
+          final config = AlarmConfig.fromJson(map);
+          _proposedAlarms.add(config);
+          if (isDelete) _proposedDeleteUids.add(config.uid);
           _proposalIds.add(p.id);
           added++;
         } catch (_) {
@@ -160,7 +180,13 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
     // which is exactly the loss the ordering below exists to prevent.
     final alarmMan = await container.read(alarmManProvider.future);
     for (final a in _proposedAlarms) {
-      alarmMan.updateAlarm(a);
+      // updateAlarm removes the uid then re-adds it, so routing a removal
+      // through it would write the alarm straight back and delete nothing.
+      if (_proposedDeleteUids.contains(a.uid)) {
+        alarmMan.removeAlarm(a);
+      } else {
+        alarmMan.updateAlarm(a);
+      }
     }
     container.invalidate(alarmManProvider);
 
@@ -206,6 +232,11 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   void _clearStagedBatch() {
     _proposedAlarms.clear();
     _proposalIds.clear();
+    // Cleared with the alarms it annotates. Left behind, a uid staged for
+    // deletion in one batch marks an unrelated alarm that happens to reuse
+    // the uid in the next one, and accepting that batch removes it instead
+    // of writing it.
+    _proposedDeleteUids.clear();
     _show = null;
     if (mounted) setState(() {});
     _commitSlot?.state = null;
@@ -214,14 +245,20 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
 
   /// Accept the proposal with the (possibly edited) alarm config from the form.
   ///
-  /// Uses [AlarmMan.updateAlarm] which handles both create and update:
+  /// A removal goes through [AlarmMan.removeAlarm]; everything else through
+  /// [AlarmMan.updateAlarm], which handles both create and update:
   /// - For new alarms (no matching UID): removeWhere is a no-op, then adds.
   /// - For updated alarms (matching UID): removes old, then adds updated.
   /// This avoids duplicate alarms when accepting an update proposal.
   Future<void> _acceptProposalWithConfig(AlarmConfig editedConfig) async {
+    final removing = _proposedDeleteUids.contains(editedConfig.uid);
     try {
       final alarmMan = await ref.read(alarmManProvider.future);
-      alarmMan.updateAlarm(editedConfig);
+      if (removing) {
+        alarmMan.removeAlarm(editedConfig);
+      } else {
+        alarmMan.updateAlarm(editedConfig);
+      }
 
       // Invalidate the provider so the alarm list rebuilds with the new alarm.
       ref.invalidate(alarmManProvider);
@@ -236,13 +273,19 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       final id = _proposalIds.first;
       await ref.read(proposalStateProvider.notifier).acceptProposal(id);
       _proposalIds.removeAt(0);
-      if (_proposedAlarms.isNotEmpty) _proposedAlarms.removeAt(0);
+      // The flag leaves with the alarm it marks: dropping it earlier would
+      // leave a still-staged removal looking like an ordinary update.
+      if (_proposedAlarms.isNotEmpty) {
+        _proposedDeleteUids.remove(_proposedAlarms.removeAt(0).uid);
+      }
     }
 
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Alarm proposal accepted!')),
+      SnackBar(
+          content:
+              Text(removing ? 'Alarm removed.' : 'Alarm proposal accepted!')),
     );
 
     setState(() {
@@ -290,7 +333,9 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(_proposedAlarms.length == 1
-                        ? 'AI proposal: ${_proposedAlarm!.title}'
+                        ? _proposedIsDelete
+                            ? 'AI proposal: remove ${_proposedAlarm!.title}'
+                            : 'AI proposal: ${_proposedAlarm!.title}'
                         : '${_proposedAlarms.length} AI alarm proposals '
                             'staged - accept them from the banner above, or '
                             'edit this one below and accept it on its own.'),
@@ -348,15 +393,29 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
                   Expanded(
                     flex: 3,
                     child: _isProposal && _proposedAlarm != null
-                        ? AlarmForm(
-                            key: ValueKey('alarm-proposal-form-${_proposedAlarm!.uid}'),
-                            initialConfig: _proposedAlarm!,
-                            editable: true,
-                            submitText: 'Accept Proposal',
-                            onSubmit: (editedConfig) {
-                              _acceptProposalWithConfig(editedConfig);
-                            },
-                          )
+                        // Read-only for a removal: editing the fields of an
+                        // alarm about to be deleted changes nothing, and the
+                        // edited config would be what gets removed.
+                        ? _proposedIsDelete
+                            ? AlarmForm(
+                                key: ValueKey(
+                                    'alarm-removal-form-${_proposedAlarm!.uid}'),
+                                initialConfig: _proposedAlarm!,
+                                submitText: 'Remove Alarm',
+                                onSubmit: (_) {
+                                  _acceptProposalWithConfig(_proposedAlarm!);
+                                },
+                              )
+                            : AlarmForm(
+                                key: ValueKey(
+                                    'alarm-proposal-form-${_proposedAlarm!.uid}'),
+                                initialConfig: _proposedAlarm!,
+                                editable: true,
+                                submitText: 'Accept Proposal',
+                                onSubmit: (editedConfig) {
+                                  _acceptProposalWithConfig(editedConfig);
+                                },
+                              )
                         : _edit != null || _show != null || _create
                             ? Column(
                                 children: [

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:test/test.dart';
 
@@ -57,6 +58,48 @@ void main() {
       client = await MockMcpClient.connect(mcpServer);
     }
 
+    /// Captured by [setupWithCapturingGate] on the last confirmation.
+    String? capturedDescription;
+    Map<String, dynamic>? capturedDetails;
+
+    /// Helper to set up tools with a gate that records the confirmation.
+    Future<void> setupWithCapturingGate(void Function(RiskLevel) onLevel) async {
+      db = createTestDatabase();
+      await db.customStatement('SELECT 1');
+
+      configService = ConfigService(db);
+
+      mcpServer = McpServer(
+        const Implementation(name: 'test-server', version: '0.1.0'),
+        options: McpServerOptions(
+          capabilities: ServerCapabilities(tools: ServerCapabilitiesTools()),
+        ),
+      );
+
+      final env = {'TFC_USER': 'op1'};
+      final identity = EnvOperatorIdentity(environmentProvider: () => env);
+      final auditService = AuditLogService(db);
+      final registry = ToolRegistry(
+        mcpServer: mcpServer,
+        identity: identity,
+        auditLogService: auditService,
+      );
+
+      registerAlarmWriteTools(
+        registry: registry,
+        configService: configService,
+        riskGate: _CapturingRiskGate((description, level, details) {
+          capturedDescription = description;
+          capturedDetails = details;
+          onLevel(level);
+        }),
+        expressionValidator: ExpressionValidator(),
+        proposalService: ProposalService(),
+      );
+
+      client = await MockMcpClient.connect(mcpServer);
+    }
+
     /// Helper to set up tools with elicitation that declines.
     Future<void> setupWithDecline() async {
       db = createTestDatabase();
@@ -89,6 +132,56 @@ void main() {
       );
 
       client = await MockMcpClient.connect(mcpServer);
+    }
+
+    /// Seeds alarm definitions where AlarmMan really keeps them.
+    ///
+    /// The `alarm` table is empty on every deployment -- nothing writes it --
+    /// so seeding it would test a lookup no operator ever exercises.
+    Future<void> seedAlarms(List<Map<String, dynamic>> alarms) async {
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'alarm_man_config',
+              value: Value(jsonEncode({'alarms': alarms})),
+              type: 'String',
+            ),
+          );
+    }
+
+    /// Seeds page config so an alarm can have a beacon pointing at it.
+    Future<void> seedPages(Map<String, dynamic> pages) async {
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'page_editor_data',
+              value: Value(jsonEncode(pages)),
+              type: 'String',
+            ),
+          );
+    }
+
+    Map<String, dynamic> alarmJson({
+      required String uid,
+      String? key,
+      required String title,
+      required String description,
+      List<Map<String, dynamic>> rules = const [],
+    }) =>
+        {
+          'uid': uid,
+          if (key != null) 'key': key,
+          'title': title,
+          'description': description,
+          'rules': rules,
+        };
+
+    /// Reads back the stored alarm config, to prove a tool did not write it.
+    Future<List<dynamic>> storedAlarms() async {
+      final query = db.select(db.serverFlutterPreferences)
+        ..where((t) => t.key.equals('alarm_man_config'));
+      final rows = await query.get();
+      if (rows.isEmpty) return const [];
+      return (jsonDecode(rows.first.value!) as Map<String, dynamic>)['alarms']
+          as List<dynamic>;
     }
 
     tearDown(() async {
@@ -221,6 +314,9 @@ void main() {
 
       test('proposal JSON never writes to database', () async {
         await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(uid: 'alarm-0', title: 'Existing', description: 'Stays'),
+        ]);
 
         await client.callTool('create_alarm', {
           'title': 'No Write Alarm',
@@ -233,9 +329,9 @@ void main() {
           ],
         });
 
-        // Verify no new alarm rows exist in the alarm table
-        final alarms = await db.select(db.serverAlarm).get();
-        expect(alarms, isEmpty);
+        final alarms = await storedAlarms();
+        expect(alarms, hasLength(1));
+        expect(alarms.first['uid'], 'alarm-0');
       });
     });
 
@@ -244,14 +340,22 @@ void main() {
           () async {
         await setupWithAutoConfirm();
 
-        // Seed an alarm
-        await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-              uid: 'alarm-1',
-              title: 'Old Title',
-              description: 'Old description',
-              rules:
-                  '[{"level":"error","expression":{"value":{"formula":"pump3.current > 15"}},"acknowledgeRequired":true}]',
-            ));
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Old Title',
+            description: 'Old description',
+            rules: [
+              {
+                'level': 'error',
+                'expression': {
+                  'value': {'formula': 'pump3.current > 15'}
+                },
+                'acknowledgeRequired': true,
+              },
+            ],
+          ),
+        ]);
 
         final result = await client.callTool('update_alarm', {
           'alarm_uid': 'alarm-1',
@@ -266,6 +370,66 @@ void main() {
         expect(json['title'], equals('New Title'));
         expect(json['description'], equals('New description'));
         expect(json['uid'], equals('alarm-1'));
+      });
+
+      test('an alarm that exists only in preferences can be updated',
+          () async {
+        // The regression this pins: update_alarm looked the alarm up in the
+        // `alarm` table, which nothing writes, so every real alarm came back
+        // "No alarm found" and the tool could not change anything.
+        await setupWithAutoConfirm();
+
+        await seedAlarms([
+          alarmJson(
+            uid: 'pref-only',
+            title: 'Only In Preferences',
+            description: 'Never written to the alarm table',
+          ),
+        ]);
+        expect(await db.select(db.serverAlarm).get(), isEmpty);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'pref-only',
+          'title': 'Renamed',
+        });
+
+        expect(result.isError, isNot(true));
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['title'], 'Renamed');
+      });
+
+      test('rules left out keep the ones already configured', () async {
+        await setupWithAutoConfirm();
+
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Keeps Rules',
+            description: 'Only the title changes',
+            rules: [
+              {
+                'level': 'warning',
+                'expression': {
+                  'value': {'formula': 'pump3.current > 15'}
+                },
+                'acknowledgeRequired': false,
+              },
+            ],
+          ),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-1',
+          'title': 'Renamed',
+        });
+
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        final rules = json['rules'] as List;
+        expect(rules, hasLength(1));
+        expect(rules.first['expression']['value']['formula'],
+            'pump3.current > 15');
       });
 
       test('non-existent alarm_uid returns isError=true', () async {
@@ -284,13 +448,22 @@ void main() {
       test('updated expression validates before elicitation', () async {
         await setupWithAutoConfirm();
 
-        await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-              uid: 'alarm-2',
-              title: 'Existing Alarm',
-              description: 'Existing',
-              rules:
-                  '[{"level":"error","expression":{"value":{"formula":"pump3.current > 15"}},"acknowledgeRequired":true}]',
-            ));
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-2',
+            title: 'Existing Alarm',
+            description: 'Existing',
+            rules: [
+              {
+                'level': 'error',
+                'expression': {
+                  'value': {'formula': 'pump3.current > 15'}
+                },
+                'acknowledgeRequired': true,
+              },
+            ],
+          ),
+        ]);
 
         final result = await client.callTool('update_alarm', {
           'alarm_uid': 'alarm-2',
@@ -310,12 +483,13 @@ void main() {
       test('declined update returns non-error decline message', () async {
         await setupWithDecline();
 
-        await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-              uid: 'alarm-3',
-              title: 'To Decline',
-              description: 'Will be declined',
-              rules: '[]',
-            ));
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-3',
+            title: 'To Decline',
+            description: 'Will be declined',
+          ),
+        ]);
 
         final result = await client.callTool('update_alarm', {
           'alarm_uid': 'alarm-3',
@@ -330,23 +504,164 @@ void main() {
       test('update does not write to database', () async {
         await setupWithAutoConfirm();
 
-        await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-              uid: 'alarm-4',
-              title: 'Original',
-              description: 'Original desc',
-              rules: '[]',
-            ));
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-4',
+            title: 'Original',
+            description: 'Original desc',
+          ),
+        ]);
 
         await client.callTool('update_alarm', {
           'alarm_uid': 'alarm-4',
           'title': 'Modified',
         });
 
-        // Verify the alarm was NOT modified in the database
-        final query = db.select(db.serverAlarm)
-          ..where((t) => t.uid.equals('alarm-4'));
-        final rows = await query.get();
-        expect(rows.first.title, equals('Original'));
+        final alarms = await storedAlarms();
+        expect(alarms, hasLength(1));
+        expect(alarms.first['title'], equals('Original'));
+      });
+    });
+
+    group('delete_alarm', () {
+      /// The duplicate-alarm case this tool exists for: two alarms with the
+      /// same formula, one of them wired to a beacon.
+      Future<void> seedDuplicatePair() async {
+        await seedAlarms([
+          alarmJson(
+            uid: 'dup-1',
+            title: 'Duplicate Alarm',
+            description: 'The stray copy',
+            rules: [
+              {
+                'level': 'error',
+                'expression': {
+                  'value': {'formula': 'line1.estop == false'}
+                },
+                'acknowledgeRequired': false,
+              },
+            ],
+          ),
+          alarmJson(
+            uid: 'keep-1',
+            title: 'Kept Alarm',
+            description: 'The one the beacon watches',
+          ),
+        ]);
+      }
+
+      test('returns a delete proposal for an existing alarm', () async {
+        await setupWithAutoConfirm();
+        await seedDuplicatePair();
+
+        final result = await client.callTool('delete_alarm', {
+          'alarm_uid': 'dup-1',
+        });
+
+        expect(result.isError, isNot(true));
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['_proposal_type'], 'alarm');
+        expect(json['_op'], 'delete');
+        expect(json['uid'], 'dup-1');
+      });
+
+      test('carries the whole alarm so the editor can show what goes',
+          () async {
+        // AlarmConfig.fromJson needs title, description and rules. A payload
+        // of just the uid would not parse, and the editor would drop the
+        // proposal on the floor.
+        await setupWithAutoConfirm();
+        await seedDuplicatePair();
+
+        final result = await client.callTool('delete_alarm', {
+          'alarm_uid': 'dup-1',
+        });
+
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['title'], 'Duplicate Alarm');
+        expect(json['description'], 'The stray copy');
+        expect(json['rules'], isList);
+        expect((json['rules'] as List), hasLength(1));
+      });
+
+      test('non-existent alarm_uid returns isError=true', () async {
+        await setupWithAutoConfirm();
+        await seedDuplicatePair();
+
+        final result = await client.callTool('delete_alarm', {
+          'alarm_uid': 'nonexistent',
+        });
+
+        expect(result.isError, isTrue);
+        expect((result.content.first as TextContent).text,
+            contains('No alarm found with UID: nonexistent'));
+      });
+
+      test('confirms at high risk -- a removal cannot be undone', () async {
+        RiskLevel? capturedLevel;
+        await setupWithCapturingGate((level) => capturedLevel = level);
+        await seedDuplicatePair();
+
+        await client.callTool('delete_alarm', {'alarm_uid': 'dup-1'});
+
+        expect(capturedLevel, RiskLevel.high);
+      });
+
+      test('names the page assets still watching the alarm', () async {
+        await setupWithCapturingGate((_) {});
+        await seedDuplicatePair();
+        await seedPages({
+          'Home': {
+            'assets': [
+              {
+                'asset_name': 'AlarmVisibilityConfig',
+                'alarm_uids': ['dup-1'],
+                'text': 'Line 1 beacon',
+              },
+            ],
+          },
+        });
+
+        await client.callTool('delete_alarm', {'alarm_uid': 'dup-1'});
+
+        expect(capturedDescription, contains('1 page asset'));
+        expect(capturedDetails?['diff'], contains('Line 1 beacon'));
+        expect(capturedDetails?['diff'], contains('Home'));
+      });
+
+      test('says so when nothing references the alarm', () async {
+        await setupWithCapturingGate((_) {});
+        await seedDuplicatePair();
+
+        await client.callTool('delete_alarm', {'alarm_uid': 'dup-1'});
+
+        expect(capturedDetails?['diff'], contains('nothing'));
+      });
+
+      test('declined delete returns non-error decline message', () async {
+        await setupWithDecline();
+        await seedDuplicatePair();
+
+        final result = await client.callTool('delete_alarm', {
+          'alarm_uid': 'dup-1',
+        });
+
+        expect(result.isError, isNot(true));
+        expect((result.content.first as TextContent).text.toLowerCase(),
+            contains('declined'));
+      });
+
+      test('does not write to database', () async {
+        await setupWithAutoConfirm();
+        await seedDuplicatePair();
+
+        await client.callTool('delete_alarm', {'alarm_uid': 'dup-1'});
+
+        final alarms = await storedAlarms();
+        expect(alarms, hasLength(2));
+        expect(alarms.map((a) => a['uid']), contains('dup-1'));
       });
     });
 
@@ -354,12 +669,22 @@ void main() {
       test('returns alarm config with parsed rules', () async {
         await setupWithAutoConfirm();
 
-        await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
-              uid: 'cfg-alarm',
-              title: 'Config Test',
-              description: 'Test desc',
-              rules: '[{"level":"error"}]',
-            ));
+        await seedAlarms([
+          alarmJson(
+            uid: 'cfg-alarm',
+            title: 'Config Test',
+            description: 'Test desc',
+            rules: [
+              {
+                'level': 'error',
+                'expression': {
+                  'value': {'formula': 'pump3.current > 15'}
+                },
+                'acknowledgeRequired': false,
+              },
+            ],
+          ),
+        ]);
 
         final config = await configService.getAlarmConfig('cfg-alarm');
         expect(config, isNotNull);
@@ -377,6 +702,27 @@ void main() {
       });
     });
   });
+}
+
+/// A RiskGate that records what it was asked to confirm, then agrees.
+///
+/// The confirmation text is the only thing the operator sees before a delete,
+/// so what it says is worth asserting on.
+class _CapturingRiskGate implements RiskGate {
+  _CapturingRiskGate(this.onConfirm);
+
+  final void Function(String description, RiskLevel level,
+      Map<String, dynamic>? details) onConfirm;
+
+  @override
+  Future<RiskConfirmation> requestConfirmation({
+    required String description,
+    required RiskLevel level,
+    Map<String, dynamic>? details,
+  }) async {
+    onConfirm(description, level, details);
+    return RiskConfirmation(confirmed: true);
+  }
 }
 
 /// A RiskGate that always throws ProposalDeclinedException.
