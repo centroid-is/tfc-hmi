@@ -91,6 +91,9 @@ class DatabaseConfig {
   ///
   /// This is the budget for work. The pool is opened one wider than it, for
   /// the health monitor's standing connection: see [poolConnectionCount].
+  ///
+  /// [fromEnv] reads it from `CENTROID_DB_MAX_POOL_CONNECTIONS`
+  /// ([kMaxPoolConnectionsEnv]), which is how the collector sets it.
   int? maxPoolConnections;
 
   /// Pool connect timeout (not serialized to JSON).
@@ -147,6 +150,11 @@ class DatabaseConfig {
       ),
       sslMode: sslMode,
       debug: debug,
+      // The only way anything sets this. The collector -- the one process the
+      // doc on [maxPoolConnections] says should raise it -- is configured
+      // entirely from the environment, so without this the escape hatch was
+      // documented but unreachable.
+      maxPoolConnections: maxPoolConnectionsFromEnv(Platform.environment),
     );
   }
 
