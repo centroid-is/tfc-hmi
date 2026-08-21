@@ -77,10 +77,13 @@ void main() {
           reason: 'a single staged id was what forced one review per proposal');
     });
 
-    test('applies the whole queued asset_update run in one pass', () {
+    test('applies the whole queued asset run in one pass', () {
+      // Was `_applyUpdateBatch`, which took `asset_update` only. New assets
+      // (`asset`, from propose_asset) went down the single-apply path and
+      // every one after the first was dropped, so the name no longer fit.
       expect(source,
-          contains('int _applyUpdateBatch(List<PendingProposal> proposals)'));
-      expect(source, contains('_applyUpdateBatch(updates)'));
+          contains('int _applyAssetBatch(List<PendingProposal> proposals)'));
+      expect(source, contains('_applyAssetBatch(assetProposals)'));
     });
 
     test('skips ids already staged so re-entry cannot double-apply', () {
@@ -177,7 +180,10 @@ void main() {
     });
 
     test('a multi-proposal batch is titled by its count', () {
-      expect(source, contains(r"'$staged asset updates'"));
+      // "asset updates" was accurate while the batch only held asset_update.
+      // It now holds new assets too, and telling an operator staging seven
+      // new sensors that he has "7 asset updates" is simply wrong.
+      expect(source, contains(r"'$staged asset proposals'"));
     });
   });
 
@@ -474,6 +480,109 @@ void main() {
           pageViewSource.substring(pageViewSource.indexOf('class AssetView'));
       expect(assetViewSection.contains('proposedAssets:'), isFalse,
           reason: 'AssetView should use default empty proposedAssets');
+    });
+  });
+
+  // Seven `asset` proposals were pending. Accept all removed exactly one row
+  // and Review all then did nothing at all: the listener applied
+  // `pageProposals.first`, that set `_isProposal`, and every proposal behind
+  // it hit `if (_isProposal) return`. Nothing else was ever staged, so the
+  // commit slot stayed null and the banner kept offering a review that could
+  // not happen. `asset_update` had been batched since #197; `asset` never was.
+  group('a queue of new-asset proposals is staged whole', () {
+    test('the listener batches asset alongside asset_update', () {
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      expect(listener, contains("p.proposalType == 'asset' ||"));
+      expect(listener, contains('_applyAssetBatch(assetProposals)'));
+    });
+
+    test('the batch runs before the single-proposal guard', () {
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      final batched = listener.indexOf('_applyAssetBatch(assetProposals)');
+      final guard = listener.indexOf('if (_isProposal) return');
+      expect(batched, greaterThan(-1));
+      expect(guard, greaterThan(batched),
+          reason: 'the guard is what threw the other six away');
+    });
+
+    test('only page proposals still go one at a time', () {
+      // A `page` proposal replaces or creates a whole page, so folding a run
+      // of them together has no defined result. `asset` appends, which does.
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      final single = listener.indexOf('pageProposals.first.proposalJson');
+      final guard = listener.indexOf('if (_isProposal) return');
+      expect(single, greaterThan(-1));
+      expect(guard, lessThan(single),
+          reason: 'the single-apply path is the else branch, page only');
+    });
+
+    test('initState stages the same set the listener does', () {
+      // Opening the editor from the banner has to stage the whole queue too,
+      // or the first thing the operator sees is one of seven.
+      final init = bodyOf('void initState() {');
+      expect(init, contains("p.proposalType == 'asset' ||"));
+      expect(init, contains('_applyAssetBatch(pending)'));
+    });
+
+    test('the batch dispatches both asset kinds', () {
+      // One driver, two applies: a create builds new assets and appends them,
+      // an update patches one in place. The bookkeeping around them --
+      // snapshot once, skip staged ids, count what landed -- is identical,
+      // which is why they share the loop rather than each having one.
+      final batch = bodyOf('int _applyAssetBatch(List<PendingProposal>');
+      expect(batch, contains("_applyAssetProposal(decoded)"));
+      expect(batch, contains("_applyUpdateProposal(decoded)"));
+      expect(batch, contains('for (final p in proposals)'));
+    });
+
+    test('a proposal arriving mid-review joins the batch', () {
+      final batch = bodyOf('int _applyAssetBatch(List<PendingProposal>');
+      expect(batch, contains('_proposalIds.contains(p.id)'));
+      expect(batch, contains('_consumedProposalIds.contains(p.id)'));
+      expect(batch, contains('final extending = _preProposalPages != null;'),
+          reason: 're-snapshotting over already-staged pages would leave '
+              'reject-all with no way back to the original');
+    });
+
+    test('a new-asset proposal adds to the outline instead of replacing it',
+        () {
+      // `_proposedAssets = Set.of(newAssets)` meant the second create in a
+      // batch erased the first one's yellow outline.
+      final apply = bodyOf('void _applyAssetProposal(');
+      expect(apply, contains('_proposedAssets.addAll(newAssets)'));
+      expect(apply, isNot(contains('_proposedAssets = Set.of(newAssets)')));
+    });
+
+    test('a proposal that built nothing does not claim the batch', () {
+      // This is the second way a queue stranded: a proposal the registry
+      // could not build still ran to the bottom of _applyAssetProposal and
+      // set `_isProposal = true`, so the guard blocked every later one --
+      // with nothing staged to accept and no empty page worth creating.
+      final apply = bodyOf('void _applyAssetProposal(');
+      final bail = apply.indexOf('if (newAssets.isEmpty) return;');
+      final flag = apply.indexOf('_isProposal = true;');
+      expect(bail, greaterThan(-1));
+      expect(flag, greaterThan(bail));
+    });
+
+    test('one malformed proposal does not take the batch with it', () {
+      // Eleven proposals missing required fields left a queue of 25
+      // unusable. Each proposal is applied inside its own try, and a failure
+      // is reported rather than swallowed.
+      final batch = bodyOf('int _applyAssetBatch(List<PendingProposal>');
+      expect(batch, isNot(contains('catch (_) {}')));
+      expect(batch, contains('debugPrint('));
+      final caught = batch.indexOf('} catch (e)');
+      final counted = batch.indexOf('applied++');
+      expect(counted, greaterThan(-1));
+      expect(caught, greaterThan(counted),
+          reason: 'the catch belongs inside the loop, around one proposal');
     });
   });
 

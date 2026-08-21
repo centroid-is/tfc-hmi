@@ -70,7 +70,7 @@ void main() {
   String pageFilter() =>
       _extractListenerBody(pageEditorSource, 'ref.listen<ProposalState>')!;
   String pageBatch() => _extractMethodBody(
-      pageEditorSource, 'int _applyUpdateBatch(List<PendingProposal>')!;
+      pageEditorSource, 'int _applyAssetBatch(List<PendingProposal>')!;
 
   // ── Source-level: all three editors have ref.listen wiring ─────────────
 
@@ -150,15 +150,15 @@ void main() {
       expect(listenerBody, isNot(contains('if (_isProposal) return')));
     });
 
-    test('PageEditor batches asset_update before reaching its guard', () {
-      // `page` and `asset` proposals replace or append wholesale, so the
-      // editor still shows those one at a time -- but the asset_update queue
-      // must be folded in first, or a second update landing while one is
-      // staged is swallowed.
+    test('PageEditor batches asset proposals before reaching its guard', () {
+      // Only a `page` proposal replaces a whole page, so only that one is
+      // still shown on its own. `asset` and `asset_update` both have to be
+      // folded in first, or anything landing while one is staged is
+      // swallowed -- seven new assets staged one and dropped six.
       final listenerBody =
           _extractListenerBody(pageEditorSource, 'ref.listen<ProposalState>');
       expect(listenerBody, isNotNull);
-      final batch = listenerBody!.indexOf('_applyUpdateBatch(updates)');
+      final batch = listenerBody!.indexOf('_applyAssetBatch(assetProposals)');
       final guard = listenerBody.indexOf('if (_isProposal) return');
       expect(batch, greaterThan(-1));
       expect(guard, greaterThan(-1));
@@ -243,17 +243,24 @@ void main() {
       expect(keyStaging(), isNot(contains('.first')));
     });
 
-    test('PageEditor hands the whole asset_update run to the batch', () {
+    test('PageEditor hands the whole asset run to the batch', () {
       final listenerBody = pageFilter();
-      expect(listenerBody, contains('.where((p) => p.proposalType =='));
-      expect(listenerBody, contains('_applyUpdateBatch(updates)'));
+      // The whole matching run, never `.first`.
+      expect(listenerBody, contains('.where((p) =>'));
+      expect(listenerBody, contains("p.proposalType == 'asset' ||"));
+      expect(listenerBody, contains("p.proposalType == 'asset_update'"));
+      expect(listenerBody, contains('_applyAssetBatch(assetProposals)'));
       expect(pageBatch(), contains('for (final p in proposals)'));
     });
 
-    test('PageEditor still takes page/asset proposals one at a time', () {
-      // Those replace or append wholesale rather than patching independent
-      // assets, so folding a run of them together has no defined result.
-      expect(pageFilter(), contains('pageProposals.first.proposalJson'));
+    test('PageEditor still takes page proposals one at a time', () {
+      // A `page` proposal replaces or creates a whole page, so folding a run
+      // of them together has no defined result. `asset` appends, which does,
+      // so it moved to the batch -- it is the else branch that is left.
+      final listener = pageFilter();
+      expect(listener, contains('pageProposals.first.proposalJson'));
+      expect(listener.indexOf('_applyAssetBatch(assetProposals)'),
+          lessThan(listener.indexOf('pageProposals.first.proposalJson')));
     });
   });
 
@@ -267,11 +274,11 @@ void main() {
       expect(listenerBody, contains('_stageAlarmProposals()'));
     });
 
-    test('PageEditor calls _applyUpdateBatch and _applyProposalData', () {
+    test('PageEditor calls _applyAssetBatch and _applyProposalData', () {
       final listenerBody =
           _extractListenerBody(pageEditorSource, 'ref.listen<ProposalState>');
       expect(listenerBody, isNotNull);
-      expect(listenerBody, contains('_applyUpdateBatch'));
+      expect(listenerBody, contains('_applyAssetBatch'));
       expect(listenerBody, contains('_applyProposalData'));
     });
 
@@ -363,7 +370,11 @@ void main() {
       }.entries) {
         expect(entry.value, contains('is! Map<String, dynamic>'),
             reason: '${entry.key} must skip a non-object proposal');
-        expect(entry.value, contains('} catch (_) {'),
+        // Per proposal, inside the loop -- the catch is what keeps one bad
+        // decode from stranding the rest of the queue. The page editor now
+        // names the error and reports it instead of swallowing it, so match
+        // the construct rather than the exact bare spelling.
+        expect(entry.value, matches(RegExp(r'\} catch \((_|e)\) \{')),
             reason: '${entry.key} must survive one bad decode');
       }
     });
