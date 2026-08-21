@@ -24,6 +24,13 @@ permissions:
   contents: write
   packages: write
 
+# See the note in linux.yml: hardcoded slug so main-prerelease.yml and tag.yml
+# cannot collapse the workflows they call into one group, and cancellation
+# limited to pull requests so a release build is never killed by a PR push.
+concurrency:
+  group: macos-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: macos-latest

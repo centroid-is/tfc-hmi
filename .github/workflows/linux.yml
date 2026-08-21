@@ -15,6 +15,20 @@ on:
 permissions:
   contents: read
 
+# One run per ref. Every push to a PR used to stack another full desktop build
+# on top of the superseded one; with five such workflows firing per push the
+# queue reached 52 runs against 5 executors.
+#
+# Hardcoded slug, NOT `${{ github.workflow }}`: inside a reusable workflow the
+# `github` context describes the *caller*, so main-prerelease.yml calling
+# windows/macos/linux would give all three the same group and they would
+# cancel or queue behind each other. Cancellation is limited to pull requests
+# for the same reason — for a called run `github.event_name` is the caller's
+# event (`push`), so a release build is never killed by someone's PR push.
+concurrency:
+  group: linux-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest

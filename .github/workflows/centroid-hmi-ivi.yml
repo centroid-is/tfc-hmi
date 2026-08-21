@@ -26,11 +26,12 @@ permissions:
   contents: write
   packages: write
 
-# Two runs of this workflow on the same PR branch push the same `pr-NNN` tag,
-# so let a new push replace the one in flight rather than race it. Only for
-# pull requests — a main or tag build must finish and publish.
+# See the note in centroid-hmi.yml: hardcoded slug rather than
+# `${{ github.workflow }}` so a caller cannot collapse several called
+# workflows into one group, and cancellation limited to pull requests so a
+# release build is never killed by a PR push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: centroid-hmi-ivi-image-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

@@ -21,11 +21,21 @@ permissions:
   contents: write
   packages: write
 
-# Two runs of this workflow on the same PR branch push the same `pr-NNN` tag,
-# so let a new push replace the one in flight rather than race it. Only for
-# pull requests — a main or tag build must finish and publish.
+# One run of this workflow per ref. Without it every push to a PR stacked
+# another full build, and two runs of the same PR raced each other to the same
+# `pr-NNN` tag.
+#
+# The group key is a hardcoded slug, NOT `${{ github.workflow }}`: inside a
+# reusable workflow the `github` context describes the *caller*, so
+# `github.workflow` would be "Tag Release" for all four workflows tag.yml
+# calls — one shared group, and they would queue behind or cancel each other.
+# A slug unique to this file cannot collide no matter who calls it.
+#
+# Cancelling is limited to pull requests. A release build being cancelled by
+# someone's PR push would be far worse than the queue it saves; for a called
+# run `github.event_name` is the caller's event (`push`), so this is false.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: centroid-hmi-image-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

@@ -20,6 +20,13 @@ on:
         type: string
         default: ''
 
+# See the note in linux.yml: hardcoded slug so tag.yml cannot collapse the
+# workflows it calls into one group, and cancellation limited to pull requests
+# so a release build is never killed by a PR push.
+concurrency:
+  group: centroidx-manager-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     strategy:
