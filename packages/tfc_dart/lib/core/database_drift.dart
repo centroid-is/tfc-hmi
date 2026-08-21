@@ -1351,30 +1351,30 @@ Future<Isolate> _spawnGuardedIsolate<T>(void Function(T) entryPoint, T arg) {
 void _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
   runZonedGuarded(() {
     Future<void> monitor() async {
+      // Borrowed per beat and released, not held for the life of the pool.
+      //
+      // This used to wrap the whole heartbeat loop in a single
+      // `withConnection`, so one connection stayed checked out for as long as
+      // the process ran. With one Database per OPC UA server that is one
+      // permanently-held connection each: the collector ran 8 databases and
+      // held 16 connections, exactly two apiece -- one for this monitor, one
+      // for the work. A pool sized to 1 could not have served both.
+      //
+      // A round trip every 15 seconds keeps the 30-second health timeout fed
+      // just as well, and leaves the connection free in between.
       while (pool.isOpen) {
         try {
           await pool.withConnection((conn) async {
-            port.send(true);
-            // Send periodic heartbeats to keep the health timeout timer fed.
-            // Without this, a healthy connection that stays open indefinitely
-            // would cause the 30-second health timeout to fire `false`.
-            while (pool.isOpen) {
-              port.send(true);
-              // Wait 15 seconds or until connection closes, whichever first
-              final closed = conn.closed.then((_) => true);
-              final timeout = Future.delayed(
-                  const Duration(seconds: 15), () => false);
-              final didClose = await Future.any([closed, timeout]);
-              if (didClose) break;
-            }
-            port.send(false);
+            await conn.execute('SELECT 1');
           });
+          port.send(true);
         } catch (e) {
+          // Continue rather than stop: the pool hands out a fresh connection
+          // on the next beat, which is how this recovers from a drop.
           port.send(false);
-          // Log but continue — pool will provide a new connection
         }
-        // Wait before retrying after a disconnection
-        await Future.delayed(const Duration(seconds: 5));
+        if (!pool.isOpen) break;
+        await Future.delayed(const Duration(seconds: 15));
       }
     }
 
