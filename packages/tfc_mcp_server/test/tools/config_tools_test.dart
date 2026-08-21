@@ -69,12 +69,22 @@ void main() {
               type: 'String',
             ),
           );
-      await db.into(db.serverAlarm).insert(
-            ServerAlarmCompanion.insert(
-              uid: 'alarm-1',
-              title: 'Pump 3 High Temp',
-              description: 'Temperature exceeds 80C',
-              rules: '[]',
+      // Alarm definitions live in the alarm_man_config preference, which is
+      // what AlarmMan loads and saves. The `alarm` table is never written.
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'alarm_man_config',
+              value: Value(jsonEncode({
+                'alarms': [
+                  {
+                    'uid': 'alarm-1',
+                    'title': 'Pump 3 High Temp',
+                    'description': 'Temperature exceeds 80C',
+                    'rules': [],
+                  },
+                ],
+              })),
+              type: 'String',
             ),
           );
 

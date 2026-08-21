@@ -58,7 +58,32 @@ void main() {
       stateReader.setValue('pump3.temperature', 82.5);
       stateReader.setValue('conveyor.speed', 3.2);
 
-      // Seed alarm definitions in database
+      // Definitions the prompt reads, from the preference AlarmMan uses.
+      await db.into(db.serverFlutterPreferences).insert(
+            ServerFlutterPreferencesCompanion.insert(
+              key: 'alarm_man_config',
+              value: Value(jsonEncode({
+                'alarms': [
+                  {
+                    'uid': 'alarm-1',
+                    'title': 'Pump 3 Overcurrent',
+                    'description': 'Current exceeds 15A threshold',
+                    'rules': [],
+                  },
+                  {
+                    'uid': 'alarm-2',
+                    'title': 'Pump 3 Over Temperature',
+                    'description': 'Temperature exceeds 90C',
+                    'rules': [],
+                  },
+                ],
+              })),
+              type: 'String',
+            ),
+          );
+
+      // The same alarms as table rows: alarm_history has a foreign key onto
+      // alarm(uid), so the history seeded below will not insert without them.
       await db.into(db.serverAlarm).insert(ServerAlarmCompanion.insert(
             uid: 'alarm-1',
             title: 'Pump 3 Overcurrent',

@@ -18,6 +18,7 @@ import '../../widgets/graph.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'auger_conveyor_painter.dart';
+import 'helper/atv320_diagnostics.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 import '../../theme.dart';
@@ -123,9 +124,22 @@ class ConveyorPathGeometry {
   final Path path;
   final double beltWidth;
   final double scale;
+
+  /// Radius of the tightest bend the centerline actually turns through, in
+  /// painted units — [double.infinity] for a belt whose corners all came out
+  /// sharp, which no band can be bent around anyway.
+  ///
+  /// Kept from the fit rather than measured off the path: [bandOutline] needs
+  /// it to know when a band is too wide for its own bend, and reading it back
+  /// from samples of the path made that judgement a function of how densely
+  /// the path happened to be sampled — which is to say, of how big the box
+  /// was. The same belt then folded on one screen and not another.
+  final double minTurnRadius;
+
   final PathMetric _metric;
 
-  ConveyorPathGeometry._(this.path, this.beltWidth, this.scale, this._metric);
+  ConveyorPathGeometry._(
+      this.path, this.beltWidth, this.scale, this.minTurnRadius, this._metric);
 
   double get length => _metric.length;
 
@@ -155,7 +169,23 @@ class ConveyorPathGeometry {
     final start = from.clamp(0.0, 1.0) * length;
     final span = to.clamp(0.0, 1.0) * length - start;
     if (span <= 0 || width <= 0) return Path();
+    // On the inside of a bend the edge cannot reach past the centre of
+    // curvature without crossing the centerline, which folds the outline into
+    // a bow tie. There is no honest band to draw at that point.
+    //
+    // Measured against the fit's own [minTurnRadius] rather than a curvature
+    // read back off samples of the path. The sampled estimate depended on how
+    // densely the path happened to be sampled, which was in absolute pixels,
+    // so the same belt was judged foldable on one box and not on another — a
+    // belt near the limit swapped between a band and a stroked centerline the
+    // moment a side pane re-fitted the page under it. With the radius exact
+    // and every length in the fit proportional, this verdict now depends on
+    // the belt alone.
+    //
+    // A little short of the radius: an edge that merely grazes the centre of
+    // curvature already leaves a cusp the border traces as a stray hair.
     final half = width / 2;
+    if (half > 0.98 * minTurnRadius) return null;
     // Same clamping an RRect applies when the radii do not fit the rect.
     final r = max(min(min(radius, half), span / 2), 0.0);
 
@@ -166,9 +196,12 @@ class ConveyorPathGeometry {
       return (half - r) + sqrt(max(r * r - k * k, 0));
     }
 
-    // Dense through the two corners, every few pixels along the middle.
+    // Dense through the two corners, and along the middle at a step set by
+    // the band's own width — a twenty-fourth of it, which is the ~4px this
+    // used to sample a full-page belt at. Relative rather than absolute so
+    // the same belt is drawn out of the same polygon whatever its box.
     const cornerSteps = 12;
-    final middleSteps = max((span / 4).ceil(), 2);
+    final middleSteps = max(min((span / (width / 24)).ceil(), 2048), 2);
     final offsets = <double>{0, span};
     for (var i = 0; i <= cornerSteps; i++) {
       offsets.add(r * i / cornerSteps);
@@ -189,36 +222,12 @@ class ConveyorPathGeometry {
     }
     if (samples.length < 2) return Path();
 
-    // Heading along the run, unwrapped so a bend does not read as a jump.
-    final heading = <double>[];
-    for (var i = 0; i < tangents.length; i++) {
-      var a = atan2(tangents[i].vector.dy, tangents[i].vector.dx);
-      if (i > 0) {
-        while (a - heading[i - 1] > pi) {
-          a -= 2 * pi;
-        }
-        while (heading[i - 1] - a > pi) {
-          a += 2 * pi;
-        }
-      }
-      heading.add(a);
-    }
-
     final left = <Offset>[];
     final right = <Offset>[];
     for (var i = 0; i < samples.length; i++) {
       final t = tangents[i];
       final normal = Offset(-t.vector.dy, t.vector.dx);
       final h = halfWidthAt(min(samples[i], span - samples[i]));
-      // On the inside of a bend the edge cannot reach past the centre of
-      // curvature without crossing the centerline, which folds the outline
-      // into a bow tie. There is no honest band to draw at that point.
-      final lo = max(i - 1, 0), hi = min(i + 1, samples.length - 1);
-      final ds = samples[hi] - samples[lo];
-      final curvature = ds > 1e-9 ? (heading[hi] - heading[lo]) / ds : 0.0;
-      // With a little margin: an edge that merely grazes the centre of
-      // curvature already leaves a cusp the border traces as a stray hair.
-      if (curvature.abs() > 1e-9 && h > 0.9 / curvature.abs()) return null;
       left.add(t.position + normal * h);
       right.add(t.position - normal * h);
     }
@@ -283,6 +292,43 @@ class ConveyorPathGeometry {
     return false;
   }
 
+  /// Clearance between the belt's ink and the box edge, as a fraction of the
+  /// box's short side.
+  ///
+  /// Proportional rather than the flat 2px this used to be, and that is the
+  /// whole point. Every other length the fit works in is relative — radii in
+  /// belt widths, positions in box fractions, the accept tests and the fold
+  /// test in ratios — so the belt it produces depends only on the *shape* of
+  /// its box. One absolute length among them breaks that: it makes the box
+  /// the belt is fitted into a slightly different shape at a different size,
+  /// which is enough to flip a belt sitting near any of those tests from the
+  /// box-filling solve to the uniform-fit fallback — from spanning its box to
+  /// a fraction of it. The plant view re-fits the whole page to ~0.68x when a
+  /// docked side pane opens over the tapped device, so the flip showed up as
+  /// a conveyor squeezing itself the moment its pane appeared, and, being a
+  /// threshold, only for some belts on some screens.
+  ///
+  /// The size is the old 2px, expressed against the box it was tuned on: a
+  /// conveyor 270px down the short side, which is roughly what one fills on
+  /// a plant page. Belts at that size are laid out exactly as before, bigger
+  /// ones get proportionally more clearance and smaller ones less — down to
+  /// less than the half-pixel of border that falls outside the band, on a
+  /// box narrower than 135px, where that fraction of the outline crosses the
+  /// box edge. Buying it back with a floor would put an absolute length back
+  /// into the fit, and a hair of antialiased outline over the edge of a
+  /// small asset is worth less than a belt that reshapes itself.
+  static const _marginFraction = 2 / 270;
+
+  /// How close the solved bounds must come to the box before the fill counts,
+  /// as a fraction of the inner box's short side — half a pixel at the size
+  /// this was measured at, and half a pixel's worth at every other size.
+  static const _fillTolerance = 0.5 / 171.5;
+
+  /// The clearance the fit keeps between the belt and the edge of a box of
+  /// [size]. Public so a test can say what "the belt fills its box" means
+  /// without copying the number out of here.
+  static double marginFor(Size size) => size.shortestSide * _marginFraction;
+
   static ConveyorPathGeometry? build(
     List<ConveyorTurnEntry> turns,
     Size size, {
@@ -298,8 +344,15 @@ class ConveyorPathGeometry {
     // can exceed the *width* in a tall narrow box and spill out sideways no
     // matter how the centerline is fitted. Cap it against the short side so
     // the box invariant always holds; for the usual wide box this is a no-op.
-    const margin = 2.0;
-    final containable = max(size.shortestSide - 2 * margin, 1.0);
+    final margin = size.shortestSide * _marginFraction;
+    // Across the box the belt has to leave room for the clearance *and* for
+    // the half-border that falls outside the band, whichever is larger. This
+    // is the one place a fixed number of pixels belongs: it only binds for a
+    // belt already as wide as its box, where there is no shape left for it to
+    // change, and it keeps that belt's outline off the box edge.
+    final containable = max(
+        size.shortestSide - 2 * max(margin, ConveyorPainter._borderWidth / 2),
+        1.0);
     // An explicit belt width is given in screen units, so the same number has
     // to mean the same belt everywhere — resizing the box must not silently
     // change it. Only the box-relative thickness is, by definition, bounded
@@ -400,8 +453,14 @@ class ConveyorPathGeometry {
     }
 
     var fillClamped = false;
+    // Radius of the tightest bend the last [buildPath] actually drew, before
+    // the final fit scale. Sharp corners are left out: they are not bends a
+    // band can be carried around, and a belt clamped to one is drawn by the
+    // fallback either way.
+    var builtMinRadius = double.infinity;
     Path buildPath(List<double> seg) {
       fillClamped = false;
+      builtMinRadius = double.infinity;
       // Tangent length each fillet eats out of the straights beside it —
       // shrink fillets that do not fit rather than dropping the straight:
       // first against each neighbouring run, then the pair sharing a run.
@@ -439,6 +498,7 @@ class ConveyorPathGeometry {
         final arcEnd = c + outDir * tangent[i];
         final effectiveRadius = tangent[i] / tan(sweeps[i].abs() / 2);
         if (tangent[i] > 0 && effectiveRadius.isFinite && effectiveRadius > 0) {
+          builtMinRadius = min(builtMinRadius, effectiveRadius);
           path.arcToPoint(
             arcEnd,
             radius: Radius.circular(effectiveRadius),
@@ -446,6 +506,9 @@ class ConveyorPathGeometry {
           );
         } else {
           // No room to round the corner — keep it sharp rather than skip it.
+          // A sharp corner carries no band around it at all, so it sets the
+          // minimum to zero and [bandOutline] hands the belt to the stroke.
+          builtMinRadius = 0;
           path.lineTo(arcEnd.dx, arcEnd.dy);
         }
         corner = c;
@@ -471,6 +534,7 @@ class ConveyorPathGeometry {
       for (final sweep in sweeps) {
         headings.add(headings.last + sweep);
       }
+      final tolerance = inner.shortestSide * _fillTolerance;
       var path = buildPath(trial);
       for (var iter = 0; iter < 40; iter++) {
         final b = path.getBounds();
@@ -479,8 +543,8 @@ class ConveyorPathGeometry {
         // and amputating runs — a belt that fits the box by no longer being
         // the belt that was configured. That case belongs to the fallback.
         if (!fillClamped &&
-            (b.width - inner.width).abs() < 0.5 &&
-            (b.height - inner.height).abs() < 0.5 &&
+            (b.width - inner.width).abs() < tolerance &&
+            (b.height - inner.height).abs() < tolerance &&
             _keepsProportions(seg, trial) &&
             !_selfOverlaps(path, beltWidth)) {
           solved = path;
@@ -502,7 +566,8 @@ class ConveyorPathGeometry {
     final double fit;
     if (solved != null) {
       // Solved: the belt fills the box at true scale. The residual is under
-      // half a pixel; squeeze it out rather than let the paint cross the box.
+      // [_fillTolerance]; squeeze it out rather than let the paint cross the
+      // box.
       final bounds = solved.getBounds();
       final clamp = min(
           1.0,
@@ -528,8 +593,9 @@ class ConveyorPathGeometry {
       final bounds = path.getBounds();
       final sx =
           bounds.width > 1e-6 ? inner.width / bounds.width : double.infinity;
-      final sy =
-          bounds.height > 1e-6 ? inner.height / bounds.height : double.infinity;
+      final sy = bounds.height > 1e-6
+          ? inner.height / bounds.height
+          : double.infinity;
       var f = min(sx, sy);
       if (!f.isFinite || f <= 0) f = 1.0;
       fit = f;
@@ -543,10 +609,13 @@ class ConveyorPathGeometry {
       );
       fitted = path.transform(matrix.storage);
     }
+    // The fit scales the whole skeleton, bends included, so the tightest
+    // bend on screen is the tightest one built times that scale.
+    final minTurnRadius = builtMinRadius * fit;
     final metrics = fitted.computeMetrics().toList();
     if (metrics.isEmpty) return null;
-    final geometry =
-        ConveyorPathGeometry._(fitted, beltWidth, fit, metrics.first);
+    final geometry = ConveyorPathGeometry._(
+        fitted, beltWidth, fit, minTurnRadius, metrics.first);
 
     // Center the ink, not the centerline. The band extends beltWidth/2 past
     // the centerline on the outer side of every run but ends in a flat cap,
@@ -572,11 +641,14 @@ class ConveyorPathGeometry {
     // Hostile configs (hand-edited JSON) can degenerate into non-finite
     // bounds; Path.shift asserts on NaN, and there is nothing to center.
     if (!shift.dx.isFinite || !shift.dy.isFinite) return geometry;
-    if (shift.distance < 0.01) return geometry;
+    // Proportional for the same reason [_marginFraction] is: nothing in the
+    // fit may depend on how big the box happens to be.
+    if (shift.distance < size.shortestSide * 1e-4) return geometry;
     final moved = fitted.shift(shift);
     final movedMetrics = moved.computeMetrics().toList();
     if (movedMetrics.isEmpty) return geometry;
-    return ConveyorPathGeometry._(moved, beltWidth, fit, movedMetrics.first);
+    return ConveyorPathGeometry._(
+        moved, beltWidth, fit, minTurnRadius, movedMetrics.first);
   }
 }
 
@@ -617,6 +689,52 @@ class ConveyorColorPaletteConfig extends BaseAsset {
       _$ConveyorColorPaletteConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ConveyorColorPaletteConfigToJson(this);
 }
+
+/// How a conveyor's drive reads.
+///
+/// [running] is the boolean-driven equivalent of [auto]: the belt is moving,
+/// and that is all the bit says. It is a separate value from [auto] so the
+/// decode stays honest about where the answer came from, but both mean the
+/// same thing on screen.
+enum DriveState { fault, stopped, auto, manual, clean, running, unknown }
+
+/// Reads a drive value, whether it is an `FB_ATV320` HMI struct or a plain
+/// BOOL.
+///
+/// A struct is preferred and answers with its `p_stat_RunMode`. A plain bool
+/// answers running/stopped. Anything else is [DriveState.unknown] rather than
+/// a guess — reading a frequency or a string as "stopped" would paint a belt
+/// grey that nobody has any information about.
+DriveState readDriveState(DynamicValue? value) {
+  if (value == null) return DriveState.unknown;
+  try {
+    final mode = value['p_stat_RunMode'];
+    final name = mode.enumFields?[mode.asInt]?.name;
+    switch (name) {
+      case 'fault':
+        return DriveState.fault;
+      case 'stopped':
+        return DriveState.stopped;
+      case 'auto':
+        return DriveState.auto;
+      case 'manual':
+        return DriveState.manual;
+      case 'clean':
+        return DriveState.clean;
+    }
+    return DriveState.unknown;
+  } catch (_) {
+    // Not a drive struct; fall through to the plain-bool reading.
+  }
+  if (value.value is bool) {
+    return value.value as bool ? DriveState.running : DriveState.stopped;
+  }
+  return DriveState.unknown;
+}
+
+/// Whether [state] means the belt is moving.
+bool driveStateIsMoving(DriveState state) =>
+    state == DriveState.auto || state == DriveState.running;
 
 class ConveyorColorPalette extends StatelessWidget {
   final ConveyorColorPaletteConfig config;
@@ -710,6 +828,15 @@ class ConveyorConfig extends BaseAsset {
   String? batchesKey;
   String? frequencyKey;
   String? tripKey;
+
+  /// Optional plain BOOL key: true while the belt is running.
+  ///
+  /// For belts that have no `FB_ATV320` HMI struct to bind [key] to — the
+  /// ones driven over Modbus from the pallet system, for instance — a single
+  /// "is running" bit is all the PLC offers. Consulted only when [key] yields
+  /// nothing usable, so a drive struct always wins where there is one.
+  String? runningKey;
+
   bool? simulateBatches;
   bool? bidirectional;
   bool? reverseDirection;
@@ -779,6 +906,7 @@ class ConveyorConfig extends BaseAsset {
       this.batchesKey,
       this.frequencyKey,
       this.tripKey,
+      this.runningKey,
       this.simulateBatches,
       this.bidirectional,
       this.reverseDirection,
@@ -892,6 +1020,12 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
           initialValue: widget.config.tripKey,
           onChanged: (val) => setState(() => widget.config.tripKey = val),
           label: 'Trip key',
+        ),
+        const SizedBox(height: 8),
+        KeyField(
+          initialValue: widget.config.runningKey,
+          onChanged: (val) => setState(() => widget.config.runningKey = val),
+          label: 'Running key (plain true/false)',
         ),
         const SizedBox(height: 16),
         Row(
@@ -1460,9 +1594,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
   Color _getConveyorColor(HmiStateColors states,
       {DynamicValue? driveValue,
+      DynamicValue? runningValue,
       DynamicValue? frequencyValue,
       DynamicValue? tripValue}) {
     try {
+      // Trip is still checked first, below, so this only handles the shape of
+      // the drive value itself.
       // Check trip condition first if trip key is provided
       if (tripValue != null) {
         try {
@@ -1475,24 +1612,33 @@ class _ConveyorState extends ConsumerState<Conveyor>
         }
       }
 
-      // If we have drive value, use the original logic
-      if (driveValue != null) {
-        final state = driveValue['p_stat_RunMode'].asInt;
-        final fields = driveValue['p_stat_RunMode'].enumFields;
-        final name = fields?[state]?.name;
-        if (name == 'fault') {
-          return states.red;
-        } else if (name == 'stopped') {
-          return states.grey;
-        } else if (name == 'auto') {
-          return states.green;
-        } else if (name == 'manual') {
-          return states.yellow;
-        } else if (name == 'clean') {
-          return states.blue;
-        }
-        return states.violet;
+      // Drive struct first where there is one; the running bit only answers
+      // when the struct is absent or says nothing useful.
+      var reading = readDriveState(driveValue);
+      if (reading == DriveState.unknown && runningValue != null) {
+        reading = readDriveState(runningValue);
       }
+      if (reading != DriveState.unknown) {
+        switch (reading) {
+          case DriveState.fault:
+            return states.red;
+          case DriveState.stopped:
+            return states.grey;
+          case DriveState.auto:
+          // A boolean-driven belt looks the same as a struct-driven one in
+          // auto. Giving it a colour of its own would say something about the
+          // belt that the bit does not carry.
+          case DriveState.running:
+            return states.green;
+          case DriveState.manual:
+            return states.yellow;
+          case DriveState.clean:
+            return states.blue;
+          case DriveState.unknown:
+            return states.violet;
+        }
+      }
+      if (driveValue != null) return states.violet;
 
       // If we only have frequency and trip, use frequency-based logic
       if (frequencyValue != null) {
@@ -1602,6 +1748,18 @@ class _ConveyorState extends ConsumerState<Conveyor>
       streamLabels.add('frequency');
     }
 
+    if (widget.config.runningKey != null &&
+        widget.config.runningKey!.isNotEmpty) {
+      streams.add(optional(
+          ref.watch(stateManProvider.future).asStream().switchMap(
+            (stateMan) => stateMan
+                .subscribe(widget.config.runningKey!)
+                .asStream()
+                .switchMap((s) => s),
+          )));
+      streamLabels.add('running');
+    }
+
     if (widget.config.tripKey != null && widget.config.tripKey!.isNotEmpty) {
       streams.add(optional(
           ref.watch(stateManProvider.future).asStream().switchMap(
@@ -1663,6 +1821,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         final color = _getConveyorColor(
           states,
           driveValue: dynValue['drive'],
+          runningValue: dynValue['running'],
           frequencyValue: dynValue['frequency'],
           tripValue: dynValue['trip'],
         );
@@ -1706,13 +1865,13 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
         final hasMainKey =
             widget.config.key != null && widget.config.key!.isNotEmpty;
-        if (hasMainKey) {
-          return GestureDetector(
-            onTap: () => _showDetailsPane(context),
-            child: _buildConveyorVisual(context, color, null, freq),
-          );
-        }
-        return _buildConveyorVisual(context, color, null, freq);
+        return _buildConveyorVisual(
+          context,
+          color,
+          null,
+          freq,
+          hasMainKey ? () => _showDetailsPane(context) : null,
+        );
       },
     );
   }
@@ -1745,12 +1904,43 @@ class _ConveyorState extends ConsumerState<Conveyor>
     Color color, [
     bool? showExclamation,
     double? frequency,
+    VoidCallback? onTap,
   ]) {
-    return LayoutBuilder(
-      builder: (context, constraints) =>
-          _buildConveyorVisualSized(context, constraints, color,
-              showExclamation, frequency),
+    // Layering, outer → inner:
+    //   LayoutRotatedBox → GestureDetector → LayoutBuilder → CustomPaint
+    //
+    // The rotation must be the OUTERMOST of the three. Every render object
+    // above it hit-tests against its own box, and that box is the belt's
+    // *unrotated* rect — long and thin along x. A 90°-turned belt paints a
+    // strip along y instead, so anything outside the rotation only saw the
+    // square where the two rects cross: on a wet-area strapper conveyor
+    // (0.05 × 0.03 of the canvas, turned 90°) that is the middle third of
+    // the belt, and the proximity sensors sit on the same spot and take most
+    // of what is left. Both the detector and the LayoutBuilder used to sit
+    // out there. Inside, `LayoutRotatedBox.hitTest` hands them positions
+    // already mapped into the unrotated frame, so the whole painted belt
+    // answers. Same arrangement as `SensorState._buildPaint`.
+    return LayoutRotatedBox(
+      angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
+      child: _withTapTarget(
+        onTap,
+        LayoutBuilder(
+          builder: (context, constraints) => _buildConveyorVisualSized(
+              context, constraints, color, showExclamation, frequency),
+        ),
+      ),
     );
+  }
+
+  /// Wraps the belt in its tap target, or leaves it alone when there is no
+  /// main key to open a pane for.
+  ///
+  /// No `behavior:` on purpose — deferring to the child leaves
+  /// [ConveyorPainter.hitTest] the final word, which is what keeps the empty
+  /// corners of a turned belt's box inert.
+  Widget _withTapTarget(VoidCallback? onTap, Widget child) {
+    if (onTap == null) return child;
+    return GestureDetector(onTap: onTap, child: child);
   }
 
   Widget _buildConveyorVisualSized(
@@ -1774,16 +1964,13 @@ class _ConveyorState extends ConsumerState<Conveyor>
     final paintSize = constraints.constrain(requestedSize);
 
     if (widget.config.showAuger ?? false) {
-      return LayoutRotatedBox(
-        angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-        child: CustomPaint(
-          size: paintSize,
-          painter: AugerConveyorPainter(
-            stateColor: color,
-            phaseNotifier: _augerPhase,
-            showAuger: !(showExclamation ?? false),
-            openEnd: widget.config.augerOpenEnd,
-          ),
+      return CustomPaint(
+        size: paintSize,
+        painter: AugerConveyorPainter(
+          stateColor: color,
+          phaseNotifier: _augerPhase,
+          showAuger: !(showExclamation ?? false),
+          openEnd: widget.config.augerOpenEnd,
         ),
       );
     }
@@ -1846,10 +2033,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
-    return LayoutRotatedBox(
-      angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: content,
-    );
+    return content;
   }
 
   Widget _positionedChildGate(
@@ -2021,15 +2205,28 @@ class _ConveyorState extends ConsumerState<Conveyor>
             final frequency = dynValue['p_stat_Frequency'].asDouble;
             final runMinutes = dynValue['p_stat_RunMinutes'].asInt;
 
+            // `p_stat_State` and `p_stat_LastFault` are the PLC enums
+            // `hmis_e` and `lft_e` — plain integers over OPC UA.
+            final driveState =
+                atv320DriveState(dynValue['p_stat_State'].asInt);
+            final lastFault = atv320Fault(dynValue['p_stat_LastFault'].asInt);
+
             return SidePane(
               title: widget.config.key!,
               subtitle: 'Conveyor',
               icon: Icons.conveyor_belt,
-              status: (jogFwd || jogBwd)
-                  ? const PaneStatus.running('Jogging')
-                  : frequency.abs() > 0.01
-                      ? const PaneStatus.running()
-                      : const PaneStatus.stopped(),
+              // A faulted or safety-stopped drive outranks the frequency
+              // reading: a belt sitting at 0 Hz because it tripped must not
+              // present itself as a healthy 'Stopped'.
+              status: driveState.severity == Atv320Severity.fault
+                  ? PaneStatus.fault(driveState.label)
+                  : driveState.code == 30 // STO — safety, not a trip
+                      ? PaneStatus.warning(driveState.label)
+                      : (jogFwd || jogBwd)
+                          ? const PaneStatus.running('Jogging')
+                          : frequency.abs() > 0.01
+                              ? const PaneStatus.running()
+                              : const PaneStatus.stopped(),
               // One command in the footer: three buttons wrap onto two rows
               // in a 380px pane and the pinned bar stops reading as a bar.
               // 'Reset run hours' sits on the Status section instead, next to
@@ -2149,13 +2346,29 @@ class _ConveyorState extends ConsumerState<Conveyor>
                           ],
                         ),
                         const SizedBox(height: 8),
-                        PaneDetailRow(
-                          label: 'HMIS',
-                          value: dynValue['p_stat_State'].toString(),
+                        // The drive's own two status words, in words rather
+                        // than in codes. Both are enums on the PLC side
+                        // (`hmis_e` / `lft_e`), so the integer is the whole
+                        // truth and the mnemonic is kept inside the
+                        // explanation for cross-referencing the keypad.
+                        PaneExplainRow(
+                          label: 'Drive state',
+                          value: driveState.label,
+                          valueColor: _severityColor(context, driveState),
+                          explanationBuilder: (context) =>
+                              _Atv320Explainer(explanation: driveState),
                         ),
-                        PaneDetailRow(
+                        PaneExplainRow(
                           label: 'Last fault',
-                          value: dynValue['p_stat_LastFault'].toString(),
+                          value: lastFault.label,
+                          valueColor: _severityColor(context, lastFault),
+                          // A live fault opens itself: the operator who just
+                          // walked over to a stopped belt should not have to
+                          // discover that the row is tappable.
+                          initiallyExpanded: !lastFault.isHealthy &&
+                              driveState.severity == Atv320Severity.fault,
+                          explanationBuilder: (context) =>
+                              _Atv320Explainer(explanation: lastFault),
                         ),
                       ],
                     ),
@@ -2169,6 +2382,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   PaneSection(
                     title: 'Trend',
                     child: PaneGraphTile(
+                      // Two traces on two axes, so they do have to be named —
+                      // but up here, where naming them costs a text row
+                      // instead of half the plot's width.
+                      legend: conveyorTrendColors,
                       // Tall enough for a two-axis line chart to be readable
                       // rather than decorative, and no taller — the setpoint
                       // fields below it have to fit on the same screen.
@@ -2235,6 +2452,143 @@ class _ConveyorState extends ConsumerState<Conveyor>
           },
         ),
       ),
+    );
+  }
+}
+
+/// Maps a decoded drive value onto the themed equipment-state colors.
+///
+/// Healthy states are deliberately left untinted — colouring "Ready" green
+/// would put as much ink on the normal case as on a trip.
+Color? _severityColor(BuildContext context, Atv320Explanation e) {
+  final colors = HmiStateColors.of(context);
+  switch (e.severity) {
+    case Atv320Severity.fault:
+      return colors.red;
+    case Atv320Severity.warning:
+      return colors.yellow;
+    case Atv320Severity.info:
+    case Atv320Severity.ok:
+      return null;
+  }
+}
+
+/// The panel behind a drive-state or fault row: what the word means, whether
+/// `Fault reset` can clear it, and what to actually do.
+///
+/// Wording comes from the ATV320 Programming Manual (NVE41295) — see
+/// `helper/atv320_diagnostics.dart`. The mnemonic and code lead, so an
+/// electrician can carry them straight to the drive keypad.
+class _Atv320Explainer extends StatelessWidget {
+  final Atv320Explanation explanation;
+
+  const _Atv320Explainer({required this.explanation});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.75),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Text(
+              explanation.mnemonic,
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text('code ${explanation.code}', style: muted),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(explanation.meaning, style: theme.textTheme.bodySmall),
+        if (explanation.clearing != null) ...[
+          const SizedBox(height: 8),
+          _ClearingNote(clearing: explanation.clearing!),
+        ],
+        if (explanation.remedy.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            explanation.documented ? 'WHAT TO DO' : 'NOT DOCUMENTED FOR ATV320',
+            style: theme.textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w700,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (final step in explanation.remedy)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('•  ', style: theme.textTheme.bodySmall),
+                  Expanded(
+                    child: Text(step, style: theme.textTheme.bodySmall),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The one line an operator most wants from a fault: can I reset this myself?
+class _ClearingNote extends StatelessWidget {
+  final Atv320Clearing clearing;
+
+  const _ClearingNote({required this.clearing});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = HmiStateColors.of(context);
+    final (icon, text, color) = switch (clearing) {
+      Atv320Clearing.selfClears => (
+          Icons.autorenew,
+          'Clears by itself once the cause is gone.',
+          colors.green,
+        ),
+      Atv320Clearing.faultReset => (
+          Icons.restart_alt,
+          'Fix the cause, then Fault reset clears it.',
+          colors.yellow,
+        ),
+      Atv320Clearing.powerCycle => (
+          Icons.power_settings_new,
+          'Fault reset will not clear this — the drive must be powered '
+              'down and back up after the cause is fixed.',
+          colors.red,
+        ),
+    };
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2476,6 +2830,14 @@ class ConveyorPainter extends CustomPainter {
   /// straight belt beside it at the same width.
   static const _endRadiusFactor = 0.2;
 
+  /// Width of the black outline around the belt, in logical pixels.
+  ///
+  /// A fixed width, so a small belt is outlined as heavily as a big one. The
+  /// fit reads it because that ink has to land inside the asset's box like
+  /// the rest of the belt, and it is the one length in the whole drawing that
+  /// does not scale with the box.
+  static const _borderWidth = 2.0;
+
   void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final borderRadius = Radius.circular(size.shortestSide * _endRadiusFactor);
@@ -2489,7 +2851,7 @@ class ConveyorPainter extends CustomPainter {
     final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+      ..strokeWidth = _borderWidth;
     canvas.drawRRect(rrect, border);
 
     // Draw exclamation mark if needed
@@ -2581,7 +2943,7 @@ class ConveyorPainter extends CustomPainter {
     final border = Paint()
       ..color = Colors.black
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+      ..strokeWidth = _borderWidth;
     _paintBand(canvas, g, 0, 1,
         width: g.beltWidth,
         radius: g.beltWidth * _endRadiusFactor,
@@ -2799,10 +3161,18 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
         final currentData = <List<double>>[];
         final freqData = <List<double>>[];
 
-        double minFreq = 1000;
-        double maxFreq = 0;
-        double minCurrent = 1000;
-        double maxCurrent = 0;
+        // The collector hands over two hours of history but the plot only
+        // shows the last [xSpan] of it, so both axes are scaled from the
+        // samples inside that window. Scaling to all two hours is what made
+        // the traces sit flat and then jump the moment an old extreme aged
+        // out of the buffer — see [stableTrendRange].
+        final windowStart = DateTime.now()
+            .subtract(widget.xSpan)
+            .millisecondsSinceEpoch
+            .toDouble();
+        double minFreq = double.infinity;
+        double maxFreq = double.negativeInfinity;
+        double maxCurrent = double.negativeInfinity;
 
         for (final sample in samples) {
           final v = sample.value;
@@ -2813,38 +3183,25 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           currentData.add([time, current]);
           freqData.add([time, freq]);
 
+          if (time < windowStart) continue;
           if (freq < minFreq) minFreq = freq;
           if (freq > maxFreq) maxFreq = freq;
-          if (current < minCurrent) minCurrent = current;
           if (current > maxCurrent) maxCurrent = current;
         }
-        if (minCurrent == maxCurrent) {
-          maxCurrent++;
-        }
-        if (minFreq == maxFreq) {
-          maxFreq++;
-        }
-
-        // Headroom above and below the data.
-        //
-        // Scaling each axis to the exact extremes pins the traces to the top
-        // and bottom edges of the plot, where they run into the tick labels —
-        // the top reading and the top of the line end up drawn on each other.
-        // A 10% margin keeps the line inside the frame and the labels clear
-        // of it, on both axes.
-        (double, double) withHeadroom(double min, double max) {
-          final margin = (max - min) * 0.1;
-          return (min - margin, max + margin);
+        // Nothing inside the window yet — a drive that has stopped
+        // reporting. Frame the newest sample rather than an empty axis.
+        if (minFreq > maxFreq && freqData.isNotEmpty) {
+          minFreq = maxFreq = freqData.last[1];
+          maxCurrent = currentData.last[1];
         }
 
-        (minFreq, maxFreq) = withHeadroom(minFreq, maxFreq);
-        (_, maxCurrent) = withHeadroom(minCurrent, maxCurrent);
+        final freqRange = stableTrendRange(minFreq, maxFreq);
         // Current is framed from zero, not from its own minimum. Load tracks
         // speed, so scaling both axes to their own extremes maps the two
         // traces onto the same shape and the second one drawn simply hides
         // the first. Anchoring current at zero separates them — and zero is
         // the meaningful floor for a current reading anyway.
-        minCurrent = 0;
+        final currentRange = stableTrendRange(0, maxCurrent, floor: 0);
 
         // Time along the bottom, frequency on the LEFT axis and current on
         // the RIGHT — frequency is what an operator reads first, so it gets
@@ -2854,15 +3211,18 @@ class _ConveyorStatsGraphState extends ConsumerState<ConveyorStatsGraph> {
           xAxis: GraphAxisConfig(unit: widget.compact ? '' : 'Time'),
           yAxis: GraphAxisConfig(
             unit: widget.compact ? '' : 'Hz',
-            min: minFreq,
-            max: maxFreq,
+            min: freqRange.min,
+            max: freqRange.max,
           ),
           yAxis2: GraphAxisConfig(
             unit: widget.compact ? '' : 'A',
-            min: minCurrent,
-            max: maxCurrent,
+            min: currentRange.min,
+            max: currentRange.max,
           ),
           xSpan: widget.xSpan,
+          // The preview names both traces in its tile header instead — the
+          // legend column costs it more width than the plot.
+          legend: !widget.compact,
         );
 
         final List<Map<String, dynamic>> data = [];

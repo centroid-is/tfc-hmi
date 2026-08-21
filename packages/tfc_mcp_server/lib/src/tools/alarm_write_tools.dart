@@ -11,12 +11,12 @@ import 'tool_registry.dart';
 
 const _uuid = Uuid();
 
-/// Registers create_alarm and update_alarm MCP write tools.
+/// Registers create_alarm, update_alarm and delete_alarm MCP write tools.
 ///
 /// These tools generate alarm configuration proposals from LLM-provided
 /// arguments. They validate boolean expressions, present diffs via
 /// elicitation, and return proposal JSON for the Flutter layer to route
-/// to the alarm editor. Neither tool writes to the database.
+/// to the alarm editor. None of them writes to the database.
 void registerAlarmWriteTools({
   required ToolRegistry registry,
   required ConfigService configService,
@@ -35,6 +35,12 @@ void registerAlarmWriteTools({
     configService: configService,
     riskGate: riskGate,
     expressionValidator: expressionValidator,
+    proposalService: proposalService,
+  );
+  _registerDeleteAlarm(
+    registry: registry,
+    configService: configService,
+    riskGate: riskGate,
     proposalService: proposalService,
   );
 }
@@ -311,6 +317,93 @@ void _registerUpdateAlarm({
       // Wrap with _proposal_type and return as JSON
       final wrapped =
           await proposalService.wrapProposal('alarm', proposal, op: 'update');
+      return CallToolResult(
+        content: [TextContent(text: jsonEncode(wrapped))],
+      );
+    },
+  );
+}
+
+void _registerDeleteAlarm({
+  required ToolRegistry registry,
+  required ConfigService configService,
+  required RiskGate riskGate,
+  required ProposalService proposalService,
+}) {
+  registry.registerTool(
+    name: 'delete_alarm',
+    description: 'Propose removing an alarm definition. Returns proposal JSON '
+        'for the alarm editor -- does not write to the database. Use this for '
+        'a duplicate alarm: two definitions carrying the same formula both '
+        'fire, so the operator sees every event twice. Page beacons bind to '
+        'alarms by uid, and the confirmation names any that would be left '
+        'watching nothing.',
+    inputSchema: JsonSchema.object(
+      properties: {
+        'alarm_uid': JsonSchema.string(
+          description: 'UID of the alarm to remove (must already exist). '
+              'Get it from list_alarm_definitions.',
+        ),
+      },
+      required: ['alarm_uid'],
+    ),
+    handler: (arguments, extra) async {
+      final alarmUid = arguments['alarm_uid'] as String;
+
+      final existing = await configService.getAlarmConfig(alarmUid);
+      if (existing == null) {
+        return CallToolResult(
+          content: [TextContent(text: 'No alarm found with UID: $alarmUid')],
+          isError: true,
+        );
+      }
+
+      final title = existing['title'] as String;
+
+      // Surfaced before the operator agrees, not after: a beacon whose alarm
+      // is gone stays on the page and never lights again, and nothing in the
+      // editor points back at what it used to watch.
+      final refs = await configService.findAlarmReferences(alarmUid);
+      final watchers = refs
+          .map((r) =>
+              '${r['label'] ?? r['asset'] ?? 'asset'} on page "${r['page']}"')
+          .join('; ');
+
+      final changes = <String, String>{
+        'alarm': '$title -> (deleted)',
+        'watched by': refs.isEmpty
+            ? 'nothing -> nothing left watching'
+            : '$watchers -> left bound to a deleted alarm',
+      };
+      final diff = proposalService.formatUpdateDiff('Alarm', title, changes);
+
+      // High, like delete_key_mapping: once the editor saves the removal
+      // there is no undo, and the rules go with it.
+      // ProposalDeclinedException propagates to middleware.
+      await riskGate.requestConfirmation(
+        description: refs.isEmpty
+            ? 'Delete alarm: $title'
+            : 'Delete alarm: $title -- ${refs.length} page asset(s) '
+                'still watching it',
+        level: RiskLevel.high,
+        details: {'diff': diff},
+      );
+
+      // The whole config travels, not just the uid: the editor rebuilds an
+      // AlarmConfig from this JSON to show what is about to go, and
+      // AlarmConfig.fromJson needs title, description and rules to parse.
+      final proposal = <String, dynamic>{
+        'uid': alarmUid,
+        'title': title,
+        'description': existing['description'],
+        'rules': existing['rules'],
+      };
+      if (existing['key'] != null) {
+        proposal['key'] = existing['key'];
+      }
+
+      final wrapped =
+          await proposalService.wrapProposal('alarm', proposal, op: 'delete');
       return CallToolResult(
         content: [TextContent(text: jsonEncode(wrapped))],
       );

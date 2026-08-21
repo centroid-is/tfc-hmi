@@ -798,6 +798,57 @@ void main() {
       expect(shrunk.height, closeTo(320, 2));
     });
 
+    testWidgets('moving and resizing does not rebuild the content',
+        (tester) async {
+      // These windows mostly hold charts, and a chart rebuilt mid-gesture
+      // drops its subscriptions and re-runs its history query — the window an
+      // operator is dragging aside flickers back to "loading" the whole way
+      // across the screen. Geometry must repaint the frame only.
+      var builds = 0;
+      await tester.pumpWidget(host(
+        onOpen: (context) => showFloatingDialog(
+          context: context,
+          id: 'trend',
+          title: 'Trend',
+          size: const Size(400, 300),
+          position: const Offset(120, 120),
+          builder: (_) => Builder(builder: (_) {
+            builds++;
+            return const Text('chart');
+          }),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(builds, 1);
+
+      await tester.drag(find.byType(PaneHeader), const Offset(-60, 40));
+      await tester.pumpAndSettle();
+      expect(builds, 1, reason: 'dragging the window rebuilt the chart');
+
+      // Moved, not just repainted — otherwise this test would pass on a
+      // dialog that ignored every gesture.
+      expect(tester.getTopLeft(find.byType(StandardDialog)),
+          const Offset(60, 160));
+
+      final beforeEdge = tester.getSize(find.byType(StandardDialog));
+      await tester.dragFrom(
+        tester.getRect(find.byType(StandardDialog)).bottomRight -
+            const Offset(2, 2),
+        const Offset(80, 40),
+      );
+      await tester.pumpAndSettle();
+      expect(builds, 1, reason: 'resizing by the edge rebuilt the chart');
+      final afterEdge = tester.getSize(find.byType(StandardDialog));
+      expect(afterEdge.width, greaterThan(beforeEdge.width));
+
+      await tester.drag(find.byType(CustomPaint).last, const Offset(40, 20));
+      await tester.pumpAndSettle();
+      expect(builds, 1, reason: 'resizing by the grip rebuilt the chart');
+      expect(tester.getSize(find.byType(StandardDialog)).width,
+          greaterThan(afterEdge.width));
+    });
+
     testWidgets('the same id does not open twice', (tester) async {
       await tester.pumpWidget(host(
         onOpen: (context) => showFloatingDialog(

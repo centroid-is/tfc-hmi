@@ -10,6 +10,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
@@ -67,6 +68,27 @@ Finder listAt(int index) => find.byType(ReorderableListView).at(index);
 /// The grab handles of the section at [list], top to bottom.
 Finder handlesIn(int list) => find.descendant(
     of: listAt(list), matching: find.byIcon(Icons.drag_indicator));
+
+/// The remove button on the card for [alias], in the section at [list].
+///
+/// Named by the server it deletes rather than picked out of the page by
+/// position. The page is more than its server lists — the database config
+/// card sits above them and has grown buttons of its own — so an index into
+/// `find.byType(IconButton)` silently comes to mean a different button every
+/// time anything above the lists gains one, and a delete test that taps the
+/// wrong card still fails somewhere far less obvious.
+Finder removeButtonFor(String alias, {int list = 0}) => find.descendant(
+      of: find.ancestor(
+        of: find.text(alias),
+        matching: find.descendant(
+            of: listAt(list), matching: find.byType(ExpansionTile)),
+      ),
+      matching: find.ancestor(
+        of: find.byWidgetPredicate(
+            (w) => w is FaIcon && w.icon == FontAwesomeIcons.trash.data),
+        matching: find.byType(IconButton),
+      ),
+    );
 
 /// Rendered card titles, top to bottom, of the server list at [list].
 ///
@@ -319,7 +341,7 @@ void main() {
           buildTestableServerConfig(stateManConfig: _threeOpcuaServers()));
 
       // Remove the middle server.
-      await tester.tap(find.byType(IconButton).at(1));
+      await tester.tap(removeButtonFor('st201'));
       await settle(tester);
       await tester.tap(find.text('Remove'));
       await settle(tester);
