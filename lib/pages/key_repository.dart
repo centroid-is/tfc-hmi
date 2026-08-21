@@ -998,22 +998,30 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             constraints: const BoxConstraints(maxHeight: 160),
             decoration: proposalDecoration(),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _proposedMappings.length,
-              itemBuilder: (context, i) {
-                final m = _proposedMappings[i];
-                final node = m['opcua_node'];
-                final ident = node is Map<String, dynamic>
-                    ? '${node['namespace']}:${node['identifier']}'
-                    : '';
-                return ListTile(
-                  dense: true,
-                  leading: const ProposalBadge(),
-                  title: Text('${m['key']}'),
-                  subtitle: Text(ident.isEmpty ? 'AI proposed key mapping' : ident),
-                );
-              },
+            // Same reason as the proposed-alarm row: a ListTile inks on the
+            // nearest Material, which is above the highlight. These rows are
+            // read-only today so nothing splashes, but the box is the same
+            // trap, and the tile asserts the moment one gets an onTap.
+            child: Material(
+              type: MaterialType.transparency,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _proposedMappings.length,
+                itemBuilder: (context, i) {
+                  final m = _proposedMappings[i];
+                  final node = m['opcua_node'];
+                  final ident = node is Map<String, dynamic>
+                      ? '${node['namespace']}:${node['identifier']}'
+                      : '';
+                  return ListTile(
+                    dense: true,
+                    leading: const ProposalBadge(),
+                    title: Text('${m['key']}'),
+                    subtitle:
+                        Text(ident.isEmpty ? 'AI proposed key mapping' : ident),
+                  );
+                },
+              ),
             ),
           ),
         Expanded(

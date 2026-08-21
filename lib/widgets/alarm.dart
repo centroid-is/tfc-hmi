@@ -125,12 +125,23 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
                   margin:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   decoration: proposalDecoration(),
-                  child: ListTile(
-                    leading: const ProposalBadge(),
-                    title: Text(widget.proposedAlarm!.title),
-                    subtitle: Text(
-                        'AI Proposed: ${widget.proposedAlarm!.description}'),
-                    onTap: () => widget.onShow?.call(widget.proposedAlarm!),
+                  // The amber highlight is painted by the box above, so the
+                  // tile needs its own Material to ink on -- otherwise the tap
+                  // ripple is painted on the page's Material, underneath the
+                  // highlight, and never shows. Transparent, so the highlight
+                  // renders exactly as before; the radius matches the box so
+                  // the splash stays inside the rounded corners.
+                  child: Material(
+                    type: MaterialType.transparency,
+                    borderRadius: BorderRadius.circular(8),
+                    clipBehavior: Clip.antiAlias,
+                    child: ListTile(
+                      leading: const ProposalBadge(),
+                      title: Text(widget.proposedAlarm!.title),
+                      subtitle: Text(
+                          'AI Proposed: ${widget.proposedAlarm!.description}'),
+                      onTap: () => widget.onShow?.call(widget.proposedAlarm!),
+                    ),
                   ),
                 ),
               Expanded(
