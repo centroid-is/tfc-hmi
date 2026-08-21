@@ -16,7 +16,10 @@ permissions:
   contents: read
 
 jobs:
+  # Job id stays `build` (main-prerelease.yml calls this workflow); `name` is
+  # what the status check context is called. See macos.yml.
   build:
+    name: Linux Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

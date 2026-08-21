@@ -21,7 +21,10 @@ permissions:
   packages: write
 
 jobs:
+  # Job id stays `build` (main-prerelease.yml and tag.yml call this workflow);
+  # `name` is what the status check context is called. See macos.yml.
   build:
+    name: Windows MSIX Build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

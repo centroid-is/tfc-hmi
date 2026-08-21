@@ -25,7 +25,12 @@ permissions:
   packages: write
 
 jobs:
+  # The job id stays `build` — main-prerelease.yml and tag.yml call this
+  # workflow — but the `name` is what becomes the status check context, and
+  # three workflows all publishing a check called `build` made it impossible
+  # to require this one specifically in branch protection.
   build:
+    name: macOS Build
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
