@@ -898,18 +898,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         //
         // Arriving from the banner's "Review all" hands us a single
         // proposalJson, but the queue behind it is what the operator asked to
-        // review. Batch every pending asset_update instead of staging one and
-        // leaving the rest invisible -- the top banner hides proposals whose
-        // editor is on screen, so anything not applied here shows up nowhere
-        // at all.
+        // review. Batch every pending asset proposal instead of staging one
+        // and leaving the rest out: the banner's Accept commits whatever the
+        // editor staged, so anything not applied here is a row the operator
+        // can see and cannot act on. New assets (`asset`) were left out of
+        // that until now, so opening the editor on a queue of seven staged
+        // one and stranded six.
         var batched = 0;
         try {
           final pending = ref
               .read(proposalStateProvider)
               .proposals
-              .where((p) => p.proposalType == 'asset_update')
+              .where((p) =>
+                  p.proposalType == 'asset' || p.proposalType == 'asset_update')
               .toList();
-          if (pending.isNotEmpty) batched = _applyUpdateBatch(pending);
+          if (pending.isNotEmpty) batched = _applyAssetBatch(pending);
         } catch (_) {
           // Provider unavailable in tests -- fall through to the single path.
         }
@@ -950,12 +953,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// For `_proposal_type: 'asset'`: expects `key`, `title`, `children` (list
   /// of asset JSON). Adds assets to the page identified by `key`, or creates
   /// a new page.
-  /// Applies every queued `asset_update` proposal in one pass.
+  /// Applies every queued `asset` and `asset_update` proposal in one pass.
   ///
-  /// Returns how many actually landed. Each patch targets a different asset
-  /// or child, so order does not matter and a failure to resolve one (a stale
-  /// index, say) leaves the rest intact.
-  int _applyUpdateBatch(List<PendingProposal> proposals) {
+  /// Returns how many actually landed. Each one targets a different asset or
+  /// child, so order does not matter and a failure to resolve one (a stale
+  /// index, a create the registry cannot build) leaves the rest intact.
+  ///
+  /// One driver for both kinds. The applies differ -- a create builds new
+  /// assets and appends them, an update patches one in place -- but the
+  /// bookkeeping around them does not: snapshot the pages once, skip ids
+  /// already staged or resolved, count what actually landed. `asset` used to
+  /// have no batch at all, which is the whole of the bug below.
+  int _applyAssetBatch(List<PendingProposal> proposals) {
     // An MCP client fires update_asset one call at a time, so a second wave
     // lands while the first is still staged. Extend the open batch instead of
     // restarting it: clearing _proposedAssets left only the newest asset
@@ -974,22 +983,36 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       try {
         final decoded = jsonDecode(p.proposalJson);
         if (decoded is! Map<String, dynamic>) continue;
-        if (decoded['_proposal_type'] != 'asset_update') continue;
+        final type = decoded['_proposal_type'];
         final before = _proposedAssets.length;
-        _applyUpdateProposal(decoded);
+        if (type == 'asset') {
+          _applyAssetProposal(decoded);
+        } else if (type == 'asset_update') {
+          _applyUpdateProposal(decoded);
+        } else {
+          continue;
+        }
+        // Counted by what actually reached the canvas, not by what was
+        // attempted: a proposal the registry could not build leaves its id
+        // out of the batch and stays pending, rather than being marked
+        // accepted against nothing.
         if (_proposedAssets.length > before) {
           _proposalIds.add(p.id);
           applied++;
         }
-      } catch (_) {
+      } catch (e) {
         // A malformed proposal must not take the rest of the batch with it.
+        // Inside the loop for that reason, and reported rather than
+        // swallowed: a run of proposals missing required fields is how a
+        // queue goes quiet with nothing to explain it.
+        debugPrint('asset proposal ${p.id} could not be staged: $e');
       }
     }
     if (applied > 0) {
       _isProposal = true;
       _publishProposalCallbacks();
       final staged = _proposalIds.length;
-      _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset updates';
+      _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset proposals';
     }
     return applied;
   }
@@ -1050,7 +1073,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// Hands the black banner the commit and discard actions for this batch,
   /// and takes the handles they will need once this editor is gone.
   ///
-  /// Both staging paths ([_applyUpdateBatch] and [_applyProposalData]) come
+  /// Both staging paths ([_applyAssetBatch] and [_applyProposalData]) come
   /// through here. They used to carry a copy of this block each, which is a
   /// good way for one of them to miss the container capture below.
   void _publishProposalCallbacks() {
@@ -1211,7 +1234,17 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       }
     }
 
-    _proposedAssets = Set.of(newAssets);
+    // Nothing the registry could build. Return before touching the pages or
+    // raising [_isProposal]: a proposal that stages no asset used to claim
+    // the editor anyway, and the listener's "already showing a proposal"
+    // guard then blocked every proposal behind it -- with nothing to accept
+    // and, on the branch below, an empty page invented for it.
+    if (newAssets.isEmpty) return;
+
+    // Added, not assigned. These are the outlines the canvas draws, and this
+    // runs once per proposal in a batch: replacing the set left only the last
+    // create outlined and lost every one before it.
+    _proposedAssets.addAll(newAssets);
 
     if (targetPage != null && _temporaryPages.containsKey(targetPage)) {
       // Add assets to existing page.
@@ -2309,15 +2342,30 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           // up, so the operator sees nothing to save.
           p.proposalType == 'asset_update');
       if (pageProposals.isEmpty) return;
-      final updates =
-          pageProposals.where((p) => p.proposalType == 'asset_update').toList();
-      if (updates.isNotEmpty) {
+      final assetProposals = pageProposals
+          .where((p) =>
+              p.proposalType == 'asset' || p.proposalType == 'asset_update')
+          .toList();
+      if (assetProposals.isNotEmpty) {
         // Whole queue at once -- one review, one save. Safe to re-enter while
         // a batch is already staged: ids already applied are skipped, so a
         // proposal arriving after the first joins the batch rather than being
         // swallowed by an "already showing a proposal" guard.
-        _applyUpdateBatch(updates);
+        //
+        // `asset` used to fall through to the single-apply branch below,
+        // where only pageProposals.first was ever applied. That set
+        // _isProposal, and every proposal behind it hit the guard: seven new
+        // assets staged one, "Accept all" removed a single row, and "Review
+        // all" then did nothing at all, because nothing further was ever
+        // staged and the commit slot stayed null. Batching them is the same
+        // reasoning asset_update already carried: the banner's Accept
+        // commits whatever this editor staged, so a proposal left unstaged
+        // is a row the operator can see and cannot act on.
+        _applyAssetBatch(assetProposals);
       } else {
+        // Only `page` reaches this. It replaces or creates a whole page, so
+        // folding a run of them together has no defined result; a run of
+        // assets appended to a page does.
         if (_isProposal) return; // Already showing a proposal.
         _applyProposalData(pageProposals.first.proposalJson);
       }
