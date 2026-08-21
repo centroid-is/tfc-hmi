@@ -147,6 +147,21 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   /// The DriftIsolate backing this database (null when using create() or sqlite).
   DriftIsolate? _driftIsolate;
 
+  /// The pool backing this database, when it lives in *this* isolate.
+  ///
+  /// Only [create] sets it. [spawn] builds its pool inside the DriftIsolate,
+  /// out of reach from here, and [close] disposes of it by killing the isolate
+  /// instead. Null for sqlite, which has no pool.
+  pg.Pool? _pool;
+
+  /// The pool [close] has to release, for tests that need to watch it.
+  @visibleForTesting
+  pg.Pool? get poolForTest => _pool;
+
+  /// Set on the first [close] so repeat and concurrent calls share one
+  /// teardown rather than racing each other through it.
+  Future<void>? _closed;
+
   /// Port for receiving connection health events from the Pool inside the DriftIsolate.
   ReceivePort? _healthPort;
   Stream<bool>? _connectionHealthBroadcast;
@@ -322,6 +337,9 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       final db = AppDatabase._(
           config, PgDatabase.opened(pool, logStatements: config.debug));
       db._healthPort = healthPort;
+      // `PgDatabase.opened` does not take ownership of what it is handed, so
+      // nothing downstream of drift will ever close this pool. [close] has to.
+      db._pool = pool;
       return db;
     }
     if (sqliteFolder != null) {
@@ -1072,11 +1090,33 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     throw FormatException('Unable to parse PostgreSQL interval: $interval');
   }
 
+  /// Releases everything this database holds, including the pool.
+  ///
+  /// Idempotent: `connectWithRetry` closes attempts it is throwing away, and a
+  /// second close arriving on top of the first must not start a second
+  /// teardown or fail the caller.
   @override
-  Future<void> close() async {
+  Future<void> close() => _closed ??= _close();
+
+  Future<void> _close() async {
     _healthPort?.close();
     await _notificationConnection?.close();
     await super.close();
+    // Order matters. `PgDatabase.opened` passes `closeUnderlyingWhenClosed:
+    // false`, so `super.close()` leaves the pool open -- nothing in the repo
+    // closed it at all, which is why the health monitor's standing connection
+    // outlived every database that used one. Releasing it here, after drift is
+    // done with it, leaves the monitor as the only borrower, and forcing is
+    // what gets it to let go: see [releasePool].
+    final pool = _pool;
+    if (pool != null) {
+      await releasePool(
+        pool.close,
+        onError: (e) => logger.w('Abandoning a pool that would not close: $e'),
+      );
+    }
+    // The spawn path keeps its pool inside the isolate, where [_pool] cannot
+    // reach it; killing the isolate takes the pool and its sockets with it.
     await _driftIsolate?.shutdownAll();
   }
 
