@@ -29,6 +29,15 @@ class TcpProxy {
   /// The actual port after [start] (OS-assigned when [listenPort] is 0).
   int get port => _server!.port;
 
+  /// Client/server socket pairs the proxy is still holding open.
+  ///
+  /// Every connection to Postgres in these tests is really the proxy's own
+  /// upstream socket, so `pg_stat_activity` counts pairs, not client sockets.
+  /// That makes this the difference between "the client never closed" and "the
+  /// client closed and the proxy did not pass it on" -- two different bugs
+  /// that look identical from the server.
+  int get livePairs => _pairs.length;
+
   bool get isRunning => _server != null && !_rejecting;
 
   Future<void> start() async {

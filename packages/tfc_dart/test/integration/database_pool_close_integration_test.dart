@@ -40,17 +40,23 @@ Future<int> _clientBackends(Connection control) async {
 
 /// Who those connections are, for a failure that explains itself.
 Future<String> _describeBackends(Connection control) async {
+  // `port` and the gap between backend_start and state_change are what say
+  // *which* connection this is. An empty query means it never ran a statement,
+  // which no drift connection can manage -- only the health monitor, which
+  // borrows one purely to watch it. Distinct ports spread across the run say
+  // they came from separate databases rather than one pool.
   final result = await control.execute(
       "SELECT coalesce(state,'?'), coalesce(nullif(application_name,''),'-'), "
       "round(extract(epoch from (now()-backend_start)))::int, "
+      "coalesce(client_port, -1), "
+      "round(extract(epoch from (state_change-backend_start)))::int, "
       "coalesce(left(query, 60),'-') "
       "FROM pg_stat_activity WHERE datname = 'testdb' "
       "AND backend_type = 'client backend' AND pid <> pg_backend_pid() "
       "ORDER BY backend_start");
-  if (result.isEmpty) return 'none';
-  return result
-      .map((r) => '[state=${r[0]} app=${r[1]} age=${r[2]}s q=${r[3]}]')
-      .join(' ');
+  if (result.isEmpty) return 'none (proxy pairs: $proxyLivePairs)';
+  return 'proxy still holding $proxyLivePairs pair(s); ${result.map((r) => '[state=${r[0]} app=${r[1]} age=${r[2]}s port=${r[3]} '
+      'idleAfter=${r[4]}s q=${r[5]}]').join(' ')}';
 }
 
 /// Polls [read] until it satisfies [done], or gives up after [timeout].

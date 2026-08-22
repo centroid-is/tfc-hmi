@@ -116,6 +116,9 @@ Future<void> stopDockerCompose() async {
 // Test helpers
 // ---------------------------------------------------------------------------
 
+/// Socket pairs the test proxy is still holding open. See [TcpProxy.livePairs].
+int get proxyLivePairs => _dbProxy.livePairs;
+
 DatabaseConfig getTestConfig() {
   return DatabaseConfig(
     postgres: Endpoint(

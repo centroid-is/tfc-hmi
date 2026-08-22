@@ -1174,12 +1174,26 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     // destroys the socket instead and leaves the server to notice, which it
     // does at its own pace -- and a server that is slow to notice is exactly
     // the one already short of connection slots.
+    //
+    // How long to wait comes from the pool's own connect timeout: a monitor
+    // caught mid-acquire cannot answer until that acquire lands, and giving up
+    // first is what leaked. See [monitorStopTimeout].
     final monitor = _healthMonitor;
     if (monitor != null) {
       monitor.stop();
+      var handedBack = true;
       await monitor.done
-          .timeout(kMonitorStopTimeout, onTimeout: () {})
+          .timeout(monitorStopTimeout(config.connectTimeout),
+              onTimeout: () => handedBack = false)
           .catchError((Object _) {});
+      if (!handedBack) {
+        // Worth saying out loud. The force close below can only reach
+        // connections the pool still knows about, so if the monitor is still
+        // holding one -- or still opening one -- this is the moment a socket
+        // gets orphaned, and it used to happen in silence.
+        logger.w('Health monitor did not hand its connection back in time; '
+            'closing the pool anyway, which may strand a connection');
+      }
     }
     final pool = _pool;
     if (pool != null) {
@@ -1416,6 +1430,9 @@ class _HealthMonitor {
 /// or Future chaining) is caught by the zone handler instead of killing
 /// the entire isolate.
 _HealthMonitor _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
+  // Its own, because this also runs inside the drift isolate, where the
+  // database's logger does not reach.
+  final logger = Logger();
   final stop = Completer<void>();
   final done = Completer<void>();
 
@@ -1450,6 +1467,13 @@ _HealthMonitor _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
           // Continue rather than stop: the pool hands out a fresh connection
           // on the next beat, which is how this recovers from a drop.
           port.send(false);
+          // A borrow that throws is the one case where we cannot say whether
+          // the connection was ever handed out, let alone handed back. Say so:
+          // an acquire that failed *after* opening its socket leaves that
+          // socket with no owner, and the pool close that follows cannot reach
+          // what the pool never recorded.
+          logger.w('Health monitor borrow failed '
+              '(stopping: ${stop.isCompleted}, pool open: ${pool.isOpen}): $e');
         }
         if (stop.isCompleted || !pool.isOpen) break;
         // Still raced against the stop signal. The beat itself is short now,
@@ -1468,6 +1492,15 @@ _HealthMonitor _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
     // Last-resort handler — catches ANYTHING that escapes the try-catch
     // (e.g. SocketException from native layer, Future chain edge cases).
     // This prevents the isolate from being killed.
+    //
+    // Completing [done] here says "the monitor has let go", which is a claim
+    // this handler is in no position to make: an error escaping asynchronously
+    // does not mean the borrow came back. A close waiting on [done] takes it
+    // at its word and closes the pool anyway, so if this fires during shutdown
+    // it is a candidate for the connection that gets stranded. Loud on
+    // purpose.
+    logger.w('Health monitor died outside its own error handling; treating it '
+        'as let go, which it may not be: $error');
     port.send(false);
     finish();
   });
