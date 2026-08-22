@@ -13,7 +13,7 @@ import 'package:tfc/theme.dart' show HmiColorRole;
 
 part 'speedbatcher.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class SpeedBatcherConfig extends BaseAsset {
   @override
   String get displayName => 'Speed Batcher';
@@ -227,7 +227,7 @@ bool gateIsTripped({
   return invertPolarity ? !rawBool : rawBool;
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class GateStatusConfig extends BaseAsset {
   String key;
 

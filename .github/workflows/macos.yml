@@ -37,13 +37,20 @@ permissions:
 # and the callees would queue behind — or cancel — each other. The `macos-`
 # prefix is what keeps them apart.
 #
-# `cancel-in-progress` must stay an expression and never become bare `true`:
-# because the context is the caller's, `github.event_name` is that caller's
-# event, so this is false for main-prerelease's push to main and for tag.yml's
-# tag push. A PR push therefore can never cancel a release build.
+# Keeping a release build from being cancelled is done in the group, not in
+# `cancel-in-progress`. The earlier form relied on
+# `cancel-in-progress: ${{ github.event_name == 'pull_request' }}` being false
+# for main-prerelease's push and tag.yml's tag push; measured on 2026-08-22 it
+# cancelled them anyway (see test.yml for the numbers). Appending `run_id` for
+# every non-PR event puts each release build in a group of its own, so there is
+# nothing that could cancel it regardless of how the expression is coerced.
+#
+# The context here is still the caller's, so `github.run_id` is the caller's
+# run — shared by macos, linux and windows within one main-prerelease run, and
+# kept apart by the `macos-` prefix above.
 concurrency:
-  group: macos-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: macos-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # The job id stays `build` — main-prerelease.yml and tag.yml call this

@@ -10,7 +10,7 @@ import 'package:tfc/converter/color_converter.dart';
 
 part 'table.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class TableAssetConfig extends BaseAsset {
   @override
   String get displayName => 'Table';

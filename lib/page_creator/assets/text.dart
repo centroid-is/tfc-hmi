@@ -12,7 +12,7 @@ import 'package:tfc/converter/color_converter.dart';
 
 part 'text.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class TextAssetConfig extends BaseAsset {
   @override
   String get displayName => 'Text';

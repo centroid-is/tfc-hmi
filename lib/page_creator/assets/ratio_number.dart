@@ -17,7 +17,7 @@ import 'package:tfc_dart/core/database.dart';
 
 part 'ratio_number.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class RatioNumberConfig extends BaseAsset {
   @override
   String get displayName => 'Ratio Number';

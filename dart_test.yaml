@@ -1,3 +1,25 @@
+# Golden-tagged tests used to be skipped everywhere, unconditionally. Nothing
+# ran them for long enough that 23 of them had rotted: stale images, a browse
+# fixture whose PDU framing no longer matched the client, and one test still
+# driving a tree that had become a drill-down navigator. A test nothing runs
+# is not a test.
+#
+# They run now, on macOS only -- the same rule the other 18 golden files
+# already apply with `skip: !Platform.isMacOS`. Goldens are rendered on macOS,
+# and Linux and Windows produce different text rasterisation, so comparing
+# there reports differences that are about the runner rather than the code.
+#
+# `--update-goldens` still works as before; this only decides where they are
+# *compared*.
 tags:
   golden:
-    skip: "Golden tests only run locally with --update-goldens"
+
+on_os:
+  linux:
+    tags:
+      golden:
+        skip: "Goldens are rendered on macOS; other platforms differ on text rasterisation"
+  windows:
+    tags:
+      golden:
+        skip: "Goldens are rendered on macOS; other platforms differ on text rasterisation"

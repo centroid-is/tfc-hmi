@@ -7,7 +7,13 @@ import 'common.dart';
 
 part 'led_column.g.dart';
 
-@JsonSerializable()
+// explicitToJson, like [LEDConfig]: without it `toJson()` emits live
+// `Coordinates` and `RelativeSize` objects rather than maps, so the output
+// cannot be fed back through `fromJson`. The page editor's proposal path does
+// exactly that round trip -- merge overrides onto `asset.toJson()`, re-parse --
+// and its `catch` then silently substituted the 2-LED preview, so a proposed
+// column arrived with the wrong LEDs and no error anywhere.
+@JsonSerializable(explicitToJson: true)
 class LEDColumnConfig extends BaseAsset {
   @override
   String get displayName => 'LED Column';

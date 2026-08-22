@@ -8,7 +8,7 @@ import 'package:tfc/page_creator/assets/common.dart';
 
 part 'checklists.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class ChecklistsConfig extends BaseAsset {
   @override
   String get displayName => 'Checklists';

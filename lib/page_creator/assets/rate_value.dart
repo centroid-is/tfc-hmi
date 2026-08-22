@@ -30,7 +30,7 @@ String _formatRate(double rate) {
   return rate.toStringAsFixed(1);
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class RateValueConfig extends BaseAsset {
   @override
   String get displayName => 'Rate Value';

@@ -25,13 +25,13 @@ LEDColumnConfig _$LEDColumnConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$LEDColumnConfigToJson(LEDColumnConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
-      'leds': instance.leds,
+      'leds': instance.leds.map((e) => e.toJson()).toList(),
       'spacing': instance.spacing,
     };
 

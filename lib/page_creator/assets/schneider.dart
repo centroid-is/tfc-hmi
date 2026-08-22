@@ -17,7 +17,7 @@ import '../../widgets/dynamic_value.dart';
 
 part 'schneider.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class SchneiderATV320Config extends BaseAsset {
   @override
   String get displayName => 'Schneider ATV320';

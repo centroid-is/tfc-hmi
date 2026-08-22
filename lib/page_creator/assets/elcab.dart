@@ -10,7 +10,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 
 part 'elcab.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class ElCabConfig extends BaseAsset {
   @override
   String get displayName => 'Electrical Cabinet';

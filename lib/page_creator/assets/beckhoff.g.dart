@@ -24,8 +24,8 @@ Map<String, dynamic> _$BeckhoffCX5010ConfigToJson(
         BeckhoffCX5010Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -59,8 +59,8 @@ Map<String, dynamic> _$BeckhoffEK1100ConfigToJson(
         BeckhoffEK1100Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -92,8 +92,8 @@ Map<String, dynamic> _$BeckhoffEL1008ConfigToJson(
         BeckhoffEL1008Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -128,8 +128,8 @@ Map<String, dynamic> _$BeckhoffEL2008ConfigToJson(
         BeckhoffEL2008Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -159,8 +159,8 @@ Map<String, dynamic> _$BeckhoffEL9222ConfigToJson(
         BeckhoffEL9222Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -185,8 +185,8 @@ Map<String, dynamic> _$BeckhoffEL9187ConfigToJson(
         BeckhoffEL9187Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -209,8 +209,8 @@ Map<String, dynamic> _$BeckhoffEL9186ConfigToJson(
         BeckhoffEL9186Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -238,8 +238,8 @@ Map<String, dynamic> _$BeckhoffEL3054ConfigToJson(
         BeckhoffEL3054Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
