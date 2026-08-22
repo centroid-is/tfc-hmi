@@ -105,6 +105,20 @@ class DatabaseConfig {
   @json.JsonKey(includeFromJson: false, includeToJson: false)
   Duration queryTimeout;
 
+  /// What this process calls itself to the server (not serialized to JSON).
+  ///
+  /// Lands in `pg_stat_activity.application_name`, so `SELECT application_name,
+  /// count(*) FROM pg_stat_activity GROUP BY 1` on a live plant server says
+  /// which of the HMI, the collector and whatever else is holding sessions.
+  /// Untagged, every one of them shows up as an empty string and the only way
+  /// to tell them apart is by client port.
+  ///
+  /// Tests override it to a value unique per database so they can count their
+  /// own backends without also counting connections another suite in the same
+  /// `dart test` invocation still has open.
+  @json.JsonKey(includeFromJson: false, includeToJson: false)
+  String applicationName;
+
   DatabaseConfig({
     this.postgres,
     this.sslMode,
@@ -112,6 +126,7 @@ class DatabaseConfig {
     this.maxPoolConnections,
     this.connectTimeout = const Duration(seconds: 5),
     this.queryTimeout = const Duration(seconds: 30),
+    this.applicationName = 'tfc_dart',
   });
 
   factory DatabaseConfig.fromJson(Map<String, dynamic> json) =>
@@ -305,6 +320,10 @@ class Database {
         config.postgres!,
         settings: pg.ConnectionSettings(
           sslMode: config.sslMode ?? pg.SslMode.disable,
+          // Its own tag: a probe is the shortest-lived connection here, so one
+          // still sitting in pg_stat_activity is unambiguously the leak this
+          // method's doc comment describes.
+          applicationName: '${config.applicationName}:probe',
         ),
       ),
       (conn) => conn.close(),

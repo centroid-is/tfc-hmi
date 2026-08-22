@@ -351,6 +351,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       config.postgres!,
       settings: pg.ConnectionSettings(
         sslMode: config.sslMode,
+        applicationName: '${config.applicationName}:notify',
       ),
     ).timeout(
       const Duration(seconds: 10),
@@ -372,6 +373,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
           settings: pg.PoolSettings(
             maxConnectionCount: poolConnectionCount(config.maxPoolConnections),
             sslMode: config.sslMode,
+            applicationName: config.applicationName,
             connectTimeout: config.connectTimeout,
             keepAliveInterval: const Duration(seconds: 5),
             keepAliveCount: 3,
@@ -420,6 +422,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
             settings: pg.PoolSettings(
               maxConnectionCount: poolConnectionCount(config.maxPoolConnections),
               sslMode: config.sslMode,
+              applicationName: config.applicationName,
               connectTimeout: config.connectTimeout,
               keepAliveInterval: const Duration(seconds: 5),
               keepAliveCount: 3,
