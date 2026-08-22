@@ -11,7 +11,7 @@ import 'package:tfc/converter/color_converter.dart';
 
 part 'baader.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class Baader221Config extends BaseAsset {
   @override
   String get displayName => 'Baader 221';

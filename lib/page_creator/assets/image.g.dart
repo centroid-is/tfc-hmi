@@ -25,8 +25,8 @@ ImageConfig _$ImageConfigFromJson(Map<String, dynamic> json) => ImageConfig(
 Map<String, dynamic> _$ImageConfigToJson(ImageConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,

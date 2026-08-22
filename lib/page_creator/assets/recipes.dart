@@ -18,7 +18,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 
 part 'recipes.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class RecipesConfig extends BaseAsset {
   @override
   String get displayName => 'Recipes';

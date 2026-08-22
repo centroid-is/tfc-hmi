@@ -31,7 +31,7 @@ const Map<String, Asset Function()> _availableSubdevices = {
   "EL9186": BeckhoffEL9186Config.preview,
 };
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffCX5010Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff CX5010';
@@ -290,7 +290,7 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEK1100Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EK1100';
@@ -512,7 +512,7 @@ class _EK1100ConfigContentState extends State<_EK1100ConfigContent> {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEL1008Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EL1008';
@@ -666,7 +666,7 @@ class _EL1008ConfigContentState extends State<_EL1008ConfigContent> {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEL2008Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EL2008';
@@ -937,7 +937,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEL9222Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EL9222';
@@ -1075,7 +1075,7 @@ class _BeckhoffEL9222 extends StatelessWidget {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEL9187Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EL9187';
@@ -1189,7 +1189,7 @@ class _BeckhoffEL9187 extends StatelessWidget {
   }
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEL9186Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EL9186';
@@ -1822,7 +1822,7 @@ class TriangleBoxPainter extends CustomPainter {
       oldDelegate.animationValue != animationValue;
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BeckhoffEL3054Config extends BaseAsset {
   @override
   String get displayName => 'Beckhoff EL3054';

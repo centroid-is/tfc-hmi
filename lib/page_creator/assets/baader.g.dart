@@ -25,8 +25,8 @@ Baader221Config _$Baader221ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$Baader221ConfigToJson(Baader221Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,

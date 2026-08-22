@@ -8,7 +8,7 @@ import 'package:tfc/page_creator/assets/button.dart';
 
 part 'aircab.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class AirCabConfig extends BaseAsset {
   @override
   String get displayName => 'Air Cabinet';

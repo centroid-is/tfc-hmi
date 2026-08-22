@@ -30,15 +30,15 @@ ChecklistsConfig _$ChecklistsConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$ChecklistsConfigToJson(ChecklistsConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
-      'line1': instance.line1,
-      'line2': instance.line2,
-      'line3': instance.line3,
+      'line1': instance.line1.map((e) => e.toJson()).toList(),
+      'line2': instance.line2.map((e) => e.toJson()).toList(),
+      'line3': instance.line3.map((e) => e.toJson()).toList(),
     };
 
 const _$TextPosEnumMap = {

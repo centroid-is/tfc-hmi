@@ -33,7 +33,7 @@ double _glyphSide(BoxConstraints constraints) {
   return side.isFinite && side > 0 ? side : 48;
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class ImageConfig extends BaseAsset {
   @override
   String get displayName => 'Image';

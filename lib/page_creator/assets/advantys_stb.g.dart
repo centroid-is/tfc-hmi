@@ -27,8 +27,8 @@ STBDDI3725Config _$STBDDI3725ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBDDI3725ConfigToJson(STBDDI3725Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -68,8 +68,8 @@ STBDDO3705Config _$STBDDO3705ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBDDO3705ConfigToJson(STBDDO3705Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -98,8 +98,8 @@ STBNIP2311Config _$STBNIP2311ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBNIP2311ConfigToJson(STBNIP2311Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -131,8 +131,8 @@ STBPDT3100Config _$STBPDT3100ConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$STBPDT3100ConfigToJson(STBPDT3100Config instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,

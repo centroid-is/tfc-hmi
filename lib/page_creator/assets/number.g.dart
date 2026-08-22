@@ -34,8 +34,8 @@ NumberConfig _$NumberConfigFromJson(Map<String, dynamic> json) => NumberConfig(
 Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -46,7 +46,7 @@ Map<String, dynamic> _$NumberConfigToJson(NumberConfig instance) =>
       'scale': instance.scale,
       'units': instance.units,
       'textColor': const ColorConverter().toJson(instance.textColor),
-      'graph_config': instance.graphConfig,
+      'graph_config': instance.graphConfig?.toJson(),
       'writable': instance.writable,
     };
 

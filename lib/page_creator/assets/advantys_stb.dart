@@ -64,7 +64,7 @@ part 'advantys_stb.g.dart';
 /// descriptions) drive the live LED block and the detail dialog. All keys are
 /// nullable; `BaseAsset.allKeys` picks them up automatically via the `Key$`
 /// regex (no override needed) and filters out empty strings.
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class STBDDI3725Config extends BaseAsset {
   @override
   String get displayName => 'STBDDI3725 (16-Ch DI)';
@@ -591,7 +591,7 @@ class _DDI3725ChannelGrid extends StatelessWidget {
 ///
 /// NO filter keys — outputs don't have on/off debounce; the detail dialog
 /// renders only force SegmentedButton + description per channel.
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class STBDDO3705Config extends BaseAsset {
   @override
   String get displayName => 'STBDDO3705 (16-Ch DO)';
@@ -1033,7 +1033,7 @@ const Map<String, Asset Function()> _availableSTBSubdevices =
 /// without separate registration. The build path is type-agnostic (permissive
 /// render): if a foreign type somehow survives in [subdevices], it renders
 /// as-is and does not crash the page.
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class STBNIP2311Config extends BaseAsset {
   @override
   String get displayName => 'STBNIP2311 (Ethernet Head)';
@@ -1409,7 +1409,7 @@ class _STBNIP2311ConfigContentState extends State<_STBNIP2311ConfigContent> {
 ///
 /// `BaseAsset.allKeys` picks up `inputOkKey` automatically via the `Key$`
 /// regex (no override needed) and filters out empty strings.
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class STBPDT3100Config extends BaseAsset {
   @override
   String get displayName => 'STBPDT3100 (24 VDC PDM)';

@@ -17,7 +17,7 @@ import 'package:tfc_dart/core/database.dart';
 
 part 'bpm.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class BpmConfig extends BaseAsset {
   @override
   String get displayName => 'BPM Counter';

@@ -407,6 +407,35 @@ void main() {
               '_currentPage'));
     });
 
+    test('a config override that will not parse is reported, not swallowed',
+        () {
+      // The override is merged onto `asset.toJson()` and re-parsed. When that
+      // throws, falling back to the default asset is a reasonable last
+      // resort -- doing it silently is not. A proposed three-lamp LED column
+      // arrived as the preview's two grey LEDs with nothing in the log and
+      // nothing shown to the operator, and the only reason anyone found out
+      // was that the wrong thing was visible on the page.
+      //
+      // Same failure mode as the `catch (_) {}` in _saveToPrefs below: a bare
+      // catch around a parse is how a batch goes missing quietly.
+      // Scoped to the config-override block, not the whole method. Two other
+      // `catch (_) {}` live in _applyAssetProposal and neither is this bug:
+      // one drops to the create-by-name fallback on purpose, and one guards
+      // `(asset as dynamic).key =` for the asset types that have no `key`
+      // field at all, where there is genuinely nothing to report.
+      final apply = bodyOf('void _applyAssetProposal(');
+      final start = apply.indexOf('// Apply config overrides');
+      expect(start, greaterThan(-1),
+          reason: 'the config-override block moved; re-scope this test');
+      final overrideBlock =
+          apply.substring(start, apply.indexOf('newAssets.add(asset);', start));
+
+      expect(overrideBlock, isNot(contains('catch (_)')),
+          reason: 'a swallowed parse failure here is indistinguishable from '
+              'a badly written proposal');
+      expect(overrideBlock, contains('falling back to the default asset'));
+    });
+
     test('falls back to createDefaultAssetByName for minimal MCP JSON', () {
       // When AssetRegistry.parse fails (e.g. missing required fields like
       // colors/sizes), the fallback creates default assets by type name

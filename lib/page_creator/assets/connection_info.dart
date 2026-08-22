@@ -46,7 +46,7 @@ enum ConnectionProtocol { modbus, opcua }
 /// [fromJson] back-fills the three [BaseAsset] keys the generated code casts
 /// unconditionally (`asset_name` / `coordinates` / `size`) so even
 /// `fromJson({})` yields a sensible default instead of crashing.
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class ConnectionInfoConfig extends BaseAsset {
   @override
   String get displayName => 'Connection Info';

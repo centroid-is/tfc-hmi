@@ -59,15 +59,15 @@ ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
 Map<String, dynamic> _$ButtonConfigToJson(ButtonConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'key': instance.key,
-      'feedback': instance.feedback,
-      'icon': instance.icon,
+      'feedback': instance.feedback?.toJson(),
+      'icon': instance.icon?.toJson(),
       'outward_color':
           const AssetColorConverter().toJson(instance.outwardColor),
       'inward_color': const AssetColorConverter().toJson(instance.inwardColor),

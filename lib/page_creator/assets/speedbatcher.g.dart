@@ -23,8 +23,8 @@ SpeedBatcherConfig _$SpeedBatcherConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$SpeedBatcherConfigToJson(SpeedBatcherConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
@@ -58,8 +58,8 @@ GateStatusConfig _$GateStatusConfigFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$GateStatusConfigToJson(GateStatusConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
