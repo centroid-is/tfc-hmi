@@ -26,20 +26,44 @@ import 'package:tfc/widgets/umas_browse.dart';
 // Fake UMAS send function — returns canned FC90 responses
 // ---------------------------------------------------------------------------
 
-/// Builds a success PDU: [0x5A, pairingKey, subFuncEcho, status=0xFE, ...payload]
-Uint8List _successPdu(int subFunc, List<int> payload,
-    {int pairingKey = 0x00}) {
-  return Uint8List.fromList([0x5A, pairingKey, subFunc, 0xFE, ...payload]);
+/// Builds a success PDU: `[0x5A, pairingKey, status=0xFE, ...payload]`.
+///
+/// There is no echoed sub-function byte. `UmasClient._checkStatus` reads the
+/// status at `pdu[2]`, and every fake in `packages/tfc_dart/test` frames it
+/// the same way. This helper used to insert the sub-function there, which put
+/// the status at `pdu[3]` and made the client read the sub-function *as* the
+/// status — so `readPlcId` saw `0x02`, threw
+/// `UMAS readPlcId failed with status 0x2`, and the browse dialog rendered
+/// that exception instead of a tree. Nothing caught it because this file is
+/// `@Tags(['golden'])` and CI never ran it.
+Uint8List _successPdu(List<int> payload, {int pairingKey = 0x00}) {
+  return Uint8List.fromList([0x5A, pairingKey, 0xFE, ...payload]);
+}
+
+/// The error counterpart: `[0x5A, pairingKey, status=0xFD, errorCode]`.
+Uint8List _errorPdu(int errorCode, {int pairingKey = 0x00}) {
+  return Uint8List.fromList([0x5A, pairingKey, 0xFD, errorCode]);
 }
 
 /// Little-endian uint16
 List<int> _le16(int v) => [v & 0xFF, (v >> 8) & 0xFF];
 
+/// Little-endian uint32
+List<int> _le32(int v) =>
+    [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF];
+
 /// Build variable names response payload with proper header and record format.
 ///
 /// Header: range(1) + nextAddress(2 LE) + unknown1(2 LE) + noOfRecords(2 LE)
-/// Record: dataType(2 LE) + block(2 LE) + offset(2 LE) + unknown4(2 LE) +
-///         stringLength(2 LE) + name
+/// Record: dataType(2 LE) + block(2 LE) + offset(4 LE) + flags(1) +
+///         unknown4(1) + name + NUL
+///
+/// The name is **null-terminated**, not length-prefixed. This used to write a
+/// `stringLength(2 LE)` and no terminator. The two headers happen to be the
+/// same ten bytes, so the first record read plausibly -- and then
+/// `_parseVariableRecords` scanned for a NUL that was not there, ran into the
+/// next record's `dataType`, and every record after the first landed in the
+/// wrong place. The panel showed `GVL` and lost `Motor` and `Counters`.
 List<int> _variableNamesPayload() {
   const variables = [
     ('Application.GVL.temperature', 1, 0, 5),
@@ -61,13 +85,13 @@ List<int> _variableNamesPayload() {
   buf.addAll(_le16(variables.length));
   // Records
   for (final (name, blockNo, offset, typeId) in variables) {
-    final nameBytes = name.codeUnits;
     buf.addAll(_le16(typeId)); // dataType
     buf.addAll(_le16(blockNo)); // block
-    buf.addAll(_le16(offset)); // offset
-    buf.addAll(_le16(0)); // unknown4
-    buf.addAll(_le16(nameBytes.length)); // stringLength
-    buf.addAll(nameBytes); // name
+    buf.addAll(_le32(offset)); // offset
+    buf.add(0x01); // flags — non-zero marks a top-level variable
+    buf.add(0x00); // unknown4
+    buf.addAll(name.codeUnits); // name...
+    buf.add(0x00); // ...NUL-terminated
   }
   return buf;
 }
@@ -112,7 +136,7 @@ Future<ModbusResponseCode> _fakeSend(ModbusRequest request) async {
 
   if (subFunc == 0x02) {
     // ReadPlcId: range(2) + hardwareId(4 LE) + numMemBanks(1) + entry(9)
-    pdu = _successPdu(0x02, [
+    pdu = _successPdu([
       0x00, 0x00, // range
       0x01, 0x00, 0x00, 0x00, // hardwareId = 1
       0x01, // numberOfMemoryBanks = 1
@@ -123,19 +147,19 @@ Future<ModbusResponseCode> _fakeSend(ModbusRequest request) async {
     ]);
   } else if (subFunc == 0x01) {
     // Init: max frame size = 1024
-    pdu = _successPdu(0x01, _le16(1024));
+    pdu = _successPdu(_le16(1024));
   } else if (subFunc == 0x26) {
     // ReadDataDictionary
     final recordType = request.umasPayload[0] | (request.umasPayload[1] << 8);
     if (recordType == 0xDD02) {
-      pdu = _successPdu(0x26, _variableNamesPayload());
+      pdu = _successPdu(_variableNamesPayload());
     } else if (recordType == 0xDD03) {
-      pdu = _successPdu(0x26, _dataTypesPayload());
+      pdu = _successPdu(_dataTypesPayload());
     } else {
-      pdu = Uint8List.fromList([0x5A, 0x00, 0x26, 0xFD, 0x03]);
+      pdu = _errorPdu(0x03);
     }
   } else {
-    pdu = Uint8List.fromList([0x5A, 0x00, subFunc, 0xFD, 0x04]);
+    pdu = _errorPdu(0x04);
   }
 
   request.internalSetFromPduResponse(pdu);
@@ -173,6 +197,16 @@ Future<void> _showUmasBrowse(WidgetTester tester) async {
 
   await tester.tap(find.text('Browse'));
   await tester.pumpAndSettle();
+
+  // A live session starts a periodic keep-alive, and flutter_test checks for
+  // pending timers at the end of the test body -- before any addTearDown
+  // runs, so that hook is too late. The whole dictionary is already fetched
+  // and cached by now (expanding folders walks the tree, it does not go back
+  // to the PLC), so the client has nothing left to do.
+  //
+  // No test ever reached this: the fake's PDU framing meant the session never
+  // came up, so the keep-alive never started.
+  client.dispose();
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +299,11 @@ void main() {
       await tester.pump(kDoubleTapTimeout);
       await tester.pumpAndSettle();
 
-      // Also expand Motor
-      await tester.tap(find.text('Motor').first);
-      await tester.pump(kDoubleTapTimeout);
-      await tester.pumpAndSettle();
+      // No "also expand Motor" step. The panel drills down rather than
+      // expanding in place -- entering GVL replaces the folder list with
+      // GVL's variables, so Motor (a sibling of GVL, one level up) is not on
+      // screen and tapping it threw "Bad state: No element". Application >
+      // GVL with its five variables is what "showing variables" means here.
 
       await expectLater(
         find.byType(Dialog),
