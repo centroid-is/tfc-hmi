@@ -29,6 +29,7 @@ import 'package:tfc/page_creator/assets/image_store.dart';
 import 'package:tfc/page_creator/page.dart';
 import 'package:tfc/theme.dart';
 
+import '../helpers/golden_tolerance.dart';
 import '../helpers/image_fixtures.dart';
 import '../helpers/page_editor_harness.dart';
 
@@ -89,6 +90,15 @@ Future<FakeEditorPreferences> _pumpEditorWithImages(
 }
 
 void main() {
+  // Looser than the 0.01% default, because this file is the one golden set
+  // that decodes real image bytes -- a PNG, an SVG and a rotated translucent
+  // BMP -- and those land a couple of hundred pixels differently depending on
+  // when the decode finishes relative to the frame. Run alone it matched
+  // exactly; run inside the full suite it came in at 264px, 0.0001 of the
+  // frame, right on the default threshold. A real regression here moves whole
+  // images, not a rotated edge.
+  useTolerantGoldenComparator(tolerance: 0.0005);
+
   final (light, dark) = solarized();
 
   // Same font wiring as page_editor_golden_test.dart — without it the labels
