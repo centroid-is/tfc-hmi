@@ -10,7 +10,6 @@ import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/theme.dart' show HmiColorRole;
-import 'package:rxdart/rxdart.dart';
 
 part 'speedbatcher.g.dart';
 
@@ -113,9 +112,7 @@ class SpeedBatcher extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) =>
-              stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(keyStreamProvider(config.key)),
       builder: (context, snapshot) {
         if (snapshot.hasError || snapshot.hasData == false) {
           return speedBatcher([null, null, null, null, null]);
@@ -193,10 +190,10 @@ class SpeedBatcher extends ConsumerWidget {
                     // The remaining 90% of the row’s width is for the text.
                     Expanded(
                       flex: 90,
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
+                      child: AutoSizedText(
+                        ledConfigs[i].text!,
                         alignment: Alignment.centerLeft,
-                        child: Text(ledConfigs[i].text!),
+                        heightFraction: 0.5,
                       ),
                     ),
                   ],
@@ -206,14 +203,10 @@ class SpeedBatcher extends ConsumerWidget {
             // The 5th “row” is the label, also taking up 1/5 of the height
             Expanded(
               flex: 1,
-              child: Center(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    config.label,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
+              child: AutoSizedText(
+                config.label,
+                heightFraction: 0.6,
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -347,9 +340,7 @@ class GateStatus extends ConsumerWidget {
     }
 
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) =>
-              stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(keyStreamProvider(config.key)),
       builder: (context, snapshot) {
         // Scheme roles rather than literals, so the gate tracks a theme
         // switch like every other status colour on the page.

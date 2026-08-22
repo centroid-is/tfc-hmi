@@ -316,9 +316,7 @@ class NumberWidget extends ConsumerWidget {
     }
 
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) =>
-              stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(keyStreamProvider(config.key)),
       builder: (context, snapshot) {
         String displayValue = "---";
 
@@ -339,16 +337,15 @@ class NumberWidget extends ConsumerWidget {
       {WidgetRef? ref, DynamicValue? rawSnapshot}) {
     final displayText = numberDisplayText(value, config.units);
 
-    Widget displayWidget = FittedBox(
-      fit: BoxFit.contain,
-      child: Transform.rotate(
-        angle: (config.coordinates.angle ?? 0) * math.pi / 180,
-        child: Text(
-          displayText,
-          style: TextStyle(
-            color: config.textColor,
-          ),
-        ),
+    // The readout is laid out at the size it is drawn at, not laid out small
+    // and scaled up by a `FittedBox` -- scaling a raster made for one size is
+    // what left every number on the page soft. `AutoSizedText` fits the
+    // *rotated* bounding box, so a turned readout still fills its asset.
+    Widget displayWidget = AutoSizedText(
+      displayText,
+      angleRadians: (config.coordinates.angle ?? 0) * math.pi / 180,
+      style: TextStyle(
+        color: config.textColor,
       ),
     );
 

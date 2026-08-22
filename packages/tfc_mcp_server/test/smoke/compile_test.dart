@@ -8,27 +8,30 @@ import 'package:test/test.dart';
 void main() {
   group('dart build cli', () {
     test('compiles tfc_mcp_server binary without FFI link errors', () async {
-      final outputDir = '/tmp/tfc_mcp_test_build';
-
-      // Clean up from any previous test run
-      final outputDirectory = Directory(outputDir);
-      if (outputDirectory.existsSync()) {
-        outputDirectory.deleteSync(recursive: true);
-      }
+      // A unique directory under the platform's own temp root. The hardcoded
+      // `/tmp` this used to write to is not a temp directory on Windows, and
+      // sharing one path between runs means two of them race.
+      final outputDirectory =
+          Directory.systemTemp.createTempSync('tfc_mcp_build_');
+      addTearDown(() {
+        if (outputDirectory.existsSync()) {
+          outputDirectory.deleteSync(recursive: true);
+        }
+      });
+      final outputDir = outputDirectory.path;
 
       final workingDir = Directory.current.path.contains('tfc_mcp_server')
           ? Directory.current.path
           : '${Directory.current.path}/packages/tfc_mcp_server';
 
+      // No entry point argument. `dart build cli` takes the package's
+      // `bin/<package name>.dart` by convention, and as of Dart 3.13 passing
+      // it explicitly is a usage error -- "Unexpected arguments:
+      // bin/tfc_mcp_server.dart", exit 64. Dart 3.12 (what Flutter 3.44.9
+      // bundles) accepts its absence too, so this works either side of that.
       final result = await Process.run(
         'dart',
-        [
-          'build',
-          'cli',
-          'bin/tfc_mcp_server.dart',
-          '-o',
-          outputDir,
-        ],
+        ['build', 'cli', '-o', outputDir],
         workingDirectory: workingDir,
       );
 
@@ -41,8 +44,10 @@ void main() {
       expect(result.exitCode, equals(0),
           reason: 'dart build cli should succeed without FFI link errors');
 
-      // dart build cli outputs to <dir>/bundle/bin/<name>
-      final binaryPath = '$outputDir/bundle/bin/tfc_mcp_server';
+      // dart build cli outputs to <dir>/bundle/bin/<name>. Forward slashes are
+      // fine on Windows; the .exe the old path was missing is not optional.
+      final exe = Platform.isWindows ? 'tfc_mcp_server.exe' : 'tfc_mcp_server';
+      final binaryPath = '$outputDir/bundle/bin/$exe';
       expect(File(binaryPath).existsSync(), isTrue,
           reason: 'Compiled binary should exist at $binaryPath');
 

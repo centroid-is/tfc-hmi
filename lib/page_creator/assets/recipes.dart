@@ -303,19 +303,16 @@ class _RecipesState extends ConsumerState<Recipes> {
           isPressed: false,
           buttonType: ButtonType.square,
         ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                "Recipes",
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimary,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
+        // AutoSizedText, not FittedBox: the label has to grow with the button,
+        // and a FittedBox would have done that by scaling a 14pt raster up,
+        // which is what left the label soft until the canvas was zoomed.
+        child: AutoSizedText(
+          "Recipes",
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          heightFraction: 0.3,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onPrimary,
+            fontWeight: FontWeight.bold,
           ),
         ),
       ),
@@ -448,42 +445,56 @@ class _RecipesState extends ConsumerState<Recipes> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Recipe values',
-                          style: Theme.of(context).textTheme.titleMedium),
-                      Divider(),
-                      if (selectedRecipeIndex != null)
-                        DynamicValueWidget(
-                          value: recipes[selectedRecipeIndex!].value,
-                          onSubmitted: (v) => dialogSetState(() {
-                            recipes[selectedRecipeIndex!].value = v;
-                            print(recipes[selectedRecipeIndex!].value);
-                            _saveRecipes(recipes);
-                          }),
-                        ),
-                      Spacer(),
+                      // The send button rides in the header rather than at
+                      // the foot of the column: a recipe struct is as tall as
+                      // the PLC type makes it, and below a Spacer() the button
+                      // was pushed out of view and had to be scrolled to.
                       Row(
                         children: [
+                          Text('Recipe values',
+                              style: Theme.of(context).textTheme.titleMedium),
+                          const Spacer(),
                           ElevatedButton(
-                            onPressed: () async {
-                              // Per-line keys write only the line that was
-                              // chosen. The legacy array shape has to send the
-                              // whole array back, which rewrites every other
-                              // line with whatever this dialog last read --
-                              // one reason per-line keys are preferable.
-                              final chosen = DynamicValue.from(
-                                  recipes[selectedRecipeIndex!].value);
-                              if (widget.config.perLineKeys) {
-                                await stateMan.write(_activeKey, chosen);
-                              } else {
-                                final newValue = DynamicValue.from(data);
-                                newValue[selectedLine] = chosen;
-                                await stateMan.write(_activeKey, newValue);
-                              }
-                            },
+                            // Every branch below dereferences
+                            // selectedRecipeIndex!, so with nothing selected
+                            // the button can only throw. Disabled instead.
+                            onPressed: selectedRecipeIndex == null
+                                ? null
+                                : () async {
+                                    // Per-line keys write only the line that
+                                    // was chosen. The legacy array shape has
+                                    // to send the whole array back, which
+                                    // rewrites every other line with whatever
+                                    // this dialog last read -- one reason
+                                    // per-line keys are preferable.
+                                    final chosen = DynamicValue.from(
+                                        recipes[selectedRecipeIndex!].value);
+                                    if (widget.config.perLineKeys) {
+                                      await stateMan.write(_activeKey, chosen);
+                                    } else {
+                                      final newValue = DynamicValue.from(data);
+                                      newValue[selectedLine] = chosen;
+                                      await stateMan.write(
+                                          _activeKey, newValue);
+                                    }
+                                  },
                             child: Text('Send values ->'),
                           ),
                         ],
-                      )
+                      ),
+                      Divider(),
+                      if (selectedRecipeIndex != null)
+                        Expanded(
+                          child: SingleChildScrollView(
+                            child: DynamicValueWidget(
+                              value: recipes[selectedRecipeIndex!].value,
+                              onSubmitted: (v) => dialogSetState(() {
+                                recipes[selectedRecipeIndex!].value = v;
+                                _saveRecipes(recipes);
+                              }),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -498,10 +509,15 @@ class _RecipesState extends ConsumerState<Recipes> {
                       Text('Current values',
                           style: Theme.of(context).textTheme.titleMedium),
                       Divider(),
-                      DynamicValueWidget(
-                        value: _lineValue(data),
+                      // Same reason as the column to the left: the struct is
+                      // whatever height the PLC type dictates.
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: DynamicValueWidget(
+                            value: _lineValue(data),
+                          ),
+                        ),
                       ),
-                      Spacer(),
                     ],
                   ),
                 ),

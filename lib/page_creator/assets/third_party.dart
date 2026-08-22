@@ -44,8 +44,9 @@ enum ThirdPartyEquipmentKind {
 
   /// The vodlari — Icelandic for the fish aligning buffer. Stored under an
   /// English-ish identifier because the persisted JSON should not depend on
-  /// non-ASCII, but it is called the vodlari on the plant floor and the label
-  /// says so.
+  /// non-ASCII. It is still called the vodlari on the plant floor, but the
+  /// operator-facing label reads "Batch aligner"; the floor name survives as a
+  /// search keyword on [ThirdPartyEquipmentConfig.searchKeywords].
   fishAligner,
 }
 
@@ -65,7 +66,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
       case ThirdPartyEquipmentKind.strappingLine:
         return 'Afak / Strapex strapping line';
       case ThirdPartyEquipmentKind.fishAligner:
-        return 'Vöðlari (fish aligning buffer)';
+        return 'Batch aligner';
     }
   }
 
@@ -254,9 +255,9 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
 
   /// Every kind's label, so searching for the machine on the floor —
   /// "multivac", "speedbatcher", "afak" — surfaces this tile even though the
-  /// palette shows the umbrella name. "vodlari" is listed on top of the label
-  /// because the label spells it with the Icelandic characters a search box
-  /// won't get.
+  /// palette shows the umbrella name. "vodlari" is listed on top of the labels
+  /// because the batch aligner's label no longer carries its floor name, and
+  /// the floor name is what an operator will type.
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   List<String> get searchKeywords => [

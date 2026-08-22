@@ -326,6 +326,55 @@ void main() {
     });
   });
 
+  // A mapping without a resolvable server alias reads null forever, so the
+  // alias is the single field the operator most needs to see before pressing
+  // Accept -- and the proposal card was the one place that did not show it.
+  // On 2026-08-22 a card read "4:SPB01.multivac.hmi.p_stat_Run" while the
+  // accepted row directly below it read "ns=4; id=... @ st101", which made a
+  // proposal that did name a server indistinguishable from one that did not.
+  group('the proposal card names the server the key will be routed to', () {
+    testWidgets('shows the alias the proposal carries', (tester) async {
+      await _stageBatch(tester, alias: 'st101');
+
+      expect(find.textContaining('@ st101'), findsNWidgets(2),
+          reason: 'both staged proposals name their server on the card');
+    });
+
+    testWidgets('says nothing extra when the proposal names no server',
+        (tester) async {
+      await _stageBatch(tester);
+
+      expect(find.textContaining('@'), findsNothing,
+          reason: 'an empty alias must not render a dangling separator');
+    });
+  });
+
+  // The half of the 2026-08-22 report that was *not* broken, pinned so it
+  // stays that way: the alias reaches preferences intact. StateMan re-reads
+  // the save from preferences, so anything dropped on this path would be
+  // dropped for the live system too.
+  group('accepting a proposal keeps its server alias', () {
+    testWidgets('server_alias lands inside opcua_node in preferences',
+        (tester) async {
+      final staged = await _stageBatch(tester, alias: 'st101');
+
+      await staged.commit!();
+      await tester.pump();
+
+      final json = await staged.prefs.last.getString('key_mappings');
+      final mappings = KeyMappings.fromJson(jsonDecode(json!));
+      expect(mappings.lookupServerAlias(_keyOne), 'st101');
+      expect(mappings.lookupServerAlias(_keyTwo), 'st101');
+      expect(
+        (jsonDecode(json) as Map)['nodes'][_keyOne]['opcua_node']
+            ['server_alias'],
+        'st101',
+        reason: 'the alias is nested under opcua_node, and StateMan looks '
+            'for it there',
+      );
+    });
+  });
+
   // dispose() retires the banner's slots a frame late, because navigating away
   // disposes this page from inside a build and writing to a provider there
   // trips riverpod's "tried to modify a provider while the widget tree was
@@ -406,17 +455,30 @@ Future<_Staged> _stageBatch(
   Set<int> failAccept = const {},
   Set<int> failReject = const {},
   Future<Preferences> Function()? prefsBuilder,
+  String? alias,
 }) async {
   final proposals = _RecordingProposals(
     failAccept: failAccept,
     failReject: failReject,
   );
-  proposals.addProposal(_proposal(_idOne, _keyOne));
-  proposals.addProposal(_proposal(_idTwo, _keyTwo));
+  proposals.addProposal(_proposal(_idOne, _keyOne, alias: alias));
+  proposals.addProposal(_proposal(_idTwo, _keyTwo, alias: alias));
 
   final built = <Preferences>[];
-  final build =
-      prefsBuilder ?? () => createTestPreferences(keyMappings: KeyMappings(nodes: {}));
+  // The alias the proposals carry has to exist in the server config too. The
+  // OPC UA section renders it in a DropdownButtonFormField, which asserts
+  // unless exactly one menu item matches the selected value — an alias with
+  // no configured server is zero items, and the page fails to build.
+  final build = prefsBuilder ??
+      () => createTestPreferences(
+            keyMappings: KeyMappings(nodes: {}),
+            stateManConfig: StateManConfig(opcua: [
+              if (alias != null)
+                OpcUAConfig()
+                  ..endpoint = 'opc.tcp://localhost:4840'
+                  ..serverAlias = alias,
+            ]),
+          );
   final container = ProviderContainer(overrides: [
     preferencesProvider.overrideWith((ref) async {
       final prefs = await build();
@@ -459,15 +521,21 @@ Future<void> _removePage(WidgetTester tester, ProviderContainer container) async
   await tester.pump();
 }
 
-PendingProposal _proposal(int id, String key) => PendingProposal(
+PendingProposal _proposal(int id, String key, {String? alias}) =>
+    PendingProposal(
       id: id,
       proposalType: 'key_mapping',
       title: 'map $key',
       proposalJson: jsonEncode({
         '_proposal_type': 'key_mapping',
+        // Built through the model rather than by hand, because where the
+        // alias sits is the whole point: `server_alias` belongs *inside*
+        // `opcua_node`, not at the top of the proposal. An audit that looks
+        // at the top level reports a false negative.
         'key': key,
-        'opcua_node':
-            OpcUANodeConfig(namespace: 2, identifier: key).toJson(),
+        'opcua_node': (OpcUANodeConfig(namespace: 2, identifier: key)
+              ..serverAlias = alias)
+            .toJson(),
       }),
       operatorId: 'ai',
       createdAt: DateTime(2026, 8, 21),

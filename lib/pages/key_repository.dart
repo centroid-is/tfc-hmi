@@ -37,6 +37,16 @@ extension ModbusConfigListExt on List<ModbusConfig> {
 
 enum _KeyStatus { ok, error, serverDisconnected, serverDisabled }
 
+/// ` @ st101` for a named server, nothing for an unnamed one.
+///
+/// Shared by the proposal card and the saved-key rows so a mapping reads the
+/// same before and after it is accepted -- the two disagreeing is how a
+/// proposal that did name a server came to look like one that did not.
+String _aliasSuffix(Object? alias) {
+  if (alias is! String || alias.isEmpty) return '';
+  return ' @ $alias';
+}
+
 /// The full page widget with BaseScaffold (used in navigation).
 class KeyRepositoryPage extends ConsumerWidget {
   /// Optional proposal JSON passed via Beamer route data.
@@ -1010,8 +1020,16 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                 itemBuilder: (context, i) {
                   final m = _proposedMappings[i];
                   final node = m['opcua_node'];
+                  // The server alias belongs on this line. It is what routes
+                  // the key, it lives inside `opcua_node` rather than at the
+                  // top of the proposal, and leaving it off made a mapping
+                  // that names a server look identical to one that names
+                  // none -- while the accepted row directly below rendered
+                  // "@ st101" and the proposal card did not. The operator is
+                  // deciding whether to accept from this line.
                   final ident = node is Map<String, dynamic>
                       ? '${node['namespace']}:${node['identifier']}'
+                          '${_aliasSuffix(node['server_alias'])}'
                       : '';
                   return ListTile(
                     dense: true,
@@ -1375,17 +1393,11 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       // mapping is bound by name — operators recognise their FB-instance
       // member names, not 'holdingRegister[N]'.
       if (variableName != null && variableName.isNotEmpty) {
-        var subtitle = variableName;
-        if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
-          subtitle += ' @ ${node.serverAlias}';
-        }
-        return subtitle;
+        return '$variableName${_aliasSuffix(node.serverAlias)}';
       }
       var subtitle = '${node.registerType.name}[${node.address}]';
       subtitle += ' ${node.dataType.name}';
-      if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
-        subtitle += ' @ ${node.serverAlias}';
-      }
+      subtitle += _aliasSuffix(node.serverAlias);
       return subtitle;
     }
     if (_isM2400) {
@@ -1394,17 +1406,13 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
       if (node.field != null) {
         subtitle += '; FLD=${node.field!.displayName}(${node.field!.id})';
       }
-      if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
-        subtitle += ' @ ${node.serverAlias}';
-      }
+      subtitle += _aliasSuffix(node.serverAlias);
       return subtitle;
     }
     final node = widget.entry.opcuaNode;
     if (node == null) return 'No config';
     var subtitle = 'ns=${node.namespace}; id=${node.identifier}';
-    if (node.serverAlias != null && node.serverAlias!.isNotEmpty) {
-      subtitle += ' @ ${node.serverAlias}';
-    }
+    subtitle += _aliasSuffix(node.serverAlias);
     if (node.arrayIndex != null) {
       subtitle += ' [${node.arrayIndex}]';
     }

@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'dart:io' as io;
+
 import 'package:flutter/material.dart';
 import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:tfc/widgets/number_slider.dart';
@@ -8,7 +10,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
-import 'package:tfc_dart/core/state_man.dart';
 import '../../theme.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
@@ -174,12 +175,10 @@ class ConveyorGateConfig extends BaseAsset {
 ///
 /// Returns a stream that emits `false` immediately and then tracks the live
 /// value. When [key] is empty the stream emits a single `false` (no-op).
-Stream<bool> _boolFeedback(StateMan sm, String key) {
+Stream<bool> _boolFeedback(WidgetRef ref, String key) {
   if (key.isEmpty) return Stream.value(false);
-  return sm
-      .subscribe(key)
-      .asStream()
-      .asyncExpand((s) => s)
+  return ref
+      .watch(keyStreamProvider(key))
       .map((v) => v.asBool)
       .startWith(false);
 }
@@ -323,7 +322,9 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         DynamicValue(value: value, typeId: NodeId.boolean),
       );
     } catch (e) {
-      debugPrint('ConveyorGate: failed to write force key "$key": $e');
+      // stderr, not debugPrint: a force write that silently fails looks
+      // identical to a stuck PLC bit from the operator's side.
+      io.stderr.writeln('ConveyorGate: failed to write force key "$key": $e');
     }
   }
 
@@ -358,13 +359,20 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     final hasForceFeedback = widget.config.forceOpenFeedbackKey.isNotEmpty ||
         widget.config.forceCloseFeedbackKey.isNotEmpty;
 
+    // Read here rather than in the nested builder below. That builder belongs
+    // to the `StreamBuilder`'s element, not to this one, so a `ref.watch`
+    // inside it is not a watch this widget holds — the dependency would lapse
+    // and the shared stream could be disposed underneath it.
+    final forceFeedback = hasForceFeedback
+        ? Rx.combineLatest2(
+            _boolFeedback(ref, widget.config.forceOpenFeedbackKey),
+            _boolFeedback(ref, widget.config.forceCloseFeedbackKey),
+            (a, b) => a || b,
+          )
+        : null;
+
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (stateMan) => stateMan
-                .subscribe(widget.config.stateKey)
-                .asStream()
-                .switchMap((s) => s),
-          ),
+      stream: ref.watch(keyStreamProvider(widget.config.stateKey)),
       builder: (context, snapshot) {
         // Resolve base color from OPC UA state.
         final bool isOpen = snapshot.hasData && snapshot.data!.asBool;
@@ -381,17 +389,9 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 
         // If force feedback keys are configured, nest a second StreamBuilder
         // that overrides color when any force feedback is active (VIS-03).
-        if (hasForceFeedback) {
+        if (forceFeedback != null) {
           return StreamBuilder<bool>(
-            stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-              (sm) {
-                return Rx.combineLatest2(
-                  _boolFeedback(sm, widget.config.forceOpenFeedbackKey),
-                  _boolFeedback(sm, widget.config.forceCloseFeedbackKey),
-                  (a, b) => a || b,
-                );
-              },
-            ),
+            stream: forceFeedback,
             builder: (context, fbSnapshot) {
               final forceActive = fbSnapshot.data ?? false;
               final displayColor = forceActive ? forcedColor : baseColor;
@@ -413,6 +413,69 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 
 /// Tri-state force selection: force open, no force (release), force close.
 enum _ForceSelection { open, none, close }
+
+/// A button that writes TRUE while held and FALSE when let go.
+///
+/// Stateful only to render the pressed look; the write is the point. Cancel
+/// is treated as release -- a drag off the button must not leave the bit set.
+class _HoldToPushButton extends StatefulWidget {
+  final bool enabled;
+  final Future<void> Function(bool down) onChanged;
+
+  const _HoldToPushButton({required this.enabled, required this.onChanged});
+
+  @override
+  State<_HoldToPushButton> createState() => _HoldToPushButtonState();
+}
+
+class _HoldToPushButtonState extends State<_HoldToPushButton> {
+  bool _down = false;
+
+  void _set(bool down) {
+    if (!widget.enabled || _down == down) return;
+    setState(() => _down = down);
+    widget.onChanged(down);
+  }
+
+  @override
+  void dispose() {
+    // Releasing on dispose matters: closing the pane mid-press would
+    // otherwise leave the pusher driven out with no way to release it.
+    if (_down) widget.onChanged(false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const forced = Colors.orange;
+    return GestureDetector(
+      // Opaque, not the default deferToChild: the child is wrapped in an
+      // IgnorePointer so the button cannot swallow the gesture, which also
+      // makes it fail hit-testing -- and with deferToChild that means this
+      // detector never sees the press at all. Same arrangement as
+      // `ThirdPartyEquipment._buildBody`.
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => _set(true),
+      onTapUp: (_) => _set(false),
+      onTapCancel: () => _set(false),
+      child: SizedBox(
+        width: double.infinity,
+        child: IgnorePointer(
+          child: FilledButton.tonalIcon(
+            icon: const Icon(Icons.east),
+            label: Text(_down ? 'Pushing' : 'Press to push'),
+            style: FilledButton.styleFrom(
+              foregroundColor: widget.enabled ? forced : null,
+              backgroundColor:
+                  forced.withValues(alpha: _down ? 0.42 : 0.18),
+            ),
+            onPressed: widget.enabled ? () {} : null,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 /// Live gate state + force feedback, combined so one stream drives both the
 /// header chip and the selector highlight.
@@ -454,24 +517,28 @@ class _GateForcePane extends ConsumerWidget {
   /// pane), then plain open/closed from the theme's state colors, unknown
   /// grey while there is no data.
   PaneStatus _status(BuildContext context, _GateSnapshot snap) {
-    if (snap.forcedOpen) return const PaneStatus.warning('Forced open');
-    if (snap.forcedClosed) return const PaneStatus.warning('Forced closed');
+    final isPusher = config.gateVariant == GateVariant.pusher;
+    // A pusher has no held force to report: its command bit is momentary and
+    // the PLC clears it on processing, so "Forced out" would flash for one
+    // cycle and then lie. Its state key is the only honest thing to show.
+    if (!isPusher) {
+      if (snap.forcedOpen) return const PaneStatus.warning('Forced open');
+      if (snap.forcedClosed) return const PaneStatus.warning('Forced closed');
+    }
     final isOpen = snap.isOpen;
     if (isOpen == null) return const PaneStatus.unknown();
     final hmi = HmiStateColors.of(context);
     return isOpen
-        ? PaneStatus(label: 'Open', color: hmi.green)
-        : PaneStatus(label: 'Closed', color: hmi.grey);
+        ? PaneStatus(label: isPusher ? 'Out' : 'Open', color: hmi.green)
+        : PaneStatus(label: isPusher ? 'In' : 'Closed', color: hmi.grey);
   }
 
   /// Gate open/closed as a nullable bool — null until the first value
   /// arrives, and forever when no state key is configured.
-  Stream<bool?> _gateState(StateMan sm) {
+  Stream<bool?> _gateState(WidgetRef ref) {
     if (config.stateKey.isEmpty) return Stream<bool?>.value(null);
-    return sm
-        .subscribe(config.stateKey)
-        .asStream()
-        .asyncExpand((s) => s)
+    return ref
+        .watch(keyStreamProvider(config.stateKey))
         .map<bool?>((v) => v.asBool)
         .startWith(null);
   }
@@ -479,15 +546,13 @@ class _GateForcePane extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return StreamBuilder<_GateSnapshot>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (sm) => Rx.combineLatest3(
-              _gateState(sm),
-              _boolFeedback(sm, config.forceOpenFeedbackKey),
-              _boolFeedback(sm, config.forceCloseFeedbackKey),
-              (bool? isOpen, bool fo, bool fc) =>
-                  (isOpen: isOpen, forcedOpen: fo, forcedClosed: fc),
-            ),
-          ),
+      stream: Rx.combineLatest3(
+        _gateState(ref),
+        _boolFeedback(ref, config.forceOpenFeedbackKey),
+        _boolFeedback(ref, config.forceCloseFeedbackKey),
+        (bool? isOpen, bool fo, bool fc) =>
+            (isOpen: isOpen, forcedOpen: fo, forcedClosed: fc),
+      ),
       builder: (context, snapshot) {
         final snap = snapshot.data ??
             (isOpen: null, forcedOpen: false, forcedClosed: false);
@@ -498,12 +563,34 @@ class _GateForcePane extends ConsumerWidget {
           status: _status(context, snap),
           child: PaneSection(
             title: 'Force',
-            // Open / None / Close, mirroring the Low/None/High idiom of
-            // the IO module panes. None releases any active force.
-            child: _forceSelector(context, snap, snapshot.hasData),
+            // A diverter or slider is held open or closed, so it gets the
+            // Open / None / Close idiom of the IO module panes. A pusher
+            // instead runs one stroke and returns by itself -- there is no
+            // state to hold and nothing to release -- so it gets a single
+            // momentary button.
+            child: config.gateVariant == GateVariant.pusher
+                ? _pusherForceControls(context, snap)
+                : _forceSelector(context, snap, snapshot.hasData),
           ),
         );
       },
+    );
+  }
+
+  /// The pusher's manual control: one button that follows its own state.
+  ///
+  /// Held down the bit is TRUE, released it is FALSE, so what the operator
+  /// sees under their finger is what the PLC has. The two obvious
+  /// alternatives are both worse here. Writing TRUE and letting the PLC clear
+  /// the bit -- `ST_Section_HMI`'s `p_cmd_*` contract -- latches forever,
+  /// because `FB_Pusher` never reads the bit, let alone clears it. Pulsing it
+  /// instead runs one fixed stroke out and back, which is not control, just a
+  /// twitch. Following the button leaves the operator holding the pusher
+  /// where they want it.
+  Widget _pusherForceControls(BuildContext context, _GateSnapshot snap) {
+    return _HoldToPushButton(
+      enabled: config.forceOpenKey.isNotEmpty,
+      onChanged: (down) => writeForce(config.forceOpenKey, down),
     );
   }
 
