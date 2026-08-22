@@ -10,7 +10,6 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 
 import 'common.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/state_man.dart';
 
 part 'start_stop_button.g.dart';
 
@@ -143,12 +142,10 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
   _Segment? _pressed; // visual press
   String? _activeWriteKey;
 
-  Stream<bool> _boolKey(StateMan sm, String? key, {bool seed = false}) {
+  Stream<bool> _boolKey(String? key, {bool seed = false}) {
     if (key == null || key.isEmpty) return Stream.value(seed);
-    return sm
-        .subscribe(key)
-        .asStream()
-        .asyncExpand((s) => s)
+    return ref
+        .watch(keyStreamProvider(key))
         .map((v) => v.asBool)
         .startWith(seed);
   }
@@ -158,11 +155,11 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
   // Manual takes the highest precedence as the active visual indicator —
   // industrial convention is that "operator is in charge" dominates any
   // other mode the PLC may also be reporting.
-  Stream<_Segment> _stateStream(StateMan sm) {
-    final running$ = _boolKey(sm, widget.config.runningKey);
-    final stopped$ = _boolKey(sm, widget.config.stoppedKey);
-    final cleaning$ = _boolKey(sm, widget.config.cleaningKey);
-    final manual$ = _boolKey(sm, widget.config.manualStateKey);
+  Stream<_Segment> _stateStream() {
+    final running$ = _boolKey(widget.config.runningKey);
+    final stopped$ = _boolKey(widget.config.stoppedKey);
+    final cleaning$ = _boolKey(widget.config.cleaningKey);
+    final manual$ = _boolKey(widget.config.manualStateKey);
     return Rx.combineLatest4<bool, bool, bool, bool, _Segment>(
       running$,
       stopped$,
@@ -241,7 +238,7 @@ class _StartStopPillButtonState extends ConsumerState<StartStopPillButton> {
     final smAsync = ref.watch(stateManProvider);
     return smAsync.when(
       data: (sm) => StreamBuilder<_Segment?>(
-        stream: _stateStream(sm),
+        stream: _stateStream(),
         builder: (context, snapshot) {
           final active = snapshot.data;
           return _PrettyPill(

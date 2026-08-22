@@ -3,10 +3,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rxdart/rxdart.dart';
 
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/providers/state_man.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 part 'elcab.g.dart';
 
@@ -87,16 +87,10 @@ class ElCab extends ConsumerWidget {
     if (config.key.isEmpty) {
       return _ElCabDoor(isOpen: false, size: config.size);
     }
-    return StreamBuilder<bool>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (stateMan) => stateMan
-                .subscribe(config.key)
-                .asStream()
-                .switchMap((s) => s)
-                .map((dynamicValue) => dynamicValue.asBool),
-          ),
+    return StreamBuilder<DynamicValue>(
+      stream: ref.watch(keyStreamProvider(config.key)),
       builder: (context, snapshot) {
-        final isOpen = snapshot.data ?? false;
+        final isOpen = snapshot.data?.asBool ?? false;
         return _ElCabDoor(isOpen: isOpen, size: config.size);
       },
     );

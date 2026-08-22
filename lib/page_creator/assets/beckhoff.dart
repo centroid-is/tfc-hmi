@@ -830,7 +830,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
                     MapEntry("raw", config.rawStateKey),
                     MapEntry("force", config.forceValuesKey),
                   ]),
-                  stateMan,
+                  ref,
                 ),
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
@@ -854,7 +854,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
                         MapEntry("raw", config.rawStateKey),
                         MapEntry("force", config.forceValuesKey),
                       ]),
-                      stateMan,
+                      ref,
                     ),
                     statesOf: (data) => data == null
                         ? List.filled(8, IOState.low)
@@ -862,7 +862,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
                     gridSummary: 'Force and descriptions for all 8 channels',
                     gridSize: const Size(940, 460),
                     gridBuilder: (_) => IoGridViewport(
-                      child: _channelGrid(context, stateMan),
+                      child: _channelGrid(context, ref, stateMan),
                     ),
                   );
                 },
@@ -877,7 +877,8 @@ class _BeckhoffEL2008 extends ConsumerWidget {
 
   /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
   /// Force writes and descriptions are unchanged — only the host moved.
-  Widget _channelGrid(BuildContext context, StateMan stateMan) {
+  Widget _channelGrid(
+      BuildContext context, WidgetRef ref, StateMan stateMan) {
     return StreamBuilder<Map<String, DynamicValue>>(
       stream: _combinedStream(
         LinkedHashMap.fromEntries([
@@ -885,7 +886,7 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           MapEntry("force", config.forceValuesKey),
           MapEntry("descriptions", config.descriptionsKey),
         ]),
-        stateMan,
+        ref,
       ),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.hasError) {
@@ -1302,12 +1303,42 @@ class _BeckhoffEL9186 extends StatelessWidget {
   }
 }
 
-CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStream(
+/// The named keys of one module, combined.
+///
+/// Reads each key through [keyStreamProvider] rather than subscribing here.
+/// These modules are page assets, so this runs on every rebuild — and a fresh
+/// `subscribe` per rebuild is a monitored-item create-and-cancel per frame
+/// while a window is being dragged. The per-key streams are shared and stable
+/// now; only the combination of them is rebuilt, which costs nothing.
+/// The same, for a side pane.
+///
+/// A pane outlives the build that opened it, so it has no build to hold a
+/// `ref.watch` in — and a watch that lapses would let the shared stream be
+/// disposed underneath it. A pane is opened deliberately and one at a time,
+/// so subscribing directly costs nothing worth the plumbing.
+CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStreamVia(
     LinkedHashMap<String, String?> keys, StateMan stateMan) {
   return CombineLatestStream([
     for (var entry in keys.entries)
       if (entry.value != null)
         stateMan.subscribe(entry.value!).asStream().asyncExpand((s) => s),
+  ], (values) {
+    final map = <String, DynamicValue>{};
+    int i = 0;
+    for (var entry in keys.entries) {
+      if (entry.value != null) {
+        map[entry.key] = values[i++];
+      }
+    }
+    return map;
+  });
+}
+
+CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStream(
+    LinkedHashMap<String, String?> keys, WidgetRef ref) {
+  return CombineLatestStream([
+    for (var entry in keys.entries)
+      if (entry.value != null) ref.watch(keyStreamProvider(entry.value!)),
   ], (values) {
     final map = <String, DynamicValue>{};
     int i = 0;
@@ -1364,7 +1395,7 @@ class _BeckhoffEL1008 extends ConsumerWidget {
                     MapEntry("raw", config.rawStateKey),
                     MapEntry("force", config.forceValuesKey),
                   ]),
-                  stateMan,
+                  ref,
                 ),
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
@@ -1388,7 +1419,7 @@ class _BeckhoffEL1008 extends ConsumerWidget {
                         MapEntry("raw", config.rawStateKey),
                         MapEntry("force", config.forceValuesKey),
                       ]),
-                      stateMan,
+                      ref,
                     ),
                     statesOf: (data) => data == null
                         ? List.filled(8, IOState.low)
@@ -1396,7 +1427,7 @@ class _BeckhoffEL1008 extends ConsumerWidget {
                     gridSummary: 'Force and descriptions for all 8 channels',
                     gridSize: const Size(940, 460),
                     gridBuilder: (_) => IoGridViewport(
-                      child: _channelGrid(context, stateMan),
+                      child: _channelGrid(context, ref, stateMan),
                     ),
                   );
                 },
@@ -1411,7 +1442,8 @@ class _BeckhoffEL1008 extends ConsumerWidget {
 
   /// The per-channel grid, lifted out of the `AlertDialog` this used to be.
   /// Force writes and descriptions are unchanged — only the host moved.
-  Widget _channelGrid(BuildContext context, StateMan stateMan) {
+  Widget _channelGrid(
+      BuildContext context, WidgetRef ref, StateMan stateMan) {
     return StreamBuilder<Map<String, DynamicValue>>(
       stream: _combinedStream(
         LinkedHashMap.fromEntries([
@@ -1422,7 +1454,7 @@ class _BeckhoffEL1008 extends ConsumerWidget {
           MapEntry("on_filters", config.onFiltersKey),
           MapEntry("off_filters", config.offFiltersKey),
         ]),
-        stateMan,
+        ref,
       ),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.hasError) {
@@ -1964,7 +1996,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
                     MapEntry("errors", config.errorsKey),
                     MapEntry("states", config.stateKey),
                   ]),
-                  stateMan,
+                  ref,
                 ),
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
@@ -2018,7 +2050,7 @@ class _BeckhoffEL3054 extends ConsumerWidget {
       context: context,
       id: _paneId,
       builder: (paneContext) => StreamBuilder<Map<String, DynamicValue>>(
-        stream: _combinedStream(
+        stream: _combinedStreamVia(
           LinkedHashMap.fromEntries([
             MapEntry("states", config.stateKey),
             MapEntry("descriptions", config.descriptionsKey),
