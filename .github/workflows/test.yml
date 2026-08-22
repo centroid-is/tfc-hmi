@@ -84,6 +84,30 @@ jobs:
         dart pub get
         dart test
 
+  # packages/tfc_mcp_server had no CI job at all until now, so none of its
+  # 1200-odd tests had ever run on any platform. They are pure Dart -- no
+  # database, no Docker, no Flutter -- and finish in well under a minute, so
+  # there was never a cost reason for the gap.
+  #
+  # It is not idle coverage: the tool-registry tests assert an exact tool
+  # count, which is precisely the kind of assertion that goes stale silently
+  # when nothing runs it.
+  tfc-mcp-server-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    - name: Test tfc_mcp_server
+      working-directory: packages/tfc_mcp_server
+      run: |
+        dart pub get
+        dart test
+
   tfc-dart-test:
     strategy:
       fail-fast: false
