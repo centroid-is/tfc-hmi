@@ -13,7 +13,6 @@ import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'common.dart';
 import 'icon.dart'; // Reuse IconConfig + IconAsset
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc/converter/color_converter.dart'
     show AssetColor, AssetColorConverter, ColorConverter, OptionalColorConverter;
 
@@ -330,31 +329,27 @@ class _ButtonState extends ConsumerState<Button> {
   /// Stream of resolved disabled-state for this widget. Emits `false`
   /// immediately when `disabledKey` is null/empty so the combineLatest
   /// downstream never stalls.
-  Stream<bool> _disabledStream(StateMan stateMan) {
+  Stream<bool> _disabledStream() {
     final dk = widget.config.disabledKey;
     if (dk == null || dk.isEmpty) {
       return Stream<bool>.value(false);
     }
-    return stateMan
-        .subscribe(dk)
-        .asStream()
-        .asyncExpand((s) => s)
+    return ref
+        .watch(keyStreamProvider(dk))
         .map((value) => _resolveDisabled(value.asBool))
         .startWith(_disabled);
   }
 
-  Stream<Color> colorStream(StateMan stateMan) {
+  Stream<Color> colorStream() {
     final feedbackStream = widget.config.feedback == null
         ? Stream<bool>.value(false)
-        : stateMan
-            .subscribe(widget.config.feedback!.key)
-            .asStream()
-            .asyncExpand((s) => s)
-            .map((value) => value?.asBool ?? false)
+        : ref
+            .watch(keyStreamProvider(widget.config.feedback!.key))
+            .map((value) => value.asBool)
             .startWith(_feedbackActive);
 
     final pressedStream = _pressedController.stream.startWith(_isPressed);
-    final disabledStream = _disabledStream(stateMan);
+    final disabledStream = _disabledStream();
 
     return Rx.combineLatest3<bool, bool, bool, Color>(
       feedbackStream,
@@ -509,7 +504,7 @@ class _ButtonState extends ConsumerState<Button> {
     return stateManAsync.when(
       data: (stateMan) {
         return StreamBuilder<Color>(
-          stream: colorStream(stateMan),
+          stream: colorStream(),
           builder: (context, snapshot) {
             final color =
                 snapshot.data ?? widget.config.outwardColor.resolve(context);

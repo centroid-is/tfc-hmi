@@ -231,31 +231,24 @@ class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
 
   Stream<Map<String, DynamicValue>> _createCombinedStream(
       List<String> variables) {
-    return ref
-        .watch(stateManProvider.future)
-        .asStream()
-        .asyncExpand((stateMan) {
-      // Create individual streams for each variable
-      final streams = variables.map((variable) {
-        return stateMan
-            .subscribe(variable)
-            .asStream()
-            .switchMap((s) => s)
-            .map((value) => MapEntry(variable, value))
-            .startWith(MapEntry(variable,
-                DynamicValue(value: '---', typeId: null))); // Initial value
-      });
-
-      // Merge streams so we get values as they arrive
-      return Rx.merge(streams).scan<Map<String, DynamicValue>>(
-        (Map<String, DynamicValue> acc, MapEntry<String, DynamicValue> entry,
-            int index) {
-          acc[entry.key] = entry.value;
-          return acc; // Return the same map instance
-        },
-        <String, DynamicValue>{},
-      );
+    // Create individual streams for each variable
+    final streams = variables.map((variable) {
+      return ref
+          .watch(keyStreamProvider(variable))
+          .map((value) => MapEntry(variable, value))
+          .startWith(MapEntry(variable,
+              DynamicValue(value: '---', typeId: null))); // Initial value
     });
+
+    // Merge streams so we get values as they arrive
+    return Rx.merge(streams).scan<Map<String, DynamicValue>>(
+      (Map<String, DynamicValue> acc, MapEntry<String, DynamicValue> entry,
+          int index) {
+        acc[entry.key] = entry.value;
+        return acc; // Return the same map instance
+      },
+      <String, DynamicValue>{},
+    );
   }
 
   void _updateVariableValues(Map<String, DynamicValue> values) {
