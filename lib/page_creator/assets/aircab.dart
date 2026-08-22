@@ -177,17 +177,13 @@ class AirCab extends StatelessWidget {
             // ─── Top “label” row ───
             Expanded(
               flex: 2,
-              child: Center(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    config.label,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      // We leave fontSize unspecified; FittedBox will scale it.
-                    ),
-                  ),
-                ),
+              // The font size is computed for the row, the same way the rows
+              // below compute theirs -- a FittedBox would have scaled a
+              // fixed-size raster instead, which is what left it soft.
+              child: AutoSizedText(
+                config.label,
+                heightFraction: 0.5,
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
 

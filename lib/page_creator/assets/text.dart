@@ -131,17 +131,15 @@ class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
         return SizedBox(
           width: constraints.maxWidth * 0.7,
           height: constraints.maxHeight * 0.7,
-          child: FittedBox(
-            fit: BoxFit.contain,
+          // AutoSizedText, not FittedBox: the content is laid out at the font
+          // size that fits, so the glyphs are rasterised at the size they are
+          // drawn instead of being scaled there. See common.dart.
+          child: AutoSizedText(
+            widget.config.textContent,
             alignment: Alignment.topLeft,
-            child: Text(
-              widget.config.textContent,
-              style: TextStyle(
-                color: widget.config.textColor ??
-                    Theme.of(context).textTheme.bodyLarge?.color,
-              ),
-              maxLines: null,
-              overflow: TextOverflow.visible,
+            style: TextStyle(
+              color: widget.config.textColor ??
+                  Theme.of(context).textTheme.bodyLarge?.color,
             ),
           ),
         );
@@ -168,18 +166,14 @@ class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
         return SizedBox(
           width: constraints.maxWidth * 0.7,
           height: constraints.maxHeight * 0.7,
-          child: FittedBox(
-            fit: BoxFit.contain,
+          // See _buildStaticText: laid out at its final size, not scaled to it.
+          child: AutoSizedText(
+            processedText,
             alignment: Alignment.topLeft,
-            child: Text(
-              processedText,
-              style: TextStyle(
-                color: widget.config.textColor ??
-                    Theme.of(context).textTheme.bodyLarge?.color,
-              ),
-              maxLines: null,
-              overflow: TextOverflow.visible,
-              textAlign: TextAlign.left,
+            textAlign: TextAlign.left,
+            style: TextStyle(
+              color: widget.config.textColor ??
+                  Theme.of(context).textTheme.bodyLarge?.color,
             ),
           ),
         );

@@ -193,10 +193,10 @@ class SpeedBatcher extends ConsumerWidget {
                     // The remaining 90% of the row’s width is for the text.
                     Expanded(
                       flex: 90,
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
+                      child: AutoSizedText(
+                        ledConfigs[i].text!,
                         alignment: Alignment.centerLeft,
-                        child: Text(ledConfigs[i].text!),
+                        heightFraction: 0.5,
                       ),
                     ),
                   ],
@@ -206,14 +206,10 @@ class SpeedBatcher extends ConsumerWidget {
             // The 5th “row” is the label, also taking up 1/5 of the height
             Expanded(
               flex: 1,
-              child: Center(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    config.label,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
+              child: AutoSizedText(
+                config.label,
+                heightFraction: 0.6,
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
           ],

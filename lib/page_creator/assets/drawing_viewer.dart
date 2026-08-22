@@ -119,31 +119,40 @@ class _DrawingViewerButtonState extends ConsumerState<DrawingViewerButton> {
             isPressed: _isPressed,
             buttonType: ButtonType.square,
           ),
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
+          // Icon and label are each sized from the button rather than laid out
+          // at a fixed size and scaled by a FittedBox: an icon is a glyph too,
+          // so scaling it by a transform blurs it exactly as it blurs text.
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final onPrimary = Theme.of(context).colorScheme.onPrimary;
+              final side = constraints.biggest.shortestSide;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0),
                 child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       Icons.picture_as_pdf,
-                      color: Theme.of(context).colorScheme.onPrimary,
+                      size: (side * 0.34).clamp(8.0, constraints.maxHeight / 2),
+                      color: onPrimary,
                     ),
-                    Text(
-                      widget.config.drawingName.isNotEmpty
-                          ? widget.config.drawingName
-                          : 'Drawing',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onPrimary,
-                        fontWeight: FontWeight.bold,
+                    Flexible(
+                      child: AutoSizedText(
+                        widget.config.drawingName.isNotEmpty
+                            ? widget.config.drawingName
+                            : 'Drawing',
+                        maxFontSize: side * 0.2,
+                        style: TextStyle(
+                          color: onPrimary,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),

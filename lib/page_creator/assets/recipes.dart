@@ -303,19 +303,16 @@ class _RecipesState extends ConsumerState<Recipes> {
           isPressed: false,
           buttonType: ButtonType.square,
         ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                "Recipes",
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimary,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
+        // AutoSizedText, not FittedBox: the label has to grow with the button,
+        // and a FittedBox would have done that by scaling a 14pt raster up,
+        // which is what left the label soft until the canvas was zoomed.
+        child: AutoSizedText(
+          "Recipes",
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          heightFraction: 0.3,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onPrimary,
+            fontWeight: FontWeight.bold,
           ),
         ),
       ),

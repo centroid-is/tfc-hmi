@@ -440,16 +440,15 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                               width: constraints.maxWidth *
                                   0.7, // Give it 70% of available width
                               height: constraints.maxHeight * 0.7,
-                              child: FittedBox(
-                                fit: BoxFit.contain,
+                              // Sized to the box rather than scaled into it,
+                              // so the label is rasterised at its final size.
+                              child: AutoSizedText(
+                                widget.config.customLabel ??
+                                    widget.config.variableName,
                                 alignment: Alignment.centerLeft,
-                                child: Text(
-                                  widget.config.customLabel ??
-                                      widget.config.variableName,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.grey.shade700,
-                                  ),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.grey.shade700,
                                 ),
                               ),
                             )
@@ -459,16 +458,12 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                               width: constraints.maxWidth *
                                   0.7, // Give it 70% of available width
                               height: constraints.maxHeight * 0.7,
-                              child: FittedBox(
-                                fit: BoxFit.contain,
+                              child: AutoSizedText(
+                                _getSelectedLabel(),
                                 alignment: Alignment.centerLeft,
-                                child: Text(
-                                  _getSelectedLabel(),
-                                  style: TextStyle(
-                                    color:
-                                        Theme.of(context).colorScheme.primary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -476,13 +471,18 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                         ],
                       ),
                     ),
-                    // Arrow indicator - also make it scale
-                    FittedBox(
-                      fit: BoxFit.contain,
-                      child: Icon(
+                    // Arrow indicator - also make it scale. Sized, not
+                    // FittedBox-scaled: an icon is a glyph, and scaling a
+                    // glyph by a transform blurs it the same way it blurs
+                    // text.
+                    LayoutBuilder(
+                      builder: (context, arrowConstraints) => Icon(
                         _isExpanded
                             ? Icons.keyboard_arrow_up
                             : Icons.keyboard_arrow_down,
+                        size: arrowConstraints.maxHeight.isFinite
+                            ? arrowConstraints.maxHeight
+                            : null,
                         color: _isExpanded
                             ? Colors.blue.shade600
                             : Colors.grey.shade600,

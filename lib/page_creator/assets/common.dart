@@ -1446,3 +1446,178 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Size-aware text
+//
+// Assets are laid out as fractions of the page, so their labels have to grow
+// and shrink with the page. The obvious way to do that -- wrap the `Text` in a
+// `FittedBox` -- is the wrong one: `FittedBox` lays the child out at the
+// child's own font size and then paints it through a *scale transform*, so the
+// glyphs are rasterised for one size and blitted at another. The text goes
+// soft, and only sharpens when something forces a re-raster at the size that
+// is actually on screen -- which is why zooming the canvas appears to fix it.
+//
+// The two helpers below do it the other way round: compute a font size for the
+// box, then lay the text out AT that size, so the glyphs are rasterised at
+// exactly the size they are drawn and there is nothing left to resample.
+// ---------------------------------------------------------------------------
+
+/// The largest font size at which [text], styled with [style], still fits in
+/// [box].
+///
+/// Measured the way `FittedBox` measured it -- unbounded width, so the string
+/// breaks only where it breaks itself -- but returned as a size to lay the
+/// text out at rather than a factor to scale it by.
+///
+/// [heightFraction] caps the result at that fraction of the box height, for
+/// labels that should not swell to fill their whole box. The default of 1.0
+/// caps nothing, which reproduces `BoxFit.contain`.
+///
+/// [angleRadians] fits the text's *rotated* bounding box, for the readouts
+/// that turn with `coordinates.angle`.
+///
+/// Returns the uncapped size when there is nothing to fit to (an empty string,
+/// or an unbounded box), and never less than [minFontSize].
+double fittedFontSize({
+  required String text,
+  required TextStyle style,
+  required Size box,
+  double heightFraction = 1.0,
+  double minFontSize = 1.0,
+  double? maxFontSize,
+  double angleRadians = 0.0,
+  TextScaler textScaler = TextScaler.noScaling,
+  TextDirection textDirection = TextDirection.ltr,
+  double referenceFontSize = 64.0,
+}) {
+  final fallback = maxFontSize ?? style.fontSize ?? referenceFontSize;
+  if (text.isEmpty) return fallback;
+  if (!box.width.isFinite || !box.height.isFinite) return fallback;
+  if (box.width <= 0 || box.height <= 0) return minFontSize;
+
+  double? cap = maxFontSize;
+  if (heightFraction < 1.0) {
+    final byHeight = box.height * heightFraction;
+    cap = cap == null ? byHeight : math.min(cap, byHeight);
+  }
+
+  final cosA = math.cos(angleRadians).abs();
+  final sinA = math.sin(angleRadians).abs();
+
+  Size measure(double fontSize) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style.copyWith(fontSize: fontSize)),
+      textDirection: textDirection,
+      textScaler: textScaler,
+    )..layout();
+    final measured = painter.size;
+    painter.dispose();
+    return measured;
+  }
+
+  // What the measured text would have to be scaled by to fit the box, taking
+  // the rotated bounding box rather than the upright one.
+  double fitScale(Size m) {
+    final aabbW = m.width * cosA + m.height * sinA;
+    final aabbH = m.width * sinA + m.height * cosA;
+    if (aabbW <= 0 || aabbH <= 0) return double.infinity;
+    return math.min(box.width / aabbW, box.height / aabbH);
+  }
+
+  var candidate = referenceFontSize * fitScale(measure(referenceFontSize));
+  if (!candidate.isFinite) return fallback;
+  if (cap != null) candidate = math.min(candidate, cap);
+  candidate = math.max(candidate, minFontSize);
+
+  // Advance widths are all but exactly linear in font size, so the step above
+  // lands on the answer; these passes take up the rounding left over.
+  for (var i = 0; i < 3; i++) {
+    final scale = fitScale(measure(candidate));
+    if (scale >= 1.0) break;
+    final next = math.max(candidate * scale, minFontSize);
+    if (next >= candidate) break;
+    candidate = next;
+  }
+  return candidate;
+}
+
+/// A [Text] laid out at a font size computed from the box it is given.
+///
+/// The drop-in replacement for `FittedBox(child: Text(...))`: it grows and
+/// shrinks with the asset just the same, but the glyphs are rasterised at
+/// their final size instead of being scaled there by a transform. See
+/// [fittedFontSize].
+class AutoSizedText extends StatelessWidget {
+  final String text;
+  final TextStyle? style;
+  final TextAlign? textAlign;
+
+  /// Where the text sits in the box once it is smaller than the box.
+  final AlignmentGeometry alignment;
+
+  /// Taken off the box before the text is fitted to what is left.
+  final EdgeInsets padding;
+
+  /// Caps the font size at this fraction of the box height. 1.0 (the default)
+  /// caps nothing, and fills the box the way `BoxFit.contain` did.
+  final double heightFraction;
+
+  final double minFontSize;
+  final double? maxFontSize;
+
+  /// Turns the text, and fits its rotated bounding box to the box.
+  final double angleRadians;
+
+  const AutoSizedText(
+    this.text, {
+    super.key,
+    this.style,
+    this.textAlign,
+    this.alignment = Alignment.center,
+    this.padding = EdgeInsets.zero,
+    this.heightFraction = 1.0,
+    this.minFontSize = 1.0,
+    this.maxFontSize,
+    this.angleRadians = 0.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final resolved = DefaultTextStyle.of(context).style.merge(style);
+        final box = Size(
+          math.max(0.0, constraints.maxWidth - padding.horizontal),
+          math.max(0.0, constraints.maxHeight - padding.vertical),
+        );
+        final fontSize = fittedFontSize(
+          text: text,
+          style: resolved,
+          box: box,
+          heightFraction: heightFraction,
+          minFontSize: minFontSize,
+          maxFontSize: maxFontSize,
+          angleRadians: angleRadians,
+          textScaler: MediaQuery.textScalerOf(context),
+          textDirection: Directionality.of(context),
+        );
+
+        Widget child = Text(
+          text,
+          style: resolved.copyWith(fontSize: fontSize),
+          textAlign: textAlign,
+          softWrap: false,
+          overflow: TextOverflow.visible,
+        );
+        if (angleRadians != 0.0) {
+          child = Transform.rotate(angle: angleRadians, child: child);
+        }
+        return Padding(
+          padding: padding,
+          child: Align(alignment: alignment, child: child),
+        );
+      },
+    );
+  }
+}
