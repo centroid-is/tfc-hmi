@@ -813,7 +813,8 @@ void main() {
   });
 
   group('StateMan — no PLC connected (no OPC-UA clients)', () {
-    test('subscribe() returns error stream instead of crashing when no client matches', () async {
+    test('subscribe() returns a quiet, live stream instead of crashing when '
+        'no client matches', () async {
       // Create StateMan with no OPC-UA clients but a key mapping that
       // references an OPC-UA node — simulates startup without PLC.
       final stateMan = await StateMan.create(
@@ -826,20 +827,26 @@ void main() {
       );
 
       // subscribe() calls _monitor() which calls _getClientWrapper().
-      // Before the fix, this would throw an uncaught StateError.
-      // After the fix, it should return a Stream that emits an error.
+      // Originally this threw an uncaught StateError; it was then made to
+      // hand back a `Stream.error`. That second shape is what this assertion
+      // used to pin, and it turned out to be its own fault: the error was
+      // terminal, the half-built subscription entry stayed cached, and a key
+      // that became routable later (its mapping saved, its server connected)
+      // stayed dead until the app was restarted. See
+      // state_man_late_mapping_test.dart. The contract now is that the caller
+      // gets a live stream that simply says nothing yet, and the retry ladder
+      // keeps looking for a client behind it.
       final stream = await stateMan.subscribe('pump.speed');
 
-      // The stream should emit a StateManException error, not crash.
       final errors = <Object>[];
-      final sub = stream.listen(
-        (_) {},
-        onError: (e) => errors.add(e),
-      );
-      await Future.delayed(Duration.zero);
+      final values = <DynamicValue>[];
+      final sub = stream.listen(values.add, onError: errors.add);
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      expect(errors, isNotEmpty);
-      expect(errors.first, isA<StateManException>());
+      expect(errors, isEmpty,
+          reason: 'a key waiting for its server is not an error the caller '
+              'can act on, and an error terminates the stream for good');
+      expect(values, isEmpty, reason: 'there is nothing to report yet');
 
       await sub.cancel();
       await stateMan.close();
