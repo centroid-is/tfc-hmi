@@ -89,8 +89,9 @@ class DatabaseConfig {
   /// parallel -- the collector, roughly one connection per OPC UA server --
   /// should raise it, and [resolvePoolSize] caps whatever is set here.
   ///
-  /// This is the budget for work. The pool is opened one wider than it, for
-  /// the health monitor's standing connection: see [poolConnectionCount].
+  /// This is the budget for work, and now also the pool size. The pool used to
+  /// be opened one wider, for the health monitor's standing connection; the
+  /// monitor no longer holds one. See [poolConnectionCount].
   ///
   /// [fromEnv] reads it from `CENTROID_DB_MAX_POOL_CONNECTIONS`
   /// ([kMaxPoolConnectionsEnv]), which is how the collector sets it.

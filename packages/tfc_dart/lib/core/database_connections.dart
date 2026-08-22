@@ -28,12 +28,10 @@ import 'dart:async';
 /// Ceiling on a single process's *work* budget, so a mistyped config cannot
 /// exhaust the server on its own.
 ///
-/// Not the ceiling on the pool itself: [poolConnectionCount] adds the health
-/// monitor's standing connection on top of whatever [resolvePoolSize] allows,
-/// so the widest pool this code will ever open is one more than this --
-/// [kMaxPoolConnections] + [kHealthMonitorConnections]. The extra one is the
-/// point of that function and is deliberately outside the cap; capping the
-/// total instead would silently take a connection away from the work.
+/// The ceiling on the pool, full stop. [poolConnectionCount] used to add the
+/// health monitor's standing connection on top, making the widest pool one
+/// more than this; the monitor no longer holds a connection, so the work
+/// budget and the pool size are now the same number.
 const int kMaxPoolConnections = 16;
 
 /// Connections a process should pool, given what it asked for.
@@ -46,23 +44,29 @@ int resolvePoolSize(int? configured) {
   return configured > kMaxPoolConnections ? kMaxPoolConnections : configured;
 }
 
-/// Connections the pool keeps for itself, on top of the work budget.
+/// Connections to open the pool with.
 ///
-/// The pool health monitor sits inside `pool.withConnection` for as long as
-/// the pool is open -- awaiting the connection's `closed` future is how it
-/// notices a socket dying. It hands that connection back only on the way out,
-/// so for sizing purposes the pool never gets it.
-const int kHealthMonitorConnections = 1;
-
-/// Connections to open the pool with: the work budget plus the monitor's.
+/// This used to be the work budget **plus one**, and the `+1` is now gone.
+/// It existed because the health monitor sat inside `pool.withConnection` for
+/// the pool's whole life, awaiting the connection's `closed` future: the slot
+/// was gone for good, so the budget had to be raised to compensate. A pool of
+/// exactly one could not even open -- the monitor took the only connection and
+/// drift's opening query waited out the pool lock and threw `Failed to acquire
+/// pool lock`.
 ///
-/// Sizing the pool to the work alone leaves nothing to do the work with. A
-/// pool of exactly one gave the monitor the only connection there was, and the
-/// first query -- drift asking Postgres its version while opening -- waited
-/// out the pool lock and threw `Failed to acquire pool lock`, so the database
-/// never opened at all.
-int poolConnectionCount(int? configured) =>
-    resolvePoolSize(configured) + kHealthMonitorConnections;
+/// The monitor now borrows for the length of a `SELECT 1` and lets go, so
+/// there is nothing to compensate for. Dropping the spare is not a tidy-up: it
+/// is where the connection saving actually comes from. Releasing the borrow
+/// alone changes nothing a server can see, because a pool keeps its sockets
+/// open between borrows -- measured against a real Postgres, a database still
+/// sat on two. Sizing the pool back down is what takes it to one, and on the
+/// collector's eight databases that is 16 connections down to 8.
+///
+/// What it costs: on a pool sized exactly to its workload the beat and the
+/// work now take turns. A `SELECT 1` every [kHealthBeatInterval] is a
+/// sub-millisecond wait for whichever arrives second, against a permanently
+/// occupied slot before.
+int poolConnectionCount(int? configured) => resolvePoolSize(configured);
 
 /// Environment variable a process uses to raise its pool above the default.
 ///
@@ -92,11 +96,27 @@ int? maxPoolConnectionsFromEnv(Map<String, String> env) {
 /// Longest either half of a pool close may take before it is given up on.
 const Duration kPoolCloseTimeout = Duration(seconds: 5);
 
+/// How often the health monitor proves the database is still reachable.
+///
+/// Sized against `Database.healthTimeout`, which is 30 seconds: a beat every
+/// 10 gives three per window, so a single slow or dropped beat cannot make a
+/// healthy database look dead, and two consecutive failures still report
+/// within the window.
+///
+/// It also sets the worst case for *noticing* a death. The monitor used to sit
+/// inside `withConnection` awaiting `conn.closed`, which fired the moment the
+/// socket died; now that it lets go between beats, a database that dies just
+/// after a good beat is not noticed until the next one. Ten seconds is the
+/// price of not holding a connection per database, and it is affordable
+/// precisely because a released beat costs a `SELECT 1` rather than a slot.
+const Duration kHealthBeatInterval = Duration(seconds: 10);
+
 /// Floor for the wait in [monitorStopTimeout], and the value to use when the
 /// pool's connect timeout is unknown.
 ///
-/// Every *wait* inside the monitor is raced against its stop signal, so a
-/// monitor that already holds its connection lets go in milliseconds.
+/// Every *wait* inside the monitor is raced against its stop signal. Since the
+/// monitor now lets go between beats, the only borrow a close can land on is
+/// the one inside a single `SELECT 1`, so it lets go in milliseconds.
 const Duration kMonitorStopTimeout = Duration(seconds: 2);
 
 /// Hard ceiling on the same wait. A close must not hang, however patiently

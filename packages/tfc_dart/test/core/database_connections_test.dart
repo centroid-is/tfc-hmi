@@ -211,35 +211,36 @@ void main() {
       expect(poolConnectionCount(null) * 20, lessThan(195));
     });
 
-    // The pool health monitor sits inside `pool.withConnection` for as long as
-    // the pool is open -- that is how it notices a socket dying. So the pool
-    // has to be opened one connection wider than the work it is sized for. A
-    // pool of exactly one gave the monitor the only connection there was, and
-    // the very first query -- drift asking Postgres its version while opening
-    // -- waited out the pool lock and threw `Failed to acquire pool lock`.
-    test('the pool is opened wider than the work, for the health monitor', () {
-      expect(poolConnectionCount(null),
-          greaterThan(resolvePoolSize(null)),
-          reason: 'the monitor holds one connection and never gives it back');
+    // The pool used to be opened one wider than the work, because the health
+    // monitor sat inside `pool.withConnection` for the pool's whole life and
+    // never gave that connection back. A pool of exactly one could not open at
+    // all: the monitor took the only connection and drift's opening query
+    // waited out the pool lock and threw `Failed to acquire pool lock`.
+    //
+    // The monitor now borrows for a `SELECT 1` and lets go, so the spare is
+    // gone -- and removing it is where the saving is. Releasing the borrow on
+    // its own changes nothing a server can see, because a pool keeps its
+    // sockets open between borrows: measured against a real Postgres, a
+    // database still sat on two connections until the pool was sized back down
+    // to one.
+    test('the pool is sized to the work, with no spare for the monitor', () {
+      expect(poolConnectionCount(null), resolvePoolSize(null),
+          reason: 'the monitor no longer holds a connection, so there is '
+              'nothing to reserve one for');
     });
 
-    test('an unconfigured client can still run a query while monitored', () {
-      expect(poolConnectionCount(null) - kHealthMonitorConnections,
-          greaterThanOrEqualTo(1));
+    test('an unconfigured client is a pool of exactly one', () {
+      // Which the monitor and the work now share by taking turns -- a
+      // sub-millisecond wait every beat, against a permanently taken slot.
+      expect(poolConnectionCount(null), 1);
     });
 
-    test('a configured size is the work budget, not the total', () {
-      // A collector asking for eight upstream drains gets eight to drain with;
-      // the monitor is not allowed to eat one of them.
-      expect(poolConnectionCount(8) - kHealthMonitorConnections, 8);
+    test('a configured size is the work budget, and the total', () {
+      expect(poolConnectionCount(8), 8);
     });
 
-    test('the ceiling still holds once the monitor is added', () {
-      // One wider than kMaxPoolConnections on purpose: the cap is on the work
-      // budget, and taking the monitor's connection out of it would give a
-      // maxed-out collector one drain fewer than it asked for.
-      expect(poolConnectionCount(10000),
-          kMaxPoolConnections + kHealthMonitorConnections);
+    test('the ceiling is the ceiling', () {
+      expect(poolConnectionCount(10000), kMaxPoolConnections);
     });
   });
 
@@ -257,7 +258,7 @@ void main() {
       final size = maxPoolConnectionsFromEnv(
           const {kMaxPoolConnectionsEnv: '8'});
       expect(size, 8);
-      expect(poolConnectionCount(size) - kHealthMonitorConnections, 8);
+      expect(poolConnectionCount(size), 8);
     });
 
     test('surrounding whitespace is not a typo worth failing over', () {
