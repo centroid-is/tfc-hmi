@@ -2104,23 +2104,61 @@ class StateMan {
       }
     }
 
-    late ClientApi client;
-    late (NodeId, int?) nodeId;
-    try {
-      client = _getClientWrapper(key).client;
-      await client.awaitConnect();
-      final lookup = _lookupNodeId(key);
-      if (lookup == null) {
-        throw StateManException('Key: "$key" not found');
-      }
-      nodeId = lookup;
-    } catch (e) {
-      logger.e('Failed to connect to client for key: "$key": $e');
-      return Stream.error(
-          StateManException('Failed to connect to client for key: "$key": $e'));
-    }
-    final (id, idx) = nodeId;
+    final ads = _subscriptions[key]!;
 
+    // Can this key be pointed at a node *right now*?
+    //
+    // Resolution used to happen here, once: a key with no client wrapper (or
+    // no mapping at all) got a `Stream.error` handed back and the entry
+    // registered above was left in `_subscriptions` — an entry that can never
+    // deliver, and that every later subscribe for this key was then given.
+    //
+    // That is what made an accepted key mapping read null until the app was
+    // restarted (2026-08-22). A page widget or an alarm binds the key while it
+    // is still only an AI proposal; the operator accepts; the save reaches
+    // StateMan and the routing is correct from that moment on — but the caller
+    // was already holding a dead stream and nothing ever resolved the key
+    // again. The log blamed a null server alias, which is only what
+    // [KeyMappings.lookupServerAlias] returns for a key that has no entry at
+    // all; the alias itself was never dropped.
+    //
+    // So an unroutable key is now transient, like every other failure in the
+    // loop below: the caller gets its live stream and the loop keeps
+    // re-resolving on the 1s/10s/60s/600s ladder until the mapping shows up.
+    // Deliberately not awaited — a caller must not block for a mapping that
+    // may be minutes away, and handing back the stream is what lets it start
+    // flowing the moment [updateKeyMappings] swaps the mapping in.
+    if (!_isRoutable(key)) {
+      logger.w('[$alias] $key cannot be routed yet (server alias: '
+          '${keyMappings.lookupServerAlias(key)}) — holding its stream open '
+          'and retrying until a mapping for it arrives');
+      unawaited(_monitorLoop(key).then<void>((_) {}, onError: (Object e) {
+        // The loop only ends when StateMan closes; nothing is waiting on it.
+        logger.d('[$alias] monitor loop for "$key" ended: $e');
+      }));
+      return ads.stream;
+    }
+    return _monitorLoop(key);
+  }
+
+  /// Whether [key] can be pointed at an OPC UA node right now.
+  ///
+  /// Both halves are read out of [keyMappings], which [updateKeyMappings]
+  /// replaces wholesale, so the answer changes the instant a mapping is saved.
+  bool _isRoutable(String key) {
+    if (_lookupNodeId(key) == null) return false;
+    try {
+      _getClientWrapper(key);
+      return true;
+    } on StateManException {
+      return false;
+    }
+  }
+
+  /// Subscribes [key] on its server and keeps trying until it succeeds, or
+  /// until StateMan closes. Assumes `_subscriptions[key]` is already
+  /// registered by [_monitor].
+  Future<Stream<DynamicValue>> _monitorLoop(String key) async {
     int retries = 0;
     // Attempt counter and start time, so a stuck key reports how long it has
     // been stuck rather than just that it failed again.
@@ -2132,7 +2170,21 @@ class StateMan {
     while (_shouldRun) {
       attempt++;
       try {
+        // Resolved per attempt rather than captured once before the loop: a
+        // key becomes routable when its mapping is saved, and the client it
+        // routes to can be replaced under it.
         final wrapper = _getClientWrapper(key);
+        final client = wrapper.client;
+        final lookup = _lookupNodeId(key);
+        if (lookup == null) {
+          throw StateManException('Key: "$key" not found');
+        }
+        final (id, idx) = lookup;
+        // Recovery resends the last value to every stream the wrapper knows
+        // about. A key that only became routable now was not on that list
+        // when its entry was registered, so put it there.
+        final registered = _subscriptions[key];
+        if (registered != null) wrapper.streams.add(registered);
         // The per-server alias, not StateMan's own `alias` -- the latter is
         // usually empty, which made every one of these lines start with "[]"
         // and gave no clue which PLC was involved.

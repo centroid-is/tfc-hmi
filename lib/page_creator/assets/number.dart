@@ -337,16 +337,15 @@ class NumberWidget extends ConsumerWidget {
       {WidgetRef? ref, DynamicValue? rawSnapshot}) {
     final displayText = numberDisplayText(value, config.units);
 
-    Widget displayWidget = FittedBox(
-      fit: BoxFit.contain,
-      child: Transform.rotate(
-        angle: (config.coordinates.angle ?? 0) * math.pi / 180,
-        child: Text(
-          displayText,
-          style: TextStyle(
-            color: config.textColor,
-          ),
-        ),
+    // The readout is laid out at the size it is drawn at, not laid out small
+    // and scaled up by a `FittedBox` -- scaling a raster made for one size is
+    // what left every number on the page soft. `AutoSizedText` fits the
+    // *rotated* bounding box, so a turned readout still fills its asset.
+    Widget displayWidget = AutoSizedText(
+      displayText,
+      angleRadians: (config.coordinates.angle ?? 0) * math.pi / 180,
+      style: TextStyle(
+        color: config.textColor,
       ),
     );
 

@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'dart:io' as io;
+
 import 'package:flutter/material.dart';
 import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:tfc/widgets/number_slider.dart';
@@ -320,7 +322,9 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         DynamicValue(value: value, typeId: NodeId.boolean),
       );
     } catch (e) {
-      debugPrint('ConveyorGate: failed to write force key "$key": $e');
+      // stderr, not debugPrint: a force write that silently fails looks
+      // identical to a stuck PLC bit from the operator's side.
+      io.stderr.writeln('ConveyorGate: failed to write force key "$key": $e');
     }
   }
 
@@ -410,6 +414,69 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 /// Tri-state force selection: force open, no force (release), force close.
 enum _ForceSelection { open, none, close }
 
+/// A button that writes TRUE while held and FALSE when let go.
+///
+/// Stateful only to render the pressed look; the write is the point. Cancel
+/// is treated as release -- a drag off the button must not leave the bit set.
+class _HoldToPushButton extends StatefulWidget {
+  final bool enabled;
+  final Future<void> Function(bool down) onChanged;
+
+  const _HoldToPushButton({required this.enabled, required this.onChanged});
+
+  @override
+  State<_HoldToPushButton> createState() => _HoldToPushButtonState();
+}
+
+class _HoldToPushButtonState extends State<_HoldToPushButton> {
+  bool _down = false;
+
+  void _set(bool down) {
+    if (!widget.enabled || _down == down) return;
+    setState(() => _down = down);
+    widget.onChanged(down);
+  }
+
+  @override
+  void dispose() {
+    // Releasing on dispose matters: closing the pane mid-press would
+    // otherwise leave the pusher driven out with no way to release it.
+    if (_down) widget.onChanged(false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const forced = Colors.orange;
+    return GestureDetector(
+      // Opaque, not the default deferToChild: the child is wrapped in an
+      // IgnorePointer so the button cannot swallow the gesture, which also
+      // makes it fail hit-testing -- and with deferToChild that means this
+      // detector never sees the press at all. Same arrangement as
+      // `ThirdPartyEquipment._buildBody`.
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => _set(true),
+      onTapUp: (_) => _set(false),
+      onTapCancel: () => _set(false),
+      child: SizedBox(
+        width: double.infinity,
+        child: IgnorePointer(
+          child: FilledButton.tonalIcon(
+            icon: const Icon(Icons.east),
+            label: Text(_down ? 'Pushing' : 'Press to push'),
+            style: FilledButton.styleFrom(
+              foregroundColor: widget.enabled ? forced : null,
+              backgroundColor:
+                  forced.withValues(alpha: _down ? 0.42 : 0.18),
+            ),
+            onPressed: widget.enabled ? () {} : null,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Live gate state + force feedback, combined so one stream drives both the
 /// header chip and the selector highlight.
 typedef _GateSnapshot = ({bool? isOpen, bool forcedOpen, bool forcedClosed});
@@ -450,14 +517,20 @@ class _GateForcePane extends ConsumerWidget {
   /// pane), then plain open/closed from the theme's state colors, unknown
   /// grey while there is no data.
   PaneStatus _status(BuildContext context, _GateSnapshot snap) {
-    if (snap.forcedOpen) return const PaneStatus.warning('Forced open');
-    if (snap.forcedClosed) return const PaneStatus.warning('Forced closed');
+    final isPusher = config.gateVariant == GateVariant.pusher;
+    // A pusher has no held force to report: its command bit is momentary and
+    // the PLC clears it on processing, so "Forced out" would flash for one
+    // cycle and then lie. Its state key is the only honest thing to show.
+    if (!isPusher) {
+      if (snap.forcedOpen) return const PaneStatus.warning('Forced open');
+      if (snap.forcedClosed) return const PaneStatus.warning('Forced closed');
+    }
     final isOpen = snap.isOpen;
     if (isOpen == null) return const PaneStatus.unknown();
     final hmi = HmiStateColors.of(context);
     return isOpen
-        ? PaneStatus(label: 'Open', color: hmi.green)
-        : PaneStatus(label: 'Closed', color: hmi.grey);
+        ? PaneStatus(label: isPusher ? 'Out' : 'Open', color: hmi.green)
+        : PaneStatus(label: isPusher ? 'In' : 'Closed', color: hmi.grey);
   }
 
   /// Gate open/closed as a nullable bool — null until the first value
@@ -490,12 +563,34 @@ class _GateForcePane extends ConsumerWidget {
           status: _status(context, snap),
           child: PaneSection(
             title: 'Force',
-            // Open / None / Close, mirroring the Low/None/High idiom of
-            // the IO module panes. None releases any active force.
-            child: _forceSelector(context, snap, snapshot.hasData),
+            // A diverter or slider is held open or closed, so it gets the
+            // Open / None / Close idiom of the IO module panes. A pusher
+            // instead runs one stroke and returns by itself -- there is no
+            // state to hold and nothing to release -- so it gets a single
+            // momentary button.
+            child: config.gateVariant == GateVariant.pusher
+                ? _pusherForceControls(context, snap)
+                : _forceSelector(context, snap, snapshot.hasData),
           ),
         );
       },
+    );
+  }
+
+  /// The pusher's manual control: one button that follows its own state.
+  ///
+  /// Held down the bit is TRUE, released it is FALSE, so what the operator
+  /// sees under their finger is what the PLC has. The two obvious
+  /// alternatives are both worse here. Writing TRUE and letting the PLC clear
+  /// the bit -- `ST_Section_HMI`'s `p_cmd_*` contract -- latches forever,
+  /// because `FB_Pusher` never reads the bit, let alone clears it. Pulsing it
+  /// instead runs one fixed stroke out and back, which is not control, just a
+  /// twitch. Following the button leaves the operator holding the pusher
+  /// where they want it.
+  Widget _pusherForceControls(BuildContext context, _GateSnapshot snap) {
+    return _HoldToPushButton(
+      enabled: config.forceOpenKey.isNotEmpty,
+      onChanged: (down) => writeForce(config.forceOpenKey, down),
     );
   }
 

@@ -409,15 +409,12 @@ class _RateValueWidgetState extends ConsumerState<RateValueWidget>
 
   Widget _buildDisplay(BuildContext context, String value,
       {int? activeInterval}) {
-    Widget displayWidget = FittedBox(
-      fit: BoxFit.contain,
-      child: Transform.rotate(
-        angle: (widget.config.coordinates.angle ?? 0) * math.pi / 180,
-        child: Text(
-          value,
-          style: TextStyle(color: widget.config.textColor),
-        ),
-      ),
+    // Laid out at its final size rather than scaled there by a `FittedBox`;
+    // see the note on `AutoSizedText` in common.dart.
+    Widget displayWidget = AutoSizedText(
+      value,
+      angleRadians: (widget.config.coordinates.angle ?? 0) * math.pi / 180,
+      style: TextStyle(color: widget.config.textColor),
     );
 
     displayWidget = GestureDetector(

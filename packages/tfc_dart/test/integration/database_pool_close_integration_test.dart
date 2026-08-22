@@ -15,26 +15,53 @@ import 'dart:async';
 
 import 'package:postgres/postgres.dart';
 import 'package:test/test.dart';
+import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
 import 'docker_compose.dart';
 
-/// Client connections the server currently has on the test database, not
-/// counting the one asking.
+/// A name no other suite in this `dart test` invocation can be using.
 ///
-/// Deliberately narrower than "rows in `pg_stat_activity` for this database".
-/// TimescaleDB keeps a background worker scheduler attached to every database
-/// it is installed in, and starts more workers when it has jobs to run -- on a
-/// database the other integration files have left hypertables and retention
-/// policies in, those come and go on the extension's own schedule. They are
-/// not connections anything here opened, and counting them made this test
-/// report a leak that was really the extension going about its business.
-/// A leaked pool connection is always a `client backend`, so nothing this
-/// test exists to catch can hide behind the filter.
-Future<int> _clientBackends(Connection control) async {
+/// Each test tags the databases it opens with one of these and counts only
+/// backends wearing it. See [_clientBackends].
+var _appNameSeq = 0;
+String _uniqueAppName(String label) => 'pool-close-$label-${_appNameSeq++}';
+
+/// [getTestConfig], tagged so the server can tell this database's connections
+/// apart from everything else on `testdb`.
+DatabaseConfig _taggedConfig(String appName) =>
+    getTestConfig()..applicationName = appName;
+
+/// Client connections the server currently has on the test database *that this
+/// test opened*, not counting the one asking.
+///
+/// Deliberately narrower than "rows in `pg_stat_activity` for this database",
+/// twice over.
+///
+/// `backend_type = 'client backend'` drops TimescaleDB's background worker
+/// scheduler, which is attached to every database the extension is installed
+/// in and starts more workers when it has jobs to run -- on a database the
+/// other integration files have left hypertables and retention policies in,
+/// those come and go on the extension's own schedule.
+///
+/// `application_name` drops the other suites. Every file in this directory
+/// shares one `dart test` process and one server, and a health monitor from a
+/// suite that has already finished goes on beating for the rest of the run.
+/// Counting those made this test report a leak whenever the runner was loaded
+/// enough for the timing to line up -- a backend that was born after
+/// [baseline] was taken and belonged to nobody here. Since `create` and
+/// `spawn` both pass the config's [DatabaseConfig.applicationName] down to
+/// `PoolSettings`, a per-database tag is exact: the count starts at zero, and
+/// anything it sees is ours.
+///
+/// A leaked pool connection is always a tagged `client backend`, so nothing
+/// this test exists to catch can hide behind either filter.
+Future<int> _clientBackends(Connection control, String appName) async {
   final result = await control.execute(
-      "SELECT count(*)::int FROM pg_stat_activity WHERE datname = 'testdb' "
-      "AND backend_type = 'client backend' AND pid <> pg_backend_pid()");
+      Sql.named("SELECT count(*)::int FROM pg_stat_activity "
+          "WHERE datname = 'testdb' AND backend_type = 'client backend' "
+          "AND pid <> pg_backend_pid() AND application_name = @app"),
+      parameters: {'app': appName});
   return result.first.first as int;
 }
 
@@ -96,16 +123,20 @@ void main() {
 
     test('closing an in-isolate database hands every connection back',
         () async {
-      final baseline = await _clientBackends(control);
+      final appName = _uniqueAppName('in-isolate');
+      final baseline = await _clientBackends(control, appName);
+      expect(baseline, 0,
+          reason: 'a tag nothing has used yet must start at zero; anything '
+              'else means the name is not unique to this test');
 
-      final db = await AppDatabase.create(getTestConfig());
+      final db = await AppDatabase.create(_taggedConfig(appName));
       await db.open();
 
       // The monitor takes its connection asynchronously, so wait for the
       // server to actually show the database holding more than the control
       // connection before claiming anything about what close gives back.
       final busy = await _waitForCount(
-          () => _clientBackends(control), (n) => n > baseline);
+          () => _clientBackends(control, appName), (n) => n > baseline);
       expect(busy, greaterThan(baseline),
           reason: 'the database opened without taking a connection, so this '
               'test is not measuring what it thinks it is');
@@ -113,7 +144,7 @@ void main() {
       await db.close().timeout(const Duration(seconds: 30));
 
       final after = await _waitForCount(
-          () => _clientBackends(control), (n) => n <= baseline);
+          () => _clientBackends(control, appName), (n) => n <= baseline);
       expect(after, lessThanOrEqualTo(baseline),
           reason: 'connections left behind after close are the leak: the '
               'health monitor holds one for as long as the pool is open, and '
@@ -127,10 +158,14 @@ void main() {
       // fix each of those leaked its monitor's connection, and the loop runs
       // every couple of seconds for as long as the server is unreachable --
       // which is how one backend ended up on 75 of 100 connections.
-      final baseline = await _clientBackends(control);
+      final appName = _uniqueAppName('discarded');
+      final baseline = await _clientBackends(control, appName);
+      expect(baseline, 0,
+          reason: 'a tag nothing has used yet must start at zero; anything '
+              'else means the name is not unique to this test');
 
       for (var i = 0; i < 5; i++) {
-        final db = await AppDatabase.create(getTestConfig());
+        final db = await AppDatabase.create(_taggedConfig(appName));
         await db.open();
         await db.close().timeout(const Duration(seconds: 30));
       }
@@ -141,11 +176,40 @@ void main() {
       // wait out. The leak this catches was two backends per attempt, so five
       // attempts cost ten and the count never came back down at all.
       final after = await _waitForCount(
-          () => _clientBackends(control), (n) => n <= baseline);
+          () => _clientBackends(control, appName), (n) => n <= baseline);
       expect(after, lessThanOrEqualTo(baseline),
           reason: 'the cost of a discarded attempt must not scale with how '
               'many were discarded. Still connected: '
               '${await _describeBackends(control)}');
     }, timeout: const Timeout(Duration(minutes: 5)));
+
+    // The two tests above are only worth their assertions if the tag actually
+    // narrows what they see. This is the measurement's own test: a database
+    // that is open the whole time, under a different name, must be invisible.
+    //
+    // Without it the filter could be silently matching everything -- a typo in
+    // the parameter, a name that collides -- and both tests would keep passing
+    // for the wrong reason, which is exactly the failure mode they had before.
+    test('the count ignores connections belonging to another tag', () async {
+      final mine = _uniqueAppName('mine');
+      final theirs = _uniqueAppName('theirs');
+
+      final other = await AppDatabase.create(_taggedConfig(theirs));
+      await other.open();
+      addTearDown(() => other.close().timeout(const Duration(seconds: 30)));
+
+      // Wait until the server can actually see the other database, so a zero
+      // below cannot just mean it had not connected yet.
+      final visible = await _waitForCount(
+          () => _clientBackends(control, theirs), (n) => n > 0);
+      expect(visible, greaterThan(0),
+          reason: 'the other database never took a connection, so this test '
+              'is not proving anything about the filter');
+
+      expect(await _clientBackends(control, mine), 0,
+          reason: 'a live connection under another application_name leaked '
+              'into this tag\'s count. Still connected: '
+              '${await _describeBackends(control)}');
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 }
