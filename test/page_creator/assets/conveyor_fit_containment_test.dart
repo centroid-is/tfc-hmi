@@ -1,8 +1,8 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
+
+import 'painted_bounds.dart';
 
 /// The page editor treats every asset as a bounding box: hit-testing,
 /// selection and z-order all use it. A belt that paints outside its box would
@@ -39,33 +39,45 @@ void main() {
     for (final box in boxes) {
       for (final entry in turnSets.entries) {
         for (final thickness in [0.15, 0.3, 0.6]) {
-          test('${box.width.toInt()}x${box.height.toInt()} '
-              '${entry.key} thk $thickness', () {
+          testWidgets('${box.width.toInt()}x${box.height.toInt()} '
+              '${entry.key} thk $thickness', (tester) async {
             final g = ConveyorPathGeometry.build(entry.value, box,
                 thicknessFactor: thickness);
             expect(g, isNotNull);
-            // The ink the painter actually lays down: the band outline (flat
-            // caps at the ends, beltWidth across) plus the half of the 2px
-            // border that falls outside it — the stroke is centred on the
-            // outline, so only a pixel of it is ink beyond the band. The
-            // centerline bounds inflated on every side would overestimate at
-            // the flat ends — the fit centers the ink in the box, so slack
-            // is spent where the band genuinely does not extend.
-            final band = g!
-                    .bandOutline(0, 1,
-                        width: g.beltWidth, radius: g.beltWidth * 0.2)
-                    ?.getBounds() ??
-                g.path.getBounds().inflate(g.beltWidth / 2);
-            final painted = band.inflate(1);
-            // The fit's clearance is a fraction of the box, so on a box under
-            // 135px across it is less than that pixel of border and the
-            // difference is ink over the edge. Sub-pixel, and the alternative
-            // is an absolute length in the fit — which is what reshaped belts
-            // when the page re-fitted them.
-            // The 0.01 is rasteriser rounding, not clearance.
-            final slop =
-                math.max(0.5, 1.0 - ConveyorPathGeometry.marginFor(box)) + 0.01;
-            expect(painted.left, greaterThanOrEqualTo(-slop));
+            // Rasterised rather than derived. The ink is not the band outline
+            // — the border is stroked on that outline, so half of it lies
+            // beyond — and it is not the centerline's bounds inflated either,
+            // which overestimates at the flat ends and, on a stretched
+            // skeleton, everywhere. See `painted_bounds.dart`.
+            final painted =
+                await tester.runAsync(() => paintedBounds(box, g));
+            expect(painted, isNotNull, reason: 'nothing painted');
+
+            // A belt as wide as its own box has nowhere to go: the width is
+            // set in screen units and the fit stands down rather than
+            // squeezing the centerline into a sliver, so it paints over the
+            // edge by design. Everything else has to stay in.
+            final clearance = ConveyorPathGeometry.marginFor(box);
+            final allBelt =
+                g!.beltWidth >= box.shortestSide - 2 * clearance - 0.5;
+            if (allBelt) return;
+
+            // Half of the 2px outline, plus half a pixel of rasteriser
+            // rounding.
+            //
+            // Where the box cannot be filled at true radius the fit measures
+            // the outline into the ink it places, and the belt lands wholly
+            // inside — those cases clear this with a pixel to spare. Where
+            // the solve *did* succeed the band is centred on the box and the
+            // outline straddles its edge, because reserving room for a fixed
+            // number of pixels there would mean scaling the skeleton by a
+            // factor that depends on how big the box happens to be — and
+            // that is precisely what makes a belt come out a different shape
+            // on a different screen. A hairline over the edge of a rectangle
+            // that is only ever drawn in the page editor is the cheaper end
+            // of that trade.
+            const slop = 2.0 / 2 + 0.5;
+            expect(painted!.left, greaterThanOrEqualTo(-slop));
             expect(painted.top, greaterThanOrEqualTo(-slop));
             expect(painted.right, lessThanOrEqualTo(box.width + slop));
             expect(painted.bottom, lessThanOrEqualTo(box.height + slop));

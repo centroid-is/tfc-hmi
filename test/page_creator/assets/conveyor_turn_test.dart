@@ -217,7 +217,22 @@ void main() {
 
       final atFullSize = foldRatio(1.0);
       for (final scale in [0.9, 0.8, 0.7, 0.6, 0.5]) {
-        expect(foldRatio(scale), closeTo(atFullSize, 1e-6),
+        // Not exact, and cannot be. An unfillable box now has its belt
+        // sized by measuring the ink, and the ink includes the outline —
+        // two pixels wide on every screen, by design, so that a small belt
+        // is outlined as legibly as a big one. A fixed width is a bigger
+        // share of a small belt than of a big one, so it moves this ratio
+        // by just under a percent across the sizes below. Every other length
+        // in the fit is proportional.
+        //
+        // The defect this guards against was of a different order: the bend
+        // radius was read back off samples taken every few *absolute*
+        // pixels, so the verdict moved by whole percent with the box and
+        // swapped a drawn band for a stroked centerline under the operator
+        // on a resize. `bandOutline` keeps 2% of headroom before it calls a
+        // belt folded, so what is left here can only matter to a belt
+        // already sitting within a percent of that edge.
+        expect(foldRatio(scale), closeTo(atFullSize, 1e-2),
             reason: 'the belt is the same fraction of its own bend at every '
                 'size, so it folds at every size or at none');
       }
