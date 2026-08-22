@@ -90,10 +90,27 @@ class ToolRegistry {
   /// from the MCP protocol. It should focus only on business logic --
   /// identity validation, audit logging, and concurrency limiting are
   /// handled transparently.
+  ///
+  /// [metered] excludes the tool from the concurrency semaphore. The
+  /// semaphore holds its slot for the handler's entire duration, which is
+  /// right for a tool that queries the database and wrong for one that parks
+  /// waiting on a human: three parked long polls would occupy every slot and
+  /// freeze the whole server for a minute at a time. Only turn this off for a
+  /// handler that spends its time idle rather than working.
+  ///
+  /// [audited] skips the audit trail. Off only for tools that are called on a
+  /// timer and record no intent -- `await_proposal_feedback` re-arms once a
+  /// minute forever, and an audit row per call would bury the rows that
+  /// describe something someone actually did.
+  ///
+  /// Identity validation happens for every tool regardless, and outside the
+  /// semaphore, so an unauthenticated call never consumes a slot.
   void registerTool({
     required String name,
     required String description,
     ToolInputSchema? inputSchema,
+    bool metered = true,
+    bool audited = true,
     required Future<CallToolResult> Function(
             Map<String, dynamic> arguments, RequestHandlerExtra extra)
         handler,
@@ -117,8 +134,11 @@ class ToolRegistry {
         }
 
         // Step 2: Acquire concurrency slot, then execute with audit trail
-        return _semaphore.run(() async {
+        Future<CallToolResult> execute() async {
           try {
+            if (!audited) {
+              return await handler(args, extra);
+            }
             return await _auditLogService.executeWithAudit<CallToolResult>(
               operatorId: _identity.operatorId,
               tool: name,
@@ -140,7 +160,9 @@ class ToolRegistry {
               isError: true,
             );
           }
-        });
+        }
+
+        return metered ? _semaphore.run(execute) : execute();
       },
     );
   }

@@ -16,7 +16,8 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         PlcCodeIndex,
         TechDocIndex,
         McpToolToggles,
-        NodeBrowser;
+        NodeBrowser,
+        ProposalFeedbackBus;
 
 import '../llm/llm_models.dart';
 import '../llm/llm_provider.dart';
@@ -113,6 +114,20 @@ class McpBridgeNotifier extends ChangeNotifier {
 
   /// Stream of proposal JSON strings emitted by write tools.
   Stream<String> get proposalStream => _proposalController.stream;
+
+  /// The return path for the operator's decision on those proposals.
+  ///
+  /// The counterpart to [_proposalController]: proposals go out through the
+  /// callback, decisions come back in here, and an external MCP client reads
+  /// them with `await_proposal_feedback`. Owned by the bridge rather than by
+  /// a server, because both the in-process server and every HTTP session
+  /// share one -- a decision is a decision regardless of which of them
+  /// proposed the change.
+  ///
+  /// Fed by `proposalFeedbackRelayProvider`; the bounded ring buffer inside
+  /// means a decision made while no client is attached is still there when
+  /// one connects.
+  final ProposalFeedbackBus feedbackBus = ProposalFeedbackBus();
 
   /// Callback wired into [TfcMcpServer]'s [ProposalService.onProposal].
   void _onProposal(Map<String, dynamic> wrapped) {
@@ -258,6 +273,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         techDocIndex: techDocIndex,
         toggles: toggles ?? McpToolToggles.allEnabled,
         onProposal: _onProposal,
+        feedbackBus: feedbackBus,
       );
 
       // Connect server to its transport
@@ -583,6 +599,7 @@ class McpBridgeNotifier extends ChangeNotifier {
         techDocIndex: techDocIndex,
         nodeBrowser: nodeBrowser,
         onProposal: _onProposal,
+        feedbackBus: feedbackBus,
       );
       _setState(McpBridgeState(
         connectionState: McpConnectionState.connected,
@@ -631,6 +648,7 @@ class McpBridgeNotifier extends ChangeNotifier {
     await disconnect();
     await stopSseServer();
     _proposalController.close();
+    await feedbackBus.close();
     super.dispose();
   }
 }

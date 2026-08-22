@@ -119,6 +119,12 @@ class MockMcpClient {
   ServerCapabilities? get serverCapabilities =>
       _client.getServerCapabilities();
 
+  /// The `instructions` string the server returned from `initialize`.
+  ///
+  /// This is how a real client receives the server's operating manual, so it
+  /// is how the tests check that one is actually being sent.
+  String? get instructions => _client.getInstructions();
+
   /// Call a tool registered on the server by name.
   Future<CallToolResult> callTool(
       String name, Map<String, dynamic> arguments) async {
