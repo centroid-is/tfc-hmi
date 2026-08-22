@@ -47,6 +47,12 @@ type suitableRelease struct {
 // requireRelease calls ListReleases on the client, finds the first release that
 // has both a platform asset for the current OS/arch and a SHA256SUMS.txt asset,
 // and returns it. Skips the test if no releases exist or none has the right assets.
+//
+// Drafts are skipped, exactly as the engine skips them. ListReleases runs with a
+// token here, so unlike a real manager it can see drafts — and a draft's assets
+// are only reachable through the API, never through the browser download URL
+// these tests use. Picking one up yields a 404 against a release no user can
+// see, which is how a stuck draft `main-latest` wedged the release pipeline.
 func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRelease {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
@@ -63,6 +69,9 @@ func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRe
 	platformAssetName := selectPlatformAssetName()
 
 	for _, r := range releases {
+		if r.GetDraft() {
+			continue
+		}
 		var platformAsset, checksumAsset *gogithub.ReleaseAsset
 		for _, a := range r.Assets {
 			name := a.GetName()
