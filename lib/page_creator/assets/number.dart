@@ -316,9 +316,7 @@ class NumberWidget extends ConsumerWidget {
     }
 
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) =>
-              stateMan.subscribe(config.key).asStream().switchMap((s) => s)),
+      stream: ref.watch(keyStreamProvider(config.key)),
       builder: (context, snapshot) {
         String displayValue = "---";
 

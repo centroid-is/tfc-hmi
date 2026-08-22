@@ -425,11 +425,7 @@ class AnalogBox extends ConsumerWidget {
 
     void addKey(String? key, String tag) {
       if (key == null || key.isEmpty) return;
-      final s = ref
-          .watch(stateManProvider.future)
-          .asStream()
-          .switchMap((sm) => sm.subscribe(key).asStream().switchMap((s) => s))
-          .map((dv) => (tag, dv));
+      final s = ref.watch(keyStreamProvider(key)).map((dv) => (tag, dv));
       streams.add(s);
     }
 

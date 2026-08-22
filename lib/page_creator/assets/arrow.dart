@@ -8,7 +8,6 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/providers/state_man.dart';
-import 'package:rxdart/rxdart.dart';
 
 part 'arrow.g.dart';
 
@@ -212,11 +211,7 @@ class _ArrowWidgetState extends ConsumerState<ArrowWidget> {
     }
 
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-          (stateMan) => stateMan
-              .subscribe(widget.config.key)
-              .asStream()
-              .switchMap((s) => s)),
+      stream: ref.watch(keyStreamProvider(widget.config.key)),
       builder: (context, snapshot) {
         String operation = "lost";
         if (snapshot.hasData) {

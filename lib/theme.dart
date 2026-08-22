@@ -183,22 +183,40 @@ class AlarmColors extends ThemeExtension<AlarmColors> {
   final Color error;
   final Color onError;
 
+  /// Signal green, not Solarized's `#859900`. That olive reads as drab
+  /// khaki on a plant floor and, on the beacon asset, at 0.04 of page width
+  /// it was barely distinguishable from the equipment behind it.
+  static const Color signalGreen = Color(0xFF00E676);
+
+  /// Signal yellow, not Solarized's `#B58900`. That one is a brown-mustard
+  /// -- the darkest of the three severities, which inverted the intended
+  /// reading: a warning looked less urgent than an info.
+  static const Color signalYellow = Color(0xFFFFEA00);
+
+  /// Text and outline drawn ON the two bright fills. The Solarized `base2`
+  /// cream that was here fails contrast against them; near-black passes
+  /// comfortably on both.
+  static const Color onSignal = Color(0xFF0A0F0C);
+
   static const light = AlarmColors(
-    info: SolarizedColors.green,
-    onInfo: SolarizedColors.base2,
-    warning: SolarizedColors.yellow,
-    onWarning: SolarizedColors.base2,
+    info: signalGreen,
+    onInfo: onSignal,
+    warning: signalYellow,
+    onWarning: onSignal,
     error: SolarizedColors.red,
     onError: SolarizedColors.base2,
   );
 
+  // Identical to [light] by design -- see the class comment. The dark scheme
+  // used to render info as blue, which broke that rule and meant an info
+  // alarm changed colour with the operator's theme.
   static const dark = AlarmColors(
-    info: SolarizedColors.blue,
-    onInfo: SolarizedColors.base02,
-    warning: SolarizedColors.yellow,
-    onWarning: SolarizedColors.base02,
+    info: signalGreen,
+    onInfo: onSignal,
+    warning: signalYellow,
+    onWarning: onSignal,
     error: SolarizedColors.red,
-    onError: SolarizedColors.base02,
+    onError: SolarizedColors.base2,
   );
 
   static AlarmColors of(BuildContext context) {

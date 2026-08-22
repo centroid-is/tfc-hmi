@@ -1,15 +1,14 @@
 import 'dart:math';
-import 'dart:io';
 
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rxdart/rxdart.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/panes/color_picker_dialog.dart';
 import 'package:tfc/converter/color_converter.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 
 part 'led.g.dart';
 
@@ -212,25 +211,17 @@ class Led extends ConsumerWidget {
     if (config.key.isEmpty || config.key == LEDConfig.previewStr) {
       return LedRaw(config, value: null);
     }
-    return StreamBuilder<bool>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (stateMan) => stateMan
-                .subscribe(config.key)
-                .asStream()
-                .switchMap((s) => s)
-                .map((dynamicValue) => dynamicValue.asBool),
-          ),
+    return StreamBuilder<DynamicValue>(
+      stream: ref.watch(keyStreamProvider(config.key)),
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          stderr.writeln(
-              'Stream setup error for ${config.key}, error: ${snapshot.error}');
+        // A key the PLC will not serve is already reported by StateMan, with
+        // the node id and the server's own answer. Repeating it here wrote a
+        // line per rebuild — which, while a window is being dragged, is a
+        // line per frame.
+        if (snapshot.hasError || !snapshot.hasData) {
           return LedRaw(config, value: null);
         }
-        if (snapshot.hasData == false) {
-          return LedRaw(config, value: null);
-        }
-
-        return LedRaw(config, value: snapshot.data);
+        return LedRaw(config, value: snapshot.data!.asBool);
       },
     );
   }

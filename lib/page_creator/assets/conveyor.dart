@@ -1888,18 +1888,16 @@ class _ConveyorState extends ConsumerState<Conveyor>
       return _buildConveyorVisual(context, states.grey, true);
     }
 
-    // Nothing to subscribe to until there is a StateMan to subscribe through.
-    // Waiting here rather than inside the streams keeps the subscriptions a
-    // function of a concrete StateMan, so they are built once — subscribing
-    // against a pending future meant building them once for the pending state
-    // and again the moment it resolved.
-    final stateMan = ref.watch(stateManProvider).valueOrNull;
-    if (stateMan == null) {
-      return _buildConveyorVisual(context, states.grey, true);
-    }
+    // One shared stream per key, held by [keyStreamProvider] rather than by
+    // this widget: watching keeps them alive across a rebuild, and two
+    // conveyors bound to the same drive read the same subscription.
+    final sources = [
+      for (final b in bindings)
+        (binding: b, source: ref.watch(keyStreamProvider(b.key)))
+    ];
 
     return StreamBuilder<Map<String, DynamicValue>>(
-      stream: _valuesStream(stateMan, bindings),
+      stream: _valuesStream(sources),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           if (_errorGate.shouldReport(snapshot.error)) {
@@ -1990,27 +1988,24 @@ class _ConveyorState extends ConsumerState<Conveyor>
   /// that flushes on every event. Measured while dragging a window edge: about
   /// 130 KiB of log a second, against nothing at all once the mouse stopped —
   /// and a window that could not keep up with the mouse.
-  Stream<Map<String, DynamicValue>> _valuesStream(StateMan stateMan,
-      List<({String label, String key, bool optional})> bindings) {
-    // Keyed on what is actually read, and on what it is read through.
-    // Rebinding a key in the page editor changes this and the subscriptions
-    // are made again, as does reconnecting to a new StateMan; a rebuild for
-    // any other reason reuses them.
-    final signature = Object.hash(
-      identityHashCode(stateMan),
-      Object.hashAll([for (final b in bindings) '${b.label} ${b.key}']),
-    );
+  Stream<Map<String, DynamicValue>> _valuesStream(
+      List<({({String label, String key, bool optional}) binding,
+             Stream<DynamicValue> source})> sources) {
+    // Keyed on the streams themselves. [keyStreamProvider] hands back the
+    // same instance for the same key, so this changes only when the conveyor
+    // is pointed at different keys or the connection behind them is replaced
+    // — not once per frame, which is what it used to do.
+    final signature =
+        Object.hashAll([for (final s in sources) identityHashCode(s.source)]);
     final cached = _cachedValues;
     if (cached != null && signature == _cachedValuesSignature) return cached;
 
-    Stream<DynamicValue?> subscribe(String key) =>
-        stateMan.subscribe(key).asStream().switchMap((s) => s);
-
-    final labels = [for (final b in bindings) b.label];
-    final combined = CombineLatestStream<DynamicValue?, Map<String, DynamicValue>>(
+    final labels = [for (final s in sources) s.binding.label];
+    final combined =
+        CombineLatestStream<DynamicValue?, Map<String, DynamicValue>>(
       [
-        for (final b in bindings)
-          b.optional ? _optional(subscribe(b.key)) : subscribe(b.key),
+        for (final s in sources)
+          s.binding.optional ? _optional(s.source) : s.source,
       ],
       (values) {
         final result = <String, DynamicValue>{};
@@ -2054,7 +2049,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
   /// So: swallow the error to null, and seed a null up front. A dead
   /// optional stream now costs its own overlay and nothing else, and it
   /// starts working again by itself when the PLC serves that node.
-  Stream<DynamicValue?> _optional(Stream<DynamicValue?> source) => source
+  Stream<DynamicValue?> _optional(Stream<DynamicValue> source) => source
+      .map<DynamicValue?>((value) => value)
       .transform(
         StreamTransformer<DynamicValue?, DynamicValue?>.fromHandlers(
           handleError: (error, stackTrace, sink) => sink.add(null),
