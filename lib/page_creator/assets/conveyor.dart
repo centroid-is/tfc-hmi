@@ -735,13 +735,6 @@ class ConveyorPathGeometry {
     return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
-  /// Stretch the centerline until the belt's *ink* fills [size], per axis.
-  ///
-  /// Solved by iteration rather than in closed form: the ink is the
-  /// centerline offset sideways by half a belt, and that offset does not
-  /// scale with the centerline, so scaling the centerline by k does not
-  /// scale the ink by k. Each pass lands the ink closer to its box; see
-  /// [_inkFitPasses] for how many it takes.
   /// Passes of the ink fit. Each shrinks the remaining shortfall by roughly
   /// the fraction of the ink the band contributes, so the tail is geometric
   /// and short: six take a U-turn from 92%/68% of its box onto its clearance
@@ -753,6 +746,13 @@ class ConveyorPathGeometry {
   /// the two axes are fitted separately. Below this the box is all belt.
   static const _perAxisFloor = 0.1;
 
+  /// Stretch the centerline until the belt's *ink* fills [size], per axis.
+  ///
+  /// Solved by iteration rather than in closed form: the ink is the
+  /// centerline offset sideways by half a belt, and that offset does not
+  /// scale with the centerline, so scaling the centerline by k does not
+  /// scale the ink by k. Each pass lands the ink closer to its box; see
+  /// [_inkFitPasses] for how many it takes.
   static ConveyorPathGeometry _fillBoxWithInk(
       ConveyorPathGeometry g, Size size, double margin) {
     // Proportional, and only proportional. Everything the fit does has to be
@@ -806,8 +806,8 @@ class ConveyorPathGeometry {
       // `scale` and the bend radius describe the belt as a whole, so they
       // track the axis that moved least: the tightest bend on screen is
       // bounded by the axis that grew the least.
-      current = ConveyorPathGeometry._(next, current.beltWidth, g.scale * applied,
-          g.minTurnRadius * applied, metrics.first);
+      current = ConveyorPathGeometry._(next, current.beltWidth,
+          g.scale * applied, g.minTurnRadius * applied, metrics.first);
     }
     return current;
   }
