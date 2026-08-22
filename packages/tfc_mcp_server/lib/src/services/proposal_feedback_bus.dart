@@ -130,6 +130,15 @@ class ProposalFeedbackBus {
   /// How many callers are currently parked in [waitFor].
   int get waiterCount => _waiters.length;
 
+  /// Whether anything is currently subscribed to [stream].
+  ///
+  /// For tests. Exists so a subscription that was never cancelled can be
+  /// seen: the bus outlives every HTTP session, so a session that closes
+  /// without cancelling leaves a listener here forever -- and the
+  /// `isConnected` guard on the sending side makes that leak invisible from
+  /// the client's side, because nothing is delivered either way.
+  bool get hasListeners => _controller.hasListener;
+
   /// Live decisions, for listeners that want a push rather than a poll.
   ///
   /// Fires only for decisions published after the listener subscribes -- use

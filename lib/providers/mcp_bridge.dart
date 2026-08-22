@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/alarm.dart' show AlarmMan;
-import 'package:tfc_dart/core/state_man.dart' show StateMan;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         AlarmReader,
@@ -12,7 +10,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
-        McpToolToggles,
         NodeBrowser,
         StateReader,
         migrateMcpConfigToDeviceLocal,

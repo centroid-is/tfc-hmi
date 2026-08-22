@@ -18,7 +18,6 @@ import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'database.dart' show databaseProvider;
 import 'preferences.dart' show preferencesProvider;
 
-import '../chat/elicitation_dialog.dart';
 import '../chat/tool_filter.dart';
 import '../mcp/mcp_lifecycle_state.dart';
 import '../chat/chat_overlay.dart';
