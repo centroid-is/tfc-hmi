@@ -43,9 +43,13 @@ Future<void> loadRealFont() async {
   }
 }
 
-/// Golden of the gate force pane with its tri-state Open / None / Close
-/// selector — force-open feedback active, so the header carries the orange
-/// `Forced open` chip and the Open segment wears the same tint.
+/// Goldens of the gate force pane, one per control shape.
+///
+/// A diverter is held in a position, so it gets the tri-state Open / None /
+/// Close selector — shown here with force-open feedback active, so the header
+/// carries the orange `Forced open` chip and the Open segment wears the same
+/// tint. A pusher strokes out and returns, so it gets a single press-and-hold
+/// button, shown both at rest and held down.
 void main() {
   // This golden is a full 800×600 app surface with real text, so the
   // cross-Flutter-version antialiasing drift the default 0.01% tolerance
@@ -59,21 +63,8 @@ void main() {
     setUpAll(loadRealFont);
     tearDown(closeSidePane);
 
-    testWidgets('force pane with open force active', (tester) async {
-      final fake = _FakeStateMan();
-      fake.push('gate/state', true);
-      fake.push('gate/fo_fb', true);
-      fake.push('gate/fc_fb', false);
-
-      final config = ConveyorGateConfig(
-        gateVariant: GateVariant.pusher,
-        stateKey: 'gate/state',
-        forceOpenKey: 'gate/force_open',
-        forceCloseKey: 'gate/force_close',
-        forceOpenFeedbackKey: 'gate/fo_fb',
-        forceCloseFeedbackKey: 'gate/fc_fb',
-      );
-
+    Future<void> pumpGate(WidgetTester tester, ConveyorGateConfig config,
+        _FakeStateMan fake) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [stateManProvider.overrideWith((_) async => fake)],
         child: MaterialApp(
@@ -91,11 +82,80 @@ void main() {
 
       await tester.tap(find.byType(ConveyorGate));
       await tester.pumpAndSettle();
+    }
+
+    testWidgets('diverter force pane with open force active', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', true);
+      fake.push('gate/fo_fb', true);
+      fake.push('gate/fc_fb', false);
+
+      await pumpGate(
+        tester,
+        ConveyorGateConfig(
+          gateVariant: GateVariant.pneumatic,
+          stateKey: 'gate/state',
+          forceOpenKey: 'gate/force_open',
+          forceCloseKey: 'gate/force_close',
+          forceOpenFeedbackKey: 'gate/fo_fb',
+          forceCloseFeedbackKey: 'gate/fc_fb',
+        ),
+        fake,
+      );
 
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/conveyor_gate_force_pane.png'),
       );
+    });
+
+    testWidgets('pusher force pane at rest', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', false);
+
+      await pumpGate(
+        tester,
+        ConveyorGateConfig(
+          gateVariant: GateVariant.pusher,
+          stateKey: 'gate/state',
+          forceOpenKey: 'gate/force_open',
+        ),
+        fake,
+      );
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/conveyor_gate_pusher_force_pane.png'),
+      );
+    });
+
+    testWidgets('pusher force pane held down', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', true);
+
+      await pumpGate(
+        tester,
+        ConveyorGateConfig(
+          gateVariant: GateVariant.pusher,
+          stateKey: 'gate/state',
+          forceOpenKey: 'gate/force_open',
+        ),
+        fake,
+      );
+
+      // Held, not tapped: the whole point of this control is what it looks
+      // like under the operator's finger.
+      final press =
+          await tester.startGesture(tester.getCenter(find.text('Press to push')));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/conveyor_gate_pusher_force_pane_held.png'),
+      );
+
+      await press.up();
+      await tester.pumpAndSettle();
     });
   });
 }
