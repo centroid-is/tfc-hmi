@@ -19,6 +19,22 @@ on:
       ref:
         type: string
         default: ''
+      # The integration tests resolve "the latest release" off the live
+      # Releases API and download from it. A caller that is about to *replace*
+      # that release must not be gated on them: they describe the state the
+      # caller is superseding, and a bad release then blocks the very run that
+      # would fix it. main-prerelease.yml passes false for exactly that reason.
+      # PRs and pushes still run them, which is where they catch regressions.
+      #
+      # A string, not a boolean, and compared as one. On push/pull_request
+      # there is no `inputs` context, so this reads as ''. GitHub casts both ''
+      # and boolean false to 0 when either side of a comparison is a number or
+      # boolean, which makes `inputs.x != false` FALSE when unset — a boolean
+      # input silently disables the job everywhere instead of only where the
+      # caller asked. Two strings compare as strings, so '' != 'false' holds.
+      run_integration_tests:
+        type: string
+        default: 'true'
 
 # One run per ref, so a second push to a PR replaces the run in flight instead
 # of stacking another on top of it.
@@ -199,6 +215,8 @@ jobs:
 
   integration-test:
     needs: [build]
+    # Unset on push/pull_request (no `inputs` context), so the tests run there.
+    if: ${{ inputs.run_integration_tests != 'false' }}
     strategy:
       matrix:
         include:
