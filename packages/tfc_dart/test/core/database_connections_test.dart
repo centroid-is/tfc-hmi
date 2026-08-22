@@ -329,26 +329,21 @@ void main() {
     // life of the process. On the `useIsolate: false` path, which is every
     // collector acquisition isolate, there was no DriftIsolate to take it down
     // either, so each thrown-away connect attempt cost a server slot.
-    test('asks politely first, then forces anyway', () async {
-      // Politely first, because returning a connection closes it with a
-      // Terminate and the backend exits on the spot, where forcing destroys
-      // the socket and leaves the server to notice.
+    test('asks politely first, and stops there when that works', () async {
+      // Returning a connection closes it with a Terminate and the backend
+      // exits on the spot. Forcing destroys the socket and leaves the server
+      // to notice -- which on a busy server is the slot staying taken.
       //
-      // But not politely *only*, which is what this used to assert. A graceful
-      // close reports success once nothing is borrowed, and that is a weaker
-      // claim than every socket being shut: on CI it returned success while
-      // four connections stayed open, the monitor having already let go and
-      // the pool already reporting itself closed. The test's TCP proxy was
-      // still holding the pairs a minute later, which is how we know the
-      // client end never closed them.
-      //
-      // The follow-up force costs nothing for connections the polite close
-      // really did hand back -- their backends are gone already.
+      // This briefly asserted the opposite, [false, true], while the four
+      // leaked backends on CI were being chased. That theory was wrong: they
+      // came from `_startup` timing out with its socket already connected and
+      // never closing it, one layer below the pool, and forcing on top never
+      // reached them because the pool had never been told they existed.
       final forced = <bool>[];
       await releasePool(({bool force = false}) async => forced.add(force));
-      expect(forced, [false, true],
-          reason: 'the polite close is best-effort, so the force must still '
-              'happen -- stopping at the polite one is what leaked');
+      expect(forced, [false],
+          reason: 'a graceful close that succeeds must not be followed by a '
+              'forced one');
     });
 
     test('forces the close when the polite one will not finish', () async {
