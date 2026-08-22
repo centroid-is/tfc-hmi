@@ -1667,6 +1667,39 @@ class _NumberBoxState extends State<_NumberBox> {
   }
 }
 
+/// Reports a repeating failure once instead of once per rebuild.
+///
+/// A `StreamBuilder`'s `builder` runs on every rebuild, not only when the
+/// stream has something new to say, and a stream that has failed keeps
+/// handing back the same error every time. Logging straight out of the
+/// builder therefore writes a line per rebuild rather than a line per
+/// failure.
+///
+/// The error still reaches the log the moment it happens, and again if it
+/// changes or comes back after a recovery. It is the repetition that carries
+/// no information.
+class RepeatedErrorGate {
+  String? _reported;
+  bool _hasReported = false;
+
+  /// Whether [error] is worth writing down: true the first time it is seen,
+  /// and thereafter only when it differs from the last one reported.
+  bool shouldReport(Object? error) {
+    final seen = error?.toString();
+    if (_hasReported && seen == _reported) return false;
+    _hasReported = true;
+    _reported = seen;
+    return true;
+  }
+
+  /// Forget what was reported, so a failure that returns after the stream
+  /// recovers is reported again rather than silently swallowed.
+  void recovered() {
+    _hasReported = false;
+    _reported = null;
+  }
+}
+
 class Conveyor extends ConsumerStatefulWidget {
   final ConveyorConfig config;
   const Conveyor(this.config, {Key? key}) : super(key: key);
@@ -1687,6 +1720,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
     ),
   );
   final Map<String, Batch> _batches = {};
+  final RepeatedErrorGate _errorGate = RepeatedErrorGate();
+  Stream<Map<String, DynamicValue>>? _cachedValues;
+  int? _cachedValuesSignature;
   // periodic timer for batches
   Timer? _simulateBatchesTimer;
 
@@ -1837,146 +1873,53 @@ class _ConveyorState extends ConsumerState<Conveyor>
       _stopSimulateBatchesTimer();
     }
 
-    // Determine which streams to subscribe to.
-    //
-    // Nullable, because the decorative streams are allowed to be absent.
-    // See [optional] below.
-    final streams = <Stream<DynamicValue?>>[];
-    final streamLabels = <String>[];
-
-    /// Wraps a stream whose failure must not take the whole conveyor down.
-    ///
-    /// `key` (the drive) is what the asset actually *is*: if it fails, the
-    /// conveyor genuinely has no state and rendering it grey is correct.
-    /// Batches, frequency, trip and auger RPM are decoration on top of that.
-    ///
-    /// They used to be fatal anyway, because CombineLatestStream propagates
-    /// an error from ANY input and the builder turns `snapshot.hasError`
-    /// into the disconnected visual. Binding `batchesKey` to a node the PLC
-    /// answered with BadDeviceFailure therefore greyed out every SPB
-    /// conveyor on the home page -- while their drive keys were healthy and
-    /// reading fine the whole time. Wet-area conveyors, which have no
-    /// `batchesKey`, were unaffected, which is what gave the game away.
-    ///
-    /// There is a second, quieter half to the same bug: CombineLatest does
-    /// not emit until EVERY input has produced a first value, so an optional
-    /// stream that merely stays silent leaves `!snapshot.hasData` and blanks
-    /// the asset just as effectively as an error does. Hence `startWith`.
-    ///
-    /// So: swallow the error to null, and seed a null up front. A dead
-    /// optional stream now costs its own overlay and nothing else, and it
-    /// starts working again by itself when the PLC serves that node.
-    Stream<DynamicValue?> optional(Stream<DynamicValue> source) => source
-        .map<DynamicValue?>((value) => value)
-        .transform(
-          StreamTransformer<DynamicValue?, DynamicValue?>.fromHandlers(
-            handleError: (error, stackTrace, sink) => sink.add(null),
-          ),
-        )
-        .startWith(null);
-
-    if (widget.config.key != null && widget.config.key!.isNotEmpty) {
-      streams.add(ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.key!)
-                .asStream()
-                .switchMap((s) => s),
-          ));
-      streamLabels.add('drive');
-    }
-
-    if (widget.config.batchesKey != null &&
-        widget.config.batchesKey!.isNotEmpty) {
-      streams.add(optional(
-          ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.batchesKey!)
-                .asStream()
-                .switchMap((s) => s),
-          )));
-      streamLabels.add('batches');
-    }
-
-    if (widget.config.frequencyKey != null &&
-        widget.config.frequencyKey!.isNotEmpty) {
-      streams.add(optional(
-          ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.frequencyKey!)
-                .asStream()
-                .switchMap((s) => s),
-          )));
-      streamLabels.add('frequency');
-    }
-
-    if (widget.config.runningKey != null &&
-        widget.config.runningKey!.isNotEmpty) {
-      streams.add(optional(
-          ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.runningKey!)
-                .asStream()
-                .switchMap((s) => s),
-          )));
-      streamLabels.add('running');
-    }
-
-    if (widget.config.tripKey != null && widget.config.tripKey!.isNotEmpty) {
-      streams.add(optional(
-          ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.tripKey!)
-                .asStream()
-                .switchMap((s) => s),
-          )));
-      streamLabels.add('trip');
-    }
-
-    if (widget.config.augerRpmKey != null &&
-        widget.config.augerRpmKey!.isNotEmpty) {
-      streams.add(optional(
-          ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(widget.config.augerRpmKey!)
-                .asStream()
-                .switchMap((s) => s),
-          )));
-      streamLabels.add('augerRpm');
-    }
+    // Which keys this conveyor reads, and the label the builder finds each
+    // one under.
+    final bindings = <({String label, String key, bool optional})>[
+      if (_bound(widget.config.key))
+        (label: 'drive', key: widget.config.key!, optional: false),
+      if (_bound(widget.config.batchesKey))
+        (label: 'batches', key: widget.config.batchesKey!, optional: true),
+      if (_bound(widget.config.frequencyKey))
+        (label: 'frequency', key: widget.config.frequencyKey!, optional: true),
+      if (_bound(widget.config.runningKey))
+        (label: 'running', key: widget.config.runningKey!, optional: true),
+      if (_bound(widget.config.tripKey))
+        (label: 'trip', key: widget.config.tripKey!, optional: true),
+      if (_bound(widget.config.augerRpmKey))
+        (label: 'augerRpm', key: widget.config.augerRpmKey!, optional: true),
+    ];
 
     // If no streams are configured, show error state
-    if (streams.isEmpty) {
+    if (bindings.isEmpty) {
+      return _buildConveyorVisual(context, states.grey, true);
+    }
+
+    // Nothing to subscribe to until there is a StateMan to subscribe through.
+    // Waiting here rather than inside the streams keeps the subscriptions a
+    // function of a concrete StateMan, so they are built once — subscribing
+    // against a pending future meant building them once for the pending state
+    // and again the moment it resolved.
+    final stateMan = ref.watch(stateManProvider).valueOrNull;
+    if (stateMan == null) {
       return _buildConveyorVisual(context, states.grey, true);
     }
 
     return StreamBuilder<Map<String, DynamicValue>>(
-      stream: CombineLatestStream(
-        streams,
-        (List<DynamicValue?> values) {
-          final result = <String, DynamicValue>{};
-          for (int i = 0; i < streamLabels.length; i++) {
-            // A null here is an optional stream that has failed or has not
-            // reported yet. Leaving the label out entirely keeps the
-            // downstream `dynValue['batches'] != null` checks honest.
-            final value = values[i];
-            if (value != null) result[streamLabels[i]] = value;
-          }
-          return result;
-        },
-      ),
+      stream: _valuesStream(stateMan, bindings),
       builder: (context, snapshot) {
-        if (widget.config.key == null || widget.config.key == '') {
-          // print('no key');
-        }
         if (snapshot.hasError) {
-          _log.e(
-            'Error fetching dynamic values, error: ${snapshot.error}',
-          );
+          if (_errorGate.shouldReport(snapshot.error)) {
+            _log.e(
+              'Error fetching dynamic values, error: ${snapshot.error}',
+            );
+          }
           return _buildConveyorVisual(context, states.grey, true);
         }
         if (!snapshot.hasData) {
           return _buildConveyorVisual(context, states.grey, true);
         }
+        _errorGate.recovered();
 
         final dynValue = snapshot.data!;
         final color = _getConveyorColor(
@@ -2036,6 +1979,95 @@ class _ConveyorState extends ConsumerState<Conveyor>
       },
     );
   }
+
+  static bool _bound(String? key) => key != null && key.isNotEmpty;
+
+  /// Everything this conveyor reads, combined — built once and kept until the
+  /// set of keys changes.
+  ///
+  /// This used to be assembled inside `build`, which handed `StreamBuilder` a
+  /// new stream object every time the widget rebuilt. A new object means
+  /// cancel the old subscription and open a fresh one, and resizing a window
+  /// rebuilds continuously — so every conveyor on the page dropped and re-made
+  /// all of its subscriptions once a frame. Each cycle asks the PLC for a new
+  /// set of monitored items and throws away the ones it made a frame ago;
+  /// restarts StateMan's retry ladder from the top, so a key that should have
+  /// backed off to one attempt every ten minutes never got past its fourth;
+  /// and writes several framed log blocks per key per frame through a sink
+  /// that flushes on every event. Measured while dragging a window edge: about
+  /// 130 KiB of log a second, against nothing at all once the mouse stopped —
+  /// and a window that could not keep up with the mouse.
+  Stream<Map<String, DynamicValue>> _valuesStream(StateMan stateMan,
+      List<({String label, String key, bool optional})> bindings) {
+    // Keyed on what is actually read, and on what it is read through.
+    // Rebinding a key in the page editor changes this and the subscriptions
+    // are made again, as does reconnecting to a new StateMan; a rebuild for
+    // any other reason reuses them.
+    final signature = Object.hash(
+      identityHashCode(stateMan),
+      Object.hashAll([for (final b in bindings) '${b.label} ${b.key}']),
+    );
+    final cached = _cachedValues;
+    if (cached != null && signature == _cachedValuesSignature) return cached;
+
+    Stream<DynamicValue?> subscribe(String key) =>
+        stateMan.subscribe(key).asStream().switchMap((s) => s);
+
+    final labels = [for (final b in bindings) b.label];
+    final combined = CombineLatestStream<DynamicValue?, Map<String, DynamicValue>>(
+      [
+        for (final b in bindings)
+          b.optional ? _optional(subscribe(b.key)) : subscribe(b.key),
+      ],
+      (values) {
+        final result = <String, DynamicValue>{};
+        for (var i = 0; i < labels.length; i++) {
+          // A null here is an optional stream that has failed or has not
+          // reported yet. Leaving the label out entirely keeps the
+          // downstream `dynValue['batches'] != null` checks honest.
+          final value = values[i];
+          if (value != null) result[labels[i]] = value;
+        }
+        return result;
+      },
+      // Shared with a replayed value, so that if the subscription ever is
+      // re-listened the belt shows what it last knew instead of blanking.
+    ).shareReplay(maxSize: 1);
+
+    _cachedValuesSignature = signature;
+    _cachedValues = combined;
+    return combined;
+  }
+
+  /// Wraps a stream whose failure must not take the whole conveyor down.
+  ///
+  /// `key` (the drive) is what the asset actually *is*: if it fails, the
+  /// conveyor genuinely has no state and rendering it grey is correct.
+  /// Batches, frequency, trip and auger RPM are decoration on top of that.
+  ///
+  /// They used to be fatal anyway, because CombineLatestStream propagates
+  /// an error from ANY input and the builder turns `snapshot.hasError`
+  /// into the disconnected visual. Binding `batchesKey` to a node the PLC
+  /// answered with BadDeviceFailure therefore greyed out every SPB
+  /// conveyor on the home page -- while their drive keys were healthy and
+  /// reading fine the whole time. Wet-area conveyors, which have no
+  /// `batchesKey`, were unaffected, which is what gave the game away.
+  ///
+  /// There is a second, quieter half to the same bug: CombineLatest does
+  /// not emit until EVERY input has produced a first value, so an optional
+  /// stream that merely stays silent leaves `!snapshot.hasData` and blanks
+  /// the asset just as effectively as an error does. Hence `startWith`.
+  ///
+  /// So: swallow the error to null, and seed a null up front. A dead
+  /// optional stream now costs its own overlay and nothing else, and it
+  /// starts working again by itself when the PLC serves that node.
+  Stream<DynamicValue?> _optional(Stream<DynamicValue?> source) => source
+      .transform(
+        StreamTransformer<DynamicValue?, DynamicValue?>.fromHandlers(
+          handleError: (error, stackTrace, sink) => sink.add(null),
+        ),
+      )
+      .startWith(null);
 
   void _updateBatches(DynamicValue dynConveyor) {
     final conveyorLength = dynConveyor['p_stat_Length'].asDouble;
