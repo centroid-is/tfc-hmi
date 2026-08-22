@@ -174,11 +174,11 @@ void main() {
 
     expect(stateMan.subscribes['CV.OtherDrive'], 1,
         reason: 'the newly bound key is subscribed');
-    // The conveyor's inputs are combined into one stream, so re-binding any
-    // of them re-makes all of them. That is a person editing a page, not a
-    // frame being drawn — once, not sixty times a second.
-    expect(stateMan.subscribes['CV.Running'], 2,
-        reason: 'the combined stream is rebuilt as a unit');
+    // And only that one. The subscription belongs to the key rather than to
+    // the widget drawing it, so the keys that did not change are not
+    // disturbed by one that did.
+    expect(stateMan.subscribes['CV.Running'], 1,
+        reason: 'rebinding one key must not re-open the others');
     await tester.pumpAndSettle();
   });
 

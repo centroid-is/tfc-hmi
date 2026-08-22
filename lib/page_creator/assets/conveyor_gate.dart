@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
-import 'package:tfc_dart/core/state_man.dart';
 import '../../theme.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
@@ -174,12 +173,10 @@ class ConveyorGateConfig extends BaseAsset {
 ///
 /// Returns a stream that emits `false` immediately and then tracks the live
 /// value. When [key] is empty the stream emits a single `false` (no-op).
-Stream<bool> _boolFeedback(StateMan sm, String key) {
+Stream<bool> _boolFeedback(WidgetRef ref, String key) {
   if (key.isEmpty) return Stream.value(false);
-  return sm
-      .subscribe(key)
-      .asStream()
-      .asyncExpand((s) => s)
+  return ref
+      .watch(keyStreamProvider(key))
       .map((v) => v.asBool)
       .startWith(false);
 }
@@ -359,12 +356,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         widget.config.forceCloseFeedbackKey.isNotEmpty;
 
     return StreamBuilder<DynamicValue>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (stateMan) => stateMan
-                .subscribe(widget.config.stateKey)
-                .asStream()
-                .switchMap((s) => s),
-          ),
+      stream: ref.watch(keyStreamProvider(widget.config.stateKey)),
       builder: (context, snapshot) {
         // Resolve base color from OPC UA state.
         final bool isOpen = snapshot.hasData && snapshot.data!.asBool;
@@ -383,14 +375,10 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         // that overrides color when any force feedback is active (VIS-03).
         if (hasForceFeedback) {
           return StreamBuilder<bool>(
-            stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-              (sm) {
-                return Rx.combineLatest2(
-                  _boolFeedback(sm, widget.config.forceOpenFeedbackKey),
-                  _boolFeedback(sm, widget.config.forceCloseFeedbackKey),
-                  (a, b) => a || b,
-                );
-              },
+            stream: Rx.combineLatest2(
+              _boolFeedback(ref, widget.config.forceOpenFeedbackKey),
+              _boolFeedback(ref, widget.config.forceCloseFeedbackKey),
+              (a, b) => a || b,
             ),
             builder: (context, fbSnapshot) {
               final forceActive = fbSnapshot.data ?? false;
@@ -466,12 +454,10 @@ class _GateForcePane extends ConsumerWidget {
 
   /// Gate open/closed as a nullable bool — null until the first value
   /// arrives, and forever when no state key is configured.
-  Stream<bool?> _gateState(StateMan sm) {
+  Stream<bool?> _gateState(WidgetRef ref) {
     if (config.stateKey.isEmpty) return Stream<bool?>.value(null);
-    return sm
-        .subscribe(config.stateKey)
-        .asStream()
-        .asyncExpand((s) => s)
+    return ref
+        .watch(keyStreamProvider(config.stateKey))
         .map<bool?>((v) => v.asBool)
         .startWith(null);
   }
@@ -479,15 +465,13 @@ class _GateForcePane extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return StreamBuilder<_GateSnapshot>(
-      stream: ref.watch(stateManProvider.future).asStream().asyncExpand(
-            (sm) => Rx.combineLatest3(
-              _gateState(sm),
-              _boolFeedback(sm, config.forceOpenFeedbackKey),
-              _boolFeedback(sm, config.forceCloseFeedbackKey),
-              (bool? isOpen, bool fo, bool fc) =>
-                  (isOpen: isOpen, forcedOpen: fo, forcedClosed: fc),
-            ),
-          ),
+      stream: Rx.combineLatest3(
+        _gateState(ref),
+        _boolFeedback(ref, config.forceOpenFeedbackKey),
+        _boolFeedback(ref, config.forceCloseFeedbackKey),
+        (bool? isOpen, bool fo, bool fc) =>
+            (isOpen: isOpen, forcedOpen: fo, forcedClosed: fc),
+      ),
       builder: (context, snapshot) {
         final snap = snapshot.data ??
             (isOpen: null, forcedOpen: false, forcedClosed: false);
