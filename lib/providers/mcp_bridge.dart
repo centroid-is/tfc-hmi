@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tfc_dart/core/alarm.dart' show AlarmMan;
-import 'package:tfc_dart/core/state_man.dart' show StateMan;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         AlarmReader,
@@ -12,7 +10,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
-        McpToolToggles,
         NodeBrowser,
         StateReader,
         migrateMcpConfigToDeviceLocal,
@@ -28,6 +25,8 @@ import 'alarm.dart';
 import 'database.dart' show databaseProvider;
 import 'plc.dart' show plcCodeIndexProvider;
 import 'preferences.dart' show localPreferencesProvider, preferencesProvider;
+import 'proposal.dart' show describeProposalFeedback;
+import 'proposal_state.dart' show ProposalFeedback, proposalFeedbackProvider;
 import 'state_man.dart';
 
 export '../mcp/mcp_bridge_notifier.dart'
@@ -227,6 +226,51 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
   );
 }
 
+/// Relays the operator's decisions on proposals out to MCP clients.
+///
+/// [proposalFeedbackProvider] is a broadcast controller with two independent
+/// consumers: the chat lifecycle turns each event into an operator-decision
+/// note in the in-app conversation, and this relay pushes the same event onto
+/// [McpBridgeNotifier.feedbackBus] where an external client picks it up with
+/// `await_proposal_feedback`.
+///
+/// Deliberately NOT hung off `chatLifecycleProvider`. That provider only runs
+/// when the in-app chat bubble is enabled, and the whole point of this path
+/// is the case where it is not: an external client proposes over HTTP, the
+/// operator accepts in the banner, and nothing about the in-app chat is
+/// involved. Hanging the relay there would have made the feature work only
+/// in the one configuration that does not need it.
+///
+/// The summary is rendered here, next to the proposals the banner actually
+/// showed, with the same [describeProposalFeedback] the in-app AI is given:
+/// the payload has to say WHAT was accepted, not just that something was.
+final proposalFeedbackRelayProvider = Provider<void>((ref) {
+  final bridge = ref.read(mcpBridgeProvider);
+  final controller = ref.watch(proposalFeedbackProvider);
+
+  final sub = controller.stream.listen((ProposalFeedback event) {
+    try {
+      bridge.feedbackBus.publish(
+        action: event.action,
+        summary: describeProposalFeedback(event.action, event.proposals),
+        proposals: [
+          for (final p in event.proposals)
+            <String, dynamic>{
+              'title': p.title,
+              'type': p.proposalType,
+              'op': p.action.name,
+            },
+        ],
+      );
+    } catch (e) {
+      // A closed bus (bridge disposed mid-shutdown) must not take down the
+      // stream that also feeds the in-app conversation.
+      io.stderr.writeln('proposalFeedbackRelayProvider: publish failed: $e');
+    }
+  });
+  ref.onDispose(sub.cancel);
+});
+
 /// Manages the MCP SSE server lifecycle based on the enabled preference.
 ///
 /// When [mcpEnabledProvider] is true, starts the SSE server on the configured
@@ -236,6 +280,12 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
 ///
 /// Also watches config preference changes for debounced server restart.
 final mcpServerLifecycleProvider = Provider<void>((ref) {
+  // Keep the decision return path alive for as long as the server is. It is
+  // mounted here rather than in main.dart so it cannot be forgotten: an MCP
+  // server whose clients never learn what the operator decided is the gap
+  // this exists to close.
+  ref.watch(proposalFeedbackRelayProvider);
+
   // Watch enabled state changes.
   // Ignore AsyncLoading transitions to avoid stop/restart cycles when
   // preferencesProvider is temporarily invalidated (e.g. database reconnect).

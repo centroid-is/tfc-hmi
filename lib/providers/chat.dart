@@ -18,7 +18,6 @@ import 'package:tfc_dart/core/preferences.dart' show Preferences;
 import 'database.dart' show databaseProvider;
 import 'preferences.dart' show preferencesProvider;
 
-import '../chat/elicitation_dialog.dart';
 import '../chat/tool_filter.dart';
 import '../mcp/mcp_lifecycle_state.dart';
 import '../chat/chat_overlay.dart';
@@ -35,8 +34,14 @@ import 'alarm.dart';
 import 'llm.dart';
 import 'mcp_bridge.dart';
 import 'plc.dart' show plcCodeIndexProvider;
+import 'proposal.dart' show describeProposalFeedback;
 import 'proposal_state.dart';
 import 'state_man.dart';
+
+// describeProposalFeedback moved to proposal.dart when the proposal-feedback
+// bus grew a second consumer for it. Re-exported so the many call sites that
+// reach it through this library keep working.
+export 'proposal.dart' show describeProposalFeedback;
 
 /// Preference key for persisted chat history (legacy, migrated to conversations).
 const kChatHistory = 'chat.history';
@@ -907,48 +912,6 @@ class ChatNotifier extends Notifier<ChatState> {
 final chatProvider = NotifierProvider<ChatNotifier, ChatState>(
   () => ChatNotifier(),
 );
-
-/// Renders one operator decision as a line of feedback for the AI.
-///
-/// The text follows [kOperatorDecisionPrefix] in the injected note, so it
-/// reads as a sentence: `Accepted the alarm proposal "High temp".` Bulk
-/// decisions list up to five titles. Proposal ids are not mentioned: they are
-/// process-local handles now, and quoting one at the AI would invite it to
-/// ask after a proposal that no longer exists anywhere.
-String describeProposalFeedback(
-    String action, List<PendingProposal> proposals) {
-  final verb = switch (action) {
-    'accepted' => 'Accepted',
-    'rejected' => 'Rejected',
-    'dismissed' => 'Dismissed',
-    'viewed' => 'Viewed',
-    _ => action,
-  };
-  final suffix = action == 'viewed' ? ' No decision yet.' : '';
-
-  String typeLabel(String type) => switch (type) {
-        'alarm' || 'alarm_create' || 'alarm_update' => 'alarm',
-        'key_mapping' => 'key mapping',
-        'page' => 'page',
-        'asset' => 'asset',
-        'asset_update' => 'asset update',
-        _ => 'config',
-      };
-
-  if (proposals.length == 1) {
-    final p = proposals.first;
-    return '$verb the ${typeLabel(p.proposalType)} proposal '
-        '"${p.title}".$suffix';
-  }
-
-  final types = proposals.map((p) => typeLabel(p.proposalType)).toSet();
-  final label = types.length == 1 ? '${types.first} proposals' : 'proposals';
-  final titles = [
-    for (final p in proposals.take(5)) '"${p.title}"',
-    if (proposals.length > 5) 'and ${proposals.length - 5} more',
-  ].join(', ');
-  return '$verb ${proposals.length} $label: $titles.$suffix';
-}
 
 /// Creates an [LlmProvider] instance for the given type and API key.
 ///

@@ -13,7 +13,8 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         TechDocIndex,
         McpToolToggles,
         NodeBrowser,
-        ProposalCallback;
+        ProposalCallback,
+        ProposalFeedbackBus;
 
 /// Hosts an MCP server using Streamable HTTP transport.
 ///
@@ -43,6 +44,10 @@ class McpSseServer {
     TechDocIndex? techDocIndex,
     NodeBrowser? nodeBrowser,
     ProposalCallback? onProposal,
+
+    /// Shared across every session: the operator decides once, and each
+    /// session's `await_proposal_feedback` reads the same decision log.
+    ProposalFeedbackBus? feedbackBus,
   }) async {
     if (isRunning) return;
 
@@ -59,6 +64,7 @@ class McpSseServer {
           nodeBrowser: nodeBrowser,
           toggles: toggles,
           onProposal: onProposal,
+          feedbackBus: feedbackBus,
         );
         return tfcServer.mcpServer;
       },

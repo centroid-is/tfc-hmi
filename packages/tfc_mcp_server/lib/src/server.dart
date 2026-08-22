@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:logger/logger.dart' as log;
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:tfc_dart/tfc_dart_core.dart' show McpDatabase;
@@ -32,6 +34,7 @@ import 'services/tag_service.dart';
 import 'services/trend_service.dart';
 import 'expression/expression_validator.dart';
 import 'safety/elicitation_risk_gate.dart';
+import 'services/proposal_feedback_bus.dart';
 import 'services/proposal_service.dart';
 import 'tools/alarm_tools.dart';
 import 'tools/alarm_write_tools.dart';
@@ -44,12 +47,14 @@ import 'tools/tech_doc_tools.dart';
 import 'tools/key_mapping_write_tools.dart';
 import 'tools/page_write_tools.dart';
 import 'tools/ping_tool.dart';
+import 'tools/proposal_feedback_tools.dart';
 import 'tools/browse_tools.dart';
 import 'tools/tag_tools.dart';
 import 'tools/tool_registry.dart';
 import 'tools/tool_toggles.dart';
 import 'tools/asset_type_catalog_tools.dart';
 import 'tools/trend_tools.dart';
+import 'server_instructions.dart';
 
 /// The TFC MCP Server wrapping [McpServer] from mcp_dart.
 ///
@@ -77,14 +82,30 @@ class TfcMcpServer {
     McpServer? mcpServer,
     log.Logger? logger,
     ProposalCallback? onProposal,
+
+    /// Where operator decisions on proposals are published, so an external
+    /// MCP client can be told what happened to what it proposed. Null in
+    /// standalone/database-only mode, where nobody is clicking anything.
+    ProposalFeedbackBus? feedbackBus,
   })  : _mcpServer = mcpServer ??
             McpServer(
               const Implementation(
                   name: 'tfc-mcp-server', version: '0.1.0'),
               options: McpServerOptions(
+                // How to drive this server, handed to every client in the
+                // initialize result. A fresh client on a fresh machine gets
+                // the load-bearing rules -- proposals are not writes, the
+                // alias is mandatory, verify before proposing -- without
+                // having to be told them by a person.
+                instructions: kTfcServerInstructions,
                 capabilities: ServerCapabilities(
                   tools: ServerCapabilitiesTools(),
                   resources: ServerCapabilitiesResources(),
+                  // Advertised so server-initiated notifications are
+                  // legitimate for clients that check. mcp_dart registers the
+                  // logging/setLevel handler whenever this is present, so
+                  // there is no repeat of the prompts hang described below.
+                  logging: <String, dynamic>{},
                   // Prompts are only registered when alarms are enabled (see
                   // the registerPrompt calls below). Advertising the
                   // capability with zero prompts registered leaves
@@ -215,6 +236,15 @@ class TfcMcpServer {
         riskGate: riskGate,
         proposalService: proposalService,
       );
+
+      // The return half of the proposal path. Without it a proposal is a
+      // one-way message: an external client over HTTP proposes twenty
+      // changes and never learns that the operator accepted eighteen of
+      // them, because the decision only ever reached the in-app chat.
+      if (feedbackBus != null) {
+        registerProposalFeedbackTools(registry, feedbackBus);
+        _wireFeedbackNotifications(feedbackBus);
+      }
     }
 
     // Resources (registered directly on McpServer, no identity/audit gate)
@@ -258,6 +288,45 @@ class TfcMcpServer {
   final McpDatabase _database;
   final log.Logger _logger;
 
+  /// Live forwarding of operator decisions to this session's client.
+  StreamSubscription<Map<String, dynamic>>? _feedbackSub;
+
+  /// Pushes each operator decision to this session as a
+  /// `notifications/tfc/proposal_feedback` notification.
+  ///
+  /// Best-effort garnish, not the mechanism. A notification with no related
+  /// request id goes to the client's standalone GET stream, and mcp_dart
+  /// discards it outright when the client holds none -- which most clients
+  /// do not. `await_proposal_feedback` is what actually delivers a decision
+  /// reliably; this only saves a client that does hold a GET stream from
+  /// waiting for its next poll to return.
+  ///
+  /// One subscription per [TfcMcpServer], and there is one of those per HTTP
+  /// session, so sessions prune themselves: the subscription is cancelled
+  /// when this session's transport closes.
+  void _wireFeedbackNotifications(ProposalFeedbackBus bus) {
+    _feedbackSub = bus.stream.listen((entry) {
+      if (!_mcpServer.isConnected) return;
+      // Unawaited and swallowed: a client that has gone away must not turn
+      // an operator's button click into an unhandled error.
+      _mcpServer.server
+          .notification(JsonRpcNotification(
+            method: 'notifications/tfc/proposal_feedback',
+            params: entry,
+          ))
+          .catchError((Object e) {
+        _logger.d('proposal feedback notification not delivered: $e');
+      });
+    });
+
+    final previousOnClose = _mcpServer.server.onclose;
+    _mcpServer.server.onclose = () {
+      _feedbackSub?.cancel();
+      _feedbackSub = null;
+      previousOnClose?.call();
+    };
+  }
+
   /// The underlying [McpServer] instance.
   McpServer get mcpServer => _mcpServer;
 
@@ -276,6 +345,8 @@ class TfcMcpServer {
   /// database and manages its lifecycle.
   Future<void> close({bool closeDatabase = true}) async {
     _logger.i('TFC MCP Server shutting down...');
+    await _feedbackSub?.cancel();
+    _feedbackSub = null;
     if (closeDatabase) {
       await _database.close();
     }
