@@ -1580,6 +1580,19 @@ class AutoSizedText extends StatelessWidget {
   final double minFontSize;
   final double? maxFontSize;
 
+  /// Shrink to fit, but never grow past the style's own font size.
+  ///
+  /// This is what `FittedBox(fit: BoxFit.scaleDown)` did, and some labels
+  /// want it. A button face should grow with the button — that is the whole
+  /// point of sizing text to its box. A *legend* should not: the conveyor
+  /// colour palette lists five colours with a word beside each, and letting
+  /// those words fill their swatches turned a key into five giant captions.
+  ///
+  /// Only caps the upper end. The text still shrinks when the box is too
+  /// small, and is still laid out at its final size rather than scaled there,
+  /// so it rasterises just as crisply.
+  final bool shrinkOnly;
+
   /// Turns the text, and fits its rotated bounding box to the box.
   final double angleRadians;
 
@@ -1593,6 +1606,7 @@ class AutoSizedText extends StatelessWidget {
     this.heightFraction = 1.0,
     this.minFontSize = 1.0,
     this.maxFontSize,
+    this.shrinkOnly = false,
     this.angleRadians = 0.0,
   });
 
@@ -1605,13 +1619,20 @@ class AutoSizedText extends StatelessWidget {
           math.max(0.0, constraints.maxWidth - padding.horizontal),
           math.max(0.0, constraints.maxHeight - padding.vertical),
         );
+        // [shrinkOnly] caps at whatever the style resolved to, which is only
+        // knowable here — the call site sees `style`, not what it merged
+        // with. An explicit maxFontSize still wins, so the two can be
+        // combined and the tighter one applies.
+        final cap = shrinkOnly && resolved.fontSize != null
+            ? math.min(maxFontSize ?? double.infinity, resolved.fontSize!)
+            : maxFontSize;
         final fontSize = fittedFontSize(
           text: text,
           style: resolved,
           box: box,
           heightFraction: heightFraction,
           minFontSize: minFontSize,
-          maxFontSize: maxFontSize,
+          maxFontSize: cap,
           angleRadians: angleRadians,
           textScaler: MediaQuery.textScalerOf(context),
           textDirection: Directionality.of(context),
