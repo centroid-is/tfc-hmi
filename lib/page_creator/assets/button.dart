@@ -66,7 +66,7 @@ enum DisabledPolarity {
   disableWhenFalse,
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class ButtonConfig extends BaseAsset {
   @override
   String get displayName => 'Button';

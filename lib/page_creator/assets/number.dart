@@ -21,7 +21,7 @@ import 'graph.dart';
 
 part 'number.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class NumberConfig extends BaseAsset {
   @override
   String get displayName => 'Number';

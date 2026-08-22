@@ -15,7 +15,7 @@ part 'start_stop_button.g.dart';
 
 enum _Segment { run, clean, stop, manual }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class StartStopPillButtonConfig extends BaseAsset {
   @override
   String get displayName => 'Start/Stop Button';

@@ -13,7 +13,7 @@ import 'common.dart';
 import 'package:tfc/converter/color_converter.dart';
 part 'drawn_box.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class DrawnBoxConfig extends BaseAsset {
   @override
   String get displayName => 'Drawn Box';

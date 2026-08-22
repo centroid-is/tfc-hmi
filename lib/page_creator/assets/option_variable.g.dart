@@ -44,14 +44,14 @@ Map<String, dynamic> _$OptionVariableConfigToJson(
         OptionVariableConfig instance) =>
     <String, dynamic>{
       'asset_name': instance.variant,
-      'coordinates': instance.coordinates,
-      'size': instance.size,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
       'text': instance.text,
       'textPos': _$TextPosEnumMap[instance.textPos],
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'variableName': instance.variableName,
-      'options': instance.options,
+      'options': instance.options.map((e) => e.toJson()).toList(),
       'selectedValue': instance.selectedValue,
       'defaultValue': instance.defaultValue,
       'showSearch': instance.showSearch,

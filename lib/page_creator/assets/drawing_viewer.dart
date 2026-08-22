@@ -11,7 +11,7 @@ import 'package:tfc/tech_docs/tech_doc_picker.dart';
 
 part 'drawing_viewer.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class DrawingViewerConfig extends BaseAsset {
   @override
   String get displayName => 'Drawing Viewer';

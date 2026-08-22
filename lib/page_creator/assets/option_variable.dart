@@ -29,7 +29,7 @@ class OptionItem {
   Map<String, dynamic> toJson() => _$OptionItemToJson(this);
 }
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class OptionVariableConfig extends BaseAsset {
   @override
   String get displayName => 'Option Variable';
