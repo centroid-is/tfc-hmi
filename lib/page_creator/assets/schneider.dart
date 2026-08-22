@@ -153,7 +153,7 @@ class _SchneiderATV320 extends ConsumerWidget {
                     MapEntry("hmis", config.hmisKey),
                     MapEntry("freq", config.freqKey),
                   ]),
-                  stateMan,
+                  ref,
                 ),
           builder: (context, s) {
             final data = (s.hasData && !s.hasError) ? s.data! : null;
@@ -356,12 +356,18 @@ class _ATV320ConfigPaneState extends State<_ATV320ConfigPane> {
   }
 }
 
+/// The named keys of one module, combined.
+///
+/// Reads each key through [keyStreamProvider] rather than subscribing here.
+/// These modules are page assets, so this runs on every rebuild — and a fresh
+/// `subscribe` per rebuild is a monitored-item create-and-cancel per frame
+/// while a window is being dragged. The per-key streams are shared and stable
+/// now; only the combination of them is rebuilt, which costs nothing.
 CombineLatestStream<DynamicValue, Map<String, DynamicValue>> _combinedStream(
-    LinkedHashMap<String, String?> keys, StateMan stateMan) {
+    LinkedHashMap<String, String?> keys, WidgetRef ref) {
   return CombineLatestStream([
     for (var entry in keys.entries)
-      if (entry.value != null)
-        stateMan.subscribe(entry.value!).asStream().asyncExpand((s) => s),
+      if (entry.value != null) ref.watch(keyStreamProvider(entry.value!)),
   ], (values) {
     final map = <String, DynamicValue>{};
     int i = 0;

@@ -355,6 +355,18 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
     final hasForceFeedback = widget.config.forceOpenFeedbackKey.isNotEmpty ||
         widget.config.forceCloseFeedbackKey.isNotEmpty;
 
+    // Read here rather than in the nested builder below. That builder belongs
+    // to the `StreamBuilder`'s element, not to this one, so a `ref.watch`
+    // inside it is not a watch this widget holds — the dependency would lapse
+    // and the shared stream could be disposed underneath it.
+    final forceFeedback = hasForceFeedback
+        ? Rx.combineLatest2(
+            _boolFeedback(ref, widget.config.forceOpenFeedbackKey),
+            _boolFeedback(ref, widget.config.forceCloseFeedbackKey),
+            (a, b) => a || b,
+          )
+        : null;
+
     return StreamBuilder<DynamicValue>(
       stream: ref.watch(keyStreamProvider(widget.config.stateKey)),
       builder: (context, snapshot) {
@@ -373,13 +385,9 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
 
         // If force feedback keys are configured, nest a second StreamBuilder
         // that overrides color when any force feedback is active (VIS-03).
-        if (hasForceFeedback) {
+        if (forceFeedback != null) {
           return StreamBuilder<bool>(
-            stream: Rx.combineLatest2(
-              _boolFeedback(ref, widget.config.forceOpenFeedbackKey),
-              _boolFeedback(ref, widget.config.forceCloseFeedbackKey),
-              (a, b) => a || b,
-            ),
+            stream: forceFeedback,
             builder: (context, fbSnapshot) {
               final forceActive = fbSnapshot.data ?? false;
               final displayColor = forceActive ? forcedColor : baseColor;
