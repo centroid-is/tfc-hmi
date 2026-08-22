@@ -915,14 +915,10 @@ class ConveyorColorPalette extends StatelessWidget {
           // ─── Top "title" row ───
           const Expanded(
             flex: 1,
-            child: Center(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  'Conveyor colors',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
+            child: AutoSizedText(
+              'Conveyor colors',
+              heightFraction: 0.6,
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
 
@@ -960,16 +956,13 @@ class ConveyorColorPalette extends StatelessWidget {
             color: background,
             borderRadius: BorderRadius.circular(4),
           ),
-          child: Center(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: textColor,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+          // Sized for the row rather than scaled into it: see AutoSizedText.
+          child: AutoSizedText(
+            label,
+            heightFraction: 0.6,
+            style: TextStyle(
+              color: textColor,
+              fontWeight: FontWeight.bold,
             ),
           ),
         ),

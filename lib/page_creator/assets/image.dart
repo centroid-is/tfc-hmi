@@ -26,6 +26,13 @@ import 'image_store.dart';
 
 part 'image.g.dart';
 
+/// Side for a placeholder glyph drawn into [constraints]: the box's shorter
+/// side, or the 48pt default when the box is unbounded.
+double _glyphSide(BoxConstraints constraints) {
+  final side = constraints.biggest.shortestSide;
+  return side.isFinite && side > 0 ? side : 48;
+}
+
 @JsonSerializable()
 class ImageConfig extends BaseAsset {
   @override
@@ -209,12 +216,16 @@ class PageImage extends ConsumerWidget {
     );
   }
 
-  Widget _glyph(BuildContext context, IconData icon) => FittedBox(
-        fit: BoxFit.contain,
-        child: Icon(
-          icon,
-          size: 48,
-          color: Theme.of(context).colorScheme.outline,
+  // Sized from the box rather than drawn at 48pt and scaled by a `FittedBox`:
+  // an icon is a font glyph, so a scale transform resamples it exactly as it
+  // resamples text. See `AutoSizedText` in common.dart.
+  Widget _glyph(BuildContext context, IconData icon) => LayoutBuilder(
+        builder: (context, constraints) => Center(
+          child: Icon(
+            icon,
+            size: _glyphSide(constraints),
+            color: Theme.of(context).colorScheme.outline,
+          ),
         ),
       );
 }
@@ -236,12 +247,13 @@ class PageImageBytesView extends StatelessWidget {
       fit: fit,
       gaplessPlayback: true,
       filterQuality: FilterQuality.medium,
-      errorBuilder: (context, _, __) => FittedBox(
-        fit: BoxFit.contain,
-        child: Icon(
-          Icons.broken_image_outlined,
-          size: 48,
-          color: Theme.of(context).colorScheme.outline,
+      errorBuilder: (context, _, __) => LayoutBuilder(
+        builder: (context, constraints) => Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            size: _glyphSide(constraints),
+            color: Theme.of(context).colorScheme.outline,
+          ),
         ),
       ),
     );

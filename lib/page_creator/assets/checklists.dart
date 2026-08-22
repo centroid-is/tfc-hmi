@@ -261,19 +261,15 @@ class _ChecklistsState extends State<Checklists> {
           isPressed: false,
           buttonType: ButtonType.square,
         ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8.0),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                "Checklists",
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimary,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
+        // AutoSizedText, not FittedBox: see the note in `common.dart`. The
+        // label is laid out at its final size instead of being scaled there.
+        child: AutoSizedText(
+          "Checklists",
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          heightFraction: 0.3,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onPrimary,
+            fontWeight: FontWeight.bold,
           ),
         ),
       ),
