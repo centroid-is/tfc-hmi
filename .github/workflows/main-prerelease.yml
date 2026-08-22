@@ -40,9 +40,18 @@ jobs:
   # served a manager as old as the last tag. Building it here keeps the
   # download current with main — and a manager predating a fix cannot install
   # anything, which is exactly how the Windows asset-name bug stayed invisible.
+  #
+  # Build only: `publish` needs this job, and `needs` on a reusable workflow is
+  # all-or-nothing — every job inside it must pass. Its integration tests
+  # download from whatever release is currently newest, which is the one this
+  # run is about to delete and recreate. Gating the publish on them means a
+  # broken main-latest keeps main-latest broken; that deadlocked releases from
+  # #243 until #271. They still run on PRs and on pushes to the manager.
   manager-build:
     uses: ./.github/workflows/build-manager.yml
     secrets: inherit
+    with:
+      run_integration_tests: false
 
   publish:
     needs: [windows-build, macos-build, linux-build, manager-build]
