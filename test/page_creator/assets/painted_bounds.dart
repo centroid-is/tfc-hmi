@@ -46,6 +46,9 @@ Future<Rect?> paintedBounds(Size box, ConveyorPathGeometry? geometry,
   final h = (box.height + 2 * paintPadding).ceil();
   final image = await recorder.endRecording().toImage(w, h);
   final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+  // Every canvas in the fill sweeps rasterises one of these; left undisposed
+  // they pile up for the length of the run.
+  image.dispose();
   if (data == null) return null;
   final bytes = data.buffer.asUint8List();
 

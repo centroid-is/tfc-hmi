@@ -256,9 +256,9 @@ void main() {
             beltWidthOverride: 24)!;
         // The real ink: band outline plus border (see the sweep invariant).
         final painted = g.inkBounds;
-        // The tenth is the band polygon, whose vertices sit a hair outside the
-      // true curve at a sharp bend; it is not clearance.
-      const slop = 2.0 / 2 + 0.1;
+        // The tenth is the band polygon, whose vertices sit a hair outside
+        // the true curve at a sharp bend; it is not clearance.
+        const slop = 2.0 / 2 + 0.1;
         expect(painted.left, greaterThanOrEqualTo(-slop));
         expect(painted.top, greaterThanOrEqualTo(-slop));
         expect(painted.right, lessThanOrEqualTo(size.width + slop));
