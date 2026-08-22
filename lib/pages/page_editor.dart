@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, stderr;
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart'
@@ -1250,8 +1250,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               newAssets.add(reparsed.first);
               continue;
             }
-          } catch (_) {
-            // If re-parse fails, fall through and use the default asset.
+          } catch (e) {
+            // Fall through to the default asset -- but say so. Silently
+            // substituting a default is how a proposed LED column arrived
+            // with the preview's two LEDs instead of the three it carried,
+            // with nothing logged and nothing shown to the operator.
+            stderr.writeln(
+                'PageEditor: config override for "$assetName" could not be '
+                'parsed, falling back to the default asset: $e');
           }
         }
         newAssets.add(asset);
