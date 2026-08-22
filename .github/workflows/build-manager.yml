@@ -52,8 +52,8 @@ on:
 # means caller event, and tag.yml is triggered by a tag `push`, so a release
 # can never be cancelled by someone's unrelated PR push.
 concurrency:
-  group: centroidx-manager-build-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: centroidx-manager-build-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   build:

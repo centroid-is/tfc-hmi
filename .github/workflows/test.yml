@@ -5,27 +5,37 @@ on:
     branches: [ main, develop ]
   pull_request:
 
-# Superseding is right for a pull request and wrong for main. Merges have been
-# landing faster than a ~13 minute macOS run, so each one cancelled its
-# predecessor's verification and main went through a whole merge burst without
-# a single completed test run — exactly the runs someone needs when bisecting a
-# regression later.
+# Superseding is right for a pull request and wrong for main. Merges land
+# faster than a ~13 minute macOS run, so without this a merge burst goes by
+# without a single completed test run — exactly the runs someone needs when
+# bisecting a regression later.
 #
-# The triggers above are the complete case list: push to main or develop, and
-# pull_request. There are no tag or feature-branch runs to consider, so
-# `event_name == 'pull_request'` is not shorthand — it is the precise
-# statement of "supersede PR runs, let every push to a permanent branch
-# finish", and it stays correct if develop is ever created.
+# #249 tried to express that as `cancel-in-progress: ${{ github.event_name ==
+# 'pull_request' }}`, and it did not work. Measured on 2026-08-22: of the 29
+# completed `Flutter Tests` runs on `main` pushes *after* #249 landed, **10
+# were cancelled**. Three merges 13:11:13, 13:11:16 and 13:11:19 produced a
+# run that was cancelled five seconds after it started.
 #
-# This does cost queue capacity: a merge now holds a full run instead of being
-# cancelled by the next one. That is deliberate — verification you never get is
-# worth nothing.
+# So do not decide this with `cancel-in-progress` at all. Put the distinction
+# in the **group**, where it does not depend on how a templated value is
+# coerced to a boolean:
+#
+#   pull_request -> ...-pr        shared by every push to that PR, so a new
+#                                 push supersedes the previous run
+#   anything else -> ...-<run_id> unique to this run, so nothing is ever in
+#                                 the group to cancel it
+#
+# `cancel-in-progress: true` is then literally true and needs no interpreting.
+#
+# This costs queue capacity: a merge holds a full run instead of being killed
+# by the next one. That is the point — verification you never get is worth
+# nothing.
 #
 # No group prefix is needed here (unlike the build workflows): test.yml is not
 # a workflow_call target, so `github.workflow` is always its own name.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   flutter-test:

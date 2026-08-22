@@ -25,8 +25,8 @@ permissions:
 # this workflow alongside others in a single run, where the github context is
 # the caller's.
 concurrency:
-  group: windows-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: windows-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # Job id stays `build` (main-prerelease.yml and tag.yml call this workflow);

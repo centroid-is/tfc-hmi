@@ -35,8 +35,8 @@ permissions:
 # unique if a caller is ever added. See macos.yml. The cancel guard is #235's,
 # unchanged.
 concurrency:
-  group: ivi-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ivi-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # Same job ids as centroid-hmi.yml — see the note there. `name` keeps the two
