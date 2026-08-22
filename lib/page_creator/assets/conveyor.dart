@@ -918,6 +918,7 @@ class ConveyorColorPalette extends StatelessWidget {
             child: AutoSizedText(
               'Conveyor colors',
               heightFraction: 0.6,
+              shrinkOnly: true,
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
@@ -957,9 +958,15 @@ class ConveyorColorPalette extends StatelessWidget {
             borderRadius: BorderRadius.circular(4),
           ),
           // Sized for the row rather than scaled into it: see AutoSizedText.
+          //
+          // shrinkOnly because this is a legend, not a button face. Without
+          // it the label fills its swatch, and a palette of five colours
+          // reads as five giant captions -- which is what happened when the
+          // FittedBox(scaleDown) here became a plain AutoSizedText.
           child: AutoSizedText(
             label,
             heightFraction: 0.6,
+            shrinkOnly: true,
             style: TextStyle(
               color: textColor,
               fontWeight: FontWeight.bold,
