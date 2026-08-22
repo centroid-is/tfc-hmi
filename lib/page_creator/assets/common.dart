@@ -1493,7 +1493,21 @@ double fittedFontSize({
 }) {
   final fallback = maxFontSize ?? style.fontSize ?? referenceFontSize;
   if (text.isEmpty) return fallback;
-  if (!box.width.isFinite || !box.height.isFinite) return fallback;
+  if (!box.width.isFinite || !box.height.isFinite) {
+    // There is nothing to fit to, so the size below is a guess. When the style
+    // carries a fontSize or the caller passed maxFontSize, that guess is the
+    // caller's own number and fine. Otherwise it is [referenceFontSize] --
+    // an arbitrary 64pt that will render, look deliberate, and be wrong. That
+    // is a bug at the call site, not something to paper over at runtime.
+    assert(
+      style.fontSize != null || maxFontSize != null,
+      'fittedFontSize was handed an unbounded box ($box) with no fontSize on '
+      'the style and no maxFontSize, so the text would silently render at '
+      '${referenceFontSize}pt. Give it a bounded box -- a SizedBox or a '
+      'LayoutBuilder with finite constraints -- or an explicit font size.',
+    );
+    return fallback;
+  }
   if (box.width <= 0 || box.height <= 0) return minFontSize;
 
   double? cap = maxFontSize;

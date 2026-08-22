@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
@@ -409,6 +411,30 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
     return label;
   }
 
+  /// How big the chevron may be drawn.
+  ///
+  /// An icon is square, so its `size` is spent on width as much as on height.
+  /// The row only offers it a height, and taking that at face value makes the
+  /// glyph wider than the whole asset the moment the asset is taller than it
+  /// is wide -- the `Expanded` label collapses to nothing and the `Row`
+  /// overflows by the difference. An option variable dragged narrow in the
+  /// page editor is enough to do it.
+  ///
+  /// So cap it by width too. The label claims 70% of the box; the chevron gets
+  /// what is left. Returns null when neither axis is bounded, which leaves the
+  /// icon at its own default rather than at some arbitrary size.
+  static double? _arrowSide(
+    BoxConstraints outer,
+    BoxConstraints arrowConstraints,
+  ) {
+    final byHeight =
+        arrowConstraints.maxHeight.isFinite ? arrowConstraints.maxHeight : null;
+    final byWidth = outer.maxWidth.isFinite ? outer.maxWidth * 0.3 : null;
+    if (byHeight == null) return byWidth;
+    if (byWidth == null) return byHeight;
+    return math.min(byHeight, byWidth);
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -480,9 +506,7 @@ class _OptionVariableWidgetState extends ConsumerState<OptionVariableWidget> {
                         _isExpanded
                             ? Icons.keyboard_arrow_up
                             : Icons.keyboard_arrow_down,
-                        size: arrowConstraints.maxHeight.isFinite
-                            ? arrowConstraints.maxHeight
-                            : null,
+                        size: _arrowSide(constraints, arrowConstraints),
                         color: _isExpanded
                             ? Colors.blue.shade600
                             : Colors.grey.shade600,
