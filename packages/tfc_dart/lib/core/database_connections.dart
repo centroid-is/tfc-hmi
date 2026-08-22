@@ -177,22 +177,21 @@ Future<void> releasePool(
 }) async {
   try {
     await close(force: false).timeout(timeout);
+    return;
   } catch (error) {
     onError?.call(error);
   }
-  // Then force, even when the polite close reported success.
+  // Forced only when the polite close could not finish.
   //
-  // It reports success once nothing is borrowed, which is not the same claim
-  // as every socket being shut, and on CI the difference was four Postgres
-  // backends per run that no one ever closed: the pool said it had closed, the
-  // health monitor said it had let go, and the test's TCP proxy was still
-  // holding the pairs a minute later. Stopping at the polite call is what let
-  // them through.
-  //
-  // Nothing is lost by following up. Connections the polite close did hand
-  // back went with a Terminate and their backends are already gone, so this is
-  // a no-op for them; it only reaches the stragglers, which would otherwise
-  // sit on server slots until the server noticed on its own.
+  // This briefly forced unconditionally, on the theory that a graceful close
+  // reporting success was not the same claim as every socket being shut. The
+  // four backends that theory was aimed at turned out to come from somewhere
+  // else entirely -- `_startup` timing out with the socket already connected
+  // and never closing it, fixed in the postgres fork -- and forcing on top
+  // never made any difference to them. It is removed rather than left in as
+  // insurance, because an unconditional force undoes the reason the polite
+  // call is made first: a returned connection goes with a Terminate and the
+  // backend exits on the spot.
   try {
     await close(force: true).timeout(timeout);
   } catch (error) {
