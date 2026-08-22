@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show stderr;
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
@@ -62,7 +63,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
       case ThirdPartyEquipmentKind.speedBatcher:
         return 'Marel SpeedBatcher';
       case ThirdPartyEquipmentKind.boxErector:
-        return 'Box erector (TODO: product name)';
+        return 'Box erector';
       case ThirdPartyEquipmentKind.strappingLine:
         return 'Afak / Strapex strapping line';
       case ThirdPartyEquipmentKind.fishAligner:
@@ -284,8 +285,9 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// (e.g. `SB1` mapping to `SPB01.speedBatcher.hmi`). Drives the diodes in
   /// the side pane's Status section.
   ///
-  /// SpeedBatcher only — the other kinds have no equivalent handshake struct,
-  /// so the editor hides the field and the pane omits the section for them.
+  /// For every other kind this is a key PREFIX rather than a struct node:
+  /// `BER02`, `STM02`, `SPB02.multivac`, `SPB02.Aligner`. The pane appends the
+  /// suffixes in [kEquipmentStatusBits] to it.
   /// A bit the PLC does not expose renders as the unknown LED rather than
   /// claiming "off".
   String statusKey;
@@ -436,6 +438,9 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   @override
   List<String> get allKeys => <String>{
         ...super.allKeys,
+        if (statusKey.isNotEmpty)
+          for (final bit in kEquipmentStatusBits[kind] ?? const [])
+            '$statusKey.${bit.suffix}',
         for (final key in children.expand((e) => e.child.allKeys)) key,
       }.toList();
 
@@ -488,6 +493,125 @@ const List<SpeedBatcherStatusBit> speedBatcherStatusBits = [
   SpeedBatcherStatusBit('p_stat_DropOk', 'Drop Ok from PLC', Colors.green),
   SpeedBatcherStatusBit('p_stat_Dropped', 'Dropped Batch', Colors.green),
 ];
+
+/// One diode in a non-SpeedBatcher machine's Status section.
+///
+/// [suffix] is appended to the asset's [ThirdPartyEquipmentConfig.statusKey],
+/// which for these kinds holds a key PREFIX rather than a struct node. The
+/// SpeedBatcher can read members out of one struct because its handshake is a
+/// published `SP_HMI`; the other machines expose their permits as separate
+/// global bools (`BER02.PermitOutfeed`, `STM02.PermitInfeed`), so the prefix
+/// plus a fixed suffix list is the closest equivalent.
+class EquipmentStatusBit {
+  final String suffix;
+  final String label;
+  final Color onColor;
+  const EquipmentStatusBit(this.suffix, this.label, this.onColor);
+}
+
+/// The diodes each kind shows, in display order.
+///
+/// Hardcoded, like [speedBatcherStatusBits]: every box erector on the site
+/// exposes the same three permits, every strapper the same two. What differs
+/// per machine is only which line it is on, and that is the prefix.
+const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
+    kEquipmentStatusBits = {
+  // One vocabulary across every machine, in the order product moves through it.
+  // "Permit infeed/outfeed" is the PLC's language, not the floor's: an operator
+  // asks whether a machine can take the next one and whether it can pass it on.
+  //
+  // Each machine is named for what it actually receives -- a box, a box bottom,
+  // fish -- because that is what the operator is looking at when they ask why
+  // it stopped.
+  //
+  //   Ready for <thing>     -- can accept another one now  (i_xDropOk / permit infeed)
+  //   Way out clear         -- allowed to send onward      (permit outfeed)
+  //   Fish waiting to drop  -- the conveyor before it is asking to drop  (i_xDropRequest)
+  //   Drop complete         -- that hand-over finished     (q_xDropFinished)
+  //   Waiting too long      -- the wait timer has expired  (TON_waitingFrustration)
+  //
+  // Waiting too long is first and red because it is the only one that says
+  // something is wrong rather than describing where in the cycle the machine
+  // is. The three below it explain why.
+  //
+  // The question an operator opens this pane to answer is "why has product
+  // stopped moving", and these say it directly: either it cannot take another
+  // one, or it cannot send the one it has.
+  //
+  // Green means "yes, now", amber something in progress, blue the outfeed side,
+  // so a glance down the column reads the same on every machine.
+  ThirdPartyEquipmentKind.strappingLine: [
+    EquipmentStatusBit('PermitInfeed', 'Ready for box', Colors.green),
+    EquipmentStatusBit('PermitOutfeed', 'Way out clear', Colors.blue),
+  ],
+  ThirdPartyEquipmentKind.boxErector: [
+    EquipmentStatusBit('PermitBottomInfeed', 'Ready for box bottom', Colors.green),
+    EquipmentStatusBit('PermitBlockInfeed', 'Ready for block', Colors.green),
+    EquipmentStatusBit('PermitOutfeed', 'Way out clear', Colors.blue),
+  ],
+  ThirdPartyEquipmentKind.multivac: [
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long', Colors.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop', Colors.amber),
+    EquipmentStatusBit('DropOk', 'Ready for fish', Colors.green),
+    EquipmentStatusBit('DropFinished', 'Drop complete', Colors.blue),
+  ],
+  ThirdPartyEquipmentKind.fishAligner: [
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long', Colors.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop', Colors.amber),
+    EquipmentStatusBit('DropOk', 'Ready for fish', Colors.green),
+    EquipmentStatusBit('DropFinished', 'Drop complete', Colors.blue),
+  ],
+};
+
+/// The Status section body for the non-SpeedBatcher kinds.
+///
+/// A plain [StatelessWidget] fed a value per bit, exactly like
+/// [SpeedBatcherStatusDiodes] -- NOT a ConsumerWidget reading
+/// `keyStreamProvider` itself. The side pane is built into an overlay through
+/// `showSidePane`, and a widget that reaches for `ref` from there is not on
+/// the page's tree; the subscriptions belong to the parent state, which
+/// outlives the pane and already owns the machine's other streams.
+class EquipmentStatusDiodes extends StatelessWidget {
+  const EquipmentStatusDiodes({
+    super.key,
+    required this.bits,
+    required this.values,
+  });
+
+  final List<EquipmentStatusBit> bits;
+
+  /// Latest value per suffix. A missing entry renders unknown -- the same grey
+  /// `!` a missing struct member gets on the SpeedBatcher.
+  final Map<String, bool?> values;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final bit in bits)
+          PaneDetailRow(
+            label: bit.label,
+            child: SizedBox(
+              // 22 px for the same reason as the SpeedBatcher's: below this the
+              // unknown state's `!` blurs into the off state.
+              width: 22,
+              height: 22,
+              child: CustomPaint(
+                painter: LEDPainter(
+                  color: switch (values[bit.suffix]) {
+                    null => null,
+                    true => bit.onColor,
+                    false => Colors.white,
+                  },
+                  ledType: LEDType.circle,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
 
 /// Reads one handshake bit out of the status struct, degrading to unknown.
 ///
@@ -798,6 +922,16 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   final ValueNotifier<DynamicValue?> _statusRaw =
       ValueNotifier<DynamicValue?>(null);
 
+  /// Latest value per status-bit suffix, for the kinds whose diodes come from
+  /// separate keys rather than one struct. Held here rather than in the pane
+  /// because the pane lives in an overlay and is torn down and rebuilt every
+  /// time it opens; the subscriptions should not be.
+  final ValueNotifier<Map<String, bool?>> _statusBits =
+      ValueNotifier<Map<String, bool?>>({});
+
+  /// One subscription per bit, keyed by suffix.
+  final Map<String, StreamSubscription<DynamicValue>> _bitSubs = {};
+
   /// The key [_statusStream] was built for; compared against [_wantedStatusKey]
   /// so a kind change away from SpeedBatcher drops the subscription too.
   String? _hoistedStatusKey;
@@ -825,6 +959,46 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     super.initState();
     _hoistStream();
     _hoistStatusStream();
+    _hoistStatusBits();
+  }
+
+  /// Subscribe every bit this kind shows, dropping any that no longer apply.
+  ///
+  /// Re-entrant: called again when the prefix or the kind changes, so a config
+  /// edit in the page editor moves the diodes onto the new keys without a
+  /// restart, and a kind switch releases the old machine's subscriptions.
+  void _hoistStatusBits() {
+    final bits = kEquipmentStatusBits[widget.config.kind];
+    final prefix = widget.config.statusKey;
+    final wanted = <String, String>{
+      if (bits != null && prefix.isNotEmpty)
+        for (final bit in bits) bit.suffix: '$prefix.${bit.suffix}',
+    };
+    for (final suffix in _bitSubs.keys.toList()) {
+      if (!wanted.containsKey(suffix)) {
+        _bitSubs.remove(suffix)?.cancel();
+        _statusBits.value = Map.of(_statusBits.value)..remove(suffix);
+      }
+    }
+    for (final entry in wanted.entries) {
+      if (_bitSubs.containsKey(entry.key)) continue;
+      try {
+        _bitSubs[entry.key] = ref
+            .read(keyStreamProvider(entry.value))
+            .listen((v) {
+          if (!mounted) return;
+          _statusBits.value = Map.of(_statusBits.value)
+            ..[entry.key] = v.asBool;
+        }, onError: (_) {
+          if (!mounted) return;
+          // Unknown, not false: a key that errors has told us nothing.
+          _statusBits.value = Map.of(_statusBits.value)..[entry.key] = null;
+        });
+      } catch (e) {
+        stderr.writeln(
+            'ThirdPartyEquipment: could not subscribe "${entry.value}": $e');
+      }
+    }
   }
 
   @override
@@ -836,6 +1010,10 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     if (_hoistedStatusKey != _wantedStatusKey) {
       _hoistStatusStream();
     }
+    // The prefix or the kind may have changed under us -- the page editor
+    // mutates the same config instance in place, so comparing against
+    // oldWidget would miss it. _hoistStatusBits is re-entrant and diffs.
+    _hoistStatusBits();
   }
 
   void _hoistStream() {
@@ -906,6 +1084,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     _raw.dispose();
     _statusSub?.cancel();
     _statusRaw.dispose();
+    for (final sub in _bitSubs.values) {
+      sub.cancel();
+    }
+    _bitSubs.clear();
+    _statusBits.dispose();
     super.dispose();
   }
 
@@ -961,7 +1144,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // Merged rather than nested: the status struct only feeds the pane, so
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
-        listenable: Listenable.merge([_raw, _statusRaw]),
+        listenable: Listenable.merge([_raw, _statusRaw, _statusBits]),
         builder: (context, _) => _paneFor(context, _isRunning, weights),
       ),
     );
@@ -1097,6 +1280,15 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               title: 'Status',
               child: SpeedBatcherStatusDiodes(
                 status: _statusRaw.value,
+              ),
+            ),
+          if (config.kind != ThirdPartyEquipmentKind.speedBatcher &&
+              kEquipmentStatusBits[config.kind] != null)
+            PaneSection(
+              title: 'Status',
+              child: EquipmentStatusDiodes(
+                bits: kEquipmentStatusBits[config.kind]!,
+                values: _statusBits.value,
               ),
             ),
           if (config.notes != null && config.notes!.isNotEmpty)
