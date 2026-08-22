@@ -465,8 +465,20 @@ Future<_Staged> _stageBatch(
   proposals.addProposal(_proposal(_idTwo, _keyTwo, alias: alias));
 
   final built = <Preferences>[];
-  final build =
-      prefsBuilder ?? () => createTestPreferences(keyMappings: KeyMappings(nodes: {}));
+  // The alias the proposals carry has to exist in the server config too. The
+  // OPC UA section renders it in a DropdownButtonFormField, which asserts
+  // unless exactly one menu item matches the selected value — an alias with
+  // no configured server is zero items, and the page fails to build.
+  final build = prefsBuilder ??
+      () => createTestPreferences(
+            keyMappings: KeyMappings(nodes: {}),
+            stateManConfig: StateManConfig(opcua: [
+              if (alias != null)
+                OpcUAConfig()
+                  ..endpoint = 'opc.tcp://localhost:4840'
+                  ..serverAlias = alias,
+            ]),
+          );
   final container = ProviderContainer(overrides: [
     preferencesProvider.overrideWith((ref) async {
       final prefs = await build();
