@@ -9,10 +9,14 @@ import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
-/// Widget tests for the gate force pane's tri-state Open / None / Close
-/// selector.
+/// Widget tests for the gate force pane, which offers a different control
+/// per variant.
 ///
-/// Contract under test:
+/// A diverter or slider is *held* in a position, so it keeps the tri-state
+/// Open / None / Close selector. A pusher runs a stroke and returns by
+/// itself, so it gets a single press-and-hold button instead.
+///
+/// Contract under test — selector (diverter / slider):
 ///   - tap on the gate opens the SidePane with the three force segments
 ///   - 'None' writes false to BOTH force keys (the unforce path — the old
 ///     two-button pane could only ever write true)
@@ -22,6 +26,14 @@ import 'package:tfc_dart/core/state_man.dart';
 ///     segment is highlighted
 ///   - a segment whose write key is unconfigured is disabled, and 'None'
 ///     only writes the keys that exist
+///
+/// Contract under test — hold button (pusher):
+///   - no selector at all; one button that writes TRUE down, FALSE up
+///   - releasing must be unconditional: tap-cancel (a drag off the button)
+///     and dispose (the pane closing mid-press) both write FALSE, because
+///     either one otherwise strands the pusher driven out
+///   - the header reads Out / In, not Open / Closed, and never claims a
+///     held force — the pusher's command bit is momentary
 void main() {
   Widget wrap({
     required Widget child,
@@ -53,7 +65,8 @@ void main() {
 
   tearDown(closeSidePane);
 
-  ConveyorGateConfig pusherConfig({
+  ConveyorGateConfig gateConfig({
+    GateVariant variant = GateVariant.pneumatic,
     String stateKey = '',
     String openKey = 'gate/force_open',
     String closeKey = 'gate/force_close',
@@ -61,7 +74,7 @@ void main() {
     String closeFbKey = '',
   }) {
     return ConveyorGateConfig(
-      gateVariant: GateVariant.pusher,
+      gateVariant: variant,
       stateKey: stateKey,
       forceOpenKey: openKey,
       forceCloseKey: closeKey,
@@ -69,6 +82,39 @@ void main() {
       forceCloseFeedbackKey: closeFbKey,
     );
   }
+
+  /// The selector belongs to the held variants; a pusher has the hold button.
+  ConveyorGateConfig diverterConfig({
+    String stateKey = '',
+    String openKey = 'gate/force_open',
+    String closeKey = 'gate/force_close',
+    String openFbKey = '',
+    String closeFbKey = '',
+  }) =>
+      gateConfig(
+        variant: GateVariant.pneumatic,
+        stateKey: stateKey,
+        openKey: openKey,
+        closeKey: closeKey,
+        openFbKey: openFbKey,
+        closeFbKey: closeFbKey,
+      );
+
+  ConveyorGateConfig pusherConfig({
+    String stateKey = '',
+    String openKey = 'gate/force_open',
+    String closeKey = 'gate/force_close',
+    String openFbKey = '',
+    String closeFbKey = '',
+  }) =>
+      gateConfig(
+        variant: GateVariant.pusher,
+        stateKey: stateKey,
+        openKey: openKey,
+        closeKey: closeKey,
+        openFbKey: openFbKey,
+        closeFbKey: closeFbKey,
+      );
 
   Widget gate(ConveyorGateConfig config, _FakeStateMan fake) {
     return wrap(
@@ -85,7 +131,7 @@ void main() {
     testWidgets('tap on gate opens pane with Open / None / Close',
         (tester) async {
       final fake = _FakeStateMan();
-      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await tester.pumpWidget(gate(diverterConfig(), fake));
       await openPane(tester);
 
       expect(find.byType(SidePane), findsOneWidget);
@@ -98,7 +144,7 @@ void main() {
     testWidgets('None writes false to both force keys (unforce)',
         (tester) async {
       final fake = _FakeStateMan();
-      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await tester.pumpWidget(gate(diverterConfig(), fake));
       await openPane(tester);
 
       await tester.tap(segmentText('None'));
@@ -118,7 +164,7 @@ void main() {
     testWidgets('Open clears force-close before asserting force-open',
         (tester) async {
       final fake = _FakeStateMan();
-      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await tester.pumpWidget(gate(diverterConfig(), fake));
       await openPane(tester);
 
       await tester.tap(segmentText('Open'));
@@ -136,7 +182,7 @@ void main() {
     testWidgets('Close clears force-open before asserting force-close',
         (tester) async {
       final fake = _FakeStateMan();
-      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await tester.pumpWidget(gate(diverterConfig(), fake));
       await openPane(tester);
 
       await tester.tap(segmentText('Close'));
@@ -158,7 +204,7 @@ void main() {
       fake.push('gate/fo_fb', true);
       fake.push('gate/fc_fb', false);
       await tester.pumpWidget(gate(
-        pusherConfig(openFbKey: 'gate/fo_fb', closeFbKey: 'gate/fc_fb'),
+        diverterConfig(openFbKey: 'gate/fo_fb', closeFbKey: 'gate/fc_fb'),
         fake,
       ));
       await openPane(tester);
@@ -173,7 +219,7 @@ void main() {
       fake.push('gate/fo_fb', false);
       fake.push('gate/fc_fb', false);
       await tester.pumpWidget(gate(
-        pusherConfig(openFbKey: 'gate/fo_fb', closeFbKey: 'gate/fc_fb'),
+        diverterConfig(openFbKey: 'gate/fo_fb', closeFbKey: 'gate/fc_fb'),
         fake,
       ));
       await openPane(tester);
@@ -186,7 +232,7 @@ void main() {
     testWidgets('without feedback keys no segment is highlighted',
         (tester) async {
       final fake = _FakeStateMan();
-      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await tester.pumpWidget(gate(diverterConfig(), fake));
       await openPane(tester);
 
       final seg = tester.widget<SegmentedButton>(forceSegmented());
@@ -200,7 +246,7 @@ void main() {
     testWidgets('missing close key disables Close; None writes only open key',
         (tester) async {
       final fake = _FakeStateMan();
-      await tester.pumpWidget(gate(pusherConfig(closeKey: ''), fake));
+      await tester.pumpWidget(gate(diverterConfig(closeKey: ''), fake));
       await openPane(tester);
 
       final seg = tester.widget<SegmentedButton>(forceSegmented());
@@ -218,6 +264,108 @@ void main() {
     });
   });
 
+  group('pusher hold-to-push button', () {
+    Finder holdButton() => find.text('Press to push');
+
+    testWidgets('a pusher gets one hold button, not the three segments',
+        (tester) async {
+      final fake = _FakeStateMan();
+      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await openPane(tester);
+
+      expect(find.byType(SidePane), findsOneWidget);
+      expect(holdButton(), findsOneWidget);
+      expect(forceSegmented(), findsNothing,
+          reason: 'a pusher has no position to hold, so the Open / None / '
+              'Close selector must not be offered for it');
+    });
+
+    testWidgets('held writes true, released writes false', (tester) async {
+      final fake = _FakeStateMan();
+      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await openPane(tester);
+
+      final press = await tester.startGesture(tester.getCenter(holdButton()));
+      await tester.pump();
+      expect(fake.writes.map((w) => (w.key, w.value)).toList(),
+          [('gate/force_open', true)],
+          reason: 'the bit must go high on the press, not on the release');
+      expect(find.text('Pushing'), findsOneWidget,
+          reason: 'the label must show the operator the pusher is driven');
+
+      await press.up();
+      await tester.pump();
+      expect(fake.writes.map((w) => (w.key, w.value)).toList(), [
+        ('gate/force_open', true),
+        ('gate/force_open', false),
+      ]);
+      expect(find.text('Press to push'), findsOneWidget);
+    });
+
+    testWidgets('dragging off the button releases it', (tester) async {
+      final fake = _FakeStateMan();
+      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await openPane(tester);
+
+      final press = await tester.startGesture(tester.getCenter(holdButton()));
+      await tester.pump();
+
+      // Far enough to take the tap out of the arena, which is what a finger
+      // sliding off the button does. Cancel must release, or the pusher is
+      // stranded out with the UI showing it idle.
+      await press.moveBy(const Offset(0, 400));
+      await tester.pump();
+      await press.up();
+      await tester.pump();
+
+      expect(fake.writes.map((w) => (w.key, w.value)).toList(), [
+        ('gate/force_open', true),
+        ('gate/force_open', false),
+      ]);
+      expect(find.text('Press to push'), findsOneWidget);
+    });
+
+    testWidgets('closing the pane mid-press releases the pusher',
+        (tester) async {
+      final fake = _FakeStateMan();
+      await tester.pumpWidget(gate(pusherConfig(), fake));
+      await openPane(tester);
+
+      final press = await tester.startGesture(tester.getCenter(holdButton()));
+      await tester.pump();
+      expect(fake.writes.last.value, isTrue);
+
+      // The operator closes the pane without lifting their finger. Nothing
+      // left in the tree could write the bit back down, so dispose has to.
+      closeSidePane();
+      await tester.pumpAndSettle();
+
+      expect(fake.writes.map((w) => (w.key, w.value)).toList(), [
+        ('gate/force_open', true),
+        ('gate/force_open', false),
+      ]);
+
+      await press.up();
+    });
+
+    testWidgets('without a force-open key the button writes nothing',
+        (tester) async {
+      final fake = _FakeStateMan();
+      await tester.pumpWidget(gate(pusherConfig(openKey: ''), fake));
+      await openPane(tester);
+
+      final press = await tester.startGesture(tester.getCenter(holdButton()));
+      await tester.pump();
+      await press.up();
+      await tester.pump();
+
+      expect(fake.writes, isEmpty,
+          reason: 'an unconfigured force key must disable the button, '
+              'not write to the empty key');
+      expect(find.text('Pushing'), findsNothing);
+    });
+  });
+
   group('pane header', () {
     testWidgets('active open force shows a Forced open chip', (tester) async {
       final fake = _FakeStateMan();
@@ -225,7 +373,7 @@ void main() {
       fake.push('gate/fo_fb', true);
       fake.push('gate/fc_fb', false);
       await tester.pumpWidget(gate(
-        pusherConfig(
+        diverterConfig(
           stateKey: 'gate/state',
           openFbKey: 'gate/fo_fb',
           closeFbKey: 'gate/fc_fb',
@@ -251,7 +399,7 @@ void main() {
       fake.push('gate/fo_fb', false);
       fake.push('gate/fc_fb', false);
       await tester.pumpWidget(gate(
-        pusherConfig(
+        diverterConfig(
           stateKey: 'gate/state',
           openFbKey: 'gate/fo_fb',
           closeFbKey: 'gate/fc_fb',
@@ -266,6 +414,58 @@ void main() {
           matching: find.text('Open'),
         ),
         findsOneWidget,
+      );
+    });
+
+    testWidgets('a pusher reads Out / In, not Open / Closed', (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', true);
+      await tester.pumpWidget(
+          gate(pusherConfig(stateKey: 'gate/state'), fake));
+      await openPane(tester);
+
+      Finder chip(String label) => find.descendant(
+            of: find.byType(PaneStatusChip),
+            matching: find.text(label),
+          );
+      expect(chip('Out'), findsOneWidget,
+          reason: 'a pusher strokes out and back; Open/Closed describes a '
+              'gate that is held in a position');
+      expect(chip('Open'), findsNothing);
+    });
+
+    testWidgets('a pusher never claims a held force in the header',
+        (tester) async {
+      final fake = _FakeStateMan();
+      fake.push('gate/state', false);
+      fake.push('gate/fo_fb', true);
+      fake.push('gate/fc_fb', false);
+      await tester.pumpWidget(gate(
+        pusherConfig(
+          stateKey: 'gate/state',
+          openFbKey: 'gate/fo_fb',
+          closeFbKey: 'gate/fc_fb',
+        ),
+        fake,
+      ));
+      await openPane(tester);
+
+      expect(
+        find.descendant(
+          of: find.byType(PaneStatusChip),
+          matching: find.text('Forced open'),
+        ),
+        findsNothing,
+        reason: "the pusher's command bit is momentary — a Forced open chip "
+            'would flash for one PLC cycle and then lie',
+      );
+      expect(
+        find.descendant(
+          of: find.byType(PaneStatusChip),
+          matching: find.text('In'),
+        ),
+        findsOneWidget,
+        reason: 'the state key is the only honest thing to show',
       );
     });
 
