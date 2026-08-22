@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:collection' show LinkedHashMap;
 import 'dart:convert';
 import 'dart:ui' as ui;
@@ -657,11 +658,28 @@ void main() {
       }
     });
 
-    test('the box erector still carries its unresolved-product-name marker',
+    test('the box erector still records that its product name is unresolved',
         () {
-      // Deliberate: the make/model has not been identified yet. When it is,
-      // this test should be updated along with the label and the painter.
-      expect(ThirdPartyEquipmentKind.boxErector.label, contains('TODO'));
+      // The marker moved out of the label and into the enum's doc comment:
+      // an operator reading the pane should not be shown "TODO", but the
+      // reminder must not vanish with it. The make/model of the box erector
+      // on the line has still not been identified, and every other kind is
+      // named after its manufacturer.
+      //
+      // Asserted on the source rather than the label for that reason. When
+      // the machine is identified, this test goes along with the comment,
+      // the label and the painter.
+      final source =
+          File('lib/page_creator/assets/third_party.dart').readAsStringSync();
+      final enumBlock = source.substring(
+          source.indexOf('enum ThirdPartyEquipmentKind'),
+          source.indexOf('  String get label'));
+      expect(enumBlock, contains('TODO(product-name)'),
+          reason: 'the reminder that the box erector is unidentified is gone '
+              'from both the label and the enum');
+
+      expect(ThirdPartyEquipmentKind.boxErector.label, isNot(contains('TODO')),
+          reason: 'operators should not be shown a TODO in the pane header');
     });
   });
 
