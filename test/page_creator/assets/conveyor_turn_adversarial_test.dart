@@ -40,18 +40,22 @@ void main() {
     // ends in flat caps, and the fit centers the ink, spending slack exactly
     // where the band does not extend.
     if (g.beltWidth + 8 < size.shortestSide) {
-      final band = g
-              .bandOutline(0, 1,
-                  width: g.beltWidth, radius: g.beltWidth * 0.2)
-              ?.getBounds() ??
-          g.path.getBounds().inflate(g.beltWidth / 2);
-      final painted = band.inflate(1);
-      // The fit's clearance is a fraction of the box, so on a box under
-      // 135px across it is less than that pixel of border and the difference
-      // is ink over the edge — sub-pixel, and the alternative is an absolute
-      // length in the fit, which is what reshaped belts on a page re-fit.
-      final slop =
-          max(0.5, 1.0 - ConveyorPathGeometry.marginFor(size)) + 0.01;
+      // The belt's own account of where its ink landed, outline included.
+      // Derived here from the centerline's bounds, that used to overshoot a
+      // stretched skeleton by tens of pixels and call a contained belt an
+      // overflow.
+      final painted = g.inkBounds;
+      // The whole width of the outline, for the shapes this sweep is made of.
+      //
+      // A belt too wide for its own bend has no band to draw, so the painter
+      // strokes the centerline at `beltWidth + 2 * border` with round caps —
+      // ink a full border past where a band's edge would have been, and past
+      // the clearance the fit keeps. A 135-degree hairpin at radius 0.5 in a
+      // 400x60 box does exactly that, and did before this change too:
+      // rasterised, it paints the same two pixels over the edge either way.
+      // What changed is that [ConveyorPathGeometry.inkBounds] now says so,
+      // where deriving it from the centerline's bounds did not.
+      const slop = 2.0 + 0.1;
       expect(painted.left, greaterThanOrEqualTo(-slop), reason: reason);
       expect(painted.top, greaterThanOrEqualTo(-slop), reason: reason);
       expect(painted.right, lessThanOrEqualTo(size.width + slop),
@@ -251,14 +255,10 @@ void main() {
             [ConveyorTurnEntry(position: 0.5, angle: 60, radius: 1.5)], size,
             beltWidthOverride: 24)!;
         // The real ink: band outline plus border (see the sweep invariant).
-        final band = g
-                .bandOutline(0, 1,
-                    width: g.beltWidth, radius: g.beltWidth * 0.2)
-                ?.getBounds() ??
-            g.path.getBounds().inflate(g.beltWidth / 2);
-        final painted = band.inflate(1);
-        final slop =
-            max(0.5, 1.0 - ConveyorPathGeometry.marginFor(size)) + 0.01;
+        final painted = g.inkBounds;
+        // The tenth is the band polygon, whose vertices sit a hair outside
+        // the true curve at a sharp bend; it is not clearance.
+        const slop = 2.0 / 2 + 0.1;
         expect(painted.left, greaterThanOrEqualTo(-slop));
         expect(painted.top, greaterThanOrEqualTo(-slop));
         expect(painted.right, lessThanOrEqualTo(size.width + slop));

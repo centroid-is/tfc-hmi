@@ -143,6 +143,17 @@ class ConveyorPathGeometry {
 
   double get length => _metric.length;
 
+  /// Bounds of the ink this belt lays down, outline included.
+  ///
+  /// The one definition of "how much box does this belt take up". Neither
+  /// [path]'s bounds nor [bandOutline]'s are that on their own: `getBounds`
+  /// is a control-point estimate that overshoots a stretched skeleton badly,
+  /// the border is stroked *on* the band's edge so half of it lies beyond,
+  /// and a band too wide for its own bend is not drawn as a band at all.
+  /// The fit places the belt by this, so anything checking where the belt
+  /// ended up should read the same number rather than re-deriving it.
+  Rect get inkBounds => _inkBounds(this);
+
   Tangent tangentAt(double fraction) =>
       _metric.getTangentForOffset(fraction.clamp(0.0, 1.0) * length) ??
       Tangent(Offset.zero, const Offset(1, 0));
@@ -407,6 +418,14 @@ class ConveyorPathGeometry {
     final inset = fitWidth / 2 + margin;
     final inner = Size(
         max(size.width - 2 * inset, 1.0), max(size.height - 2 * inset, 1.0));
+    // A box that is all belt: `inner` is a sliver held up by its own floor —
+    // a 38px belt in a 40px-tall box leaves 1.4px of it. Both the per-axis
+    // fit and the ink fit stand down there. Neither has anything to win: the
+    // belt already covers its box, and the two axes disagree by orders of
+    // magnitude, so either would squash a 90° turn flat rather than fill
+    // anything, leaving a belt that is no longer the belt configured.
+    final boxIsAllBelt = inner.width < size.width * _perAxisFloor ||
+        inner.height < size.height * _perAxisFloor;
 
     // Straight runs between consecutive corners: seg[0] leads into the first
     // corner, seg[n] leaves the last one. Positions seed their proportions;
@@ -586,24 +605,41 @@ class ConveyorPathGeometry {
         dx, dy, 0, 1,
       ).storage);
     } else {
-      // Unfillable box (arcs alone overrun an axis, or a straight belt):
-      // uniform fit inside, centred — bends shrink below true radius, which
-      // is the least-wrong rendering left.
+      // Unfillable box: the solve could not span both axes while keeping
+      // every fillet at true radius. Fit each axis on its own instead.
+      //
+      // This used to shrink the whole skeleton by `min(sx, sy)`, which kept
+      // the bends circular. That guarantee was already gone by the time we
+      // get here — a uniform shrink scales the radii down with everything
+      // else, and the reference U-turn came out at 0.66 of its configured
+      // radius on every screen. What it bought instead was a belt floating
+      // in a third of its box, and a shape that moved with the window: 33%
+      // of the box width at 16:9, 24% at 21:9, 57% in portrait.
+      //
+      // Fitting per axis gives up circular bends in this branch and gets
+      // back the two properties that are actually visible: the belt fills
+      // the box it was drawn into, and what is drawn depends only on that
+      // box — so resizing the window scales the belt instead of reshaping
+      // it. The stroke is applied after this transform, so the band keeps an
+      // even width; it is the centerline that stretches.
       final path = buildPath(seg);
       final bounds = path.getBounds();
-      final sx =
-          bounds.width > 1e-6 ? inner.width / bounds.width : double.infinity;
-      final sy = bounds.height > 1e-6
-          ? inner.height / bounds.height
-          : double.infinity;
-      var f = min(sx, sy);
-      if (!f.isFinite || f <= 0) f = 1.0;
-      fit = f;
-      final dx = size.width / 2 - bounds.center.dx * fit;
-      final dy = size.height / 2 - bounds.center.dy * fit;
+      final sx = bounds.width > 1e-6 ? inner.width / bounds.width : 1.0;
+      final sy = bounds.height > 1e-6 ? inner.height / bounds.height : 1.0;
+      var fx = sx.isFinite && sx > 0 ? sx : 1.0;
+      var fy = sy.isFinite && sy > 0 ? sy : 1.0;
+      // Shrink uniformly where the box is all belt, as this branch always
+      // did — there is nothing to fit the axes to separately.
+      if (boxIsAllBelt) fx = fy = min(fx, fy);
+      // `scale` and the min-radius derived from it describe the belt as a
+      // whole, so report the smaller axis: the tightest bend on screen is
+      // bounded by the axis that shrank most.
+      fit = min(fx, fy);
+      final dx = size.width / 2 - bounds.center.dx * fx;
+      final dy = size.height / 2 - bounds.center.dy * fy;
       final matrix = Matrix4(
-        fit, 0, 0, 0, //
-        0, fit, 0, 0, //
+        fx, 0, 0, 0, //
+        0, fy, 0, 0, //
         0, 0, 1, 0, //
         dx, dy, 0, 1,
       );
@@ -614,23 +650,30 @@ class ConveyorPathGeometry {
     final minTurnRadius = builtMinRadius * fit;
     final metrics = fitted.computeMetrics().toList();
     if (metrics.isEmpty) return null;
-    final geometry = ConveyorPathGeometry._(
+    var geometry = ConveyorPathGeometry._(
         fitted, beltWidth, fit, minTurnRadius, metrics.first);
+
+    // What the box has to hold is the ink, and the ink is not the centerline
+    // plus a constant inset. The band extends beltWidth/2 sideways from the
+    // centerline, so on the axis a run travels *along* it adds nothing — yet
+    // the fit insets the box by beltWidth/2 on all four sides regardless. On
+    // a U-turn, whose two ends both run vertically, that reservation is
+    // simply left empty: the reference belt's ink came out at 68% of its box
+    // height with 16% of the box blank above and below it.
+    //
+    // Fallback only. Where the solve succeeded every fillet is at its true
+    // radius and the centerline already fills `inner` exactly; stretching it
+    // to use up the leftover would trade the one guarantee the solve exists
+    // to provide for a few percent of box.
+    if (solved == null && !boxIsAllBelt) {
+      geometry = _fillBoxWithInk(geometry, size, margin);
+    }
 
     // Center the ink, not the centerline. The band extends beltWidth/2 past
     // the centerline on the outer side of every run but ends in a flat cap,
     // so around an L the ink is lopsided against the centerline's bounds —
-    // centered on those, the belt visibly hugs one corner of its box. The
-    // shift is at most beltWidth/4 per axis, which the fit's own inset
-    // (beltWidth/2 + margin per side) always has room for.
-    final ink = geometry
-            .bandOutline(0, 1,
-                width: beltWidth,
-                radius: beltWidth * ConveyorPainter._endRadiusFactor)
-            ?.getBounds() ??
-        // Over-wide belt: the painter falls back to a round-capped stroke,
-        // whose ink is the centerline inflated evenly — nothing to correct.
-        fitted.getBounds().inflate(beltWidth / 2);
+    // centered on those, the belt visibly hugs one corner of its box.
+    final ink = _inkBounds(geometry);
     // Per axis, and only while the ink fits: an over-wide belt spills over
     // the box by design, and dragging its centerline around to center the
     // spill would break the skeleton's own containment.
@@ -644,11 +687,129 @@ class ConveyorPathGeometry {
     // Proportional for the same reason [_marginFraction] is: nothing in the
     // fit may depend on how big the box happens to be.
     if (shift.distance < size.shortestSide * 1e-4) return geometry;
-    final moved = fitted.shift(shift);
+    final moved = geometry.path.shift(shift);
     final movedMetrics = moved.computeMetrics().toList();
     if (movedMetrics.isEmpty) return geometry;
-    return ConveyorPathGeometry._(
-        moved, beltWidth, fit, minTurnRadius, movedMetrics.first);
+    return ConveyorPathGeometry._(moved, geometry.beltWidth, geometry.scale,
+        geometry.minTurnRadius, movedMetrics.first);
+  }
+
+  /// Ink of a belt as the painter draws it — outline included.
+  ///
+  /// The border counts. It is stroked *on* the band's edge, so half of its
+  /// width is ink beyond the band, and it is the one length in the drawing
+  /// that does not scale with the box. Leaving it out of the measurement is
+  /// what let a fitted belt lay a hairline over the edge of its own box.
+  static Rect _inkBounds(ConveyorPathGeometry g) {
+    const border = ConveyorPainter._borderWidth;
+    final band = g.bandOutline(0, 1,
+        width: g.beltWidth,
+        radius: g.beltWidth * ConveyorPainter._endRadiusFactor);
+    if (band != null) return band.getBounds().inflate(border / 2);
+    // Too wide for its own bend: the painter strokes the centerline instead,
+    // at `beltWidth + 2 * border` and with round caps, so its ink reaches
+    // half a belt plus a whole border out from the curve.
+    return _curveBounds(g).inflate(g.beltWidth / 2 + border);
+  }
+
+  /// Tight bounds of the centerline, sampled off the path.
+  ///
+  /// Not `Path.getBounds`, which is a control-point estimate and only an
+  /// upper one. On a skeleton this branch has stretched hard the two differ
+  /// enormously — a U-turn in a 400px box reported a rect 90px taller than
+  /// any ink in it — and a fit aimed at that shrinks the belt away from the
+  /// box it is supposed to be filling.
+  static Rect _curveBounds(ConveyorPathGeometry g) {
+    const samples = 256;
+    var minX = double.infinity, minY = double.infinity;
+    var maxX = -double.infinity, maxY = -double.infinity;
+    for (var i = 0; i <= samples; i++) {
+      final p = g.tangentAt(i / samples).position;
+      if (!p.dx.isFinite || !p.dy.isFinite) continue;
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    if (!minX.isFinite || !minY.isFinite) return g.path.getBounds();
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  /// Passes of the ink fit. Each shrinks the remaining shortfall by roughly
+  /// the fraction of the ink the band contributes, so the tail is geometric
+  /// and short: six take a U-turn from 92%/68% of its box onto its clearance
+  /// rect to within a thousandth, and gentler belts trip the convergence
+  /// check after one or two.
+  static const _inkFitPasses = 6;
+
+  /// How much of the box the centerline's own rect has to be worth before
+  /// the two axes are fitted separately. Below this the box is all belt.
+  static const _perAxisFloor = 0.1;
+
+  /// Stretch the centerline until the belt's *ink* fills [size], per axis.
+  ///
+  /// Solved by iteration rather than in closed form: the ink is the
+  /// centerline offset sideways by half a belt, and that offset does not
+  /// scale with the centerline, so scaling the centerline by k does not
+  /// scale the ink by k. Each pass lands the ink closer to its box; see
+  /// [_inkFitPasses] for how many it takes.
+  static ConveyorPathGeometry _fillBoxWithInk(
+      ConveyorPathGeometry g, Size size, double margin) {
+    // Proportional, and only proportional. Everything the fit does has to be
+    // a function of the box's *shape*, never of how many pixels it happens
+    // to be: the moment an absolute clearance enters here it lands in
+    // `scale` and `minTurnRadius` with it, and a belt near the fold
+    // threshold starts swapping between a drawn band and a stroked
+    // centerline as the window is resized — the very defect `minTurnRadius`
+    // was made exact to kill. Aiming at a clearance that included the fixed
+    // 2px border moved the fold ratio by 0.2% between sizes. The
+    // half-border that falls outside the band is accounted for where it
+    // belongs, in the `containable` cap on the belt's own width.
+    final target = Size(max(size.width - 2 * margin, 0.0),
+        max(size.height - 2 * margin, 0.0));
+    // A belt wider than its own box cannot be made to fit by moving the
+    // centerline — the band alone overflows. It spills by design, and
+    // pulling the centerline in to make room for the spill only collapses
+    // the bend into a blob.
+    if (target.shortestSide <= g.beltWidth) return g;
+
+    var current = g;
+    var applied = 1.0;
+    for (var pass = 0; pass < _inkFitPasses; pass++) {
+      final ink = _inkBounds(current);
+      if (!ink.width.isFinite ||
+          !ink.height.isFinite ||
+          ink.width <= 1e-6 ||
+          ink.height <= 1e-6) {
+        return current;
+      }
+      final gx = target.width / ink.width;
+      final gy = target.height / ink.height;
+      if (!gx.isFinite || !gy.isFinite || gx <= 0 || gy <= 0) return current;
+      // Close enough that another pass would move the belt by less than a
+      // pixel on any box anyone draws.
+      if ((gx - 1).abs() < 1e-3 && (gy - 1).abs() < 1e-3) break;
+      // Scale about the ink's centre and land that centre on the box's, so
+      // the belt stays centered as it grows.
+      final next = current.path.transform(Matrix4(
+        gx, 0, 0, 0, //
+        0, gy, 0, 0, //
+        0, 0, 1, 0, //
+        size.width / 2 - ink.center.dx * gx,
+        size.height / 2 - ink.center.dy * gy,
+        0,
+        1,
+      ).storage);
+      final metrics = next.computeMetrics().toList();
+      if (metrics.isEmpty) return current;
+      applied *= min(gx, gy);
+      // `scale` and the bend radius describe the belt as a whole, so they
+      // track the axis that moved least: the tightest bend on screen is
+      // bounded by the axis that grew the least.
+      current = ConveyorPathGeometry._(next, current.beltWidth,
+          g.scale * applied, g.minTurnRadius * applied, metrics.first);
+    }
+    return current;
   }
 }
 
