@@ -284,6 +284,43 @@ void main() {
     });
   });
 
+  group('monitorStopTimeout', () {
+    // The close used to wait a flat two seconds for the monitor to hand its
+    // connection back. The monitor races its *waits* against the stop signal,
+    // but it cannot race `pool.withConnection`'s acquire -- the stop flag is
+    // only read inside the callback, which does not run until the connection
+    // is open. So a monitor asked to stop mid-acquire answers only when that
+    // acquire lands, and the close gave up first, swallowed the timeout, and
+    // force-closed the pool with a socket still on its way in. That socket
+    // arrived untracked by a pool that no longer existed, and stayed idle on
+    // the server forever.
+    //
+    // In the integration config those two numbers were *identical* -- a 2s
+    // connect timeout and a 2s stop wait -- so it came down to a coin flip,
+    // which is why it only ever failed on a loaded CI runner.
+    test('leaves room for an acquire that takes the whole connect timeout', () {
+      expect(monitorStopTimeout(const Duration(seconds: 2)),
+          greaterThan(const Duration(seconds: 2)));
+    });
+
+    test('scales with the connect timeout rather than being flat', () {
+      expect(monitorStopTimeout(const Duration(seconds: 8)),
+          const Duration(seconds: 9));
+    });
+
+    test('never drops below the floor, however impatient the pool', () {
+      expect(monitorStopTimeout(Duration.zero), kMonitorStopTimeout);
+      expect(monitorStopTimeout(const Duration(milliseconds: 100)),
+          kMonitorStopTimeout);
+    });
+
+    test('is capped, because a close must not hang', () {
+      // A patiently configured pool must not turn shutdown into a stall.
+      expect(monitorStopTimeout(const Duration(minutes: 5)),
+          kMonitorStopCeiling);
+    });
+  });
+
   group('releasePool', () {
     // The pool was never closed anywhere in the repo. `PgDatabase.opened` does
     // not own what it is handed, so `AppDatabase.close()` left the pool -- and
@@ -291,15 +328,26 @@ void main() {
     // life of the process. On the `useIsolate: false` path, which is every
     // collector acquisition isolate, there was no DriftIsolate to take it down
     // either, so each thrown-away connect attempt cost a server slot.
-    test('asks politely first, and stops there when that works', () async {
-      // Returning a connection closes it with a Terminate and the backend
-      // exits on the spot. Forcing destroys the socket and leaves the server
-      // to notice -- which on a busy server is the slot staying taken.
+    test('asks politely first, then forces anyway', () async {
+      // Politely first, because returning a connection closes it with a
+      // Terminate and the backend exits on the spot, where forcing destroys
+      // the socket and leaves the server to notice.
+      //
+      // But not politely *only*, which is what this used to assert. A graceful
+      // close reports success once nothing is borrowed, and that is a weaker
+      // claim than every socket being shut: on CI it returned success while
+      // four connections stayed open, the monitor having already let go and
+      // the pool already reporting itself closed. The test's TCP proxy was
+      // still holding the pairs a minute later, which is how we know the
+      // client end never closed them.
+      //
+      // The follow-up force costs nothing for connections the polite close
+      // really did hand back -- their backends are gone already.
       final forced = <bool>[];
       await releasePool(({bool force = false}) async => forced.add(force));
-      expect(forced, [false],
-          reason: 'a graceful close that succeeds must not be followed by a '
-              'forced one');
+      expect(forced, [false, true],
+          reason: 'the polite close is best-effort, so the force must still '
+              'happen -- stopping at the polite one is what leaked');
     });
 
     test('forces the close when the polite one will not finish', () async {

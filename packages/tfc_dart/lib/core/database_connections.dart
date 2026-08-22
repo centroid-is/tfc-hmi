@@ -92,12 +92,42 @@ int? maxPoolConnectionsFromEnv(Map<String, String> env) {
 /// Longest either half of a pool close may take before it is given up on.
 const Duration kPoolCloseTimeout = Duration(seconds: 5);
 
-/// Longest to wait for the health monitor to hand its connection back.
+/// Floor for the wait in [monitorStopTimeout], and the value to use when the
+/// pool's connect timeout is unknown.
 ///
-/// Every wait inside the monitor is raced against its stop signal, so it lets
-/// go in milliseconds; this is only here so that a wedged one cannot hold up a
-/// close that must not hang.
+/// Every *wait* inside the monitor is raced against its stop signal, so a
+/// monitor that already holds its connection lets go in milliseconds.
 const Duration kMonitorStopTimeout = Duration(seconds: 2);
+
+/// Hard ceiling on the same wait. A close must not hang, however patiently
+/// configured the pool is.
+const Duration kMonitorStopCeiling = Duration(seconds: 15);
+
+/// Slack on top of [connectTimeout], for the callback to run and the borrow to
+/// be handed back once the acquire lands.
+const Duration kMonitorStopSlack = Duration(seconds: 1);
+
+/// Longest to wait for the health monitor to hand its connection back, given
+/// how long the pool may take to hand it one.
+///
+/// Not a flat constant, because the thing being waited for is not flat. The
+/// monitor races its waits against the stop signal, but it cannot race
+/// `pool.withConnection`'s *acquire*: the stop flag is only read inside the
+/// callback, which does not run until the connection is open. So a monitor
+/// asked to stop mid-acquire takes as long as that acquire takes, and the
+/// longest that can legitimately be is the pool's [connectTimeout].
+///
+/// Waiting less than that is what leaked. The close gave up after a flat two
+/// seconds, swallowed the timeout, and force-closed the pool with an acquire
+/// still in flight; the socket then landed untracked by a pool that was
+/// already gone, and nothing ever closed it. On a fast machine the acquire
+/// always won that race, which is why it only ever showed up on CI.
+Duration monitorStopTimeout(Duration connectTimeout) {
+  final wanted = connectTimeout + kMonitorStopSlack;
+  if (wanted < kMonitorStopTimeout) return kMonitorStopTimeout;
+  if (wanted > kMonitorStopCeiling) return kMonitorStopCeiling;
+  return wanted;
+}
 
 /// Releases a pool: politely if it can, forcibly if it must.
 ///
@@ -127,10 +157,22 @@ Future<void> releasePool(
 }) async {
   try {
     await close(force: false).timeout(timeout);
-    return;
   } catch (error) {
     onError?.call(error);
   }
+  // Then force, even when the polite close reported success.
+  //
+  // It reports success once nothing is borrowed, which is not the same claim
+  // as every socket being shut, and on CI the difference was four Postgres
+  // backends per run that no one ever closed: the pool said it had closed, the
+  // health monitor said it had let go, and the test's TCP proxy was still
+  // holding the pairs a minute later. Stopping at the polite call is what let
+  // them through.
+  //
+  // Nothing is lost by following up. Connections the polite close did hand
+  // back went with a Terminate and their backends are already gone, so this is
+  // a no-op for them; it only reaches the stragglers, which would otherwise
+  // sit on server slots until the server noticed on its own.
   try {
     await close(force: true).timeout(timeout);
   } catch (error) {
