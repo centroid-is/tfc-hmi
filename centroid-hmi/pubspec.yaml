@@ -119,7 +119,7 @@ dependency_overrides:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: add-keepalive-test
+      ref: fix-orphaned-socket-on-failed-connect
   # drift:
   #   path: ../../drift/drift
   # drift_postgres:
