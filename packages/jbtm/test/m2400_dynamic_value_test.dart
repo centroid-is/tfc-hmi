@@ -124,7 +124,7 @@ void main() {
       expect(statusDv.enumFields![10]!.name, 'badDeny');
     });
 
-    test('deviceTimestamp stored as ISO 8601 string child', () {
+    test('deviceTimestamp stored as epoch-microseconds int child', () {
       final ts = DateTime.utc(2026, 3, 4, 10, 30, 45);
       final record = M2400ParsedRecord(
         type: M2400RecordType.recBatch,
@@ -136,7 +136,13 @@ void main() {
       );
 
       final dv = convertRecordToDynamicValue(record);
-      expect(dv['deviceTimestamp'].asString, ts.toIso8601String());
+      expect(dv['deviceTimestamp'].asInt, ts.microsecondsSinceEpoch);
+      // Pin the representation, not just the round-trip: asserting only
+      // `== ts.microsecondsSinceEpoch` would still pass if the value were
+      // stored as the *string* '1772620245000000', and the collector writes
+      // this straight into a jsonb column where number and string are
+      // different things.
+      expect(dv['deviceTimestamp'].value, isA<int>());
     });
 
     test('null deviceTimestamp means no deviceTimestamp child', () {
@@ -155,7 +161,7 @@ void main() {
       expect(map.containsKey('deviceTimestamp'), isFalse);
     });
 
-    test('receivedAt stored as ISO 8601 string child', () {
+    test('receivedAt stored as epoch-microseconds int child', () {
       final ra = DateTime.utc(2026, 3, 4, 12, 0, 0);
       final record = M2400ParsedRecord(
         type: M2400RecordType.recBatch,
@@ -166,7 +172,8 @@ void main() {
       );
 
       final dv = convertRecordToDynamicValue(record);
-      expect(dv['receivedAt'].asString, ra.toIso8601String());
+      expect(dv['receivedAt'].asInt, ra.microsecondsSinceEpoch);
+      expect(dv['receivedAt'].value, isA<int>());
     });
 
     test('round-trip: double in -> asDouble out matches', () {

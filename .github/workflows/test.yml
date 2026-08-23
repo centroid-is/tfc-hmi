@@ -72,6 +72,73 @@ jobs:
         if-no-files-found: ignore
         retention-days: 7
 
+  # There are TWO Flutter packages in this repository and `flutter-test` above
+  # only covers one of them:
+  #
+  #   /                package `tfc`       — the library and widgets, tests in
+  #                                          test/
+  #   /centroid-hmi    package `centroidx` — the thin app shell, tests in
+  #                                          centroid-hmi/test/
+  #
+  # `flutter-test` runs `flutter test test/` from the repo root, which resolves
+  # to the ROOT package's test/ directory and never descends into
+  # centroid-hmi/. So centroid-hmi/test/navigation_test.dart — 15 tests over
+  # the app's menu shape, god-mode gating and route fallbacks, including the
+  # redirect that stops a deleted Home from dead-ending `/` — had never run in
+  # CI. centroid-hmi is also built by four separate build workflows
+  # (centroid-hmi.yml, linux.yml, macos.yml, windows.yml) and not one of them
+  # runs `flutter test`; they only compile it.
+  #
+  # This needs setup-flutter, not setup-dart: the tests use flutter_test. They
+  # are VM widget/unit tests — no device, no golden comparison — but
+  # `flutter test` still runs the native-asset build hooks for this package,
+  # same as the root job does.
+  centroid-hmi-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Flutter
+      uses: ./.github/actions/setup-flutter
+
+    - name: Install native dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+
+    # Note the working-directory on both steps: this is the centroid-hmi
+    # package, NOT the root one. Dropping it silently retargets this job at the
+    # root package and re-runs what flutter-test already covers.
+    - name: Get dependencies
+      working-directory: centroid-hmi
+      run: flutter pub get
+
+    - name: Run centroid-hmi tests
+      working-directory: centroid-hmi
+      run: flutter test test/ --file-reporter "json:test-report.json"
+
+    # See the note on jbtm-test. It matters more here: this job's failure mode
+    # is not "no tests exist", it is "the runner was pointed at the wrong
+    # package", which is exactly how these 15 tests went unrun in the first
+    # place — and that mistake produces a passing run, not an empty one.
+    - name: Verify the suite actually ran
+      if: always()
+      shell: bash
+      working-directory: centroid-hmi
+      run: |
+        [ -f test-report.json ] || { echo "::error::no test-report.json — the test step never produced a report"; exit 1; }
+        total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
+        loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
+        ran=$((total - loading))
+        echo "centroid-hmi tests reported: $ran"
+        if [ "$ran" -lt 15 ]; then
+          echo "::error::centroid-hmi ran only $ran tests, expected >=15 — check the working-directory, this job may be running the root package instead"
+          exit 1
+        fi
+
   modbus-lib-test:
     strategy:
       fail-fast: false
@@ -93,6 +160,59 @@ jobs:
       run: |
         dart pub get
         dart test
+
+  # packages/jbtm is the M2400/M2200 weigher acquisition path — the code that
+  # reads the production line's weighers — and it is a path dependency of both
+  # the root app and packages/tfc_dart. It had no CI job, so its 227 tests had
+  # never run anywhere, and two of them were red on `main` for five months:
+  # #99 ("perf: reduce CPU usage across paint pipeline") changed the
+  # deviceTimestamp/receivedAt children of the record DynamicValue from ISO
+  # 8601 strings to epoch microseconds and left both the doc comment and the
+  # assertions behind. Nothing caught it because nothing ran it.
+  #
+  # Pure Dart — no Flutter, no database, no Docker — so setup-dart, same shape
+  # as modbus-lib-test above.
+  jbtm-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    - name: Test jbtm
+      working-directory: packages/jbtm
+      run: |
+        dart pub get
+        dart test --file-reporter "json:test-report.json"
+
+    # A job that exists and runs nothing is the defect this job was added to
+    # fix, so do not take "green" on faith. `dart test` does exit non-zero when
+    # it finds no tests (79 for a suite that declares none, 65 for a missing
+    # test/ directory), but that does not catch the suite quietly shrinking —
+    # a bad glob, a renamed directory, a file that stops matching *_test.dart.
+    # Assert a floor on the number of tests that actually reported a start.
+    #
+    # The JSON reporter emits one synthetic "loading <path>" test per suite;
+    # subtract those to get the real count.
+    - name: Verify the suite actually ran
+      if: always()
+      shell: bash
+      working-directory: packages/jbtm
+      run: |
+        [ -f test-report.json ] || { echo "::error::no test-report.json — the test step never produced a report"; exit 1; }
+        total=$(grep -o '"type":"testStart"' test-report.json | wc -l)
+        loading=$(grep -o '"name":"loading ' test-report.json | wc -l)
+        ran=$((total - loading))
+        echo "jbtm tests reported: $ran"
+        # 227 as of this commit. The floor is deliberately just under that, so
+        # it catches a suite that collapses without tripping on every new test.
+        if [ "$ran" -lt 220 ]; then
+          echo "::error::jbtm ran only $ran tests, expected ~227 — the suite is not being picked up"
+          exit 1
+        fi
 
   # packages/tfc_mcp_server had no CI job at all until now, so none of its
   # 1200-odd tests had ever run on any platform. They are pure Dart -- no
