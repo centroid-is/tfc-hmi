@@ -109,7 +109,7 @@ packages:
     dependency: transitive
     description:
       path: "."
-      ref: subtitle-for-start-end-date
+      ref: efc20ef16ace8ce37442d06732182ff06d05c398
       resolved-ref: efc20ef16ace8ce37442d06732182ff06d05c398
       url: "https://github.com/centroid-is/board_datetime_picker.git"
     source: git
@@ -293,7 +293,7 @@ packages:
     dependency: transitive
     description:
       path: "."
-      ref: dev
+      ref: c9afc9db1032dc1f14096c703f11a0a3bc90c40b
       resolved-ref: c9afc9db1032dc1f14096c703f11a0a3bc90c40b
       url: "https://github.com/centroid-is/cristalyse.git"
     source: git
@@ -850,10 +850,10 @@ packages:
     dependency: transitive
     description:
       name: native_toolchain_cmake
-      sha256: fe40e8483183ced98e851e08a9cd2a547fd412cccab98277aa23f2377e43d66f
+      sha256: "8ba223410102665483e873b83d2156720233a6a0181c07f9dc41cb2e961336b0"
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.4"
+    version: "0.3.2"
   nm:
     dependency: transitive
     description:
@@ -874,11 +874,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: main
-      resolved-ref: "4b80433ae9420e1e3a79d33af8a7fdc5fe8578e1"
+      ref: "631702f8354ca5a4c030ab3a0eddd510caeba711"
+      resolved-ref: "631702f8354ca5a4c030ab3a0eddd510caeba711"
       url: "https://github.com/centroid-is/open62541_dart.git"
     source: git
-    version: "1.5.2-1"
+    version: "1.5.6-1"
   openai_dart:
     dependency: transitive
     description:
@@ -1083,7 +1083,7 @@ packages:
     dependency: "direct overridden"
     description:
       path: "."
-      ref: fix-orphaned-socket-on-failed-connect
+      ref: "519312712bacca6c54f296ce190bdb85f37a2581"
       resolved-ref: "519312712bacca6c54f296ce190bdb85f37a2581"
       url: "https://github.com/centroid-is/postgresql-dart.git"
     source: git

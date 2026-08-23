@@ -19,7 +19,10 @@ dependencies:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: fix-orphaned-socket-on-failed-connect
+      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref
+      # lets a tagged build pick up untested code. Head of `fix-orphaned-socket-on-failed-connect`
+      # as of 2026-08-23. Keep in step with the root pubspec.yaml.
+      ref: 519312712bacca6c54f296ce190bdb85f37a2581
   logger: ^2.4.0
   json_annotation: ^4.9.0
   args: ^2.4.2
@@ -33,7 +36,10 @@ dependency_overrides:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: fix-orphaned-socket-on-failed-connect
+      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref
+      # lets a tagged build pick up untested code. Head of `fix-orphaned-socket-on-failed-connect`
+      # as of 2026-08-23. Keep in step with the root pubspec.yaml.
+      ref: 519312712bacca6c54f296ce190bdb85f37a2581
   archive: 4.0.2
 
 dev_dependencies:

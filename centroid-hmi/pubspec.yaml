@@ -47,7 +47,10 @@ dependencies:
     # path: ../../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref lets a
+      # tagged build pick up code that was never tested here. Head of `main` as
+      # of 2026-08-23. Must stay in step with the root pubspec.yaml.
+      ref: 631702f8354ca5a4c030ab3a0eddd510caeba711
   tfc:
     path: ../
   flutter_riverpod: ^2.6.1
@@ -122,11 +125,15 @@ dependency_overrides:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      # Head of `main` as of 2026-08-23; keep in step with the root pubspec.yaml
+      # and with the `dependencies:` entry above.
+      ref: 631702f8354ca5a4c030ab3a0eddd510caeba711
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: fix-orphaned-socket-on-failed-connect
+      # Head of `fix-orphaned-socket-on-failed-connect` as of 2026-08-23. This
+      # branch moved on 2026-08-22, so it was the live one of the four.
+      ref: 519312712bacca6c54f296ce190bdb85f37a2581
   # drift:
   #   path: ../../drift/drift
   # drift_postgres:
