@@ -291,8 +291,7 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets(
-        'occupiedWidth claims the strip for a covered device, '
+    testWidgets('occupiedWidth claims the strip for a covered device, '
         'follows resize and releases on close', (tester) async {
       expect(SidePaneHost.occupiedWidth.value, 0);
 
@@ -376,8 +375,7 @@ void main() {
             id: 'device-$next',
             width: 380,
             // The first device is covered; the second is in plain view.
-            avoidRect:
-                next == 1 ? coveredRect : const Rect.fromLTWH(60, 100, 60, 60),
+            avoidRect: next == 1 ? coveredRect : const Rect.fromLTWH(60, 100, 60, 60),
             builder: (_) => demoPane(title: 'DEV-$next'),
           );
         },
