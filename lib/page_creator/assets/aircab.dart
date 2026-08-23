@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 
@@ -129,6 +131,13 @@ class AirCab extends StatelessWidget {
   final AirCabConfig config;
   const AirCab({super.key, required this.config});
 
+  /// Between a lamp and its caption, and between the two lamp cells.
+  static const double _gap = 4;
+
+  /// How much of a lamp cell's height the caption under it may take. The
+  /// rest, less [_gap], is the lamp itself.
+  static const double _captionFraction = 0.42;
+
   @override
   Widget build(BuildContext context) {
     // Prepare two LEDs (Pressure, Soft start)
@@ -210,87 +219,79 @@ class AirCab extends StatelessWidget {
 
                   const SizedBox(width: 8),
 
-                  // b) Right side: Two LEDs stacked vertically (flex = 3)
+                  // b) Right side: the two lamps, stacked, each with its
+                  //    caption beside it.
                   Expanded(
                     flex: 4,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // ─── LED Row #1 (“Pressure”) ───
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder: (ctx, rowConstraints) {
-                              // Compute fontSize as a fraction of row’s height:
-                              final double fontSize = rowConstraints.maxHeight * 0.5;
-                              return Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  // 1) Icon: keep it square using AspectRatio(1)
-                                  AspectRatio(
-                                    aspectRatio: 1,
-                                    child: FractionallySizedBox(
-                                      widthFactor: 0.8,
-                                      heightFactor: 0.8,
-                                      child: Led(ledConfigs[0]),
+                    child: LayoutBuilder(
+                      builder: (ctx, box) {
+                        final cellHeight = math.max(0.0, (box.maxHeight - _gap) / 2);
+
+                        // The caption sits *under* its lamp rather than
+                        // beside it, so it gets the column's whole width
+                        // instead of what a full-height lamp leaves over.
+                        // Beside the lamp there were about 54 logical pixels
+                        // for ten monospace characters, which is why
+                        // "Pressure" and "Soft start" were being clipped to
+                        // "Pr…" and "So…"; underneath there are roughly 117,
+                        // and the words fit at nearly twice the size.
+                        final captionHeight = cellHeight * _captionFraction;
+                        final lamp = math.max(0.0, cellHeight - captionHeight - _gap);
+                        final captionBox = Size(box.maxWidth, captionHeight);
+
+                        // One size for both captions, chosen so the longer
+                        // one fits: sized independently, "Pressure" would
+                        // come out visibly larger than "Soft start" and the
+                        // pair would stop reading as one list.
+                        final baseStyle = DefaultTextStyle.of(ctx).style;
+                        final fontSize = ledConfigs
+                            .map((led) => fittedFontSize(
+                                  text: led.text!,
+                                  style: baseStyle,
+                                  box: captionBox,
+                                  textScaler: MediaQuery.textScalerOf(ctx),
+                                  textDirection: Directionality.of(ctx),
+                                ))
+                            .reduce(math.min);
+
+                        return Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            for (final (i, led) in ledConfigs.indexed) ...[
+                              if (i > 0) const SizedBox(height: _gap),
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox.square(
+                                      dimension: lamp,
+                                      child: Led(led),
                                     ),
-                                  ),
-
-                                  const SizedBox(width: 4),
-
-                                  // 2) Text “Pressure” at exactly the computed fontSize
-                                  Expanded(
-                                    child: Text(
-                                      ledConfigs[0].text!,
-                                      style: TextStyle(
-                                        fontSize: fontSize,
+                                    const SizedBox(height: _gap),
+                                    // Sized to the box rather than clipped to
+                                    // it: the caption is a whole word an
+                                    // operator reads across the hall, and
+                                    // `TextOverflow.ellipsis` had been eating
+                                    // seven eighths of it.
+                                    SizedBox(
+                                      height: captionHeight,
+                                      child: Center(
+                                        child: Text(
+                                          led.text!,
+                                          style: TextStyle(fontSize: fontSize),
+                                          softWrap: false,
+                                          overflow: TextOverflow.visible,
+                                          maxLines: 1,
+                                        ),
                                       ),
-                                      overflow: TextOverflow.ellipsis,
-                                      maxLines: 1,
                                     ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-
-                        const SizedBox(height: 4),
-
-                        // ─── LED Row #2 (“Soft start”) ───
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder: (ctx, rowConstraints) {
-                              // We use the same formula for fontSize (same fraction of height).
-                              // Because both rows have the same Expanded(flex:1), rowConstraints.maxHeight is identical.
-                              final double fontSize = rowConstraints.maxHeight * 0.5;
-                              return Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  AspectRatio(
-                                    aspectRatio: 1,
-                                    child: FractionallySizedBox(
-                                      widthFactor: 0.8,
-                                      heightFactor: 0.8,
-                                      child: Led(ledConfigs[1]),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Expanded(
-                                    child: Text(
-                                      ledConfigs[1].text!,
-                                      style: TextStyle(
-                                        fontSize: fontSize,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                      maxLines: 1,
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                      ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
                     ),
                   ),
                 ],
