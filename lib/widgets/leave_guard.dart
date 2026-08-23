@@ -23,7 +23,28 @@ abstract final class LeaveGuard {
   }
 
   /// True when nothing objects to leaving the current page.
-  static Future<bool> mayLeave() async => await (_guard?.call() ?? Future.value(true));
+  static Future<bool> mayLeave() async =>
+      await (_guard?.call() ?? Future.value(true));
+
+  /// Run [go] if nothing objects -- and run it SYNCHRONOUSLY when no guard
+  /// is installed. That matters: the navigation chrome closes the side pane
+  /// and then beams in [go], and both must happen inside the tap handler.
+  /// Deferring them by even one microtask (an `await` on an already-true
+  /// Future) left the pane's overlay entry mounted across the route pop, so
+  /// the pane rebuilt a builder whose asset had just been disposed -- the
+  /// same "ValueNotifier used after being disposed" the dismiss-race fix had
+  /// removed. With a guard installed the answer comes from a dialog, i.e.
+  /// from a later tap handler, where the same ordering holds again.
+  static void then(void Function() go) {
+    final guard = _guard;
+    if (guard == null) {
+      go();
+      return;
+    }
+    guard().then((ok) {
+      if (ok) go();
+    });
+  }
 
   static bool get isSet => _guard != null;
 }

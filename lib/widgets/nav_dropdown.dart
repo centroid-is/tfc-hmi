@@ -271,13 +271,22 @@ class NavDropdownState extends State<NavDropdown> {
   }
 }
 
-Future<void> beamSafelyKids(BuildContext context, MenuItem item,
-    {bool askGuard = true}) async {
+void beamSafelyKids(BuildContext context, MenuItem item,
+    {bool askGuard = true}) {
   // The page may object (the editor with unsaved edits). The nav bar asks
   // before it gets here (it also closes the pane and dialogs between the
   // two), so it passes askGuard: false; menu items come straight here.
-  if (askGuard && !await LeaveGuard.mayLeave()) return;
-  if (!context.mounted) return;
+  // Synchronous when no guard is set -- see LeaveGuard.then.
+  if (!askGuard) {
+    _beamKids(context, item);
+    return;
+  }
+  LeaveGuard.then(() {
+    if (context.mounted) _beamKids(context, item);
+  });
+}
+
+void _beamKids(BuildContext context, MenuItem item) {
   if (item.path != null) {
     context.beamToNamed(item.path.toString());
   } else {

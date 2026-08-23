@@ -277,10 +277,11 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                               context.canBeamBack)
                             IconButton(
                               icon: const Icon(Icons.arrow_back),
-                              onPressed: () async {
-                                // The page may object (the editor with
-                                // unsaved edits); ask before anything moves.
-                                if (!await LeaveGuard.mayLeave()) return;
+                              // The page may object (the editor with
+                              // unsaved edits); ask before anything moves.
+                              // LeaveGuard.then runs the body synchronously
+                              // when no guard is set -- see its comment.
+                              onPressed: () => LeaveGuard.then(() {
                                 if (!context.mounted) return;
                                 // Same reason as the navigation bar below:
                                 // take the pane away the moment the operator
@@ -289,7 +290,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                 closeSidePane(immediate: true);
                                 closeAllFloatingDialogs();
                                 context.beamBack();
-                              },
+                              }),
                             ),
                           globalLeftProvider?.buildAppBarLeftWidgets(context) ??
                               const SizedBox.shrink(),
@@ -403,13 +404,11 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                   );
                 }),
               ],
-              onDestinationSelected: (int index) async {
+              onDestinationSelected: (int index) => LeaveGuard.then(() {
                 _logger.d('Item tapped: $index');
-                // The page may object (the editor with unsaved edits).
-                // beamSafelyKids asks the guard itself -- it is also the
-                // menu items' path -- so only the pane and dialogs are
-                // handled here, and only once the guard has let us go.
-                if (!await LeaveGuard.mayLeave()) return;
+                // The page may object (the editor with unsaved edits); the
+                // guard is asked once, here, synchronously when none is set.
+                // beamSafelyKids is told not to ask again.
                 if (!context.mounted) return;
                 // Closed on the tap, not left to the router listener in
                 // MyApp. That listener is the guarantee -- it catches the back
@@ -422,7 +421,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 closeAllFloatingDialogs();
                 final item = RouteRegistry().menuItems[index];
                 beamSafelyKids(context, item, askGuard: false);
-              },
+              }),
             ),
     );
   }
