@@ -1,5 +1,7 @@
 #include "crash_handler.h"
 
+#include "crash_record.h"
+
 #include <windows.h>
 // dbghelp.h must follow windows.h.
 #include <dbghelp.h>
@@ -8,10 +10,9 @@
 
 #include <csignal>   // signal, SIGABRT
 #include <cstdint>   // uintptr_t, in the invalid-parameter handler signature
-#include <cstdio>    // fputs, fflush, _snprintf_s
+#include <cstdio>    // fputs, fflush, snprintf
 #include <cstdlib>   // _set_abort_behavior, _set_purecall_handler
-#include <exception> // set_terminate, current_exception, rethrow_exception
-#include <typeinfo>  // typeid, to name the exception that killed us
+#include <exception> // set_terminate
 
 namespace tfc {
 namespace {
@@ -20,13 +21,10 @@ namespace {
 // take arguments and must not allocate.
 char g_dump_dir[MAX_PATH] = {0};
 
-// A crash inside a crash handler must not recurse forever. InterlockedExchange
-// rather than a plain bool: two threads can fault simultaneously.
-LONG g_handling = 0;
-
-bool EnterHandler() {
-  return ::InterlockedExchange(&g_handling, 1) == 0;
-}
+// A crash inside a crash handler must not recurse forever, and two threads can
+// fault simultaneously. Constant-initialised, so it is armed before any static
+// constructor could fault.
+CrashLatch g_latch;
 
 // Writes straight to stderr, which the runner has redirected to the log file.
 // Deliberately avoids std::string and iostreams: this runs after things like
@@ -40,32 +38,36 @@ void WriteRecord(const char* line) {
   ::OutputDebugStringA("\n");
 }
 
-void FormatTimestamp(char* out, size_t out_len) {
+CrashTime NowUtc() {
   SYSTEMTIME st;
   ::GetSystemTime(&st);
-  _snprintf_s(out, out_len, _TRUNCATE, "%04u%02u%02u-%02u%02u%02u", st.wYear,
-              st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+  CrashTime time;
+  time.year = st.wYear;
+  time.month = st.wMonth;
+  time.day = st.wDay;
+  time.hour = st.wHour;
+  time.minute = st.wMinute;
+  time.second = st.wSecond;
+  return time;
 }
 
 // Writes a minidump and reports where it went. |pointers| may be null, which
 // still yields usable thread stacks.
 void WriteMinidump(EXCEPTION_POINTERS* pointers, const char* timestamp) {
-  if (g_dump_dir[0] == '\0') {
-    WriteRecord("[crash] no dump directory configured — minidump skipped");
+  char path[MAX_PATH];
+  if (!FormatMinidumpPath(path, sizeof(path), g_dump_dir, timestamp,
+                          ::GetCurrentProcessId())) {
+    WriteRecord("[crash] no usable dump path — minidump skipped");
     return;
   }
-
-  char path[MAX_PATH];
-  _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\hmi-crash-%s-%lu.dmp",
-              g_dump_dir, timestamp, ::GetCurrentProcessId());
 
   HANDLE file = ::CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     char line[MAX_PATH + 64];
-    _snprintf_s(line, sizeof(line), _TRUNCATE,
-                "[crash] could not create minidump %s (error %lu)", path,
-                ::GetLastError());
+    std::snprintf(line, sizeof(line),
+                  "[crash] could not create minidump %s (error %lu)", path,
+                  ::GetLastError());
     WriteRecord(line);
     return;
   }
@@ -87,12 +89,11 @@ void WriteMinidump(EXCEPTION_POINTERS* pointers, const char* timestamp) {
 
   char line[MAX_PATH + 64];
   if (ok) {
-    _snprintf_s(line, sizeof(line), _TRUNCATE, "[crash] minidump written: %s",
-                path);
+    std::snprintf(line, sizeof(line), "[crash] minidump written: %s", path);
   } else {
-    _snprintf_s(line, sizeof(line), _TRUNCATE,
-                "[crash] MiniDumpWriteDump failed (error %lu)",
-                ::GetLastError());
+    std::snprintf(line, sizeof(line),
+                  "[crash] MiniDumpWriteDump failed (error %lu)",
+                  ::GetLastError());
   }
   WriteRecord(line);
 }
@@ -102,15 +103,13 @@ void WriteMinidump(EXCEPTION_POINTERS* pointers, const char* timestamp) {
 // SIGABRT handler, and so no second dialog appears.
 [[noreturn]] void ReportAndDie(const char* kind, const char* detail,
                                EXCEPTION_POINTERS* pointers, UINT exit_code) {
-  if (EnterHandler()) {
+  if (g_latch.Enter()) {
     char timestamp[32];
-    FormatTimestamp(timestamp, sizeof(timestamp));
+    FormatTimestamp(timestamp, sizeof(timestamp), NowUtc());
 
     char line[1024];
-    _snprintf_s(line, sizeof(line), _TRUNCATE,
-                "[crash] %s  thread=%lu  time=%s  detail=%s", kind,
-                ::GetCurrentThreadId(), timestamp,
-                detail != nullptr ? detail : "(none)");
+    FormatCrashRecord(line, sizeof(line), kind, ::GetCurrentThreadId(),
+                      timestamp, detail);
     WriteRecord(line);
 
     WriteMinidump(pointers, timestamp);
@@ -121,56 +120,34 @@ void WriteMinidump(EXCEPTION_POINTERS* pointers, const char* timestamp) {
 }
 
 LONG WINAPI SehFilter(EXCEPTION_POINTERS* pointers) {
-  char detail[128] = "(no record)";
-  if (pointers != nullptr && pointers->ExceptionRecord != nullptr) {
-    _snprintf_s(detail, sizeof(detail), _TRUNCATE,
-                "code=0x%08lX address=0x%p",
-                pointers->ExceptionRecord->ExceptionCode,
-                pointers->ExceptionRecord->ExceptionAddress);
-  }
+  const bool has_record =
+      pointers != nullptr && pointers->ExceptionRecord != nullptr;
+  char detail[128];
+  FormatSehDetail(detail, sizeof(detail), has_record,
+                  has_record ? pointers->ExceptionRecord->ExceptionCode : 0,
+                  has_record ? pointers->ExceptionRecord->ExceptionAddress
+                             : nullptr);
   ReportAndDie("structured exception", detail, pointers, 1);
 }
 
 void TerminateHandler() {
-  // Recovering what() is the whole point: this is the path an exception
-  // escaping a noexcept function takes, and without this the log says nothing
-  // beyond "abort() has been called".
-  const char* detail = "no active exception (explicit terminate, or an "
-                       "exception escaping a noexcept function)";
   char buffer[512];
-
-  if (std::exception_ptr active = std::current_exception()) {
-    try {
-      std::rethrow_exception(active);
-    } catch (const std::exception& e) {
-      _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, "uncaught %s: %s",
-                  typeid(e).name(), e.what());
-      detail = buffer;
-    } catch (...) {
-      detail = "uncaught exception not derived from std::exception";
-    }
-  }
-
-  ReportAndDie("std::terminate", detail, nullptr, 3);
+  ReportAndDie("std::terminate", DescribeActiveException(buffer, sizeof(buffer)),
+               nullptr, 3);
 }
 
 void SignalHandler(int signal_number) {
-  const char* kind = signal_number == SIGABRT ? "abort()" : "signal";
   char detail[64];
-  _snprintf_s(detail, sizeof(detail), _TRUNCATE, "signal=%d", signal_number);
-  ReportAndDie(kind, detail, nullptr, 3);
+  std::snprintf(detail, sizeof(detail), "signal=%d", signal_number);
+  ReportAndDie(SignalKind(signal_number), detail, nullptr, 3);
 }
 
 void InvalidParameterHandler(const wchar_t* expression, const wchar_t* function,
                              const wchar_t* file, unsigned int line,
                              uintptr_t /*reserved*/) {
-  // The CRT's default for this is to call abort() with no explanation at all.
   char detail[768];
-  _snprintf_s(detail, sizeof(detail), _TRUNCATE,
-              "expression=%ls function=%ls file=%ls line=%u",
-              expression != nullptr ? expression : L"(null)",
-              function != nullptr ? function : L"(null)",
-              file != nullptr ? file : L"(null)", line);
+  FormatInvalidParameterDetail(detail, sizeof(detail), expression, function,
+                               file, line);
   ReportAndDie("CRT invalid parameter", detail, nullptr, 3);
 }
 
@@ -181,8 +158,7 @@ void PureCallHandler() {
 }  // namespace
 
 void InstallCrashHandlers(const std::string& dump_dir) {
-  _snprintf_s(g_dump_dir, sizeof(g_dump_dir), _TRUNCATE, "%s",
-              dump_dir.c_str());
+  std::snprintf(g_dump_dir, sizeof(g_dump_dir), "%s", dump_dir.c_str());
 
   ::SetUnhandledExceptionFilter(SehFilter);
   std::set_terminate(TerminateHandler);
