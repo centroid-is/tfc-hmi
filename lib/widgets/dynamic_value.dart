@@ -151,14 +151,13 @@ class DynamicValueWidget extends StatelessWidget {
   }
 
   Widget _buildStringWidget(BuildContext context) {
-    return TextField(
-      controller: TextEditingController(text: _value.asString),
+    return _ValueTextField(
+      text: _value.asString,
       onSubmitted: onSubmitted != null
           ? (newValue) {
               onSubmitted!(DynamicValue.from(_value)..value = newValue);
             }
           : null,
-      readOnly: onSubmitted == null,
       decoration: InputDecoration(
         labelText: _value.displayName?.value,
         helperText: _value.description?.value,
@@ -234,8 +233,8 @@ class DynamicValueWidget extends StatelessWidget {
       }
     }
 
-    return TextField(
-      controller: TextEditingController(text: _value.asInt.toString()),
+    return _ValueTextField(
+      text: _value.asInt.toString(),
       keyboardType: TextInputType.number,
       onSubmitted: onSubmitted != null
           ? (newValue) {
@@ -245,7 +244,6 @@ class DynamicValueWidget extends StatelessWidget {
               }
             }
           : null,
-      readOnly: onSubmitted == null,
       decoration: InputDecoration(
         labelText: _value.displayName?.value,
         helperText: _value.description?.value,
@@ -254,10 +252,9 @@ class DynamicValueWidget extends StatelessWidget {
   }
 
   Widget _buildDoubleWidget(BuildContext context) {
-    return TextField(
-      controller: TextEditingController(text: _value.asDouble.toString()),
+    return _ValueTextField(
+      text: _value.asDouble.toString(),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      readOnly: onSubmitted == null,
       onSubmitted: onSubmitted != null
           ? (newValue) {
               final doubleValue = double.tryParse(newValue);
@@ -287,5 +284,65 @@ class DynamicValueWidget extends StatelessWidget {
     withSpaces = withSpaces.trimLeft();
     if (withSpaces.isEmpty) return '';
     return withSpaces[0].toUpperCase() + withSpaces.substring(1);
+  }
+}
+
+/// A text field that keeps its controller across rebuilds.
+///
+/// The string, int and double editors used to build
+/// `TextField(controller: TextEditingController(text: ...))` inline: a new
+/// controller -- and with it a new, empty selection -- on every rebuild. The
+/// recipes dialog rebuilds on every PLC tick and on every keystroke, so the
+/// cursor jumped, backspace ate the wrong character, and select-all could
+/// not survive a frame; the controllers were never disposed either. The
+/// controller lives here now; the PLC's value is followed only while the
+/// operator is not editing.
+class _ValueTextField extends StatefulWidget {
+  const _ValueTextField({
+    required this.text,
+    required this.decoration,
+    this.onSubmitted,
+    this.keyboardType,
+  });
+
+  final String text;
+  final InputDecoration decoration;
+  final ValueChanged<String>? onSubmitted;
+  final TextInputType? keyboardType;
+
+  @override
+  State<_ValueTextField> createState() => _ValueTextFieldState();
+}
+
+class _ValueTextFieldState extends State<_ValueTextField> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.text);
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void didUpdateWidget(covariant _ValueTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.text != oldWidget.text && !_focus.hasFocus) {
+      _controller.text = widget.text;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      focusNode: _focus,
+      keyboardType: widget.keyboardType,
+      onSubmitted: widget.onSubmitted,
+      readOnly: widget.onSubmitted == null,
+      decoration: widget.decoration,
+    );
   }
 }
