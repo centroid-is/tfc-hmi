@@ -118,6 +118,26 @@ jobs:
         dart pub get
         dart test
 
+  # The updater. Its tests existed but no workflow ran them, so the component
+  # that installs every other fix was the one component with no CI at all.
+  # Needs setup-flutter rather than setup-dart: the package depends on
+  # flutter_test. No native build happens -- these are VM unit tests.
+  centroidx-upgrader-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup-flutter
+
+    - name: Test centroidx_upgrader
+      working-directory: packages/centroidx_upgrader
+      run: |
+        flutter pub get
+        flutter test
+
   tfc-dart-test:
     strategy:
       fail-fast: false

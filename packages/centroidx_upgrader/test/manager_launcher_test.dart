@@ -203,34 +203,241 @@ void main() {
       expect(path, contains('centroidx-manager_linux_amd64'));
     });
 
+    // Test 5a: the real Windows branch, exercised. Tests 4 and 5 inject a
+    // pathResolver and therefore never run the code that builds the path, so
+    // nothing covered the APPDATA lookup itself.
+    test('resolveManagerPath builds the APPDATA path on Windows', () async {
+      final launcher = ManagerLauncher(
+        envProvider: (key) => key == 'APPDATA'
+            ? r'C:\Users\Jón\AppData\Roaming'
+            : null,
+        platformIsWindows: true,
+        platformIsMacOS: false,
+      );
+
+      expect(
+        await launcher.resolveManagerPath(),
+        equals(
+            r'C:\Users\Jón\AppData\Roaming\centroidx\manager\centroidx-manager.exe'),
+      );
+    });
+
+    // Test 5b: with APPDATA unset the old code interpolated an empty string
+    // and produced `\centroidx\manager\centroidx-manager.exe` — an absolute
+    // path at the root of the current drive, which it would then quietly try
+    // to create. The Go side (extract_windows.go) errors explicitly here; the
+    // Dart side now does too.
+    test('resolveManagerPath refuses to build a path when APPDATA is unset',
+        () async {
+      final launcher = ManagerLauncher(
+        envProvider: (_) => null,
+        platformIsWindows: true,
+        platformIsMacOS: false,
+      );
+
+      await expectLater(
+        launcher.resolveManagerPath(),
+        throwsA(isA<StateError>().having(
+            (e) => e.message, 'message', contains('APPDATA'))),
+      );
+    });
+
+    test('resolveManagerPath refuses to build a path when APPDATA is empty',
+        () async {
+      final launcher = ManagerLauncher(
+        envProvider: (_) => '',
+        platformIsWindows: true,
+        platformIsMacOS: false,
+      );
+
+      await expectLater(
+          launcher.resolveManagerPath(), throwsA(isA<StateError>()));
+    });
+
     // -----------------------------------------------------------------------
     // ensureExtracted tests
     // -----------------------------------------------------------------------
 
-    // Test 6: ensureExtracted skips extraction when file already exists with non-zero size
-    test('ensureExtracted skips extraction when file already exists with non-zero size', () async {
+    // Test 6: an on-disk binary that already matches the bundle is left alone.
+    //
+    // "Left alone" is asserted through chmod rather than through the asset
+    // loader: the loader now runs unconditionally, because comparing against
+    // the bundled asset is the only way to know whether the copy on disk is
+    // the current one. chmod only happens after a write, so no chmod means no
+    // rewrite.
+    test('ensureExtracted leaves the binary alone when it matches the bundle',
+        () async {
       final tempDir = await Directory.systemTemp.createTemp('mltest6_');
       final managerFile = File('${tempDir.path}/centroidx-manager');
-      // Write existing content so the file is non-empty
-      await managerFile.writeAsBytes([1, 2, 3, 4, 5]);
+      await managerFile.writeAsBytes(_fakeAssetBytes);
 
-      var assetLoaderCalled = false;
+      final recorder = _RecordingCommandRunner();
 
       try {
         final launcher = ManagerLauncher(
           pathResolver: () async => managerFile.path,
-          assetLoader: (key) async {
-            assetLoaderCalled = true;
-            return _fakeAssetBytes;
-          },
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: recorder.call,
           platformIsWindows: false,
           platformIsMacOS: false,
         );
 
         await launcher.ensureExtracted();
 
-        expect(assetLoaderCalled, isFalse,
-            reason: 'Should not load asset when file already exists');
+        expect(recorder.executables, isNot(contains('chmod')),
+            reason: 'an identical binary must not be rewritten');
+        expect(await managerFile.readAsBytes(), equals(_fakeAssetBytes));
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 6a: THE DELIVERY-CHAIN TEST. A stale manager left over from an
+    // earlier CentroidX version must be replaced by the one this build
+    // bundles. Before this was fixed, ensureExtracted returned early on
+    // "exists && length > 0", so every manager fix we shipped sat undelivered
+    // on any station that had ever extracted one.
+    test('ensureExtracted replaces a stale binary that differs from the bundle',
+        () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6a_');
+      final managerFile = File('${tempDir.path}/centroidx-manager');
+      // A previous version's manager: non-empty, so the old exists-check
+      // considered it good, but neither the size nor the bytes this build
+      // ships. Deliberately a different length from test 6b, so the two
+      // together separate "no comparison at all" from "size-only comparison".
+      final stale = Uint8List.fromList(List<int>.filled(4, 0xEE));
+      expect(stale.length, isNot(_fakeAssetBytes.length));
+      await managerFile.writeAsBytes(stale);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerFile.path,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.ensureExtracted();
+
+        expect(await managerFile.readAsBytes(), equals(_fakeAssetBytes),
+            reason: 'a manager from an older build must be replaced');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 6b: same length, different content. Guards against a size-only
+    // comparison, which is what the Go side does and what would silently miss
+    // a rebuilt manager that happens to land on the same byte count.
+    test('ensureExtracted replaces a binary of equal length but different bytes',
+        () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6b_');
+      final managerFile = File('${tempDir.path}/centroidx-manager');
+      final sameLength =
+          Uint8List.fromList(List<int>.filled(_fakeAssetBytes.length, 0x7F));
+      expect(sameLength.length, equals(_fakeAssetBytes.length));
+      await managerFile.writeAsBytes(sameLength);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerFile.path,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.ensureExtracted();
+
+        expect(await managerFile.readAsBytes(), equals(_fakeAssetBytes),
+            reason: 'comparison must be by content, not by size');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 6c: a zero-length file is a failed earlier extraction, not a
+    // manager. It must be replaced (this held before the change too).
+    test('ensureExtracted replaces a zero-length file', () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6c_');
+      final managerFile = File('${tempDir.path}/centroidx-manager');
+      await managerFile.writeAsBytes(<int>[]);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerFile.path,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.ensureExtracted();
+
+        expect(await managerFile.readAsBytes(), equals(_fakeAssetBytes));
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 6d: refreshing is best-effort once a usable binary is already
+    // there. Windows refuses to open a running .exe for writing, and a
+    // manager left running from an earlier launch would otherwise turn a
+    // refresh that used to be a no-op into a hard failure of the whole
+    // update. Keeping the older binary beats not launching at all.
+    //
+    // Forced with a read-only file, so POSIX only — Windows ignores the mode
+    // bits and this would not reproduce there.
+    test('ensureExtracted keeps the existing binary when the refresh cannot be written',
+        () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6d_');
+      final managerFile = File('${tempDir.path}/centroidx-manager');
+      final existing = Uint8List.fromList(List<int>.filled(10, 0xEE));
+      await managerFile.writeAsBytes(existing);
+      await Process.run('chmod', ['444', managerFile.path]);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerFile.path,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        // Must not throw: the caller goes on to launch the old manager.
+        await launcher.ensureExtracted();
+
+        expect(await managerFile.readAsBytes(), equals(existing),
+            reason: 'the unwritable original must survive');
+      } finally {
+        await Process.run('chmod', ['644', managerFile.path]);
+        await tempDir.delete(recursive: true);
+      }
+    }, skip: Platform.isWindows ? 'read-only mode bits are a POSIX thing' : null);
+
+    // Test 6e: with nothing usable on disk, a failed write is fatal — there is
+    // no older manager to fall back to, so swallowing it would leave the
+    // caller launching a path that does not exist.
+    test('ensureExtracted rethrows when the first extraction cannot be written',
+        () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6e_');
+      // A directory where the binary should go: writeAsBytes cannot replace it.
+      final managerPath = '${tempDir.path}/centroidx-manager';
+      await Directory(managerPath).create(recursive: true);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerPath,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await expectLater(
+            launcher.ensureExtracted(), throwsA(isA<FileSystemException>()));
       } finally {
         await tempDir.delete(recursive: true);
       }
