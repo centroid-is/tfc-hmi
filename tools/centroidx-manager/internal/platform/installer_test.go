@@ -90,7 +90,9 @@ func TestWindowsInstaller_Install(t *testing.T) {
 }
 
 func TestWindowsInstaller_TrustCertificate(t *testing.T) {
-	runner := &mockRunner{}
+	// The runner has to report the success token: silence no longer means
+	// success, which is the point of the change this test now sits on top of.
+	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustOKToken)}, errors: []error{nil}}
 	if err := trustCertificateWindows(runner, "/tmp/cert.cer"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
