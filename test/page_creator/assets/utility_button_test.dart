@@ -65,9 +65,10 @@ void main() {
         expect(painter.buttonType, ButtonType.square);
 
         // The label is the page's text colour at medium weight -- not bold
-        // white on blue.
+        // white on blue, and not the dimmer onSurface either.
         final label = tester.widget<Text>(find.text(asset.key));
-        expect(label.style!.color, scheme.onSurface);
+        expect(label.style!.color,
+            theme.value.textTheme.bodyLarge?.color ?? scheme.onSurface);
         expect(label.style!.fontWeight, isNot(FontWeight.bold));
       });
     }

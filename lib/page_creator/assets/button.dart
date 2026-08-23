@@ -677,7 +677,11 @@ class _UtilityButtonState extends State<UtilityButton> {
           padding: const EdgeInsets.symmetric(horizontal: 8.0),
           heightFraction: 0.3,
           style: TextStyle(
-            color: theme.colorScheme.onSurface,
+            // The page's own label colour (what a text asset paints with),
+            // not colorScheme.onSurface: in Solarized dark onSurface is
+            // base01, a 2.4:1 grey that made the word fade into the face.
+            color: theme.textTheme.bodyLarge?.color ??
+                theme.colorScheme.onSurface,
             fontWeight: FontWeight.w500,
           ),
         ),
