@@ -191,9 +191,10 @@ class AirCab extends StatelessWidget {
         child: Column(
           children: [
             // ─── Top “label” row ───
-            // One fifth of the box, not a third: the label is a short tag
+            // A quarter of the box, not a third: the label is a short tag
             // ("+ST203") and every pixel it gives up goes to the lamps below,
-            // which at a third were eight pixels across on the home page.
+            // which at a third were eight pixels across on the home page. A
+            // fifth made the tag itself fine print.
             Expanded(
               flex: 1,
               // The font size is computed for the row, the same way the rows
@@ -208,7 +209,7 @@ class AirCab extends StatelessWidget {
 
             // ─── Bottom “content” row ───
             Expanded(
-              flex: 4,
+              flex: 3,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
