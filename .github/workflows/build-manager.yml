@@ -213,6 +213,60 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: tools/centroidx-manager/${{ matrix.artifact_name }}
 
+  # The manager's unit tests had never run anywhere. The only `go test` in the
+  # whole of .github/workflows was the integration one below, and it is
+  # `-tags integration -run TestIntegration` — so 68 plain unit tests across
+  # internal/{github,platform,ui,update} compiled and executed on developer
+  # machines only, and the three tests behind //go:build windows in
+  # internal/platform/extract_windows_test.go had never compiled at all.
+  #
+  # Deliberately not `needs: [build]`: these are hermetic and take seconds, and
+  # there is no reason to queue them behind three platform builds. Nor are they
+  # gated on run_integration_tests — that flag exists because the integration
+  # tests describe the release a caller is about to replace (see the input's
+  # comment above), which is not true of these. A unit-test failure blocking
+  # main-prerelease's publish is the correct outcome: it means the manager
+  # about to be published is broken.
+  #
+  # ubuntu and windows, no macOS: the windows leg is what makes
+  # extract_windows_test.go compile, ubuntu covers everything else, and macOS
+  # runners are the scarce resource on this plan — the integration job below
+  # already spends one.
+  unit-test:
+    name: manager-unit-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cgo: '1'
+          - os: windows-latest
+            cgo: '0'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # internal/ui is Gio, so `./...` needs the windowing headers even though
+      # no window is ever opened. Same list the build job installs.
+      - name: Install Linux build dependencies (Gio)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libvulkan-dev
+
+      - name: Run unit tests
+        working-directory: tools/centroidx-manager
+        shell: bash
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go test ./...
+
   integration-test:
     needs: [build]
     # Unset on push/pull_request (no `inputs` context), so the tests run there.
