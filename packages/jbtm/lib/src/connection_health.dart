@@ -28,14 +28,24 @@ class ConnectionHealthMetrics {
   /// Rolling window of record receipt timestamps for throughput calculation.
   final List<DateTime> _recordTimestamps = [];
 
+  /// Source of "now". Seam for tests; production uses [DateTime.now].
+  final DateTime Function() _now;
+
   /// Create health metrics that track the given [socket]'s connection status.
-  ConnectionHealthMetrics(this._socket) {
+  ///
+  /// [now] exists only for tests. Both [uptime] and [recordsPerSecond] are
+  /// differences between two clock reads, and on Windows the system clock
+  /// ticks in ~15.6ms steps -- two reads inside the same tick are equal, so
+  /// a freshly connected socket can legitimately report an uptime of exactly
+  /// zero. Tests inject a clock they control instead of sleeping and hoping.
+  ConnectionHealthMetrics(this._socket, {DateTime Function()? now})
+      : _now = now ?? DateTime.now {
     _statusSub = _socket.statusStream.listen(_onStatus);
   }
 
   void _onStatus(ConnectionStatus status) {
     if (status == ConnectionStatus.connected) {
-      _lastConnectedAt = DateTime.now();
+      _lastConnectedAt = _now();
       _isConnected = true;
       if (_firstConnected) {
         // This is a reconnection (not the very first connect)
@@ -51,7 +61,7 @@ class ConnectionHealthMetrics {
   /// Duration since last connected. Returns [Duration.zero] when disconnected.
   Duration get uptime {
     if (!_isConnected || _lastConnectedAt == null) return Duration.zero;
-    return DateTime.now().difference(_lastConnectedAt!);
+    return _now().difference(_lastConnectedAt!);
   }
 
   /// Number of reconnections (first connect is not counted).
@@ -65,12 +75,12 @@ class ConnectionHealthMetrics {
 
   /// Call this when a record is received to update throughput tracking.
   void notifyRecord() {
-    _recordTimestamps.add(DateTime.now());
+    _recordTimestamps.add(_now());
   }
 
   /// Prune timestamps older than 1 second.
   void _pruneOldTimestamps() {
-    final cutoff = DateTime.now().subtract(Duration(seconds: 1));
+    final cutoff = _now().subtract(Duration(seconds: 1));
     _recordTimestamps.removeWhere((t) => t.isBefore(cutoff));
   }
 
