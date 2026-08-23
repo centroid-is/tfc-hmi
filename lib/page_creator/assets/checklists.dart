@@ -1,10 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:rxdart/rxdart.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 
 import 'package:tfc/page_creator/assets/button.dart';
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/page_creator/assets/common.dart';
+import 'package:tfc/providers/state_man.dart';
+import 'package:tfc/theme.dart';
 
 part 'checklists.g.dart';
 
@@ -168,86 +175,46 @@ class _ChecklistsState extends State<Checklists> {
       title: 'Checklists',
       icon: Icons.checklist,
       size: const Size(1200, 560),
-      builder: (context) => ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: 1200,
-          maxHeight: 500,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ─── Three‐column area ───
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: List.generate(3, (lineIdx) {
-                final List<LEDConfig> line = [
-                  widget.config.line1,
-                  widget.config.line2,
-                  widget.config.line3,
-                ][lineIdx];
-
-                return Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 8.0),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // ─── "Line X" header ───
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8.0),
-                            child: Text(
-                              'Line ${lineIdx + 1}',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                          ),
-
-                          // ─── Each LED row ───
-                          for (final ledConfig in line)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 8.0, horizontal: 12.0),
-                              child: Row(
-                                children: [
-                                  // LED icon, with a relative size
-                                  Expanded(
-                                    flex: 1,
-                                    child: AspectRatio(
-                                      aspectRatio: 1, // Make it square
-                                      child: Led(
-                                        ledConfig
-                                          ..size = RelativeSize(
-                                              width: 0.03, height: 0.03),
-                                      ),
-                                    ),
-                                  ),
-
-                                  const SizedBox(width: 8),
-
-                                  // LED text
-                                  Expanded(
-                                    flex: 6,
-                                    child: Text(
-                                      ledConfig.text ?? '',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
-                                    ),
-                                  ),
-                                ],
+      builder: (context) {
+        final theme = Theme.of(context);
+        final lines = [
+          widget.config.line1,
+          widget.config.line2,
+          widget.config.line3,
+        ];
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1200),
+          // IntrinsicHeight so the hairlines between the columns run the full
+          // height of the tallest one; the dialog body scrolls as a whole.
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var lineIdx = 0; lineIdx < lines.length; lineIdx++)
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                      decoration: lineIdx == 0
+                          ? null
+                          : BoxDecoration(
+                              border: Border(
+                                left: BorderSide(
+                                  color:
+                                      theme.dividerColor.withValues(alpha: 0.5),
+                                ),
                               ),
                             ),
-                        ],
+                      child: ChecklistColumn(
+                        title: 'Line ${lineIdx + 1}',
+                        steps: lines[lineIdx],
                       ),
                     ),
                   ),
-                );
-              }),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -256,6 +223,266 @@ class _ChecklistsState extends State<Checklists> {
     return UtilityButton(
       label: 'Checklists',
       onTap: () => _showChecklistDialog(context),
+    );
+  }
+}
+
+/// One line's checklist: a header with how far along it is, a thin progress
+/// bar, and the steps themselves, numbered, with a hairline between them.
+///
+/// Every step is an LED bound to a PLC bool, so "done" is whatever the PLC
+/// says it is -- nothing here is ticked by hand or written back. The column
+/// reads each key once through [keyStreamProvider], the same way the LED
+/// asset does, and paints the LED from that value rather than letting every
+/// row subscribe on its own: the header needs the values anyway to count.
+class ChecklistColumn extends ConsumerStatefulWidget {
+  final String title;
+  final List<LEDConfig> steps;
+
+  const ChecklistColumn({super.key, required this.title, required this.steps});
+
+  @override
+  ConsumerState<ChecklistColumn> createState() => _ChecklistColumnState();
+}
+
+class _ChecklistColumnState extends ConsumerState<ChecklistColumn> {
+  Stream<List<bool?>>? _cachedValues;
+  int? _cachedSignature;
+
+  static bool _bound(LEDConfig step) =>
+      step.key.isNotEmpty && step.key != LEDConfig.previewStr;
+
+  /// The live value of every bound step, in step order, with `null` for a
+  /// step that has not reported yet or whose key the PLC will not serve.
+  ///
+  /// Built once per set of streams, not once per build -- see the note on
+  /// `_valuesStream` in `conveyor.dart` for what re-subscribing per frame
+  /// costs. Each source is made optional (errors and silence become `null`)
+  /// so one dead key leaves the rest of the column working.
+  Stream<List<bool?>> _valuesStream(List<Stream<DynamicValue>?> sources) {
+    final signature = Object.hashAll(
+        [for (final s in sources) s == null ? 0 : identityHashCode(s)]);
+    final cached = _cachedValues;
+    if (cached != null && signature == _cachedSignature) return cached;
+
+    final combined = CombineLatestStream<bool?, List<bool?>>(
+      [
+        for (final s in sources)
+          if (s == null)
+            Stream<bool?>.value(null)
+          else
+            s
+                .map<bool?>((value) => value.asBool)
+                .transform(StreamTransformer<bool?, bool?>.fromHandlers(
+                  handleError: (error, stackTrace, sink) => sink.add(null),
+                ))
+                .startWith(null),
+      ],
+      (values) => List<bool?>.unmodifiable(values),
+    ).shareReplay(maxSize: 1);
+
+    _cachedSignature = signature;
+    _cachedValues = combined;
+    return combined;
+  }
+
+  /// What the row shows: a preview LED is lit, like the LED asset's own
+  /// preview; an unbound one is unknown.
+  static bool? _stateOf(LEDConfig step, bool? value) {
+    if (step.key == LEDConfig.previewStr) return true;
+    if (step.key.isEmpty) return null;
+    return value;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = widget.steps;
+    if (steps.isEmpty) {
+      return _ChecklistColumnBody(
+        title: widget.title,
+        steps: const [],
+        states: const [],
+      );
+    }
+    final sources = [
+      for (final step in steps)
+        _bound(step) ? ref.watch(keyStreamProvider(step.key)) : null,
+    ];
+    return StreamBuilder<List<bool?>>(
+      stream: _valuesStream(sources),
+      builder: (context, snapshot) {
+        final values = snapshot.data ?? List<bool?>.filled(steps.length, null);
+        return _ChecklistColumnBody(
+          title: widget.title,
+          steps: steps,
+          states: [
+            for (var i = 0; i < steps.length; i++)
+              _stateOf(steps[i], values[i]),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ChecklistColumnBody extends StatelessWidget {
+  final String title;
+  final List<LEDConfig> steps;
+
+  /// One entry per step: done, not done, or unknown.
+  final List<bool?> states;
+
+  const _ChecklistColumnBody({
+    required this.title,
+    required this.steps,
+    required this.states,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final doneColor = HmiStateColors.of(context).green;
+    final hairline = theme.dividerColor.withValues(alpha: 0.5);
+    final muted = scheme.onSurface.withValues(alpha: 0.6);
+
+    final total = steps.length;
+    final done = states.where((s) => s == true).length;
+    final complete = total > 0 && done == total;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ─── Header: title, N / M, thin progress ───
+        Padding(
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (total > 0)
+                Text(
+                  '$done / $total',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: complete ? doneColor : muted,
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (total > 0)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: done / total,
+              minHeight: 3,
+              color: doneColor,
+              backgroundColor: theme.dividerColor,
+            ),
+          ),
+        const SizedBox(height: 4),
+
+        // ─── Steps ───
+        if (total == 0)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12.0),
+            child: Text(
+              'No steps configured',
+              style: theme.textTheme.bodyMedium?.copyWith(color: muted),
+            ),
+          ),
+        for (var i = 0; i < total; i++)
+          _ChecklistStepRow(
+            index: i + 1,
+            step: steps[i],
+            state: states[i],
+            // A hairline under every step but the last, like the detail
+            // rows in the panes.
+            hairline: i == total - 1 ? null : hairline,
+            muted: muted,
+            doneColor: doneColor,
+          ),
+      ],
+    );
+  }
+}
+
+class _ChecklistStepRow extends StatelessWidget {
+  final int index;
+  final LEDConfig step;
+  final bool? state;
+  final Color? hairline;
+  final Color muted;
+  final Color doneColor;
+
+  const _ChecklistStepRow({
+    required this.index,
+    required this.step,
+    required this.state,
+    required this.hairline,
+    required this.muted,
+    required this.doneColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final done = state == true;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 7.0),
+      decoration: hairline == null
+          ? null
+          : BoxDecoration(
+              border: Border(bottom: BorderSide(color: hairline!)),
+            ),
+      child: Row(
+        children: [
+          // Step number, so "step 4" means the same thing on the floor as
+          // it does on the screen.
+          SizedBox(
+            width: 22,
+            child: Text(
+              '$index.',
+              textAlign: TextAlign.right,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: muted,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // The LED, at a fixed size: a step indicator, not a panel lamp.
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: LedRaw(step, value: state),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              step.text ?? '',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                // A done step steps back, so what is left stands out.
+                color: done ? muted : null,
+              ),
+            ),
+          ),
+          if (done) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.check, size: 16, color: doneColor),
+          ],
+        ],
+      ),
     );
   }
 }
