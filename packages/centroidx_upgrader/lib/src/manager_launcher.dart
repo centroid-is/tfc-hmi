@@ -141,18 +141,44 @@ class ManagerLauncher {
 
     await dest.parent.create(recursive: true);
 
+    // Staged, then renamed into place, so the destination changes all at once
+    // or not at all.
+    //
+    // Writing straight to the destination staked the installed manager on the
+    // write completing: writeAsBytes truncates on open, so a write that died
+    // part way -- disk full, on a station that has been logging for months --
+    // left a truncated binary behind, and the branch below then reported
+    // "continuing with the copy already installed" about a file it had just
+    // destroyed. The caller would go on to launch the fragment.
+    //
+    // It also improves the case this fallback was written for. Windows will
+    // not rename over a running .exe any more than it will open one for
+    // writing, but now it refuses before anything has been touched.
+    final staged = File('$destPath.new');
     try {
-      await dest.writeAsBytes(bytes);
+      await staged.writeAsBytes(bytes);
+      await staged.rename(destPath);
     } on FileSystemException catch (e) {
-      // Windows refuses to open a running .exe for writing, so a manager left
-      // over from an earlier launch turns this refresh -- which used to be a
-      // no-op -- into a hard failure of the whole update. An older manager is
-      // worth more than no manager, so keep it and carry on. With nothing on
-      // disk there is no fallback and the caller has to hear about it.
+      // Best effort once something runnable is already there: a manager left
+      // running from an earlier launch would otherwise turn a refresh that
+      // used to be a no-op into a hard failure of the whole update, and one
+      // stray process would block every future update. An older manager beats
+      // no manager, and it self-heals as soon as that process is gone. With
+      // nothing on disk there is no fallback and the caller has to hear about
+      // it.
+      try {
+        if (await staged.exists()) await staged.delete();
+      } on FileSystemException {
+        // Leaving the staging file is not worth failing the update over.
+      }
       if (!hasUsableBinary) rethrow;
       stderr.writeln(
-          '[centroidx_upgrader] could not refresh the manager at $destPath '
-          '($e); continuing with the copy already installed.');
+          '[centroidx_upgrader] WARNING: could not replace the installed '
+          'manager at $destPath with the one bundled in this build ($e). '
+          'The update will run against the older manager, so fixes shipped '
+          'in this version may not apply. Most likely a manager process is '
+          'still running; it will refresh on the next attempt once that '
+          'exits.');
       return;
     }
 
