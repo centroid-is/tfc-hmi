@@ -12,6 +12,15 @@ permissions:
   contents: write
   packages: write
 
+# Two tags pushed close together would otherwise run concurrently, and both
+# would try to push a version bump to main: the second loses the race and dies
+# on a non-fast-forward after a full macOS and Windows build has already been
+# paid for. Queued instead — and never cancelled, because the run holds the
+# only copy of the release artifacts.
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
 jobs:
   retag-pubspec:
     runs-on: ubuntu-latest
@@ -148,12 +157,19 @@ jobs:
           [ "${msix[0]}" = "centroidx_windows_amd64.msix" ] \
             || mv "${msix[0]}" centroidx_windows_amd64.msix
 
+          # The sideload certificate arrives through the flat download above —
+          # windows.yml uploads it and windows-build is in `needs`, so it is
+          # already present. Named here rather than globbed, like every other
+          # asset: if the export step ever stops producing it, this line fails
+          # the release instead of quietly publishing a release that no fresh
+          # Windows machine can install.
           echo "Artifacts to checksum:"
           ls -la
           sha256sum centroidx-manager_* \
                     centroidx_darwin_arm64.dmg \
                     centroidx_windows_x64.zip \
-                    centroidx_windows_amd64.msix > SHA256SUMS.txt
+                    centroidx_windows_amd64.msix \
+                    centroidx-sideload.cer > SHA256SUMS.txt
           echo ""
           echo "SHA256SUMS.txt contents:"
           cat SHA256SUMS.txt
@@ -169,3 +185,4 @@ jobs:
             release-artifacts/centroidx_windows_x64.zip
             release-artifacts/SHA256SUMS.txt
             release-artifacts/centroidx_windows_amd64.msix
+            release-artifacts/centroidx-sideload.cer
