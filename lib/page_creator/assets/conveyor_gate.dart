@@ -18,6 +18,7 @@ import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
 import 'package:tfc/providers/state_man.dart';
+import '../../widgets/memo_stream_builder.dart';
 
 part 'conveyor_gate.g.dart';
 
@@ -481,7 +482,7 @@ class _HoldToPushButtonState extends State<_HoldToPushButton> {
 /// header chip and the selector highlight.
 typedef _GateSnapshot = ({bool? isOpen, bool forcedOpen, bool forcedClosed});
 
-class _GateForcePane extends ConsumerWidget {
+class _GateForcePane extends ConsumerStatefulWidget {
   final ConveyorGateConfig config;
   final Future<void> Function(String key, bool value) writeForce;
 
@@ -489,6 +490,16 @@ class _GateForcePane extends ConsumerWidget {
     required this.config,
     required this.writeForce,
   });
+
+  @override
+  ConsumerState<_GateForcePane> createState() => _GateForcePaneState();
+}
+
+class _GateForcePaneState extends ConsumerState<_GateForcePane> {
+  ConveyorGateConfig get config => widget.config;
+  Future<void> Function(String key, bool value) get writeForce =>
+      widget.writeForce;
+
 
   /// The opposite force is cleared before the requested one is set so the
   /// PLC never sees both force commands high at once. `None` clears both —
@@ -544,8 +555,20 @@ class _GateForcePane extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return StreamBuilder<_GateSnapshot>(
+  Widget build(BuildContext context) {
+    // Sources are Riverpod's (stable while watched); the combined wrapper is
+    // kept across rebuilds so the pane does not restart on each.
+    final sources = [
+      config.stateKey.isEmpty ? null : ref.watch(keyStreamProvider(config.stateKey)),
+      config.forceOpenFeedbackKey.isEmpty
+          ? null
+          : ref.watch(keyStreamProvider(config.forceOpenFeedbackKey)),
+      config.forceCloseFeedbackKey.isEmpty
+          ? null
+          : ref.watch(keyStreamProvider(config.forceCloseFeedbackKey)),
+    ];
+    return MemoStreamBuilder<_GateSnapshot>(
+      keys: sources,
       stream: Rx.combineLatest3(
         _gateState(ref),
         _boolFeedback(ref, config.forceOpenFeedbackKey),

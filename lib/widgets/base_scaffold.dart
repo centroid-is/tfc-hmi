@@ -98,6 +98,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
 
   bool _isFullscreen = false;
 
+  /// The top bar's alarm stream, subscribed once. Built inline it was a new
+  /// stream on every scaffold rebuild -- every navigation, every pane inset
+  /// change -- and the banner blinked back to the clock for a frame each
+  /// time while the new StreamBuilder waited for its first value.
+  late final Stream<(AlarmMan, List<AlarmActive>)> _alarmStream =
+      Stream.fromFuture(ref.read(alarmManProvider.future)).asyncExpand(
+          (alarmMan) => alarmMan
+              .activeAlarms()
+              .map((activeAlarms) => (alarmMan, activeAlarms.toList())));
+
   void _toggleFullscreen() {
     setState(() {
       _isFullscreen = !_isFullscreen;
@@ -132,10 +142,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
 
   Widget _buildClockOrAlarm(BuildContext context, WidgetRef ref) {
     return StreamBuilder<(AlarmMan, List<AlarmActive>)>(
-        stream: Stream.fromFuture(ref.watch(alarmManProvider.future))
-            .asyncExpand((alarmMan) => alarmMan
-                .activeAlarms()
-                .map((activeAlarms) => (alarmMan, activeAlarms.toList()))),
+        stream: _alarmStream,
         builder: (context, snapshot) {
           if (!snapshot.hasError &&
               snapshot.hasData &&

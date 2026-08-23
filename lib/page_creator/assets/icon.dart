@@ -12,6 +12,7 @@ import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 import '../../widgets/boolean_expression.dart';
 import '../../providers/state_man.dart';
+import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 part 'icon.g.dart';
 
@@ -101,13 +102,54 @@ class IconConfig extends BaseAsset {
   Map<String, dynamic> toJson() => _$IconConfigToJson(this);
 }
 
-class IconAsset extends ConsumerWidget {
+class IconAsset extends ConsumerStatefulWidget {
   final IconConfig config;
 
   const IconAsset(this.config, {super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<IconAsset> createState() => _IconAssetState();
+}
+
+class _IconAssetState extends ConsumerState<IconAsset> {
+  IconConfig get config => widget.config;
+
+  /// The evaluators and their combined stream, made once per StateMan and
+  /// condition set. They used to be made in build(): every rebuild of the
+  /// page -- a pane inset gliding, a theme change -- created a fresh
+  /// Evaluator per condition, each with its own key subscriptions, and the
+  /// old ones were left to the garbage collector with their subscriptions
+  /// still open. A page with a dozen conditional icons churned dozens of
+  /// subscriptions per frame of animation.
+  List<Evaluator> _evaluators = const [];
+  Stream<List<bool>>? _conditions;
+  Object? _conditionsFor;
+
+  Stream<List<bool>> _conditionStream(StateMan stateMan) {
+    final signature = (stateMan, config.conditionalStates);
+    if (_conditions != null && _conditionsFor == signature) return _conditions!;
+    for (final e in _evaluators) {
+      e.cancel();
+    }
+    _evaluators = config.conditionalStates!
+        .map((state) =>
+            Evaluator(stateMan: stateMan, expression: state.expression))
+        .toList();
+    _conditionsFor = signature;
+    return _conditions =
+        CombineLatestStream.list(_evaluators.map((e) => e.eval()));
+  }
+
+  @override
+  void dispose() {
+    for (final e in _evaluators) {
+      e.cancel();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         // Fall back to a sane finite size when an axis is unbounded.
@@ -121,14 +163,13 @@ class IconAsset extends ConsumerWidget {
         final double size = w.isFinite && h.isFinite ? (w < h ? w : h) : 48.0;
 
         return Center(
-          child: _buildIconWithConditions(context, ref, size),
+          child: _buildIconWithConditions(context, size),
         );
       },
     );
   }
 
-  Widget _buildIconWithConditions(
-      BuildContext context, WidgetRef ref, double size) {
+  Widget _buildIconWithConditions(BuildContext context, double size) {
     if (config.conditionalStates?.isEmpty ?? true) {
       return Icon(
         config.iconData,
@@ -139,12 +180,8 @@ class IconAsset extends ConsumerWidget {
 
     return ref.watch(stateManProvider).when(
           data: (stateMan) {
-            final evaluators = config.conditionalStates!
-                .map((state) =>
-                    Evaluator(stateMan: stateMan, expression: state.expression))
-                .toList();
             return StreamBuilder<List<bool>>(
-              stream: CombineLatestStream.list(evaluators.map((e) => e.eval())),
+              stream: _conditionStream(stateMan),
               builder: (context, snapshot) {
                 IconData displayIcon = config.iconData;
                 Color? displayColor = config.color;

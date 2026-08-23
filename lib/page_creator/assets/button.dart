@@ -15,6 +15,7 @@ import 'icon.dart'; // Reuse IconConfig + IconAsset
 import '../../providers/state_man.dart';
 import 'package:tfc/converter/color_converter.dart'
     show AssetColor, AssetColorConverter, ColorConverter, OptionalColorConverter;
+import '../../widgets/memo_stream_builder.dart';
 
 part 'button.g.dart';
 
@@ -503,7 +504,20 @@ class _ButtonState extends ConsumerState<Button> {
 
     return stateManAsync.when(
       data: (stateMan) {
-        return StreamBuilder<Color>(
+        // The sources are Riverpod's own (stable while watched); only the
+        // combining wrapper is new per build, so it is kept across rebuilds
+        // until a source changes. Built inline it restarted on every press
+        // and painted one frame of the resting colour -- a flicker.
+        final feedbackKey = widget.config.feedback?.key;
+        final disabledKey = widget.config.disabledKey;
+        final feedbackSource = feedbackKey == null
+            ? null
+            : ref.watch(keyStreamProvider(feedbackKey));
+        final disabledSource = disabledKey == null || disabledKey.isEmpty
+            ? null
+            : ref.watch(keyStreamProvider(disabledKey));
+        return MemoStreamBuilder<Color>(
+          keys: [feedbackSource, disabledSource, widget.config.isToggle],
           stream: colorStream(),
           builder: (context, snapshot) {
             final color =

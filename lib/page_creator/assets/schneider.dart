@@ -14,6 +14,7 @@ import '../../painter/schneider/atv320.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/dynamic_value.dart';
+import '../../widgets/memo_stream_builder.dart';
 
 part 'schneider.g.dart';
 
@@ -145,7 +146,8 @@ class _SchneiderATV320 extends ConsumerWidget {
       builder: (context, snap) {
         final stateMan = snap.data;
 
-        return StreamBuilder<Map<String, DynamicValue>>(
+        return MemoStreamBuilder<Map<String, DynamicValue>>(
+          keys: [stateMan, config],
           stream: (stateMan == null)
               ? const Stream.empty()
               : _combinedStream(

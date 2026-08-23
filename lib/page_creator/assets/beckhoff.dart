@@ -19,6 +19,7 @@ import 'io_pane.dart';
 import '../page.dart';
 import '../../page_creator/assets/graph.dart';
 import '../../widgets/graph.dart';
+import '../../widgets/memo_stream_builder.dart';
 
 part 'beckhoff.g.dart';
 
@@ -822,7 +823,8 @@ class _BeckhoffEL2008 extends ConsumerWidget {
           );
         }
 
-        return StreamBuilder<Map<String, DynamicValue>>(
+        return MemoStreamBuilder<Map<String, DynamicValue>>(
+          keys: [stateMan, config],
           stream: (stateMan == null)
               ? const Stream.empty()
               : _combinedStream(
@@ -879,7 +881,8 @@ class _BeckhoffEL2008 extends ConsumerWidget {
   /// Force writes and descriptions are unchanged — only the host moved.
   Widget _channelGrid(
       BuildContext context, WidgetRef ref, StateMan stateMan) {
-    return StreamBuilder<Map<String, DynamicValue>>(
+    return MemoStreamBuilder<Map<String, DynamicValue>>(
+      keys: [stateMan, config],
       stream: _combinedStream(
         LinkedHashMap.fromEntries([
           MapEntry("raw", config.rawStateKey),
@@ -1387,7 +1390,8 @@ class _BeckhoffEL1008 extends ConsumerWidget {
           return IO8Widget(ledStates: leds, name: name, animation: animation);
         }
 
-        return StreamBuilder<Map<String, DynamicValue>>(
+        return MemoStreamBuilder<Map<String, DynamicValue>>(
+          keys: [stateMan, config],
           stream: (stateMan == null)
               ? const Stream.empty()
               : _combinedStream(
@@ -1444,7 +1448,8 @@ class _BeckhoffEL1008 extends ConsumerWidget {
   /// Force writes and descriptions are unchanged — only the host moved.
   Widget _channelGrid(
       BuildContext context, WidgetRef ref, StateMan stateMan) {
-    return StreamBuilder<Map<String, DynamicValue>>(
+    return MemoStreamBuilder<Map<String, DynamicValue>>(
+      keys: [stateMan, config],
       stream: _combinedStream(
         LinkedHashMap.fromEntries([
           MapEntry("raw", config.rawStateKey),
@@ -1988,7 +1993,8 @@ class _BeckhoffEL3054 extends ConsumerWidget {
           );
         }
 
-        return StreamBuilder<Map<String, DynamicValue>>(
+        return MemoStreamBuilder<Map<String, DynamicValue>>(
+          keys: [stateMan, config],
           stream: (stateMan == null)
               ? const Stream.empty()
               : _combinedStream(
@@ -2049,7 +2055,8 @@ class _BeckhoffEL3054 extends ConsumerWidget {
     showSidePane(
       context: context,
       id: _paneId,
-      builder: (paneContext) => StreamBuilder<Map<String, DynamicValue>>(
+      builder: (paneContext) => MemoStreamBuilder<Map<String, DynamicValue>>(
+        keys: [stateMan, config],
         stream: _combinedStreamVia(
           LinkedHashMap.fromEntries([
             MapEntry("states", config.stateKey),
