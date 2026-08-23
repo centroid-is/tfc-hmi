@@ -17,11 +17,9 @@
 library;
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:modbus_client/modbus_client.dart';
 import 'package:modbus_client_tcp/modbus_client_tcp.dart';
-import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:test/test.dart';
 import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
