@@ -132,11 +132,14 @@ class AirCab extends StatelessWidget {
   const AirCab({super.key, required this.config});
 
   /// Between a lamp and its caption, and between the two lamp cells.
-  static const double _gap = 4;
+  static const double _gap = 2;
 
   /// How much of a lamp cell's height the caption under it may take. The
   /// rest, less [_gap], is the lamp itself.
-  static const double _captionFraction = 0.42;
+  // The caption takes a third of the cell, the lamp the rest: the lamp is
+  // the state, the caption its name, and the lamps were too small to read
+  // as lamps across the hall.
+  static const double _captionFraction = 0.34;
 
   @override
   Widget build(BuildContext context) {
@@ -187,8 +190,11 @@ class AirCab extends StatelessWidget {
         child: Column(
           children: [
             // ─── Top “label” row ───
+            // One fifth of the box, not a third: the label is a short tag
+            // ("+ST203") and every pixel it gives up goes to the lamps below,
+            // which at a third were eight pixels across on the home page.
             Expanded(
-              flex: 2,
+              flex: 1,
               // The font size is computed for the row, the same way the rows
               // below compute theirs -- a FittedBox would have scaled a
               // fixed-size raster instead, which is what left it soft.
