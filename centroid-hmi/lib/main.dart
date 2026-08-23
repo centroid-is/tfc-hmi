@@ -137,14 +137,25 @@ void main() {
     final culprit = details.informationCollector
             ?.call()
             .map((n) => n.toStringDeep())
-            .where((s) =>
-                s.contains('error-causing widget') || s.contains('creator:'))
+            .where((s) => s.contains('error-causing widget') || s.contains('creator:'))
             .map((s) => s.length > 400 ? '${s.substring(0, 400)}...' : s)
+            .join('\n') ??
+        '';
+    // The logger prints the first eight frames, and for a framework error
+    // those are all framework: the app frame that matters is the tenth or the
+    // thirtieth. Pull the app's own frames out of the full trace so the log
+    // names the asset, not change_notifier.dart.
+    final appFrames = details.stack
+            ?.toString()
+            .split('\n')
+            .where((f) => f.contains('package:tfc') || f.contains('package:centroidx'))
+            .take(10)
             .join('\n') ??
         '';
     logger.e(
         'Flutter framework error: ${details.exceptionAsString()}'
-        '${culprit.isEmpty ? '' : '\n$culprit'}',
+        '${culprit.isEmpty ? '' : '\n$culprit'}'
+        '${appFrames.isEmpty ? '' : '\napp frames:\n$appFrames'}',
         error: details.exception,
         stackTrace: details.stack);
     if (priorOnError != null) priorOnError(details);
@@ -306,8 +317,7 @@ Future<void> _startApp([bool debugMode = false]) async {
             flutterPid: pid,
           ),
           log: stderr.writeln,
-          show: (message) =>
-              globalScaffoldMessengerKey.currentState?.showSnackBar(
+          show: (message) => globalScaffoldMessengerKey.currentState?.showSnackBar(
             SnackBar(
               content: Text(message),
               duration: const Duration(seconds: 10),
@@ -585,8 +595,7 @@ class MyApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeAsync = ref.watch(themeNotifierProvider);
     final schemeAsync = ref.watch(colorSchemeNotifierProvider);
-    final (light, dark) = themesForScheme(
-        schemeAsync.valueOrNull ?? AppColorScheme.solarized);
+    final (light, dark) = themesForScheme(schemeAsync.valueOrNull ?? AppColorScheme.solarized);
 
     // Initialize MCP server lifecycle management
     ref.watch(mcpServerLifecycleProvider);
@@ -675,14 +684,15 @@ class MyApp extends ConsumerWidget {
                               child: const Icon(Icons.chat),
                             ),
                           ),
-                        // MCP server status indicator (debug only). Kept
-                        // above the navigation bar: at 8 px from the bottom it
-                        // sat on the last destination's label once the window
-                        // was narrower than ~1100 px.
+                        // MCP server status indicator (debug only). Under the
+                        // logo, top right: at the bottom it sat on the last nav
+                        // destination below ~1100 px wide, and just above the
+                        // bar it covered whatever a page keeps in its bottom
+                        // right corner (the key repository's Export button).
                         if (kDebugMode && mcpRunning && !navMenuOpen)
                           Positioned(
-                            bottom: chatEnabled && !chatVisible ? 82 : 90,
-                            right: chatEnabled && !chatVisible ? 76 : 8,
+                            top: 58,
+                            right: 8,
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               decoration: BoxDecoration(
