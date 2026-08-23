@@ -138,6 +138,20 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
         NativeDatabase.memory(logStatements: false),
       );
 
+  /// A generative constructor so a test can *subclass* [AppDatabase] and
+  /// override [tableExists] / [tableInsertBatch].
+  ///
+  /// [AppDatabase._] is private, which means the only backend a test outside
+  /// this library can give [Database] is a real one. That is why the write
+  /// path's outage handling — the retry queue, its overflow trimming and the
+  /// rows it discards — had no tests at all: reaching it requires a database
+  /// that fails on demand and then recovers, and sqlite cannot be made to do
+  /// either ([tableExists] queries `information_schema`, which sqlite does not
+  /// have, so an in-memory backend is permanently "down" and can never come
+  /// back up).
+  @visibleForTesting
+  AppDatabase.forTest(this.config, QueryExecutor executor) : super(executor);
+
   final logger = Logger();
 
   /// The one LISTEN/NOTIFY connection, held as the in-flight future rather
@@ -866,8 +880,28 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   /// TODO: SQLITE
+  ///
+  /// Throws [DatabaseException] for a [RetentionPolicy] that is not
+  /// [RetentionPolicy.isUsable], *before issuing any statement*. The order
+  /// matters: this method's first act on the happy path is
+  /// `remove_retention_policy`, so a refusal that came any later would already
+  /// have taken away the policy the table had. Refusing here leaves the table
+  /// exactly as it was and deletes nothing.
+  ///
+  /// This is the inner of the two guards. The outer one is in the UI, which
+  /// clamps the retention field to 1..[kMaxRetentionDays] days. This one exists
+  /// because the outer one cannot help a station whose config file already
+  /// holds a bad value.
   Future<void> updateRetentionPolicy(
       String tableName, RetentionPolicy retention) async {
+    if (!retention.isUsable) {
+      throw DatabaseException(
+          'Refusing to set a retention policy of ${retention.dropAfter} on '
+          '"$tableName": anything under $kMinRetentionDuration would drop the '
+          'table\'s history the next time the policy ran, not bound it. The '
+          'stored value is almost certainly a unit mix-up rather than a '
+          'decision. The table keeps whatever policy it already had.');
+    }
     // Convert to hypertable
     await customStatement('''
       SELECT create_hypertable('"$tableName"', 'time', if_not_exists => TRUE, migrate_data => TRUE);
