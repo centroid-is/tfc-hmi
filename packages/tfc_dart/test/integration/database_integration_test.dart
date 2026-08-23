@@ -1010,9 +1010,15 @@ void main() {
           }
         }
 
+        // Recent, not a fixed date: the enclosing setUp puts a two-hour
+        // retention policy on this table, and anything older is fair game for
+        // the retention job to drop mid-test.
+        DateTime recentBase() =>
+            DateTime.now().toUtc().subtract(const Duration(minutes: 30));
+
         test('agrees with array_agg on plain, distinct-timestamp data',
             () async {
-          final base = DateTime.utc(2026, 1, 1);
+          final base = recentBase();
           for (var i = 0; i < 30; i++) {
             await database.insertTimeseriesData(
                 testTableName, base.add(Duration(seconds: i * 10)), i * 1.5);
@@ -1028,7 +1034,7 @@ void main() {
           // is not — it returns whatever the greatest-time row holds. A
           // collector writing a null on a dropped read must keep reading as a
           // gap in the chart, not as the previous value held forever.
-          final base = DateTime.utc(2026, 1, 1);
+          final base = recentBase();
           await database.insertTimeseriesData(testTableName, base, 10.0);
           await database.insertTimeseriesData(
               testTableName, base.add(const Duration(seconds: 10)), 20.0);
@@ -1047,7 +1053,7 @@ void main() {
         });
 
         test('agrees when every value in a bucket is NULL', () async {
-          final base = DateTime.utc(2026, 1, 1);
+          final base = recentBase();
           await database.insertTimeseriesData(testTableName, base, 1.0);
           await database.flush();
           await database.db
@@ -1061,7 +1067,7 @@ void main() {
         });
 
         test('agrees on NaN and Infinity', () async {
-          final base = DateTime.utc(2026, 1, 1);
+          final base = recentBase();
           await database.insertTimeseriesData(testTableName, base, 1.0);
           await database.flush();
           for (final (i, literal) in [
@@ -1082,11 +1088,11 @@ void main() {
           // row while last() skips it. Timescale forbids it outright, because
           // time is the partitioning column.
           await database.insertTimeseriesData(
-              testTableName, DateTime.utc(2026, 1, 1), 1.0);
+              testTableName, recentBase(), 1.0);
           await database.flush();
 
-          expect(
-            () => database.db.customStatement(
+          await expectLater(
+            database.db.customStatement(
                 'INSERT INTO "$testTableName" (time, value) VALUES (NULL, 1)'),
             throwsA(anything),
           );
