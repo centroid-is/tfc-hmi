@@ -104,6 +104,17 @@ const publisherConflictHRESULT = "0x80073cf3"
 // all. So isPublisherConflict has to pick the conflict out of the bucket, and
 // it does so two independent ways — see publisherConflictSignal (what Windows
 // says) and packageFullNamePattern (what Windows names).
+//
+// On every recorded conflict message that could be found, both arms fire: each
+// of them names the two packages *and* says the sentence, so no fixture here
+// exercises the sentence alone, and deleting the sentence arm outright does not
+// fail a single test. It stays regardless, and not out of caution about
+// Windows: the structural arm is a regex resting on assumptions about what a
+// package full name looks like — four-part version, thirteen-character
+// PublisherId, no underscore in the identity Name. Those assumptions are mine.
+// The sentence is Windows'. Given that this function exists because a constant
+// asserted from plausibility went unchallenged into production, the arm that
+// covers a mistake in my own pattern is the last one to drop.
 func isPublisherConflict(matchable string) bool {
 	return strings.Contains(matchable, publisherConflictSignal) ||
 		hasConflictingPublisherIDs(matchable)
