@@ -8,6 +8,13 @@ import 'package:rxdart/rxdart.dart';
 /// Connection status for [MSocket].
 enum ConnectionStatus { connected, connecting, disconnected }
 
+/// Opens a TCP connection. Seam for tests; production uses [Socket.connect].
+typedef SocketConnector = Future<Socket> Function(
+    String host, int port, Duration timeout);
+
+/// Waits for [Duration]. Seam for tests; production uses [Future.delayed].
+typedef DelayFn = Future<void> Function(Duration duration);
+
 /// A protocol-agnostic TCP socket with SO_KEEPALIVE and auto-reconnect.
 ///
 /// Connects to a TCP server, streams raw bytes as [Uint8List], configures
@@ -40,9 +47,32 @@ class MSocket {
 
   static const _initialBackoff = Duration(milliseconds: 500);
   static const _maxBackoff = Duration(seconds: 5);
+  static const _connectTimeout = Duration(seconds: 3);
   Duration _backoff = _initialBackoff;
 
-  MSocket(this.host, this.port);
+  final SocketConnector _connector;
+  final DelayFn _delay;
+
+  /// Creates a socket for [host]:[port].
+  ///
+  /// [connector] and [delay] exist only so tests can drive the reconnect loop
+  /// without depending on wall-clock time or on how fast a given OS refuses a
+  /// TCP connection. Production code must not pass them: the defaults are a
+  /// real [Socket.connect] and a real [Future.delayed]. A test that supplies
+  /// [delay] can record the exact sequence of backoff durations the loop asks
+  /// for, which is what the backoff contract actually promises -- as opposed
+  /// to how long a loaded CI runner happened to take to deliver them.
+  MSocket(
+    this.host,
+    this.port, {
+    SocketConnector? connector,
+    DelayFn? delay,
+  })  : _connector = connector ?? _defaultConnector,
+        _delay = delay ?? Future<void>.delayed;
+
+  static Future<Socket> _defaultConnector(
+          String host, int port, Duration timeout) =>
+      Socket.connect(host, port, timeout: timeout);
 
   /// Raw byte stream. Lives for the lifetime of MSocket.
   /// Pauses during disconnect, resumes on reconnect.
@@ -73,8 +103,7 @@ class MSocket {
     while (!_disposed) {
       if (!_status.isClosed) _status.add(ConnectionStatus.connecting);
       try {
-        _socket = await Socket.connect(host, port,
-            timeout: const Duration(seconds: 3));
+        _socket = await _connector(host, port, _connectTimeout);
         if (_disposed) {
           _destroySocket();
           break;
@@ -114,7 +143,7 @@ class MSocket {
         _status.add(ConnectionStatus.disconnected);
       }
       if (_disposed) break;
-      await Future.delayed(_backoff);
+      await _delay(_backoff);
       if (_disposed) break;
       _backoff = _clampDuration(_backoff * 2, Duration.zero, _maxBackoff);
     }

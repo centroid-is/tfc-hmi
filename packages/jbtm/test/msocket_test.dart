@@ -1,8 +1,43 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:jbtm/jbtm.dart';
 import 'package:test/test.dart';
+
+/// Drive the reconnect loop with a connector that always fails and a delay
+/// that returns instantly, and return the first [count] backoff durations the
+/// loop asked for.
+///
+/// No socket is opened and no time passes, so the result is the same on every
+/// machine. The backoff contract is "the loop waits 500ms, then 1s, 2s, 4s and
+/// then 5s forever" -- that is a statement about the durations it requests, and
+/// this reads them directly instead of inferring them from how long a loaded CI
+/// runner took to deliver them.
+Future<List<Duration>> recordBackoffLadder(int count) async {
+  final delays = <Duration>[];
+  final enough = Completer<void>();
+  final socket = MSocket(
+    'injected.invalid',
+    1,
+    connector: (_, __, ___) =>
+        Future<Socket>.error(const SocketException('injected refusal')),
+    delay: (d) {
+      delays.add(d);
+      if (delays.length >= count) {
+        if (!enough.isCompleted) enough.complete();
+        // Park the loop on a future that never completes: we have what we
+        // came for, and letting it spin would only add noise.
+        return Completer<void>().future;
+      }
+      return Future<void>.value();
+    },
+  );
+  socket.connect();
+  await enough.future.timeout(const Duration(seconds: 10));
+  socket.dispose();
+  return delays;
+}
 
 void main() {
   late TestTcpServer server;
@@ -391,7 +426,17 @@ void main() {
 
     test('backoff resets after successful reconnect', () async {
       final port = await server.start();
-      final socket = MSocket('localhost', port);
+
+      // Record what the loop asks to wait for, then actually wait it. The
+      // socket work is real; only the assertion is freed from the clock. The
+      // old version timed the reconnect with a Stopwatch and asserted "under
+      // 1000ms", which on a slow runner is indistinguishable from a backoff
+      // that never reset.
+      final delays = <Duration>[];
+      final socket = MSocket('localhost', port, delay: (d) {
+        delays.add(d);
+        return Future<void>.delayed(d);
+      });
 
       socket.connect();
       await socket.statusStream
@@ -402,30 +447,30 @@ void main() {
       server.disconnectAll();
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.disconnected);
-      final sw1 = Stopwatch()..start();
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.connected)
-          .timeout(const Duration(seconds: 3));
-      sw1.stop();
+          .timeout(const Duration(seconds: 10));
       await server.waitForClient();
 
-      // Second disconnect + reconnect -- should also be ~500ms (not 1s)
+      // Second disconnect + reconnect
       server.disconnectAll();
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.disconnected);
-      final sw2 = Stopwatch()..start();
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.connected)
-          .timeout(const Duration(seconds: 3));
-      sw2.stop();
-
-      // Both reconnects should be approximately 500ms (backoff reset)
-      // Use generous tolerance for CI stability
-      expect(sw2.elapsedMilliseconds, lessThan(1000),
-          reason: 'Second reconnect should be ~500ms (reset backoff), '
-              'not 1s+ (doubled backoff). Got ${sw2.elapsedMilliseconds}ms');
+          .timeout(const Duration(seconds: 10));
 
       socket.dispose();
+
+      expect(
+          delays,
+          orderedEquals(const [
+            Duration(milliseconds: 500),
+            Duration(milliseconds: 500),
+          ]),
+          reason: 'The second retry must wait another 500ms. A second wait of '
+              '1s would mean the successful reconnect never reset the ladder. '
+              'Got $delays');
     });
 
     test('dispose during backoff cancels reconnect', () async {
@@ -495,37 +540,101 @@ void main() {
       await sub.cancel();
     });
 
-    test('connect to unreachable host retries with backoff', () async {
-      // Use a port where no server is listening
-      final socket = MSocket('localhost', 59999);
+    test('connect to unreachable host retries', () async {
+      // A real socket against a port nobody is listening on, so the real
+      // failure path runs -- but with the backoff waits neutralised, because
+      // how long an OS takes to refuse a connection is not this test's
+      // subject. (It was, implicitly, the old version's subject: it slept a
+      // fixed 3s and counted whatever had happened, which on Windows was one
+      // retry fewer than it demanded.) The backoff durations themselves are
+      // covered by the 'backoff timing' group.
+      final socket =
+          MSocket('localhost', 59999, delay: (_) => Future<void>.value());
 
       final statuses = <ConnectionStatus>[];
-      socket.statusStream.listen(statuses.add);
+      final sawThreeAttempts = Completer<void>();
+      socket.statusStream.listen((s) {
+        statuses.add(s);
+        if (statuses.where((x) => x == ConnectionStatus.connecting).length >=
+                3 &&
+            !sawThreeAttempts.isCompleted) {
+          sawThreeAttempts.complete();
+        }
+      });
 
       socket.connect();
 
-      // Wait for at least 2 retry cycles
-      await Future.delayed(const Duration(seconds: 3));
-
-      // Should see connecting, disconnected pattern repeated
-      final connectingCount =
-          statuses.where((s) => s == ConnectionStatus.connecting).length;
-      final disconnectedCount =
-          statuses.where((s) => s == ConnectionStatus.disconnected).length;
-
-      expect(connectingCount, greaterThanOrEqualTo(2),
-          reason: 'Should have at least 2 connecting events (retries)');
-      // disconnected count: 1 seed + at least 2 failures = at least 3
-      expect(disconnectedCount, greaterThanOrEqualTo(3),
-          reason: 'Should have at least 3 disconnected events '
-              '(1 seed + 2 failures)');
-
+      // Event-driven: as fast as this machine can refuse three connections.
+      await sawThreeAttempts.future.timeout(const Duration(seconds: 20),
+          onTimeout: () => fail('The loop stopped retrying: only saw '
+              '${statuses.where((s) => s == ConnectionStatus.connecting).length}'
+              ' connecting events in 20s. Got $statuses'));
       socket.dispose();
+
+      // The loop must cycle, not just fail once and stop.
+      expect(
+          statuses,
+          containsAllInOrder(const [
+            ConnectionStatus.disconnected, // seed
+            ConnectionStatus.connecting,
+            ConnectionStatus.disconnected, // attempt 1 failed
+            ConnectionStatus.connecting,
+            ConnectionStatus.disconnected, // attempt 2 failed
+            ConnectionStatus.connecting,
+          ]),
+          reason: 'Each failed attempt must be followed by another one. '
+              'Got $statuses');
     });
   });
 
   group('backoff timing', () {
-    test('initial backoff is approximately 500ms', () async {
+    test('initial backoff is 500ms', () async {
+      final port = await server.start();
+
+      final firstDelay = Completer<Duration>();
+      final socket = MSocket('localhost', port, delay: (d) {
+        if (!firstDelay.isCompleted) firstDelay.complete(d);
+        return Future<void>.delayed(d);
+      });
+
+      socket.connect();
+      await socket.statusStream
+          .firstWhere((s) => s == ConnectionStatus.connected);
+      await server.waitForClient();
+
+      // Shut the server down so the loop drops into its backoff wait.
+      await server.shutdown();
+
+      expect(await firstDelay.future.timeout(const Duration(seconds: 10)),
+          const Duration(milliseconds: 500));
+
+      socket.dispose();
+    });
+
+    test('backoff doubles each retry and caps at 5 seconds', () async {
+      // 8 retries: 500, 1s, 2s, 4s, then 5s forever. Without the cap the 5th
+      // would be 8s and the 8th 64s.
+      final delays = await recordBackoffLadder(8);
+
+      expect(
+          delays,
+          orderedEquals(const [
+            Duration(milliseconds: 500),
+            Duration(seconds: 1),
+            Duration(seconds: 2),
+            Duration(seconds: 4),
+            Duration(seconds: 5),
+            Duration(seconds: 5),
+            Duration(seconds: 5),
+            Duration(seconds: 5),
+          ]));
+    });
+
+    test('an uninjected socket waits real time before retrying', () async {
+      // The tests above hand MSocket a delay function, so on their own they
+      // would still pass if the production default became an instant retry.
+      // This one uses the real constructor. It asserts a lower bound only: a
+      // slow machine can only make the gap longer, never shorter.
       final port = await server.start();
       final socket = MSocket('localhost', port);
 
@@ -533,73 +642,21 @@ void main() {
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.connected);
       await server.waitForClient();
-
-      // Shut down server so reconnect attempt fails, then times the gap
       await server.shutdown();
 
-      // Wait for disconnected
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.disconnected);
       final sw = Stopwatch()..start();
-
-      // Wait for the next connecting event (after backoff delay)
       await socket.statusStream
           .firstWhere((s) => s == ConnectionStatus.connecting)
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 10));
       sw.stop();
 
-      // Initial backoff should be ~500ms (tolerance: 300ms-900ms for CI)
       expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(300),
-          reason: 'Backoff should be at least 300ms');
-      expect(sw.elapsedMilliseconds, lessThanOrEqualTo(900),
-          reason: 'Initial backoff should not exceed 900ms');
+          reason: 'The default backoff must be a real wait (500ms), not an '
+              'instant retry. Got ${sw.elapsedMilliseconds}ms');
 
       socket.dispose();
-    });
-
-    test('backoff caps at 5 seconds', () async {
-      // Connect to unreachable port to trigger repeated failures
-      final socket = MSocket('localhost', 59998);
-
-      final connectingTimestamps = <int>[];
-      socket.statusStream.listen((s) {
-        if (s == ConnectionStatus.connecting) {
-          connectingTimestamps.add(DateTime.now().millisecondsSinceEpoch);
-        }
-      });
-
-      socket.connect();
-
-      // Wait long enough for at least 5 cycles:
-      // 500 + 1000 + 2000 + 4000 + 5000 = 12500ms, plus connect timeouts
-      // With 3s connect timeout per attempt, we need much more time.
-      // Actually, connect to localhost should fail fast (connection refused).
-      // So: 500 + 1000 + 2000 + 4000 + 5000 ~= 12.5s + fast fails
-      await Future.delayed(const Duration(seconds: 16));
-
-      socket.dispose();
-
-      // Need at least 6 timestamps (initial + 5 retries) to check capping
-      expect(connectingTimestamps.length, greaterThanOrEqualTo(6),
-          reason: 'Need at least 6 connecting events to verify cap. '
-              'Got ${connectingTimestamps.length}');
-
-      // Check deltas between connecting events
-      final deltas = <int>[];
-      for (var i = 1; i < connectingTimestamps.length; i++) {
-        deltas.add(connectingTimestamps[i] - connectingTimestamps[i - 1]);
-      }
-
-      // Expected approximate deltas: 500, 1000, 2000, 4000, 5000, 5000...
-      // Use generous tolerance (0.5x to 2.0x) for CI stability.
-      // The last few deltas should be capped at ~5000ms (not growing beyond)
-      if (deltas.length >= 5) {
-        // The 5th+ deltas should be close to 5s (capped), not 8s or 16s
-        for (var i = 4; i < deltas.length; i++) {
-          expect(deltas[i], lessThanOrEqualTo(8000),
-              reason: 'Delta[$i]=${deltas[i]}ms should be capped at ~5s');
-        }
-      }
     });
   });
 }

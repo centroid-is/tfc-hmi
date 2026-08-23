@@ -1,16 +1,16 @@
-import 'dart:async';
-
 import 'package:jbtm/jbtm.dart';
 import 'package:jbtm/src/connection_health.dart';
 import 'package:test/test.dart';
 
 import 'tcp_proxy.dart';
+import 'test_clock.dart';
 
 void main() {
   late TestTcpServer server;
   late TcpProxy proxy;
   late MSocket socket;
   late ConnectionHealthMetrics metrics;
+  late TestClock clock;
 
   setUp(() async {
     server = TestTcpServer();
@@ -18,7 +18,12 @@ void main() {
     proxy = TcpProxy(targetPort: serverPort);
     await proxy.start();
     socket = MSocket('localhost', proxy.port);
-    metrics = ConnectionHealthMetrics(socket);
+    // Drive the metrics off a clock the test moves by hand. Both uptime and
+    // recordsPerSecond are differences between two clock reads, and Windows
+    // ticks its clock in ~15.6ms steps, so anything measured by sleeping is
+    // either flaky or has to sleep long enough to be slow.
+    clock = TestClock();
+    metrics = ConnectionHealthMetrics(socket, now: clock.now);
   });
 
   tearDown(() async {
@@ -37,12 +42,16 @@ void main() {
     expect(metrics.uptime, Duration.zero);
   });
 
-  test('uptime is > Duration.zero after connect', () async {
+  test('uptime counts from the moment of connect', () async {
     socket.connect();
     await socket.statusStream
         .firstWhere((s) => s == ConnectionStatus.connected);
-    await Future.delayed(Duration(milliseconds: 50));
-    expect(metrics.uptime, greaterThan(Duration.zero));
+
+    expect(metrics.uptime, Duration.zero,
+        reason: 'no time has passed since connecting');
+
+    clock.advance(Duration(seconds: 42));
+    expect(metrics.uptime, Duration(seconds: 42));
   });
 
   test('reconnectCount is 0 after first connect (not a reconnect)', () async {
@@ -118,14 +127,19 @@ void main() {
     expect(metrics.recordsPerSecond, 10.0);
   });
 
-  test('recordsPerSecond drops old entries after 1 second', () async {
+  test('recordsPerSecond drops entries older than the 1 second window', () {
     for (var i = 0; i < 5; i++) {
       metrics.notifyRecord();
     }
     expect(metrics.recordsPerSecond, 5.0);
 
-    // Wait >1 second so entries age out
-    await Future.delayed(Duration(milliseconds: 1100));
+    // Still inside the window: nothing has aged out yet.
+    clock.advance(Duration(milliseconds: 900));
+    expect(metrics.recordsPerSecond, 5.0,
+        reason: 'entries 900ms old are still within the 1s window');
+
+    // Now past it.
+    clock.advance(Duration(milliseconds: 200));
     expect(metrics.recordsPerSecond, 0.0);
   });
 
@@ -133,21 +147,33 @@ void main() {
     socket.connect();
     await socket.statusStream
         .firstWhere((s) => s == ConnectionStatus.connected);
-    expect(metrics.uptime, greaterThan(Duration.zero));
+    clock.advance(Duration(seconds: 3));
+    expect(metrics.uptime, Duration(seconds: 3));
+    expect(metrics.reconnectCount, 0);
 
     metrics.dispose();
 
-    // After dispose, uptime should not update further
-    // (subscription cancelled, values frozen)
+    // Now force a real disconnect + reconnect. A metrics object that had not
+    // cancelled its subscription would count this as a reconnect and restart
+    // its uptime -- which is what this test is named for, and what the old
+    // version (expect(() => metrics.reconnectCount, returnsNormally)) never
+    // actually checked.
     final proxyPort = proxy.port;
     final serverPort = server.port;
     await proxy.shutdown();
+    await socket.statusStream
+        .firstWhere((s) => s == ConnectionStatus.disconnected);
+    proxy = TcpProxy(listenPort: proxyPort, targetPort: serverPort);
+    await proxy.start();
+    await socket.statusStream
+        .firstWhere((s) => s == ConnectionStatus.connected)
+        .timeout(Duration(seconds: 10));
 
-    // Give time for status change that should NOT be tracked
-    await Future.delayed(Duration(milliseconds: 200));
-
-    // Metrics should still report last known state (no crash)
-    // The key test: dispose doesn't throw and stops tracking
-    expect(() => metrics.reconnectCount, returnsNormally);
+    expect(metrics.reconnectCount, 0,
+        reason: 'a disposed metrics object must not observe the reconnect');
+    clock.advance(Duration(seconds: 1));
+    expect(metrics.uptime, Duration(seconds: 4),
+        reason: 'uptime must still be measured from the pre-dispose connect');
   });
 }
+
