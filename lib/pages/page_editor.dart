@@ -20,6 +20,7 @@ import '../widgets/base_scaffold.dart';
 import 'page_view.dart';
 import '../widgets/zoomable_canvas.dart';
 import '../widgets/panes/pane_chrome.dart' show PaneAction;
+import '../widgets/leave_guard.dart';
 import '../widgets/panes/side_pane.dart';
 import '../page_creator/page.dart';
 import '../models/menu_item.dart';
@@ -888,6 +889,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // does nothing has no way to see why. [_onShortcutKey] stands down for
     // text fields, stacked routes and floating dialogs instead.
     HardwareKeyboard.instance.addHandler(_onShortcutKey);
+    // Leaving with unsaved edits used to drop them without a word; the only
+    // hint was the Save button having turned orange. The navigation chrome
+    // asks this guard before it beams away.
+    LeaveGuard.set(_confirmLeave);
     ref.read(pageManagerProvider.future).then((pageManager) {
       setState(() {
         _temporaryPages = pageManager.copyWith().pages;
@@ -925,8 +930,49 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     });
   }
 
+  /// Asked by the back arrow and the navigation bar before they leave.
+  /// Nothing unsaved: go. Otherwise: Save and go, discard and go, or stay.
+  Future<bool> _confirmLeave() async {
+    if (!mounted || !_hasUnsavedChanges) return true;
+    final choice = await showStandardDialog<_LeaveChoice>(
+      context: context,
+      title: 'Unsaved changes',
+      icon: Icons.edit_note,
+      barrierDismissible: false,
+      builder: (_) => const Text(
+          'This page has edits that are not saved. Leaving now discards them.'),
+      actionsBuilder: (ctx) => [
+        PaneAction(
+          label: 'Stay',
+          onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.stay),
+        ),
+        PaneAction.destructive(
+          label: 'Discard',
+          onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.discard),
+        ),
+        PaneAction.primary(
+          label: 'Save and leave',
+          icon: Icons.save,
+          autofocus: true,
+          onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.save),
+        ),
+      ],
+    );
+    switch (choice) {
+      case _LeaveChoice.save:
+        await _saveToPrefs();
+        return true;
+      case _LeaveChoice.discard:
+        return true;
+      case _LeaveChoice.stay:
+      case null:
+        return false;
+    }
+  }
+
   @override
   void dispose() {
+    LeaveGuard.clear(_confirmLeave);
     HardwareKeyboard.instance.removeHandler(_onShortcutKey);
     // The banner holds these closures over this State; left set they
     // would fire into a disposed State after navigating away -- nothing
@@ -4736,3 +4782,5 @@ class SelectionBoxPainter extends CustomPainter {
     return start != oldDelegate.start || current != oldDelegate.current;
   }
 }
+
+enum _LeaveChoice { save, discard, stay }

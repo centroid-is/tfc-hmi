@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'panes/side_pane.dart';
 import 'panes/standard_dialog.dart';
+import 'leave_guard.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
@@ -276,13 +277,17 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                               context.canBeamBack)
                             IconButton(
                               icon: const Icon(Icons.arrow_back),
-                              onPressed: () {
+                              onPressed: () async {
+                                // The page may object (the editor with
+                                // unsaved edits); ask before anything moves.
+                                if (!await LeaveGuard.mayLeave()) return;
+                                if (!context.mounted) return;
                                 // Same reason as the navigation bar below:
                                 // take the pane away the moment the operator
                                 // asks to leave, rather than a few frames
                                 // later when the router listener notices.
                                 closeSidePane(immediate: true);
-                closeAllFloatingDialogs();
+                                closeAllFloatingDialogs();
                                 context.beamBack();
                               },
                             ),
@@ -398,8 +403,14 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                   );
                 }),
               ],
-              onDestinationSelected: (int index) {
+              onDestinationSelected: (int index) async {
                 _logger.d('Item tapped: $index');
+                // The page may object (the editor with unsaved edits).
+                // beamSafelyKids asks the guard itself -- it is also the
+                // menu items' path -- so only the pane and dialogs are
+                // handled here, and only once the guard has let us go.
+                if (!await LeaveGuard.mayLeave()) return;
+                if (!context.mounted) return;
                 // Closed on the tap, not left to the router listener in
                 // MyApp. That listener is the guarantee -- it catches the back
                 // button, beamBack, deep links and the route guards -- but it
@@ -410,7 +421,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 closeSidePane(immediate: true);
                 closeAllFloatingDialogs();
                 final item = RouteRegistry().menuItems[index];
-                beamSafelyKids(context, item);
+                beamSafelyKids(context, item, askGuard: false);
               },
             ),
     );

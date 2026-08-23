@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc/widgets/leave_guard.dart';
 
 /// The top-level menu shape used by the app: Home (`/`) and Alarm View are
 /// top-level; Server Config lives under Advanced and is therefore NOT
@@ -166,6 +167,58 @@ void main() {
       Beamer.of(context).beamToNamed('/alarm-view');
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.arrow_back), findsNothing);
+    });
+  });
+
+  group('LeaveGuard', () {
+    testWidgets('a page that says "stay" keeps the back arrow and the nav '
+        'bar from leaving; "go" lets them', (tester) async {
+      await tester.pumpWidget(_buildShell());
+      await tester.pumpAndSettle();
+      final context = tester.element(find.text('home-body'));
+      Beamer.of(context).beamToNamed('/advanced/server-config');
+      await tester.pumpAndSettle();
+      expect(find.text('server-config-body'), findsOneWidget);
+
+      var asked = 0;
+      var answer = false;
+      Future<bool> guard() async {
+        asked++;
+        return answer;
+      }
+
+      LeaveGuard.set(guard);
+      addTearDown(() => LeaveGuard.clear(guard));
+
+      // Back arrow: asked, refused, still here.
+      await tester.tap(find.byIcon(Icons.arrow_back));
+      await tester.pumpAndSettle();
+      expect(asked, 1);
+      expect(find.text('server-config-body'), findsOneWidget,
+          reason: 'the guard said stay');
+
+      // Nav bar: asked, refused, still here.
+      await tester.tap(find.text('Alarm View'));
+      await tester.pumpAndSettle();
+      expect(asked, 2);
+      expect(find.text('server-config-body'), findsOneWidget);
+
+      // Allowed: the nav bar goes.
+      answer = true;
+      await tester.tap(find.text('Alarm View'));
+      await tester.pumpAndSettle();
+      expect(asked, 3);
+      expect(find.text('alarm-view-body'), findsOneWidget);
+    });
+
+    test('clear() only removes the guard that is installed', () async {
+      Future<bool> a() async => false;
+      Future<bool> b() async => true;
+      LeaveGuard.set(a);
+      LeaveGuard.clear(b); // someone else's -- a stays
+      expect(await LeaveGuard.mayLeave(), isFalse);
+      LeaveGuard.clear(a);
+      expect(await LeaveGuard.mayLeave(), isTrue);
     });
   });
 }

@@ -8,6 +8,7 @@ import '../models/menu_item.dart';
 import '../providers/nav_alarm.dart' show navigationAlarmLevelFor;
 import '../route_registry.dart';
 import 'nav_alarm_badge.dart';
+import 'leave_guard.dart';
 
 class TopLevelNavIndicator extends StatelessWidget {
   final IconData icon;
@@ -270,7 +271,13 @@ class NavDropdownState extends State<NavDropdown> {
   }
 }
 
-void beamSafelyKids(BuildContext context, MenuItem item) {
+Future<void> beamSafelyKids(BuildContext context, MenuItem item,
+    {bool askGuard = true}) async {
+  // The page may object (the editor with unsaved edits). The nav bar asks
+  // before it gets here (it also closes the pane and dialogs between the
+  // two), so it passes askGuard: false; menu items come straight here.
+  if (askGuard && !await LeaveGuard.mayLeave()) return;
+  if (!context.mounted) return;
   if (item.path != null) {
     context.beamToNamed(item.path.toString());
   } else {
