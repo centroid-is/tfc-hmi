@@ -9,7 +9,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
-import 'package:tfc/page_creator/page.dart';
 
 import '../chat/asset_context_menu.dart';
 import '../core/feature_flags.dart';
