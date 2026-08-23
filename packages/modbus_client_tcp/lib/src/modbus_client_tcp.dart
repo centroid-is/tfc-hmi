@@ -289,66 +289,79 @@ class ModbusClientTcp extends ModbusClient {
       return;
     }
 
-    final idleSeconds = keepAliveIdle.inSeconds;
-    final intervalSeconds = keepAliveInterval.inSeconds;
-    final count = keepAliveCount;
-
-    // SO_KEEPALIVE: Linux/Android=0x0009, macOS/iOS/Windows=0x0008
-    final soKeepAlive =
-        Platform.isLinux || Platform.isAndroid ? 0x0009 : 0x0008;
-    socket.setRawOption(
-      RawSocketOption.fromBool(RawSocketOption.levelSocket, soKeepAlive, true),
-    );
-
-    if (Platform.isWindows) {
-      // Windows 10 1709+ supports TCP_KEEPIDLE(3), TCP_KEEPCNT(16),
-      // TCP_KEEPINTVL(17). Older versions only support SO_KEEPALIVE.
+    // Best effort, every option, on every platform.
+    //
+    // This is tuning: it shortens how long a dead peer goes unnoticed. It is
+    // never a reason to fail a connection, and it used to be exactly that.
+    // The call sits inside connect()'s try, and the only guard here caught
+    // `SocketException` on the Windows branch alone -- so a Windows build
+    // where TCP_KEEPIDLE and friends are rejected with anything else, or a
+    // Linux/macOS kernel that refuses one of its own constants, lost the
+    // whole connection and logged "failed to connect". On a plant floor that
+    // is a PLC that never comes up, for the sake of a keepalive timer.
+    //
+    // Each option is applied independently so one unsupported constant does
+    // not skip the ones after it. SO_KEEPALIVE alone still gives OS-default
+    // probing, which is the behaviour before any of this was tuned.
+    for (final option in keepAliveOptions(
+      isWindows: Platform.isWindows,
+      isLinuxOrAndroid: Platform.isLinux || Platform.isAndroid,
+      isMac: Platform.isMacOS || Platform.isIOS,
+      idleSeconds: keepAliveIdle.inSeconds,
+      intervalSeconds: keepAliveInterval.inSeconds,
+      count: keepAliveCount,
+    )) {
       try {
-        socket.setRawOption(
-          RawSocketOption.fromInt(
-              RawSocketOption.levelTcp, 3, idleSeconds),
-        );
-        socket.setRawOption(
-          RawSocketOption.fromInt(
-              RawSocketOption.levelTcp, 17, intervalSeconds),
-        );
-        socket.setRawOption(
-          RawSocketOption.fromInt(RawSocketOption.levelTcp, 16, count),
-        );
-      } on SocketException {
-        // Older Windows versions don't support fine-grained keepalive
-        // options. SO_KEEPALIVE is still enabled with OS defaults.
+        socket.setRawOption(option);
+      } catch (e) {
+        // Older Windows (pre-10 1709) has no TCP_KEEPIDLE/CNT/INTVL, and the
+        // failure is not reliably a SocketException.
+        ModbusAppLogger.fine('keepalive option not applied: $e');
       }
-    } else {
-      final isMac = Platform.isMacOS || Platform.isIOS;
-
-      // TCP_KEEPIDLE (Linux=4) / TCP_KEEPALIVE (macOS=0x10)
-      socket.setRawOption(
-        RawSocketOption.fromInt(
-          RawSocketOption.levelTcp,
-          isMac ? 0x10 : 4,
-          idleSeconds,
-        ),
-      );
-
-      // TCP_KEEPINTVL: Linux=5, macOS=0x101
-      socket.setRawOption(
-        RawSocketOption.fromInt(
-          RawSocketOption.levelTcp,
-          isMac ? 0x101 : 5,
-          intervalSeconds,
-        ),
-      );
-
-      // TCP_KEEPCNT: Linux=6, macOS=0x102
-      socket.setRawOption(
-        RawSocketOption.fromInt(
-          RawSocketOption.levelTcp,
-          isMac ? 0x102 : 6,
-          count,
-        ),
-      );
     }
+  }
+
+  /// The socket options that implement this client's keepalive settings, in
+  /// the order they should be applied.
+  ///
+  /// Pure and platform-injected so the constants can be tested off the
+  /// platform they belong to -- the Windows numbers in particular, which are
+  /// the ones no developer on macOS or Linux ever exercises. Public for that
+  /// reason rather than because callers outside this class need it.
+  ///
+  /// SO_KEEPALIVE differs by platform (Linux/Android 0x0009, everything else
+  /// 0x0008) and comes first: it is what actually turns keepalive on, and the
+  /// rest only tune it.
+  static List<RawSocketOption> keepAliveOptions({
+    required bool isWindows,
+    required bool isLinuxOrAndroid,
+    required bool isMac,
+    required int idleSeconds,
+    required int intervalSeconds,
+    required int count,
+  }) {
+    final soKeepAlive = isLinuxOrAndroid ? 0x0009 : 0x0008;
+    return [
+      RawSocketOption.fromBool(
+          RawSocketOption.levelSocket, soKeepAlive, true),
+      if (isWindows) ...[
+        // Windows 10 1709+: TCP_KEEPIDLE(3), TCP_KEEPCNT(16),
+        // TCP_KEEPINTVL(17). Older versions only support SO_KEEPALIVE.
+        RawSocketOption.fromInt(RawSocketOption.levelTcp, 3, idleSeconds),
+        RawSocketOption.fromInt(RawSocketOption.levelTcp, 17, intervalSeconds),
+        RawSocketOption.fromInt(RawSocketOption.levelTcp, 16, count),
+      ] else ...[
+        // TCP_KEEPIDLE (Linux=4) / TCP_KEEPALIVE (macOS=0x10)
+        RawSocketOption.fromInt(
+            RawSocketOption.levelTcp, isMac ? 0x10 : 4, idleSeconds),
+        // TCP_KEEPINTVL: Linux=5, macOS=0x101
+        RawSocketOption.fromInt(
+            RawSocketOption.levelTcp, isMac ? 0x101 : 5, intervalSeconds),
+        // TCP_KEEPCNT: Linux=6, macOS=0x102
+        RawSocketOption.fromInt(
+            RawSocketOption.levelTcp, isMac ? 0x102 : 6, count),
+      ],
+    ];
   }
 
   /// Handle socket being closed
