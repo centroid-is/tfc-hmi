@@ -155,11 +155,13 @@ jobs:
           codesign --verify --deep --strict "$APP"
           echo "App bundle signing verified"
 
-          # Create DMG
+          # Create DMG. Retries "Resource busy", which `hdiutil create` throws
+          # intermittently and which would otherwise cost a whole release —
+          # this job is in create-release's `needs`. See the script.
           mkdir -p dmg-staging
           cp -R "$APP" dmg-staging/
-          hdiutil create -volname "CentroidX Manager" -srcfolder dmg-staging -ov -format UDZO \
-            "${{ matrix.artifact_name }}"
+          "$GITHUB_WORKSPACE/.github/scripts/create-dmg.sh" \
+            "CentroidX Manager" dmg-staging "${{ matrix.artifact_name }}"
           rm -rf dmg-staging
 
           # Sign the DMG
@@ -196,8 +198,9 @@ jobs:
           APP="CentroidX-Manager.app"
           mkdir -p dmg-staging
           cp -R "$APP" dmg-staging/
-          hdiutil create -volname "CentroidX Manager" -srcfolder dmg-staging -ov -format UDZO \
-            "${{ matrix.artifact_name }}"
+          # Same retry as the signed path above. See the script.
+          "$GITHUB_WORKSPACE/.github/scripts/create-dmg.sh" \
+            "CentroidX Manager" dmg-staging "${{ matrix.artifact_name }}"
           rm -rf dmg-staging
           echo "Unsigned DMG created"
 

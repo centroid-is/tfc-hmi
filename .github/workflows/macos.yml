@@ -174,10 +174,13 @@ jobs:
           cp -R "$APP_PATH" "$DMG_DIR/CentroidX.app"
           ln -s /Applications "$DMG_DIR/Applications"
 
-          hdiutil create -volname "CentroidX" -srcfolder "$DMG_DIR" \
-            -ov -format UDZO "$DMG_NAME"
+          # Retries "Resource busy", which `hdiutil create` throws
+          # intermittently and which would otherwise cost a whole release —
+          # this job is in create-release's `needs`. See the script.
+          "$GITHUB_WORKSPACE/.github/scripts/create-dmg.sh" \
+            "CentroidX" "$DMG_DIR" "$DMG_NAME"
+
           echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
-          ls -lh "$DMG_NAME"
 
       - name: Sign the DMG
         if: env.CODESIGN_IDENTITY != ''
