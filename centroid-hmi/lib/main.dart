@@ -58,6 +58,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:tfc/widgets/proposal_banner.dart';
 import 'package:tfc/marionette/route_logger.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 
 import 'marionette_init.dart';
 import 'navigation.dart';
@@ -540,6 +541,7 @@ class MyApp extends ConsumerWidget {
       if (path == _lastPanePath) return;
       _lastPanePath = path;
       closeSidePane(immediate: true);
+      closeAllFloatingDialogs();
     });
   }
 

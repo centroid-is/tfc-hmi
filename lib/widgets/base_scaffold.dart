@@ -5,6 +5,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import 'panes/side_pane.dart';
+import 'panes/standard_dialog.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
@@ -270,6 +271,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                 // asks to leave, rather than a few frames
                                 // later when the router listener notices.
                                 closeSidePane(immediate: true);
+                closeAllFloatingDialogs();
                                 context.beamBack();
                               },
                             ),
@@ -395,6 +397,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 // the moment the operator asks to leave. close() is a no-op
                 // when nothing is open, so the two never fight.
                 closeSidePane(immediate: true);
+                closeAllFloatingDialogs();
                 final item = RouteRegistry().menuItems[index];
                 beamSafelyKids(context, item);
               },

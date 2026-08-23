@@ -320,6 +320,9 @@ void showFloatingDialog({
 /// Closes the floating dialog with this [id], if it is open.
 void closeFloatingDialog(String id) => FloatingDialogs.close(id);
 
+/// Closes every floating dialog. See [FloatingDialogs.closeAll].
+int closeAllFloatingDialogs() => FloatingDialogs.closeAll();
+
 /// Registry of open floating dialogs.
 ///
 /// Public so the side pane can tell whether an Escape key press belongs to a
@@ -393,6 +396,23 @@ abstract final class FloatingDialogs {
     _entries.remove(id);
     _stack.remove(id);
     _onClosed.remove(id)?.call();
+  }
+
+  /// Closes every open dialog. Returns how many were closed.
+  ///
+  /// A floating dialog lives in the ROOT overlay, so nothing about leaving a
+  /// page removes it -- it follows the operator to the next one, and they
+  /// stack: a trend opened on the home page was still there, under two more,
+  /// after a trip through Advanced. Called on every route change, from the
+  /// back button and from the navigation bar, the same three places the side
+  /// pane closes from. Removal is synchronous (no exit animation), so it is
+  /// safe from a dispose() in the same frame.
+  static int closeAll() {
+    final ids = List<String>.of(_stack);
+    for (final id in ids) {
+      close(id);
+    }
+    return ids.length;
   }
 
   /// Closes the most recently opened dialog. Returns false if none was open.
