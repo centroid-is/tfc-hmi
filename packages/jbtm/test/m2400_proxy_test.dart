@@ -30,6 +30,65 @@ int fdCount() {
 final String? fdLeakSkip =
     Platform.isWindows ? 'no POSIX file-descriptor table on Windows' : null;
 
+// ---- TEMPORARY DIAGNOSTIC (fdlinux probe) ---------------------------------
+Map<String, String> fdSnapshot() {
+  final out = <String, String>{};
+  if (!Platform.isLinux) return out;
+  for (final e in Directory('/proc/self/fd').listSync()) {
+    final name = e.path.split('/').last;
+    String target;
+    try {
+      target = Link(e.path).targetSync();
+    } catch (err) {
+      target = '<unreadable>';
+    }
+    out[name] = target;
+  }
+  return out;
+}
+
+Map<String, String> socketTable() {
+  final table = <String, String>{};
+  if (!Platform.isLinux) return table;
+  for (final f in const ['/proc/net/tcp', '/proc/net/tcp6']) {
+    final file = File(f);
+    if (!file.existsSync()) continue;
+    for (final line in file.readAsLinesSync().skip(1)) {
+      final p = line.trim().split(RegExp(r'\s+'));
+      if (p.length < 10) continue;
+      table[p[9]] = 'local=${p[1]} rem=${p[2]} st=${p[3]}';
+    }
+  }
+  return table;
+}
+
+void dumpFd(String label, Map<String, String> before, Map<String, String> now) {
+  if (!Platform.isLinux) return;
+  final sockets = socketTable();
+  String describe(String fd, String target) {
+    final m = RegExp(r'^socket:\[(\d+)\]$').firstMatch(target);
+    if (m != null) {
+      final info = sockets[m.group(1)!];
+      return '$target ${info ?? "(no /proc/net/tcp row)"}';
+    }
+    return target;
+  }
+
+  final added = <String>[];
+  final removed = <String>[];
+  for (final e in now.entries) {
+    if (before[e.key] != e.value) added.add('  +fd ${e.key} -> ${describe(e.key, e.value)}');
+  }
+  for (final e in before.entries) {
+    if (now[e.key] != e.value) removed.add('  -fd ${e.key} -> ${e.value}');
+  }
+  print('[fdlinux] $label: before=${before.length} now=${now.length} '
+      'delta=${now.length - before.length}');
+  for (final l in removed) print('[fdlinux] $label$l');
+  for (final l in added) print('[fdlinux] $label$l');
+}
+// ---- end TEMPORARY DIAGNOSTIC ---------------------------------------------
+
 void main() {
   // TestTcpServer acts as the fake upstream M2400 device.
   late TestTcpServer upstream;
@@ -596,6 +655,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       final baseline = fdCount();
+      final baseSnap = fdSnapshot();
 
       for (var i = 0; i < 30; i++) {
         final client = await Socket.connect(
@@ -608,14 +668,20 @@ void main() {
         await Future.delayed(const Duration(milliseconds: 2));
       }
 
+      final churnSnap = fdSnapshot();
+      dumpFd('after-churn(clients=${proxy.clientCount})', baseSnap, churnSnap);
+
       await proxy.shutdown();
       await Future.delayed(const Duration(milliseconds: 300));
+      final after = fdCount();
+      dumpFd('after-shutdown', baseSnap, fdSnapshot());
+      await Future.delayed(const Duration(seconds: 2));
+      dumpFd('after-shutdown+2s', baseSnap, fdSnapshot());
 
       // shutdown() only walks `_clients`; anything already dropped from that
       // list is unreachable and cannot be reclaimed here. The count must
       // therefore already be back at baseline (minus the listen socket and
       // the upstream connection shutdown() does close).
-      final after = fdCount();
       expect(
         after - baseline,
         lessThanOrEqualTo(0),
