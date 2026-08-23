@@ -66,19 +66,29 @@ func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRe
 		t.Skip("no releases found in centroid-is/tfc-hmi — skipping integration test")
 	}
 
-	platformAssetName := selectPlatformAssetName()
+	// The same candidate list the engine uses, not just the canonical name.
+	// Matching on selectPlatformAssetName() alone made this test stricter than
+	// the code it covers: the engine accepts the legacy "centroidx.msix" so a
+	// rollback to a release published before the rename still installs, but the
+	// test would refuse that release and report the platform as unservable.
+	//
+	// That mattered in practice. Only `main-latest` carries the canonical
+	// centroidx_windows_amd64.msix today — v2026.3.26 has the legacy name — and
+	// main-prerelease.yml republishes main-latest by deleting and recreating it
+	// on every merge to main. Inside that window no release matched, so this
+	// test failed on Windows and macOS for a pipeline that was working
+	// correctly. Accepting the legacy name means v2026.3.26 satisfies it and
+	// the window stops being observable.
+	candidates := platformAssetCandidates()
 
 	for _, r := range releases {
 		if r.GetDraft() {
 			continue
 		}
-		var platformAsset, checksumAsset *gogithub.ReleaseAsset
+		platformAsset := selectAssetByNames(r.Assets, candidates)
+		var checksumAsset *gogithub.ReleaseAsset
 		for _, a := range r.Assets {
-			name := a.GetName()
-			if name == platformAssetName {
-				platformAsset = a
-			}
-			if name == "SHA256SUMS.txt" {
+			if a.GetName() == "SHA256SUMS.txt" {
 				checksumAsset = a
 			}
 		}
@@ -109,19 +119,19 @@ func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRe
 	// instead of failing on a decision nobody intends to revisit.
 	if runtime.GOOS == "linux" {
 		t.Skipf(
-			"no release publishes %q, and none is expected: Linux stations run the "+
-				"elinux docker image, not a manager install. Nothing was verified on %s/%s.",
-			platformAssetName, runtime.GOOS, runtime.GOARCH,
+			"no release publishes any of %q, and none is expected: Linux stations run "+
+				"the elinux docker image, not a manager install. Nothing was verified on %s/%s.",
+			candidates, runtime.GOOS, runtime.GOARCH,
 		)
 		return suitableRelease{} // unreachable - t.Skipf does not return
 	}
 
 	t.Fatalf(
-		"no release in centroid-is/tfc-hmi has both %q and SHA256SUMS.txt (running on %s/%s). "+
-			"The manager cannot install anything on this platform - either the release "+
-			"pipeline stopped publishing that asset, or it was renamed without updating "+
-			"selectPlatformAssetName.",
-		platformAssetName, runtime.GOOS, runtime.GOARCH,
+		"no release in centroid-is/tfc-hmi has SHA256SUMS.txt plus any of %q (running on "+
+			"%s/%s). The manager cannot install anything on this platform - either the "+
+			"release pipeline stopped publishing that asset, or it was renamed without "+
+			"updating platformAssetCandidates.",
+		candidates, runtime.GOOS, runtime.GOARCH,
 	)
 	return suitableRelease{} // unreachable - t.Fatalf does not return
 }
