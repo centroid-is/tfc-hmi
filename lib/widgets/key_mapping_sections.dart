@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -944,9 +945,77 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
     super.dispose();
   }
 
+  /// What the retention field will actually be applied as, and what is wrong
+  /// with what was typed.
+  ///
+  /// Retention is the one setting whose entire job is to delete data, and this
+  /// field used to be a bare [TextField]: no formatter, no clamp, and no
+  /// objection to 0 or a negative number. Typing 3651 — one day past ten years
+  /// — produced a stored value that was read back as five and a quarter
+  /// *seconds*, and Timescale then dropped the whole history. Typing 0 produced
+  /// a policy that drops everything, and read back as a plausible-looking 0.
+  ///
+  /// Returns the clamped day count, and a message if the typed text was not
+  /// usable as-is.
+  ({int days, String? error}) _retentionFromText() {
+    final text = _retentionDaysController.text.trim();
+    if (text.isEmpty) {
+      return (days: _defaultRetentionDays, error: null);
+    }
+    final parsed = int.tryParse(text);
+    if (parsed == null) {
+      return (
+        days: _defaultRetentionDays,
+        error: 'Whole number of days, 1 to $kMaxRetentionDays.'
+      );
+    }
+    if (parsed < 1) {
+      return (
+        days: 1,
+        error: 'Retention must be at least 1 day. '
+            '0 would tell the database to delete everything.'
+      );
+    }
+    if (parsed > kMaxRetentionDays) {
+      return (
+        days: kMaxRetentionDays,
+        error: 'Maximum retention is $kMaxRetentionDays days (ten years). '
+            'Using $kMaxRetentionDays.'
+      );
+    }
+    return (days: parsed, error: null);
+  }
+
+  static const int _defaultRetentionDays = 365;
+
+  /// The retention field, with the guards a delete-my-data setting needs.
+  ///
+  /// `digitsOnly` removes the minus sign at the source — a negative retention
+  /// was accepted here and read back as a negative Duration. The helper text
+  /// states the range up front, and [_retentionFromText] reports out-of-range
+  /// values rather than silently substituting one, which is what made the old
+  /// behaviour so hard to notice: 3651 came back as 0 days and looked fine.
+  Widget _buildRetentionField() {
+    final validated = _retentionFromText();
+    return TextField(
+      controller: _retentionDaysController,
+      decoration: InputDecoration(
+        labelText: 'Retention (days)',
+        helperText: '1 to $kMaxRetentionDays days',
+        errorText: validated.error,
+        errorMaxLines: 3,
+      ),
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      onChanged: (_) {
+        setState(_notifyChanged);
+      },
+    );
+  }
+
   void _notifyChanged() {
     final sampleUs = int.tryParse(_sampleIntervalController.text);
-    final retDays = int.tryParse(_retentionDaysController.text) ?? 365;
+    final retDays = _retentionFromText().days;
     final schedMins = int.tryParse(_scheduleIntervalController.text);
 
     final collect = CollectEntry(
@@ -1033,14 +1102,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                   if (isNarrow) {
                     return Column(
                       children: [
-                        TextField(
-                          controller: _retentionDaysController,
-                          decoration: const InputDecoration(
-                            labelText: 'Retention (days)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => _notifyChanged(),
-                        ),
+                        _buildRetentionField(),
                         const SizedBox(height: 12),
                         TextField(
                           controller: _scheduleIntervalController,
@@ -1048,23 +1110,16 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                             labelText: 'Schedule Interval (minutes, optional)',
                           ),
                           keyboardType: TextInputType.number,
+                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                           onChanged: (_) => _notifyChanged(),
                         ),
                       ],
                     );
                   }
                   return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _retentionDaysController,
-                          decoration: const InputDecoration(
-                            labelText: 'Retention (days)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          onChanged: (_) => _notifyChanged(),
-                        ),
-                      ),
+                      Expanded(child: _buildRetentionField()),
                       const SizedBox(width: 12),
                       Expanded(
                         child: TextField(
@@ -1073,6 +1128,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                             labelText: 'Schedule Interval (minutes, optional)',
                           ),
                           keyboardType: TextInputType.number,
+                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                           onChanged: (_) => _notifyChanged(),
                         ),
                       ),
