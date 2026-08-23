@@ -1416,46 +1416,22 @@ class Database {
     throw DatabaseException('Time column not found in table $tableName');
   }
 
-  /// Postgres type of each collected table's `value` column, keyed by table.
+  /// Postgres type of a collected table's `value` column.
   ///
-  /// Every downsampled series used to pay an `information_schema` round trip
-  /// to learn this — 2 ms each, and they queue behind every other statement on
-  /// a pool of one, so a History View with a dozen series spent an eighth of a
-  /// second on nothing but type lookups before the first row was fetched. A
-  /// collected table's `value` type is fixed when the collector creates it, so
-  /// one lookup per table per session is enough.
+  /// Deliberately **not** cached, though it costs an `information_schema`
+  /// round trip (~2 ms) per downsampled series. A cache was built here and
+  /// removed: the type is only stable while the table is, and a retype drops
+  /// and recreates it. A remembered type that outlives its table fails in two
+  /// different ways — over-claiming makes the statement error, under-claiming
+  /// silently drops to the raw fallback and stops downsampling for the rest of
+  /// the session with no error at all. Each needed its own fix and CI caught
+  /// both.
   ///
-  /// Only *positive* answers are cached. A table that does not exist yet is
-  /// deliberately re-checked, because the collector may create it moments
-  /// later.
-  ///
-  /// A retype drops and recreates the table, and the entry would outlive it.
-  /// Two things stop that, because one alone is not enough:
-  ///
-  /// - [_createTimeseriesTable] evicts. Creating the table is when its `value`
-  ///   type is set, so it is when a remembered type stops being true. This
-  ///   covers both directions of a retype done through this object.
-  /// - [queryTimeseriesDataDownsampled]'s error path evicts and retries once,
-  ///   for a table recreated by *another* process, where the first this object
-  ///   hears of it is its own statement failing.
-  ///
-  /// The gap the error path cannot close on its own is a stale entry that
-  /// *under*-claims — a cached `boolean` for what is now `double precision`.
-  /// That does not fail; it quietly takes the raw fallback and stops
-  /// downsampling. Hence the eviction at creation. The residue is a table
-  /// retyped by another process in that same direction, which stays raw
-  /// (correct data, no downsampling) until this object next creates it or the
-  /// station restarts.
-  final Map<String, ValueColumnType> _valueColumnTypes = {};
-
-  /// The [_valueColumnTypes] cache, so tests can seed it and watch it evict.
-  @visibleForTesting
-  Map<String, ValueColumnType> get valueColumnTypeCache => _valueColumnTypes;
-
+  /// The saving did not justify that. Within a single History View refresh
+  /// every series is a different table, so each is looked up once either way;
+  /// the cache only paid off on repeat queries. If this is revisited, the
+  /// invalidation story has to come first.
   Future<ValueColumnType?> _valueColumnType(String tableName) async {
-    final cached = _valueColumnTypes[tableName];
-    if (cached != null) return cached;
-
     final typeResult = await db.customSelect(
       r'''
       SELECT data_type, udt_name
@@ -1467,12 +1443,10 @@ class Database {
 
     if (typeResult.isEmpty) return null;
 
-    final type = ValueColumnType(
+    return ValueColumnType(
       typeResult.first.data['data_type'] as String,
       typeResult.first.data['udt_name'] as String,
     );
-    _valueColumnTypes[tableName] = type;
-    return type;
   }
 
   /// Query time-series data with server-side downsampling using TimescaleDB time_bucket().
@@ -1508,9 +1482,7 @@ class Database {
     final intervalStr = '$bucketMs milliseconds';
     final quotedTable = tableName.replaceAll('"', '""');
 
-    // Detect column type to choose the right SQL. Whether the answer came out
-    // of the cache decides what a later failure means — see the catch below.
-    final servedFromCache = _valueColumnTypes.containsKey(tableName);
+    // Detect column type to choose the right SQL.
     final valueType = await _valueColumnType(tableName);
     if (valueType == null) {
       return queryTimeseriesData(tableName, endTime, from: startTime);
@@ -1545,35 +1517,11 @@ class Database {
     final sql =
         buildDownsampleSql(quotedTable: quotedTable, isArray: isArray);
 
-    final List<QueryRow> result;
-    try {
-      result = await db.customSelect(sql, variables: [
-        Variable.withString(intervalStr),
-        Variable.withString(startTime.toUtc().toIso8601String()),
-        Variable.withString(endTime.toUtc().toIso8601String()),
-      ]).get();
-    } catch (_) {
-      // A cached type that no longer describes the table is the one way the
-      // shape of this statement can be wrong: retyping a key drops and
-      // recreates its table, and the entry outlives it. The stale type may
-      // even say "numeric" for what is now a boolean — in which case the
-      // right answer was never this statement at all, it was the raw
-      // fallback above, which a stale entry skipped straight past.
-      //
-      // So evict and retry once, rather than reporting an error the caller
-      // cannot act on. The retry re-detects from information_schema, so it
-      // takes whichever branch the new type calls for; because the entry is
-      // gone, `servedFromCache` is false next time round and a second
-      // failure propagates. At most one extra attempt.
-      _valueColumnTypes.remove(tableName);
-      if (servedFromCache) {
-        return queryTimeseriesDataDownsampled(tableName, startTime, endTime,
-            maxPoints: maxPoints);
-      }
-      // Nothing cached to blame: the table is missing, the server is down, or
-      // the statement is genuinely wrong. That is the caller's to handle.
-      rethrow;
-    }
+    final result = await db.customSelect(sql, variables: [
+      Variable.withString(intervalStr),
+      Variable.withString(startTime.toUtc().toIso8601String()),
+      Variable.withString(endTime.toUtc().toIso8601String()),
+    ]).get();
 
     if (result.isEmpty) {
       return [];
@@ -1712,19 +1660,6 @@ ORDER BY at.time;
 
   Future<void> _createTimeseriesTable(
       String tableName, RetentionPolicy retention, dynamic value) async {
-    // Creating the table is the moment its `value` type is established, so it
-    // is also the moment any remembered type stops being true. A table only
-    // gets created here twice if it was dropped in between — a retyped key,
-    // or a retention policy that took the whole thing — and the new column
-    // may well have a different type than the old one.
-    //
-    // This is the invalidation the error path in
-    // [queryTimeseriesDataDownsampled] cannot provide: a stale entry that
-    // *under*-claims (cached `boolean` for what is now `double precision`)
-    // never fails, it just takes the raw fallback and silently stops
-    // downsampling for the rest of the session. There is no error to catch.
-    _valueColumnTypes.remove(tableName);
-
     if (value is Map<String, dynamic>) {
       // Create table with columns for each key in the complex object
       await _createComplexTimeseriesTable(tableName, retention, value);
