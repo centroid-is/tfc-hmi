@@ -30,7 +30,10 @@ dependencies:
     # path: ../open62541_dart
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: main
+      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref lets a
+      # tagged build pick up code that was never tested here, and lets the same
+      # tag rebuild into a different binary. Head of `main` as of 2026-08-23.
+      ref: 631702f8354ca5a4c030ab3a0eddd510caeba711
   postgres: ^3.4.5
   intl: ^0.20.2
   collection: ^1.18.0
@@ -50,11 +53,16 @@ dependencies:
   board_datetime_picker:
     git:
       url: https://github.com/centroid-is/board_datetime_picker.git
-      ref: subtitle-for-start-end-date
+      # Head of `subtitle-for-start-end-date` as of 2026-08-23 (last moved
+      # 2025-11-03). See the note on open62541 above for why this is a SHA.
+      ref: efc20ef16ace8ce37442d06732182ff06d05c398
   cristalyse:
     git:
       url: https://github.com/centroid-is/cristalyse.git
-      ref: dev
+      # Head of `dev` as of 2026-08-23 (last moved 2026-02-16). NOTE: work on
+      # cristalyse was in progress elsewhere when this was pinned; if that fix
+      # is meant to ship, push it and bump this SHA deliberately.
+      ref: c9afc9db1032dc1f14096c703f11a0a3bc90c40b
   tfc_dart:
     path: packages/tfc_dart
   tfc_mcp_server:
@@ -125,7 +133,9 @@ dependency_overrides:
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
-      ref: fix-orphaned-socket-on-failed-connect
+      # Head of `fix-orphaned-socket-on-failed-connect` as of 2026-08-23. This
+      # branch moved on 2026-08-22, so it was the live one of the four.
+      ref: 519312712bacca6c54f296ce190bdb85f37a2581
 #   stream_channel: ^2.1.4
 #   stack_trace: ^1.12.1
 #   meta: ^1.16.0
