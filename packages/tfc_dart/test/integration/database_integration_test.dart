@@ -1213,6 +1213,50 @@ void main() {
                   'of the raw fallback, which a stale cache entry skipped');
         });
 
+        test('a recreated numeric table downsamples again rather than '
+            'silently staying raw', () async {
+          // The direction that has no error to catch, and the one that broke
+          // five pre-existing tests in this group: `should fall back to raw
+          // query for boolean columns` runs earlier, caches `boolean` for the
+          // shared table, and tearDown drops it. Every later test recreates
+          // the table as double precision — and a stale `boolean` entry does
+          // not fail, it just takes the raw fallback. The query succeeds, the
+          // data is correct, and downsampling silently never happens again.
+          final base = DateTime.now().subtract(const Duration(minutes: 30));
+          for (var i = 0; i < 6; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(minutes: i)), i.isEven);
+          }
+          await database.flush();
+
+          final from = base.subtract(const Duration(seconds: 1));
+          final to = base.add(const Duration(minutes: 31));
+
+          expect(
+              await database.queryTimeseriesDataDownsampled(
+                  testTableName, from, to, maxPoints: 6),
+              hasLength(6),
+              reason: 'boolean has no min/max/last, so raw');
+          expect(database.valueColumnTypeCache[testTableName]?.dataType,
+              'boolean');
+
+          await database.db
+              .customStatement('DROP TABLE IF EXISTS "$testTableName" CASCADE');
+          for (var i = 0; i < 9; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(minutes: i)), i.toDouble());
+          }
+          await database.flush();
+
+          final result = await database.queryTimeseriesDataDownsampled(
+              testTableName, from, to,
+              maxPoints: 6);
+          expect(result.length % 3, 0,
+              reason: 'min/max/last triples — the table is numeric again, so '
+                  'the cached boolean must not still be pinning it to raw');
+          expect(result.length, lessThan(9));
+        });
+
         test('a missing table is never cached', () async {
           // The collector may create the table moments later; caching "no
           // such column" would leave the series raw for the whole session.

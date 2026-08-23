@@ -1429,11 +1429,23 @@ class Database {
   /// deliberately re-checked, because the collector may create it moments
   /// later.
   ///
-  /// A retype drops and recreates the table, and the entry outlives it. That
-  /// is handled in [queryTimeseriesDataDownsampled]'s error path, which
-  /// evicts and retries once so the caller never sees the stale entry — a
-  /// boolean table wearing a cached `double precision` would otherwise skip
-  /// the raw fallback and fail the query outright.
+  /// A retype drops and recreates the table, and the entry would outlive it.
+  /// Two things stop that, because one alone is not enough:
+  ///
+  /// - [_createTimeseriesTable] evicts. Creating the table is when its `value`
+  ///   type is set, so it is when a remembered type stops being true. This
+  ///   covers both directions of a retype done through this object.
+  /// - [queryTimeseriesDataDownsampled]'s error path evicts and retries once,
+  ///   for a table recreated by *another* process, where the first this object
+  ///   hears of it is its own statement failing.
+  ///
+  /// The gap the error path cannot close on its own is a stale entry that
+  /// *under*-claims — a cached `boolean` for what is now `double precision`.
+  /// That does not fail; it quietly takes the raw fallback and stops
+  /// downsampling. Hence the eviction at creation. The residue is a table
+  /// retyped by another process in that same direction, which stays raw
+  /// (correct data, no downsampling) until this object next creates it or the
+  /// station restarts.
   final Map<String, ValueColumnType> _valueColumnTypes = {};
 
   /// The [_valueColumnTypes] cache, so tests can seed it and watch it evict.
@@ -1700,6 +1712,19 @@ ORDER BY at.time;
 
   Future<void> _createTimeseriesTable(
       String tableName, RetentionPolicy retention, dynamic value) async {
+    // Creating the table is the moment its `value` type is established, so it
+    // is also the moment any remembered type stops being true. A table only
+    // gets created here twice if it was dropped in between — a retyped key,
+    // or a retention policy that took the whole thing — and the new column
+    // may well have a different type than the old one.
+    //
+    // This is the invalidation the error path in
+    // [queryTimeseriesDataDownsampled] cannot provide: a stale entry that
+    // *under*-claims (cached `boolean` for what is now `double precision`)
+    // never fails, it just takes the raw fallback and silently stops
+    // downsampling for the rest of the session. There is no error to catch.
+    _valueColumnTypes.remove(tableName);
+
     if (value is Map<String, dynamic>) {
       // Create table with columns for each key in the complex object
       await _createComplexTimeseriesTable(tableName, retention, value);
