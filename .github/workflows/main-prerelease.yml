@@ -71,6 +71,15 @@ jobs:
           name: centroid-hmi.msix
           path: msix/
 
+      # Without this the MSIX above is unusable on any machine that has not
+      # already trusted the sideload certificate by hand — see windows.yml for
+      # why it is exported and why publishing it is safe.
+      - name: Download sideload certificate
+        uses: actions/download-artifact@v4
+        with:
+          name: centroidx-sideload.cer
+          path: release/
+
       - name: Download macOS DMG
         uses: actions/download-artifact@v4
         with:
@@ -111,6 +120,7 @@ jobs:
 
           cd release
           sha256sum centroidx_windows_x64.zip centroidx_windows_amd64.msix \
+                    centroidx-sideload.cer \
                     centroidx_darwin_arm64.dmg \
                     centroidx_linux_x64.tar.gz \
                     centroidx-manager_* > SHA256SUMS.txt
@@ -139,6 +149,7 @@ jobs:
           | macOS (Apple Silicon) | \`centroidx_darwin_arm64.dmg\` — Developer ID signed; notarized only when Apple's notary service accepts the build |
           | Windows (x64) | \`centroidx_windows_x64.zip\` — portable exe + libs, no installer |
           | Windows (x64) | \`centroidx_windows_amd64.msix\` — sideload installer, used by the in-app updater's latest channel |
+          | Windows (x64) | \`centroidx-sideload.cer\` — public signing certificate; the MSIX will not install until this is in \`LocalMachine\\TrustedPeople\` |
           | Linux (x64) | \`centroidx_linux_x64.tar.gz\` — GTK3 desktop bundle |
 
           The \`centroidx-manager_*\` assets are the version manager built from this same commit; its **Latest** channel installs the packages above.
@@ -146,6 +157,7 @@ jobs:
           Checksums in \`SHA256SUMS.txt\`." \
             release/centroidx_windows_x64.zip \
             release/centroidx_windows_amd64.msix \
+            release/centroidx-sideload.cer \
             release/centroidx_darwin_arm64.dmg \
             release/centroidx_linux_x64.tar.gz \
             release/centroidx-manager_windows_amd64.exe \

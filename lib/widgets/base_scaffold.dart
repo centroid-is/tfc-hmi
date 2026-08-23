@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+
+import 'panes/side_pane.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
@@ -262,7 +264,14 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                               context.canBeamBack)
                             IconButton(
                               icon: const Icon(Icons.arrow_back),
-                              onPressed: () => context.beamBack(),
+                              onPressed: () {
+                                // Same reason as the navigation bar below:
+                                // take the pane away the moment the operator
+                                // asks to leave, rather than a few frames
+                                // later when the router listener notices.
+                                closeSidePane(immediate: true);
+                                context.beamBack();
+                              },
                             ),
                           globalLeftProvider?.buildAppBarLeftWidgets(context) ??
                               const SizedBox.shrink(),
@@ -378,6 +387,14 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
               ],
               onDestinationSelected: (int index) {
                 logger.d('Item tapped: $index');
+                // Closed on the tap, not left to the router listener in
+                // MyApp. That listener is the guarantee -- it catches the back
+                // button, beamBack, deep links and the route guards -- but it
+                // fires once the new location has been resolved, so the pane
+                // lingers for those frames. Closing here as well takes it away
+                // the moment the operator asks to leave. close() is a no-op
+                // when nothing is open, so the two never fight.
+                closeSidePane(immediate: true);
                 final item = RouteRegistry().menuItems[index];
                 beamSafelyKids(context, item);
               },

@@ -25,6 +25,13 @@ typedef AssetLoader = Future<List<int>> Function(String key);
 /// Typedef for resolving the manager binary path — injectable for testing.
 typedef PathResolver = Future<String> Function();
 
+/// Typedef for reading an environment variable — injectable for testing.
+///
+/// Defaults to `Platform.environment[key]`. Exists so the Windows APPDATA
+/// branch of [ManagerLauncher.resolveManagerPath] can be exercised from a
+/// test on any host.
+typedef EnvProvider = String? Function(String key);
+
 /// Handles extraction and detached launching of the bundled centroidx-manager
 /// binary.
 ///
@@ -35,6 +42,7 @@ class ManagerLauncher {
   final CommandRunner? _commandRunner;
   final AssetLoader? _assetLoader;
   final PathResolver? _pathResolver;
+  final EnvProvider? _envProvider;
 
   /// Whether to behave as if running on Windows (injectable for tests).
   final bool platformIsWindows;
@@ -47,12 +55,14 @@ class ManagerLauncher {
     CommandRunner? commandRunner,
     AssetLoader? assetLoader,
     PathResolver? pathResolver,
+    EnvProvider? envProvider,
     bool? platformIsWindows,
     bool? platformIsMacOS,
   })  : _processStarter = processStarter,
         _commandRunner = commandRunner,
         _assetLoader = assetLoader,
         _pathResolver = pathResolver,
+        _envProvider = envProvider,
         platformIsWindows = platformIsWindows ?? Platform.isWindows,
         platformIsMacOS = platformIsMacOS ?? Platform.isMacOS;
 
@@ -72,7 +82,19 @@ class ManagerLauncher {
     if (injected != null) return injected();
 
     if (platformIsWindows) {
-      final appData = Platform.environment['APPDATA'] ?? '';
+      final env = _envProvider ?? (key) => Platform.environment[key];
+      final appData = env('APPDATA');
+      if (appData == null || appData.isEmpty) {
+        // Interpolating an unset APPDATA used to yield
+        // `\centroidx\manager\centroidx-manager.exe` -- an absolute path at
+        // the root of the current drive, which ensureExtracted would then
+        // quietly try to create. Fail where the cause is still visible.
+        // extract_windows.go refuses the same way on the Go side.
+        throw StateError(
+          'APPDATA is not set, so the centroidx-manager directory cannot be '
+          'located. The manager lives under %APPDATA%\\centroidx\\manager.',
+        );
+      }
       return '$appData\\centroidx\\manager\\centroidx-manager.exe';
     }
 
@@ -83,40 +105,85 @@ class ManagerLauncher {
     return '${dir.path}/centroidx/manager/$binaryName';
   }
 
-  /// Extracts the manager binary from Flutter assets to [resolveManagerPath].
+  /// Extracts the manager binary from Flutter assets to [resolveManagerPath],
+  /// replacing whatever is there when it is not the binary this build bundles.
   ///
-  /// Idempotent: no-op when the file already exists and has a non-zero size.
-  /// Creates parent directories as needed.
-  /// Calls `chmod +x` on Unix platforms after writing.
+  /// Idempotent on content: a byte-identical copy is left untouched, so the
+  /// common case still costs no write. Creates parent directories as needed
+  /// and calls `chmod +x` on Unix after writing.
+  ///
+  /// This used to return early whenever the destination merely existed and was
+  /// non-empty, which meant the manager was extracted exactly once per machine
+  /// and never again. Every subsequent fix to the manager -- and it is the
+  /// component that installs updates -- shipped inside the app and then sat
+  /// undelivered on any station that had already run one. The Go side's
+  /// extractManagerFrom does compare before copying, but only along the
+  /// launched-from-MSIX path, never this one.
+  ///
+  /// Comparison is by content, not size: a rebuilt Go binary can easily land
+  /// on the same byte count. The length is checked first purely to avoid
+  /// reading the file when it cannot possibly match.
+  ///
+  /// The cost is reading the bundled asset on every call. That is bounded --
+  /// callers are the two user-initiated launch paths, not a loop.
   Future<void> ensureExtracted() async {
     final destPath = await resolveManagerPath();
     final dest = File(destPath);
 
-    if (await dest.exists() && (await dest.length()) > 0) {
-      return; // Already extracted — skip.
-    }
+    final bytes = await _bundledManagerBytes();
 
-    // Create parent directories.
+    if (await _matchesBundle(dest, bytes)) return;
+
+    // Whether there is already something runnable to fall back on. Checked
+    // before the write, because a failed write can leave nothing behind.
+    final hasUsableBinary =
+        await dest.exists() && (await dest.length()) > 0;
+
     await dest.parent.create(recursive: true);
 
-    // Load bytes — from injected loader or real rootBundle.
-    final List<int> bytes;
-    final injectedLoader = _assetLoader;
-    if (injectedLoader != null) {
-      bytes = await injectedLoader(_assetKey);
-    } else {
-      // Use rootBundle in production; import is lazy to avoid breaking tests
-      // that run without Flutter binding.
-      final bd = await _loadFromRootBundle(_assetKey);
-      bytes = bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
+    try {
+      await dest.writeAsBytes(bytes);
+    } on FileSystemException catch (e) {
+      // Windows refuses to open a running .exe for writing, so a manager left
+      // over from an earlier launch turns this refresh -- which used to be a
+      // no-op -- into a hard failure of the whole update. An older manager is
+      // worth more than no manager, so keep it and carry on. With nothing on
+      // disk there is no fallback and the caller has to hear about it.
+      if (!hasUsableBinary) rethrow;
+      stderr.writeln(
+          '[centroidx_upgrader] could not refresh the manager at $destPath '
+          '($e); continuing with the copy already installed.');
+      return;
     }
-
-    await dest.writeAsBytes(bytes);
 
     // Mark executable on Unix.
     if (!platformIsWindows) {
       await _runCommand('chmod', ['+x', destPath]);
     }
+  }
+
+  /// Whether [dest] already holds exactly [bundled].
+  Future<bool> _matchesBundle(File dest, List<int> bundled) async {
+    if (!await dest.exists()) return false;
+    final length = await dest.length();
+    // A zero-length file is a failed earlier extraction, never a manager.
+    if (length == 0 || length != bundled.length) return false;
+    final onDisk = await dest.readAsBytes();
+    for (var i = 0; i < onDisk.length; i++) {
+      if (onDisk[i] != bundled[i]) return false;
+    }
+    return true;
+  }
+
+  /// The manager binary this build ships, from the injected loader in tests or
+  /// the real asset bundle in production.
+  Future<List<int>> _bundledManagerBytes() async {
+    final injectedLoader = _assetLoader;
+    if (injectedLoader != null) return injectedLoader(_assetKey);
+    // Use rootBundle in production; import is lazy to avoid breaking tests
+    // that run without Flutter binding.
+    final bd = await _loadFromRootBundle(_assetKey);
+    return bd.buffer.asUint8List(bd.offsetInBytes, bd.lengthInBytes);
   }
 
   /// Strips the macOS quarantine attribute from [path].

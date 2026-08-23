@@ -199,7 +199,7 @@ class _STBDDI3725State extends ConsumerState<_STBDDI3725> {
     // The docked pane holds `_stateMan` too and lives in the root overlay, so
     // it must go first — otherwise a page change would leave a pane behind
     // writing to a module that is no longer on screen.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _combinedStreamCache = null;
     _stateMan = null;
     super.dispose();
@@ -704,7 +704,7 @@ class _STBDDO3705State extends ConsumerState<_STBDDO3705> {
   void dispose() {
     // DDO-07 / QUAL-03 lifecycle hygiene. Matches _STBDDI3725State — the
     // docked pane goes first, it holds `_stateMan` and outlives the route.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _combinedStreamCache = null;
     _stateMan = null;
     super.dispose();

@@ -730,7 +730,7 @@ class _ElevatorState extends ConsumerState<Elevator> {
   void dispose() {
     // The pane's body listens to `_progress`, which dies with this State —
     // and a docked pane outlives the route that opened it. Close it first.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _streamSub?.cancel();
     // Plan 04-04 — cancel the simulation timer (if running) BEFORE
     // disposing the progress notifier so a final tick can't fire on

@@ -57,6 +57,7 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'package:tfc/widgets/proposal_banner.dart';
 import 'package:tfc/marionette/route_logger.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
 
 import 'marionette_init.dart';
 import 'navigation.dart';
@@ -113,6 +114,21 @@ void main() {
   }
 
   initLogConfig();
+
+  // Route framework errors into the app logger, which writes to
+  // CENTROID_LOG_FILE. Without this they go only to Flutter's default handler
+  // and out on stdout -- and stdout does not survive the redirect in
+  // run-hmi.ps1, so a red screen left no trace anywhere on disk and could only
+  // be read off the operator's monitor.
+  //
+  // presentError is still called, so the red screen and the debug console
+  // behave exactly as before; this only adds a copy that persists.
+  final priorOnError = FlutterError.onError;
+  FlutterError.onError = (FlutterErrorDetails details) {
+    logger.e('Flutter framework error: ${details.exceptionAsString()}',
+        error: details.exception, stackTrace: details.stack);
+    if (priorOnError != null) priorOnError(details);
+  };
 
   if (_enableMarionette) {
     initMarionette();
@@ -504,7 +520,32 @@ class MyApp extends ConsumerWidget {
     if (_enableMarionette) {
       MarionetteRouteLogger(routerDelegate);
     }
+
+    // A docked side pane belongs to the page that opened it, but it lives in
+    // the ROOT overlay, so nothing about leaving that page removes it: it
+    // follows the operator to the next one, still showing a device that is no
+    // longer on screen.
+    //
+    // Hung off the router rather than the navigation bar. The bar is only one
+    // way to leave -- the back button, beamBack from a button on the page, a
+    // deep link and the route guards all bypass it, and each would strand a
+    // pane. One listener on the delegate covers every one of them.
+    //
+    // Immediate: the page underneath is already going, so an exit glide would
+    // play over a page that is leaving anyway. It also lets an asset's
+    // dispose() tear down what the pane was reading in the same frame, which
+    // the glide made unsafe.
+    routerDelegate.addListener(() {
+      final path = routerDelegate.configuration.location;
+      if (path == _lastPanePath) return;
+      _lastPanePath = path;
+      closeSidePane(immediate: true);
+    });
   }
+
+  /// Last location the pane watcher saw, so a delegate rebuild that does not
+  /// change the route leaves an open pane alone.
+  String? _lastPanePath;
 
   final BeamerDelegate routerDelegate;
 
