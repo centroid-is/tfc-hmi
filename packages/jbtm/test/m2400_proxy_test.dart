@@ -650,43 +650,55 @@ void main() {
 
     test('shutdown() leaves no descriptors behind after graceful churn',
         () async {
-      await proxy.start();
-      await upstream.waitForClient();
-      await Future.delayed(const Duration(milliseconds: 100));
+      // TEMPORARY fdlinux probe: repeat the whole sequence many times, with
+      // and without a settle before shutdown(), and report the distribution.
+      final results = <String>[];
+      for (final settleMs in [0, 50]) {
+        for (var iter = 0; iter < 15; iter++) {
+          final up = TestTcpServer();
+          await up.start();
+          final p = M2400Proxy(
+            upstreamHost: 'localhost',
+            upstreamPort: up.port,
+            listenPort: 0,
+            listenAddress: InternetAddress.loopbackIPv4,
+          );
+          await p.start();
+          await up.waitForClient();
+          await Future.delayed(const Duration(milliseconds: 100));
 
-      final baseline = fdCount();
-      final baseSnap = fdSnapshot();
+          final baseCount = fdCount();
+          final baseSnap = fdSnapshot();
 
-      for (var i = 0; i < 30; i++) {
-        final client = await Socket.connect(
-          InternetAddress.loopbackIPv4,
-          proxy.listenPort,
-        );
-        client.listen((_) {}, onError: (_) {});
-        unawaited(client.close());
-        client.destroy();
-        await Future.delayed(const Duration(milliseconds: 2));
+          for (var i = 0; i < 30; i++) {
+            final client = await Socket.connect(
+              InternetAddress.loopbackIPv4,
+              p.listenPort,
+            );
+            client.listen((_) {}, onError: (_) {});
+            unawaited(client.close());
+            client.destroy();
+            await Future.delayed(const Duration(milliseconds: 2));
+          }
+
+          final clientsBefore = p.clientCount;
+          if (settleMs > 0) {
+            await Future.delayed(Duration(milliseconds: settleMs));
+          }
+          await p.shutdown();
+          await Future.delayed(const Duration(milliseconds: 300));
+          final after = fdCount();
+          final delta = after - baseCount;
+          results.add('settle=$settleMs#$iter delta=$delta '
+              'clientsBeforeShutdown=$clientsBefore '
+              'clientsAfter=${p.clientCount}');
+          if (delta > -2) {
+            dumpFd('settle=$settleMs#$iter', baseSnap, fdSnapshot());
+          }
+          await up.shutdown();
+        }
       }
-
-      final churnSnap = fdSnapshot();
-      dumpFd('after-churn(clients=${proxy.clientCount})', baseSnap, churnSnap);
-
-      await proxy.shutdown();
-      await Future.delayed(const Duration(milliseconds: 300));
-      final after = fdCount();
-      dumpFd('after-shutdown', baseSnap, fdSnapshot());
-      await Future.delayed(const Duration(seconds: 2));
-      dumpFd('after-shutdown+2s', baseSnap, fdSnapshot());
-
-      // shutdown() only walks `_clients`; anything already dropped from that
-      // list is unreachable and cannot be reclaimed here. The count must
-      // therefore already be back at baseline (minus the listen socket and
-      // the upstream connection shutdown() does close).
-      expect(
-        after - baseline,
-        lessThanOrEqualTo(0),
-        reason: 'after shutdown, $after fds vs baseline $baseline',
-      );
-    }, skip: fdLeakSkip);
+      fail('fdlinux probe results:\n${results.join('\n')}');
+    }, skip: fdLeakSkip, timeout: const Timeout(Duration(minutes: 5)));
   });
 }
