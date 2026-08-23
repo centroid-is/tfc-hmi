@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -173,8 +174,25 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
             } else if (snap.hasData) {
               data = snap.data!;
               _pausedData = data;
+            } else if (snap.hasError) {
+              // Say what went wrong. A key whose table is missing, whose node
+              // the server no longer publishes, or whose collection is not
+              // configured used to sit on the spinner for good.
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    'No data for ${widget.keys.join(', ')}\n${snap.error}',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
+              );
             } else {
-              return const Center(child: CircularProgressIndicator());
+              return _WaitingForData(keys: widget.keys);
             }
 
             // Group data by graph index
@@ -245,16 +263,14 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
                       final graphData = graphDataByIndex[graphIndex] ?? [];
                       final graphDisplayConfig =
                           widget.graphDisplayConfigs[graphIndex];
-                      final isTarget =
-                          graphIndex == widget.targetGraphIndex;
+                      final isTarget = graphIndex == widget.targetGraphIndex;
 
                       return Expanded(
                         child: DragTarget<int>(
                           onWillAcceptWithDetails: (details) =>
                               details.data != graphIndex,
                           onAcceptWithDetails: (details) {
-                            widget.onSwapGraphs
-                                ?.call(details.data, graphIndex);
+                            widget.onSwapGraphs?.call(details.data, graphIndex);
                           },
                           builder: (context, candidateData, _) {
                             final isDropTarget = candidateData.isNotEmpty;
@@ -312,11 +328,9 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
                                       label: graphDisplayConfig?.displayName ??
                                           'Graph ${graphIndex + 1}',
                                       isTarget: isTarget,
-                                      showDrag:
-                                          usedGraphIndices.length > 1 &&
-                                              widget.onSwapGraphs != null,
-                                      showEdit:
-                                          widget.onEditGraph != null,
+                                      showDrag: usedGraphIndices.length > 1 &&
+                                          widget.onSwapGraphs != null,
+                                      showEdit: widget.onEditGraph != null,
                                     ),
                                   ),
                                 ],
@@ -390,9 +404,8 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
                         child: Text(
                           'Paused at ${_pausedAt!.toString().substring(11, 19)}',
                           style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
                           ),
@@ -437,14 +450,12 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
               borderRadius: BorderRadius.circular(4),
               onTap: () => widget.onSelectGraph?.call(graphIndex),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 child: Text(
                   label,
                   style: TextStyle(
                     fontSize: 11,
-                    fontWeight:
-                        isTarget ? FontWeight.bold : FontWeight.normal,
+                    fontWeight: isTarget ? FontWeight.bold : FontWeight.normal,
                     color: fgColor,
                   ),
                 ),
@@ -513,8 +524,8 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
                         child: Center(
                           child: Padding(
                             padding: const EdgeInsets.all(3),
-                            child: Icon(Icons.settings,
-                                size: 14, color: fgColor),
+                            child:
+                                Icon(Icons.settings, size: 14, color: fgColor),
                           ),
                         ),
                       ),
@@ -559,15 +570,15 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
             ? displayCfg!.yAxisUnit
             : 'Y',
       ),
-      yAxis2: (displayCfg?.yAxis2Unit != null &&
-              displayCfg!.yAxis2Unit!.isNotEmpty)
-          ? GraphAxisConfig(
-              unit: displayCfg.yAxis2Unit!,
-              title: displayCfg.yAxis2Unit,
-            )
-          : graphData.any((m) => m.keys.any((k) => !k.mainAxis))
-              ? const GraphAxisConfig(unit: '', title: 'Y2')
-              : null,
+      yAxis2:
+          (displayCfg?.yAxis2Unit != null && displayCfg!.yAxis2Unit!.isNotEmpty)
+              ? GraphAxisConfig(
+                  unit: displayCfg.yAxis2Unit!,
+                  title: displayCfg.yAxis2Unit,
+                )
+              : graphData.any((m) => m.keys.any((k) => !k.mainAxis))
+                  ? const GraphAxisConfig(unit: '', title: 'Y2')
+                  : null,
       xSpan: widget.realtime ? xSpan : null,
       xRange: widget.realtime ? null : widget.range,
       pan: false,
@@ -590,5 +601,67 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
 
     graph.theme(ref.watch(chartThemeNotifierProvider));
     return graph.build(context);
+  }
+}
+
+/// The spinner, with a deadline: after ten seconds without a first sample it
+/// says so and names the keys, so a dead key reads as "no data" rather than
+/// "still loading". The stream stays subscribed -- if data arrives later the
+/// chart draws.
+class _WaitingForData extends StatefulWidget {
+  const _WaitingForData({required this.keys});
+  final List<String> keys;
+
+  @override
+  State<_WaitingForData> createState() => _WaitingForDataState();
+}
+
+class _WaitingForDataState extends State<_WaitingForData> {
+  Timer? _timer;
+  bool _late = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(seconds: 10), () {
+      if (mounted) setState(() => _late = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_late) return const Center(child: CircularProgressIndicator());
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 8),
+            Text(
+              'No data yet for ${widget.keys.join(', ')}',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Nothing has been received in 10 s -- the key may not be '
+              'collected, or the PLC is not publishing it. Still listening.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

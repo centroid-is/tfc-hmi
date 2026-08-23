@@ -271,8 +271,10 @@ class Collector {
         }
       },
       onError: (error, stackTrace) {
-        logger.e('[collector] Error for $name (subscription will continue): $error',
-            error: error, stackTrace: stackTrace);
+        logger.e(
+            '[collector] Error for $name (subscription will continue): $error',
+            error: error,
+            stackTrace: stackTrace);
       },
       onDone: () {
         logger.e('[collector] Stream DONE for $name — '
@@ -301,7 +303,8 @@ class Collector {
 
   /// Get performance statistics
   Map<String, dynamic> getStats() {
-    final uptimeSec = _uptime.elapsed.inSeconds > 0 ? _uptime.elapsed.inSeconds : 1;
+    final uptimeSec =
+        _uptime.elapsed.inSeconds > 0 ? _uptime.elapsed.inSeconds : 1;
     return {
       'total_events': _eventCount,
       'events_per_sec': _eventCount / uptimeSec,
@@ -311,7 +314,8 @@ class Collector {
       'active_subscriptions': _subscriptions.length,
       'json_conversion_ms': _jsonConversionTime.elapsedMilliseconds,
       'avg_json_conversion_us': _insertCount > 0
-          ? (_jsonConversionTime.elapsedMicroseconds / _insertCount).toStringAsFixed(1)
+          ? (_jsonConversionTime.elapsedMicroseconds / _insertCount)
+              .toStringAsFixed(1)
           : '0',
       'insert_time_ms': _insertTime.elapsedMilliseconds,
       'avg_insert_ms': _insertCount > 0
@@ -385,52 +389,78 @@ class Collector {
 
     StreamSubscription<DynamicValue>? realTimeSubscription;
 
+    // History first, live second -- and never wait on live. The old order
+    // awaited the OPC UA subscription before it touched the database, so a
+    // key whose node cannot be monitored (a stats key the PLC no longer
+    // publishes) kept its trend on a spinner for as long as the retry ladder
+    // ran, which is forever, with a year of history sitting in the table.
+    // Now the table answers on its own, the chart draws, and live samples
+    // join in whenever the subscription comes up.
+    var cancelled = false;
     streamController.onListen = () async {
-      try {
-        Queue<TimeseriesData<dynamic>>? historicalData =
-            Queue<TimeseriesData<dynamic>>();
-        final Queue<TimeseriesData<dynamic>> buffer =
-            Queue<TimeseriesData<dynamic>>();
-        var rtStream = _realTimeStreams[entry] ?? await _toBeCollected(entry);
-        if (entry.sampleInterval != null) {
-          rtStream =
-              rtStream.throttleTime(entry.sampleInterval!, trailing: true);
-          print("throttling rtStream for ${entry.sampleInterval}");
+      Queue<TimeseriesData<dynamic>>? historicalData;
+      final Queue<TimeseriesData<dynamic>> buffer =
+          Queue<TimeseriesData<dynamic>>();
+
+      unawaited(() async {
+        try {
+          var rtStream = _realTimeStreams[entry] ?? await _toBeCollected(entry);
+          if (cancelled) return;
+          if (entry.sampleInterval != null) {
+            rtStream =
+                rtStream.throttleTime(entry.sampleInterval!, trailing: true);
+          }
+          realTimeSubscription = rtStream.listen(
+            (value) {
+              final newSample = TimeseriesData<dynamic>(
+                const DynamicValueConverter().toJson(value, slim: true),
+                DateTime.now().toUtc(),
+              );
+              final history = historicalData;
+              if (history == null) {
+                buffer.add(newSample);
+                return;
+              }
+              history.add(newSample);
+
+              // Remove old data outside the retention window
+              final cutoffTime = DateTime.now().toUtc().subtract(since);
+              while (history.isNotEmpty &&
+                  history.first.time.isBefore(cutoffTime)) {
+                history.removeFirst();
+              }
+              streamController.add(history.toList());
+            },
+            onError: (error, stackTrace) {
+              logger.e('Error collecting data for key $key',
+                  error: error, stackTrace: stackTrace);
+            },
+          );
+          if (cancelled) realTimeSubscription?.cancel();
+        } catch (e, st) {
+          // Live failed; the history already drawn stays. Surface it on the
+          // stream only if nothing has been delivered yet, so the chart says
+          // why instead of waiting.
+          logger.e('Failed to subscribe live data for key $key',
+              error: e, stackTrace: st);
+          if (historicalData == null && !streamController.isClosed) {
+            streamController.addError(e);
+          }
         }
-        realTimeSubscription = rtStream.listen(
-          (value) {
-            final newSample = TimeseriesData<dynamic>(
-              const DynamicValueConverter().toJson(value, slim: true),
-              DateTime.now().toUtc(),
-            );
-            if (historicalData == null) {
-              buffer.add(newSample);
-              return;
-            }
-            historicalData.add(newSample);
+      }());
 
-            // Remove old data outside the retention window
-            final cutoffTime = DateTime.now().toUtc().subtract(since);
-            while (historicalData.isNotEmpty &&
-                historicalData.first.time.isBefore(cutoffTime)) {
-              historicalData.removeFirst();
-            }
-            streamController.add(historicalData.toList());
-          },
-          onError: (error, stackTrace) {
-            logger.e('Error collecting data for key $key',
-                error: error, stackTrace: stackTrace);
-          },
-        );
-        historicalData = Queue.from(await database.queryTimeseriesData(
-            entry.name ?? entry.key, sinceTime));
-        historicalData.addAll(buffer.toList());
+      try {
+        final rows = await database.queryTimeseriesData(
+            entry.name ?? entry.key, sinceTime);
+        if (cancelled) return;
+        final history = Queue<TimeseriesData<dynamic>>.from(rows)
+          ..addAll(buffer.toList());
+        historicalData = history;
         buffer.clear();
-
-        streamController.add(historicalData.toList());
+        streamController.add(history.toList());
       } catch (e) {
         logger.e('Failed to load historical data for key $key: $e');
-        streamController.addError(e);
+        if (!streamController.isClosed) streamController.addError(e);
       }
     };
 
@@ -439,6 +469,7 @@ class Collector {
 
     // Clean up when the stream is cancelled
     streamController.onCancel = () {
+      cancelled = true;
       realTimeSubscription?.cancel();
       streamController.close();
     };

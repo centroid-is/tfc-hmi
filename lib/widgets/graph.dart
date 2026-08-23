@@ -221,9 +221,48 @@ class Graph {
   late final List<Map<String, dynamic>> _data;
   late cs.CristalyseChart _chart;
   Widget _chartWidget;
+
+  /// Replace the spinner with a message. A fetch that throws -- a key whose
+  /// table was never created because it is not collected, a database that
+  /// is down -- used to leave the chart on its spinner for good, because
+  /// nothing ever called [addData]. The operator reads "still loading" and
+  /// waits; the truth is "there is nothing to load, and here is why".
+  void showError(String message) {
+    _isLoading = false;
+    _errored = true;
+    _chartWidget = Builder(
+      builder: (context) {
+        final theme = Theme.of(context);
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_off,
+                    color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    redraw();
+  }
+
   bool _showDate = false; // if viewport is not today, show date
   late cs.PanInfo _lastPanInfo;
   bool _isLoading = true;
+
+  /// Set by [showError]; the "No data from ... to ..." footer stays off then,
+  /// since the message in the chart area already says why there is none.
+  bool _errored = false;
   final cs.PanController _panController = cs.PanController();
   bool _nowDisabled = false;
 
@@ -418,7 +457,7 @@ class Graph {
     }
 
     Widget? noData;
-    if (_data.isEmpty && !_isLoading) {
+    if (_data.isEmpty && !_isLoading && !_errored) {
       var txt =
           "No data from: ${_lastPanInfo.visibleMinX} to: ${_lastPanInfo.visibleMaxX}";
       if (config.type == GraphType.timeseries ||
@@ -724,7 +763,8 @@ cs.ChartTheme chartThemeWithPadding(cs.ChartTheme theme, EdgeInsets padding) {
 /// round numbers on an axis.
 double _niceStep(double raw) {
   if (raw <= 0 || !raw.isFinite) return 1;
-  final magnitude = math.pow(10, (math.log(raw) / math.ln10).floor()).toDouble();
+  final magnitude =
+      math.pow(10, (math.log(raw) / math.ln10).floor()).toDouble();
   final normalized = raw / magnitude;
   final double nice;
   if (normalized <= 1) {

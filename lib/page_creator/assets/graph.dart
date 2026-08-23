@@ -8,6 +8,7 @@ import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:intl/intl.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/converter/duration_converter.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -176,6 +177,21 @@ class GraphAssetConfig extends BaseAsset {
             .where((e) => e.color != null)
             .map((e) => MapEntry(e.legend, e.color!)),
       );
+}
+
+/// Operator wording for a history fetch that failed.
+///
+/// The database's own message names a relation and an SQLSTATE, which is
+/// for us. What the operator needs is which key, and whether it is a matter
+/// of configuration (not collected) or of the database being unreachable.
+String describeTrendFetchError(String keys, Object e) {
+  final text = e.toString();
+  if (text.contains('42P01') || text.contains('does not exist')) {
+    return 'No history for $keys.\n'
+        'This key is not being collected, so there is no table to read. '
+        'Add it to the collector to start recording.';
+  }
+  return 'Could not load history for $keys.\n$text';
 }
 
 class GraphContentConfig extends StatefulWidget {
@@ -571,7 +587,6 @@ class GraphContentConfigState extends State<GraphContentConfig> {
       ],
     );
   }
-
 }
 
 /// What a [GraphAsset]'s data actually depends on, as a comparable string.
@@ -617,6 +632,8 @@ class GraphAsset extends ConsumerStatefulWidget {
 }
 
 class _GraphAssetState extends ConsumerState<GraphAsset> {
+  static final _log = Logger(printer: SimplePrinter(printTime: false));
+
   late Graph _graph;
   int _dataMinX;
   int _dataMaxX;
@@ -704,12 +721,17 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         tooltipBuilder: _buildTooltip,
         categoryColors: widget.config.colorPalette);
     _graph.theme(_themeFor(ref.read(chartThemeNotifierProvider)));
+    final trendName =
+        widget.config.headerText ?? widget.config.allKeys.join(',');
+    _log.d('trend "$trendName": init, waiting for state manager');
     _stateMan = await ref.read(stateManProvider.future);
+    _log.d('trend "$trendName": waiting for database');
     _db = await ref.read(databaseProvider.future);
     if (!mounted || generation != _initGeneration) return;
     // Recorded only now: the signature resolves keys through StateMan, which
     // was not available when this init started.
     _initSignature = _dataSignature();
+    _log.d('trend "$trendName": querying history');
     final start =
         // 300% of the time window, refer to panUpdate method for more details
         DateTime.now().subtract(widget.config.timeWindowMinutes * 3);
@@ -718,7 +740,27 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
     _dataMaxX = end.millisecondsSinceEpoch.toInt();
     _lastFetchWindowMs =
         widget.config.timeWindowMinutes.inMilliseconds.toDouble();
-    _addData(await _queryData(DateTimeRange(start: start, end: end)));
+    final List<Map<String, dynamic>> initial;
+    try {
+      initial = await _queryData(DateTimeRange(start: start, end: end));
+    } catch (e, st) {
+      // Say so on the chart. Left to escape, this was an unhandled async
+      // error nobody saw and a spinner that never stopped: "Batcher 4
+      // weigher left" sat loading for good because its key is mapped but
+      // not collected, so its table was never created.
+      _log.w('Trend "${widget.config.headerText ?? ''}" has no data: $e',
+          error: e, stackTrace: st);
+      if (!mounted || generation != _initGeneration) return;
+      final keys = [
+        ...widget.config.primarySeries,
+        ...widget.config.secondarySeries
+      ].map((s) => s.key).join(', ');
+      _graph.showError(describeTrendFetchError(keys, e));
+      return;
+    }
+    if (!mounted || generation != _initGeneration) return;
+    _log.d('trend "$trendName": ${initial.length} points');
+    _addData(initial);
     _realTimeActive = true;
     _initRealtimeUpdates();
   }
