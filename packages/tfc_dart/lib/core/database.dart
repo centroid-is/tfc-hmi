@@ -7,6 +7,7 @@ import 'package:postgres/postgres.dart' show Endpoint, SslMode;
 import 'package:json_annotation/json_annotation.dart' as json;
 export 'package:postgres/postgres.dart' show Sql;
 import 'package:logger/logger.dart';
+import 'package:meta/meta.dart' show visibleForTesting;
 
 import 'secure_storage/secure_storage.dart';
 import 'database_drift.dart';
@@ -509,6 +510,18 @@ class Database {
   // Retry queue for failed writes (survives extended DB outages)
   final Map<String, List<_PendingWrite>> _retryQueue = {};
   bool _retryInProgress = false;
+
+  /// The pending [_scheduleRetryFlush] wake-up, so shutdown can cancel it.
+  Timer? _retryTimer;
+
+  /// Whether a retry wake-up is still armed. A closed Database must have
+  /// none: a pending [Timer] keeps the event loop alive, which is what stops
+  /// a spawned isolate exiting when it is done.
+  @visibleForTesting
+  bool get hasPendingRetryForTest => _retryTimer != null;
+
+  /// Set by [close]/[dispose]; stops the retry loop rescheduling itself.
+  bool _shutDown = false;
   static const _maxRetryQueueSize = 100; // per table
 
   Future<void> open() async {
@@ -840,10 +853,21 @@ class Database {
 
   /// Schedule periodic retry of queued writes
   void _scheduleRetryFlush() {
-    if (_retryInProgress || _retryQueue.isEmpty) return;
+    if (_shutDown || _retryInProgress || _retryQueue.isEmpty) return;
     _retryInProgress = true;
 
-    Future.delayed(const Duration(seconds: 5), () async {
+    // A Timer, not a bare Future.delayed: a closed Database must be able to
+    // stop this. The loop re-queues on failure and re-schedules itself, so
+    // without a handle it outlives the object that owns it -- and every
+    // config reload that rebuilds the Database adds another immortal copy,
+    // each holding its whole retry queue. A killed acquisition isolate
+    // leaves one of these in the supervisor's process.
+    _retryTimer = Timer(const Duration(seconds: 5), () async {
+      _retryTimer = null;
+      if (_shutDown) {
+        _retryInProgress = false;
+        return;
+      }
       // Snapshot and clear
       final batch = Map<String, List<_PendingWrite>>.from(_retryQueue);
       _retryQueue.clear();
@@ -879,7 +903,10 @@ class Database {
 
   /// Dispose resources - flushes pending data before shutdown
   Future<void> dispose() async {
+    _shutDown = true;
     _flushTimer?.cancel();
+    _retryTimer?.cancel();
+    _retryTimer = null;
     _healthTimeoutTimer?.cancel();
     await _healthSub?.cancel();
     await _connectionStateController.close();
@@ -1396,7 +1423,10 @@ ORDER BY at.time;
   /// has to be complete. Leaving the batch flush timer running on a discarded
   /// attempt would be the same leak in a different shape.
   Future<void> close() async {
+    _shutDown = true;
     _flushTimer?.cancel();
+    _retryTimer?.cancel();
+    _retryTimer = null;
     _healthTimeoutTimer?.cancel();
     await _healthSub?.cancel();
     if (!_connectionStateController.isClosed) {
