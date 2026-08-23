@@ -76,9 +76,11 @@ class M2400ParsedRecord {
 void _reportParseFailure(String kind, int? fieldId, String rawValue) {
   final reason = '$kind:$fieldId';
   if (!shouldReportM2400(reason)) return;
-  final count = m2400LogCount(reason);
-  _logger.w('Failed to parse $kind field $fieldId: "$rawValue"'
-      '${count > 1 ? ' (occurrence $count)' : ''}');
+  // Always carry the count, even when it is 1: the six throttled sites in
+  // this package read the same way, and "(occurrence 1)" says the number is
+  // known rather than leaving the reader to infer it from an absence.
+  _logger.w('Failed to parse $kind field $fieldId: "$rawValue" '
+      '(occurrence ${m2400LogCount(reason)})');
 }
 
 /// Parse a raw field value string to its target Dart type.
