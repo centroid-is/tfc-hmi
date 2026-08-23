@@ -332,50 +332,169 @@ func TestWindowsInstaller_Install_UntrustedCertReportsHRESULT(t *testing.T) {
 	}
 }
 
-// The genuine publisher conflict — same package identity, different signing
-// publisher — is the one case where removing the installed package is the fix.
-func TestWindowsInstaller_Install_PublisherConflictRemovesAndRetries(t *testing.T) {
-	const conflict = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CFB, The provided package " +
-		"is already installed, and reinstallation of the package was blocked. Check the " +
-		"AppXDeployment-Server event log for details."
-	runner := &mockRunnerSeq{
-		outputs: [][]byte{[]byte(conflict), nil, nil},
-		errors:  []error{errors.New("exit status 1"), nil, nil},
-	}
+// ---- Recorded Windows output ------------------------------------------------
+//
+// Every fixture below is a message Windows actually emitted, copied from a
+// traced source rather than composed to fit the matcher. Matching text produced
+// outside this repo against a plausible-looking guess is what put the wrong
+// HRESULT in installWindows in the first place: the constant said
+// ERROR_PACKAGE_ALREADY_EXISTS and the fixture agreed with it, because both came
+// from the same assumption.
+//
+// The package names in these are the reporters', not ours. That is deliberate —
+// the matcher looks only at the HRESULT and at Windows' own sentence, neither of
+// which depends on which package failed.
 
-	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
-		t.Fatalf("expected the retry to succeed, got: %v", err)
-	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("expected install, remove, install; got %d calls: %v", len(runner.calls), runner.calls)
-	}
-	if !hasArgContaining(allArgs(runner.calls[0]), "Add-AppxPackage") {
-		t.Errorf("call 0: expected Add-AppxPackage, got: %v", allArgs(runner.calls[0]))
-	}
-	if !hasArgContaining(allArgs(runner.calls[1]), "Remove-AppxPackage") {
-		t.Errorf("call 1: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[1]))
-	}
-	if !hasArgContaining(allArgs(runner.calls[1]), "Centroid.CentroidX") {
-		t.Errorf("call 1: expected the removal scoped to Centroid.CentroidX, got: %v", allArgs(runner.calls[1]))
-	}
-	if !hasArgContaining(allArgs(runner.calls[2]), "Add-AppxPackage") {
-		t.Errorf("call 2: expected the install retry, got: %v", allArgs(runner.calls[2]))
+// conflictFliteDeck is a complete Add-AppxPackage failure line for the identity
+// conflict, quoted in Jeppesen's support note for FliteDeck Pro X and in
+// microsoft/winget-cli#4752. The two package full names differ only in their
+// trailing PublisherId hash.
+const conflictFliteDeck = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF3, Package failed " +
+	"updates, dependency or conflict validation. Windows cannot install package " +
+	"Jeppesen.FliteDeck_10.3.1.10593_neutral_~_8gk7v4trkh4pt because a different package " +
+	"Jeppesen.FliteDeck_10.2.1.9678_neutral_~_g4095tshxnsa8 with the same name is already installed."
+
+// conflictRepublished is the same failure reproduced deliberately in
+// microsoft/WindowsAppSDK#650 by changing nothing but the manifest Publisher
+// string: PublisherId 0rxggyxen88sc becomes 6jx1svrqfke3r and the install is
+// rejected. This is the CentroidX case — a rig moving between Store and
+// sideload signing — and it is the evidence that 0x80073CF3, not 0x80073CFB, is
+// the publisher conflict.
+// https://github.com/microsoft/WindowsAppSDK/issues/650
+const conflictRepublished = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073cf3, Package failed " +
+	"updates, dependency or conflict validation. Windows cannot install package " +
+	"MyPackageName_1.0.7.0_neutral_~_6jx1svrqfke3r because a different package " +
+	"MyPackageName_1.0.6.0_neutral_~_0rxggyxen88sc with the same name is already installed."
+
+// alreadyInstalled is what Windows says for ERROR_PACKAGE_ALREADY_EXISTS,
+// quoted in microsoft/WindowsAppSDK#1871 and matching the description Microsoft
+// documents for 0x80073CFB. Note what it does *not* say: nothing about a
+// publisher, and nothing about a different package. It means the package on the
+// machine is not bitwise identical to the one being installed — a rebuild or a
+// re-sign at an unchanged version — and the installed copy is working.
+// https://github.com/microsoft/WindowsAppSDK/issues/1871
+// https://learn.microsoft.com/en-us/windows/win32/appxpkg/troubleshooting
+const alreadyInstalled = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CFB, The provided package " +
+	"is already installed, and reinstallation of the package was blocked. Check the " +
+	"AppXDeployment-Server event log for details."
+
+// missingDependency is 0x80073CF3 for a cause removal cannot fix, quoted in
+// WSA-Community/WSAGAScript#293. Microsoft documents the code as covering three
+// causes — conflict, missing dependency, wrong processor architecture — so the
+// HRESULT alone must never trigger the uninstall. Note that this text names a
+// publisher ("published by 'CN=Microsoft Corporation, ...'"), so looking for the
+// word "publisher" would not have separated it either.
+//
+// No verbatim recording of the wrong-architecture variant turned up, so it is
+// not asserted here rather than invented.
+const missingDependency = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF3, Package failed " +
+	"updates, dependency or conflict validation. Windows cannot install package " +
+	"Microsoft.Lovika_1.17.0.0_x64__8wekyb3d8bbwe because this package depends on a framework " +
+	"that could not be found. Provide the framework 'Microsoft.DirectXRuntime' published by " +
+	"'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US', with " +
+	"neutral or x64 processor architecture and minimum version 9.29.952.0, along with this " +
+	"package to install."
+
+// The genuine publisher conflict — same package name, different PublisherId
+// because the signing identity changed — is the one case where removing the
+// installed package is the fix.
+func TestWindowsInstaller_Install_PublisherConflictRemovesAndRetries(t *testing.T) {
+	// Both spellings of the HRESULT appear in the wild; the second fixture is
+	// lower case, which also covers the case-insensitive match.
+	for _, tc := range []struct {
+		name   string
+		output string
+	}{
+		{"different package with the same name", conflictFliteDeck},
+		{"republished under a different signing identity", conflictRepublished},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &mockRunnerSeq{
+				outputs: [][]byte{[]byte(tc.output), nil, nil},
+				errors:  []error{errors.New("exit status 1"), nil, nil},
+			}
+
+			if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+				t.Fatalf("expected the retry to succeed, got: %v", err)
+			}
+			if len(runner.calls) != 3 {
+				t.Fatalf("expected install, remove, install; got %d calls: %v", len(runner.calls), runner.calls)
+			}
+			if !hasArgContaining(allArgs(runner.calls[0]), "Add-AppxPackage") {
+				t.Errorf("call 0: expected Add-AppxPackage, got: %v", allArgs(runner.calls[0]))
+			}
+			if !hasArgContaining(allArgs(runner.calls[1]), "Remove-AppxPackage") {
+				t.Errorf("call 1: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[1]))
+			}
+			if !hasArgContaining(allArgs(runner.calls[1]), "Centroid.CentroidX") {
+				t.Errorf("call 1: expected the removal scoped to Centroid.CentroidX, got: %v", allArgs(runner.calls[1]))
+			}
+			if !hasArgContaining(allArgs(runner.calls[2]), "Add-AppxPackage") {
+				t.Errorf("call 2: expected the install retry, got: %v", allArgs(runner.calls[2]))
+			}
+		})
 	}
 }
 
-// HRESULTs are matched case-insensitively: the hex casing PowerShell emits is
-// not something an update on a plant rig should depend on.
-func TestWindowsInstaller_Install_PublisherConflictLowercaseHRESULT(t *testing.T) {
+// The regression that matters. ERROR_PACKAGE_ALREADY_EXISTS means a working
+// CentroidX at this very version is on the machine and Windows will not
+// overwrite it. Removing it to retry gambles the whole installation on a retry
+// that fixes nothing, and if that retry fails — Defender holding a file, a full
+// disk, a payload already deleted — the station is left with no application.
+// PR #290 bound the uninstall to exactly this code; nothing may put it back.
+func TestWindowsInstaller_Install_AlreadyInstalledKeepsInstalledPackage(t *testing.T) {
+	// A third response is supplied so that a wrongly-taken removal path would
+	// run to completion and be visible in the call log, rather than erroring
+	// out for an unrelated reason.
 	runner := &mockRunnerSeq{
-		outputs: [][]byte{[]byte("Deployment failed with HRESULT: 0x80073cfb, package already installed"), nil, nil},
+		outputs: [][]byte{[]byte(alreadyInstalled), nil, nil},
 		errors:  []error{errors.New("exit status 1"), nil, nil},
 	}
 
-	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
-		t.Fatalf("expected the retry to succeed, got: %v", err)
+	err := installWindows(runner, "/tmp/app.msix")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
 	}
-	if n := countRemoveAppxCalls(runner.calls); n != 1 {
-		t.Errorf("expected exactly one Remove-AppxPackage, got %d; calls: %v", n, runner.calls)
+	if n := countRemoveAppxCalls(runner.calls); n != 0 {
+		t.Errorf("an already-installed package was uninstalled (%d Remove-AppxPackage call(s)); calls: %v", n, runner.calls)
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("expected the install to stop after one attempt, got %d calls: %v", len(runner.calls), runner.calls)
+	}
+	if strings.Contains(err.Error(), "after removing conflict") {
+		t.Errorf("an already-installed package was reported as a publisher conflict: %v", err)
+	}
+	// The operator has to be able to act on this: it is a release cut twice
+	// under one version number, not something to retry on the rig.
+	if !strings.Contains(err.Error(), "0x80073CFB") {
+		t.Errorf("expected the HRESULT in the error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "left alone") {
+		t.Errorf("expected the error to say the installation was kept, got: %v", err)
+	}
+}
+
+// 0x80073CF3 is a bucket code. A missing framework dependency reports it too,
+// and uninstalling CentroidX does not conjure the framework — it just removes
+// the application. Only Windows' conflict sentence may open the removal path.
+func TestWindowsInstaller_Install_DependencyFailureKeepsInstalledPackage(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(missingDependency), nil, []byte(missingDependency)},
+		errors:  []error{errors.New("exit status 1"), nil, errors.New("exit status 1")},
+	}
+
+	err := installWindows(runner, "/tmp/app.msix")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if n := countRemoveAppxCalls(runner.calls); n != 0 {
+		t.Errorf("a missing dependency uninstalled the working package (%d Remove-AppxPackage call(s)); calls: %v", n, runner.calls)
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("expected the install to stop after one attempt, got %d calls: %v", len(runner.calls), runner.calls)
+	}
+	if !strings.Contains(err.Error(), "Microsoft.DirectXRuntime") {
+		t.Errorf("expected the missing framework named in the error, got: %v", err)
 	}
 }
 
@@ -385,9 +504,10 @@ func TestWindowsInstaller_Install_PublisherConflictLowercaseHRESULT(t *testing.T
 func TestWindowsInstaller_Install_PublisherConflictRetryFailure(t *testing.T) {
 	runner := &mockRunnerSeq{
 		outputs: [][]byte{
-			[]byte("Deployment failed with HRESULT: 0x80073CFB, package already installed"),
+			[]byte(conflictFliteDeck),
 			nil,
-			[]byte("Deployment failed with HRESULT: 0x80073CF9, Install failed."),
+			[]byte("Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF9, Install failed. " +
+				"Please contact your software vendor."),
 		},
 		errors: []error{errors.New("exit status 1"), nil, errors.New("exit status 1")},
 	}

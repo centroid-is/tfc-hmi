@@ -60,25 +60,73 @@ func (e execRunner) Start(name string, args ...string) error {
 	return cmd.Process.Release()
 }
 
-// publisherConflictHRESULT is ERROR_PACKAGE_ALREADY_EXISTS: a package with
-// this identity is installed but was signed by a different publisher, so
-// deployment refuses to replace it — what happens when a rig switches between
-// Store and sideload signing. Removing the installed package and retrying is
-// the fix, and it is the only failure for which it is the fix.
+// publisherConflictHRESULT is ERROR_INSTALL_RESOLVE_DEPENDENCY_FAILED, the
+// code Windows returns when an incoming package conflicts with an installed
+// one. A rig that moves between Store and sideload signing lands here: the
+// PackageFullName embeds a hash of the manifest Publisher string, so a re-signed
+// CentroidX is, to deployment, a different package that happens to share a
+// name, and it refuses to replace what is there. Removing the installed
+// package and retrying is the fix.
 //
-// The match is deliberately this narrow. Windows prefixes nearly every
-// deployment error with "Deployment failed with HRESULT: 0x...", and the
-// neighbouring 0x80073CFx codes are unrelated causes — out of disk space
-// (…CF4), network failure (…CF5), plain install failure (…CF9). Matching any
-// of those uninstalls a working CentroidX and then fails the retry for the
-// original reason, leaving the machine with no application at all. Failing to
-// recognise a conflict costs one failed update that an operator can retry;
-// mistaking anything else for a conflict costs the installation, so the tie
-// goes to matching too little.
+// Source: microsoft/WindowsAppSDK#650 reproduces it from both ends — two builds
+// differing only in the Publisher string produce PublisherIds 0rxggyxen88sc and
+// 6jx1svrqfke3r, and installing the second fails with 0x80073cf3 and the text
+// quoted in publisherConflictSignal.
+// https://github.com/microsoft/WindowsAppSDK/issues/650
+//
+// It is *not* 0x80073CFB. That is ERROR_PACKAGE_ALREADY_EXISTS — see
+// alreadyInstalledHRESULT, which exists to keep the two apart.
 //
 // Lower case because the comparison lower-cases detail first: the hex casing
 // PowerShell happens to emit is not something an update should depend on.
-const publisherConflictHRESULT = "0x80073cfb"
+const publisherConflictHRESULT = "0x80073cf3"
+
+// publisherConflictSignal narrows that HRESULT to the conflict that removal
+// actually repairs. 0x80073CF3 is a bucket, not a diagnosis: Microsoft
+// documents it as "the package failed update, dependency, or conflict
+// validation", covering three unrelated causes — the incoming package conflicts
+// with an installed package, a specified package dependency can't be found, and
+// the package doesn't support the correct processor architecture.
+// https://learn.microsoft.com/en-us/windows/win32/appxpkg/troubleshooting
+//
+// Only the first is fixed by uninstalling. On a missing dependency or a wrong
+// architecture, uninstalling destroys a working CentroidX and the retry then
+// fails for the original reason, leaving the station with no application at
+// all — so the HRESULT on its own is not enough to act on. Windows names the
+// conflict case in the detail text, and this is that sentence, verbatim from
+// the WindowsAppSDK#650 repro:
+//
+//	Windows cannot install package MyPackageName_1.0.7.0_neutral_~_6jx1svrqfke3r
+//	because a different package MyPackageName_1.0.6.0_neutral_~_0rxggyxen88sc
+//	with the same name is already installed.
+//
+// The match is deliberately this narrow, and English-only. A localised Windows
+// says the same thing in its own words — Italian emits "È già installato un
+// pacchetto ... diverso con lo stesso nome" (microsoft/winget-cli#4752) — and
+// will not match, so the update simply fails and an operator retries. That is
+// the right direction to fail in: failing to recognise a conflict costs one
+// failed update; mistaking anything else for a conflict costs the installation.
+const publisherConflictSignal = "with the same name is already installed"
+
+// alreadyInstalledHRESULT is ERROR_PACKAGE_ALREADY_EXISTS: "The provided
+// package is already installed, and reinstallation of the package is blocked."
+// Microsoft's documented cause is installing a package that is not bitwise
+// identical to the one already on the machine — a rebuild or a re-sign under an
+// unchanged version number, since the signature is part of the package — and
+// the documented fixes are to increment the version or to remove the old
+// package for every user first.
+// https://learn.microsoft.com/en-us/windows/win32/appxpkg/troubleshooting
+//
+// This is not a publisher conflict, and it is matched here only to guarantee it
+// is never treated as one. What Windows is refusing to replace is a working
+// CentroidX already at the version we were told to install; uninstalling it to
+// retry would risk ending with nothing installed in order to fix nothing.
+//
+// It is reported rather than swallowed as success. The station is arguably
+// already where the update wanted it, but a release re-cut under a version
+// number that has already shipped is a build-pipeline fault that has to be
+// fixed centrally, and reporting success would hide it on every rig at once.
+const alreadyInstalledHRESULT = "0x80073cfb"
 
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
 // -ForceApplicationShutdown ensures any running package processes are stopped first.
@@ -97,17 +145,33 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	}
 
 	detail := strings.TrimSpace(string(out))
+	lower := strings.ToLower(detail)
+
+	// "Already installed" is checked first and returns, so that it can never
+	// reach the removal path below however the two texts evolve. Uninstalling
+	// here would remove a working CentroidX to fix a problem removal does not
+	// fix. See alreadyInstalledHRESULT.
+	if strings.Contains(lower, alreadyInstalledHRESULT) {
+		return &commandError{
+			op: "Add-AppxPackage failed: this package is already installed and Windows blocked " +
+				"the reinstall (0x80073CFB). The installed CentroidX was left alone. This means " +
+				"the release was rebuilt or re-signed without a version bump — cut a new version " +
+				"rather than re-cutting this one — detail: " + detail,
+			cause: err,
+		}
+	}
 
 	// Only a publisher conflict justifies uninstalling what is already on the
-	// machine; every other failure is reported as-is. See
-	// publisherConflictHRESULT for why the match is not broader.
-	if strings.Contains(strings.ToLower(detail), publisherConflictHRESULT) {
+	// machine; every other failure is reported as-is. Both the HRESULT and the
+	// conflict sentence have to be present — see publisherConflictSignal for
+	// why the code alone is not enough.
+	if strings.Contains(lower, publisherConflictHRESULT) && strings.Contains(lower, publisherConflictSignal) {
 		// Remove conflicting package(s) with the same identity name
 		runner.Run(
 			"powershell",
 			"-NoProfile", "-NonInteractive",
 			"-Command",
-			"Get-AppxPackage -Name 'Centroid.CentroidX' | Remove-AppxPackage",
+			"Get-AppxPackage -Name '"+windowsPackageName+"' | Remove-AppxPackage",
 		)
 		// Retry install
 		out2, err2 := runner.Run(
