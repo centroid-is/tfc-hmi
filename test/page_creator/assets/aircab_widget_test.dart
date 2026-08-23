@@ -179,11 +179,16 @@ void main() {
         expect(sizes.first, closeTo(sizes.last, 0.01),
             reason: 'the two captions are one list and must be set at one '
                 'size, not sized independently so the shorter one grows');
+        // The lamp is the state and gets 72% of its row (Jon, 2026-08-23:
+        // "the LEDs inside the air cabinet are too small"); in a square box
+        // the caption takes what is left beside it, which is about a third
+        // of the tag. Below that it is fine print; above it the lamp shrinks
+        // back to a dot.
         expect(
           sizes.first,
-          greaterThan(title * 0.5),
-          reason: 'a caption more than twice as small as the cabinet name is '
-              'fine print at arm\'s length, never mind across the hall',
+          greaterThan(title * 0.3),
+          reason: 'a caption more than three times as small as the cabinet '
+              "name is fine print at arm's length, never mind across the hall",
         );
       });
     }

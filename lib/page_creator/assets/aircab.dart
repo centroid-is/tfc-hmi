@@ -134,12 +134,13 @@ class AirCab extends StatelessWidget {
   /// Between a lamp and its caption, and between the two lamp cells.
   static const double _gap = 2;
 
+  /// The lamp's share of its row. Big enough to read as a lamp across the
+  /// hall; the rest of the row's width is the caption's, and in a square box
+  /// that is what keeps the caption from going below fine print.
+  static const double _lampFraction = 0.72;
+
   /// How much of a lamp cell's height the caption under it may take. The
   /// rest, less [_gap], is the lamp itself.
-  // The caption takes a third of the cell, the lamp the rest: the lamp is
-  // the state, the caption its name, and the lamps were too small to read
-  // as lamps across the hall.
-  static const double _captionFraction = 0.34;
 
   @override
   Widget build(BuildContext context) {
@@ -226,29 +227,22 @@ class AirCab extends StatelessWidget {
                   const SizedBox(width: 8),
 
                   // b) Right side: the two lamps, stacked, each with its
-                  //    caption beside it.
+                  //    caption beside it. The lamp IS the state -- it takes
+                  //    the row's full height; the caption is sized to what
+                  //    is left beside it, one size for both rows so the pair
+                  //    reads as a list. (A caption under the lamp read better
+                  //    as text but shrank the lamp to a dot; the operator
+                  //    reads the lamp across the hall, the caption up close.)
                   Expanded(
                     flex: 4,
                     child: LayoutBuilder(
                       builder: (ctx, box) {
-                        final cellHeight = math.max(0.0, (box.maxHeight - _gap) / 2);
-
-                        // The caption sits *under* its lamp rather than
-                        // beside it, so it gets the column's whole width
-                        // instead of what a full-height lamp leaves over.
-                        // Beside the lamp there were about 54 logical pixels
-                        // for ten monospace characters, which is why
-                        // "Pressure" and "Soft start" were being clipped to
-                        // "Pr…" and "So…"; underneath there are roughly 117,
-                        // and the words fit at nearly twice the size.
-                        final captionHeight = cellHeight * _captionFraction;
-                        final lamp = math.max(0.0, cellHeight - captionHeight - _gap);
-                        final captionBox = Size(box.maxWidth, captionHeight);
-
-                        // One size for both captions, chosen so the longer
-                        // one fits: sized independently, "Pressure" would
-                        // come out visibly larger than "Soft start" and the
-                        // pair would stop reading as one list.
+                        final rowHeight =
+                            math.max(0.0, (box.maxHeight - _gap) / 2);
+                        final lamp = rowHeight * _lampFraction;
+                        final captionBox = Size(
+                            math.max(0.0, box.maxWidth - lamp - _gap),
+                            rowHeight);
                         final baseStyle = DefaultTextStyle.of(ctx).style;
                         final fontSize = ledConfigs
                             .map((led) => fittedFontSize(
@@ -259,36 +253,27 @@ class AirCab extends StatelessWidget {
                                   textDirection: Directionality.of(ctx),
                                 ))
                             .reduce(math.min);
-
                         return Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             for (final (i, led) in ledConfigs.indexed) ...[
                               if (i > 0) const SizedBox(height: _gap),
                               Expanded(
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     SizedBox.square(
                                       dimension: lamp,
                                       child: Led(led),
                                     ),
-                                    const SizedBox(height: _gap),
-                                    // Sized to the box rather than clipped to
-                                    // it: the caption is a whole word an
-                                    // operator reads across the hall, and
-                                    // `TextOverflow.ellipsis` had been eating
-                                    // seven eighths of it.
-                                    SizedBox(
-                                      height: captionHeight,
-                                      child: Center(
-                                        child: Text(
-                                          led.text!,
-                                          style: TextStyle(fontSize: fontSize),
-                                          softWrap: false,
-                                          overflow: TextOverflow.visible,
-                                          maxLines: 1,
-                                        ),
+                                    const SizedBox(width: _gap),
+                                    Expanded(
+                                      child: Text(
+                                        led.text!,
+                                        style: TextStyle(fontSize: fontSize),
+                                        softWrap: false,
+                                        overflow: TextOverflow.visible,
+                                        maxLines: 1,
                                       ),
                                     ),
                                   ],
