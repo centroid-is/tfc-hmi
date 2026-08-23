@@ -234,6 +234,37 @@ class ModbusClientWrapper {
   Timer? _heartbeatTimer;
   final Duration _heartbeatInterval;
 
+  // ---------------------------------------------------------------------------
+  // Half-open detection
+  // ---------------------------------------------------------------------------
+
+  /// Consecutive failed poll reads since the last successful one.
+  int _consecutiveReadFailures = 0;
+
+  /// After this many consecutive failures the socket is treated as dead even
+  /// though the OS still calls it connected. A peer that accepts the TCP
+  /// connection and then answers nothing -- a wedged gateway, a firewall that
+  /// silently drops, a PLC mid-reboot holding the listen queue -- otherwise
+  /// leaves the wrapper reporting `connected` forever, because
+  /// [_awaitDisconnect] only ever looks at the socket flag.
+  static const _failuresBeforeReconnect = 3;
+
+  /// Whether [code] means "nothing came back", as opposed to the device
+  /// answering with a protocol exception.
+  static bool _isTransportFailure(ModbusResponseCode code) =>
+      code == ModbusResponseCode.requestTimeout ||
+      code == ModbusResponseCode.connectionFailed ||
+      code == ModbusResponseCode.requestTxFailed ||
+      code == ModbusResponseCode.requestRxFailed;
+
+  /// Drops the current socket so [_connectionLoop] reconnects.
+  void _forceReconnect(String why) {
+    _consecutiveReadFailures = 0;
+    _lastError = why;
+    _log.w('ModbusClientWrapper($host:$port) forcing reconnect: $why');
+    unawaited(_cleanupClientInstance());
+  }
+
   /// Creates a wrapper for a Modbus device at [host]:[port] with [unitId].
   ///
   /// Provide [clientFactory] to inject a custom/mock ModbusClientTcp for
@@ -284,8 +315,23 @@ class ModbusClientWrapper {
   void connect() {
     if (_disposed) return;
     _stopped = false;
-    _connectionLoop();
+    // One loop per wrapper, ever. Without this a second connect() -- two
+    // presses of Reconnect, a rebuilt widget, a disconnect()/connect() pair
+    // from a config save -- starts a second _connectionLoop that races the
+    // first for _client. The loser's socket is never disconnected.
+    if (_loopRunning) return;
+    _loopRunning = true;
+    unawaited(_connectionLoop().whenComplete(() {
+      _loopRunning = false;
+      // A connect() that arrived while the previous loop was winding down
+      // returned early above; honour it now rather than leaving the wrapper
+      // permanently disconnected.
+      if (!_stopped && !_disposed) connect();
+    }));
   }
+
+  /// True while [_connectionLoop] is executing.
+  bool _loopRunning = false;
 
   /// Stops the reconnect loop and disconnects the client. The wrapper can be
   /// reconnected by calling [connect] again. Streams remain open.
@@ -679,6 +725,12 @@ class ModbusClientWrapper {
         group._dirty = false;
       }
 
+      // Elements whose batch actually came back this tick. Only these may be
+      // published: the element objects hold their PREVIOUS reading when a
+      // read fails, so publishing unconditionally re-emits the last good
+      // value at the poll rate and a dead device looks like a steady one.
+      final freshlyRead = Set<ModbusElement>.identity();
+
       for (final elemGroup in group._cachedGroups) {
         if (_disposed || connectionStatus != ConnectionStatus.connected) break;
 
@@ -693,24 +745,53 @@ class ModbusClientWrapper {
             _lastError = 'Poll group "${group.name}": ${result.name}';
             _log.w(
                 'Poll group "${group.name}" batch read failed: ${result.name}');
+            // Only transport failures count toward half-open detection. A
+            // protocol exception (illegalDataAddress, deviceBusy, ...) is
+            // proof the peer is alive and answering; it means the register
+            // map is wrong, not the socket.
+            if (_isTransportFailure(result)) _consecutiveReadFailures++;
             // Last-known values remain in BehaviorSubjects (SCADA behavior)
+          } else {
+            _consecutiveReadFailures = 0;
+            freshlyRead.addAll(elemGroup);
           }
         } catch (e) {
           _lastError = e.toString();
           _log.w('Poll group "${group.name}" batch read error: $e');
+          _consecutiveReadFailures++;
           // Continue to next group
+        }
+
+        if (_consecutiveReadFailures >= _failuresBeforeReconnect) {
+          _forceReconnect('$_consecutiveReadFailures consecutive failed '
+              'reads on a socket the OS still calls connected');
+          break;
         }
       }
 
-      // Pipe all subscription values after all groups have been read.
+      // Pipe subscription values after all groups have been read.
       // Elements are shared references -- batch reads populated them in-place.
       // The modbus_client library returns double for all numeric types (due to
       // multiplier/offset arithmetic). Coerce back to int for integer types.
+      //
+      // A subscription whose batch failed is SKIPPED, not republished: its
+      // BehaviorSubject keeps the last good value for new listeners (the SCADA
+      // behaviour), but no new event is emitted, so nothing downstream --
+      // above all the collector -- records a reading that never happened.
       for (final sub in group._subscriptions) {
+        if (!freshlyRead.contains(sub.element)) continue;
         if (!sub.value$.isClosed) {
           sub.value$.add(_coerceValue(sub.element.value, sub.spec.dataType));
         }
       }
+    } catch (e, st) {
+      // Last line of defence. _onPollTick runs from an async Timer.periodic
+      // callback whose Future is discarded, and the data-acquisition isolate
+      // is spawned with errorsAreFatal, so ANY throw that escapes this method
+      // kills acquisition for the whole server and sends the supervisor into
+      // a respawn loop. A poll tick failing must never be able to do that.
+      _lastError = e.toString();
+      _log.e('Poll group "${group.name}" tick failed: $e\n$st');
     } finally {
       group._pollInProgress = false;
     }
@@ -763,8 +844,19 @@ class ModbusClientWrapper {
             (isRegister ? curr.element.byteCount ~/ 2 : 1);
         final batchRange = currEnd - currentBatch.first.element.address;
 
-        // Start new batch if gap too large or would exceed Modbus limit
-        if (gap > gapThreshold || batchRange > maxRange) {
+        // Start new batch if the gap is too large, the address span would
+        // exceed the Modbus limit, or the batch would hold more ELEMENTS than
+        // ModbusElementsGroup accepts.
+        //
+        // Span and count are not the same number: several keys may share one
+        // register address (a status word with one key per bit is the normal
+        // case), so a batch spanning 8 registers can hold 128 elements.
+        // ModbusElementsGroup checks both against the same limit and throws
+        // "Too many elements!" on the count — from inside the poll timer,
+        // where nothing catches it.
+        if (gap > gapThreshold ||
+            batchRange > maxRange ||
+            currentBatch.length >= maxRange) {
           groups.add(ModbusElementsGroup(currentBatch.map((s) => s.element)));
           currentBatch = [curr];
         } else {

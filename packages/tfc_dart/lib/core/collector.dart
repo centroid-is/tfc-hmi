@@ -156,7 +156,20 @@ class Collector {
         skipped++;
         continue;
       }
-      collectEntry(value.collect!);
+      // The Future MUST be handled. This runs inside the data-acquisition
+      // isolate, which is spawned with errorsAreFatal (the default), so a
+      // discarded Future that rejects is an uncaught async error that kills
+      // acquisition for the WHOLE server and sends the supervisor into a
+      // respawn loop. The easy trigger is a key still naming an unresolved
+      // $variable: those resolve in the UI when an OptionVariable asset
+      // publishes, but nothing publishes substitutions inside the acquisition
+      // isolate, so the key stays templated and subscribe() throws every time.
+      // One unstartable key must cost exactly that key.
+      final entry = value.collect!;
+      unawaited(collectEntry(entry).catchError((Object e) {
+        logger.e('[collector] could not start collection for "${entry.key}" '
+            '(this key only): $e');
+      }));
     }
     if (skipped > 0) {
       logger.i('[collector] Skipped $skipped collected key(s) on disabled '
@@ -276,6 +289,10 @@ class Collector {
         if (val == null) return;
         await insertValue(val);
       });
+      // collectEntryImpl can run twice for one entry (a re-collect after a
+      // mapping edit); without this the first timer is orphaned and keeps
+      // inserting alongside its replacement.
+      _sampleTimers[entry]?.cancel();
       _sampleTimers[entry] = sampleTimer;
     }
 
@@ -319,7 +336,16 @@ class Collector {
     if (entry == null) {
       return Stream.error(StateError('No collection configured for key: $key'));
     }
-    return _realTimeStreams[entry]!
+    // A station that is not the collector has the entry but no live stream:
+    // collectEntry returns before populating _realTimeStreams when
+    // config.collect is false. Match the sibling branch above rather than
+    // throwing a bare null-check TypeError at the caller.
+    final rt = _realTimeStreams[entry];
+    if (rt == null) {
+      return Stream.error(
+          StateError('No live collection running for key: $key'));
+    }
+    return rt
         .map((value) => TimeseriesData<dynamic>(value, DateTime.now().toUtc()));
   }
 

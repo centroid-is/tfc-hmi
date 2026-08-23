@@ -705,13 +705,30 @@ class ServerDisabledException extends StateManException {
 class SingleWorker {
   List<Completer<bool>> waiters = [];
 
+  /// How long a waiter blocks before giving up on the current owner.
+  ///
+  /// The owner only calls [complete] from the `finally` of its own work, so a
+  /// PLC (or isolate) that never answers means that `finally` never runs. An
+  /// unbounded wait here then parks every other key on the server with no
+  /// retry and no log. Giving up returns `false`, which puts the caller back
+  /// on its normal retry ladder -- it re-checks whether the work is still
+  /// needed before trying again, so this can never create duplicate work.
+  final Duration waitTimeout;
+
+  SingleWorker({this.waitTimeout = const Duration(seconds: 5)});
+
   Future<bool> doTheWork() async {
-    waiters.add(Completer<bool>());
+    final completer = Completer<bool>();
+    waiters.add(completer);
     if (waiters.length == 1) {
-      waiters.last.complete(true);
+      completer.complete(true);
+      return completer.future;
     }
 
-    return waiters.last.future;
+    return completer.future.timeout(waitTimeout, onTimeout: () {
+      waiters.remove(completer);
+      return false;
+    });
   }
 
   void complete() {
@@ -883,6 +900,11 @@ class ClientWrapper {
       _connectedSince = null;
     }
     _connectionStatus = next;
+    // StateMan._() installs a stateStream listener that calls this, and
+    // nothing ever cancels it -- not close(), not dispose(). close() disposes
+    // the wrapper, which closes this controller, so a state event racing
+    // shutdown would otherwise throw out of that listener.
+    if (_connectionController.isClosed) return;
     _connectionController.add(next);
   }
 
@@ -2232,9 +2254,15 @@ class StateMan {
           try {
             // keepAliveCount=30 → inactivity after (100ms×30)+5s ≈ 8s.
             // Tolerates intermittent packet loss on unstable connections.
-            wrapper.subscriptionId = await client.subscriptionCreate(
-              requestedMaxKeepAliveCount: 30,
-            );
+            // Bounded: a server that accepts the channel and then never
+            // answers CreateSubscription would otherwise hold the worker
+            // forever, and with it every key routed to this server -- not on
+            // the retry ladder, on a bare await. The timeout drops through to
+            // the catch, the `finally` releases the worker, and the normal
+            // ladder takes over.
+            wrapper.subscriptionId = await client
+                .subscriptionCreate(requestedMaxKeepAliveCount: 30)
+                .timeout(const Duration(seconds: 10));
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
             wrapper.startHeartbeat(wrapper.subscriptionId!);
@@ -2474,6 +2502,13 @@ class AutoDisposingStream<T> {
         _logger.w('[$key] raw stream DONE — '
             'subject will close! listeners=$_listenerCount, '
             'subjectClosed=${_subject.isClosed}');
+        // A spent entry must not leave an idle timer armed. _onDispose
+        // removes BY KEY, so a timer surviving into the next subscription for
+        // this key would evict the live entry that replaced this one, and the
+        // subscriber after that would ask the PLC for four more monitored
+        // items while the displaced entry kept streaming.
+        _idleTimer?.cancel();
+        _idleTimer = null;
         _subject.close();
         // Retire the entry as well. The idle path already does both -- it
         // calls _onDispose before closing -- but this one used to close and
@@ -2505,6 +2540,8 @@ class AutoDisposingStream<T> {
   void _handleCancel() {
     _listenerCount--;
     _logger.d('[$key] listener removed (count=$_listenerCount)');
+    // Nothing left to retire, and nothing that may outlive this entry.
+    if (_subject.isClosed) return;
     if (_listenerCount == 0) {
       _logger.w(
           '[$key] no listeners left, starting ${idleTimeout.inSeconds}s idle timer');
