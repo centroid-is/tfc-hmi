@@ -1784,6 +1784,14 @@ class UmasClient {
     // Avoid unhandled-async-error if no one awaits the lock.
     _symbolCacheLock!.future.ignore();
     try {
+      // Sample the project we are browsing FROM, before the first round trip.
+      // A browse is many round trips; the keepalive and the CRC watch both
+      // refresh _projectCrc while it runs, so a PLC download landing mid-browse
+      // moves it under us. Stamping the post-browse value would compare the new
+      // CRC against itself, and a cache built from the OLD data dictionary --
+      // symbol paths pointing at variables that have since moved -- would never
+      // be invalidated.
+      final crcAtBrowseStart = _projectCrc;
       final tree = await browse();
       _symbolCache.clear();
       void walk(UmasVariableTreeNode node) {
@@ -1805,7 +1813,7 @@ class UmasClient {
         walk(root);
       }
       _symbolCacheBuilt = true;
-      _symbolCacheProjectCrc = _projectCrc;
+      _symbolCacheProjectCrc = crcAtBrowseStart;
       _log.i('UMAS symbolCache: built ${_symbolCache.length} entries '
           '(projectCrc=${_symbolCacheProjectCrc == null ? 'n/a' : '0x${_symbolCacheProjectCrc!.toRadixString(16)}'})');
       _symbolCacheLock!.complete();
