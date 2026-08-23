@@ -253,26 +253,9 @@ class _ChecklistsState extends State<Checklists> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return UtilityButton(
+      label: 'Checklists',
       onTap: () => _showChecklistDialog(context),
-      child: CustomPaint(
-        painter: ButtonPainter(
-          color: Theme.of(context).colorScheme.primary,
-          isPressed: false,
-          buttonType: ButtonType.square,
-        ),
-        // AutoSizedText, not FittedBox: see the note in `common.dart`. The
-        // label is laid out at its final size instead of being scaled there.
-        child: AutoSizedText(
-          "Checklists",
-          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-          heightFraction: 0.3,
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onPrimary,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
     );
   }
 }

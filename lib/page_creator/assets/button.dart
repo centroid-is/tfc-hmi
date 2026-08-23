@@ -523,10 +523,16 @@ class ButtonPainter extends CustomPainter {
   final bool isPressed;
   final ButtonType buttonType;
 
+  /// The hairline around the face. Defaults to a faint black, which is
+  /// invisible on a dark fill -- a face close to the page colour passes the
+  /// theme's divider colour instead, so its edge still reads in both modes.
+  final Color? borderColor;
+
   ButtonPainter({
     required this.color,
     this.isPressed = false,
     required this.buttonType,
+    this.borderColor,
   });
 
   @override
@@ -583,7 +589,7 @@ class ButtonPainter extends CustomPainter {
 
     // Border
     final borderPaint = Paint()
-      ..color = Colors.black.withOpacity(0.1)
+      ..color = borderColor ?? Colors.black.withValues(alpha: 0.1)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
@@ -608,7 +614,76 @@ class ButtonPainter extends CustomPainter {
   bool shouldRepaint(ButtonPainter oldDelegate) =>
       color != oldDelegate.color ||
       isPressed != oldDelegate.isPressed ||
-      buttonType != oldDelegate.buttonType;
+      buttonType != oldDelegate.buttonType ||
+      borderColor != oldDelegate.borderColor;
+}
+
+/// The calm face shared by the home page's utility buttons -- Recipes,
+/// Checklists: the ones that open a dialog rather than drive equipment.
+///
+/// They used to be solid `primary` with bold `onPrimary` text, which made two
+/// bright blue blocks the loudest things on a page whose equipment colours
+/// are meant to carry the meaning. This is a step back: the fill is the
+/// scheme's raised surface (`surfaceContainerHighest`), one notch off the
+/// page, with the theme's divider hairline for an edge and the page's own
+/// text colour for the label at medium weight. The [ButtonPainter] shadow and
+/// the pressed shrink are what still say "button"; the colour no longer has
+/// to.
+///
+/// In every scheme the fill and the label come off the page's own surface
+/// pair, so it is grey-on-grey in the muted schemes and cream/teal-on-cream/
+/// teal in Solarized light/dark rather than one fixed grey that only suits
+/// one of them.
+class UtilityButton extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const UtilityButton({super.key, required this.label, required this.onTap});
+
+  @override
+  State<UtilityButton> createState() => _UtilityButtonState();
+}
+
+class _UtilityButtonState extends State<UtilityButton> {
+  bool _isPressed = false;
+
+  void _setPressed(bool value) {
+    if (_isPressed != value) {
+      setState(() => _isPressed = value);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => _setPressed(true),
+      onTapUp: (_) => _setPressed(false),
+      onTapCancel: () => _setPressed(false),
+      onTap: widget.onTap,
+      child: CustomPaint(
+        painter: ButtonPainter(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderColor: theme.dividerColor,
+          isPressed: _isPressed,
+          buttonType: ButtonType.square,
+        ),
+        // AutoSizedText, not FittedBox: the label has to grow with the button,
+        // and a FittedBox would have done that by scaling a 14pt raster up,
+        // which is what left the label soft until the canvas was zoomed.
+        child: AutoSizedText(
+          widget.label,
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          heightFraction: 0.3,
+          style: TextStyle(
+            color: theme.colorScheme.onSurface,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ConfigContent extends StatefulWidget {
