@@ -479,7 +479,16 @@ abstract final class SidePaneHost {
       _onClosed = onClosed;
       _avoidRect = avoidRect;
       _width = width ?? SidePaneDefaults.width;
-      shell.swapTo(id, builder);
+      // The chrome travels with the pane, not with the sheet: the overlay
+      // entry was built for whichever pane opened first and is not rebuilt
+      // here, so anything read off that widget would be the first pane's.
+      shell.swapTo(
+        id,
+        builder,
+        resizable: resizable,
+        onWidthChanged: onWidthChanged,
+        insets: insets ?? SidePaneDefaults.insets,
+      );
       previous?.call();
       return;
     }
@@ -592,6 +601,20 @@ class _SidePaneShellState extends State<_SidePaneShell>
   late WidgetBuilder _builder = widget.builder;
   late Object _contentKey = SidePaneHost._openId ?? 'pane';
 
+  /// The chrome that belongs to the content currently shown.
+  ///
+  /// These travel with the pane, not with the sheet. The overlay entry — and
+  /// so the widget — is built once for whichever pane opened first and is not
+  /// rebuilt by a swap, so reading them off `widget` gave every swapped-in
+  /// pane the FIRST pane's values: the page editor's asset-config pane (the
+  /// one caller that is resizable) opened over an equipment pane came up with
+  /// no resize handle, and an equipment pane opened over IT stayed resizable
+  /// and drove the page editor's `onWidthChanged` — a setState for a pane it
+  /// no longer owns.
+  late bool _resizable = widget.resizable;
+  late ValueChanged<double>? _onWidthChanged = widget.onWidthChanged;
+  late EdgeInsets _insets = widget.insets;
+
   /// Fades the body out and back in around a content change.
   ///
   /// Deliberately sequential rather than a cross-fade. Two translucent copies
@@ -611,13 +634,22 @@ class _SidePaneShellState extends State<_SidePaneShell>
   /// down and build a new one, so the sheet slid out and back in for what the
   /// operator experiences as one pane changing what it is about. The sheet now
   /// stays exactly where it is.
-  Future<void> swapTo(String id, WidgetBuilder builder) async {
+  Future<void> swapTo(
+    String id,
+    WidgetBuilder builder, {
+    required bool resizable,
+    required ValueChanged<double>? onWidthChanged,
+    required EdgeInsets insets,
+  }) async {
     if (_contentKey == id) return;
     await _fade.reverse();
     if (!mounted) return;
     setState(() {
       _builder = builder;
       _contentKey = id;
+      _resizable = resizable;
+      _onWidthChanged = onWidthChanged;
+      _insets = insets;
     });
     if (!mounted) return;
     await _fade.forward();
@@ -709,7 +741,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
     final screen = MediaQuery.sizeOf(context);
     final margin = SidePaneDefaults.margin;
     // Never let the reserved chrome squeeze the pane off a short screen.
-    final chrome = widget.insets;
+    final chrome = _insets;
     final maxChrome = screen.height - 160;
     final scale = (chrome.top + chrome.bottom) > maxChrome && maxChrome > 0
         ? maxChrome / (chrome.top + chrome.bottom)
@@ -762,7 +794,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
       ),
     );
 
-    if (widget.resizable) {
+    if (_resizable) {
       pane = Stack(
         children: [
           Positioned.fill(child: pane),
@@ -813,7 +845,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
     // The pane sits in its own route's OverlayEntry, which a plain setState
     // here would not reach.
     _paneEntry.markNeedsBuild();
-    widget.onWidthChanged?.call(next);
+    _onWidthChanged?.call(next);
   }
 }
 
