@@ -1,3 +1,10 @@
+# NOTE: `name` is load-bearing beyond Dart. The msix builder uses it as the
+# AppxManifest Application Id (with underscores stripped), and centroidx-manager
+# hard-codes that id in the shell:AppsFolder URI it uses to relaunch the app
+# after an update — see windowsAppID in
+# tools/centroidx-manager/internal/platform/installer.go. Renaming this package
+# without updating that constant makes an update appear to succeed while the
+# HMI never comes back.
 name: centroidx
 description: "Centroid HMI system for your wildest dreams."
 # The following line prevents the package from being accidentally published to
