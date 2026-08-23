@@ -9,6 +9,7 @@
 #include "crash_handler.h"
 #include "flutter_window.h"
 #include "output_target.h"
+#include "path_utils.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -72,7 +73,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     // `flutter run` and the VS Code debugger set up. Leave the streams where
     // they are so Dart's output keeps reaching whoever is watching. Crash
     // handlers still install; their records go to the same place.
-    tfc::InstallCrashHandlers(DirectoryOf(DefaultLogPath()));
+    tfc::InstallCrashHandlers(tfc::DirectoryOf(DefaultLogPath()));
     std::cerr << "[startup] logging to the attached console/pipe" << std::endl;
   } else if (!log_path.empty()) {
     // Rotate before opening: RedirectIOToFile truncates, and the previous
@@ -91,7 +92,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::SetEnvironmentVariableA("CENTROID_LOG_REDIRECTED", "1");
 
     // Only now can crash records actually be written somewhere.
-    tfc::InstallCrashHandlers(DirectoryOf(log_path));
+    tfc::InstallCrashHandlers(tfc::DirectoryOf(log_path));
     std::cerr << "[startup] logging to " << log_path << " (keeping "
               << max_archives << " previous runs)" << std::endl;
   }

@@ -13,6 +13,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 enable_testing()
 
+# crash_record_test races threads through the crash latch.
+find_package(Threads REQUIRED)
+
 add_executable(gpu_watchdog_test
   "gpu_watchdog_test.cpp"
   "../gpu_watchdog.cpp"
@@ -31,7 +34,21 @@ add_executable(output_target_test
 )
 target_include_directories(output_target_test PRIVATE "..")
 
-foreach(target gpu_watchdog_test log_rotation_test output_target_test)
+add_executable(crash_record_test
+  "crash_record_test.cpp"
+  "../crash_record.cpp"
+)
+target_include_directories(crash_record_test PRIVATE "..")
+target_link_libraries(crash_record_test PRIVATE Threads::Threads)
+
+add_executable(path_utils_test
+  "path_utils_test.cpp"
+  "../path_utils.cpp"
+)
+target_include_directories(path_utils_test PRIVATE "..")
+
+foreach(target gpu_watchdog_test log_rotation_test output_target_test
+               crash_record_test path_utils_test)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()
@@ -42,3 +59,5 @@ endforeach()
 add_test(NAME gpu_watchdog COMMAND gpu_watchdog_test)
 add_test(NAME log_rotation COMMAND log_rotation_test)
 add_test(NAME output_target COMMAND output_target_test)
+add_test(NAME crash_record COMMAND crash_record_test)
+add_test(NAME path_utils COMMAND path_utils_test)

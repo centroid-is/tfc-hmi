@@ -1,6 +1,7 @@
 #include "utils.h"
 
 #include "log_rotation.h"
+#include "path_utils.h"
 
 #include <flutter_windows.h>
 #include <fcntl.h>
@@ -185,10 +186,14 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   if (utf16_string == nullptr) {
     return std::string();
   }
-  unsigned int target_length = ::WideCharToMultiByte(
+  // Sizing call includes the trailing null; tfc::Utf8LengthWithoutNul removes
+  // it, and refuses to do so when the call failed. WC_ERR_INVALID_CHARS makes
+  // failure reachable from a command line the user typed — an unpaired
+  // surrogate is enough — and the naked `- 1` this replaces turned that into
+  // an unsigned wrap and a four-gigabyte resize().
+  size_t target_length = tfc::Utf8LengthWithoutNul(::WideCharToMultiByte(
       CP_UTF8, WC_ERR_INVALID_CHARS, utf16_string,
-      -1, nullptr, 0, nullptr, nullptr)
-    -1; // remove the trailing null character
+      -1, nullptr, 0, nullptr, nullptr));
   int input_length = (int)wcslen(utf16_string);
   std::string utf8_string;
   if (target_length == 0 || target_length > utf8_string.max_size()) {
@@ -197,7 +202,7 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   utf8_string.resize(target_length);
   int converted_length = ::WideCharToMultiByte(
       CP_UTF8, WC_ERR_INVALID_CHARS, utf16_string,
-      input_length, utf8_string.data(), target_length, nullptr, nullptr);
+      input_length, utf8_string.data(), (int)target_length, nullptr, nullptr);
   if (converted_length == 0) {
     return std::string();
   }
@@ -237,12 +242,6 @@ bool StdoutIsConnected() {
   // pipe, FILE_TYPE_DISK is a `> file` redirect. Only UNKNOWN means the handle
   // leads nowhere.
   return ::GetFileType(handle) != FILE_TYPE_UNKNOWN;
-}
-
-std::string DirectoryOf(const std::string& path) {
-  std::string::size_type slash = path.find_last_of("/\\");
-  if (slash == std::string::npos) return std::string();
-  return path.substr(0, slash);
 }
 
 std::string DefaultLogPath() {

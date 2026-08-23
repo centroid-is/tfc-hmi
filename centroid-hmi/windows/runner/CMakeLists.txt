@@ -8,11 +8,13 @@ project(runner LANGUAGES CXX)
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
   "crash_handler.cpp"
+  "crash_record.cpp"
   "flutter_window.cpp"
   "gpu_watchdog.cpp"
   "log_rotation.cpp"
   "main.cpp"
   "output_target.cpp"
+  "path_utils.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"

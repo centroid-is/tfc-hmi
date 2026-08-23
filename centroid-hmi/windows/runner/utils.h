@@ -29,8 +29,9 @@ std::string DefaultLogPath();
 // console, is what decides whether anything is listening.
 bool StdoutIsConnected();
 
-// Directory part of |path|, empty if it has none.
-std::string DirectoryOf(const std::string& path);
+// Directory part of a path: tfc::DirectoryOf in path_utils.h. It lives there
+// because it is pure string arithmetic and this file cannot be compiled off
+// Windows.
 
 // Moves previous runs aside so this run starts a fresh file, keeping
 // |max_archives| generations (hmi.1.log, hmi.2.log, ...). Without this the
