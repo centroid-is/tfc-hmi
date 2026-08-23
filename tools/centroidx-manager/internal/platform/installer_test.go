@@ -332,50 +332,320 @@ func TestWindowsInstaller_Install_UntrustedCertReportsHRESULT(t *testing.T) {
 	}
 }
 
-// The genuine publisher conflict — same package identity, different signing
-// publisher — is the one case where removing the installed package is the fix.
-func TestWindowsInstaller_Install_PublisherConflictRemovesAndRetries(t *testing.T) {
-	const conflict = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CFB, The provided package " +
-		"is already installed, and reinstallation of the package was blocked. Check the " +
-		"AppXDeployment-Server event log for details."
-	runner := &mockRunnerSeq{
-		outputs: [][]byte{[]byte(conflict), nil, nil},
-		errors:  []error{errors.New("exit status 1"), nil, nil},
+// ---- Recorded Windows output ------------------------------------------------
+//
+// The HRESULT is the only thing installWindows reads out of these; which cause
+// within 0x80073CF3 it is gets decided by querying Windows, not by the wording.
+// They are still real messages, quoted from traced sources, because a fixture
+// that drifts from what Windows emits stops testing anything — that is how
+// 0x80073CFB came to be labelled a publisher conflict in the first place: the
+// constant and the fixture were guessed from each other.
+
+// conflict0x80073CF3 is a complete Add-AppxPackage failure line for the identity
+// conflict, quoted in Jeppesen's support note for FliteDeck Pro X and in
+// microsoft/winget-cli#4752. The two package full names differ only in their
+// trailing PublisherId hash — which is the conflict, and which is exactly what
+// installWindows no longer tries to read.
+const conflict0x80073CF3 = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF3, Package failed " +
+	"updates, dependency or conflict validation. Windows cannot install package " +
+	"Jeppesen.FliteDeck_10.3.1.10593_neutral_~_8gk7v4trkh4pt because a different package " +
+	"Jeppesen.FliteDeck_10.2.1.9678_neutral_~_g4095tshxnsa8 with the same name is already installed."
+
+// alreadyInstalled is what Windows says for ERROR_PACKAGE_ALREADY_EXISTS,
+// quoted in microsoft/WindowsAppSDK#1871 and matching the description Microsoft
+// documents for 0x80073CFB. Note what it does *not* say: nothing about a
+// publisher, and nothing about a different package. The package on the machine
+// is not bitwise identical to the one being installed — a rebuild or a re-sign
+// at an unchanged version — and the installed copy is working.
+// https://github.com/microsoft/WindowsAppSDK/issues/1871
+// https://learn.microsoft.com/en-us/windows/win32/appxpkg/troubleshooting
+const alreadyInstalled = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CFB, The provided package " +
+	"is already installed, and reinstallation of the package was blocked. Check the " +
+	"AppXDeployment-Server event log for details."
+
+// missingDependency is 0x80073CF3 for a cause removal cannot fix, quoted in
+// WSA-Community/WSAGAScript#293. It is the same HRESULT as the conflict, which
+// is the whole reason the code cannot act on the HRESULT alone.
+const missingDependency = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF3, Package failed " +
+	"updates, dependency or conflict validation. Windows cannot install package " +
+	"Microsoft.Lovika_1.17.0.0_x64__8wekyb3d8bbwe because this package depends on a framework " +
+	"that could not be found. Provide the framework 'Microsoft.DirectXRuntime' published by " +
+	"'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US', with " +
+	"neutral or x64 processor architecture and minimum version 9.29.952.0, along with this " +
+	"package to install."
+
+// publisherOutput is what a publisher query prints when it has an answer: the
+// value wrapped in the script's own tokens. An empty publisher means the query
+// found nothing and printed nothing, which is not the same as printing an empty
+// token — a distinction the tests below rely on.
+func publisherOutput(dn string) []byte {
+	if dn == "" {
+		return nil
 	}
+	return []byte(publisherTokenStart + dn + publisherTokenEnd)
+}
+
+// The two publishers a conflict is made of. The installed one is CentroidX's
+// current sideload identity, traced to centroid-hmi/pubspec.yaml's
+// msix_config.publisher; the other is any second signing identity, which is what
+// moving between Store and sideload signing produces.
+const (
+	sideloadPublisher = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
+	otherPublisher    = "CN=Centroid ehf., O=Centroid ehf., L=Reykjavik, C=IS"
+)
+
+// conflictRunner builds a runner for a 0x80073CF3 install failure, answering the
+// two publisher queries with what the test wants Windows to say. A nil entry
+// means the query produced no output; errored says it failed outright.
+func conflictRunner(installed, incoming string, retryOK bool) *mockRunnerSeq {
+	outputs := [][]byte{[]byte(conflict0x80073CF3), publisherOutput(installed), publisherOutput(incoming), nil, nil}
+	errs := []error{errors.New("exit status 1"), nil, nil, nil, nil}
+	if !retryOK {
+		outputs[4] = []byte("Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF9, Install failed.")
+		errs[4] = errors.New("exit status 1")
+	}
+	return &mockRunnerSeq{outputs: outputs, errors: errs}
+}
+
+// The one case that justifies removing a working installation: our identity is
+// installed, and it was signed by somebody other than whoever signed the asset.
+func TestWindowsInstaller_Install_DifferingPublisherRemovesAndRetries(t *testing.T) {
+	runner := conflictRunner(sideloadPublisher, otherPublisher, true)
 
 	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
 		t.Fatalf("expected the retry to succeed, got: %v", err)
 	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("expected install, remove, install; got %d calls: %v", len(runner.calls), runner.calls)
+	if len(runner.calls) != 5 {
+		t.Fatalf("expected install, two publisher queries, remove, install; got %d: %v", len(runner.calls), runner.calls)
 	}
-	if !hasArgContaining(allArgs(runner.calls[0]), "Add-AppxPackage") {
-		t.Errorf("call 0: expected Add-AppxPackage, got: %v", allArgs(runner.calls[0]))
+	if !hasArgContaining(allArgs(runner.calls[1]), "-ExpandProperty Publisher") {
+		t.Errorf("call 1: expected the installed-publisher query, got: %v", allArgs(runner.calls[1]))
 	}
-	if !hasArgContaining(allArgs(runner.calls[1]), "Remove-AppxPackage") {
-		t.Errorf("call 1: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[1]))
+	if !hasArgContaining(allArgs(runner.calls[1]), windowsPackageName) {
+		t.Errorf("call 1: expected the query scoped to our identity name, got: %v", allArgs(runner.calls[1]))
 	}
-	if !hasArgContaining(allArgs(runner.calls[1]), "Centroid.CentroidX") {
-		t.Errorf("call 1: expected the removal scoped to Centroid.CentroidX, got: %v", allArgs(runner.calls[1]))
+	if !hasArgContaining(allArgs(runner.calls[2]), "AppxManifest.xml") {
+		t.Errorf("call 2: expected the asset manifest read, got: %v", allArgs(runner.calls[2]))
 	}
-	if !hasArgContaining(allArgs(runner.calls[2]), "Add-AppxPackage") {
-		t.Errorf("call 2: expected the install retry, got: %v", allArgs(runner.calls[2]))
+	if !hasArgContaining(allArgs(runner.calls[2]), "app.msix") {
+		t.Errorf("call 2: expected the asset path in the manifest read, got: %v", allArgs(runner.calls[2]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[3]), "Remove-AppxPackage") {
+		t.Errorf("call 3: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[3]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[4]), "Add-AppxPackage") {
+		t.Errorf("call 4: expected the install retry, got: %v", allArgs(runner.calls[4]))
 	}
 }
 
-// HRESULTs are matched case-insensitively: the hex casing PowerShell emits is
-// not something an update on a plant rig should depend on.
-func TestWindowsInstaller_Install_PublisherConflictLowercaseHRESULT(t *testing.T) {
-	runner := &mockRunnerSeq{
-		outputs: [][]byte{[]byte("Deployment failed with HRESULT: 0x80073cfb, package already installed"), nil, nil},
-		errors:  []error{errors.New("exit status 1"), nil, nil},
+// Everything else about a 0x80073CF3 leaves the installation alone. These are
+// the cases that used to depend on how Windows worded the failure; none of them
+// does now, and each fails towards keeping the application.
+func TestWindowsInstaller_Install_0x80073CF3KeepsInstalledPackageUnlessPublishersDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runner  *mockRunnerSeq
+		queries int // how many publisher queries should have been needed
+	}{
+		{
+			// A missing dependency or a wrong architecture: our package is
+			// installed, signed by us, and removing it fixes nothing.
+			"same publisher on both sides",
+			conflictRunner(sideloadPublisher, sideloadPublisher, true),
+			2,
+		},
+		{
+			// Nothing of ours is installed, so there is nothing to conflict
+			// with and nothing to remove. No point reading the asset.
+			"our identity is not installed",
+			conflictRunner("", "", true),
+			1,
+		},
+		{
+			// The asset could not be read — not a zip, no manifest, unparseable
+			// XML. We cannot tell whether the publishers differ, so we must not
+			// act as though they do.
+			"asset publisher unreadable",
+			conflictRunner(sideloadPublisher, "", true),
+			2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := installWindows(tc.runner, "/tmp/app.msix")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if n := countRemoveAppxCalls(tc.runner.calls); n != 0 {
+				t.Errorf("uninstalled the working package (%d Remove-AppxPackage call(s)); calls: %v", n, tc.runner.calls)
+			}
+			if want := 1 + tc.queries; len(tc.runner.calls) != want {
+				t.Errorf("expected %d calls (install + %d quer(y/ies)), got %d: %v", want, tc.queries, len(tc.runner.calls), tc.runner.calls)
+			}
+			if !strings.Contains(err.Error(), "0x80073CF3") {
+				t.Errorf("expected the original HRESULT reported, got: %v", err)
+			}
+		})
 	}
+}
+
+// The exit code is advisory, on the same contract trustCertificateWindows
+// established: a complete token is better evidence than a zero exit, because
+// only a successful query can print one. A publisher reported alongside a
+// non-zero exit is still a publisher.
+func TestWindowsInstaller_Install_TokenOutranksTheExitCode(t *testing.T) {
+	runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+	// Both queries answer properly but exit non-zero — a trailing warning, a
+	// noisy profile, anything PowerShell decides to be unhappy about.
+	runner.errors[1] = errors.New("exit status 1")
+	runner.errors[2] = errors.New("exit status 1")
 
 	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
 		t.Fatalf("expected the retry to succeed, got: %v", err)
 	}
 	if n := countRemoveAppxCalls(runner.calls); n != 1 {
-		t.Errorf("expected exactly one Remove-AppxPackage, got %d; calls: %v", n, runner.calls)
+		t.Errorf("a tokenised answer was discarded because of the exit code; calls: %v", runner.calls)
+	}
+}
+
+// A query that fails outright is not an answer. The exit code is advisory — a
+// token is trusted whatever the exit status, as in trustCertificateWindows — so
+// what actually rules these out is that a failed query prints no token, only its
+// error. The installation must survive that.
+func TestWindowsInstaller_Install_PublisherQueryFailureKeepsInstalledPackage(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		errAt  int // index of the query that fails
+		wanted int // total calls expected
+	}{
+		{"installed-publisher query fails", 1, 2},
+		{"asset-publisher query fails", 2, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+			runner.errors[tc.errAt] = errors.New("exit status 1")
+			// A failed query still writes to stderr; that output must not be
+			// mistaken for the answer.
+			runner.outputs[tc.errAt] = []byte("Get-AppxPackage : the term is not recognized")
+
+			err := installWindows(runner, "/tmp/app.msix")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if n := countRemoveAppxCalls(runner.calls); n != 0 {
+				t.Errorf("a failed query led to an uninstall (%d call(s)); calls: %v", n, runner.calls)
+			}
+			if len(runner.calls) != tc.wanted {
+				t.Errorf("expected %d calls, got %d: %v", tc.wanted, len(runner.calls), runner.calls)
+			}
+		})
+	}
+}
+
+// Publishers are compared byte for byte. The PublisherId hash is computed over
+// the exact Publisher string with no normalisation, and even the order of the
+// distinguished-name elements changes it (microsoft/WindowsAppSDK#650), so two
+// spellings that differ only in case really are two different packages to
+// Windows — and skipping that would skip a real conflict.
+func TestWindowsInstaller_Install_PublisherComparisonIsExact(t *testing.T) {
+	runner := conflictRunner(sideloadPublisher, strings.ToLower(sideloadPublisher), true)
+
+	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+	if n := countRemoveAppxCalls(runner.calls); n != 1 {
+		t.Errorf("a case-only publisher difference was treated as the same publisher; calls: %v", runner.calls)
+	}
+}
+
+// PowerShell pads and wraps, and the same publisher must compare equal to itself
+// whichever way it arrived. A distinguished name is easily long enough to be
+// wrapped by the formatter; if a wrapped copy did not match an unwrapped one, an
+// ordinary update would read as a conflict and uninstall a working HMI.
+func TestWindowsInstaller_Install_IdenticalPublishersCompareEqualHoweverFormatted(t *testing.T) {
+	// Long enough that the formatter would wrap it at the 120-column default.
+	const longDN = "CN=Centroid ehf. Sildarvinnsla Station Signing Authority, " +
+		"O=Centroid ehf., L=Reykjavik, S=Hofudborgarsvaedid, C=IS"
+	wrapped := strings.Replace(longDN, "O=Centroid", "\n    O=Centroid", 1)
+
+	for _, tc := range []struct {
+		name                string
+		installed, incoming string
+	}{
+		{"padding and line endings", "  " + sideloadPublisher + "\r\n", sideloadPublisher + "\n"},
+		{"one side wrapped by the formatter", wrapped, longDN},
+		{"both sides wrapped", wrapped, wrapped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := conflictRunner(tc.installed, tc.incoming, true)
+
+			err := installWindows(runner, "/tmp/app.msix")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if n := countRemoveAppxCalls(runner.calls); n != 0 {
+				t.Errorf("the same publisher formatted two ways was read as a conflict; calls: %v", runner.calls)
+			}
+		})
+	}
+}
+
+// The regression that matters. ERROR_PACKAGE_ALREADY_EXISTS means a working
+// CentroidX at this very version is on the machine and Windows will not
+// overwrite it. Removing it to retry gambles the whole installation on a retry
+// that fixes nothing, and if that retry fails — Defender holding a file, a full
+// disk, a payload already deleted — the station is left with no application.
+// PR #290 bound the uninstall to exactly this code; nothing may put it back.
+func TestWindowsInstaller_Install_AlreadyInstalledKeepsInstalledPackage(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(alreadyInstalled), nil, nil, nil, nil},
+		errors:  []error{errors.New("exit status 1"), nil, nil, nil, nil},
+	}
+
+	err := installWindows(runner, "/tmp/app.msix")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if n := countRemoveAppxCalls(runner.calls); n != 0 {
+		t.Errorf("an already-installed package was uninstalled (%d Remove-AppxPackage call(s)); calls: %v", n, runner.calls)
+	}
+	// Not even a publisher query: CFB is answered without asking anything.
+	if len(runner.calls) != 1 {
+		t.Errorf("expected the install to stop after one attempt, got %d calls: %v", len(runner.calls), runner.calls)
+	}
+	if strings.Contains(err.Error(), "after removing conflict") {
+		t.Errorf("an already-installed package was reported as a publisher conflict: %v", err)
+	}
+	if !strings.Contains(err.Error(), "0x80073CFB") {
+		t.Errorf("expected the HRESULT in the error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "left alone") {
+		t.Errorf("expected the error to say the installation was kept, got: %v", err)
+	}
+}
+
+// The dependency message carries the conflict's HRESULT, so only the publisher
+// query separates them. With our package installed under our own signature,
+// nothing may be removed — and the missing framework must reach the operator.
+func TestWindowsInstaller_Install_DependencyFailureKeepsInstalledPackage(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{
+			[]byte(missingDependency),
+			[]byte(sideloadPublisher),
+			[]byte(sideloadPublisher),
+			nil, nil,
+		},
+		errors: []error{errors.New("exit status 1"), nil, nil, nil, nil},
+	}
+
+	err := installWindows(runner, "/tmp/app.msix")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if n := countRemoveAppxCalls(runner.calls); n != 0 {
+		t.Errorf("a missing dependency uninstalled the working package (%d Remove-AppxPackage call(s)); calls: %v", n, runner.calls)
+	}
+	if !strings.Contains(err.Error(), "Microsoft.DirectXRuntime") {
+		t.Errorf("expected the missing framework named in the error, got: %v", err)
 	}
 }
 
@@ -383,14 +653,7 @@ func TestWindowsInstaller_Install_PublisherConflictLowercaseHRESULT(t *testing.T
 // this is the state where the machine has no CentroidX installed and the
 // message is all the operator has to go on.
 func TestWindowsInstaller_Install_PublisherConflictRetryFailure(t *testing.T) {
-	runner := &mockRunnerSeq{
-		outputs: [][]byte{
-			[]byte("Deployment failed with HRESULT: 0x80073CFB, package already installed"),
-			nil,
-			[]byte("Deployment failed with HRESULT: 0x80073CF9, Install failed."),
-		},
-		errors: []error{errors.New("exit status 1"), nil, errors.New("exit status 1")},
-	}
+	runner := conflictRunner(sideloadPublisher, otherPublisher, false)
 
 	err := installWindows(runner, "/tmp/app.msix")
 	if err == nil {
@@ -401,6 +664,135 @@ func TestWindowsInstaller_Install_PublisherConflictRetryFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "0x80073CF9") {
 		t.Errorf("expected the retry's HRESULT in the error, got: %v", err)
+	}
+}
+
+// A publisher query is only allowed to answer with something that could be a
+// publisher. The manager captures combined output, so a non-terminating
+// PowerShell error arrives on the same channel as the answer while the process
+// still exits 0 — and an error message is not equal to the other publisher, so
+// letting it through would read as "they differ" and uninstall a working HMI on
+// the strength of a diagnostic. Every one of these must refuse to act.
+func TestWindowsInstaller_Install_UnrecognisedQueryOutputIsNotAPublisher(t *testing.T) {
+	noise := []struct {
+		name   string
+		output string
+	}{
+		{"cmdlet error on stdout", "Get-AppxPackage : A parameter cannot be found that matches parameter name 'Name'."},
+		{"deployment warning", "WARNING: The package repository is being rebuilt."},
+		{"whitespace only", "   \r\n  "},
+		{"empty", ""},
+		// The token started but never finished: the script died midway, or the
+		// output was truncated. Half an answer is not an answer.
+		{"unterminated token", publisherTokenStart + sideloadPublisher},
+		{"end token only", sideloadPublisher + publisherTokenEnd},
+		// A complete token is not enough on its own. If Select-Object ever
+		// stopped yielding a string the token would faithfully wrap the result,
+		// and anything that is not a publisher would read as a different one.
+		{"token wrapping a non-publisher", publisherTokenStart + "System.Object[]" + publisherTokenEnd},
+		{"token wrapping nothing", publisherTokenStart + publisherTokenEnd},
+		// A publisher-shaped string loose in an error message must not be
+		// mistaken for the answer; only the token may carry it.
+		{"untokenised publisher in an error", "Get-AppxPackage : cannot find a package published by CN=Contoso"},
+	}
+	// Both queries are checked: whichever one is poisoned, nothing may be removed.
+	for _, at := range []struct {
+		name  string
+		index int
+		calls int
+	}{
+		{"installed-publisher query", 1, 2},
+		{"asset-publisher query", 2, 3},
+	} {
+		for _, n := range noise {
+			t.Run(at.name+"/"+n.name, func(t *testing.T) {
+				runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+				runner.outputs[at.index] = []byte(n.output)
+
+				err := installWindows(runner, "/tmp/app.msix")
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				if c := countRemoveAppxCalls(runner.calls); c != 0 {
+					t.Errorf("unrecognised query output caused an uninstall (%d call(s)); calls: %v", c, runner.calls)
+				}
+				if len(runner.calls) != at.calls {
+					t.Errorf("expected %d calls, got %d: %v", at.calls, len(runner.calls), runner.calls)
+				}
+			})
+		}
+	}
+}
+
+// The queries have to be built so that a failure cannot masquerade as an answer.
+// -ErrorAction Stop / $ErrorActionPreference='Stop' are what make a cmdlet error
+// terminating; without them PowerShell writes the error and exits 0, and the
+// manager cannot tell the difference from the outside.
+func TestWindowsInstaller_PublisherQueriesStopOnError(t *testing.T) {
+	installed := installedPublisherCommand()
+	for _, want := range []string{windowsPackageName, "-ErrorAction Stop", "-ExpandProperty Publisher", publisherTokenStart, publisherTokenEnd} {
+		if !strings.Contains(installed, want) {
+			t.Errorf("installed-publisher query is missing %q: %s", want, installed)
+		}
+	}
+	asset := assetPublisherCommand(`C:\tmp\app.msix`)
+	for _, want := range []string{"$ErrorActionPreference='Stop'", "AppxManifest.xml", "Identity.Publisher", `C:\tmp\app.msix`, publisherTokenStart, publisherTokenEnd} {
+		if !strings.Contains(asset, want) {
+			t.Errorf("asset-publisher query is missing %q: %s", want, asset)
+		}
+	}
+}
+
+// The claim this redesign rests on is that the verdict does not depend on what
+// Windows said, only on what it answered. So the same conflict, worded four
+// different ways — including with no wording at all beyond the code — must reach
+// the same decision.
+//
+// Only the English and Italian messages are recorded; the Icelandic is invented
+// and the bare one is not a real message at all. That is safe here in a way it
+// would not have been before, and it is precisely the point: nothing reads these
+// strings except the hex digits. A test that had to quote real prose to pass
+// would mean the prose was still load-bearing.
+func TestWindowsInstaller_Install_VerdictIsIndependentOfMessageLanguage(t *testing.T) {
+	messages := []struct {
+		name    string
+		message string
+	}{
+		{"english", conflict0x80073CF3},
+		{
+			"italian", // verbatim, microsoft/winget-cli#4752
+			"Impossibile installare il pacchetto Mozilla.MozillaFirefox_129.0.2.0_x64__jag0gd4e3s9p2. È già " +
+				"installato un pacchetto Mozilla.MozillaFirefox_126.0.1.0_x64__gmpnhwe7bv608 diverso con lo stesso " +
+				"nome. Exception(1) tid(1274) 80073CF3",
+		},
+		{
+			"icelandic", // invented; nothing reads it
+			"Add-AppxPackage : Uppsetning mistókst með HRESULT: 0x80073CF3, pakkinn stóðst ekki staðfestingu.",
+		},
+		{"no prose at all", "0x80073CF3"},
+	}
+
+	for _, m := range messages {
+		t.Run(m.name+"/differing publishers removes and retries", func(t *testing.T) {
+			runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+			runner.outputs[0] = []byte(m.message)
+			if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+				t.Fatalf("expected the retry to succeed, got: %v", err)
+			}
+			if c := countRemoveAppxCalls(runner.calls); c != 1 {
+				t.Errorf("expected exactly one Remove-AppxPackage, got %d; calls: %v", c, runner.calls)
+			}
+		})
+		t.Run(m.name+"/same publisher keeps the installation", func(t *testing.T) {
+			runner := conflictRunner(sideloadPublisher, sideloadPublisher, true)
+			runner.outputs[0] = []byte(m.message)
+			if err := installWindows(runner, "/tmp/app.msix"); err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if c := countRemoveAppxCalls(runner.calls); c != 0 {
+				t.Errorf("matching publishers still uninstalled (%d call(s)); calls: %v", c, runner.calls)
+			}
+		})
 	}
 }
 
