@@ -23,6 +23,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/theme.dart';
 import 'package:tfc/widgets/panes/database_stats_pane.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/database_connections.dart';
 
@@ -53,6 +54,71 @@ const _alarming = ConnectionCensus(
     PeerConnections(peer: 'local', app: '-', count: 1),
   ],
 );
+
+/// An outage that cost data, plus a counter that has outgrown its column.
+///
+/// The numbers are the ones that were actually measured: 300 samples across a
+/// thirty-second outage left 100, so 200 rows were discarded oldest-first.
+/// Tag names are invented, like the addresses above.
+const _lossy = <String, dynamic>{
+  'total_writes': 4821,
+  'dropped_rows': 200,
+  'dropped_rows_by_table': {'cn01.motor.speed': 200},
+  'poisoned_rows': 12,
+  'poisoned_rows_by_table': {'cn03.infeed.counter': 12},
+  'queued_rows': 340,
+  'queued_rows_by_table': {'cn01.motor.speed': 340},
+  'max_queued_rows_per_table': 10000,
+  'max_queued_rows_total': 200000,
+};
+
+/// Nothing lost, nothing waiting.
+const _clean = <String, dynamic>{
+  'total_writes': 4821,
+  'dropped_rows': 0,
+  'dropped_rows_by_table': <String, int>{},
+  'poisoned_rows': 0,
+  'poisoned_rows_by_table': <String, int>{},
+  'queued_rows': 0,
+  'queued_rows_by_table': <String, int>{},
+  'max_queued_rows_per_table': 10000,
+  'max_queued_rows_total': 200000,
+};
+
+/// The write-queue section docked the same way the census is.
+Widget _writeQueueApp(ThemeData theme, Map<String, dynamic> stats,
+    {required bool collectsHere}) {
+  return MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: theme,
+    home: Scaffold(
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Expanded(child: SizedBox.shrink()),
+          SizedBox(
+            width: 380,
+            child: Material(
+              color: theme.colorScheme.surface,
+              elevation: 8,
+              child: SidePane(
+                title: 'DB connections',
+                subtitle: 'Refreshed every 10 s',
+                icon: Icons.storage,
+                status: const PaneStatus.unknown(),
+                onClose: () {},
+                child: DatabaseWriteQueueView(
+                  stats: stats,
+                  collectsHere: collectsHere,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
 
 /// The pane docked against a page, the way an operator sees it.
 Widget _paneApp(ThemeData theme, ConnectionCensus census) {
@@ -143,6 +209,24 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/database_stats_pane_alarming_dark.png'),
+      );
+    });
+  });
+
+  group('rows never stored goldens', () {
+    testWidgets('an outage that cost data', (tester) async {
+      await _pump(tester, _writeQueueApp(dark, _lossy, collectsHere: true));
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/database_write_queue_lossy_dark.png'),
+      );
+    });
+
+    testWidgets('a station that does not collect', (tester) async {
+      await _pump(tester, _writeQueueApp(dark, _clean, collectsHere: false));
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/database_write_queue_notcollecting_dark.png'),
       );
     });
   });

@@ -58,13 +58,32 @@ class DurationMinutesConverterNonNull implements JsonConverter<Duration, int> {
 
 /// Above this, a "minutes" value is read as microseconds instead.
 ///
-/// Ten years. No retention window, chart window or ratio window is set in
-/// centuries, while the smallest microsecond value in the field -- a 30 minute
-/// ratio window, 1_800_000_000 -- is over three hundred times this. The two
-/// populations are separated by six orders of magnitude, so the test is not a
-/// close call. It exists so configs written before the converter was fixed
-/// keep their meaning; once those are rewritten it can go.
-const int kLegacyMicrosecondCutoffMinutes = 10 * 365 * 24 * 60;
+/// Fifty years. The cutoff has to sit in the *gap* between two populations, and
+/// it used to sit at the top of the lower one instead:
+///
+///   * Legitimate minutes. The largest is a retention policy, which the UI now
+///     clamps to ten years = 5_256_000 minutes. Chart and ratio windows are far
+///     smaller.
+///   * Legacy microseconds, written while the converter was inert. Every field
+///     using this converter is *measured in minutes*, and `toJson` wrote
+///     `inMinutes`, so the smallest value that era could produce is one minute
+///     = 60_000_000 microseconds.
+///
+/// The gap is therefore (5_256_000, 60_000_000), and this constant sits inside
+/// it with roughly five times headroom below and better than two above.
+///
+/// The old value was ten years exactly — 5_256_000 — which is the *first*
+/// number of the lower population rather than a point past it. A retention of
+/// 3651 days is 5_257_440 minutes: one day over ten years, one minute-count
+/// over the cutoff, and it was read back as 5.25744 seconds. Timescale was then
+/// told to drop every chunk older than five seconds, and did. The cliff was
+/// inside the range the operator could type, which is the whole defect; moving
+/// it into the gap is what fixes it, and the clamp in the UI plus
+/// [RetentionPolicy] keeps anything from approaching it again.
+///
+/// It exists so configs written before the converter was fixed keep their
+/// meaning; once those are rewritten it can go.
+const int kLegacyMicrosecondCutoffMinutes = 50 * 365 * 24 * 60;
 
 Duration durationFromMinutesTolerant(int value) => value.abs() > kLegacyMicrosecondCutoffMinutes
     ? Duration(microseconds: value)

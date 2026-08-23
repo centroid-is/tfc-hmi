@@ -50,6 +50,7 @@ class DatabaseStatsPane extends ConsumerStatefulWidget {
 class _DatabaseStatsPaneState extends ConsumerState<DatabaseStatsPane> {
   Timer? _timer;
   ConnectionCensus? _census;
+  Map<String, dynamic>? _writeStats;
   Object? _error;
   bool _postgres = true;
   bool _loading = true;
@@ -78,11 +79,16 @@ class _DatabaseStatsPaneState extends ConsumerState<DatabaseStatsPane> {
         });
         return;
       }
+      // Read before the query: getStats() is a local field read and cannot
+      // fail, so the write counters stay visible even when the census — which
+      // needs a connection, the very thing that runs out — does not.
+      final writeStats = db.getStats();
       final rows = await db.db.customSelect(connectionCensusSql).get();
       final census = parseConnectionCensus(rows.map((r) => r.data));
       if (!mounted) return;
       setState(() {
         _census = census;
+        _writeStats = writeStats;
         _error = null;
         _postgres = true;
         _loading = false;
@@ -95,6 +101,16 @@ class _DatabaseStatsPaneState extends ConsumerState<DatabaseStatsPane> {
       });
     }
   }
+
+  /// Whether the process showing this pane is the one writing samples.
+  ///
+  /// It is not. `collectorProvider` (lib/providers/collector.dart) builds its
+  /// Collector with `collect: false` — "do not collect data in main isolate" —
+  /// and the collecting Collector lives in the backend service, a separate
+  /// process entirely. Written as a constant with its reasoning rather than
+  /// inlined, so that if the topology ever changes this is the one place to
+  /// look.
+  static const bool _collectsInThisProcess = false;
 
   @override
   Widget build(BuildContext context) {
@@ -110,11 +126,149 @@ class _DatabaseStatsPaneState extends ConsumerState<DatabaseStatsPane> {
                   'server, so there are no connections to count.'),
             )
           : census != null
-              ? DatabaseCensusView(census: census, staleError: _error)
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DatabaseCensusView(census: census, staleError: _error),
+                    if (_writeStats != null)
+                      DatabaseWriteQueueView(
+                        stats: _writeStats!,
+                        collectsHere: _collectsInThisProcess,
+                      ),
+                  ],
+                )
               : _loading
                   ? const PaneSection(
                       child: Center(child: CircularProgressIndicator()))
                   : PaneSection(child: _CensusError(error: _error)),
+    );
+  }
+}
+
+/// What this process's write pipeline has thrown away, and how close it is to
+/// throwing away more.
+///
+/// Built from [Database.getStats]. Rows can be discarded for two unrelated
+/// reasons and they are shown apart, because the remedies are different:
+///
+///   * *Discarded* — a queue filled up while the database was unreachable. The
+///     remedy is to shorten the outage, or to raise [kMaxQueuedRowsPerTable].
+///   * *Rejected* — the server refused the values themselves and always will,
+///     almost always a counter that has outgrown an `INTEGER` column. The
+///     remedy is to widen the column.
+///
+/// Both were previously invisible: `getStats()` reported only writes and waits,
+/// and this pane showed neither. A thirty-second outage could take two thirds
+/// of a tag's samples with nothing anywhere to say so.
+class DatabaseWriteQueueView extends StatelessWidget {
+  final Map<String, dynamic> stats;
+
+  /// Whether this process actually collects data.
+  ///
+  /// On a normal HMI station it does not — collection runs in the backend
+  /// service, in its own process — so these counters are this application's own
+  /// writes and will read zero. Saying so is the point: a permanent zero that
+  /// looks like a health indicator is worse than no indicator, because it reads
+  /// as "no data has been lost" when it means "this process was never the one
+  /// writing".
+  final bool collectsHere;
+
+  const DatabaseWriteQueueView({
+    super.key,
+    required this.stats,
+    required this.collectsHere,
+  });
+
+  int _int(String key) => (stats[key] as int?) ?? 0;
+
+  Map<String, int> _byTable(String key) =>
+      (stats[key] as Map?)?.cast<String, int>() ?? const {};
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dropped = _int('dropped_rows');
+    final poisoned = _int('poisoned_rows');
+    final queued = _int('queued_rows');
+    final lost = dropped + poisoned;
+    final perTableCap = _int('max_queued_rows_per_table');
+
+    final byTable = <String, ({int dropped, int poisoned})>{};
+    for (final e in _byTable('dropped_rows_by_table').entries) {
+      byTable[e.key] = (dropped: e.value, poisoned: 0);
+    }
+    for (final e in _byTable('poisoned_rows_by_table').entries) {
+      final prev = byTable[e.key];
+      byTable[e.key] =
+          (dropped: prev?.dropped ?? 0, poisoned: e.value);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        PaneSection(
+          title: 'Rows never stored',
+          child: PaneTileRow(
+            children: [
+              PaneMetricTile(
+                label: 'Discarded',
+                value: '$dropped',
+                valueColor: dropped > 0 ? theme.colorScheme.error : null,
+              ),
+              PaneMetricTile(
+                label: 'Rejected',
+                value: '$poisoned',
+                valueColor: poisoned > 0 ? theme.colorScheme.error : null,
+              ),
+              PaneMetricTile(
+                label: 'Waiting',
+                value: '$queued',
+              ),
+            ],
+          ),
+        ),
+        if (byTable.isNotEmpty)
+          PaneSection(
+            title: 'By tag',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final e in byTable.entries)
+                  PaneDetailRow(
+                    label: e.key,
+                    value: [
+                      if (e.value.dropped > 0) '${e.value.dropped} discarded',
+                      if (e.value.poisoned > 0) '${e.value.poisoned} rejected',
+                    ].join(' · '),
+                  ),
+              ],
+            ),
+          ),
+        PaneSection(
+          child: Text(
+            !collectsHere
+                ? 'This application does not collect data — collection runs in '
+                    'the backend service, in a separate process, so these '
+                    'counters cover only this application\'s own writes. They '
+                    'are expected to be zero here; the collector\'s own figures '
+                    'are in its log.'
+                : lost > 0
+                    ? 'Discarded rows filled a queue during an outage and are '
+                        'gone for good; the buffer holds $perTableCap rows per '
+                        'tag. Rejected rows were refused by the server on their '
+                        'contents — usually a counter that has outgrown an '
+                        'INTEGER column, which needs widening to BIGINT.'
+                    : 'Nothing has been discarded. "Waiting" is what is buffered '
+                        'right now; it only grows while the database is '
+                        'unreachable, and rows are only lost once it reaches '
+                        '$perTableCap for a tag.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ),
+      ],
     );
   }
 }
