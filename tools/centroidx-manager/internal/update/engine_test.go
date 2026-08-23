@@ -59,12 +59,17 @@ type mockInstaller struct {
 	trustAttempts []string
 	trustedCerts  []string
 	launchedApp   bool
-	installErr    error
-	trustErr      error
-	launchErr     error
+	// order records the sequence of interface calls. Trusting the certificate
+	// after installing would be useless — the signature is checked during the
+	// install — so the ordering is part of the contract.
+	order      []string
+	installErr error
+	trustErr   error
+	launchErr  error
 }
 
 func (m *mockInstaller) Install(assetPath string) error {
+	m.order = append(m.order, "install")
 	if m.installErr != nil {
 		return m.installErr
 	}
@@ -73,6 +78,7 @@ func (m *mockInstaller) Install(assetPath string) error {
 }
 
 func (m *mockInstaller) TrustCertificate(certPath string) error {
+	m.order = append(m.order, "trust")
 	m.trustAttempts = append(m.trustAttempts, certPath)
 	if m.trustErr != nil {
 		return m.trustErr
@@ -452,6 +458,20 @@ func TestEngine_Update_TrustsCertificate(t *testing.T) {
 	}
 	if len(inst.installed) == 0 {
 		t.Error("expected Install to be called")
+	}
+}
+
+// Trust has to precede the install: Add-AppxPackage validates the signature as
+// it installs, so a certificate imported afterwards helps nothing.
+func TestEngine_Update_TrustsCertificateBeforeInstalling(t *testing.T) {
+	inst := &mockInstaller{}
+	eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if len(inst.order) < 2 || inst.order[0] != "trust" || inst.order[1] != "install" {
+		t.Errorf("expected trust before install, got call order %v", inst.order)
 	}
 }
 

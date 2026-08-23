@@ -98,6 +98,12 @@ func TestWindowsInstaller_TrustCertificate(t *testing.T) {
 	if !hasArgContaining(all, "TrustedPeople") {
 		t.Errorf("expected 'TrustedPeople' in command args, got: %v", all)
 	}
+	// Must be the machine store. Add-AppxPackage validates sideload signatures
+	// against machine-level trust, so Cert:\CurrentUser\TrustedPeople would
+	// still contain "TrustedPeople" while silently not working.
+	if !hasArgContaining(all, `Cert:\LocalMachine\TrustedPeople`) {
+		t.Errorf("expected the machine-level TrustedPeople store, got: %v", all)
+	}
 	if !hasArgContaining(all, "/tmp/cert.cer") {
 		t.Errorf("expected cert path in command args, got: %v", all)
 	}
