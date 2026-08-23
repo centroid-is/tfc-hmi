@@ -92,11 +92,38 @@ func requireRelease(t *testing.T, client githubclient.ReleasesClient) suitableRe
 		}
 	}
 
-	t.Skipf(
-		"no release in centroid-is/tfc-hmi has both %q and SHA256SUMS.txt — skipping (running on %s/%s)",
+	// A missing asset is a real failure everywhere except the one platform
+	// where its absence is a recorded decision.
+	//
+	// This used to skip unconditionally, which meant the job went green by
+	// doing nothing: the whole point of an integration test is to notice when
+	// the pipeline stops publishing something, and skipping is indistinguishable
+	// from passing in the CI summary. Windows and macOS assets disappearing is
+	// exactly the regression this test exists to catch, so on those it fails.
+	//
+	// Linux is deliberately exempt. The manager asks for a .deb (see
+	// platformExt) and the release pipeline has never built one; Linux stations
+	// run the elinux docker image rather than installing through the manager,
+	// so this is an accepted gap, not a regression. Skipping keeps
+	// integration-test (ubuntu-latest) honest about what it did NOT verify
+	// instead of failing on a decision nobody intends to revisit.
+	if runtime.GOOS == "linux" {
+		t.Skipf(
+			"no release publishes %q, and none is expected: Linux stations run the "+
+				"elinux docker image, not a manager install. Nothing was verified on %s/%s.",
+			platformAssetName, runtime.GOOS, runtime.GOARCH,
+		)
+		return suitableRelease{} // unreachable - t.Skipf does not return
+	}
+
+	t.Fatalf(
+		"no release in centroid-is/tfc-hmi has both %q and SHA256SUMS.txt (running on %s/%s). "+
+			"The manager cannot install anything on this platform - either the release "+
+			"pipeline stopped publishing that asset, or it was renamed without updating "+
+			"selectPlatformAssetName.",
 		platformAssetName, runtime.GOOS, runtime.GOARCH,
 	)
-	return suitableRelease{} // unreachable — t.Skipf does not return
+	return suitableRelease{} // unreachable - t.Fatalf does not return
 }
 
 // TestIntegration_ListReleases verifies that the real GitHub Releases API
