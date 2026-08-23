@@ -147,52 +147,94 @@ func importCertificateCommand(certPath string) string {
 	return `Import-Certificate -FilePath '` + certPath + `' -CertStoreLocation ` + certStoreLocation
 }
 
-// elevationRequiredSignals are the ways Windows says "you are not an
-// administrator". Unlike the publisher-conflict match in installWindows, a
-// false positive here is harmless — it only changes the wording of an error
-// that has already happened, and never destroys anything — so this errs
-// towards matching, where that one errs away from it.
-var elevationRequiredSignals = []string{
-	"access is denied",
-	"unauthorizedaccessexception",
-	"requested registry access is not allowed",
-	"0x80070005",
+// Tokens the trust script emits about itself. Everything the manager decides
+// about a trust attempt is read from these, never from Windows' own wording:
+// the stations run mixed and unknown locales, so any English phrase would be
+// unreliable in production while passing every test we can write here.
+const (
+	trustOKToken       = "CENTROIDX_TRUST_OK"
+	trustFailedToken   = "CENTROIDX_TRUST_FAILED"
+	trustNotElevated   = "ELEVATED=FALSE"
+	trustScriptSuccess = "> $null"
+)
+
+// trustCertificateScript imports the certificate and reports, in its own
+// vocabulary, what happened.
+//
+// Elevation is asked of Windows rather than inferred from a failure message:
+// IsInRole returns a boolean that means the same thing in every language. It is
+// evaluated before the import so the answer is available even when the import
+// throws.
+//
+// -ErrorAction Stop makes the cmdlet error terminating so the catch fires;
+// without it a non-terminating error would skip the catch and emit the success
+// token for an import that did not happen. (This is deliberately scoped to this
+// script — the same flag is missing from Add-AppxPackage in installWindows, but
+// that changes which installs count as failures and is tracked separately.)
+func trustCertificateScript(certPath string) string {
+	return `$e = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); ` +
+		`try { ` + importCertificateCommand(certPath) + ` -ErrorAction Stop ` + trustScriptSuccess + `; ` +
+		`Write-Output '` + trustOKToken + `' } ` +
+		`catch { Write-Output ('` + trustFailedToken + ` ELEVATED=' + $e.ToString().ToUpper()); ` +
+		`Write-Output $_.Exception.Message; exit 1 }`
 }
 
 // trustCertificateWindows imports a certificate into LocalMachine\TrustedPeople.
 //
 // Writing to a machine-level store requires administrator rights, and the
-// manager never requests elevation, so on an ordinary station this fails. The
+// manager never elevates itself, so on an ordinary station this fails. The
 // engine treats that as non-fatal, which makes this error message the only
-// thing an operator has to work from — hence the command output is folded in,
-// and a rights failure says so and carries the one-time manual fix.
+// thing an operator has to work from — so when the cause is rights, it says so
+// and carries the one-time command, and when it is not, it does not.
+//
+// The verdict comes from the script's own tokens rather than the exit code or
+// the message text. A missing token means we could not tell what happened, and
+// that is reported as a failure: the caller treats trust as best-effort, so a
+// false success would be silent and permanent.
 func trustCertificateWindows(runner CommandRunner, certPath string) error {
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command",
-		importCertificateCommand(certPath),
+		trustCertificateScript(certPath),
 	)
-	if err == nil {
+
+	detail := strings.TrimSpace(string(out))
+	upper := strings.ToUpper(detail)
+
+	if err == nil && strings.Contains(upper, trustOKToken) {
 		return nil
 	}
 
-	detail := strings.TrimSpace(string(out))
-	lower := strings.ToLower(detail)
-	for _, signal := range elevationRequiredSignals {
-		if strings.Contains(lower, signal) {
+	// Keep a non-nil cause even when PowerShell exited 0 but told us it failed.
+	cause := err
+	if cause == nil {
+		cause = errors.New("no exit status")
+	}
+
+	if strings.Contains(upper, trustFailedToken) {
+		if strings.Contains(upper, trustNotElevated) {
 			return &commandError{
 				op: "Import-Certificate failed: the manager is not running as administrator and " +
 					certStoreLocation + " requires it. Run this once from an elevated PowerShell: " +
 					importCertificateCommand(certPath) + " — detail: " + detail,
-				cause: err,
+				cause: cause,
 			}
 		}
+		return &commandError{op: "Import-Certificate failed: " + detail, cause: cause}
 	}
+
+	// Neither token: the script did not run, or did not run to either end.
 	if detail != "" {
-		return &commandError{op: "Import-Certificate failed: " + detail, cause: err}
+		return &commandError{
+			op:    "Import-Certificate produced no recognisable result, so the certificate cannot be assumed trusted: " + detail,
+			cause: cause,
+		}
 	}
-	return &commandError{op: "Import-Certificate failed", cause: err}
+	return &commandError{
+		op:    "Import-Certificate produced no output, so the certificate cannot be assumed trusted",
+		cause: cause,
+	}
 }
 
 // installLinux runs dpkg -i with pkexec (GUI elevation) or sudo (fallback).
