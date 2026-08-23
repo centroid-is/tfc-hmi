@@ -1736,14 +1736,14 @@ class StateMan {
         throw StateManException("Key: \"$key\" not found");
       }
       final (id, idx) = nodeId;
-      parameters[client] = {
-        id: [
-          AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
-          AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
-          AttributeId.UA_ATTRIBUTEID_DATATYPE,
-          AttributeId.UA_ATTRIBUTEID_VALUE,
-        ]
-      };
+      // Accumulate: assigning a fresh map here dropped every node but the
+      // last one for each client, so readMany returned a single value.
+      (parameters[client] ??= {})[id] = [
+        AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
+        AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
+        AttributeId.UA_ATTRIBUTEID_DATATYPE,
+        AttributeId.UA_ATTRIBUTEID_VALUE,
+      ];
     }
 
     for (final pair in parameters.entries) {
@@ -1923,6 +1923,7 @@ class StateMan {
       ads._rawSub?.cancel();
       ads._rawSub = null;
       if (!ads._subject.isClosed) ads._subject.close();
+      _unregisterStream(ads);
     }
 
     // Changed keys with a live OPC UA monitor: re-point the monitored item
@@ -1941,6 +1942,7 @@ class StateMan {
         _subscriptions.remove(key);
         ads._idleTimer?.cancel();
         if (!ads._subject.isClosed) ads._subject.close();
+        _unregisterStream(ads);
         continue;
       }
       logger.i('[$alias] key mapping changed, resubscribing live: $key');
@@ -2052,6 +2054,20 @@ class StateMan {
     return keyMappings.lookupNodeId(key);
   }
 
+  /// Drop [ads] from every wrapper's resend set.
+  ///
+  /// [ClientWrapper.streams] is what [ClientWrapper._handleRecovery] walks
+  /// after an inactivity blip. An entry left behind once its subject is closed
+  /// is retained for the lifetime of the process, and every path that retires a
+  /// subscription must come through here -- there are three (idle timeout, raw
+  /// stream done, and key-mapping edits), and only the first two went through
+  /// the dispose callback.
+  void _unregisterStream(AutoDisposingStream ads) {
+    for (final w in clients) {
+      w.streams.remove(ads);
+    }
+  }
+
   @visibleForTesting
   void addSubscription({
     required String key,
@@ -2088,12 +2104,13 @@ class StateMan {
     // Register entry synchronously before any await so concurrent
     // callers for the same key hit the early return above.
     if (!_subscriptions.containsKey(key)) {
-      final ads = AutoDisposingStream<DynamicValue>(key, (key) {
+      late final AutoDisposingStream<DynamicValue> ads;
+      ads = AutoDisposingStream<DynamicValue>(key, (key) {
         _subscriptions.remove(key);
-        // Remove from wrapper's stream set on disposal
-        for (final w in clients) {
-          w.streams.remove(_subscriptions[key]);
-        }
+        // Remove from wrapper's stream set on disposal. Captured, not looked
+        // up: reading _subscriptions[key] here is always null -- the line
+        // above just removed it -- so this used to remove nothing at all.
+        _unregisterStream(ads);
         logger.d('Unsubscribed from $key');
       });
       _subscriptions[key] = ads;
@@ -2501,6 +2518,10 @@ class AutoDisposingStream<T> {
   }
 
   void resendLastValue() {
+    // A spent entry can still be reachable from ClientWrapper.streams; adding
+    // to its closed subject throws StateError, which would abort the recovery
+    // loop and leave every later key on that server unrefreshed.
+    if (_subject.isClosed) return;
     if (_lastValue != null) {
       _subject.add(_lastValue!);
     }
