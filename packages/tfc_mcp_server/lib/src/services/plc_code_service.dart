@@ -14,6 +14,7 @@ import 'package:archive/archive.dart';
 import '../cache/ttl_cache.dart';
 import '../compiler/call_graph_builder.dart';
 import '../interfaces/plc_code_index.dart';
+import '../parser/source_encoding.dart';
 import '../parser/schneider_xml_parser.dart';
 import '../parser/twincat_zip_extractor.dart';
 import '../parser/twincat_xml_parser.dart';
@@ -283,7 +284,7 @@ class PlcCodeService {
               nameLower.endsWith('.xef') ||
               nameLower.endsWith('.st')) {
             try {
-              final content = String.fromCharCodes(entry.content as List<int>);
+              final content = decodeSourceBytes(entry.content as List<int>);
 
               if (nameLower.endsWith('.st')) {
                 // Raw ST file
