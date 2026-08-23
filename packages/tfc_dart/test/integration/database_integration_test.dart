@@ -978,6 +978,212 @@ void main() {
               greaterThanOrEqualTo(result[i - 1].time.millisecondsSinceEpoch));
         }
       });
+
+      // The per-bucket "last" is TimescaleDB's last(value, time) rather than
+      // (array_agg(value ORDER BY time DESC))[1], which forced a full external
+      // merge sort of every row in range. The two are equivalent; these pin
+      // the corners of that equivalence, because the one thing that would make
+      // the optimisation unsafe is a case where they disagree.
+      group('per-bucket last() semantics', () {
+        /// Runs the same aggregation both ways, straight against the server,
+        /// and asserts they agree row for row. `IS NOT DISTINCT FROM` so two
+        /// NULLs count as agreement.
+        Future<void> expectAggregatesAgree(String table) async {
+          final rows = await database.db.customSelect('''
+            SELECT
+              time_bucket('1 minute'::interval, time)  AS bucket,
+              (array_agg(value ORDER BY time DESC))[1] AS old_last,
+              last(value, time)                        AS new_last,
+              ((array_agg(value ORDER BY time DESC))[1]
+                 IS NOT DISTINCT FROM last(value, time)) AS same
+            FROM "$table"
+            GROUP BY bucket
+            ORDER BY bucket
+          ''').get();
+
+          expect(rows, isNotEmpty, reason: 'nothing to compare');
+          for (final row in rows) {
+            expect(row.data['same'], true,
+                reason: 'array_agg and last() disagreed on bucket '
+                    '${row.data['bucket']}: ${row.data['old_last']} vs '
+                    '${row.data['new_last']}');
+          }
+        }
+
+        test('agrees with array_agg on plain, distinct-timestamp data',
+            () async {
+          final base = DateTime.utc(2026, 1, 1);
+          for (var i = 0; i < 30; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(seconds: i * 10)), i * 1.5);
+          }
+          await database.flush();
+          await expectAggregatesAgree(testTableName);
+        });
+
+        test('both carry a NULL value on the newest row, neither skips back',
+            () async {
+          // The interesting case: last() could plausibly have been defined to
+          // ignore NULL values and fall back to an older non-null sample. It
+          // is not — it returns whatever the greatest-time row holds. A
+          // collector writing a null on a dropped read must keep reading as a
+          // gap in the chart, not as the previous value held forever.
+          final base = DateTime.utc(2026, 1, 1);
+          await database.insertTimeseriesData(testTableName, base, 10.0);
+          await database.insertTimeseriesData(
+              testTableName, base.add(const Duration(seconds: 10)), 20.0);
+          await database.flush();
+          // insertTimeseriesData has no null path, so write it directly.
+          await database.db.customStatement(
+              'INSERT INTO "$testTableName" (time, value) VALUES '
+              "('${base.add(const Duration(seconds: 20)).toIso8601String()}'::timestamptz, NULL)");
+
+          await expectAggregatesAgree(testTableName);
+
+          final row = await database.db.customSelect(
+              'SELECT last(value, time) AS v FROM "$testTableName"').get();
+          expect(row.single.data['v'], isNull,
+              reason: 'last() must propagate the newest NULL');
+        });
+
+        test('agrees when every value in a bucket is NULL', () async {
+          final base = DateTime.utc(2026, 1, 1);
+          await database.insertTimeseriesData(testTableName, base, 1.0);
+          await database.flush();
+          await database.db
+              .customStatement('DELETE FROM "$testTableName"');
+          for (var i = 0; i < 3; i++) {
+            await database.db.customStatement(
+                'INSERT INTO "$testTableName" (time, value) VALUES '
+                "('${base.add(Duration(seconds: i * 10)).toIso8601String()}'::timestamptz, NULL)");
+          }
+          await expectAggregatesAgree(testTableName);
+        });
+
+        test('agrees on NaN and Infinity', () async {
+          final base = DateTime.utc(2026, 1, 1);
+          await database.insertTimeseriesData(testTableName, base, 1.0);
+          await database.flush();
+          for (final (i, literal) in [
+            "'NaN'",
+            "'Infinity'",
+            "'-Infinity'",
+          ].indexed) {
+            await database.db.customStatement(
+                'INSERT INTO "$testTableName" (time, value) VALUES '
+                "('${base.add(Duration(seconds: (i + 1) * 10)).toIso8601String()}'::timestamptz, $literal)");
+          }
+          await expectAggregatesAgree(testTableName);
+        });
+
+        test('a hypertable cannot hold a NULL time', () async {
+          // This is what makes the equivalence total. ORDER BY time DESC sorts
+          // NULLs *first*, so a NULL time would make array_agg[1] pick that
+          // row while last() skips it. Timescale forbids it outright, because
+          // time is the partitioning column.
+          await database.insertTimeseriesData(
+              testTableName, DateTime.utc(2026, 1, 1), 1.0);
+          await database.flush();
+
+          expect(
+            () => database.db.customStatement(
+                'INSERT INTO "$testTableName" (time, value) VALUES (NULL, 1)'),
+            throwsA(anything),
+          );
+        });
+      });
+
+      // The information_schema lookup that picks the scalar-vs-array SQL used
+      // to run once per series per query — 2 ms each, queued behind everything
+      // else on a pool of one.
+      group('value-column type cache', () {
+        // The Database outlives every test here, and the shared table is
+        // dropped and recreated between them, so start each case cold.
+        setUp(() => database.valueColumnTypeCache.clear());
+
+        test('a cached type is used instead of a fresh lookup', () async {
+          final base = DateTime.now().subtract(const Duration(minutes: 60));
+          for (var i = 0; i < 20; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(minutes: i)), i.toDouble());
+          }
+          await database.flush();
+
+          final from = base.subtract(const Duration(seconds: 1));
+          final to = base.add(const Duration(minutes: 21));
+
+          expect(database.valueColumnTypeCache, isNot(contains(testTableName)),
+              reason: 'cache should start cold for this table');
+
+          final downsampled = await database
+              .queryTimeseriesDataDownsampled(testTableName, from, to,
+                  maxPoints: 9);
+          expect(downsampled.length, lessThan(20),
+              reason: 'a double precision column downsamples');
+          expect(database.valueColumnTypeCache[testTableName]?.dataType,
+              'double precision');
+
+          // Now lie to the cache. If the second call still consults
+          // information_schema it will see `double precision` and downsample
+          // again; if it trusts the cache it takes the non-numeric fallback
+          // and hands back every raw row. The row count is the tell.
+          database.valueColumnTypeCache[testTableName] =
+              ValueColumnType('boolean', 'bool');
+
+          final viaCache = await database
+              .queryTimeseriesDataDownsampled(testTableName, from, to,
+                  maxPoints: 9);
+          expect(viaCache.length, 20,
+              reason: 'the poisoned cache entry must be the one that is used');
+        });
+
+        test('a wrong cached type is evicted when the query fails', () async {
+          final base = DateTime.now().subtract(const Duration(minutes: 60));
+          for (var i = 0; i < 10; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(minutes: i)), i.toDouble());
+          }
+          await database.flush();
+
+          final from = base.subtract(const Duration(seconds: 1));
+          final to = base.add(const Duration(minutes: 11));
+
+          // A key retyped scalar → array recreates the table underneath a
+          // long-lived Database. Simulate the stale entry that leaves behind:
+          // the array SQL unnests `value`, which a scalar column refuses.
+          database.valueColumnTypeCache[testTableName] =
+              ValueColumnType('ARRAY', '_float8');
+
+          await expectLater(
+            database.queryTimeseriesDataDownsampled(testTableName, from, to,
+                maxPoints: 9),
+            throwsA(anything),
+          );
+          expect(database.valueColumnTypeCache, isNot(contains(testTableName)),
+              reason: 'a stale entry must not survive the failure it caused');
+
+          // And the retry re-detects and succeeds.
+          final result = await database
+              .queryTimeseriesDataDownsampled(testTableName, from, to,
+                  maxPoints: 9);
+          expect(result, isNotEmpty);
+        });
+
+        test('a missing table is never cached', () async {
+          // The collector may create the table moments later; caching "no
+          // such column" would leave the series raw for the whole session.
+          await expectLater(
+            database.queryTimeseriesDataDownsampled(
+                'not_created_yet_xyz',
+                DateTime.now().subtract(const Duration(hours: 1)),
+                DateTime.now(),
+                maxPoints: 9),
+            throwsA(anything),
+          );
+          expect(database.valueColumnTypeCache,
+              isNot(contains('not_created_yet_xyz')));
+        });
+      });
     });
 
     group('Error Handling', () {

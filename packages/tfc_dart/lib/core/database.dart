@@ -408,6 +408,90 @@ class _PendingWrite {
   }
 }
 
+/// The Postgres type of a collected table's `value` column.
+class ValueColumnType {
+  final String dataType;
+  final String udtName;
+  const ValueColumnType(this.dataType, this.udtName);
+}
+
+/// Builds the min/max/last downsampling SQL used by
+/// [Database.queryTimeseriesDataDownsampled].
+///
+/// [quotedTable] must already have its embedded double quotes doubled; it is
+/// interpolated inside `"..."`. The statement takes three positional
+/// parameters: `$1` the bucket interval, `$2`/`$3` the inclusive time bounds.
+///
+/// The per-bucket "last" value is TimescaleDB's `last(value, time)`, **not**
+/// `(array_agg(value ORDER BY time DESC))[1]`. The two are equivalent — both
+/// yield the value carried by the row with the greatest `time` in the bucket,
+/// both propagate a NULL *value* on that newest row rather than skipping back
+/// to an older non-null one, and neither defines which row wins when several
+/// share the maximum `time`. A NULL *time* cannot arise: `time` is the
+/// hypertable partitioning column, so Timescale enforces NOT NULL on it (the
+/// one case where the two would differ, since `ORDER BY time DESC` sorts NULLs
+/// first). The difference is entirely in the plan: `array_agg(... ORDER BY)`
+/// forces a full sort of every row in range — measured as
+/// `Sort Method: external merge  Disk: 60288kB` over 1.8M rows on the plant
+/// database — while `last()` is computed in one pass off the existing time
+/// index.
+@visibleForTesting
+String buildDownsampleSql(
+    {required String quotedTable, required bool isArray}) {
+  if (isArray) {
+    // Unnest array elements, aggregate per-index, re-assemble arrays
+    return r'''
+        WITH elements AS (
+          SELECT
+            time,
+            val,
+            idx
+          FROM "''' +
+        quotedTable +
+        r'''"
+          CROSS JOIN LATERAL unnest(value) WITH ORDINALITY AS t(val, idx)
+          WHERE time >= $2::timestamptz AND time <= $3::timestamptz
+        ),
+        agg AS (
+          SELECT
+            time_bucket($1::interval, time) AS bucket,
+            idx,
+            min(val)                                   AS min_val,
+            max(val)                                   AS max_val,
+            last(val, time)                            AS last_val
+          FROM elements
+          GROUP BY bucket, idx
+        )
+        SELECT bucket AS time, array_agg(min_val ORDER BY idx) AS value FROM agg GROUP BY bucket
+        UNION ALL
+        SELECT bucket + $1::interval * 0.5, array_agg(max_val ORDER BY idx) FROM agg GROUP BY bucket
+        UNION ALL
+        SELECT bucket + $1::interval, array_agg(last_val ORDER BY idx) FROM agg GROUP BY bucket
+        ORDER BY 1
+      ''';
+  }
+  return r'''
+        WITH agg AS (
+          SELECT
+            time_bucket($1::interval, time) AS bucket,
+            min(value)                                   AS min_val,
+            max(value)                                   AS max_val,
+            last(value, time)                            AS last_val
+          FROM "''' +
+      quotedTable +
+      r'''"
+          WHERE time >= $2::timestamptz AND time <= $3::timestamptz
+          GROUP BY bucket
+        )
+        SELECT bucket              AS time, min_val  AS value FROM agg
+        UNION ALL
+        SELECT bucket + $1::interval * 0.5,  max_val  AS value FROM agg
+        UNION ALL
+        SELECT bucket + $1::interval,         last_val AS value FROM agg
+        ORDER BY 1
+      ''';
+}
+
 class Database {
   Database(
     this.db, {
@@ -1332,6 +1416,48 @@ class Database {
     throw DatabaseException('Time column not found in table $tableName');
   }
 
+  /// Postgres type of each collected table's `value` column, keyed by table.
+  ///
+  /// Every downsampled series used to pay an `information_schema` round trip
+  /// to learn this — 2 ms each, and they queue behind every other statement on
+  /// a pool of one, so a History View with a dozen series spent an eighth of a
+  /// second on nothing but type lookups before the first row was fetched. A
+  /// collected table's `value` type is fixed when the collector creates it, so
+  /// one lookup per table per session is enough.
+  ///
+  /// Only *positive* answers are cached. A table that does not exist yet is
+  /// deliberately re-checked, because the collector may create it moments
+  /// later. A retype (which drops and recreates the table) is caught by the
+  /// eviction in [queryTimeseriesDataDownsampled]'s error path.
+  final Map<String, ValueColumnType> _valueColumnTypes = {};
+
+  /// The [_valueColumnTypes] cache, so tests can seed it and watch it evict.
+  @visibleForTesting
+  Map<String, ValueColumnType> get valueColumnTypeCache => _valueColumnTypes;
+
+  Future<ValueColumnType?> _valueColumnType(String tableName) async {
+    final cached = _valueColumnTypes[tableName];
+    if (cached != null) return cached;
+
+    final typeResult = await db.customSelect(
+      r'''
+      SELECT data_type, udt_name
+      FROM information_schema.columns
+      WHERE table_name = $1 AND column_name = 'value'
+      ''',
+      variables: [Variable.withString(tableName)],
+    ).get();
+
+    if (typeResult.isEmpty) return null;
+
+    final type = ValueColumnType(
+      typeResult.first.data['data_type'] as String,
+      typeResult.first.data['udt_name'] as String,
+    );
+    _valueColumnTypes[tableName] = type;
+    return type;
+  }
+
   /// Query time-series data with server-side downsampling using TimescaleDB time_bucket().
   ///
   /// For each bucket, returns 3 points: min value, max value, and last value,
@@ -1365,22 +1491,14 @@ class Database {
     final intervalStr = '$bucketMs milliseconds';
     final quotedTable = tableName.replaceAll('"', '""');
 
-    // Detect column type to choose the right SQL
-    final typeResult = await db.customSelect(
-      r'''
-      SELECT data_type, udt_name
-      FROM information_schema.columns
-      WHERE table_name = $1 AND column_name = 'value'
-      ''',
-      variables: [Variable.withString(tableName)],
-    ).get();
-
-    if (typeResult.isEmpty) {
+    // Detect column type to choose the right SQL.
+    final valueType = await _valueColumnType(tableName);
+    if (valueType == null) {
       return queryTimeseriesData(tableName, endTime, from: startTime);
     }
 
-    final dataType = typeResult.first.data['data_type'] as String;
-    final udtName = typeResult.first.data['udt_name'] as String;
+    final dataType = valueType.dataType;
+    final udtName = valueType.udtName;
     final isArray = dataType == 'ARRAY' || udtName.startsWith('_');
 
     // Only support numeric types
@@ -1405,66 +1523,24 @@ class Database {
       return queryTimeseriesData(tableName, endTime, from: startTime);
     }
 
-    final String sql;
-    if (isArray) {
-      // Unnest array elements, aggregate per-index, re-assemble arrays
-      sql = r'''
-        WITH elements AS (
-          SELECT
-            time,
-            val,
-            idx
-          FROM "''' +
-          quotedTable +
-          r'''"
-          CROSS JOIN LATERAL unnest(value) WITH ORDINALITY AS t(val, idx)
-          WHERE time >= $2::timestamptz AND time <= $3::timestamptz
-        ),
-        agg AS (
-          SELECT
-            time_bucket($1::interval, time) AS bucket,
-            idx,
-            min(val)                                   AS min_val,
-            max(val)                                   AS max_val,
-            (array_agg(val ORDER BY time DESC))[1]     AS last_val
-          FROM elements
-          GROUP BY bucket, idx
-        )
-        SELECT bucket AS time, array_agg(min_val ORDER BY idx) AS value FROM agg GROUP BY bucket
-        UNION ALL
-        SELECT bucket + $1::interval * 0.5, array_agg(max_val ORDER BY idx) FROM agg GROUP BY bucket
-        UNION ALL
-        SELECT bucket + $1::interval, array_agg(last_val ORDER BY idx) FROM agg GROUP BY bucket
-        ORDER BY 1
-      ''';
-    } else {
-      sql = r'''
-        WITH agg AS (
-          SELECT
-            time_bucket($1::interval, time) AS bucket,
-            min(value)                                   AS min_val,
-            max(value)                                   AS max_val,
-            (array_agg(value ORDER BY time DESC))[1]     AS last_val
-          FROM "''' +
-          quotedTable +
-          r'''"
-          WHERE time >= $2::timestamptz AND time <= $3::timestamptz
-          GROUP BY bucket
-        )
-        SELECT bucket              AS time, min_val  AS value FROM agg
-        UNION ALL
-        SELECT bucket + $1::interval * 0.5,  max_val  AS value FROM agg
-        UNION ALL
-        SELECT bucket + $1::interval,         last_val AS value FROM agg
-        ORDER BY 1
-      ''';
-    }
+    final sql =
+        buildDownsampleSql(quotedTable: quotedTable, isArray: isArray);
 
-    final result = await db.customSelect(sql, variables: [
-      Variable.withString(intervalStr),
-      Variable.withString(startTime.toUtc().toIso8601String()),
-      Variable.withString(endTime.toUtc().toIso8601String()),
-    ]).get();
+    final List<QueryRow> result;
+    try {
+      result = await db.customSelect(sql, variables: [
+        Variable.withString(intervalStr),
+        Variable.withString(startTime.toUtc().toIso8601String()),
+        Variable.withString(endTime.toUtc().toIso8601String()),
+      ]).get();
+    } catch (_) {
+      // The only way the shape of this statement can be wrong is a cached
+      // column type that no longer matches the table — a key retyped
+      // scalar↔array recreates the table underneath us. Drop the entry so
+      // the next call re-detects instead of failing forever.
+      _valueColumnTypes.remove(tableName);
+      rethrow;
+    }
 
     if (result.isEmpty) {
       return [];
