@@ -617,26 +617,120 @@ func TestWindowsInstaller_Install_PublisherConflictRetryFailure(t *testing.T) {
 	}
 }
 
-// The HRESULT gate is matched on the hex digits alone, so it does not depend on
-// the "0x" prefix or on the wording around it — the parts that vary by locale
-// and by which tool reported the failure.
-func TestWindowsInstaller_Install_HRESULTMatchIgnoresPrefixAndWording(t *testing.T) {
-	// Italian, verbatim from microsoft/winget-cli#4752, which logs the code
-	// without the "0x" prefix. Under the old text matching this was invisible.
-	const localised = "Impossibile installare il pacchetto Mozilla.MozillaFirefox_129.0.2.0_x64__jag0gd4e3s9p2. " +
-		"È già installato un pacchetto Mozilla.MozillaFirefox_126.0.1.0_x64__gmpnhwe7bv608 diverso con lo " +
-		"stesso nome. Exception(1) tid(1274) 80073CF3 Convalida degli aggiornamenti, delle dipendenze e dei " +
-		"conflitti del pacchetto non eseguita."
-	runner := &mockRunnerSeq{
-		outputs: [][]byte{[]byte(localised), []byte(sideloadPublisher), []byte(otherPublisher), nil, nil},
-		errors:  []error{errors.New("exit status 1"), nil, nil, nil, nil},
+// A publisher query is only allowed to answer with something that could be a
+// publisher. The manager captures combined output, so a non-terminating
+// PowerShell error arrives on the same channel as the answer while the process
+// still exits 0 — and an error message is not equal to the other publisher, so
+// letting it through would read as "they differ" and uninstall a working HMI on
+// the strength of a diagnostic. Every one of these must refuse to act.
+func TestWindowsInstaller_Install_UnrecognisedQueryOutputIsNotAPublisher(t *testing.T) {
+	noise := []struct {
+		name   string
+		output string
+	}{
+		{"cmdlet error on stdout", "Get-AppxPackage : A parameter cannot be found that matches parameter name 'Name'."},
+		{"deployment warning", "WARNING: The package repository is being rebuilt."},
+		{"whitespace only", "   \r\n  "},
+		{"empty", ""},
+	}
+	// Both queries are checked: whichever one is poisoned, nothing may be removed.
+	for _, at := range []struct {
+		name  string
+		index int
+		calls int
+	}{
+		{"installed-publisher query", 1, 2},
+		{"asset-publisher query", 2, 3},
+	} {
+		for _, n := range noise {
+			t.Run(at.name+"/"+n.name, func(t *testing.T) {
+				runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+				runner.outputs[at.index] = []byte(n.output)
+
+				err := installWindows(runner, "/tmp/app.msix")
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				if c := countRemoveAppxCalls(runner.calls); c != 0 {
+					t.Errorf("unrecognised query output caused an uninstall (%d call(s)); calls: %v", c, runner.calls)
+				}
+				if len(runner.calls) != at.calls {
+					t.Errorf("expected %d calls, got %d: %v", at.calls, len(runner.calls), runner.calls)
+				}
+			})
+		}
+	}
+}
+
+// The queries have to be built so that a failure cannot masquerade as an answer.
+// -ErrorAction Stop / $ErrorActionPreference='Stop' are what make a cmdlet error
+// terminating; without them PowerShell writes the error and exits 0, and the
+// manager cannot tell the difference from the outside.
+func TestWindowsInstaller_PublisherQueriesStopOnError(t *testing.T) {
+	installed := installedPublisherCommand()
+	for _, want := range []string{windowsPackageName, "-ErrorAction Stop", "-ExpandProperty Publisher"} {
+		if !strings.Contains(installed, want) {
+			t.Errorf("installed-publisher query is missing %q: %s", want, installed)
+		}
+	}
+	asset := assetPublisherCommand(`C:\tmp\app.msix`)
+	for _, want := range []string{"$ErrorActionPreference='Stop'", "AppxManifest.xml", "Identity.Publisher", `C:\tmp\app.msix`} {
+		if !strings.Contains(asset, want) {
+			t.Errorf("asset-publisher query is missing %q: %s", want, asset)
+		}
+	}
+}
+
+// The claim this redesign rests on is that the verdict does not depend on what
+// Windows said, only on what it answered. So the same conflict, worded four
+// different ways — including with no wording at all beyond the code — must reach
+// the same decision.
+//
+// Only the English and Italian messages are recorded; the Icelandic is invented
+// and the bare one is not a real message at all. That is safe here in a way it
+// would not have been before, and it is precisely the point: nothing reads these
+// strings except the hex digits. A test that had to quote real prose to pass
+// would mean the prose was still load-bearing.
+func TestWindowsInstaller_Install_VerdictIsIndependentOfMessageLanguage(t *testing.T) {
+	messages := []struct {
+		name    string
+		message string
+	}{
+		{"english", conflict0x80073CF3},
+		{
+			"italian", // verbatim, microsoft/winget-cli#4752
+			"Impossibile installare il pacchetto Mozilla.MozillaFirefox_129.0.2.0_x64__jag0gd4e3s9p2. È già " +
+				"installato un pacchetto Mozilla.MozillaFirefox_126.0.1.0_x64__gmpnhwe7bv608 diverso con lo stesso " +
+				"nome. Exception(1) tid(1274) 80073CF3",
+		},
+		{
+			"icelandic", // invented; nothing reads it
+			"Add-AppxPackage : Uppsetning mistókst með HRESULT: 0x80073CF3, pakkinn stóðst ekki staðfestingu.",
+		},
+		{"no prose at all", "0x80073CF3"},
 	}
 
-	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
-		t.Fatalf("expected the retry to succeed, got: %v", err)
-	}
-	if n := countRemoveAppxCalls(runner.calls); n != 1 {
-		t.Errorf("a localised conflict was not recognised; calls: %v", runner.calls)
+	for _, m := range messages {
+		t.Run(m.name+"/differing publishers removes and retries", func(t *testing.T) {
+			runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+			runner.outputs[0] = []byte(m.message)
+			if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+				t.Fatalf("expected the retry to succeed, got: %v", err)
+			}
+			if c := countRemoveAppxCalls(runner.calls); c != 1 {
+				t.Errorf("expected exactly one Remove-AppxPackage, got %d; calls: %v", c, runner.calls)
+			}
+		})
+		t.Run(m.name+"/same publisher keeps the installation", func(t *testing.T) {
+			runner := conflictRunner(sideloadPublisher, sideloadPublisher, true)
+			runner.outputs[0] = []byte(m.message)
+			if err := installWindows(runner, "/tmp/app.msix"); err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if c := countRemoveAppxCalls(runner.calls); c != 0 {
+				t.Errorf("matching publishers still uninstalled (%d call(s)); calls: %v", c, runner.calls)
+			}
+		})
 	}
 }
 

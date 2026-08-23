@@ -120,8 +120,16 @@ const publisherConflictHRESULT = "80073cf3"
 //
 // Windows permits at most one package per identity Name per user — that is the
 // conflict — so this yields a single value, not a list.
+// -ErrorAction Stop makes any cmdlet error terminating, so PowerShell exits
+// non-zero and the answer is discarded. Without it a non-terminating error is
+// written to stderr while the process still exits 0, and because the manager
+// captures combined output that error text would arrive here looking like an
+// answer — a "publisher" that matches nothing, which reads as a difference,
+// which uninstalls. The dangerous direction is reached by doing nothing special,
+// so this is not optional.
 func installedPublisherCommand() string {
-	return "Get-AppxPackage -Name '" + windowsPackageName + "' | Select-Object -ExpandProperty Publisher"
+	return "Get-AppxPackage -Name '" + windowsPackageName + "' -ErrorAction Stop | " +
+		"Select-Object -ExpandProperty Publisher"
 }
 
 // assetPublisherCommand reads Identity/@Publisher out of the .msix about to be
@@ -142,7 +150,8 @@ func installedPublisherCommand() string {
 // will not parse — the command produces no output and publisherConflict returns
 // false, so the failure direction is "do not uninstall".
 func assetPublisherCommand(assetPath string) string {
-	return "Add-Type -AssemblyName System.IO.Compression.FileSystem; " +
+	return "$ErrorActionPreference='Stop'; " +
+		"Add-Type -AssemblyName System.IO.Compression.FileSystem; " +
 		"$z=[IO.Compression.ZipFile]::OpenRead('" + assetPath + "'); " +
 		"try { $e=$z.GetEntry('AppxManifest.xml'); if ($e) { " +
 		"$r=New-Object IO.StreamReader($e.Open()); " +
@@ -172,25 +181,45 @@ func assetPublisherCommand(assetPath string) string {
 // there is nothing to compare. A failed update is retryable; a destroyed
 // installation is not.
 func publisherConflict(runner CommandRunner, assetPath string) bool {
-	installed := runOutput(runner, installedPublisherCommand())
+	installed := publisherAnswer(runner, installedPublisherCommand())
 	if installed == "" {
 		return false
 	}
-	incoming := runOutput(runner, assetPublisherCommand(assetPath))
+	incoming := publisherAnswer(runner, assetPublisherCommand(assetPath))
 	if incoming == "" {
 		return false
 	}
 	return installed != incoming
 }
 
-// runOutput runs a PowerShell command and returns its trimmed output, or "" if
-// it failed. Callers treat "" as "could not determine", never as an answer.
-func runOutput(runner CommandRunner, command string) string {
+// publisherDNMarker is the one thing every Appx Publisher string has: it is an
+// X.500 distinguished name, and a distinguished name has a common name. Both
+// CentroidX's own "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB" and Microsoft's
+// "CN=Microsoft Corporation, O=..., C=US" carry it.
+const publisherDNMarker = "CN="
+
+// publisherAnswer runs a query and returns its answer only if the answer could
+// be a publisher at all. Anything else — a PowerShell error that reached stdout,
+// a warning, an empty result — is "could not determine", never an answer.
+//
+// The check is here because the failure direction is asymmetric and unforgiving.
+// An unrecognised string is not equal to the other publisher, so passing it
+// through would read as "the publishers differ" and uninstall a working HMI on
+// the strength of a diagnostic message. Requiring the shape of a publisher turns
+// every such surprise into a refusal to act.
+//
+// Whitespace is collapsed first so that a distinguished name the formatter
+// wrapped across lines compares equal to the same name that fitted on one.
+func publisherAnswer(runner CommandRunner, command string) string {
 	out, err := runner.Run("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	answer := collapseWhitespace(string(out))
+	if !strings.Contains(strings.ToUpper(answer), publisherDNMarker) {
+		return ""
+	}
+	return answer
 }
 
 // alreadyInstalledHRESULT is ERROR_PACKAGE_ALREADY_EXISTS: "The provided
