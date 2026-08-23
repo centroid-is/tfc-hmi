@@ -131,11 +131,16 @@ class EnvLogFilter extends LogFilter {
 /// `errorMethodCount` is left alone, so anything logged with an error or an
 /// explicit stack trace still prints a full frame list: the stack is kept
 /// exactly where it is worth paying for.
+///
+/// Everything else is [PrettyPrinter]'s own default, deliberately -- this
+/// becomes the format of nearly every log line in the app, and a performance
+/// fix is no place to restyle them. The one addition is a timestamp:
+/// [initLogConfig] exists to serve `CENTROID_LOG_FILE`, and a station log with
+/// no clock in it cannot be lined up against a shift, an alarm, or anything
+/// else that happened that day.
 PrettyPrinter hotPathPrinter() => PrettyPrinter(
       methodCount: 0,
       errorMethodCount: 8,
-      lineLength: 120,
-      printEmojis: false,
       dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
     );
 
