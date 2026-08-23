@@ -21,11 +21,12 @@ const bool kShippedBuild = _kProductMode || _kProfileMode;
 ///
 /// * shipped builds -> [Level.info]. Trace and debug are the levels that carry
 ///   the per-sample and per-record log sites (one of them fired 13,013 times in
-///   a single page load), and a `PrettyPrinter` line costs ~23us to format plus
-///   ~19us to write. Info and above are lifecycle events -- connected,
-///   subscribed, migrated, session lost -- which are what makes an error in the
-///   log file interpretable weeks later, and are all event-driven rather than
-///   per-sample.
+///   a single page load), and a default `PrettyPrinter` line measured 10-23us
+///   to format depending on machine load, plus the console write on top. A
+///   line the filter drops costs 43ns. Info and above are lifecycle events --
+///   connected, subscribed, migrated, session lost -- which are what makes an
+///   error in the log file interpretable weeks later, and are all event-driven
+///   rather than per-sample.
 /// * everything else -> [Level.debug]. Debug builds are attended; the extra
 ///   detail is worth its cost, but the trace firehose is not.
 ///
@@ -126,8 +127,9 @@ class EnvLogFilter extends LogFilter {
 /// The printer every bare `Logger()` gets once [initLogConfig] has run.
 ///
 /// `PrettyPrinter`'s default `methodCount: 2` calls `StackTrace.current` and
-/// walks it for *every* line, which is the bulk of the ~23us a single
-/// `logger.t(...)` costs -- dropping it to zero takes the same call to ~1.3us.
+/// walks it for *every* line, which is the bulk of what a single
+/// `logger.t(...)` costs -- measured here, dropping it to zero took the same
+/// call from 10.0us to 1.1us.
 /// `errorMethodCount` is left alone, so anything logged with an error or an
 /// explicit stack trace still prints a full frame list: the stack is kept
 /// exactly where it is worth paying for.
