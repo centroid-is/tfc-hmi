@@ -13,6 +13,7 @@ import 'package:upgrader/upgrader.dart';
 import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
 import 'package:tfc/core/update_channel.dart';
+import 'package:tfc/core/update_launch.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
 import 'package:tfc/models/menu_item.dart';
@@ -273,18 +274,29 @@ Future<void> _startApp([bool debugMode = false]) async {
       onUpdate: () {
         final targetVersion = upgrader.state.versionInfo?.appStoreVersion?.toString() ?? '';
         // The update itself is done by forking the bundled centroidx-manager,
-        // which waits for this process to exit, installs, and relaunches.
-        unawaited(() async {
-          final channel = await readUpdateChannel();
-          await managerLauncher.launchForUpdate(
-            // On the latest channel the announced version is a date stand-in
-            // that matches no tag — let the manager resolve the channel head.
-            version: channel == updateChannelLatest ? null : targetVersion,
+        // which waits for this process to exit, installs, and relaunches --
+        // so the success path exits and never comes back. startManagerUpdate
+        // owns the other path: if the manager will not start, it says so
+        // rather than leaving the operator looking at an app that did
+        // nothing.
+        unawaited(startManagerUpdate(
+          targetVersion: targetVersion,
+          readChannel: readUpdateChannel,
+          launch: (version, channel) => managerLauncher.launchForUpdate(
+            version: version,
             channel: channel,
             flutterPid: pid,
-          );
-          exit(0);
-        }());
+          ),
+          log: stderr.writeln,
+          show: (message) =>
+              globalScaffoldMessengerKey.currentState?.showSnackBar(
+            SnackBar(
+              content: Text(message),
+              duration: const Duration(seconds: 10),
+            ),
+          ),
+          onHandedOff: () => exit(0),
+        ));
         return false;
       },
       child: MyApp(
