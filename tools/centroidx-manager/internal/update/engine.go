@@ -412,14 +412,25 @@ func (e *Engine) Update(ctx context.Context, opts UpdateOptions) error {
 //
 // Every path logs. The silent version of this function hid an unreachable
 // trust step for months.
+// log reports a non-fatal condition. It tolerates an Engine built as a struct
+// literal rather than through NewEngine, so a logging call can never be the
+// thing that takes down an update.
+func (e *Engine) log(format string, args ...any) {
+	if e.logf == nil {
+		log.Printf(format, args...)
+		return
+	}
+	e.logf(format, args...)
+}
+
 func (e *Engine) trustReleaseCertificate(ctx context.Context, assets []*gogithub.ReleaseAsset, destDir string) {
 	certPath, err := downloadCertAsset(ctx, assets, destDir)
 	if err != nil {
-		e.logf("warn: could not download the release signing certificate, installing without it: %v", err)
+		e.log("warn: could not download the release signing certificate, installing without it: %v", err)
 		return
 	}
 	if certPath == "" {
-		e.logf("warn: this release publishes no signing certificate; a station that does not already trust the publisher will reject the package")
+		e.log("warn: this release publishes no signing certificate; a station that does not already trust the publisher will reject the package")
 		return
 	}
 	// Remove the certificate whether or not the import worked — it is a
@@ -427,10 +438,10 @@ func (e *Engine) trustReleaseCertificate(ctx context.Context, assets []*gogithub
 	defer func() { _ = os.Remove(certPath) }()
 
 	if err := e.installer.TrustCertificate(certPath); err != nil {
-		e.logf("warn: could not trust the release signing certificate, installing anyway: %v", err)
+		e.log("warn: could not trust the release signing certificate, installing anyway: %v", err)
 		return
 	}
-	e.logf("trusted the release signing certificate %s", filepath.Base(certPath))
+	e.log("trusted the release signing certificate %s", filepath.Base(certPath))
 }
 
 // Install is a shortcut for a first-time install of the latest release.

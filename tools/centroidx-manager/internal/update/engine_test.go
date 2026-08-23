@@ -565,6 +565,21 @@ func TestEngine_Update_CertificateFileIsRemoved(t *testing.T) {
 	}
 }
 
+// An Engine built as a struct literal rather than through NewEngine has no
+// logf. Logging must not be the thing that takes down an update — the whole
+// point of this path is that nothing in it is fatal.
+func TestEngine_Update_ZeroValueLoggerDoesNotPanic(t *testing.T) {
+	inst := &mockInstaller{}
+	eng := &Engine{client: certFixture(t, "absent"), installer: inst}
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if len(inst.installed) == 0 {
+		t.Error("expected the install to proceed")
+	}
+}
+
 // Install is the first-time shortcut. It must trust the certificate too, and
 // must not behave differently from Update now that the step is unconditional.
 func TestEngine_Install_TrustsCertificate(t *testing.T) {
