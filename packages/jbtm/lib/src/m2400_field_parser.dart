@@ -1,5 +1,6 @@
 import 'package:jbtm/src/m2400.dart';
 import 'package:jbtm/src/m2400_fields.dart';
+import 'package:jbtm/src/m2400_log_throttle.dart';
 import 'package:logger/logger.dart';
 
 final _logger = Logger();
@@ -67,9 +68,25 @@ class M2400ParsedRecord {
       '${unknownFields.length} unknown)';
 }
 
+/// Reports a parse failure, throttled per (kind, field id).
+///
+/// See [shouldReportM2400]: a scale that emits one malformed field emits it on
+/// every weighment, and these are warnings, so no log level a station would be
+/// set to suppresses them.
+void _reportParseFailure(String kind, int? fieldId, String rawValue) {
+  final reason = '$kind:$fieldId';
+  if (!shouldReportM2400(reason)) return;
+  // Always carry the count, even when it is 1: the six throttled sites in
+  // this package read the same way, and "(occurrence 1)" says the number is
+  // known rather than leaving the reader to infer it from an absence.
+  _logger.w('Failed to parse $kind field $fieldId: "$rawValue" '
+      '(occurrence ${m2400LogCount(reason)})');
+}
+
 /// Parse a raw field value string to its target Dart type.
 ///
-/// Returns null if parsing fails (logs a warning with [fieldId] for diagnostics).
+/// Returns null if parsing fails (logs a warning with [fieldId] for
+/// diagnostics -- first occurrence, then every thousandth).
 Object? parseFieldValue(String rawValue, FieldType type, {int? fieldId}) {
   switch (type) {
     case FieldType.decimal:
@@ -79,14 +96,14 @@ Object? parseFieldValue(String rawValue, FieldType type, {int? fieldId}) {
         final stripped = rawValue.replaceFirst(RegExp(r'[a-zA-Z%°]+$'), '');
         parsed = double.tryParse(stripped);
         if (parsed == null) {
-          _logger.w('Failed to parse decimal field $fieldId: "$rawValue"');
+          _reportParseFailure('decimal', fieldId, rawValue);
         }
       }
       return parsed;
     case FieldType.integer:
       final parsed = int.tryParse(rawValue);
       if (parsed == null) {
-        _logger.w('Failed to parse integer field $fieldId: "$rawValue"');
+        _reportParseFailure('integer', fieldId, rawValue);
       }
       return parsed;
     case FieldType.string:
@@ -94,7 +111,7 @@ Object? parseFieldValue(String rawValue, FieldType type, {int? fieldId}) {
     case FieldType.percentage:
       final parsed = double.tryParse(rawValue);
       if (parsed == null) {
-        _logger.w('Failed to parse percentage field $fieldId: "$rawValue"');
+        _reportParseFailure('percentage', fieldId, rawValue);
       }
       return parsed;
     case FieldType.date:
@@ -140,13 +157,25 @@ M2400ParsedRecord parseTypedRecord(M2400Record raw) {
   for (final entry in raw.fields.entries) {
     final fieldId = int.tryParse(entry.key);
     if (fieldId == null) {
-      _logger.d('Non-numeric field key: "${entry.key}"');
+      // Fixed reason key, not the raw key: the reason is device data here and
+      // would grow the counter map without bound.
+      if (shouldReportM2400('nonNumericFieldKey')) {
+        _logger.d('Non-numeric field key: "${entry.key}" '
+            '(occurrence ${m2400LogCount('nonNumericFieldKey')})');
+      }
       continue;
     }
 
     final field = M2400Field.fromId(fieldId);
     if (field == null) {
-      _logger.d('Unknown field ID: $fieldId with value: "${entry.value}"');
+      // Unknown ids are routine -- firmware emits fields this parser has not
+      // been taught -- and every record carries the same ones. Two of these
+      // cost 138us per record before throttling.
+      final reason = 'unknownFieldId:$fieldId';
+      if (shouldReportM2400(reason)) {
+        _logger.d('Unknown field ID: $fieldId with value: "${entry.value}" '
+            '(occurrence ${m2400LogCount(reason)})');
+      }
       unknown[fieldId] = entry.value;
       continue;
     }

@@ -2297,10 +2297,13 @@ class StateMan {
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
-        // Trace, not debug: this fired 13,013 times in one run. Note the
-        // default level is trace when CENTROID_LOG_LEVEL is unset, so this
-        // only bites once a deployment raises the level -- which is exactly
-        // when the volume matters.
+        // Trace, not debug: this fired 13,013 times in one run. The default
+        // level used to be trace when CENTROID_LOG_LEVEL was unset, so this
+        // line was formatted and printed 13,013 times on every page load and
+        // every reconnect -- ~300ms of PrettyPrinter plus ~250ms of stdout.
+        // The default is now info (see log_config.dart), so it costs the
+        // string interpolation and a rejected filter call unless somebody
+        // asks for trace.
         logger.t(
             '[$srv] Creating monitored items for $key on sub=${wrapper.subscriptionId}');
 

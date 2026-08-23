@@ -30,7 +30,10 @@ void main() {
 
       // Simulate what _debugPrint does: intercept print() and write to file
       final logger = Logger(
-        filter: EnvLogFilter(),
+        // Explicitly trace: the default is info (log_config.dart), and this
+        // test is about the file sink carrying every level it is handed, not
+        // about which levels the default filter admits.
+        filter: EnvLogFilter(envValue: 'trace'),
         printer: SimplePrinter(printTime: false),
         output: _FileLogOutput(logFile),
       );
@@ -115,10 +118,9 @@ void main() {
     });
 
     test('EnvLogFilter respects log level filtering', () {
-      // Default: CENTROID_LOG_LEVEL not set → trace (show everything)
-      final filter = EnvLogFilter();
+      // CENTROID_LOG_LEVEL=trace → everything passes.
+      final filter = EnvLogFilter(envValue: 'trace');
 
-      // All levels should pass when default (trace)
       for (final level in [
         Level.trace,
         Level.debug,
