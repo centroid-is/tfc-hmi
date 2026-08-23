@@ -620,12 +620,26 @@ String _paneTitle(AnalogBoxConfig config) =>
 ///
 /// The subscriptions live and die with the pane — closing it releases them
 /// (same lifetime contract as the conveyor and sensor panes).
-class _AnalogBoxPaneLoader extends ConsumerWidget {
+class _AnalogBoxPaneLoader extends ConsumerStatefulWidget {
   final AnalogBoxConfig config;
   const _AnalogBoxPaneLoader({required this.config});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AnalogBoxPaneLoader> createState() =>
+      _AnalogBoxPaneLoaderState();
+}
+
+class _AnalogBoxPaneLoaderState extends ConsumerState<_AnalogBoxPaneLoader> {
+  AnalogBoxConfig get config => widget.config;
+
+  /// The combined stream, built once: built in `build` it was a new object on
+  /// every rebuild, and `StreamBuilder` re-subscribes to a new object and
+  /// starts over empty -- the pane flashed its values away on any rebuild.
+  Stream<Map<String, DynamicValue>>? _combined;
+
+  Stream<Map<String, DynamicValue>> _combinedStream() {
+    final cached = _combined;
+    if (cached != null) return cached;
     final keys = <String, String>{};
     void put(String tag, String? key) {
       final k = _definedKey(key);
@@ -647,7 +661,7 @@ class _AnalogBoxPaneLoader extends ConsumerWidget {
     final streams = [
       for (final entry in keys.entries)
         ref
-            .watch(stateManProvider.future)
+            .read(stateManProvider.future)
             .asStream()
             .switchMap((sm) =>
                 sm.subscribe(entry.value).asStream().switchMap((s) => s))
@@ -657,11 +671,16 @@ class _AnalogBoxPaneLoader extends ConsumerWidget {
             .map((dv) => MapEntry(entry.key, dv)),
     ];
 
-    final combined = CombineLatestStream.list(streams)
+    return _combined = CombineLatestStream.list(streams)
         .map((entries) => <String, DynamicValue>{
               for (final e in entries)
                 if (e.value != null) e.key: e.value!,
             });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final combined = _combinedStream();
 
     Future<void> write(String key, double val) async {
       final sm = await ref.read(stateManProvider.future);

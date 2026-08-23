@@ -5,11 +5,9 @@ import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/converter/color_converter.dart';
-import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc_dart/core/collector.dart' show CollectEntry, Collector;
 import 'package:tfc_dart/core/database.dart' show TimeseriesData;
-import 'package:tfc_dart/core/state_man.dart';
 
 import '../../providers/collector.dart';
 import '../../providers/state_man.dart';
@@ -18,6 +16,8 @@ import 'common.dart';
 import 'graph.dart' show extractSeriesMemberValue;
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/state_value_builder.dart';
+import '../../widgets/panes/setpoint_field.dart';
 import 'sensor_painter.dart';
 
 part 'sensor.g.dart';
@@ -697,31 +697,15 @@ class _SensorState extends ConsumerState<Sensor> {
     showSidePane(
       context: context,
       id: _paneId,
-      builder: (paneContext) => Consumer(
-        builder: (paneContext, ref, _) =>
-            StreamBuilder<(StateMan, DynamicValue)>(
-          stream: ref.watch(stateManProvider.future).asStream().switchMap(
-                (stateMan) => stateMan
-                    .subscribe(key)
-                    .asStream()
-                    .map(
-                      (stream) => Rx.combineLatest2(
-                        Stream.value(stateMan),
-                        stream,
-                        (StateMan sm, DynamicValue value) => (sm, value),
-                      ),
-                    )
-                    .switchMap((stream) => stream),
-              ),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return _staticPane(const PaneStatus.fault('Error'), null);
-            }
-            if (!snapshot.hasData) {
-              return _staticPane(const PaneStatus.unknown('Connecting'), null);
-            }
-
-            final (stateMan, dynValue) = snapshot.data!;
+      // One subscription for the life of the pane (StateManValueBuilder): a
+      // stream built inline re-subscribed on every rebuild, and tapping a
+      // delay field is a rebuild -- the pane flashed "Connecting" and the
+      // field lost what was typed.
+      builder: (paneContext) => StateManValueBuilder(
+        keyName: key,
+        waiting: (_) => _staticPane(const PaneStatus.unknown('Connecting'), null),
+        error: (_, __) => _staticPane(const PaneStatus.fault('Error'), null),
+        builder: (context, stateMan, dynValue) {
             final fb = SensorFbState.tryParse(dynValue);
 
             // Data gathering on this key unlocks the inline trend — see
@@ -798,8 +782,7 @@ class _SensorState extends ConsumerState<Sensor> {
                 });
               },
             );
-          },
-        ),
+        },
       ),
     );
   }
@@ -1064,20 +1047,40 @@ class SensorFbPane extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: _DelayField(
+                          child: SetpointField<int>(
                             fieldKey: 'sensor_on_delay_field',
                             label: 'On delay',
-                            value: state.onDelay,
+                            text: state.onDelay.inMilliseconds.toString(),
+                            current: state.onDelay.inMilliseconds,
+                            // Negative rejected rather than clamped: `TIME` is
+                            // unsigned, and silently turning -50 into 0 hides a
+                            // typo from the operator.
+                            parse: (t) {
+                              final v = int.tryParse(t);
+                              return v == null || v < 0 ? null : v;
+                            },
+                            suffix: 'ms',
+                            decimal: false,
                             onSubmitted: (ms) =>
                                 onWrite(SensorFbFields.onDelay, ms),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _DelayField(
+                          child: SetpointField<int>(
                             fieldKey: 'sensor_off_delay_field',
                             label: 'Off delay',
-                            value: state.offDelay,
+                            text: state.offDelay.inMilliseconds.toString(),
+                            current: state.offDelay.inMilliseconds,
+                            // Negative rejected rather than clamped: `TIME` is
+                            // unsigned, and silently turning -50 into 0 hides a
+                            // typo from the operator.
+                            parse: (t) {
+                              final v = int.tryParse(t);
+                              return v == null || v < 0 ? null : v;
+                            },
+                            suffix: 'ms',
+                            decimal: false,
                             onSubmitted: (ms) =>
                                 onWrite(SensorFbFields.offDelay, ms),
                           ),
@@ -1102,45 +1105,6 @@ class SensorFbPane extends StatelessWidget {
   }
 }
 
-/// A debounce setpoint field in milliseconds. Submits on Enter/focus-out only.
-///
-/// Milliseconds rather than a duration picker: `TIME` crosses the wire as a
-/// millisecond count, the values in play are tens to hundreds of ms, and the
-/// operators reading these panes think in the same unit the PLC does.
-class _DelayField extends StatelessWidget {
-  final String fieldKey;
-  final String label;
-  final Duration value;
-  final void Function(int milliseconds) onSubmitted;
-
-  const _DelayField({
-    required this.fieldKey,
-    required this.label,
-    required this.value,
-    required this.onSubmitted,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextFormField(
-      key: Key('$fieldKey-${value.inMilliseconds}'),
-      initialValue: value.inMilliseconds.toString(),
-      keyboardType: const TextInputType.numberWithOptions(decimal: false),
-      decoration: InputDecoration(
-        labelText: label,
-        suffixText: 'ms',
-        isDense: true,
-      ),
-      onFieldSubmitted: (text) {
-        final parsed = int.tryParse(text.trim());
-        // Negative rejected rather than clamped: `TIME` is unsigned, and
-        // silently turning -50 into 0 hides a typo from the operator.
-        if (parsed == null || parsed < 0) return;
-        onSubmitted(parsed);
-      },
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Details rows (Plan 04-05 / SENS-01)

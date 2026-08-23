@@ -222,7 +222,7 @@ void main() {
       )!));
       await expandAdjust(tester);
 
-      final onDelay = find.byKey(const Key('sensor_on_delay_field-50'));
+      final onDelay = find.byKey(const Key('sensor_on_delay_field'));
       await tester.enterText(onDelay, '120');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump();
@@ -237,7 +237,7 @@ void main() {
       )!));
       await expandAdjust(tester);
 
-      final offDelay = find.byKey(const Key('sensor_off_delay_field-20'));
+      final offDelay = find.byKey(const Key('sensor_off_delay_field'));
       await tester.enterText(offDelay, '35');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump();
@@ -252,7 +252,7 @@ void main() {
       )!));
       await expandAdjust(tester);
 
-      final onDelay = find.byKey(const Key('sensor_on_delay_field-50'));
+      final onDelay = find.byKey(const Key('sensor_on_delay_field'));
       await tester.enterText(onDelay, '-50');
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump();

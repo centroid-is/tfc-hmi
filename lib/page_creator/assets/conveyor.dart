@@ -7,16 +7,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tfc/providers/collector.dart';
 import 'dart:math';
 import 'package:tfc/widgets/number_slider.dart';
+import 'package:rxdart/rxdart.dart';
 import 'common.dart';
 import 'dart:async';
 import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
-import 'package:tfc_dart/core/state_man.dart';
-import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../widgets/graph.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import '../../widgets/state_value_builder.dart';
+import '../../widgets/panes/setpoint_field.dart';
 import 'auger_conveyor_painter.dart';
 import 'helper/atv320_diagnostics.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -2335,49 +2336,32 @@ class _ConveyorState extends ConsumerState<Conveyor>
     showSidePane(
       context: context,
       id: _paneId,
-      builder: (paneContext) => Consumer(
-        builder: (paneContext, ref, _) =>
-            StreamBuilder<(StateMan, DynamicValue)>(
-          stream: ref.watch(stateManProvider.future).asStream().switchMap(
-                (stateMan) => stateMan
-                    .subscribe(widget.config.key!)
-                    .asStream()
-                    .map(
-                      (stream) => Rx.combineLatest2(
-                        Stream.value(stateMan),
-                        stream,
-                        (stateMan, value) => (stateMan, value),
-                      ),
-                    )
-                    .switchMap((stream) => stream),
-              ),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return SidePane(
-                title: widget.config.key!,
-                subtitle: 'Conveyor',
-                icon: Icons.conveyor_belt,
-                status: const PaneStatus.unknown('Connecting'),
-                child: const Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              );
-            }
-            if (snapshot.hasError) {
-              return SidePane(
-                title: widget.config.key!,
-                subtitle: 'Conveyor',
-                icon: Icons.conveyor_belt,
-                status: const PaneStatus.fault('Error'),
-                child: PaneSection(
-                  title: 'Subscription failed',
-                  child: SelectableText(snapshot.error.toString()),
-                ),
-              );
-            }
-
-            final (stateMan, dynValue) = snapshot.data!;
+      // One subscription for the life of the pane: see StateManValueBuilder
+      // for why the stream must not be built inline (tapping a setpoint field
+      // rebuilt the pane, which re-subscribed and threw the keystrokes away).
+      builder: (paneContext) => StateManValueBuilder(
+        keyName: widget.config.key!,
+        waiting: (_) => SidePane(
+          title: widget.config.key!,
+          subtitle: 'Conveyor',
+          icon: Icons.conveyor_belt,
+          status: const PaneStatus.unknown('Connecting'),
+          child: const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        ),
+        error: (_, error) => SidePane(
+          title: widget.config.key!,
+          subtitle: 'Conveyor',
+          icon: Icons.conveyor_belt,
+          status: const PaneStatus.fault('Error'),
+          child: PaneSection(
+            title: 'Subscription failed',
+            child: SelectableText(error.toString()),
+          ),
+        ),
+        builder: (context, stateMan, dynValue) {
 
             /// Copy-on-write helper — every command follows the same shape:
             /// clone the current value, set one field, write the whole thing
@@ -2501,12 +2485,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
                         const SizedBox(height: 10),
                         // The speed those buttons jog at — full width, under
                         // the controls it belongs to.
-                        _FrequencyField(
-                          fieldKey: 'manual_freq_field',
-                          label: 'Manual frequency',
-                          value: dynValue['p_cfg_ManualFreq'],
-                          onSubmitted: (v) => write('p_cfg_ManualFreq', v),
-                        ),
+                        SetpointField<double>(
+                            fieldKey: 'manual_freq_field',
+                            label: 'Manual frequency',
+                            text: dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2),
+                            current: dynValue['p_cfg_ManualFreq'].asDouble,
+                            parse: double.tryParse,
+                            suffix: 'Hz',
+                            onSubmitted: (v) => write('p_cfg_ManualFreq', v),
+                          ),
                       ],
                     ),
                   ),
@@ -2642,19 +2629,25 @@ class _ConveyorState extends ConsumerState<Conveyor>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: _FrequencyField(
+                          child: SetpointField<double>(
                             fieldKey: 'auto_freq_field',
                             label: 'Auto',
-                            value: dynValue['p_cfg_AutoFreq'],
+                            text: dynValue['p_cfg_AutoFreq'].asDouble.toStringAsFixed(2),
+                            current: dynValue['p_cfg_AutoFreq'].asDouble,
+                            parse: double.tryParse,
+                            suffix: 'Hz',
                             onSubmitted: (v) => write('p_cfg_AutoFreq', v),
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _FrequencyField(
+                          child: SetpointField<double>(
                             fieldKey: 'cleaning_freq_field',
                             label: 'Cleaning',
-                            value: dynValue['p_cfg_CleaningFreq'],
+                            text: dynValue['p_cfg_CleaningFreq'].asDouble.toStringAsFixed(2),
+                            current: dynValue['p_cfg_CleaningFreq'].asDouble,
+                            parse: double.tryParse,
+                            suffix: 'Hz',
                             onSubmitted: (v) => write('p_cfg_CleaningFreq', v),
                           ),
                         ),
@@ -2664,8 +2657,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
                 ],
               ),
             );
-          },
-        ),
+        },
       ),
     );
   }
@@ -2865,40 +2857,6 @@ class _JogButton extends StatelessWidget {
   }
 }
 
-/// A frequency setpoint field. Submits on Enter/focus-out only.
-class _FrequencyField extends StatelessWidget {
-  final String fieldKey;
-  final String label;
-  final DynamicValue value;
-  final void Function(double value) onSubmitted;
-
-  const _FrequencyField({
-    required this.fieldKey,
-    required this.label,
-    required this.value,
-    required this.onSubmitted,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextFormField(
-      key: Key('$fieldKey-${value.asString}'),
-      initialValue: value.asDouble.toStringAsFixed(2),
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      decoration: InputDecoration(
-        labelText: label,
-        suffixText: 'Hz',
-        isDense: true,
-      ),
-      onFieldSubmitted: (text) {
-        if (text.isEmpty) return;
-        final parsed = double.tryParse(text);
-        if (parsed == null) return;
-        onSubmitted(parsed);
-      },
-    );
-  }
-}
 
 /// Resolves the [Collector] and hands it to [ConveyorStatsGraph].
 ///

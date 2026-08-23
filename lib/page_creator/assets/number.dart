@@ -418,6 +418,15 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
   double? _currentRaw; // raw value (unscaled)
   bool _hasValue = false;
 
+  /// Subscribed once, here, not in build: an inline stream re-subscribed on
+  /// every rebuild, and each re-subscribe showed the spinner in place of the
+  /// field for a frame -- the field lost focus and the cursor with it.
+  late final Stream<DynamicValue> _value$ = ref
+      .read(stateManProvider.future)
+      .asStream()
+      .switchMap((sm) =>
+          sm.subscribe(widget.config.key).asStream().switchMap((s) => s));
+
   @override
   void initState() {
     super.initState();
@@ -482,11 +491,7 @@ class _NumberWriteDialogState extends ConsumerState<_NumberWriteDialog> {
 
   @override
   Widget build(BuildContext context) {
-    Stream<DynamicValue> value$ = ref
-        .watch(stateManProvider.future)
-        .asStream()
-        .switchMap((sm) =>
-            sm.subscribe(widget.config.key).asStream().switchMap((s) => s));
+    final value$ = _value$;
 
     return StandardDialogFrame(
       title: widget.config.text?.isNotEmpty == true

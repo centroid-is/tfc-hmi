@@ -3,15 +3,14 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:rxdart/rxdart.dart';
 
 import 'package:tfc/page_creator/assets/button.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc_dart/core/state_man.dart';
-import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
+import 'package:tfc/widgets/state_value_builder.dart';
 import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -531,7 +530,14 @@ class _RecipesState extends ConsumerState<Recipes> {
 
   String get _dialogId => 'recipes:${identityHashCode(widget.config)}';
 
+  /// The recipe list the open dialog works on. Fetched once per opening,
+  /// not once per rebuild: the FutureBuilder used to take a fresh future on
+  /// every rebuild, which re-read the preferences and rebuilt the content --
+  /// and with it the text fields -- for every keystroke-triggered rebuild.
+  Future<List<Recipe>>? _recipesFuture;
+
   void _showRecipesDialog(BuildContext context) {
+    _recipesFuture = null;
     showFloatingDialog(
       context: context,
       id: _dialogId,
@@ -539,22 +545,15 @@ class _RecipesState extends ConsumerState<Recipes> {
       subtitle: widget.config.label,
       icon: Icons.receipt_long,
       size: const Size(1040, 700),
-      builder: (_) => StreamBuilder<(StateMan, DynamicValue)>(
-        stream: ref.watch(stateManProvider.future).asStream().switchMap(
-            (stateMan) => stateMan
-                .subscribe(_activeKey)
-                .asStream()
-                .map((stream) => Rx.combineLatest2(Stream.value(stateMan),
-                    stream, (stateMan, value) => (stateMan, value)))
-                .switchMap((stream) => stream)),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Text('Error loading recipes: ${snapshot.error}');
-          }
-          if (!snapshot.hasData) {
-            return Center(child: CircularProgressIndicator());
-          }
-          final (stateMan, data) = snapshot.data!;
+      // One subscription for the life of the dialog (StateManValueBuilder):
+      // the inline stream re-subscribed on every rebuild, and a rebuild
+      // rebuilt the fields under the cursor -- the cursor jumped and
+      // backspace ate the wrong character.
+      builder: (_) => StateManValueBuilder(
+        keyName: _activeKey,
+        error: (_, error) => Text('Error loading recipes: $error'),
+        waiting: (_) => const Center(child: CircularProgressIndicator()),
+        builder: (context, stateMan, data) {
           // With one key per line the node IS the line's recipe, so an array
           // is neither expected nor required. Only the legacy single-key
           // shape carries every line in one value.
@@ -565,7 +564,7 @@ class _RecipesState extends ConsumerState<Recipes> {
           }
 
           return FutureBuilder<List<Recipe>>(
-            future: _getRecipes(),
+            future: _recipesFuture ??= _getRecipes(),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Text('Error loading recipes: ${snapshot.error}');

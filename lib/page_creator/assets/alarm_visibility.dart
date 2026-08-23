@@ -317,18 +317,32 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
 /// Data layer only: subscribes to the alarm service (an independent
 /// subscription that lives and dies with the pane) and hands the resolved
 /// state to [AlarmVisibilityPaneView] for rendering.
-class AlarmVisibilityPane extends ConsumerWidget {
+class AlarmVisibilityPane extends ConsumerStatefulWidget {
   final AlarmVisibilityConfig config;
 
   const AlarmVisibilityPane({super.key, required this.config});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return StreamBuilder<(AlarmMan, List<AlarmActive>)>(
-      stream: ref.watch(alarmManProvider.future).asStream().switchMap(
+  ConsumerState<AlarmVisibilityPane> createState() =>
+      _AlarmVisibilityPaneState();
+}
+
+class _AlarmVisibilityPaneState extends ConsumerState<AlarmVisibilityPane> {
+  AlarmVisibilityConfig get config => widget.config;
+
+  /// Subscribed once, not per build: a stream object made in `build` makes
+  /// `StreamBuilder` start over on every rebuild, and the pane flashed
+  /// "Connecting" for a frame each time.
+  late final Stream<(AlarmMan, List<AlarmActive>)> _stream =
+      ref.read(alarmManProvider.future).asStream().switchMap(
             (alarmMan) => alarmMan.activeAlarms().map(
                 (set) => (alarmMan, matchingActiveAlarms(set, config.alarmUids))),
-          ),
+          );
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<(AlarmMan, List<AlarmActive>)>(
+      stream: _stream,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return AlarmVisibilityPaneView.message(
