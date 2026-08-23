@@ -754,6 +754,43 @@ const _maxStringByteSize = 1024;
 /// arrived (possibly empty) and decodes it without raising, so the HMI
 /// renders a (possibly truncated/empty) string rather than the literal text
 /// "Buffer underflow" through `'read error: $e'` (v1.1 JOB-A fix).
+/// Elementary types [parseVariableValue] decodes at their full declared width.
+///
+/// Anything in here is read with an exact-width accessor (`getFloat64`,
+/// `getInt64`, …), so a caller walking a multi-variable buffer must advance by
+/// the same number of bytes. See [umasOnWireSize].
+const Set<String> kUmasKnownScalars = {
+  'BOOL', 'EBOOL', 'INT', 'UINT', 'WORD', 'DINT', 'TIME', 'UDINT',
+  'DWORD', 'REAL', 'LREAL', 'LINT', 'ULINT', 'BYTE',
+  'DATE', 'TIME_OF_DAY', 'DATE_AND_TIME',
+};
+
+bool _isStringyName(String name) {
+  final u = name.toUpperCase();
+  return u == 'STRING' || u == 'BYTE_STRING' || u == 'WSTRING';
+}
+
+/// Bytes [parseVariableValue] will consume for [type] out of a buffer with
+/// [remaining] bytes left at the current offset.
+///
+/// The single source of truth for stepping through a concatenated buffer.
+/// Getting this out of step with the reader silently misaligns every variable
+/// that follows: the 4-byte clamp below exists for wide *aggregates* (struct
+/// instances, TON), which the M580 truncates to 4 bytes, but it used to catch
+/// the 8-byte elementary scalars too — so an LREAL was read as 8 bytes and
+/// stepped over as 4, and everything after it decoded from the wrong offset.
+int umasOnWireSize(UmasDataTypeRef type, int remaining) {
+  final upper = type.name.toUpperCase();
+  // Exact-width scalars: the reader demands all of them or throws underflow.
+  if (kUmasKnownScalars.contains(upper)) return type.byteSize;
+  final clamped = type.byteSize > 4 ? 4 : type.byteSize;
+  // STRING-family may arrive shorter than the clamp; never step past the end.
+  if (_isStringyName(upper) && clamped > remaining) {
+    return remaining < 0 ? 0 : remaining;
+  }
+  return clamped;
+}
+
 TypedVariableValue parseVariableValue(
     Uint8List bytes, int offset, UmasDataTypeRef dataType) {
   final declared = dataType.byteSize;
@@ -766,14 +803,8 @@ TypedVariableValue parseVariableValue(
   // PLC truncates wide STRING reads, and the parser must gracefully decode
   // whatever bytes arrive even when zero bytes are available.
   final upper = dataType.name.toUpperCase();
-  final knownScalar = const {
-        'BOOL', 'EBOOL', 'INT', 'UINT', 'WORD', 'DINT', 'TIME', 'UDINT',
-        'DWORD', 'REAL', 'LREAL', 'LINT', 'ULINT', 'BYTE',
-        'DATE', 'TIME_OF_DAY', 'DATE_AND_TIME',
-      }.contains(upper);
-  final isStringy = upper == 'STRING' ||
-      upper == 'BYTE_STRING' ||
-      upper == 'WSTRING';
+  final knownScalar = kUmasKnownScalars.contains(upper);
+  final isStringy = _isStringyName(upper);
 
   if (offset + declared > bytes.length) {
     if (isStringy) {
@@ -893,7 +924,7 @@ List<TypedVariableValue> parseVariableValues(
   int totalExpected = 0;
   for (final type in types) {
     if (isStringy(type.name)) continue;
-    totalExpected += type.byteSize > 4 ? 4 : type.byteSize;
+    totalExpected += umasOnWireSize(type, rawBytes.length);
   }
   if (totalExpected > rawBytes.length) {
     throw UmasException(
@@ -907,14 +938,8 @@ List<TypedVariableValue> parseVariableValues(
   int offset = 0;
   for (final type in types) {
     results.add(parseVariableValue(rawBytes, offset, type));
-    // Advance by the actual on-wire size (clamped to 4 for wide types).
-    // For STRING-family the on-wire size is whatever remains up to 4 bytes,
-    // matching parseVariableValue's graceful-slice semantics.
-    final remaining = rawBytes.length - offset;
-    final declaredAdvance = type.byteSize > 4 ? 4 : type.byteSize;
-    offset += isStringy(type.name) && declaredAdvance > remaining
-        ? remaining
-        : declaredAdvance;
+    // Advance by exactly what the reader consumed -- see [umasOnWireSize].
+    offset += umasOnWireSize(type, rawBytes.length - offset);
   }
   return results;
 }
@@ -1637,28 +1662,14 @@ class MonitorPlcRegistrationTable {
     final results = <TypedVariableValue>[];
     int offset = 0;
 
-    bool isStringy(String n) {
-      final u = n.toUpperCase();
-      return u == 'STRING' || u == 'BYTE_STRING' || u == 'WSTRING';
-    }
-
     for (final idx in indices) {
       final type = _types[idx]!;
-      // M580 clamps wide types (STRING, struct instances) to 4 bytes per
-      // dataSizeIndex range — advance by actual on-wire size, not declared
-      // byteSize. See /tmp/umas-string-bug-report.md + parseVariableValues.
       results.add(parseVariableValue(rawBytes, offset, type));
-      final remaining = rawBytes.length - offset;
-      final declaredAdvance = type.byteSize > 4 ? 4 : type.byteSize;
-      // For STRING-family, clamp the advance at the remaining bytes so a
-      // PLC that returned fewer-than-clamped bytes (e.g. 1 byte for an
-      // empty STRING via 0x22, or no bytes at all) does not push `offset`
-      // past `rawBytes.length` and break the next variable's parse.
-      if (isStringy(type.name) && declaredAdvance > remaining) {
-        offset += remaining < 0 ? 0 : remaining;
-      } else {
-        offset += declaredAdvance;
-      }
+      // Advance by exactly what the reader consumed. [umasOnWireSize] also
+      // clamps STRING-family at the remaining bytes, so a PLC that returned
+      // fewer-than-clamped bytes (e.g. 1 byte for an empty STRING via 0x22,
+      // or none at all) cannot push `offset` past the end.
+      offset += umasOnWireSize(type, rawBytes.length - offset);
     }
 
     return results;
