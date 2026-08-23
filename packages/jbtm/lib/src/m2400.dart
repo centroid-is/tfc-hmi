@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:jbtm/src/m2400_log_throttle.dart';
 import 'package:logger/logger.dart';
 
 final _logger = Logger();
@@ -149,12 +150,22 @@ M2400Record? parseM2400Frame(Uint8List frameBytes) {
   if (recTypeId != null) {
     type = M2400RecordType.fromId(recTypeId);
     if (type == M2400RecordType.unknown) {
-      _logger.w('Unknown record type ID: $recTypeId');
+      // Throttled: an unrecognised record type repeats on every record of
+      // that type, and warnings survive every level a station is set to.
+      final reason = 'unknownRecordType:$recTypeId';
+      if (shouldReportM2400(reason)) {
+        _logger.w('Unknown record type ID: $recTypeId '
+            '(occurrence ${m2400LogCount(reason)})');
+      }
     }
   } else {
     type = M2400RecordType.unknown;
     if (firstToken.isNotEmpty) {
-      _logger.w('Non-numeric record type value: $firstToken');
+      // Fixed reason key: firstToken is raw device data.
+      if (shouldReportM2400('nonNumericRecordType')) {
+        _logger.w('Non-numeric record type value: $firstToken '
+            '(occurrence ${m2400LogCount('nonNumericRecordType')})');
+      }
     }
   }
 
@@ -165,8 +176,10 @@ M2400Record? parseM2400Frame(Uint8List frameBytes) {
 
   // Log warning for even total count (odd number of field tokens = unpaired trailing element)
   if (parts.length > 1 && parts.length.isEven) {
-    _logger.w(
-        'Odd number of field elements; trailing "${parts.last}" unpaired');
+    if (shouldReportM2400('unpairedTrailingField')) {
+      _logger.w('Odd number of field elements; trailing "${parts.last}" '
+          'unpaired (occurrence ${m2400LogCount('unpairedTrailingField')})');
+    }
   }
 
   return M2400Record(type: type, fields: fields);

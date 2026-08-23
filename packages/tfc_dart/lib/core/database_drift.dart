@@ -795,7 +795,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     ).get();
 
     final duration = DateTime.now().difference(start);
-    print('⏱️  tableQuery: Query execution took ${duration.inMilliseconds}ms');
+    logger.d('tableQuery: query execution took ${duration.inMilliseconds}ms');
 
     return result;
   }
@@ -850,14 +850,18 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       sql += ' order by $orderBy ';
     }
     final start = Stopwatch()..start();
-    print('⏱️  tableQueryMultiple: SQL: $sql');
+    // Trace, and through the logger: this runs once per timeseries chart
+    // query and the generated SQL is hundreds of characters wide. As a raw
+    // `print` it was unfilterable -- every history view paid a full stdout
+    // write for it, in release, with no way to turn it off.
+    logger.t('tableQueryMultiple: SQL: $sql');
     final result = await customSelect(sql,
             variables: whereArgs != null
                 ? [for (var arg in whereArgs) Variable(arg)]
                 : [])
         .get();
-    print(
-        '⏱️  tableQueryMultiple: Query execution took ${start.elapsedMilliseconds}ms');
+    logger.d('tableQueryMultiple: query execution took '
+        '${start.elapsedMilliseconds}ms');
     return result;
   }
 

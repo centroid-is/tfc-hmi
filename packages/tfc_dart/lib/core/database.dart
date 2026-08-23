@@ -996,9 +996,12 @@ class Database {
 
     // final processStart = DateTime.now();
     if (result.isEmpty) {
-      print('📊 queryTimeseriesData: No results found for $tableName');
-      print(
-          '📊 queryTimeseriesData: from=${from?.toUtc().toIso8601String()} to=${to.toUtc().toIso8601String()}');
+      // An empty window is ordinary -- a chart scrolled past the start of the
+      // data does it on every frame of the scroll -- so this is debug, not a
+      // pair of unfilterable prints.
+      logger.d('queryTimeseriesData: no results for $tableName '
+          '(from=${from?.toUtc().toIso8601String()} '
+          'to=${to.toUtc().toIso8601String()})');
       return [];
     }
 

@@ -91,6 +91,11 @@ class BaseScaffold extends ConsumerStatefulWidget {
 }
 
 class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
+  // Static, not per-build: `Logger()` constructs a filter, a printer and an
+  // output every time (~4.3us), and this rebuilds on every navigation-alarm
+  // tick. The scaffold logs one line, from a tap handler.
+  static final Logger _logger = Logger();
+
   bool _isFullscreen = false;
 
   void _toggleFullscreen() {
@@ -210,7 +215,6 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    final logger = Logger();
     // Retrieve the provider (if any)
     final globalLeftProvider = _tryGetGlobalAppBarLeftWidgetProvider(context);
 
@@ -388,7 +392,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 }),
               ],
               onDestinationSelected: (int index) {
-                logger.d('Item tapped: $index');
+                _logger.d('Item tapped: $index');
                 // Closed on the tap, not left to the router listener in
                 // MyApp. That listener is the guarantee -- it catches the back
                 // button, beamBack, deep links and the route guards -- but it

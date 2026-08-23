@@ -1,16 +1,50 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:logger/logger.dart';
 import 'package:open62541/open62541.dart' show LogLevel;
 
-/// Reads CENTROID_LOG_LEVEL env var and returns the corresponding [Level].
+/// True when this code was compiled for release or profile.
 ///
-/// Valid values: trace, debug, info, warning, error, fatal, off, all
-/// Defaults to [Level.trace] (show everything) if unset or unrecognized.
-Level logLevelFromEnv() {
-  final value = Platform.environment['CENTROID_LOG_LEVEL']?.toLowerCase();
-  return switch (value) {
+/// This is exactly how `package:flutter/foundation.dart` defines
+/// `kReleaseMode` / `kProfileMode`; spelling the constants out here keeps
+/// tfc_dart a pure Dart package (it is also run from `bin/` by the Dart VM,
+/// where `foundation` is not available). Both are compile-time constants, so
+/// the branch below folds away at build time.
+const bool _kProductMode = bool.fromEnvironment('dart.vm.product');
+const bool _kProfileMode = bool.fromEnvironment('dart.vm.profile');
+
+/// Whether the running binary is a shipped build (release or profile) rather
+/// than a JIT/debug run.
+const bool kShippedBuild = _kProductMode || _kProfileMode;
+
+/// The level used when CENTROID_LOG_LEVEL is unset.
+///
+/// * shipped builds -> [Level.info]. Trace and debug are the levels that carry
+///   the per-sample and per-record log sites (one of them fired 13,013 times in
+///   a single page load), and a `PrettyPrinter` line costs ~23us to format plus
+///   ~19us to write. Info and above are lifecycle events -- connected,
+///   subscribed, migrated, session lost -- which are what makes an error in the
+///   log file interpretable weeks later, and are all event-driven rather than
+///   per-sample.
+/// * everything else -> [Level.debug]. Debug builds are attended; the extra
+///   detail is worth its cost, but the trace firehose is not.
+///
+/// Deliberately *not* `assert`-gated the way `package:logger`'s
+/// [DevelopmentFilter] is. That filter drops every line in release, which would
+/// leave a station with no record of its own faults -- the opposite of what an
+/// unattended industrial box needs. Errors and warnings must always survive.
+Level defaultLogLevel({bool shippedBuild = kShippedBuild}) =>
+    shippedBuild ? Level.info : Level.debug;
+
+/// Maps a CENTROID_LOG_LEVEL string to a [Level].
+///
+/// Valid values: trace, debug, info, warning, error, fatal, off, all.
+/// `all` behaves like `trace` but additionally overrides per-logger `level:`
+/// floors -- see [EnvLogFilter].
+///
+/// Unset or unrecognised falls back to [defaultLogLevel].
+Level logLevelFor(String? value, {bool shippedBuild = kShippedBuild}) {
+  return switch (value?.toLowerCase()) {
     'all' || 'trace' => Level.trace,
     'debug' => Level.debug,
     'info' => Level.info,
@@ -18,9 +52,25 @@ Level logLevelFromEnv() {
     'error' => Level.error,
     'fatal' => Level.fatal,
     'off' || 'none' => Level.off,
-    _ => Level.trace,
+    _ => defaultLogLevel(shippedBuild: shippedBuild),
   };
 }
+
+/// Whether [value] asks for per-logger `level:` floors to be ignored.
+///
+/// Only the literal `all` does. It is the escape hatch for the handful of
+/// loggers that pin themselves to `Level.info` because they are chatty
+/// (modbus, UMAS): `CENTROID_LOG_LEVEL=trace` respects those floors,
+/// `CENTROID_LOG_LEVEL=all` blows through them.
+bool logLevelOverridesLoggerFloor(String? value) =>
+    value?.toLowerCase() == 'all';
+
+/// Reads CENTROID_LOG_LEVEL env var and returns the corresponding [Level].
+///
+/// Valid values: trace, debug, info, warning, error, fatal, off, all
+/// Defaults to [defaultLogLevel] if unset or unrecognized.
+Level logLevelFromEnv() =>
+    logLevelFor(Platform.environment['CENTROID_LOG_LEVEL']);
 
 /// Reads CENTROID_OPCUA_LOG_LEVEL env var and returns the corresponding
 /// open62541 [LogLevel].
@@ -40,18 +90,54 @@ LogLevel opcuaLogLevelFromEnv() {
   };
 }
 
-/// A [LogFilter] that uses [CENTROID_LOG_LEVEL] to control which messages
+/// A [LogFilter] that uses `CENTROID_LOG_LEVEL` to control which messages
 /// are logged. Messages at or above the configured level pass through.
+///
+/// A per-logger level -- `Logger(level: Level.info)`, which `logger` stores on
+/// [LogFilter.level] -- acts as a *floor*: such a logger never emits below its
+/// own level even when the environment asks for more. That is the point of the
+/// three loggers in this repo that set it (modbus/UMAS chatter). Set
+/// `CENTROID_LOG_LEVEL=all` to ignore those floors.
+///
+/// [LogFilter.level] falls back to the static `Logger.level` (default
+/// [Level.trace]) when no per-logger level was given, so the floor is a no-op
+/// unless somebody opted in.
 class EnvLogFilter extends LogFilter {
   final Level _minLevel;
+  final bool _ignoreLoggerFloor;
 
-  EnvLogFilter() : _minLevel = logLevelFromEnv();
+  EnvLogFilter({String? envValue, bool? shippedBuild})
+      : _minLevel = logLevelFor(
+          envValue ?? Platform.environment['CENTROID_LOG_LEVEL'],
+          shippedBuild: shippedBuild ?? kShippedBuild,
+        ),
+        _ignoreLoggerFloor = logLevelOverridesLoggerFloor(
+            envValue ?? Platform.environment['CENTROID_LOG_LEVEL']);
 
   @override
   bool shouldLog(LogEvent event) {
-    return event.level >= _minLevel;
+    if (event.level < _minLevel) return false;
+    if (_ignoreLoggerFloor) return true;
+    final floor = level;
+    return floor == null || event.level >= floor;
   }
 }
+
+/// The printer every bare `Logger()` gets once [initLogConfig] has run.
+///
+/// `PrettyPrinter`'s default `methodCount: 2` calls `StackTrace.current` and
+/// walks it for *every* line, which is the bulk of the ~23us a single
+/// `logger.t(...)` costs -- dropping it to zero takes the same call to ~1.3us.
+/// `errorMethodCount` is left alone, so anything logged with an error or an
+/// explicit stack trace still prints a full frame list: the stack is kept
+/// exactly where it is worth paying for.
+PrettyPrinter hotPathPrinter() => PrettyPrinter(
+      methodCount: 0,
+      errorMethodCount: 8,
+      lineLength: 120,
+      printEmojis: false,
+      dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
+    );
 
 /// Writes each log line straight to the file, flushed as it goes.
 ///
@@ -98,6 +184,7 @@ RandomAccessFile? _logFile;
 /// Writing from inside the process removes that dependency.
 void initLogConfig() {
   Logger.defaultFilter = () => EnvLogFilter();
+  Logger.defaultPrinter = () => hotPathPrinter();
 
   final path = Platform.environment['CENTROID_LOG_FILE'];
   if (path == null || path.isEmpty) return;
