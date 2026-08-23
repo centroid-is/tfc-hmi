@@ -270,6 +270,24 @@ void main() {
       expect(ts!.millisecond, equals(500));
     });
 
+    // The device sends date/time with no zone, so the recombined DateTime is
+    // local, not UTC. That is load-bearing downstream: convertRecordToDynamicValue
+    // stores deviceTimestamp as microsecondsSinceEpoch, which resolves a local
+    // DateTime through the *host's* UTC offset. Flipping this to UTC (or to
+    // local, if someone "fixes" it the other way) silently shifts every
+    // weigher timestamp by that offset, so pin it.
+    test('recombined timestamp is local, not UTC — the wire carries no zone', () {
+      final fields = <M2400Field, Object>{
+        M2400Field.date: '2026-03-04',
+        M2400Field.time: '14:30:00',
+      };
+      final ts = extractTimestamp(fields);
+      expect(ts, isNotNull);
+      expect(ts!.isUtc, isFalse);
+      expect(ts.microsecondsSinceEpoch,
+          equals(DateTime(2026, 3, 4, 14, 30).microsecondsSinceEpoch));
+    });
+
     test('returns null when date present but time absent', () {
       final fields = <M2400Field, Object>{
         M2400Field.date: '2026-03-04',

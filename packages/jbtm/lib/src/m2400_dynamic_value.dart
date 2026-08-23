@@ -28,8 +28,24 @@ bool _isStatusField(M2400Field field) =>
 /// - One child per known typed field, keyed by the [M2400Field] enum name
 ///   (e.g., 'weight', 'unit', 'siWeight', 'field6')
 /// - One child per unknown field, keyed by numeric ID string (e.g., '99')
-/// - 'receivedAt' child with ISO 8601 string timestamp
-/// - 'deviceTimestamp' child with ISO 8601 string (only if non-null)
+/// - 'receivedAt' child with an **int**: microseconds since the Unix epoch
+/// - 'deviceTimestamp' child with an **int**: microseconds since the Unix
+///   epoch (only if non-null)
+///
+/// Both timestamps were ISO 8601 strings until #99 ("perf: reduce CPU usage
+/// across paint pipeline"), which switched them to ints to cut string
+/// allocation on the hot acquisition path. The doc here said "ISO 8601
+/// string" for five months after that; if you are reading rows written before
+/// #99 out of the collector's `jsonb` value column, expect strings there and
+/// ints after.
+///
+/// Note the two are not equally well defined. [M2400ParsedRecord.receivedAt]
+/// comes from `DateTime.timestamp()` and is UTC, so its epoch value is
+/// unambiguous. [M2400ParsedRecord.deviceTimestamp] is recombined by
+/// `extractTimestamp` from the device's date/time fields, which carry no zone,
+/// so it is a **local** `DateTime` — converting it to epoch microseconds bakes
+/// in the *host's* UTC offset. That is correct on the SVN stations (Iceland is
+/// UTC+0 year round, no DST) and would shift on a host in another zone.
 ///
 /// Status fields ([M2400Field.status], [M2400Field.weighingStatus]) have
 /// their [DynamicValue.enumFields] populated with [WeigherStatus] entries.
