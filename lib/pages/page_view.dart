@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
+import 'package:tfc/page_creator/page.dart' show AssetPage;
 
 import '../chat/asset_context_menu.dart';
 import '../core/feature_flags.dart';
@@ -692,7 +693,7 @@ class AssetView extends StatelessWidget {
 /// not confirmed the layout — a mark saying so.
 ///
 /// Split out of [AssetView] so it can be tested without the app shell.
-class PlantPageView extends ConsumerWidget {
+class PlantPageView extends ConsumerStatefulWidget {
   final String pageName;
   const PlantPageView({Key? key, required this.pageName}) : super(key: key);
 
@@ -700,7 +701,50 @@ class PlantPageView extends ConsumerWidget {
   static const Key unverifiedBannerKey = Key('unverified-page-banner');
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PlantPageView> createState() => _PlantPageViewState();
+}
+
+class _PlantPageViewState extends ConsumerState<PlantPageView> {
+  // Memo for [_confirmedPage], keyed on the identity of the two inputs. The
+  // comparison serializes the page, so it must happen once per new pair of
+  // copies — not once per build.
+  AssetPage? _lastFromDatabase;
+  AssetPage? _lastCached;
+  AssetPage? _reconciled;
+
+  /// The instance to render once the database has confirmed [dbPage].
+  ///
+  /// `AssetStack` keys every asset by `ObjectKey(asset)` — object identity —
+  /// so that reordering moves elements instead of restarting each asset's
+  /// subscriptions (#180). The database copy is deserialized separately from
+  /// the cached one, so *every* `Asset` in it is a different instance even
+  /// when the layout is byte-for-byte the same. Handing it straight to
+  /// `AssetStack` would therefore tear the whole page down and rebuild it the
+  /// moment Postgres answers: every subscription restarts, every asset flashes
+  /// back through its loading state, and any equipment pane the operator has
+  /// opened closes under their finger (pane-owning assets close their pane
+  /// from `dispose` — see `SidePaneOwner`).
+  ///
+  /// So when the server confirms exactly what was already on screen, keep the
+  /// instance that is already mounted. When the layout genuinely differs the
+  /// database copy is used and the teardown is correct — that is the same
+  /// rebuild the app already does after every page-editor save.
+  AssetPage? _confirmedPage(AssetPage? dbPage, AssetPage? cachedPage) {
+    if (dbPage == null || cachedPage == null) return dbPage;
+    if (identical(dbPage, _lastFromDatabase) &&
+        identical(cachedPage, _lastCached)) {
+      return _reconciled;
+    }
+    _lastFromDatabase = dbPage;
+    _lastCached = cachedPage;
+    final same = jsonEncode(dbPage.toJson()) == jsonEncode(cachedPage.toJson());
+    return _reconciled = same ? cachedPage : dbPage;
+  }
+
+  String get pageName => widget.pageName;
+
+  @override
+  Widget build(BuildContext context) {
     // `pageManagerProvider` is the authority and it wins the moment it
     // answers: riverpod rebuilds this widget with the database copy, which is
     // used from then on — including across later refreshes, because
@@ -725,7 +769,14 @@ class PlantPageView extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
-    final page = pageManager.pages[pageName];
+    // When the database confirms the layout that is already mounted, keep the
+    // mounted instance rather than swapping in an identical-but-new one.
+    final page = unverified
+        ? pageManager.pages[pageName]
+        : _confirmedPage(
+            pageManager.pages[pageName],
+            ref.read(bootstrapPageManagerProvider)?.pages[pageName],
+          );
 
     final Widget content;
     if (page == null) {
@@ -768,13 +819,22 @@ class PlantPageView extends ConsumerWidget {
       );
     }
 
-    if (!unverified) return content;
-
-    // Outside the canvas on purpose: inside it the strip would zoom and pan
-    // away with the plant.
+    // The Column is here whether or not the strip is, and the strip's slot is
+    // always child 0. Collapsing to a bare `content` when the mark clears
+    // would change the depth of everything below it, and Flutter reconciles
+    // by position — so the whole plant page would be torn down and every
+    // asset re-subscribed purely because a banner went away. Keeping the
+    // shape fixed means the mark appearing or clearing costs one zero-height
+    // box, and nothing under it is disturbed.
+    //
+    // The strip sits outside the canvas on purpose: inside it, it would zoom
+    // and pan away with the plant.
     return Column(
       children: [
-        const _UnverifiedPageBanner(),
+        if (unverified)
+          const _UnverifiedPageBanner()
+        else
+          const SizedBox.shrink(),
         Expanded(child: content),
       ],
     );

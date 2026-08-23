@@ -23,9 +23,73 @@ import 'package:shared_preferences_platform_interface/in_memory_shared_preferenc
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/page_creator/page.dart';
+import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/pages/page_view.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
+import 'package:tfc/widgets/zoomable_canvas.dart';
 import 'package:tfc/providers/page_manager.dart';
 import 'package:tfc_dart/core/preferences.dart';
+
+/// Counts how many times a probe asset's subtree was mounted and torn down.
+int _probeMounts = 0;
+int _probeDisposes = 0;
+
+/// An asset whose only job is to report whether its subtree survived a rebuild.
+///
+/// It wraps itself in a [SidePaneOwner] exactly as the real pane-owning assets
+/// do (`AnalogBox`, the Beckhoff modules), so a teardown here closes a pane for
+/// the same reason a teardown there would.
+class _ProbeAsset extends BaseAsset {
+  _ProbeAsset() {
+    coordinates = Coordinates(x: 0.5, y: 0.5);
+  }
+
+  @override
+  Widget build(BuildContext context) => const SidePaneOwner(
+        paneId: 'probe',
+        child: _Probe(),
+      );
+
+  @override
+  Widget configure(BuildContext context) => const SizedBox.shrink();
+
+  @override
+  Map<String, dynamic> toJson() => {'type': 'probe'};
+}
+
+class _Probe extends StatefulWidget {
+  const _Probe();
+  @override
+  State<_Probe> createState() => _ProbeState();
+}
+
+class _ProbeState extends State<_Probe> {
+  @override
+  void initState() {
+    super.initState();
+    _probeMounts++;
+  }
+
+  @override
+  void dispose() {
+    _probeDisposes++;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox(width: 20, height: 20);
+}
+
+PageManager _managerWithProbe(String path) => PageManager(
+      pages: {
+        path: AssetPage(
+          menuItem: MenuItem(label: path, path: path, icon: Icons.factory),
+          assets: [_ProbeAsset()],
+          mirroringDisabled: false,
+        ),
+      },
+      prefs: InMemoryPreferences(),
+    );
 
 PageManager _managerWith(Iterable<String> paths) => PageManager(
       pages: {
@@ -177,6 +241,61 @@ void main() {
     expect(find.byType(AssetStack), findsOneWidget,
         reason: 'an unreachable server must not blank the plant page');
     expect(find.byKey(PlantPageView.unverifiedBannerKey), findsOneWidget);
+  });
+
+  testWidgets('the staleness mark is outside the zoomable canvas',
+      (tester) async {
+    // This is what makes showing an unconfirmed layout safe at all. Inside the
+    // canvas the strip would pan and zoom with the plant, so an operator who
+    // scrolled the page could put the warning off screen and be left looking
+    // at an unconfirmed layout with nothing saying so.
+    await tester.pumpWidget(_app(overrides: [
+      _dbNeverAnswers(),
+      bootstrapPageManagerProvider
+          .overrideWithValue(_managerWith(['/line-1'])),
+    ]));
+    await tester.pump();
+
+    expect(find.byType(ZoomableCanvas), findsOneWidget);
+    expect(find.byKey(PlantPageView.unverifiedBannerKey), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(ZoomableCanvas),
+        matching: find.byKey(PlantPageView.unverifiedBannerKey),
+      ),
+      findsNothing,
+      reason: 'the mark must not be pannable or zoomable off screen',
+    );
+  });
+
+  testWidgets('an unchanged page keeps its asset subtrees when the database '
+      'copy lands', (tester) async {
+    // AssetStack keys each asset by `ObjectKey(asset)` — object identity — so
+    // that a z-order change moves the element instead of restarting every
+    // asset's subscriptions (#180). The database copy is deserialized
+    // separately from the cached one, so every Asset is a different instance
+    // even when the layout is byte-identical. Without care that means the
+    // whole page is torn down and re-subscribed the moment Postgres answers,
+    // and any pane the operator has open closes under their finger.
+    _probeMounts = 0;
+    _probeDisposes = 0;
+    final completer = Completer<PageManager>();
+    await tester.pumpWidget(_app(overrides: [
+      pageManagerProvider.overrideWith((ref) => completer.future),
+      bootstrapPageManagerProvider
+          .overrideWithValue(_managerWithProbe('/line-1')),
+    ]));
+    await tester.pump();
+    expect(_probeMounts, 1);
+
+    completer.complete(_managerWithProbe('/line-1'));
+    await tester.pumpAndSettle();
+
+    expect(_probeDisposes, 0,
+        reason: 'the layout did not change, so nothing should have been '
+            'torn down — a teardown restarts every subscription and closes '
+            'any open equipment pane');
+    expect(_probeMounts, 1);
   });
 
   testWidgets('a page the cache has never seen waits rather than claiming it '
