@@ -565,7 +565,10 @@ void main() {
       socket.connect();
 
       // Event-driven: as fast as this machine can refuse three connections.
-      await sawThreeAttempts.future.timeout(const Duration(seconds: 30));
+      await sawThreeAttempts.future.timeout(const Duration(seconds: 20),
+          onTimeout: () => fail('The loop stopped retrying: only saw '
+              '${statuses.where((s) => s == ConnectionStatus.connecting).length}'
+              ' connecting events in 20s. Got $statuses'));
       socket.dispose();
 
       // The loop must cycle, not just fail once and stop.

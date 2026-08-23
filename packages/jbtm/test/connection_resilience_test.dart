@@ -6,6 +6,7 @@ import 'package:jbtm/src/connection_health.dart';
 import 'package:test/test.dart';
 
 import 'tcp_proxy.dart';
+import 'test_clock.dart';
 
 /// Helper to wait until [socket] reaches [target] status with timeout.
 Future<void> _waitForStatus(
@@ -242,7 +243,12 @@ void main() {
     });
 
     test('uptime resets after reconnection', () async {
-      final metrics = ConnectionHealthMetrics(socket);
+      // Uptime is read off a clock this test controls, so "it reset" is an
+      // exact statement. Sleeping 500ms, then 200ms, and asserting the second
+      // reading is the smaller one leaves only ~300ms of margin -- one stall
+      // on a loaded runner and it inverts.
+      final clock = TestClock();
+      final metrics = ConnectionHealthMetrics(socket, now: clock.now);
       addTearDown(() => metrics.dispose());
 
       socket.connect();
@@ -250,9 +256,8 @@ void main() {
           socket, ConnectionStatus.connected, Duration(seconds: 5));
 
       // Let uptime accumulate
-      await Future.delayed(Duration(milliseconds: 500));
-      final uptime1 = metrics.uptime;
-      expect(uptime1, greaterThan(Duration(milliseconds: 400)));
+      clock.advance(Duration(hours: 9));
+      expect(metrics.uptime, Duration(hours: 9));
 
       // Cable pull + recover
       await proxy.shutdown();
@@ -263,13 +268,11 @@ void main() {
       await _waitForStatus(
           socket, ConnectionStatus.connected, Duration(seconds: 10));
 
-      // Uptime should have reset (new connection, new _lastConnectedAt)
-      await Future.delayed(Duration(milliseconds: 200));
-      final uptime2 = metrics.uptime;
-
-      // uptime2 should be less than uptime1 because it just reconnected
-      expect(uptime2, lessThan(uptime1),
+      // Uptime restarts from the new connection, not the original one.
+      expect(metrics.uptime, Duration.zero,
           reason: 'Uptime should reset after reconnection');
+      clock.advance(Duration(minutes: 1));
+      expect(metrics.uptime, Duration(minutes: 1));
     });
   });
 }

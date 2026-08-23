@@ -3,6 +3,7 @@ import 'package:jbtm/src/connection_health.dart';
 import 'package:test/test.dart';
 
 import 'tcp_proxy.dart';
+import 'test_clock.dart';
 
 void main() {
   late TestTcpServer server;
@@ -176,12 +177,3 @@ void main() {
   });
 }
 
-/// A clock the test moves by hand, so metrics that are differences between two
-/// clock reads can be asserted exactly instead of being slept for.
-class TestClock {
-  DateTime _now = DateTime.utc(2026, 1, 1);
-
-  DateTime now() => _now;
-
-  void advance(Duration d) => _now = _now.add(d);
-}
