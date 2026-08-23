@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 )
@@ -49,7 +50,14 @@ func (e execRunner) Run(name string, args ...string) ([]byte, error) {
 }
 
 func (e execRunner) Start(name string, args ...string) error {
-	return exec.Command(name, args...).Start()
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// The manager exits immediately after launching the app and will never
+	// Wait, so release the handle rather than leave a zombie behind if it
+	// somehow outlives the child.
+	return cmd.Process.Release()
 }
 
 // publisherConflictHRESULT is ERROR_PACKAGE_ALREADY_EXISTS: a package with
@@ -229,17 +237,60 @@ func installDarwin(runner CommandRunner, assetPath string) error {
 	return nil
 }
 
-// launchAppDetached starts the app as a detached process so the manager can exit.
-// appPath is platform-specific: shell:AppsFolder URI on Windows, binary path elsewhere.
-func launchAppDetached(runner CommandRunner, appPath string) error {
-	_, err := runner.Run(appPath)
-	return err
+// launchAppDetached starts the app without waiting for it to exit, so the
+// manager can finish its update and quit.
+//
+// It must not go through Run: that captures combined output, which does not
+// return until the child closes its pipes — i.e. until the app exits. Launching
+// the HMI that way left the manager sitting on "installing" for as long as the
+// HMI ran. Windows only escaped it by launching explorer.exe, which returns at
+// once; fixing that alone would have turned this into a Windows bug too.
+func launchAppDetached(runner CommandRunner, appPath string, args ...string) error {
+	return runner.Start(appPath, args...)
 }
 
-// launchWindowsApp — placeholder replicating the current behaviour.
+// windowsPackageName is the MSIX identity name from centroid-hmi's msix_config.
+const windowsPackageName = "Centroid.CentroidX"
+
+// windowsAppID is the Application Id in the generated AppxManifest. The msix
+// builder emits a single application entry with this id.
+const windowsAppID = "App"
+
+// launchWindowsApp starts the installed MSIX through its AppsFolder URI.
+//
+// A packaged app cannot be launched by path — there is no plain executable to
+// run — so it goes through the shell:AppsFolder alias, which needs the package
+// family name. That name embeds a hash derived from the publisher, so it
+// changes whenever the signing identity does and must be read back from the
+// installed package rather than baked in.
+//
+// The previous implementation ran "explorer.exe" with no arguments at all,
+// which simply opens a File Explorer window: every successful update ended
+// with the HMI gone and a file browser on the screen.
 func launchWindowsApp(runner CommandRunner) error {
-	_, err := runner.Run("explorer.exe")
-	return err
+	out, err := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		"(Get-AppxPackage -Name '"+windowsPackageName+"').PackageFamilyName",
+	)
+	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			return &commandError{op: "could not read the installed package family name: " + detail, cause: err}
+		}
+		return &commandError{op: "could not read the installed package family name", cause: err}
+	}
+
+	familyName := strings.TrimSpace(string(out))
+	if familyName == "" {
+		return &commandError{
+			op:    "cannot launch " + windowsPackageName + ": it does not appear to be installed",
+			cause: errors.New("Get-AppxPackage returned no package family name"),
+		}
+	}
+
+	return launchAppDetached(runner, "explorer.exe", `shell:AppsFolder\`+familyName+"!"+windowsAppID)
 }
 
 // parseMountPoint extracts the /Volumes/... path from hdiutil -plist output.

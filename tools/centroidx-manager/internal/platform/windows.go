@@ -23,7 +23,7 @@ func (w *windowsInstaller) TrustCertificate(certPath string) error {
 }
 
 func (w *windowsInstaller) LaunchApp() error {
-	return launchAppDetached(w.runner, `explorer.exe`)
+	return launchWindowsApp(w.runner)
 }
 
 func (w *windowsInstaller) IsInstalled() bool {
