@@ -57,7 +57,11 @@ func TestWindowsInstaller_Install_DelegatesToInstallWindows(t *testing.T) {
 }
 
 func TestWindowsInstaller_TrustCertificate_DelegatesToTrustCertificateWindows(t *testing.T) {
-	runner := &mockRunner{}
+	// The runner must report the success token. Silence no longer means the
+	// certificate is trusted — that assumption was the defect, and this test
+	// was its second instance: it asserted success from a mock that said
+	// nothing, in a file no local run could compile.
+	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustOKToken)}, errors: []error{nil}}
 	inst := &windowsInstaller{runner: runner}
 
 	if err := inst.TrustCertificate(`C:\tmp\centroidx.cer`); err != nil {
