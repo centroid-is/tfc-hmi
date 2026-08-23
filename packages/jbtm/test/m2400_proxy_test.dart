@@ -5,89 +5,94 @@ import 'dart:typed_data';
 import 'package:jbtm/jbtm.dart';
 import 'package:test/test.dart';
 
-/// Number of file descriptors this process currently holds.
+/// Number of socket descriptors this process holds whose **local** port is
+/// [port] — i.e. the proxy's listen socket plus every downstream client it has
+/// accepted, and nothing else.
 ///
-/// Used by the descriptor-leak test below. POSIX only — `fdLeakSkip` guards
-/// the call sites, so this is never reached on Windows.
-int fdCount() {
+/// Scoping to a port is the whole point. The first version of this test
+/// counted every descriptor in the process and compared against a baseline,
+/// which is not attributable to the proxy for two independent reasons:
+///
+///  1. `dart test` runs VM suites as isolates inside a **single process**, so
+///     `/proc/self/fd` and `lsof -p $pid` also see the sockets of every other
+///     suite running concurrently — `msocket_test`, `m2400_integration_test`
+///     and `connection_resilience_test` are all socket-heavy and all overlap
+///     with this one. (Verified: two suites report the same `pid`.)
+///  2. Even alone in the process, a raw count includes handles that are not
+///     sockets at all — epoll/eventfd/timerfd the VM opens lazily, the
+///     descriptor `Directory.listSync` holds for the directory it is reading
+///     (which takes the lowest free number, so it lands somewhere different in
+///     every sample), and on macOS the pipes `Process.runSync` needs to read
+///     lsof's own output.
+///
+/// Either one moves a whole-process count by a descriptor or two with nothing
+/// leaked. That is how the original assertion failed on Linux, intermittently
+/// and by exactly one — while passing on macOS, where it was written, and
+/// Linux is the platform this proxy actually runs on.
+///
+/// Counting the proxy's own sockets is *stricter* than the process-wide
+/// version, not looser: it needs no baseline and no slack, so the assertions
+/// below state absolute figures — 1 while listening, 0 once shut down.
+///
+/// Matching is on the local port only. A downstream client's socket has the
+/// proxy's port as its *remote* port, and those descriptors belong to the
+/// test, not the proxy.
+///
+/// POSIX only — `fdLeakSkip` guards the call sites, so this is never reached
+/// on Windows.
+int socketsOnLocalPort(int port) {
   if (Platform.isLinux) {
-    return Directory('/proc/self/fd').listSync().length;
+    // inode -> local port, from the kernel's own socket tables.
+    final localPortOf = <String, int>{};
+    for (final table in const ['/proc/net/tcp', '/proc/net/tcp6']) {
+      final file = File(table);
+      if (!file.existsSync()) continue;
+      for (final line in file.readAsLinesSync().skip(1)) {
+        final fields = line.trim().split(RegExp(r'\s+'));
+        if (fields.length < 10) continue;
+        final colon = fields[1].lastIndexOf(':');
+        if (colon < 0) continue;
+        final localPort = int.tryParse(fields[1].substring(colon + 1), radix: 16);
+        if (localPort != null) localPortOf[fields[9]] = localPort;
+      }
+    }
+    var count = 0;
+    for (final entry in Directory('/proc/self/fd').listSync()) {
+      try {
+        // A socket descriptor's /proc link target is literally
+        // "socket:[inode]"; everything else is a file, pipe or anon_inode.
+        final target = Link(entry.path).targetSync();
+        if (!target.startsWith('socket:[')) continue;
+        final inode = target.substring(8, target.length - 1);
+        if (localPortOf[inode] == port) count++;
+      } on FileSystemException {
+        // The descriptor went away between readdir and readlink — including
+        // the listing's own directory descriptor. Not a socket either way.
+      }
+    }
+    return count;
   }
   // macOS has no /proc, and listing /dev/fd races against the listing's own
   // descriptor. lsof is part of the base system and is present on the GitHub
-  // macos runners.
-  final result = Process.runSync('lsof', ['-p', '$pid']);
+  // macos runners. Column 4 is TYPE; the NAME column is either
+  // "127.0.0.1:PORT (LISTEN)" or "127.0.0.1:LOCAL->127.0.0.1:REMOTE (STATE)".
+  final result = Process.runSync('lsof', ['-nP', '-p', '$pid']);
   if (result.exitCode != 0) {
     throw StateError('lsof failed: ${result.stderr}');
   }
-  return (result.stdout as String)
-      .split('\n')
-      .where((line) => line.isNotEmpty)
-      .length;
+  return (result.stdout as String).split('\n').where((line) {
+    final fields = line.trim().split(RegExp(r'\s+'));
+    if (fields.length < 9) return false;
+    if (!const {'IPv4', 'IPv6'}.contains(fields[4])) return false;
+    final local = fields[8].split('->').first;
+    final colon = local.lastIndexOf(':');
+    return colon >= 0 && int.tryParse(local.substring(colon + 1)) == port;
+  }).length;
 }
 
 /// Skip reason for descriptor-counting tests, or null when they can run.
 final String? fdLeakSkip =
     Platform.isWindows ? 'no POSIX file-descriptor table on Windows' : null;
-
-// ---- TEMPORARY DIAGNOSTIC (fdlinux probe) ---------------------------------
-Map<String, String> fdSnapshot() {
-  final out = <String, String>{};
-  if (!Platform.isLinux) return out;
-  for (final e in Directory('/proc/self/fd').listSync()) {
-    final name = e.path.split('/').last;
-    String target;
-    try {
-      target = Link(e.path).targetSync();
-    } catch (err) {
-      target = '<unreadable>';
-    }
-    out[name] = target;
-  }
-  return out;
-}
-
-Map<String, String> socketTable() {
-  final table = <String, String>{};
-  if (!Platform.isLinux) return table;
-  for (final f in const ['/proc/net/tcp', '/proc/net/tcp6']) {
-    final file = File(f);
-    if (!file.existsSync()) continue;
-    for (final line in file.readAsLinesSync().skip(1)) {
-      final p = line.trim().split(RegExp(r'\s+'));
-      if (p.length < 10) continue;
-      table[p[9]] = 'local=${p[1]} rem=${p[2]} st=${p[3]}';
-    }
-  }
-  return table;
-}
-
-void dumpFd(String label, Map<String, String> before, Map<String, String> now) {
-  if (!Platform.isLinux) return;
-  final sockets = socketTable();
-  String describe(String fd, String target) {
-    final m = RegExp(r'^socket:\[(\d+)\]$').firstMatch(target);
-    if (m != null) {
-      final info = sockets[m.group(1)!];
-      return '$target ${info ?? "(no /proc/net/tcp row)"}';
-    }
-    return target;
-  }
-
-  final added = <String>[];
-  final removed = <String>[];
-  for (final e in now.entries) {
-    if (before[e.key] != e.value) added.add('  +fd ${e.key} -> ${describe(e.key, e.value)}');
-  }
-  for (final e in before.entries) {
-    if (now[e.key] != e.value) removed.add('  -fd ${e.key} -> ${e.value}');
-  }
-  print('[fdlinux] $label: before=${before.length} now=${now.length} '
-      'delta=${now.length - before.length}');
-  for (final l in removed) print('[fdlinux] $label$l');
-  for (final l in added) print('[fdlinux] $label$l');
-}
-// ---- end TEMPORARY DIAGNOSTIC ---------------------------------------------
 
 void main() {
   // TestTcpServer acts as the fake upstream M2400 device.
@@ -617,7 +622,9 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 100));
 
       const cycles = 60;
-      final baseline = fdCount();
+      final listenPort = proxy.listenPort;
+      // Just the listen socket: no client is connected yet.
+      expect(socketsOnLocalPort(listenPort), equals(1));
 
       for (var i = 0; i < cycles; i++) {
         final client = await Socket.connect(
@@ -636,69 +643,62 @@ void main() {
 
       expect(proxy.clientCount, equals(0));
 
-      final after = fdCount();
-      // Slack for descriptors the runtime may open incidentally (lsof itself
-      // opens none in-process, but timers/isolates can). The leak is 1:1 with
-      // the cycle count, so anything near `cycles` is unmistakable.
+      // No baseline, no slack: the proxy is listening and has no clients, so
+      // it must hold exactly the one listen socket — the same figure as
+      // before the churn. Every peer it accepted has to be gone. (A socket in
+      // TIME_WAIT is a kernel table entry, not a descriptor, so it does not
+      // appear here.) The leak this test was written for is 1:1 with the
+      // cycle count, but an off-by-one leak is just as real, and scoping the
+      // count to the proxy's own port is what makes it safe to say so.
+      final after = socketsOnLocalPort(listenPort);
       expect(
-        after - baseline,
-        lessThanOrEqualTo(5),
-        reason: 'leaked ${after - baseline} descriptors over $cycles '
-            'graceful connect/close cycles (baseline $baseline, now $after)',
+        after,
+        equals(1),
+        reason: 'the proxy holds $after sockets on its listen port after '
+            '$cycles graceful connect/close cycles; it should hold only the '
+            'listen socket, so ${after - 1} accepted peers were leaked',
       );
     }, skip: fdLeakSkip);
 
     test('shutdown() leaves no descriptors behind after graceful churn',
         () async {
-      // TEMPORARY fdlinux probe: repeat the whole sequence many times, with
-      // and without a settle before shutdown(), and report the distribution.
-      final results = <String>[];
-      for (final settleMs in [0, 50]) {
-        for (var iter = 0; iter < 15; iter++) {
-          final up = TestTcpServer();
-          await up.start();
-          final p = M2400Proxy(
-            upstreamHost: 'localhost',
-            upstreamPort: up.port,
-            listenPort: 0,
-            listenAddress: InternetAddress.loopbackIPv4,
-          );
-          await p.start();
-          await up.waitForClient();
-          await Future.delayed(const Duration(milliseconds: 100));
+      await proxy.start();
+      await upstream.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
 
-          final baseCount = fdCount();
-          final baseSnap = fdSnapshot();
+      final listenPort = proxy.listenPort;
+      expect(socketsOnLocalPort(listenPort), equals(1));
 
-          for (var i = 0; i < 30; i++) {
-            final client = await Socket.connect(
-              InternetAddress.loopbackIPv4,
-              p.listenPort,
-            );
-            client.listen((_) {}, onError: (_) {});
-            unawaited(client.close());
-            client.destroy();
-            await Future.delayed(const Duration(milliseconds: 2));
-          }
-
-          final clientsBefore = p.clientCount;
-          if (settleMs > 0) {
-            await Future.delayed(Duration(milliseconds: settleMs));
-          }
-          await p.shutdown();
-          await Future.delayed(const Duration(milliseconds: 300));
-          final after = fdCount();
-          final delta = after - baseCount;
-          results.add('settle=$settleMs#$iter delta=$delta '
-              'clientsBeforeShutdown=$clientsBefore '
-              'clientsAfter=${p.clientCount}');
-          if (delta > -2) {
-            dumpFd('settle=$settleMs#$iter', baseSnap, fdSnapshot());
-          }
-          await up.shutdown();
-        }
+      for (var i = 0; i < 30; i++) {
+        final client = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          proxy.listenPort,
+        );
+        client.listen((_) {}, onError: (_) {});
+        unawaited(client.close());
+        client.destroy();
+        await Future.delayed(const Duration(milliseconds: 2));
       }
-      fail('fdlinux probe results:\n${results.join('\n')}');
-    }, skip: fdLeakSkip, timeout: const Timeout(Duration(minutes: 5)));
+
+      await proxy.shutdown();
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // shutdown() only walks `_clients`; anything already dropped from that
+      // list is unreachable and cannot be reclaimed here. So every peer the
+      // churn accepted has to have been released as it disconnected, and
+      // shutdown must then close the listen socket itself: zero, exactly.
+      //
+      // Naming that figure, rather than asserting a slack-carrying "no worse
+      // than before", is the point — "no worse" still passes with the listen
+      // socket left open.
+      final after = socketsOnLocalPort(listenPort);
+      expect(
+        after,
+        isZero,
+        reason: 'shutdown() left $after sockets open on the proxy listen '
+            'port; it must close the listen socket and every peer the churn '
+            'accepted',
+      );
+    }, skip: fdLeakSkip);
   });
 }
