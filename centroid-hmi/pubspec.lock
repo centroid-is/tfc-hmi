@@ -1083,8 +1083,8 @@ packages:
     dependency: "direct overridden"
     description:
       path: "."
-      ref: add-keepalive-test
-      resolved-ref: "79d469cd517bff44ae6e2974409128d8be4fe04e"
+      ref: fix-orphaned-socket-on-failed-connect
+      resolved-ref: "519312712bacca6c54f296ce190bdb85f37a2581"
       url: "https://github.com/centroid-is/postgresql-dart.git"
     source: git
     version: "3.5.9"
