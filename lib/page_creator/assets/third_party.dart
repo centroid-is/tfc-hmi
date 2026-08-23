@@ -528,11 +528,14 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
   //   Way out clear         -- allowed to send onward      (permit outfeed)
   //   Fish waiting to drop  -- the conveyor before it is asking to drop  (i_xDropRequest)
   //   Drop complete         -- that hand-over finished     (q_xDropFinished)
-  //   Waiting too long      -- the wait timer has expired  (TON_waitingFrustration)
+  //   Waiting to release    -- a batch has been held at the door too long
+  //                            (TON_waitingFrustration)
   //
-  // Waiting too long is first and red because it is the only one that says
+  // Waiting to release is first and red because it is the only one that says
   // something is wrong rather than describing where in the cycle the machine
-  // is. The three below it explain why.
+  // is. Note the direction: the batch is upstream, ready, and NOT being taken
+  // -- the machine named on this pane is the one refusing it, not the one
+  // waiting. The three below explain why.
   //
   // The question an operator opens this pane to answer is "why has product
   // stopped moving", and these say it directly: either it cannot take another
@@ -550,13 +553,13 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
     EquipmentStatusBit('PermitOutfeed', 'Way out clear', Colors.blue),
   ],
   ThirdPartyEquipmentKind.multivac: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long', Colors.red),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting to release', Colors.red),
     EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop', Colors.amber),
     EquipmentStatusBit('DropOk', 'Ready for fish', Colors.green),
     EquipmentStatusBit('DropFinished', 'Drop complete', Colors.blue),
   ],
   ThirdPartyEquipmentKind.fishAligner: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long', Colors.red),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting to release', Colors.red),
     EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop', Colors.amber),
     EquipmentStatusBit('DropOk', 'Ready for fish', Colors.green),
     EquipmentStatusBit('DropFinished', 'Drop complete', Colors.blue),
