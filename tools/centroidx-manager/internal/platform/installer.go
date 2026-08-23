@@ -35,6 +35,10 @@ type Installer interface {
 // and verify the exact commands constructed without executing them.
 type CommandRunner interface {
 	Run(name string, args ...string) ([]byte, error)
+
+	// Start launches a command without waiting for it to exit and without
+	// capturing its output.
+	Start(name string, args ...string) error
 }
 
 // execRunner is the real CommandRunner that delegates to os/exec.
@@ -42,6 +46,10 @@ type execRunner struct{}
 
 func (e execRunner) Run(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput()
+}
+
+func (e execRunner) Start(name string, args ...string) error {
+	return exec.Command(name, args...).Start()
 }
 
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
@@ -204,6 +212,12 @@ func installDarwin(runner CommandRunner, assetPath string) error {
 // appPath is platform-specific: shell:AppsFolder URI on Windows, binary path elsewhere.
 func launchAppDetached(runner CommandRunner, appPath string) error {
 	_, err := runner.Run(appPath)
+	return err
+}
+
+// launchWindowsApp — placeholder replicating the current behaviour.
+func launchWindowsApp(runner CommandRunner) error {
+	_, err := runner.Run("explorer.exe")
 	return err
 }
 
