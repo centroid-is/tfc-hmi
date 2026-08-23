@@ -523,7 +523,25 @@ abstract final class SidePaneHost {
     // Mark closed straight away so a tap during the exit animation opens a
     // fresh pane instead of toggling against a pane that is on its way out.
     _openId = null;
-    shell.dismiss().then((_) => _removeNow());
+    // That fresh pane takes over the statics -- _entry, _shellKey, _onClosed
+    // -- while this one is still sliding out. So when the slide finishes,
+    // remove THIS entry, not whichever one the host holds by then: removing
+    // the host's took the new pane down and left the old shell mounted for
+    // good, invisible and off-screen, rebuilding a builder whose asset had
+    // since been disposed (the soak test logged a thousand
+    // "used after being disposed" from exactly that). Same for onClosed: the
+    // pane that is leaving gets its own callback, once, when it has left.
+    final entry = _entry;
+    final onClosed = _onClosed;
+    _onClosed = null;
+    shell.dismiss().then((_) {
+      if (_entry == entry) {
+        _removeNow();
+      } else {
+        entry?.remove();
+      }
+      onClosed?.call();
+    });
   }
 
   static void _removeNow({bool keepInset = false}) {
@@ -581,7 +599,8 @@ class _SidePaneShell extends StatefulWidget {
 class _SidePaneShellState extends State<_SidePaneShell>
     // Two controllers, so not the Single- variant: [_controller] slides the
     // sheet in and out, [_fade] fades the body around a content swap.
-    with TickerProviderStateMixin {
+    with
+        TickerProviderStateMixin {
   /// The pane's own Navigator. The pane lives in the root overlay, and
   /// `Overlay.rearrange` keeps it above every route the app Navigator will
   /// ever push — so a `DropdownButton` menu or `showDialog` opened from pane

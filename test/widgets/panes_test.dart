@@ -155,6 +155,62 @@ void main() {
       expect(find.text('DEV-1'), findsNothing);
     });
 
+    testWidgets(
+        'a pane opened while the previous one is still sliding out survives it',
+        (tester) async {
+      // Toggle A shut (animated), and before the 220 ms slide-out has ended
+      // open B. The host used to remove "the" entry when A's slide finished --
+      // by then B's -- so B vanished and A's shell stayed mounted for good,
+      // invisible, rebuilding a builder whose asset had been disposed.
+      var buildsOfA = 0;
+      var aClosed = 0;
+      var bClosed = 0;
+      await tester.pumpWidget(host(
+        onOpen: (context) => showSidePane(
+          context: context,
+          id: 'a',
+          onClosed: () => aClosed++,
+          builder: (_) {
+            buildsOfA++;
+            return demoPane(title: 'DEV-A');
+          },
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('DEV-A'), findsOneWidget);
+
+      await tester.tap(find.text('open')); // toggle A shut -- animated
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(isSidePaneOpen(), isFalse);
+
+      final context = tester.element(find.text('open'));
+      showSidePane(
+        context: context,
+        id: 'b',
+        onClosed: () => bClosed++,
+        builder: (_) => demoPane(title: 'DEV-B'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(isSidePaneOpen(id: 'b'), isTrue, reason: 'B is the open pane');
+      expect(find.text('DEV-B'), findsOneWidget,
+          reason: "A's slide-out finishing must not take B down");
+      expect(find.text('DEV-A'), findsNothing,
+          reason: "A's shell is gone, not lingering off-screen");
+      expect(find.byType(SidePane), findsOneWidget);
+      expect(aClosed, 1, reason: 'A got its own onClosed, once');
+      expect(bClosed, 0, reason: "B's onClosed is not A's to fire");
+
+      final builds = buildsOfA;
+      await tester.pump(const Duration(seconds: 1));
+      expect(buildsOfA, builds, reason: "A's builder is never run again");
+
+      closeSidePane();
+      await tester.pumpAndSettle();
+      expect(bClosed, 1);
+    });
+
     testWidgets('closeSidePane(id:) only closes that pane', (tester) async {
       await tester.pumpWidget(host(
         onOpen: (context) => showSidePane(
@@ -234,7 +290,8 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('occupiedWidth claims the strip for a covered device, '
+    testWidgets(
+        'occupiedWidth claims the strip for a covered device, '
         'follows resize and releases on close', (tester) async {
       expect(SidePaneHost.occupiedWidth.value, 0);
 
@@ -318,7 +375,8 @@ void main() {
             id: 'device-$next',
             width: 380,
             // The first device is covered; the second is in plain view.
-            avoidRect: next == 1 ? coveredRect : const Rect.fromLTWH(60, 100, 60, 60),
+            avoidRect:
+                next == 1 ? coveredRect : const Rect.fromLTWH(60, 100, 60, 60),
             builder: (_) => demoPane(title: 'DEV-$next'),
           );
         },
