@@ -277,10 +277,12 @@ void main() {
       // machine.
       // Non-breaking space before "min": the label column wraps, and the
       // break must never split "(30 min)".
-      expect(find.text('Accept rate CW1 (30\u{00A0}min)'), findsOneWidget);
-      expect(find.text('Accept rate CW2 (30\u{00A0}min)'), findsOneWidget);
-      expect(find.text('Weight CW1'), findsOneWidget);
-      expect(find.text('Weight CW2'), findsOneWidget);
+      expect(
+          find.text('Accept rate, infeed scale (30\u{00A0}min)'), findsOneWidget);
+      expect(find.text('Accept rate, outfeed scale (30\u{00A0}min)'),
+          findsOneWidget);
+      expect(find.text('Weight, infeed scale'), findsOneWidget);
+      expect(find.text('Weight, outfeed scale'), findsOneWidget);
       // No PLC in this test, so the value is `---`, but the unit must be
       // there: the belt readout has no room for it, the pane does. kg is
       // the default when the child has no unit configured.
