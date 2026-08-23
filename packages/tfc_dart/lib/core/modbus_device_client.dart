@@ -628,6 +628,14 @@ class ModbusDeviceClientAdapter implements DeviceClient {
   void debugSetUmasClient(UmasClient client) {
     _umasClient = client;
     _umasClientInjectedForTest = true;
+    // Bind the injected client to the wrapper's current socket identity.
+    // Without this `_umasClientFor` stays null, `_umasTableBuiltFor` is null
+    // too, and the `identical(_umasTableBuiltFor, _umasClientFor)` early
+    // return in [_buildUmasTableAndStartTimers] fires on the first tick — so
+    // an injected client could only ever exercise the per-key fallback poll,
+    // and the MonitorPlc registration + [_demuxUmasReadAll] path (the primary
+    // data path on M580) was unreachable from any test.
+    _umasClientFor = wrapper.client;
   }
 
   /// @visibleForTesting (Phase 7): read-only view of the per-group key
@@ -835,9 +843,15 @@ class ModbusDeviceClientAdapter implements DeviceClient {
     for (final keys in _umasKeysByGroup.values) {
       keys.remove(key);
     }
-    // Force a MonitorPlc table rebuild on the next connection state
-    // change; until then, the order list is unchanged and demux still
-    // ignores indices it can't map (n = min(values, _umasKeyOrder)).
+    // Removing from _umasKeyOrder here would desynchronise it from the PLC's
+    // registration, and _demuxUmasReadAll pairs the two BY POSITION — a
+    // shifted response would silently show every later key its neighbour's
+    // tag. What makes it safe is that _pollUmasGroup re-checks
+    // `_umasTableBuiltFor` on EVERY tick, so the tick after this rebuilds and
+    // re-registers instead of reading; no shifted response is ever demuxed.
+    // (An older comment here claimed the order list was left unchanged. It is
+    // not — the line below changes it. The dirty flag is the real guard.)
+    // Pinned by test/core/umas_demux_ordering_test.dart.
     _umasKeyOrder.remove(key);
     _umasTableBuiltFor = null;
   }
