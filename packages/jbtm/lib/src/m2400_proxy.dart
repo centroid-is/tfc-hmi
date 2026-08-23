@@ -86,16 +86,23 @@ class M2400Proxy {
     client.done.catchError((_) {});
 
     // Drain reads and detect disconnect via onDone/onError.
+    //
+    // Both paths must destroy() the socket, not just drop it from _clients.
+    // onDone fires on a peer FIN, which shuts the read half only; dart:io
+    // frees the descriptor when *both* halves are shut, and Socket carries no
+    // NativeFinalizer, so a dropped-but-not-destroyed Socket keeps its
+    // descriptor for the life of the process. destroy() is idempotent, so an
+    // onError-then-onDone double fire is harmless.
+    void releaseClient() {
+      _clients.remove(client);
+      client.destroy();
+      onClientCountChanged?.call(_clients.length);
+    }
+
     client.listen(
       (_) {},
-      onError: (_) {
-        _clients.remove(client);
-        onClientCountChanged?.call(_clients.length);
-      },
-      onDone: () {
-        _clients.remove(client);
-        onClientCountChanged?.call(_clients.length);
-      },
+      onError: (_) => releaseClient(),
+      onDone: releaseClient,
     );
   }
 

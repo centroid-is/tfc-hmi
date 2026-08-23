@@ -5,6 +5,31 @@ import 'dart:typed_data';
 import 'package:jbtm/jbtm.dart';
 import 'package:test/test.dart';
 
+/// Number of file descriptors this process currently holds.
+///
+/// Used by the descriptor-leak test below. POSIX only — `fdLeakSkip` guards
+/// the call sites, so this is never reached on Windows.
+int fdCount() {
+  if (Platform.isLinux) {
+    return Directory('/proc/self/fd').listSync().length;
+  }
+  // macOS has no /proc, and listing /dev/fd races against the listing's own
+  // descriptor. lsof is part of the base system and is present on the GitHub
+  // macos runners.
+  final result = Process.runSync('lsof', ['-p', '$pid']);
+  if (result.exitCode != 0) {
+    throw StateError('lsof failed: ${result.stderr}');
+  }
+  return (result.stdout as String)
+      .split('\n')
+      .where((line) => line.isNotEmpty)
+      .length;
+}
+
+/// Skip reason for descriptor-counting tests, or null when they can run.
+final String? fdLeakSkip =
+    Platform.isWindows ? 'no POSIX file-descriptor table on Windows' : null;
+
 void main() {
   // TestTcpServer acts as the fake upstream M2400 device.
   late TestTcpServer upstream;
@@ -480,5 +505,122 @@ void main() {
       await proxy.shutdown();
       // If we get here without exception, the test passes
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Descriptor lifetime
+  //
+  // Every other downstream-disconnect test above uses `client.destroy()` — an
+  // abrupt RST, which self-cleans. The *graceful* path (peer sends FIN, i.e.
+  // `close()`) is what the docker healthcheck in docker/weigher-proxy does
+  // every 30s, and it closes only the read half. dart:io frees the descriptor
+  // when both halves are shut, and Socket carries no NativeFinalizer, so an
+  // unreachable Socket the proxy simply dropped from `_clients` keeps its
+  // descriptor for the life of the process.
+  // ---------------------------------------------------------------------------
+  group('descriptor lifetime', () {
+    test('graceful client close makes the proxy close its half too', () async {
+      await proxy.start();
+      await upstream.waitForClient();
+
+      final client = await connectClient(proxy.listenPort);
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(proxy.clientCount, equals(1));
+
+      // The proxy closing its side surfaces on this client as either a FIN
+      // (done) or an RST (error) depending on timing; both mean the peer
+      // descriptor is gone.
+      final peerClosed = Completer<void>();
+      void signal() {
+        if (!peerClosed.isCompleted) peerClosed.complete();
+      }
+
+      client.listen((_) {}, onDone: signal, onError: (_) => signal());
+
+      // Half-close: shut the write side only, exactly like
+      // `exec 3<>/dev/tcp/host/port` returning in the healthcheck.
+      unawaited(client.close());
+
+      await peerClosed.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => fail(
+          'proxy never closed its half of a gracefully-closed client — '
+          'the accepted socket (and its descriptor) is leaked',
+        ),
+      );
+      expect(proxy.clientCount, equals(0));
+    });
+
+    test('repeated graceful connect/close cycles return fds to baseline',
+        () async {
+      await proxy.start();
+      await upstream.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      const cycles = 60;
+      final baseline = fdCount();
+
+      for (var i = 0; i < cycles; i++) {
+        final client = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          proxy.listenPort,
+        );
+        client.listen((_) {}, onError: (_) {});
+        // Graceful close, then release this side entirely so the only
+        // descriptor a growing count can be attributed to is the proxy's.
+        unawaited(client.close());
+        client.destroy();
+        await Future.delayed(const Duration(milliseconds: 2));
+      }
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(proxy.clientCount, equals(0));
+
+      final after = fdCount();
+      // Slack for descriptors the runtime may open incidentally (lsof itself
+      // opens none in-process, but timers/isolates can). The leak is 1:1 with
+      // the cycle count, so anything near `cycles` is unmistakable.
+      expect(
+        after - baseline,
+        lessThanOrEqualTo(5),
+        reason: 'leaked ${after - baseline} descriptors over $cycles '
+            'graceful connect/close cycles (baseline $baseline, now $after)',
+      );
+    }, skip: fdLeakSkip);
+
+    test('shutdown() leaves no descriptors behind after graceful churn',
+        () async {
+      await proxy.start();
+      await upstream.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final baseline = fdCount();
+
+      for (var i = 0; i < 30; i++) {
+        final client = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          proxy.listenPort,
+        );
+        client.listen((_) {}, onError: (_) {});
+        unawaited(client.close());
+        client.destroy();
+        await Future.delayed(const Duration(milliseconds: 2));
+      }
+
+      await proxy.shutdown();
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // shutdown() only walks `_clients`; anything already dropped from that
+      // list is unreachable and cannot be reclaimed here. The count must
+      // therefore already be back at baseline (minus the listen socket and
+      // the upstream connection shutdown() does close).
+      final after = fdCount();
+      expect(
+        after - baseline,
+        lessThanOrEqualTo(0),
+        reason: 'after shutdown, $after fds vs baseline $baseline',
+      );
+    }, skip: fdLeakSkip);
   });
 }
