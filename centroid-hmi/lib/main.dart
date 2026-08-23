@@ -82,6 +82,65 @@ void _debugPrint(Zone self, ZoneDelegate parent, Zone zone, String line) {
   parent.print(zone, line);
 }
 
+/// How much of one diagnostics dump is kept. The creator chain runs all the
+/// way to the root; its head is what names the asset, so the tail is padding.
+const int kCulpritLineLimit = 400;
+
+/// The line a framework error is logged under: the exception, plus whatever
+/// the details know about *which* widget caused it.
+///
+/// The message alone does not say WHICH Row overflowed — a layout error's
+/// stack is the paint stack, all framework frames. The widget lives in the
+/// details' information collector instead: "The relevant error-causing widget
+/// was: Row  lib/foo.dart:123" for build errors, and for layout overflows "The
+/// specific RenderFlex in question is: ... creator: Column <- Padding <- ...".
+/// Those two are kept and everything else the collector offers is dropped, so
+/// an overflow in the log names the asset rather than a paint stack.
+///
+/// The stack gets the same treatment. The logger prints its first eight
+/// frames and for a framework error those are all framework — the app frame
+/// that names the asset is the tenth or the thirtieth — so the app's own
+/// frames are pulled out of the full trace and appended.
+String describeFrameworkError(FlutterErrorDetails details) {
+  final culprit = details.informationCollector
+          ?.call()
+          .map((n) => n.toStringDeep())
+          .where((s) =>
+              s.contains('error-causing widget') || s.contains('creator:'))
+          .map((s) => s.length > kCulpritLineLimit
+              ? '${s.substring(0, kCulpritLineLimit)}...'
+              : s)
+          .join('\n') ??
+      '';
+  final appFrames = appFramesOf(details.stack);
+  return 'Flutter framework error: ${details.exceptionAsString()}'
+      '${culprit.isEmpty ? '' : '\n$culprit'}'
+      '${appFrames.isEmpty ? '' : '\napp frames:\n$appFrames'}';
+}
+
+/// The packages whose frames are worth printing: everything else in a
+/// framework error's trace is Flutter's own machinery.
+const List<String> kAppFramePackages = ['package:tfc', 'package:centroidx'];
+
+/// At most this many app frames. The first few name the asset; past that the
+/// trace is the route and the app shell, the same on every error.
+const int kAppFrameLimit = 10;
+
+/// The app's own frames from [stack], in order, at most [kAppFrameLimit].
+///
+/// Returns an empty string when [stack] is null or contains none — an error
+/// raised entirely inside the framework has nothing of ours to point at, and
+/// an empty section is better than a heading over nothing.
+String appFramesOf(StackTrace? stack) {
+  if (stack == null) return '';
+  return stack
+      .toString()
+      .split('\n')
+      .where((f) => kAppFramePackages.any(f.contains))
+      .take(kAppFrameLimit)
+      .join('\n');
+}
+
 void main() {
   // Ignore SIGPIPE so broken-pipe writes become IOExceptions instead of
   // killing the process.  The MCP HTTP server, OPC UA client, and pdfium
@@ -127,37 +186,8 @@ void main() {
   // behave exactly as before; this only adds a copy that persists.
   final priorOnError = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails details) {
-    // The message alone does not say WHICH Row overflowed: a layout error's
-    // stack is the paint stack, all framework frames. The widget lives in the
-    // details' information collector -- "The relevant error-causing widget
-    // was: Row  lib/foo.dart:123" for build errors, and for layout overflows
-    // "The specific RenderFlex in question is: ... creator: Column <- Padding
-    // <- ..." -- so keep those lines, trimmed: the creator chain runs to the
-    // root and its head is what names the asset.
-    final culprit = details.informationCollector
-            ?.call()
-            .map((n) => n.toStringDeep())
-            .where((s) => s.contains('error-causing widget') || s.contains('creator:'))
-            .map((s) => s.length > 400 ? '${s.substring(0, 400)}...' : s)
-            .join('\n') ??
-        '';
-    // The logger prints the first eight frames, and for a framework error
-    // those are all framework: the app frame that matters is the tenth or the
-    // thirtieth. Pull the app's own frames out of the full trace so the log
-    // names the asset, not change_notifier.dart.
-    final appFrames = details.stack
-            ?.toString()
-            .split('\n')
-            .where((f) => f.contains('package:tfc') || f.contains('package:centroidx'))
-            .take(10)
-            .join('\n') ??
-        '';
-    logger.e(
-        'Flutter framework error: ${details.exceptionAsString()}'
-        '${culprit.isEmpty ? '' : '\n$culprit'}'
-        '${appFrames.isEmpty ? '' : '\napp frames:\n$appFrames'}',
-        error: details.exception,
-        stackTrace: details.stack);
+    logger.e(describeFrameworkError(details),
+        error: details.exception, stackTrace: details.stack);
     if (priorOnError != null) priorOnError(details);
   };
 
