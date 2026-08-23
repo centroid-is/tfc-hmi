@@ -12,6 +12,11 @@ type mockRunner struct {
 	errOn  int // 0 = never error, n = error on nth call (1-based)
 	callN  int
 	retErr error
+	// started records Start calls separately from Run calls. Launching the app
+	// must not block on it, so which of the two a launch used is the thing
+	// under test — not merely that some command was issued.
+	started  []mockCall
+	startErr error
 }
 
 type mockCall struct {
@@ -26,6 +31,11 @@ func (m *mockRunner) Run(name string, args ...string) ([]byte, error) {
 		return nil, m.retErr
 	}
 	return nil, nil
+}
+
+func (m *mockRunner) Start(name string, args ...string) error {
+	m.started = append(m.started, mockCall{name: name, args: args})
+	return m.startErr
 }
 
 // hasArg returns true if any element of args equals v.
@@ -410,9 +420,16 @@ func TestLinuxInstaller_Install(t *testing.T) {
 
 // mockRunnerSeq lets each Run call return different data.
 type mockRunnerSeq struct {
-	calls   []mockCall
-	outputs [][]byte
-	errors  []error
+	calls    []mockCall
+	outputs  [][]byte
+	errors   []error
+	started  []mockCall
+	startErr error
+}
+
+func (m *mockRunnerSeq) Start(name string, args ...string) error {
+	m.started = append(m.started, mockCall{name: name, args: args})
+	return m.startErr
 }
 
 func (m *mockRunnerSeq) Run(name string, args ...string) ([]byte, error) {
@@ -532,12 +549,114 @@ func TestInstaller_LaunchApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(runner.calls) == 0 {
-		t.Fatal("no commands were recorded")
+	if len(runner.started) == 0 {
+		t.Fatal("no command was started")
 	}
-	call := runner.calls[0]
+	call := runner.started[0]
 	if call.name != "/Applications/CentroidX.app/Contents/MacOS/centroidx" {
 		t.Errorf("expected app path as command, got: %v", call.name)
+	}
+}
+
+// The launch must not wait for the app to exit. runner.Run buffers the child's
+// output until it terminates, so launching the HMI through it pins the manager
+// open for the HMI's entire lifetime — on Linux the update never reports
+// finished. Only Windows escaped that, and only because it was launching
+// explorer.exe, which returns immediately (see the AppsFolder test below).
+func TestInstaller_LaunchApp_DoesNotWaitForTheApp(t *testing.T) {
+	runner := &mockRunner{}
+	if err := launchAppDetached(runner, "/opt/centroidx/centroidx"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("launch used the blocking Run path: %v", runner.calls)
+	}
+	if len(runner.started) != 1 {
+		t.Fatalf("expected exactly one started process, got %d: %v", len(runner.started), runner.started)
+	}
+}
+
+func TestInstaller_LaunchApp_ReportsStartFailure(t *testing.T) {
+	runner := &mockRunner{startErr: errors.New("no such file or directory")}
+	if err := launchAppDetached(runner, "/opt/centroidx/centroidx"); err == nil {
+		t.Fatal("expected an error when the process cannot be started, got nil")
+	}
+}
+
+// ---- Windows launch ---------------------------------------------------------
+
+// LaunchApp ran "explorer.exe" with no arguments, which just opens a File
+// Explorer window: after a successful update the HMI exited, the install
+// succeeded, a file browser appeared, and the operator was left with no HMI on
+// a running line. An MSIX app is launched through its AppsFolder URI.
+func TestWindowsInstaller_LaunchApp_UsesAppsFolderURI(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte("Centroid.CentroidX_8wekyb3d8bbwe\r\n")},
+		errors:  []error{nil},
+	}
+
+	if err := launchWindowsApp(runner); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.started) != 1 {
+		t.Fatalf("expected exactly one started process, got %d: %v", len(runner.started), runner.started)
+	}
+	all := allArgs(runner.started[0])
+	if !hasArgContaining(all, `shell:AppsFolder\Centroid.CentroidX_8wekyb3d8bbwe!App`) {
+		t.Errorf("expected the AppsFolder URI for the installed package, got: %v", all)
+	}
+	// Bare explorer.exe is the bug: it opens a file browser and nothing else.
+	if len(runner.started[0].args) == 0 {
+		t.Errorf("explorer.exe was started with no arguments — that just opens a File Explorer window")
+	}
+}
+
+// The package family name embeds a hash of the publisher, so it changes when
+// the signing identity does. It has to be read from the installed package
+// rather than baked in, or a publisher change silently launches nothing.
+func TestWindowsInstaller_LaunchApp_ReadsFamilyNameFromInstalledPackage(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte("Centroid.CentroidX_differenthash\r\n")},
+		errors:  []error{nil},
+	}
+
+	if err := launchWindowsApp(runner); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.calls) == 0 || len(runner.started) == 0 {
+		t.Fatalf("expected a query then a launch, got calls=%v started=%v", runner.calls, runner.started)
+	}
+	query := allArgs(runner.calls[0])
+	if !hasArgContaining(query, "PackageFamilyName") {
+		t.Errorf("expected the family name to be queried, got: %v", query)
+	}
+	if !hasArgContaining(allArgs(runner.started[0]), `Centroid.CentroidX_differenthash!App`) {
+		t.Errorf("expected the queried family name to be used, got: %v", allArgs(runner.started[0]))
+	}
+}
+
+// If the package is not installed the query returns nothing. Launching
+// "shell:AppsFolder\!App" would silently do nothing, so this must be an error
+// the engine can report instead.
+func TestWindowsInstaller_LaunchApp_ErrorsWhenPackageNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output []byte
+		err    error
+	}{
+		{"empty output", []byte("  \r\n"), nil},
+		{"query failed", nil, errors.New("exit status 1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &mockRunnerSeq{outputs: [][]byte{tc.output}, errors: []error{tc.err}}
+
+			if err := launchWindowsApp(runner); err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if len(runner.started) != 0 {
+				t.Errorf("expected nothing to be launched, got: %v", runner.started)
+			}
+		})
 	}
 }
 
