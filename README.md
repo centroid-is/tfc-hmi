@@ -14,7 +14,19 @@ Download the **CentroidX Version Manager** for your platform — it handles inst
 
 Run the manager and it will download and install the latest CentroidX release.
 
-> macOS and Windows binaries are signed and notarized — no Gatekeeper warnings.
+> The macOS manager is Developer ID signed and notarized — no Gatekeeper
+> warning. The Windows manager is not code-signed, so SmartScreen shows a
+> "Windows protected your PC" prompt on first run: choose **More info → Run
+> anyway**. CentroidX itself ships as an MSIX signed by a self-signed sideload
+> certificate, published alongside it as `centroidx-sideload.cer`. Windows will
+> refuse to install the MSIX until that certificate is trusted:
+>
+> ```powershell
+> Import-Certificate -FilePath centroidx-sideload.cer `
+>   -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+> ```
+>
+> Run once per machine, elevated.
 
 ### Latest `main` build
 
