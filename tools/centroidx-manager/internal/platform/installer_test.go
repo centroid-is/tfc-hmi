@@ -378,6 +378,44 @@ const alreadyInstalled = "Add-AppxPackage : Deployment failed with HRESULT: 0x80
 	"is already installed, and reinstallation of the package was blocked. Check the " +
 	"AppXDeployment-Server event log for details."
 
+// conflictWrapped is a conflict as PowerShell actually delivers it: rendered
+// through the formatter, wrapped to the 120-column default that applies when no
+// console is attached, continuations indented. The wrap falls between "already"
+// and "installed.", splitting publisherConflictSignal in half — which is why
+// installWindows matches a whitespace-collapsed copy and never the raw bytes.
+//
+// Two recordings joined, no invented text: the deployment line is Windows' own
+// as quoted for FliteDeck above, and the package names and conflict sentence are
+// the Windows App Certification Kit failure recorded at
+// stegriff.co.uk/upblog/windows-app-certification-kit-cannot-install-package/
+// (also MSDN forum 67b1a081). No single published recording shows both the
+// HRESULT line and names long enough to reach the wrap, because where the wrap
+// bites is purely a function of package-name length — with the FliteDeck names
+// the phrase survives on one line, with these it does not. Which recording it
+// happens to hit is luck, and luck is what this test removes.
+const conflictWrapped = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF3, Package failed updates, dependency or conflict validation.\n" +
+	"    Windows cannot install package 780a2c2f-f4be-4a7d-83bf-212522026da9_1.0.0.0_neutral_~_m56gs6vrxbyza because a\n" +
+	"    different package 780a2c2f-f4be-4a7d-83bf-212522026da9_1.0.0.0_x64__gf73qhakswkrp with the same name is already\n" +
+	"    installed."
+
+// conflictLocalised is the same conflict on a non-English Windows, and the
+// reason the structural arm exists: an Icelandic plant station running a
+// localised Windows would otherwise never recover, while passing every English
+// test in this file.
+//
+// The body is verbatim Italian from microsoft/winget-cli#4752 — winget drives
+// the same deployment API, and its log records the failure as 0x80073CF3. The
+// "Add-AppxPackage : Deployment failed with HRESULT:" prefix is ours: no
+// verbatim localised copy of PowerShell's wrapper line turned up, and the
+// wrapper is not what this fixture tests. What must not be faked is the text
+// under test — the sentence the matcher has to cope with not understanding —
+// and that is Windows', unaltered.
+const conflictLocalised = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF3, Convalida degli aggiornamenti, " +
+	"delle dipendenze e dei conflitti del pacchetto non eseguita. Impossibile installare il pacchetto " +
+	"Mozilla.MozillaFirefox_129.0.2.0_x64__jag0gd4e3s9p2. È già installato un pacchetto " +
+	"Mozilla.MozillaFirefox_126.0.1.0_x64__gmpnhwe7bv608 diverso con lo stesso nome. Prima di eseguire " +
+	"l'installazione, rimuovere il pacchetto Mozilla.MozillaFirefox_126.0.1.0_x64__gmpnhwe7bv608."
+
 // missingDependency is 0x80073CF3 for a cause removal cannot fix, quoted in
 // WSA-Community/WSAGAScript#293. Microsoft documents the code as covering three
 // causes — conflict, missing dependency, wrong processor architecture — so the
@@ -407,6 +445,10 @@ func TestWindowsInstaller_Install_PublisherConflictRemovesAndRetries(t *testing.
 	}{
 		{"different package with the same name", conflictFliteDeck},
 		{"republished under a different signing identity", conflictRepublished},
+		// The formatter split publisherConflictSignal across a line break.
+		{"wrapped by the PowerShell formatter", conflictWrapped},
+		// No English sentence at all; only the structural arm can see this one.
+		{"reported by a localised Windows", conflictLocalised},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &mockRunnerSeq{
@@ -431,6 +473,95 @@ func TestWindowsInstaller_Install_PublisherConflictRemovesAndRetries(t *testing.
 			}
 			if !hasArgContaining(allArgs(runner.calls[2]), "Add-AppxPackage") {
 				t.Errorf("call 2: expected the install retry, got: %v", allArgs(runner.calls[2]))
+			}
+		})
+	}
+}
+
+// isPublisherConflict has two independent arms, and a table over the recorded
+// messages is the only place their division of labour is visible. Each row
+// states which arm carries which real failure, so breaking either arm fails
+// here and says which one broke.
+func TestPublisherConflictArms(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		output    string
+		sentence  bool // publisherConflictSignal, Windows' English wording
+		structure bool // two package full names, one Name, two PublisherIds
+	}{
+		{"conflict, FliteDeck", conflictFliteDeck, true, true},
+		{"conflict, republished (WindowsAppSDK#650)", conflictRepublished, true, true},
+		{"conflict, wrapped by the formatter", conflictWrapped, true, true},
+		// The row that justifies the structural arm: Windows said it in
+		// Italian, so the sentence arm is blind and the structure is not.
+		{"conflict, localised", conflictLocalised, false, true},
+		// And the rows that keep both arms honest — same HRESULT for the
+		// first, and neither may be mistaken for a conflict.
+		{"missing dependency", missingDependency, false, false},
+		{"already installed", alreadyInstalled, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			matchable := collapseWhitespace(strings.ToLower(tc.output))
+			if got := strings.Contains(matchable, publisherConflictSignal); got != tc.sentence {
+				t.Errorf("sentence arm = %v, want %v", got, tc.sentence)
+			}
+			if got := hasConflictingPublisherIDs(matchable); got != tc.structure {
+				t.Errorf("structural arm = %v, want %v", got, tc.structure)
+			}
+			if got := isPublisherConflict(matchable); got != (tc.sentence || tc.structure) {
+				t.Errorf("isPublisherConflict = %v, want %v", got, tc.sentence || tc.structure)
+			}
+		})
+	}
+}
+
+// The sentence arm only works because the output is collapsed first. On the raw
+// bytes PowerShell hands back, the formatter's line break sits inside the
+// phrase and the match silently misses — which is the whole defect this file is
+// about, reached by a different route.
+func TestPublisherConflictSentenceNeedsCollapsedWhitespace(t *testing.T) {
+	raw := strings.ToLower(conflictWrapped)
+	if strings.Contains(raw, publisherConflictSignal) {
+		t.Fatal("the fixture is not actually wrapped through the phrase; it cannot prove anything")
+	}
+	if !strings.Contains(collapseWhitespace(raw), publisherConflictSignal) {
+		t.Error("collapsing whitespace did not rejoin the phrase the formatter split")
+	}
+}
+
+// The structural arm keys on two package full names that share an identity Name
+// and differ in the trailing PublisherId. One name is not a conflict however
+// much else the message says, or a missing dependency would take the removal
+// path in every locale.
+func TestConflictingPublisherIDs_NeedsTwoNamesUnderOneIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"one package named", missingDependency, false},
+		{"two names, two publisher ids", conflictFliteDeck, true},
+		{
+			// A package updating itself normally: same Name, same
+			// PublisherId, different version. Not a conflict.
+			"same publisher id, different version",
+			"windows cannot install package jeppesen.flitedeck_10.3.1.10593_neutral_~_8gk7v4trkh4pt " +
+				"over jeppesen.flitedeck_10.2.1.9678_neutral_~_8gk7v4trkh4pt.",
+			false,
+		},
+		{
+			// Two unrelated packages, each mentioned once. Different Names,
+			// so nothing here says one is displacing the other.
+			"different names, different publisher ids",
+			"windows cannot install package contoso.one_1.0.0.0_x64__8gk7v4trkh4pt because " +
+				"fabrikam.two_2.0.0.0_x64__g4095tshxnsa8 is in the way.",
+			false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hasConflictingPublisherIDs(collapseWhitespace(strings.ToLower(tc.text)))
+			if got != tc.want {
+				t.Errorf("hasConflictingPublisherIDs = %v, want %v", got, tc.want)
 			}
 		})
 	}

@@ -3,8 +3,17 @@ package platform
 import (
 	"errors"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// collapseWhitespace reduces every run of whitespace to a single space, undoing
+// the line breaks and continuation indents that PowerShell's formatter inserts
+// when it wraps an error record to the host width. Matching anything against
+// command output has to go through this first; see publisherConflictSignal.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
 
 // Installer is the interface for platform-specific installation operations.
 // Each OS has a concrete implementation (windows.go, linux.go, darwin.go).
@@ -81,32 +90,81 @@ func (e execRunner) Start(name string, args ...string) error {
 // PowerShell happens to emit is not something an update should depend on.
 const publisherConflictHRESULT = "0x80073cf3"
 
-// publisherConflictSignal narrows that HRESULT to the conflict that removal
-// actually repairs. 0x80073CF3 is a bucket, not a diagnosis: Microsoft
-// documents it as "the package failed update, dependency, or conflict
-// validation", covering three unrelated causes — the incoming package conflicts
-// with an installed package, a specified package dependency can't be found, and
-// the package doesn't support the correct processor architecture.
+// The HRESULT alone is not enough to act on. 0x80073CF3 is a bucket, not a
+// diagnosis: Microsoft documents it as "the package failed update, dependency,
+// or conflict validation", covering three unrelated causes — the incoming
+// package conflicts with an installed package, a specified package dependency
+// can't be found, and the package doesn't support the correct processor
+// architecture.
 // https://learn.microsoft.com/en-us/windows/win32/appxpkg/troubleshooting
 //
 // Only the first is fixed by uninstalling. On a missing dependency or a wrong
 // architecture, uninstalling destroys a working CentroidX and the retry then
 // fails for the original reason, leaving the station with no application at
-// all — so the HRESULT on its own is not enough to act on. Windows names the
-// conflict case in the detail text, and this is that sentence, verbatim from
-// the WindowsAppSDK#650 repro:
+// all. So isPublisherConflict has to pick the conflict out of the bucket, and
+// it does so two independent ways — see publisherConflictSignal (what Windows
+// says) and packageFullNamePattern (what Windows names).
+func isPublisherConflict(matchable string) bool {
+	return strings.Contains(matchable, publisherConflictSignal) ||
+		hasConflictingPublisherIDs(matchable)
+}
+
+// publisherConflictSignal is Windows' own sentence for the conflict case,
+// verbatim from the WindowsAppSDK#650 repro:
 //
 //	Windows cannot install package MyPackageName_1.0.7.0_neutral_~_6jx1svrqfke3r
 //	because a different package MyPackageName_1.0.6.0_neutral_~_0rxggyxen88sc
 //	with the same name is already installed.
 //
-// The match is deliberately this narrow, and English-only. A localised Windows
-// says the same thing in its own words — Italian emits "È già installato un
-// pacchetto ... diverso con lo stesso nome" (microsoft/winget-cli#4752) — and
-// will not match, so the update simply fails and an operator retries. That is
-// the right direction to fail in: failing to recognise a conflict costs one
-// failed update; mistaking anything else for a conflict costs the installation.
+// It is matched against a whitespace-collapsed copy of the output, never the
+// raw bytes. PowerShell renders error records through its formatter and wraps
+// them to the host width — 120 columns when no console is attached, which is
+// exactly how the manager runs it. These messages are far longer than that, so
+// a wrap can land inside this 38-character phrase and put a newline and a
+// continuation indent in the middle of it. Matching the raw output would then
+// silently stop recognising the conflict: the same dead recovery this whole
+// path exists to fix, arriving through formatting instead of a wrong constant.
+//
+// This arm is English-only, which is why it is not the only arm.
 const publisherConflictSignal = "with the same name is already installed"
+
+// packageFullNamePattern recognises the conflict by structure rather than by
+// prose, which makes it locale-independent — and these are Icelandic plant
+// stations, where a localised Windows would otherwise leave the recovery dead
+// on arrival while passing every English test we have. A localised Windows
+// states the same failure in its own words; the Italian is "È già installato un
+// pacchetto ... diverso con lo stesso nome" (microsoft/winget-cli#4752).
+//
+// What does not vary is what Windows *names*: a package full name is
+// Name_Version_Architecture_ResourceId_PublisherId, and the identity conflict is
+// precisely the case where two of them share a Name and differ in the trailing
+// PublisherId — the 13-character hash of the manifest Publisher string. That is
+// the conflict's definition, not a description of it, and it separates the
+// conflict from the bucket's other two causes as sharply as the sentence does:
+// a missing dependency names one package full name, not two under one Name.
+//
+// Package identity Names cannot contain an underscore, and versions are always
+// four parts, so the fields parse unambiguously out of surrounding prose.
+// Applied to the same lower-cased, whitespace-collapsed copy: PowerShell wraps
+// at spaces, and a package full name is one unbreakable token well under the
+// 120-column width, so collapsing rejoins the sentence without ever splitting
+// a name.
+var packageFullNamePattern = regexp.MustCompile(
+	`([a-z0-9][a-z0-9.\-]*)_\d+\.\d+\.\d+\.\d+_[a-z0-9]+_[a-z0-9~.\-]*_([a-z0-9]{13})\b`)
+
+// hasConflictingPublisherIDs reports whether the text names two packages with
+// the same identity Name under different PublisherIds.
+func hasConflictingPublisherIDs(matchable string) bool {
+	seen := make(map[string]string)
+	for _, m := range packageFullNamePattern.FindAllStringSubmatch(matchable, -1) {
+		name, publisherID := m[1], m[2]
+		if prev, ok := seen[name]; ok && prev != publisherID {
+			return true
+		}
+		seen[name] = publisherID
+	}
+	return false
+}
 
 // alreadyInstalledHRESULT is ERROR_PACKAGE_ALREADY_EXISTS: "The provided
 // package is already installed, and reinstallation of the package is blocked."
@@ -118,14 +176,25 @@ const publisherConflictSignal = "with the same name is already installed"
 // https://learn.microsoft.com/en-us/windows/win32/appxpkg/troubleshooting
 //
 // This is not a publisher conflict, and it is matched here only to guarantee it
-// is never treated as one. What Windows is refusing to replace is a working
-// CentroidX already at the version we were told to install; uninstalling it to
-// retry would risk ending with nothing installed in order to fix nothing.
+// is never treated as one.
 //
-// It is reported rather than swallowed as success. The station is arguably
-// already where the update wanted it, but a release re-cut under a version
-// number that has already shipped is a build-pipeline fault that has to be
-// fixed centrally, and reporting success would hide it on every rig at once.
+// It must not be reported as success either, and the reason is definitional
+// rather than a matter of taste. CFB fires only when the incoming package is
+// not bitwise identical to the installed one — the signature counts as part of
+// the package — because if it were identical Add-AppxPackage would have
+// succeeded and this code would never appear. So CFB is Windows saying "you do
+// not have what you are trying to install". It can never mean "already where we
+// wanted to be": calling it success would report an update as applied while the
+// station keeps running the old build, and LaunchApp would then dutifully
+// relaunch that old build.
+//
+// Nor may it uninstall, and here the reasoning is an asymmetry rather than a
+// definition — Microsoft's second documented remedy for CFB *is* to remove the
+// old package for every user before installing the new one, so removal is not
+// wrong for CFB in the abstract. It is wrong for us. CFB fires on a re-signed
+// package, which is exactly the situation where our retry is most likely to hit
+// an untrusted certificate and fail. We would be staking the whole installation
+// on that retry in exchange for reinstalling a version that is already present.
 const alreadyInstalledHRESULT = "0x80073cfb"
 
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
@@ -145,13 +214,19 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	}
 
 	detail := strings.TrimSpace(string(out))
-	lower := strings.ToLower(detail)
+	// Everything below matches against matchable, never against detail: PowerShell
+	// hard-wraps error records to the host width and indents the continuations, so
+	// any phrase long enough to be worth matching is long enough to be split in
+	// half. Collapsing runs of whitespace to single spaces undoes the formatter's
+	// line breaks and its indent in one step. detail stays raw, because it is what
+	// the operator reads.
+	matchable := collapseWhitespace(strings.ToLower(detail))
 
 	// "Already installed" is checked first and returns, so that it can never
 	// reach the removal path below however the two texts evolve. Uninstalling
 	// here would remove a working CentroidX to fix a problem removal does not
 	// fix. See alreadyInstalledHRESULT.
-	if strings.Contains(lower, alreadyInstalledHRESULT) {
+	if strings.Contains(matchable, alreadyInstalledHRESULT) {
 		return &commandError{
 			op: "Add-AppxPackage failed: this package is already installed and Windows blocked " +
 				"the reinstall (0x80073CFB). The installed CentroidX was left alone. This means " +
@@ -162,10 +237,10 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	}
 
 	// Only a publisher conflict justifies uninstalling what is already on the
-	// machine; every other failure is reported as-is. Both the HRESULT and the
-	// conflict sentence have to be present — see publisherConflictSignal for
-	// why the code alone is not enough.
-	if strings.Contains(lower, publisherConflictHRESULT) && strings.Contains(lower, publisherConflictSignal) {
+	// machine; every other failure is reported as-is. The HRESULT has to be
+	// there and the failure has to actually be the conflict — see
+	// isPublisherConflict for why the code alone is not enough.
+	if strings.Contains(matchable, publisherConflictHRESULT) && isPublisherConflict(matchable) {
 		// Remove conflicting package(s) with the same identity name
 		runner.Run(
 			"powershell",
