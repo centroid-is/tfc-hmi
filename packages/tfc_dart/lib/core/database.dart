@@ -1427,8 +1427,13 @@ class Database {
   ///
   /// Only *positive* answers are cached. A table that does not exist yet is
   /// deliberately re-checked, because the collector may create it moments
-  /// later. A retype (which drops and recreates the table) is caught by the
-  /// eviction in [queryTimeseriesDataDownsampled]'s error path.
+  /// later.
+  ///
+  /// A retype drops and recreates the table, and the entry outlives it. That
+  /// is handled in [queryTimeseriesDataDownsampled]'s error path, which
+  /// evicts and retries once so the caller never sees the stale entry — a
+  /// boolean table wearing a cached `double precision` would otherwise skip
+  /// the raw fallback and fail the query outright.
   final Map<String, ValueColumnType> _valueColumnTypes = {};
 
   /// The [_valueColumnTypes] cache, so tests can seed it and watch it evict.
@@ -1491,7 +1496,9 @@ class Database {
     final intervalStr = '$bucketMs milliseconds';
     final quotedTable = tableName.replaceAll('"', '""');
 
-    // Detect column type to choose the right SQL.
+    // Detect column type to choose the right SQL. Whether the answer came out
+    // of the cache decides what a later failure means — see the catch below.
+    final servedFromCache = _valueColumnTypes.containsKey(tableName);
     final valueType = await _valueColumnType(tableName);
     if (valueType == null) {
       return queryTimeseriesData(tableName, endTime, from: startTime);
@@ -1534,11 +1541,25 @@ class Database {
         Variable.withString(endTime.toUtc().toIso8601String()),
       ]).get();
     } catch (_) {
-      // The only way the shape of this statement can be wrong is a cached
-      // column type that no longer matches the table — a key retyped
-      // scalar↔array recreates the table underneath us. Drop the entry so
-      // the next call re-detects instead of failing forever.
+      // A cached type that no longer describes the table is the one way the
+      // shape of this statement can be wrong: retyping a key drops and
+      // recreates its table, and the entry outlives it. The stale type may
+      // even say "numeric" for what is now a boolean — in which case the
+      // right answer was never this statement at all, it was the raw
+      // fallback above, which a stale entry skipped straight past.
+      //
+      // So evict and retry once, rather than reporting an error the caller
+      // cannot act on. The retry re-detects from information_schema, so it
+      // takes whichever branch the new type calls for; because the entry is
+      // gone, `servedFromCache` is false next time round and a second
+      // failure propagates. At most one extra attempt.
       _valueColumnTypes.remove(tableName);
+      if (servedFromCache) {
+        return queryTimeseriesDataDownsampled(tableName, startTime, endTime,
+            maxPoints: maxPoints);
+      }
+      // Nothing cached to blame: the table is missing, the server is down, or
+      // the statement is genuinely wrong. That is the caller's to handle.
       rethrow;
     }
 

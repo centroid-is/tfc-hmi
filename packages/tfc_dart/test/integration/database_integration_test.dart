@@ -1143,7 +1143,8 @@ void main() {
               reason: 'the poisoned cache entry must be the one that is used');
         });
 
-        test('a wrong cached type is evicted when the query fails', () async {
+        test('a wrong cached type recovers without the caller seeing it',
+            () async {
           final base = DateTime.now().subtract(const Duration(minutes: 60));
           for (var i = 0; i < 10; i++) {
             await database.insertTimeseriesData(
@@ -1160,19 +1161,56 @@ void main() {
           database.valueColumnTypeCache[testTableName] =
               ValueColumnType('ARRAY', '_float8');
 
-          await expectLater(
-            database.queryTimeseriesDataDownsampled(testTableName, from, to,
-                maxPoints: 9),
-            throwsA(anything),
-          );
-          expect(database.valueColumnTypeCache, isNot(contains(testTableName)),
-              reason: 'a stale entry must not survive the failure it caused');
-
-          // And the retry re-detects and succeeds.
+          // The caller asked for a chart, not for an error it cannot act on.
+          // One statement fails internally, the entry is dropped, and the
+          // retry re-detects and answers.
           final result = await database
               .queryTimeseriesDataDownsampled(testTableName, from, to,
                   maxPoints: 9);
           expect(result, isNotEmpty);
+          expect(database.valueColumnTypeCache[testTableName]?.dataType,
+              'double precision',
+              reason: 'the stale entry must be replaced by the real type');
+        });
+
+        test('a table recreated with a different value type falls back to raw',
+            () async {
+          // This is the shape that broke `should fall back to raw query for
+          // boolean columns` in CI: the shared table is dropped and recreated
+          // between tests, so a `double precision` entry cached by an earlier
+          // case was still sitting there when the table came back as boolean.
+          // The stale entry said "numeric", which skipped straight past the
+          // raw fallback and ran min/max/last on a boolean column.
+          final base = DateTime.now().subtract(const Duration(minutes: 20));
+          for (var i = 0; i < 5; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(minutes: i)), i.toDouble());
+          }
+          await database.flush();
+
+          final from = base.subtract(const Duration(seconds: 1));
+          final to = base.add(const Duration(minutes: 21));
+
+          await database.queryTimeseriesDataDownsampled(testTableName, from, to,
+              maxPoints: 9);
+          expect(database.valueColumnTypeCache[testTableName]?.dataType,
+              'double precision');
+
+          // Retype the key: drop the table and let it come back as boolean.
+          await database.db
+              .customStatement('DROP TABLE IF EXISTS "$testTableName" CASCADE');
+          for (var i = 0; i < 10; i++) {
+            await database.insertTimeseriesData(
+                testTableName, base.add(Duration(minutes: i)), i.isEven);
+          }
+          await database.flush();
+
+          final result = await database
+              .queryTimeseriesDataDownsampled(testTableName, from, to,
+                  maxPoints: 6);
+          expect(result.length, 10,
+              reason: 'a boolean column has no min/max/last — the whole point '
+                  'of the raw fallback, which a stale cache entry skipped');
         });
 
         test('a missing table is never cached', () async {
