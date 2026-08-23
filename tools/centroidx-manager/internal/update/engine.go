@@ -382,7 +382,16 @@ func (e *Engine) Update(ctx context.Context, opts UpdateOptions) error {
 
 	// Step 6: Install the downloaded asset.
 	if err := e.installer.Install(downloadedPath); err != nil {
+		// The payload is deliberately kept when the install fails: it is what
+		// someone will want to inspect, and replaceFile clears a stale
+		// destination anyway, so it cannot wedge the next update.
 		return fmt.Errorf("install: %w", err)
+	}
+	// Installed successfully — the downloaded package has served its purpose.
+	// Leaving it in the temp directory under a fixed name is what turns a
+	// locked destination into a permanent failure on Windows.
+	if err := os.Remove(downloadedPath); err != nil {
+		e.log("warn: could not remove the downloaded package %s: %v", downloadedPath, err)
 	}
 
 	// Step 7: Launch the application.
