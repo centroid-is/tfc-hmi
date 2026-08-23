@@ -231,9 +231,18 @@ func launchAppDetached(runner CommandRunner, appPath string, args ...string) err
 // windowsPackageName is the MSIX identity name from centroid-hmi's msix_config.
 const windowsPackageName = "Centroid.CentroidX"
 
-// windowsAppID is the Application Id in the generated AppxManifest. The msix
-// builder emits a single application entry with this id.
-const windowsAppID = "App"
+// windowsAppID is the Application Id in the generated AppxManifest, which the
+// AppsFolder URI needs after the "!".
+//
+// It is not a free choice and it is not "App": the msix builder writes the
+// Application Id as the app name with underscores stripped (msix 3.16.13,
+// lib/src/appx_manifest.dart:59) and takes that name from the Flutter package
+// name (lib/src/configuration.dart:83). centroid-hmi's pubspec declares
+// `name: centroidx`, so the id is "centroidx".
+//
+// If centroid-hmi's package name ever changes, this must change with it — the
+// launch would otherwise fail with a URI that resolves to nothing.
+const windowsAppID = "centroidx"
 
 // launchWindowsApp starts the installed MSIX through its AppsFolder URI.
 //

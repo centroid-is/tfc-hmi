@@ -433,7 +433,7 @@ func TestWindowsInstaller_LaunchApp_UsesAppsFolderURI(t *testing.T) {
 		t.Fatalf("expected exactly one started process, got %d: %v", len(runner.started), runner.started)
 	}
 	all := allArgs(runner.started[0])
-	if !hasArgContaining(all, `shell:AppsFolder\Centroid.CentroidX_8wekyb3d8bbwe!App`) {
+	if !hasArgContaining(all, `shell:AppsFolder\Centroid.CentroidX_8wekyb3d8bbwe!centroidx`) {
 		t.Errorf("expected the AppsFolder URI for the installed package, got: %v", all)
 	}
 	// Bare explorer.exe is the bug: it opens a file browser and nothing else.
@@ -461,7 +461,7 @@ func TestWindowsInstaller_LaunchApp_ReadsFamilyNameFromInstalledPackage(t *testi
 	if !hasArgContaining(query, "PackageFamilyName") {
 		t.Errorf("expected the family name to be queried, got: %v", query)
 	}
-	if !hasArgContaining(allArgs(runner.started[0]), `Centroid.CentroidX_differenthash!App`) {
+	if !hasArgContaining(allArgs(runner.started[0]), `Centroid.CentroidX_differenthash!centroidx`) {
 		t.Errorf("expected the queried family name to be used, got: %v", allArgs(runner.started[0]))
 	}
 }
