@@ -44,6 +44,26 @@ func (e execRunner) Run(name string, args ...string) ([]byte, error) {
 	return exec.Command(name, args...).CombinedOutput()
 }
 
+// publisherConflictHRESULT is ERROR_PACKAGE_ALREADY_EXISTS: a package with
+// this identity is installed but was signed by a different publisher, so
+// deployment refuses to replace it — what happens when a rig switches between
+// Store and sideload signing. Removing the installed package and retrying is
+// the fix, and it is the only failure for which it is the fix.
+//
+// The match is deliberately this narrow. Windows prefixes nearly every
+// deployment error with "Deployment failed with HRESULT: 0x...", and the
+// neighbouring 0x80073CFx codes are unrelated causes — out of disk space
+// (…CF4), network failure (…CF5), plain install failure (…CF9). Matching any
+// of those uninstalls a working CentroidX and then fails the retry for the
+// original reason, leaving the machine with no application at all. Failing to
+// recognise a conflict costs one failed update that an operator can retry;
+// mistaking anything else for a conflict costs the installation, so the tie
+// goes to matching too little.
+//
+// Lower case because the comparison lower-cases detail first: the hex casing
+// PowerShell happens to emit is not something an update should depend on.
+const publisherConflictHRESULT = "0x80073cfb"
+
 // installWindows runs Add-AppxPackage via PowerShell to install an MSIX.
 // -ForceApplicationShutdown ensures any running package processes are stopped first.
 func installWindows(runner CommandRunner, assetPath string) error {
@@ -62,9 +82,10 @@ func installWindows(runner CommandRunner, assetPath string) error {
 
 	detail := strings.TrimSpace(string(out))
 
-	// If the error is a publisher conflict (0x80073CFB), remove the old package
-	// and retry. This happens when switching from Store to sideload signing.
-	if strings.Contains(detail, "0x80073CF") || strings.Contains(detail, "conflicting") || strings.Contains(detail, "Deployment failed") {
+	// Only a publisher conflict justifies uninstalling what is already on the
+	// machine; every other failure is reported as-is. See
+	// publisherConflictHRESULT for why the match is not broader.
+	if strings.Contains(strings.ToLower(detail), publisherConflictHRESULT) {
 		// Remove conflicting package(s) with the same identity name
 		runner.Run(
 			"powershell",

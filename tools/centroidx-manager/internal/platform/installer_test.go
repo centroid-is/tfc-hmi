@@ -208,6 +208,175 @@ func TestWindowsInstaller_Install_Error(t *testing.T) {
 	}
 }
 
+// countRemoveAppxCalls counts how many recorded commands would uninstall the
+// package. Removing a working installation is the destructive step, so tests
+// assert on it directly rather than on call counts alone.
+func countRemoveAppxCalls(calls []mockCall) int {
+	n := 0
+	for _, c := range calls {
+		if hasArgContaining(allArgs(c), "Remove-AppxPackage") {
+			n++
+		}
+	}
+	return n
+}
+
+// Windows prefixes essentially every deployment error with "Deployment failed
+// with HRESULT: 0x...", so that phrase says nothing about *why* an install
+// failed. Treating it as a publisher-conflict signal uninstalls a working
+// CentroidX on any failure — a rejected certificate, a full disk, a bad
+// download — and the retry then fails for the same reason, leaving the rig
+// with no application at all. None of these may remove anything.
+func TestWindowsInstaller_Install_NonConflictFailureKeepsInstalledPackage(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+	}{
+		{
+			"untrusted certificate",
+			"Add-AppxPackage : Deployment failed with HRESULT: 0x800B0109, A certificate chain " +
+				"processed, but terminated in a root certificate which is not trusted by the trust provider.",
+		},
+		{
+			"out of disk space",
+			"Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF4, Windows cannot install " +
+				"package Centroid.CentroidX because there is not enough disk space.",
+		},
+		{
+			"network failure",
+			"Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF5, Windows cannot install " +
+				"package Centroid.CentroidX because it requires a network resource that is unavailable.",
+		},
+		{
+			"generic install failure",
+			"Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF9, Install failed. " +
+				"Please contact your software vendor.",
+		},
+		{
+			"package could not be opened",
+			"Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF0, The package could not be opened.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Whatever the cause, it is still there on a second attempt: an
+			// untrusted certificate is still untrusted, a full disk is still
+			// full. The third entry is only reached if the installer wrongly
+			// removes the package and retries.
+			runner := &mockRunnerSeq{
+				outputs: [][]byte{[]byte(tc.output), nil, []byte(tc.output)},
+				errors:  []error{errors.New("exit status 1"), nil, errors.New("exit status 1")},
+			}
+
+			err := installWindows(runner, "/tmp/app.msix")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if n := countRemoveAppxCalls(runner.calls); n != 0 {
+				t.Errorf("a non-conflict failure uninstalled the working package (%d Remove-AppxPackage call(s)); calls: %v", n, runner.calls)
+			}
+			if len(runner.calls) != 1 {
+				t.Errorf("expected the install to stop after one attempt, got %d calls: %v", len(runner.calls), runner.calls)
+			}
+		})
+	}
+}
+
+// The operator has to be able to tell a certificate rejection from anything
+// else, so the HRESULT and its text must survive into the returned error.
+func TestWindowsInstaller_Install_UntrustedCertReportsHRESULT(t *testing.T) {
+	const detail = "Add-AppxPackage : Deployment failed with HRESULT: 0x800B0109, A certificate chain " +
+		"processed, but terminated in a root certificate which is not trusted by the trust provider."
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(detail), nil, []byte(detail)},
+		errors:  []error{errors.New("exit status 1"), nil, errors.New("exit status 1")},
+	}
+
+	err := installWindows(runner, "/tmp/app.msix")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "0x800B0109") {
+		t.Errorf("expected the HRESULT in the error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "after removing conflict") {
+		t.Errorf("a certificate rejection was reported as a conflict: %v", err)
+	}
+}
+
+// The genuine publisher conflict — same package identity, different signing
+// publisher — is the one case where removing the installed package is the fix.
+func TestWindowsInstaller_Install_PublisherConflictRemovesAndRetries(t *testing.T) {
+	const conflict = "Add-AppxPackage : Deployment failed with HRESULT: 0x80073CFB, The provided package " +
+		"is already installed, and reinstallation of the package was blocked. Check the " +
+		"AppXDeployment-Server event log for details."
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(conflict), nil, nil},
+		errors:  []error{errors.New("exit status 1"), nil, nil},
+	}
+
+	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("expected install, remove, install; got %d calls: %v", len(runner.calls), runner.calls)
+	}
+	if !hasArgContaining(allArgs(runner.calls[0]), "Add-AppxPackage") {
+		t.Errorf("call 0: expected Add-AppxPackage, got: %v", allArgs(runner.calls[0]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[1]), "Remove-AppxPackage") {
+		t.Errorf("call 1: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[1]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[1]), "Centroid.CentroidX") {
+		t.Errorf("call 1: expected the removal scoped to Centroid.CentroidX, got: %v", allArgs(runner.calls[1]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[2]), "Add-AppxPackage") {
+		t.Errorf("call 2: expected the install retry, got: %v", allArgs(runner.calls[2]))
+	}
+}
+
+// HRESULTs are matched case-insensitively: the hex casing PowerShell emits is
+// not something an update on a plant rig should depend on.
+func TestWindowsInstaller_Install_PublisherConflictLowercaseHRESULT(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte("Deployment failed with HRESULT: 0x80073cfb, package already installed"), nil, nil},
+		errors:  []error{errors.New("exit status 1"), nil, nil},
+	}
+
+	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+	if n := countRemoveAppxCalls(runner.calls); n != 1 {
+		t.Errorf("expected exactly one Remove-AppxPackage, got %d; calls: %v", n, runner.calls)
+	}
+}
+
+// When the retry after a conflict removal also fails, the error must say so —
+// this is the state where the machine has no CentroidX installed and the
+// message is all the operator has to go on.
+func TestWindowsInstaller_Install_PublisherConflictRetryFailure(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{
+			[]byte("Deployment failed with HRESULT: 0x80073CFB, package already installed"),
+			nil,
+			[]byte("Deployment failed with HRESULT: 0x80073CF9, Install failed."),
+		},
+		errors: []error{errors.New("exit status 1"), nil, errors.New("exit status 1")},
+	}
+
+	err := installWindows(runner, "/tmp/app.msix")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "after removing conflict") {
+		t.Errorf("expected the error to name the retry, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "0x80073CF9") {
+		t.Errorf("expected the retry's HRESULT in the error, got: %v", err)
+	}
+}
+
 // ---- Linux installer tests --------------------------------------------------
 
 func TestLinuxInstaller_Install(t *testing.T) {
