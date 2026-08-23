@@ -21,6 +21,17 @@ String _emit(Logger logger, void Function(Logger) act, _CapturingOutput out) {
 }
 
 void main() {
+  setUpAll(() {
+    // `EnvLogFilter(envValue: null)` means "read the environment", which is
+    // what the default-level tests below want -- but only if the environment
+    // is quiet. Say so out loud rather than letting a developer who happens to
+    // export CENTROID_LOG_LEVEL chase a baffling assertion failure.
+    final ambient = Platform.environment['CENTROID_LOG_LEVEL'];
+    expect(ambient == null || ambient.isEmpty, isTrue,
+        reason: 'these tests assert the *unset* defaults; '
+            'CENTROID_LOG_LEVEL is set to "$ambient" -- unset it to run them');
+  });
+
   // initLogConfig() mutates process-global Logger statics. Put them back so a
   // later test in this file is not silently reading the previous test's setup.
   final originalFilter = Logger.defaultFilter;
