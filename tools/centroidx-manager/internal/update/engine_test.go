@@ -580,6 +580,38 @@ func TestEngine_Update_ZeroValueLoggerDoesNotPanic(t *testing.T) {
 	}
 }
 
+// The downloaded package is a temporary payload. Leaving it in %TEMP% under a
+// fixed name is what makes a locked destination self-perpetuating on Windows,
+// so a successful install must clean up after itself.
+func TestEngine_Update_RemovesThePayloadAfterInstalling(t *testing.T) {
+	destDir := t.TempDir()
+	inst := &mockInstaller{}
+	eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: destDir}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, platformAssetName())); !os.IsNotExist(err) {
+		t.Errorf("expected the payload to be removed from %s, stat error was %v", destDir, err)
+	}
+}
+
+// A failed install keeps its payload: it is the artefact someone will want to
+// look at, and replaceFile clears a stale destination anyway so keeping it
+// cannot wedge the next update.
+func TestEngine_Update_KeepsThePayloadWhenTheInstallFails(t *testing.T) {
+	destDir := t.TempDir()
+	inst := &mockInstaller{installErr: errors.New("Add-AppxPackage failed")}
+	eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: destDir}); err == nil {
+		t.Fatal("expected the install error to surface")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, platformAssetName())); err != nil {
+		t.Errorf("expected the payload to be kept for diagnosis, stat error was %v", err)
+	}
+}
+
 // Install is the first-time shortcut. It must trust the certificate too, and
 // must not behave differently from Update now that the step is unconditional.
 func TestEngine_Install_TrustsCertificate(t *testing.T) {

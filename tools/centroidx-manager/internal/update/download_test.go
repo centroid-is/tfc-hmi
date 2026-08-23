@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 const testAssetFilename = "centroidx-setup.msix"
@@ -157,4 +160,129 @@ func containsString(s, substr string) bool {
 			}
 			return false
 		}())
+}
+
+// ---- replaceFile ------------------------------------------------------------
+
+// os.Rename on Windows is MoveFileEx(MOVEFILE_REPLACE_EXISTING), which fails
+// with ACCESS_DENIED or SHARING_VIOLATION when the destination is open without
+// FILE_SHARE_DELETE — a Defender scan of the just-written package, or AppX
+// staging still holding a reference. Because the payload lands in %TEMP% under
+// a fixed name and is never cleaned up, that failure then repeats on every
+// later update in the same session. Removing the destination first turns the
+// replace into a create.
+//
+// An existing empty directory at the destination stands in for the Windows
+// case here: os.Rename onto it fails on every platform, and only succeeds if
+// the destination was removed first.
+func TestReplaceFile_RemovesTheDestinationFirst(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.WriteFile(src, []byte("new payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceFile(src, dst); err != nil {
+		t.Fatalf("replaceFile did not clear the destination: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("destination is not a readable file: %v", err)
+	}
+	if string(got) != "new payload" {
+		t.Errorf("destination has the wrong content: %q", got)
+	}
+}
+
+func TestReplaceFile_OverwritesAnExistingPayload(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.WriteFile(src, []byte("new payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("stale payload from a previous update"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceFile(src, dst); err != nil {
+		t.Fatalf("replaceFile returned error: %v", err)
+	}
+	got, _ := os.ReadFile(dst)
+	if string(got) != "new payload" {
+		t.Errorf("destination has the wrong content: %q", got)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("expected the source to be consumed, stat error was %v", err)
+	}
+}
+
+// A scanner holding the file usually lets go within a moment, so a transient
+// failure must be retried rather than failing the whole update.
+func TestReplaceFile_RetriesATransientFailure(t *testing.T) {
+	origRename, origDelay := renameFile, renameRetryDelay
+	t.Cleanup(func() { renameFile, renameRetryDelay = origRename, origDelay })
+	renameRetryDelay = time.Millisecond
+
+	attempts := 0
+	renameFile = func(oldpath, newpath string) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("Access is denied.")
+		}
+		return origRename(oldpath, newpath)
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceFile(src, filepath.Join(dir, "dst")); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+// The retry is bounded — a destination that is permanently locked must fail
+// with the underlying error rather than spin.
+func TestReplaceFile_GivesUpAndReportsTheRealError(t *testing.T) {
+	origRename, origDelay := renameFile, renameRetryDelay
+	t.Cleanup(func() { renameFile, renameRetryDelay = origRename, origDelay })
+	renameRetryDelay = time.Millisecond
+
+	attempts := 0
+	renameFile = func(_, _ string) error {
+		attempts++
+		return errors.New("Access is denied.")
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceFile(src, filepath.Join(dir, "dst"))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "Access is denied") {
+		t.Errorf("expected the underlying error to be reported, got: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("expected more than one attempt, got %d", attempts)
+	}
+	if attempts > 10 {
+		t.Errorf("retry is not bounded: %d attempts", attempts)
+	}
 }

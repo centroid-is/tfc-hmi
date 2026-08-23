@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	ghdownload "github.com/centroid-is/centroidx-manager/internal/github"
 )
@@ -61,6 +62,14 @@ func DownloadAndVerify(ctx context.Context, assetURL string, checksumURL string,
 	}
 
 	return finalPath, nil
+}
+
+// placeholder replicating today's behaviour so the tests fail on behaviour.
+var renameFile = os.Rename
+var renameRetryDelay = 250 * time.Millisecond
+
+func replaceFile(tmpPath, finalPath string) error {
+	return renameFile(tmpPath, finalPath)
 }
 
 // fetchExpectedHash downloads checksumURL, parses it as SHA256SUMS.txt format,
