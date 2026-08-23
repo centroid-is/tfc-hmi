@@ -762,9 +762,24 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       String tableName, List<Map<String, dynamic>> dataList) async {
     if (dataList.isEmpty) return 0;
 
-    // All rows should have the same keys
-    final firstRow = dataList.first;
-    final keys = firstRow.keys.map((key) => '"$key"').join(', ');
+    // Rows are NOT guaranteed to have the same keys: `sample_members` omits a
+    // member that did not resolve in that sample, so one flush can carry
+    // {time,a,b} next to {time,a}. Taking the column list from the first row
+    // and the placeholders from each row made those two disagree — same arity
+    // and postgres silently writes b's value into column a; different arity
+    // and it is 42601 "VALUES lists must all be the same length", which
+    // `_isPermanentDbError` re-raises, so the whole batch is queued, retried
+    // every 5 s forever, and eventually dropped on queue overflow.
+    //
+    // The column list is the union of every row's keys, in first-seen order,
+    // and every row binds a value for every column — null where it has none.
+    final columns = <String>[];
+    for (final data in dataList) {
+      for (final key in data.keys) {
+        if (!columns.contains(key)) columns.add(key);
+      }
+    }
+    final keys = columns.map((key) => '"$key"').join(', ');
 
     // Build placeholders for all rows
     final List<String> valuesClauses = [];
@@ -772,7 +787,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     int paramIndex = 1;
 
     for (final data in dataList) {
-      final placeholders = data.keys.map((key) {
+      final placeholders = columns.map((key) {
         final value = data[key];
         final index = paramIndex++;
 
@@ -800,8 +815,10 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
       valuesClauses.add('($placeholders)');
 
-      // Add variables for this row
-      for (final value in data.values) {
+      // Add variables for this row — one per column, in the same order the
+      // placeholders were emitted.
+      for (final key in columns) {
+        final value = data[key];
         if (value is List) {
           if (value.isEmpty) {
             allVariables.add(const Variable('{}'));

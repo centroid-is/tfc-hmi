@@ -125,6 +125,7 @@ class Collector {
   final Map<CollectEntry, AutoDisposingStream<List<TimeseriesData<dynamic>>>>
       _collectStreams = {};
   final Map<CollectEntry, Evaluator> _evaluators = {};
+  final Map<CollectEntry, Timer> _sampleTimers = {};
   final Logger logger = Logger();
 
   // Performance instrumentation
@@ -271,12 +272,11 @@ class Collector {
     // Set up periodic sampling if sample interval is specified
     if (entry.sampleInterval != null) {
       sampleTimer = Timer.periodic(entry.sampleInterval!, (timer) async {
-        // if (latestValue != null) {
-        final val = latestValue!;
-        // latestValue = null;
+        final val = latestValue;
+        if (val == null) return;
         await insertValue(val);
-        // }
       });
+      _sampleTimers[entry] = sampleTimer;
     }
 
     _realTimeStreams[entry] = subscription;
@@ -424,6 +424,7 @@ class Collector {
   void stopCollect(CollectEntry entry) {
     _subscriptions[entry]?.cancel();
     _subscriptions.remove(entry);
+    _sampleTimers.remove(entry)?.cancel();
     _evaluators[entry]?.cancel();
     _evaluators.remove(entry);
   }
@@ -438,5 +439,10 @@ class Collector {
       evaluator.cancel();
     }
     _evaluators.clear();
+
+    for (final timer in _sampleTimers.values) {
+      timer.cancel();
+    }
+    _sampleTimers.clear();
   }
 }
