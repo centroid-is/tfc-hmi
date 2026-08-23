@@ -95,20 +95,67 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	return &commandError{op: "Add-AppxPackage failed", cause: err}
 }
 
+// certStoreLocation is where a sideload signing certificate has to land.
+// TrustedPeople is sufficient for MSIX sideloading and avoids the extra
+// security dialog that LocalMachine\Root triggers. It has to be LocalMachine:
+// Add-AppxPackage validates against machine-level trust, so the per-user
+// Cert:\CurrentUser\TrustedPeople store is not a substitute even though the
+// manager could write to it without elevation.
+const certStoreLocation = `Cert:\LocalMachine\TrustedPeople`
+
+// importCertificateCommand builds the PowerShell that imports certPath. It is
+// also handed to the operator verbatim when the manager cannot run it itself,
+// so the two can never drift apart.
+func importCertificateCommand(certPath string) string {
+	return `Import-Certificate -FilePath '` + certPath + `' -CertStoreLocation ` + certStoreLocation
+}
+
+// elevationRequiredSignals are the ways Windows says "you are not an
+// administrator". Unlike the publisher-conflict match in installWindows, a
+// false positive here is harmless — it only changes the wording of an error
+// that has already happened, and never destroys anything — so this errs
+// towards matching, where that one errs away from it.
+var elevationRequiredSignals = []string{
+	"access is denied",
+	"unauthorizedaccessexception",
+	"requested registry access is not allowed",
+	"0x80070005",
+}
+
 // trustCertificateWindows imports a certificate into LocalMachine\TrustedPeople.
-// TrustedPeople is sufficient for MSIX sideloading and avoids the extra security
-// dialog that using LocalMachine\Root triggers.
+//
+// Writing to a machine-level store requires administrator rights, and the
+// manager never requests elevation, so on an ordinary station this fails. The
+// engine treats that as non-fatal, which makes this error message the only
+// thing an operator has to work from — hence the command output is folded in,
+// and a rights failure says so and carries the one-time manual fix.
 func trustCertificateWindows(runner CommandRunner, certPath string) error {
-	_, err := runner.Run(
+	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command",
-		`Import-Certificate -FilePath '`+certPath+`' -CertStoreLocation Cert:\LocalMachine\TrustedPeople`,
+		importCertificateCommand(certPath),
 	)
-	if err != nil {
-		return &commandError{op: "Import-Certificate failed", cause: err}
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	detail := strings.TrimSpace(string(out))
+	lower := strings.ToLower(detail)
+	for _, signal := range elevationRequiredSignals {
+		if strings.Contains(lower, signal) {
+			return &commandError{
+				op: "Import-Certificate failed: the manager is not running as administrator and " +
+					certStoreLocation + " requires it. Run this once from an elevated PowerShell: " +
+					importCertificateCommand(certPath) + " — detail: " + detail,
+				cause: err,
+			}
+		}
+	}
+	if detail != "" {
+		return &commandError{op: "Import-Certificate failed: " + detail, cause: err}
+	}
+	return &commandError{op: "Import-Certificate failed", cause: err}
 }
 
 // installLinux runs dpkg -i with pkexec (GUI elevation) or sudo (fallback).

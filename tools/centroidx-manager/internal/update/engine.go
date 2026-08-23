@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -56,9 +58,6 @@ type UpdateOptions struct {
 	// May be nil.
 	OnProgress func(downloaded, total int64)
 
-	// FirstTime, if true, attempts to install the certificate before the app.
-	FirstTime bool
-
 	// DestDir is the directory where downloaded assets are stored.
 	// If empty, os.TempDir() is used.
 	DestDir string
@@ -69,6 +68,10 @@ type UpdateOptions struct {
 type Engine struct {
 	client    github.ReleasesClient
 	installer platform.Installer
+
+	// logf reports non-fatal progress and problems. Defaults to log.Printf;
+	// tests replace it to assert on what the operator would have been told.
+	logf func(format string, args ...any)
 }
 
 // NewEngine creates an Engine with the given GitHub client and platform installer.
@@ -77,6 +80,7 @@ func NewEngine(client github.ReleasesClient, installer platform.Installer) *Engi
 	return &Engine{
 		client:    client,
 		installer: installer,
+		logf:      log.Printf,
 	}
 }
 
@@ -373,16 +377,8 @@ func (e *Engine) Update(ctx context.Context, opts UpdateOptions) error {
 		return err // DownloadAndVerify uses "checksum mismatch" / "download asset" phrasing
 	}
 
-	// Step 5: First-time install — trust certificate if cert asset is present.
-	if opts.FirstTime {
-		if certPath, cerr := downloadCertAsset(ctx, info.Assets, destDir); cerr == nil && certPath != "" {
-			if trustErr := e.installer.TrustCertificate(certPath); trustErr != nil {
-				return fmt.Errorf("trust certificate: %w", trustErr)
-			}
-			// Best-effort cleanup of the cert file.
-			_ = os.Remove(certPath)
-		}
-	}
+	// Step 5: trust the release signing certificate.
+	e.trustReleaseCertificate(ctx, info.Assets, destDir)
 
 	// Step 6: Install the downloaded asset.
 	if err := e.installer.Install(downloadedPath); err != nil {
@@ -397,11 +393,61 @@ func (e *Engine) Update(ctx context.Context, opts UpdateOptions) error {
 	return nil
 }
 
+// trustReleaseCertificate imports the release's signing certificate into the
+// OS trust store. It is attempted on every install and update, and no outcome
+// is fatal.
+//
+// Unconditional, because a certificate is not a first-install concern: when the
+// signing certificate is rotated, the machines that need the new one are
+// precisely the ones that already have the app. Gating this on a first install
+// meant a rotation could only ever be delivered to stations that did not need
+// it yet.
+//
+// Non-fatal, because trusting a certificate needs administrator rights the
+// manager does not have (see trustCertificateWindows). Without the certificate
+// the install fails on its own with a signature error, so attempting it anyway
+// costs nothing; refusing to install because trust failed would take a station
+// that merely lacks trust and stop it from even trying — a worse outcome than
+// today's, and the one shipping the certificate asset would otherwise create.
+//
+// Every path logs. The silent version of this function hid an unreachable
+// trust step for months.
+// log reports a non-fatal condition. It tolerates an Engine built as a struct
+// literal rather than through NewEngine, so a logging call can never be the
+// thing that takes down an update.
+func (e *Engine) log(format string, args ...any) {
+	if e.logf == nil {
+		log.Printf(format, args...)
+		return
+	}
+	e.logf(format, args...)
+}
+
+func (e *Engine) trustReleaseCertificate(ctx context.Context, assets []*gogithub.ReleaseAsset, destDir string) {
+	certPath, err := downloadCertAsset(ctx, assets, destDir)
+	if err != nil {
+		e.log("warn: could not download the release signing certificate, installing without it: %v", err)
+		return
+	}
+	if certPath == "" {
+		e.log("warn: this release publishes no signing certificate; a station that does not already trust the publisher will reject the package")
+		return
+	}
+	// Remove the certificate whether or not the import worked — it is a
+	// temporary download, and the old code left it behind on every failure.
+	defer func() { _ = os.Remove(certPath) }()
+
+	if err := e.installer.TrustCertificate(certPath); err != nil {
+		e.log("warn: could not trust the release signing certificate, installing anyway: %v", err)
+		return
+	}
+	e.log("trusted the release signing certificate %s", filepath.Base(certPath))
+}
+
 // Install is a shortcut for a first-time install of the latest release.
-// It calls Update with FirstTime=true and Version="" (latest).
+// It calls Update with Version="" (latest).
 func (e *Engine) Install(ctx context.Context, destDir string, onProgress func(downloaded, total int64)) error {
 	return e.Update(ctx, UpdateOptions{
-		FirstTime:  true,
 		DestDir:    destDir,
 		OnProgress: onProgress,
 	})

@@ -10,12 +10,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	gogithub "github.com/google/go-github/v84/github"
+
+	"github.com/centroid-is/centroidx-manager/internal/github"
+	"github.com/centroid-is/centroidx-manager/internal/platform"
 )
 
 // ---- mock types --------------------------------------------------------
@@ -47,15 +51,25 @@ func (m *mockReleasesClient) DownloadAsset(_ context.Context, _ *gogithub.Releas
 
 // mockInstaller tracks all install/trust/launch calls.
 type mockInstaller struct {
-	installed    []string
-	trustedCerts []string
-	launchedApp  bool
-	installErr   error
-	trustErr     error
-	launchErr    error
+	installed []string
+	// trustAttempts records every TrustCertificate call including the ones
+	// that fail; trustedCerts records only the successful ones. The engine's
+	// job is to keep attempting trust even when it cannot succeed, so tests
+	// need to see the attempt, not just the outcome.
+	trustAttempts []string
+	trustedCerts  []string
+	launchedApp   bool
+	// order records the sequence of interface calls. Trusting the certificate
+	// after installing would be useless — the signature is checked during the
+	// install — so the ordering is part of the contract.
+	order      []string
+	installErr error
+	trustErr   error
+	launchErr  error
 }
 
 func (m *mockInstaller) Install(assetPath string) error {
+	m.order = append(m.order, "install")
 	if m.installErr != nil {
 		return m.installErr
 	}
@@ -64,6 +78,8 @@ func (m *mockInstaller) Install(assetPath string) error {
 }
 
 func (m *mockInstaller) TrustCertificate(certPath string) error {
+	m.order = append(m.order, "trust")
+	m.trustAttempts = append(m.trustAttempts, certPath)
 	if m.trustErr != nil {
 		return m.trustErr
 	}
@@ -360,20 +376,24 @@ func TestEngine_Update_InstallError(t *testing.T) {
 	}
 }
 
-// ---- TestEngine_Install_FirstTime ------------------------------------------
+// ---- certificate trust ------------------------------------------------------
 
-func TestEngine_Install_FirstTime(t *testing.T) {
-	assetContent := "fake app package for first-time install"
+// certFixture serves a platform asset, its checksums, and (optionally) a
+// signing certificate from one test server, and returns a client offering them
+// as a release. certMode selects what the release says about the certificate:
+//
+//	"present" — a .cer asset that downloads successfully
+//	"absent"  — no .cer asset at all (what every release published before #292 looked like)
+//	"broken"  — a .cer asset whose download fails
+func certFixture(t *testing.T, certMode string) *mockReleasesClient {
+	t.Helper()
+	const assetContent = "fake app package"
 	assetFilename := platformAssetName()
 
-	srv := newEngineTestServer(t, assetContent, assetFilename, "")
-	defer srv.Close()
-
-	certFilename := "centroidx.cer"
-	mux := http.NewServeMux()
-	// Serve asset + checksums + cert
 	h := sha256.Sum256([]byte(assetContent))
 	checksumContent := hex.EncodeToString(h[:]) + "  " + assetFilename + "\n"
+
+	mux := http.NewServeMux()
 	mux.HandleFunc("/asset", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(assetContent)))
 		_, _ = w.Write([]byte(assetContent))
@@ -382,41 +402,198 @@ func TestEngine_Install_FirstTime(t *testing.T) {
 		_, _ = w.Write([]byte(checksumContent))
 	})
 	mux.HandleFunc("/cert", func(w http.ResponseWriter, r *http.Request) {
+		if certMode == "broken" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		_, _ = w.Write([]byte("fake cert data"))
 	})
-	srv2 := httptest.NewServer(mux)
-	defer srv2.Close()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
 
 	assets := []*gogithub.ReleaseAsset{
-		buildAsset(assetFilename, srv2.URL+"/asset"),
-		buildAsset("SHA256SUMS.txt", srv2.URL+"/SHA256SUMS.txt"),
-		buildAsset(certFilename, srv2.URL+"/cert"),
+		buildAsset(assetFilename, srv.URL+"/asset"),
+		buildAsset("SHA256SUMS.txt", srv.URL+"/SHA256SUMS.txt"),
 	}
-	release := buildRelease("2026.3.6", "notes", assets)
+	if certMode != "absent" {
+		assets = append(assets, buildAsset("centroidx.cer", srv.URL+"/cert"))
+	}
+	return &mockReleasesClient{latest: buildRelease("2026.3.6", "notes", assets)}
+}
 
-	client := &mockReleasesClient{latest: release}
-	inst := &mockInstaller{}
-
+// newLoggingEngine returns an Engine whose log lines are captured for assertion
+// instead of going to stderr.
+func newLoggingEngine(client github.ReleasesClient, inst platform.Installer) (*Engine, *[]string) {
 	eng := NewEngine(client, inst)
-
-	destDir := t.TempDir()
-	err := eng.Update(context.Background(), UpdateOptions{
-		DestDir:   destDir,
-		FirstTime: true,
-	})
-	if err != nil {
-		t.Fatalf("Install (first-time) returned error: %v", err)
+	var lines []string
+	eng.logf = func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
 	}
+	return eng, &lines
+}
 
-	// For non-Windows we just check Install was called.
+// logsContain reports whether any captured line contains substr.
+func logsContain(lines []string, substr string) bool {
+	for _, l := range lines {
+		if strings.Contains(l, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// The update path is the one the HMI actually launches. Before this change the
+// trust step ran only under FirstTime, which nothing reachable ever set, so a
+// station being updated never imported the release certificate — including
+// after a certificate rotation, which is exactly when it needs to.
+func TestEngine_Update_TrustsCertificate(t *testing.T) {
+	inst := &mockInstaller{}
+	eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if len(inst.trustAttempts) != 1 {
+		t.Fatalf("expected the update to attempt certificate trust once, got %d attempts", len(inst.trustAttempts))
+	}
 	if len(inst.installed) == 0 {
-		t.Fatal("expected Install to be called, but it was not")
+		t.Error("expected Install to be called")
 	}
+}
 
-	// On first-time install with a cert asset, TrustCertificate should be called.
-	// (Platform-agnostic: the engine calls TrustCertificate when cert asset is found)
-	if len(inst.trustedCerts) == 0 {
-		t.Log("TrustCertificate not called (may be platform-specific no-op, acceptable)")
+// Trust has to precede the install: Add-AppxPackage validates the signature as
+// it installs, so a certificate imported afterwards helps nothing.
+func TestEngine_Update_TrustsCertificateBeforeInstalling(t *testing.T) {
+	inst := &mockInstaller{}
+	eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if len(inst.order) < 2 || inst.order[0] != "trust" || inst.order[1] != "install" {
+		t.Errorf("expected trust before install, got call order %v", inst.order)
+	}
+}
+
+// A trust failure must never abort the install. Trust needs administrator
+// rights the manager may not have; without the certificate the install fails
+// on its own with a signature error, so attempting it costs nothing — whereas
+// aborting here turns a station that merely lacks trust into one that never
+// even tries.
+func TestEngine_Update_TrustFailureDoesNotAbortInstall(t *testing.T) {
+	inst := &mockInstaller{trustErr: errors.New("Import-Certificate failed: Access is denied")}
+	eng, logs := newLoggingEngine(certFixture(t, "present"), inst)
+
+	err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("a trust failure aborted the update: %v", err)
+	}
+	if len(inst.installed) == 0 {
+		t.Error("expected the install to proceed after a trust failure")
+	}
+	if !inst.launchedApp {
+		t.Error("expected the app to be launched after a trust failure")
+	}
+	if !logsContain(*logs, "Access is denied") {
+		t.Errorf("expected the trust failure to be logged; got %v", *logs)
+	}
+}
+
+// A release with no certificate asset is the world every release before #292
+// shipped. It must not be silently swallowed: the skip is the reason a fresh
+// station cannot install, so it has to appear in the log.
+func TestEngine_Update_MissingCertificateIsLogged(t *testing.T) {
+	inst := &mockInstaller{}
+	eng, logs := newLoggingEngine(certFixture(t, "absent"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if len(inst.trustAttempts) != 0 {
+		t.Errorf("expected no trust attempt when the release has no certificate, got %d", len(inst.trustAttempts))
+	}
+	if len(inst.installed) == 0 {
+		t.Error("expected the install to proceed when there is no certificate")
+	}
+	if !logsContain(*logs, "no signing certificate") {
+		t.Errorf("expected the missing certificate to be logged; got %v", *logs)
+	}
+}
+
+// A certificate that is published but fails to download is a different fault
+// from one that was never published, and must be distinguishable in the log.
+func TestEngine_Update_CertificateDownloadFailureIsLogged(t *testing.T) {
+	inst := &mockInstaller{}
+	eng, logs := newLoggingEngine(certFixture(t, "broken"), inst)
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("a certificate download failure aborted the update: %v", err)
+	}
+	if len(inst.trustAttempts) != 0 {
+		t.Errorf("expected no trust attempt when the certificate could not be downloaded, got %d", len(inst.trustAttempts))
+	}
+	if len(inst.installed) == 0 {
+		t.Error("expected the install to proceed when the certificate could not be downloaded")
+	}
+	if !logsContain(*logs, "download") {
+		t.Errorf("expected the download failure to be logged; got %v", *logs)
+	}
+}
+
+// The certificate is a temporary file; it must not be left behind whether the
+// trust step succeeded or failed.
+func TestEngine_Update_CertificateFileIsRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		trustErr error
+	}{
+		{"trust succeeded", nil},
+		{"trust failed", errors.New("Access is denied")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			destDir := t.TempDir()
+			inst := &mockInstaller{trustErr: tc.trustErr}
+			eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+			if err := eng.Update(context.Background(), UpdateOptions{DestDir: destDir}); err != nil {
+				t.Fatalf("Update returned error: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(destDir, "centroidx.cer")); !os.IsNotExist(err) {
+				t.Errorf("expected the certificate to be removed from %s, stat error was %v", destDir, err)
+			}
+		})
+	}
+}
+
+// An Engine built as a struct literal rather than through NewEngine has no
+// logf. Logging must not be the thing that takes down an update — the whole
+// point of this path is that nothing in it is fatal.
+func TestEngine_Update_ZeroValueLoggerDoesNotPanic(t *testing.T) {
+	inst := &mockInstaller{}
+	eng := &Engine{client: certFixture(t, "absent"), installer: inst}
+
+	if err := eng.Update(context.Background(), UpdateOptions{DestDir: t.TempDir()}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if len(inst.installed) == 0 {
+		t.Error("expected the install to proceed")
+	}
+}
+
+// Install is the first-time shortcut. It must trust the certificate too, and
+// must not behave differently from Update now that the step is unconditional.
+func TestEngine_Install_TrustsCertificate(t *testing.T) {
+	inst := &mockInstaller{}
+	eng, _ := newLoggingEngine(certFixture(t, "present"), inst)
+
+	if err := eng.Install(context.Background(), t.TempDir(), nil); err != nil {
+		t.Fatalf("Install returned error: %v", err)
+	}
+	if len(inst.trustAttempts) != 1 {
+		t.Errorf("expected a first-time install to attempt certificate trust once, got %d", len(inst.trustAttempts))
+	}
+	if len(inst.installed) == 0 {
+		t.Error("expected Install to be called")
 	}
 }
 
