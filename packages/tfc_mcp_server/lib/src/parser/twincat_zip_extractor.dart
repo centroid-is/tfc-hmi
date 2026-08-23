@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 
+import 'source_encoding.dart';
+
 /// File types recognized from a TwinCAT project zip.
 enum TwinCatFileType {
   /// .TcPOU -- Program Organization Unit (Function Block, Program, Function).
@@ -66,7 +68,7 @@ List<ExtractedFile> extractTwinCatFiles(
     }
 
     if (type != null) {
-      final content = String.fromCharCodes(entry.content as List<int>);
+      final content = decodeSourceBytes(entry.content as List<int>);
       results.add(ExtractedFile(
         path: entry.name,
         content: content,
