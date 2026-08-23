@@ -239,6 +239,43 @@ class DatabaseException implements Exception {
   final String message;
 }
 
+/// Rows one table may hold across the write buffer and the retry queue.
+///
+/// Was 100, which is not an outage buffer — it is a rounding error. A tag
+/// sampled once a second filled it in a minute and forty seconds; a thirty
+/// second outage over three hundred samples kept the last hundred and threw
+/// away two hundred, oldest first, which is to say it threw away the
+/// *beginning* of the incident: exactly the rows anyone investigating the
+/// outage would want.
+///
+/// Ten thousand buys a hundred times the tolerance — a few hours at 1 Hz, about
+/// seventeen minutes at 10 Hz — which covers a Postgres restart, a failover, or
+/// a VM reboot, the outages that actually happen.
+///
+/// The cost is memory, and the cost is per table, not per process. A scalar
+/// `_PendingWrite` is roughly 100 bytes (a DateTime, a boxed number, a sequence
+/// int, object headers), so a saturated table is about a megabyte. The SVN
+/// station collects 140 tags, so the worst case here alone is ~140 MB — not the
+/// "few MB" a single-table reading of this number suggests. That is why
+/// [kMaxQueuedRowsTotal] exists.
+const int kMaxQueuedRowsPerTable = 10000;
+
+/// Rows all tables together may hold.
+///
+/// The per-table cap keeps one noisy tag from starving the rest; this one keeps
+/// the process from being killed. Without it, raising the per-table cap a
+/// hundredfold would trade a silent, bounded data loss for an unbounded one —
+/// an OOM kill loses the entire queue, every table at once, plus whatever the
+/// process was doing. Struct samples make that worse: a ten-member row is
+/// closer to 600 bytes than 100, and 140 tables of those at the per-table cap
+/// would be most of a gigabyte.
+///
+/// 200 000 rows is roughly 20 MB of scalars, or 120 MB of wide structs. It is
+/// reached only when many tables are saturated at once, i.e. in a long outage
+/// on a busy line, and when it is reached the trimming is counted and logged
+/// like any other drop rather than being silent.
+const int kMaxQueuedRowsTotal = 200000;
+
 /// The longest retention anything may ask for: ten years.
 ///
 /// Also the number the UI clamps to. It is not an arbitrary round figure — it
@@ -348,7 +385,13 @@ class _PendingWrite {
 }
 
 class Database {
-  Database(this.db, {this.healthTimeout = const Duration(seconds: 30)}) {
+  Database(
+    this.db, {
+    this.healthTimeout = const Duration(seconds: 30),
+    int maxQueuedRowsPerTable = kMaxQueuedRowsPerTable,
+    int maxQueuedRowsTotal = kMaxQueuedRowsTotal,
+  })  : _maxRetryQueueSize = maxQueuedRowsPerTable,
+        _maxTotalQueuedRows = maxQueuedRowsTotal {
     _startBatchFlushTimer();
     _initConnectionHealth();
   }
@@ -613,42 +656,11 @@ class Database {
   /// Set by [close]/[dispose]; stops the retry loop rescheduling itself.
   bool _shutDown = false;
 
-  /// Rows one table may hold across the write buffer and the retry queue.
-  ///
-  /// Was 100, which is not an outage buffer — it is a rounding error. A tag
-  /// sampled once a second filled it in a minute and forty seconds; a thirty
-  /// second outage over three hundred samples kept the last hundred and threw
-  /// away two hundred, oldest first, which is to say it threw away the
-  /// *beginning* of the incident: exactly the rows anyone investigating the
-  /// outage would want.
-  ///
-  /// Ten thousand buys a hundred times the tolerance — a few hours at 1 Hz,
-  /// about seventeen minutes at 10 Hz — which covers a Postgres restart, a
-  /// failover, or a VM reboot, the outages that actually happen.
-  ///
-  /// The cost is memory, and the cost is per table, not per process. A scalar
-  /// [_PendingWrite] is roughly 100 bytes (a DateTime, a boxed number, a
-  /// sequence int, object headers), so a saturated table is about a megabyte.
-  /// The SVN station collects 140 tags, so the worst case here alone is ~140 MB
-  /// — not the "few MB" a single-table reading of this number suggests. That is
-  /// why [_maxTotalQueuedRows] exists.
-  static const int _maxRetryQueueSize = 10000; // per table
+  /// Rows one table may hold; [kMaxQueuedRowsPerTable] unless overridden.
+  final int _maxRetryQueueSize;
 
-  /// Rows all tables together may hold.
-  ///
-  /// The per-table cap keeps one noisy tag from starving the rest; this one
-  /// keeps the process from being killed. Without it, raising the per-table cap
-  /// a hundredfold would trade a silent, bounded data loss for an unbounded one
-  /// — an OOM kill loses the entire queue, every table at once, plus whatever
-  /// the process was doing. Struct samples make that worse: a ten-member row is
-  /// closer to 600 bytes than 100, and 140 tables of those at the per-table cap
-  /// would be most of a gigabyte.
-  ///
-  /// 200 000 rows is roughly 20 MB of scalars, or 120 MB of wide structs. It is
-  /// reached only when many tables are saturated at once, i.e. in a long outage
-  /// on a busy line, and when it is reached the trimming is counted and logged
-  /// like any other drop rather than being silent.
-  static const int _maxTotalQueuedRows = 200000;
+  /// Rows all tables together may hold; [kMaxQueuedRowsTotal] unless overridden.
+  final int _maxTotalQueuedRows;
 
   /// Rows discarded to keep within [_maxRetryQueueSize] / [_maxTotalQueuedRows],
   /// per table. These are rows the database never saw and never will.

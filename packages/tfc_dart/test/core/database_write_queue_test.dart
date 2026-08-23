@@ -127,7 +127,82 @@ void main() {
 
   group('the global cap', () {
     test('is reported', () {
-      expect(db.getStats()['max_queued_rows_total'], 200000);
+      expect(db.getStats()['max_queued_rows_total'], kMaxQueuedRowsTotal);
+      expect(db.getStats()['max_queued_rows_per_table'],
+          kMaxQueuedRowsPerTable);
+    });
+
+    test('the shipped numbers are the ones argued for in their docs', () {
+      // Pinned because they are a memory budget, not a taste: 10 000 rows is
+      // ~1 MB per saturated scalar table, and the SVN station collects 140
+      // tags, so the per-table cap alone permits ~140 MB. The total cap is
+      // what keeps a hundredfold increase in outage tolerance from becoming a
+      // hundredfold increase in the chance of an OOM kill.
+      expect(kMaxQueuedRowsPerTable, 10000);
+      expect(kMaxQueuedRowsTotal, 200000);
+      expect(kMaxQueuedRowsTotal, greaterThan(kMaxQueuedRowsPerTable),
+          reason: 'A total below the per-table cap would make the per-table '
+              'cap unreachable and the arithmetic in its doc a fiction.');
+    });
+
+    group('with small caps, so the trimming can actually be reached', () {
+      late FakeWriteBackend smallBackend;
+      late Database smallDb;
+
+      setUp(() {
+        smallBackend = FakeWriteBackend();
+        smallDb = Database(smallBackend,
+            maxQueuedRowsPerTable: 100, maxQueuedRowsTotal: 250);
+      });
+
+      tearDown(() => smallDb.close());
+
+      Future<void> fill(String table, int n) async {
+        smallBackend.down = true;
+        for (var i = 1; i <= n; i++) {
+          await smallDb.insertTimeseriesData(
+              table, DateTime.utc(2026).add(Duration(seconds: i)), i.toDouble());
+        }
+        await smallDb.flush();
+      }
+
+      test('holds the total down even when no single table is over', () async {
+        // Four tables of 100 each: every one is exactly at its per-table cap,
+        // so the per-table trimming never fires, and without a global bound
+        // the process would hold 400.
+        for (final t in ['a', 'b', 'c', 'd']) {
+          await fill(t, 100);
+        }
+        expect(smallDb.queuedRowCount, lessThanOrEqualTo(250));
+      });
+
+      test('counts what the global cap discards', () async {
+        for (final t in ['a', 'b', 'c', 'd']) {
+          await fill(t, 100);
+        }
+        final stats = smallDb.getStats();
+        expect(stats['dropped_rows'], 400 - smallDb.queuedRowCount,
+            reason: 'Every row is either queued or counted as dropped.');
+        expect(stats['dropped_rows'], greaterThan(0));
+      });
+
+      test('trims the fullest table first, not the well-behaved ones',
+          () async {
+        await fill('busy', 100);
+        await fill('quiet', 5);
+        // 105 rows, cap 250 — nothing to do yet.
+        expect(smallDb.getStats()['dropped_rows_by_table'], isEmpty);
+
+        await fill('busy2', 100);
+        await fill('busy3', 100);
+        // Now over 250. The quiet table has 5 rows and should keep them.
+        final byTable =
+            smallDb.getStats()['dropped_rows_by_table'] as Map<String, int>;
+        expect(byTable['quiet'], isNull,
+            reason: 'A slow tag must not pay for a fast one. It has five rows; '
+                'taking them frees nothing and loses a whole tag.');
+        expect(byTable.keys, isNotEmpty);
+      });
     });
 
     test('a discard is announced at error level, with the table and a total',
