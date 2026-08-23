@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -69,6 +70,10 @@ type UpdateOptions struct {
 type Engine struct {
 	client    github.ReleasesClient
 	installer platform.Installer
+
+	// logf reports non-fatal progress and problems. Defaults to log.Printf;
+	// tests replace it to assert on what the operator would have been told.
+	logf func(format string, args ...any)
 }
 
 // NewEngine creates an Engine with the given GitHub client and platform installer.
@@ -77,6 +82,7 @@ func NewEngine(client github.ReleasesClient, installer platform.Installer) *Engi
 	return &Engine{
 		client:    client,
 		installer: installer,
+		logf:      log.Printf,
 	}
 }
 

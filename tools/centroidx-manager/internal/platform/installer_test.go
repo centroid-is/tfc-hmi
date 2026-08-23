@@ -103,6 +103,91 @@ func TestWindowsInstaller_TrustCertificate(t *testing.T) {
 	}
 }
 
+// A trust failure used to report only "exit status 1". installWindows and
+// Uninstall both fold the command output into their errors; this one must too,
+// or the operator has nothing to act on.
+func TestWindowsInstaller_TrustCertificate_ReportsDetail(t *testing.T) {
+	const detail = "Import-Certificate : The system cannot find the file specified."
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(detail)},
+		errors:  []error{errors.New("exit status 1")},
+	}
+
+	err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot find the file specified") {
+		t.Errorf("expected the command output in the error, got: %v", err)
+	}
+}
+
+// Cert:\LocalMachine\TrustedPeople is a machine-wide store and writing to it
+// needs administrator rights the manager does not request. That is the failure
+// a plant technician will actually hit, and "exit status 1" tells them nothing
+// — the error has to name the cause and give them the one-time command.
+func TestWindowsInstaller_TrustCertificate_AccessDeniedExplainsElevation(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+	}{
+		{
+			"access is denied",
+			"Import-Certificate : Access is denied. 0x80070005 (WIN32: 5 ERROR_ACCESS_DENIED)",
+		},
+		{
+			"unauthorized access exception",
+			"Import-Certificate : Cannot access the store. " +
+				"System.UnauthorizedAccessException: Access to the path is denied.",
+		},
+		{
+			"registry access not allowed",
+			"Import-Certificate : Requested registry access is not allowed.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &mockRunnerSeq{
+				outputs: [][]byte{[]byte(tc.output)},
+				errors:  []error{errors.New("exit status 1")},
+			}
+
+			err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "administrator") {
+				t.Errorf("expected the error to name elevation as the cause, got: %v", err)
+			}
+			if !strings.Contains(msg, "Import-Certificate -FilePath") {
+				t.Errorf("expected the error to carry the one-time remediation command, got: %v", err)
+			}
+			if !strings.Contains(msg, `C:\tmp\centroidx.cer`) {
+				t.Errorf("expected the remediation command to name the cert path, got: %v", err)
+			}
+		})
+	}
+}
+
+// A trust failure that is not an elevation problem must not be mislabelled as
+// one — the same over-matching mistake the install path used to make.
+func TestWindowsInstaller_TrustCertificate_NonElevationFailureIsNotBlamedOnAdmin(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte("Import-Certificate : Cannot find path 'C:\\tmp\\centroidx.cer' because it does not exist.")},
+		errors:  []error{errors.New("exit status 1")},
+	}
+
+	err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if strings.Contains(err.Error(), "administrator") {
+		t.Errorf("a missing-file failure was reported as an elevation problem: %v", err)
+	}
+}
+
 func TestWindowsInstaller_Install_Error(t *testing.T) {
 	runner := &mockRunner{
 		errOn:  1,
