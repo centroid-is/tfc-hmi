@@ -108,18 +108,52 @@ jobs:
           path: release-artifacts/
           merge-multiple: true
 
+      # Fetched again on its own so the portable build keeps its directory
+      # structure — the step above flattens every artifact into one folder,
+      # which is fine for the single-file assets but would lose the layout the
+      # zip needs.
+      - name: Download Windows portable build
+        uses: actions/download-artifact@v4
+        with:
+          name: centroid-hmi-windows-portable
+          path: centroidx-windows-x64/
+
+      # The MSIX is the only Windows asset stable has ever shipped, so a
+      # machine whose policy refuses to sideload it has no way to run a
+      # release build. main-latest has published this zip since #271; stable
+      # now does too. Zipped with a top-level directory so it does not explode
+      # into the user's Downloads folder.
+      - name: Zip Windows portable build
+        run: zip -qr release-artifacts/centroidx_windows_x64.zip centroidx-windows-x64
+
       - name: Generate SHA256SUMS.txt
         working-directory: release-artifacts
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+
           # Canonical asset name the manager looks for (msix:create emits
           # centroidx.msix; the manager still accepts the old name when
           # rolling back to releases published before this rename).
-          for f in *.msix; do
-            [ "$f" = "centroidx_windows_amd64.msix" ] || mv "$f" centroidx_windows_amd64.msix
-          done
+          #
+          # Asserted rather than looped: with no match the old loop ran once on
+          # the literal string "*.msix" and failed confusingly, and with more
+          # than one it renamed them all onto the same target and silently
+          # published whichever landed last.
+          msix=(*.msix)
+          if [ "${#msix[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one .msix artifact, found ${#msix[@]}: ${msix[*]:-none}"
+            exit 1
+          fi
+          [ "${msix[0]}" = "centroidx_windows_amd64.msix" ] \
+            || mv "${msix[0]}" centroidx_windows_amd64.msix
+
           echo "Artifacts to checksum:"
           ls -la
-          sha256sum centroidx-manager_* centroidx_darwin_arm64.dmg *.msix > SHA256SUMS.txt
+          sha256sum centroidx-manager_* \
+                    centroidx_darwin_arm64.dmg \
+                    centroidx_windows_x64.zip \
+                    centroidx_windows_amd64.msix > SHA256SUMS.txt
           echo ""
           echo "SHA256SUMS.txt contents:"
           cat SHA256SUMS.txt
@@ -132,5 +166,6 @@ jobs:
           files: |
             release-artifacts/centroidx-manager_*
             release-artifacts/centroidx_darwin_arm64.dmg
+            release-artifacts/centroidx_windows_x64.zip
             release-artifacts/SHA256SUMS.txt
-            release-artifacts/*.msix
+            release-artifacts/centroidx_windows_amd64.msix
