@@ -82,6 +82,65 @@ jobs:
           $bytes = [Convert]::FromBase64String("${{ secrets.MSIX_CERT_PFX_BASE64 }}")
           [IO.File]::WriteAllBytes("${{ github.workspace }}/centroid-hmi/centroidx-sideload.pfx", $bytes)
 
+      # The MSIX is signed by a self-signed sideload certificate, so Windows
+      # refuses to install it until that certificate is in the machine's
+      # TrustedPeople store. centroidx-manager already knows how to do that —
+      # downloadCertAsset() looks for a .cer or .crt among the release assets
+      # and hands it to TrustCertificate — but no workflow has ever published
+      # one, so the lookup always came back empty and the install hit
+      # 0x800B0109 with nothing in the log to say why.
+      #
+      # Extracted from the PFX rather than by running scripts/generate-cert.ps1:
+      # that script is documented "Do NOT run this in CI" because it calls
+      # New-SelfSignedCertificate, which would mint a *different* certificate
+      # from the one the package was just signed with — publishing that would
+      # be worse than publishing nothing, since trusting it changes nothing and
+      # looks like it should. Its output filename is reused verbatim.
+      #
+      # PowerShell rather than openssl: Export-Certificate is the exact inverse
+      # of the Export-PfxCertificate that produced the secret, and it does not
+      # care how the PFX was encrypted. OpenSSL 3 needs -legacy for PFXs
+      # written by older Windows tooling, which is a portability trap for a
+      # step that must not break silently.
+      - name: Export the public sideload certificate
+        working-directory: centroid-hmi
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $password = ConvertTo-SecureString "${{ secrets.MSIX_CERT_PASSWORD }}" -AsPlainText -Force
+          $signing = (Get-PfxData -FilePath "centroidx-sideload.pfx" -Password $password).EndEntityCertificates[0]
+          Export-Certificate -Cert $signing -FilePath "centroidx-sideload.cer" -Type CERT | Out-Null
+
+          # Read back what was actually written, not what we think we wrote.
+          # This asset is published to the world, so the two things that must
+          # be true about it are checked against the file itself.
+          $exported = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 `
+            ((Resolve-Path "centroidx-sideload.cer").Path)
+
+          # A DER certificate cannot physically carry a private key, but this
+          # is the assertion anyone reviewing "we publish our signing cert"
+          # will look for.
+          if ($exported.HasPrivateKey) {
+            throw "Exported certificate carries a private key — refusing to publish it"
+          }
+
+          # Trusting the wrong certificate is indistinguishable from trusting
+          # none. pubspec.yaml anchors the package identity to this subject.
+          $expected = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
+          if ($exported.Subject -ne $expected) {
+            throw "Exported certificate subject is '$($exported.Subject)', expected '$expected'"
+          }
+
+          Write-Host "Exported $expected"
+          Write-Host "  thumbprint: $($exported.Thumbprint)"
+          Write-Host "  valid until: $($exported.NotAfter.ToString('yyyy-MM-dd'))"
+
+      - name: Upload sideload certificate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroidx-sideload.cer
+          path: centroid-hmi/centroidx-sideload.cer
+
       - name: Build MSIX (sideload, signed)
         working-directory: centroid-hmi
         shell: powershell
