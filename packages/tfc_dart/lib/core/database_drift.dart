@@ -18,6 +18,7 @@ import 'package:logger/logger.dart';
 
 import 'alarm.dart';
 import 'database.dart';
+import 'database_batch_insert.dart';
 import 'database_connections.dart';
 import 'mcp_tables.dart';
 import 'mcp_database.dart';
@@ -757,97 +758,18 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     );
   }
 
-  /// Batch insert multiple rows into a dynamic table
+  /// Batch insert multiple rows into a dynamic table.
+  ///
+  /// The statement is built by [buildBatchInsert], which is pure and covered
+  /// by `database_batch_insert_test.dart` in CI on every platform. The bug
+  /// this guards against — the column list, the placeholders and the bound
+  /// variables disagreeing on ragged rows — is a construction bug, and
+  /// pinning it needed a test that does not require a Postgres to run.
   Future<int> tableInsertBatch(
       String tableName, List<Map<String, dynamic>> dataList) async {
-    if (dataList.isEmpty) return 0;
-
-    // Rows are NOT guaranteed to have the same keys: `sample_members` omits a
-    // member that did not resolve in that sample, so one flush can carry
-    // {time,a,b} next to {time,a}. Taking the column list from the first row
-    // and the placeholders from each row made those two disagree — same arity
-    // and postgres silently writes b's value into column a; different arity
-    // and it is 42601 "VALUES lists must all be the same length", which
-    // `_isPermanentDbError` re-raises, so the whole batch is queued, retried
-    // every 5 s forever, and eventually dropped on queue overflow.
-    //
-    // The column list is the union of every row's keys, in first-seen order,
-    // and every row binds a value for every column — null where it has none.
-    final columns = <String>[];
-    for (final data in dataList) {
-      for (final key in data.keys) {
-        if (!columns.contains(key)) columns.add(key);
-      }
-    }
-    final keys = columns.map((key) => '"$key"').join(', ');
-
-    // Build placeholders for all rows
-    final List<String> valuesClauses = [];
-    final List<Variable> allVariables = [];
-    int paramIndex = 1;
-
-    for (final data in dataList) {
-      final placeholders = columns.map((key) {
-        final value = data[key];
-        final index = paramIndex++;
-
-        if (key == 'time') {
-          return '\$$index::timestamptz';
-        } else if (value is List) {
-          if (value.isEmpty) {
-            return '\$$index::text[]';
-          }
-          final first = value.first;
-          if (first is int) {
-            return '\$$index::integer[]';
-          } else if (first is double) {
-            return '\$$index::double precision[]';
-          } else if (first is String) {
-            return '\$$index::text[]';
-          } else if (first is bool) {
-            return '\$$index::boolean[]';
-          } else {
-            return '\$$index::jsonb[]';
-          }
-        }
-        return '\$$index';
-      }).join(', ');
-
-      valuesClauses.add('($placeholders)');
-
-      // Add variables for this row — one per column, in the same order the
-      // placeholders were emitted.
-      for (final key in columns) {
-        final value = data[key];
-        if (value is List) {
-          if (value.isEmpty) {
-            allVariables.add(const Variable('{}'));
-          } else {
-            final first = value.first;
-            if (first is num) {
-              final arrayString = '{${value.join(',')}}';
-              allVariables.add(Variable(arrayString));
-            } else if (first is String) {
-              final arrayString = '{${value.map((e) => '"$e"').join(',')}}';
-              allVariables.add(Variable(arrayString));
-            } else if (first is bool) {
-              final arrayString = '{${value.join(',')}}';
-              allVariables.add(Variable(arrayString));
-            } else {
-              allVariables.add(Variable(jsonEncode(value)));
-            }
-          }
-        } else {
-          allVariables.add(Variable(value));
-        }
-      }
-    }
-
-    final valuesClause = valuesClauses.join(', ');
-    return await customInsert(
-      'INSERT INTO "$tableName" ($keys) VALUES $valuesClause',
-      variables: allVariables,
-    );
+    final insert = buildBatchInsert(tableName, dataList);
+    if (insert == null) return 0;
+    return await customInsert(insert.sql, variables: insert.variables);
   }
 
   /// Query data from a dynamic table with detailed analysis
