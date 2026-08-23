@@ -187,6 +187,41 @@ void main() {
       // Unset (the probe runs JIT, so kShippedBuild is false there).
       expect(await run({'CENTROID_LOG_LEVEL': ''}), equals('debug'));
     }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('the CENTROID_LOG_FILE header records the level even when the level '
+        'itself would suppress the banner', () async {
+      // The whole point of the header copy: a station deliberately run at
+      // error still has to say so. This is the production configuration, and
+      // it is only reachable from a child process.
+      if (Platform.isWindows && Platform.environment['CI'] == 'true') {
+        markTestSkipped('Skipped on Windows CI -- DLL build hook race');
+        return;
+      }
+
+      final tempDir = Directory.systemTemp.createTempSync('logperf_banner_');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final logPath = '${tempDir.path}${Platform.pathSeparator}station.log';
+
+      final result = await Process.run(
+        Platform.resolvedExecutable,
+        ['run', 'test/core/log_level_env_probe.dart'],
+        environment: {
+          'CENTROID_LOG_LEVEL': 'error',
+          'CENTROID_LOG_FILE': logPath,
+          'CENTROID_LOG_REDIRECTED': '',
+        },
+        includeParentEnvironment: true,
+      );
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+
+      final content = File(logPath).readAsStringSync();
+      expect(content, contains('--- log opened '));
+      expect(content, contains('[log] level error'));
+      expect(content, contains('CENTROID_LOG_LEVEL=error'));
+      // At error the banner cannot have come through the logger, so this line
+      // proves the header copy is doing the work.
+      expect(content, isNot(contains('INFO')));
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 
   group('per-logger level:', () {

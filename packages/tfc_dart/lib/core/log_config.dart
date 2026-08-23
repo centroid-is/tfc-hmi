@@ -194,12 +194,19 @@ void initLogConfig() {
   Logger.defaultPrinter = () => hotPathPrinter();
 
   final banner = logLevelBanner();
+  _installFileOutput(banner);
 
+  // Last, and exactly once: by now the file sink (if any) is installed, so
+  // this lands in the file as well as the console. An earlier `return` used
+  // to need its own copy of this line, which is how one of them drifted.
+  Logger().i(banner);
+}
+
+/// Points [Logger.defaultOutput] at `CENTROID_LOG_FILE` when that is set and
+/// the launcher has not already redirected stdout there.
+void _installFileOutput(String banner) {
   final path = Platform.environment['CENTROID_LOG_FILE'];
-  if (path == null || path.isEmpty) {
-    Logger().i(banner);
-    return;
-  }
+  if (path == null || path.isEmpty) return;
 
   // The Windows runner sets this once it has already pointed the process
   // stdout at that same file. ConsoleOutput therefore lands there anyway, and
@@ -207,25 +214,22 @@ void initLogConfig() {
   // positions -- the runner writing from offset 0, this one appending at EOF,
   // each overwriting the other. main.dart already honours the flag for its
   // own file; the logger has to as well.
-  if (Platform.environment['CENTROID_LOG_REDIRECTED'] == '1') {
-    Logger().i(banner);
-    return;
-  }
+  if (Platform.environment['CENTROID_LOG_REDIRECTED'] == '1') return;
 
   try {
     _logFile ??= File(path).openSync(mode: FileMode.append);
     final file = _logFile!;
     Logger.defaultOutput = () => MultiOutput([ConsoleOutput(), _FileOutput(file)]);
-    // In the header, not only through the logger: the header is unfiltered, so
-    // a station running at warning or error still records which level it is
-    // running at. Otherwise the one line that explains why the log looks empty
-    // would itself be filtered out.
+    // The banner goes in the header too, not only through the logger: the
+    // header is written straight to the file and is therefore unfiltered, so a
+    // station deliberately run at warning or error still records which level
+    // it is running at. Filtering out the one line that explains the
+    // filtering would be a poor joke.
     file.writeStringSync('--- log opened ${DateTime.now().toIso8601String()} '
         '| $banner ---\n');
   } catch (e) {
     stderr.writeln('[log] file logging unavailable ($path): $e');
   }
-  Logger().i(banner);
 }
 
 /// One line naming the level this process resolved, and where it came from.
