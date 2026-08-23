@@ -93,11 +93,44 @@ void main() {
           isFalse);
     });
 
-    test('rejects anything under an hour', () {
-      expect(RetentionPolicy(dropAfter: const Duration(minutes: 59)).isUsable,
+    test('rejects the seconds-range values the unit cliff produces', () {
+      // The whole point of the floor. These are the artifact, not a choice:
+      // the originally reported 5.26 s, and what the cliff can still produce
+      // for an absurd day count now that the cutoff has moved.
+      expect(
+          RetentionPolicy(dropAfter: const Duration(milliseconds: 5257))
+              .isUsable,
           isFalse);
-      expect(RetentionPolicy(dropAfter: const Duration(hours: 1)).isUsable,
+      expect(RetentionPolicy(dropAfter: const Duration(seconds: 52)).isUsable,
+          isFalse,
+          reason: '36 500 days misread as microseconds is 52.6 s — the worst a '
+              'plausible fat-finger can produce.');
+      expect(RetentionPolicy(dropAfter: const Duration(seconds: 59)).isUsable,
+          isFalse);
+    });
+
+    test('permits a short window that somebody might actually want', () {
+      // A high-rate diagnostic tag — a vibration or current trace — is a
+      // legitimate reason to keep only minutes. An hour floor forbade this,
+      // which was over-reach: the defect was a unit conversion, not a bad
+      // choice of window.
+      expect(RetentionPolicy(dropAfter: const Duration(minutes: 1)).isUsable,
           isTrue);
+      expect(RetentionPolicy(dropAfter: const Duration(minutes: 10)).isUsable,
+          isTrue);
+      expect(RetentionPolicy(dropAfter: const Duration(minutes: 30)).isUsable,
+          isTrue);
+    });
+
+    test('the floor sits above every artifact the cliff can produce', () {
+      // Ties the threshold to the thing it defends against, so that moving
+      // either without the other fails here rather than in the field.
+      const worstPlausibleTypo = 36500; // a hundred years, in days
+      final artifact =
+          Duration(microseconds: worstPlausibleTypo * 24 * 60);
+      expect(artifact, lessThan(kMinRetentionDuration),
+          reason: 'If the cutoff or the floor moves so that an artifact lands '
+              'above the floor, it would be installed as a real retention.');
     });
   });
 
@@ -107,7 +140,7 @@ void main() {
     setUp(() => db = AppDatabase.inMemoryForTest());
     tearDown(() => db.close());
 
-    test('a sub-hour dropAfter throws instead of deleting the history',
+    test('a seconds-range dropAfter throws instead of deleting the history',
         () async {
       await expectLater(
         db.updateRetentionPolicy(
@@ -132,14 +165,14 @@ void main() {
           'CREATE TABLE "t" (time TEXT, value INTEGER)');
       await expectLater(
         db.updateRetentionPolicy(
-            't', RetentionPolicy(dropAfter: const Duration(minutes: 1))),
+            't', RetentionPolicy(dropAfter: const Duration(seconds: 30))),
         throwsA(isA<DatabaseException>()),
       );
       // On sqlite create_hypertable would have thrown a *different* error; a
       // DatabaseException proves we never got that far.
     });
 
-    test('an hour or more is accepted as far as the SQL', () async {
+    test('a minute or more is accepted as far as the SQL', () async {
       // sqlite has no create_hypertable, so this fails -- but it must fail as
       // sqlite complaining, not as our own refusal.
       await expectLater(

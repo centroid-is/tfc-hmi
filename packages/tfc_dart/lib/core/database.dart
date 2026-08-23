@@ -286,13 +286,37 @@ const int kMaxRetentionDays = 3650;
 
 /// The shortest retention that will be installed.
 ///
-/// Below this the policy stops being "retention" and becomes "delete the
-/// history": a `drop_after` of five seconds tells Timescale to drop every chunk
-/// that is not from the last five seconds, which on a production line is the
-/// whole record of the shift. Nothing legitimate asks for it, and the values
-/// that did ask for it all arrived through a unit mix-up rather than a
-/// decision, so it is refused rather than obeyed.
-const Duration kMinRetentionDuration = Duration(hours: 1);
+/// This guard exists to catch a **unit-conversion artifact**, not to second-
+/// guess an operator who wants a short window. That distinction sets the
+/// threshold, and it is why this is a minute rather than an hour.
+///
+/// The defect was a cliff in [durationFromMinutesTolerant]: a `drop_after_min`
+/// above the cutoff is re-read as *microseconds*, so a retention typed in days
+/// came back as a fraction of a minute. The artifacts it produces are bounded
+/// and land firmly in the seconds range. With the cutoff at fifty years
+/// (26 280 000 minutes), a stored value is only misread when the typed day
+/// count exceeds 18 250, and the misread duration is `days × 1440`
+/// *microseconds*:
+///
+///   * 18 251 days (just over the cutoff) -> 26.3 s
+///   * 36 500 days (a hundred years, a plausible fat-finger) -> 52.6 s
+///   * the originally reported 3651 days, under the old cutoff -> 5.26 s
+///
+/// Every one is under a minute, so a one-minute floor rejects all of them, and
+/// zero and negative with them.
+///
+/// An hour was the first choice here and it was wrong: it rejected a ten-minute
+/// retention, which is a perfectly reasonable window for a high-rate diagnostic
+/// tag — a vibration or current trace sampled at 100 Hz — and which the
+/// integration suite legitimately uses. "Nothing legitimate asks for it" was an
+/// assumption, and the test suite was evidence against it.
+///
+/// Policy about what an operator may *choose* lives in the UI, which clamps the
+/// retention field to 1..[kMaxRetentionDays] days. This constant is the
+/// narrower backstop for values already on disk, and it should stay narrow:
+/// every minute of headroom it takes away is a configuration somebody might
+/// legitimately need.
+const Duration kMinRetentionDuration = Duration(minutes: 1);
 
 // https://docs.tigerdata.com/api/latest/data-retention/add_retention_policy/
 @json.JsonSerializable(explicitToJson: true)

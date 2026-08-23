@@ -105,7 +105,7 @@ void main() {
         await waitForDatabaseReady();
       }, timeout: Timeout(Duration(seconds: 60)));
 
-      test('WHEN queue overflows THEN oldest items are dropped, newest kept',
+      test('WHEN the DB is down for a burst THEN nothing is lost',
           () async {
         // Exercise the full production path: Collector → DynamicValue →
         // stream listener → unawaited insertTimeseriesData → auto-flush →
@@ -142,11 +142,22 @@ void main() {
         await stopTimescaleDb();
         await Future.delayed(const Duration(seconds: 5));
 
-        // Insert MORE than queue capacity (100).
-        // The Collector's stream listener fires unawaited insertTimeseriesData
-        // calls.  Auto-flushes at 50 items try the pool, fail within
-        // queryTimeout (5s), and queue items for retry.  The overflow cap
-        // in _queueForRetry keeps only the newest 100 items.
+        // 120 items during a total outage. This used to be MORE than the
+        // queue could hold: the cap was 100 per table, so 20 items were
+        // discarded oldest-first and this test asserted that they were.
+        //
+        // The cap is now kMaxQueuedRowsPerTable (10 000), so the whole burst
+        // survives and the assertion below is the opposite of what it was.
+        // That is the point of the change, not an accommodation to it: a
+        // thirty-second outage losing the first two thirds of a tag's samples
+        // was the defect.
+        //
+        // The trimming policy itself -- oldest-first within a table, fullest
+        // queue first across tables, and the counters that record it -- is
+        // covered in packages/tfc_dart/test/core/database_write_queue_test.dart,
+        // which injects small caps so it can exercise the real code without a
+        // database. Making a pure in-memory list-trimming policy require Docker
+        // was never a good trade.
         const totalItems = 120;
         for (var i = 0; i < totalItems; i++) {
           streamController.add(DynamicValue(value: 'item_$i'));
@@ -174,22 +185,24 @@ void main() {
         await Future.delayed(const Duration(seconds: 12));
         await database.flush();
 
-        // Verify: 1 init + 100 newest items = 101
+        // Verify: 1 init + all 120 items = 121, none discarded.
         data = await _queryTable(database, tableName);
-        expect(data.length, 101);
+        expect(data.length, totalItems + 1);
 
-        // Verify oldest were dropped (item_0 to item_19)
         final values = data.map((d) => d.value as String).toSet();
-        for (var i = 0; i < 20; i++) {
-          expect(values.contains('item_$i'), isFalse,
-              reason: 'item_$i should have been dropped');
+        for (var i = 0; i < totalItems; i++) {
+          expect(values.contains('item_$i'), isTrue,
+              reason: 'item_$i was produced during the outage and should have '
+                  'survived it. The start of an outage is exactly the part '
+                  'that used to be thrown away.');
         }
 
-        // Verify newest are present (item_20 to item_119)
-        for (var i = 20; i < totalItems; i++) {
-          expect(values.contains('item_$i'), isTrue,
-              reason: 'item_$i should be in database');
-        }
+        // And the counters agree, against a real server: the drop counter is
+        // the instrument an operator would check, so it has to be right when
+        // nothing was lost, not only when something was.
+        final stats = database.getStats();
+        expect(stats['dropped_rows'], 0);
+        expect(stats['poisoned_rows'], 0);
 
         // Cleanup
         streamController.close();
