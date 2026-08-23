@@ -16,8 +16,9 @@ import 'package:tfc_dart/core/state_man.dart';
 /// standing at a stopped belt what is wrong or what to do.
 ///
 /// These tests pin the decode (`p_stat_State` = `hmis_e`, `p_stat_LastFault`
-/// = `lft_e`) and the behaviour around it: the rows keep the drive's own
-/// names, HMIS and LFT, and say the value as a keypad mnemonic plus words.
+/// = `lft_e`) and the behaviour around it: the rows say what they are in
+/// operator words and keep the drive's own names, HMIS and LFT, in brackets,
+/// and say the value as a keypad mnemonic plus words.
 ///
 /// They also pin the live-vs-stored rule. HMIS is the drive's condition now;
 /// LFT is a record that outlives the trip it describes. Every real LFT code
@@ -117,7 +118,8 @@ Future<void> _settlePane(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 400));
 }
 
-/// The status row under a given label — `HMIS` or `LFT`.
+/// The status row under a given label — `Status (HMIS)` or `Last fault
+/// (LFT)`.
 PaneExplainRow _row(WidgetTester tester, String label) =>
     tester.widgetList<PaneExplainRow>(find.byType(PaneExplainRow)).firstWhere(
           (row) => row.label == label,
@@ -150,13 +152,17 @@ void main() {
     expect(find.text('2'), findsNothing);
   });
 
-  testWidgets('the rows keep the names the drive keypad uses', (tester) async {
+  testWidgets('the rows say what they are and keep the keypad names',
+      (tester) async {
     await _openPane(tester, state: 2);
 
-    // Not 'Drive state' / 'Last fault': an electrician cross-references the
-    // keypad and NVE41295, and those call the two parameters HMIS and LFT.
-    expect(find.text('HMIS'), findsOneWidget);
-    expect(find.text('LFT'), findsOneWidget);
+    // Operator words first — `Status`, `Last fault` — and the keypad name in
+    // brackets: an electrician cross-references the keypad and NVE41295, and
+    // those call the two parameters HMIS and LFT. Neither half may go.
+    expect(find.text('Status (HMIS)'), findsOneWidget);
+    expect(find.text('Last fault (LFT)'), findsOneWidget);
+    expect(find.text('HMIS'), findsNothing);
+    expect(find.text('LFT'), findsNothing);
   });
 
   testWidgets('the running state is named', (tester) async {
@@ -237,7 +243,7 @@ void main() {
       frequency: 42.0,
     );
 
-    final lft = _row(tester, 'LFT');
+    final lft = _row(tester, 'Last fault (LFT)');
     expect(lft.value, 'OCF · Overcurrent');
     expect(lft.valueColor, isNull, reason: 'history must not read as a trip');
     expect(lft.valueNote, 'cleared');
@@ -254,7 +260,7 @@ void main() {
 
     // By the label: with the `cleared` note the value is a span tree, not a
     // single string.
-    await tester.tap(find.text('LFT'));
+    await tester.tap(find.text('Last fault (LFT)'));
     await _settlePane(tester);
 
     expect(
@@ -266,7 +272,7 @@ void main() {
   testWidgets('the same fault is red while the drive is in it', (tester) async {
     await _openPane(tester, state: 23, fault: 9); // hmis_e.fault + lft_e.ocf
 
-    final lft = _row(tester, 'LFT');
+    final lft = _row(tester, 'Last fault (LFT)');
     expect(lft.value, 'OCF · Overcurrent');
     expect(lft.valueColor, isNotNull);
     expect(lft.valueNote, isNull);
@@ -276,7 +282,7 @@ void main() {
   testWidgets('a drive that never tripped carries no marker', (tester) async {
     await _openPane(tester, state: 2); // hmis_e.rdy, LFT = NOF
 
-    final lft = _row(tester, 'LFT');
+    final lft = _row(tester, 'Last fault (LFT)');
     expect(lft.valueColor, isNull);
     expect(lft.valueNote, isNull, reason: 'nothing to clear');
   });
@@ -287,7 +293,7 @@ void main() {
     // one live condition rather than as a cleared record.
     await _openPane(tester, state: 99, fault: 7);
 
-    final lft = _row(tester, 'LFT');
+    final lft = _row(tester, 'Last fault (LFT)');
     expect(lft.valueColor, isNotNull);
     expect(lft.valueNote, isNull);
   });

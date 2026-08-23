@@ -236,8 +236,23 @@ class PaneAction {
 // Header / footer
 // ---------------------------------------------------------------------------
 
-/// The standard header: identity on the left, live status and close on the
-/// right. Shared by [SidePane] and [StandardDialog] so both read identically.
+/// The standard header: the equipment identity on the first line, what kind
+/// of thing it is and its live status on the second, the close button in the
+/// corner. Shared by [SidePane] and [StandardDialog] so both read identically.
+///
+/// ```
+/// [icon] CVS02.CN01.FD01                          X
+///        Conveyor                    (● Running)
+/// ```
+///
+/// The status chip sits under the title rather than beside it so that the
+/// identity is never the thing that gives way. A pane is 380 px wide; with
+/// the chip and the close button on the title row, a full PLC key such as
+/// `CVS02.CN01.FD01` next to a `Connecting` chip came out as `CVS02.CN0…` —
+/// and the name is what the operator opened the pane to check. The subtitle
+/// is short, fixed wording (`Conveyor`, `Third-party equipment`) and can
+/// share its row with the chip; the chip keeps its place at the right, so
+/// the eye still finds the state where it always has been.
 class PaneHeader extends StatelessWidget {
   final String title;
   final String? subtitle;
@@ -263,9 +278,17 @@ class PaneHeader extends StatelessWidget {
     this.wrap,
   });
 
+  /// Icon glyph size and the gap to the title; the second line indents by
+  /// their sum so the subtitle lines up under the title, not the icon.
+  static const double _iconSize = 22;
+  static const double _iconGap = 10;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasSubtitle = subtitle != null && subtitle!.isNotEmpty;
+    final hasSecondLine = hasSubtitle || status != null;
+    final indent = icon != null ? _iconSize + _iconGap : 0.0;
     final header = Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
       decoration: BoxDecoration(
@@ -278,34 +301,56 @@ class PaneHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          if (icon != null) ...[
-            Icon(icon, size: 22, color: theme.colorScheme.primary),
-            const SizedBox(width: 10),
-          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  title,
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis,
+                // Line one: the identity, with the whole width to itself.
+                Row(
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon,
+                          size: _iconSize, color: theme.colorScheme.primary),
+                      const SizedBox(width: _iconGap),
+                    ],
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
-                if (subtitle != null && subtitle!.isNotEmpty)
-                  Text(
-                    subtitle!,
-                    style: theme.textTheme.bodySmall,
-                    overflow: TextOverflow.ellipsis,
+                // Line two: what it is on the left, how it is on the right.
+                if (hasSecondLine) ...[
+                  const SizedBox(height: 2),
+                  Padding(
+                    padding: EdgeInsets.only(left: indent),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: hasSubtitle
+                              ? Text(
+                                  subtitle!,
+                                  style: theme.textTheme.bodySmall,
+                                  overflow: TextOverflow.ellipsis,
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        if (status != null) ...[
+                          const SizedBox(width: 8),
+                          PaneStatusChip(status: status!),
+                        ],
+                      ],
+                    ),
                   ),
+                ],
               ],
             ),
           ),
-          if (status != null) ...[
-            const SizedBox(width: 8),
-            PaneStatusChip(status: status!),
-          ],
           if (trailing != null) ...[
             const SizedBox(width: 4),
             trailing!,
@@ -821,6 +866,13 @@ class PaneExpandTile extends StatelessWidget {
 /// line until it is asked; the detail is not a dialog, because reading it and
 /// acting on it happen at the same time and a dialog would cover the mimic.
 ///
+/// Label and value share one line while they fit. When they do not — a
+/// `Last fault (LFT)` label against `CNF · Fieldbus communication lost` in a
+/// 380 px pane — the value drops under the label on a line of its own, still
+/// right-aligned with the info glyph at its end, rather than being ellipsised
+/// or folded into a narrow right-hand column. Nothing in either row is ever
+/// cut short: both are things the operator came to read.
+///
 /// Contrast with [PaneExpandTile], which is for *bulk* detail (a channel
 /// grid, a parameter table) and does open a dialog.
 class PaneExplainRow extends StatefulWidget {
@@ -870,9 +922,80 @@ class _PaneExplainRowState extends State<PaneExplainRow> {
     }
   }
 
+  /// The info / fold glyph at the end of the value, and the gaps around the
+  /// pieces. Named so the one-line fit check below measures the same row the
+  /// build lays out.
+  static const double _iconSize = 16;
+  static const double _labelGap = 8;
+  static const double _iconGap = 4;
+
+  /// Whether label, value and glyph all fit on one line of [width].
+  ///
+  /// Measured with the same styles and text scale the row renders with, so
+  /// the answer is the layout's own, not a character-count guess.
+  bool _fitsOneLine(
+    BuildContext context,
+    double width,
+    TextStyle labelStyle,
+    InlineSpan valueSpan,
+  ) {
+    if (!width.isFinite) return true;
+    final direction = Directionality.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    double measure(InlineSpan span) {
+      final painter = TextPainter(
+        text: span,
+        textDirection: direction,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final w = painter.width;
+      painter.dispose();
+      return w;
+    }
+
+    final needed = measure(TextSpan(text: widget.label, style: labelStyle)) +
+        _labelGap +
+        measure(valueSpan) +
+        _iconGap +
+        _iconSize;
+    return needed <= width;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // What `Text(style: bodyMedium)` resolves to, spelled out so the fit
+    // check measures the glyphs that will actually be drawn.
+    final bodyStyle =
+        DefaultTextStyle.of(context).style.merge(theme.textTheme.bodyMedium);
+    // One paragraph rather than two widgets, so a value and its note wrap
+    // around each other instead of the note squeezing the value onto two
+    // lines.
+    final valueSpan = TextSpan(style: bodyStyle, children: [
+      TextSpan(
+        text: widget.value,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: widget.valueColor,
+        ),
+      ),
+      if (widget.valueNote != null)
+        TextSpan(
+          text: '  ${widget.valueNote}',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+          ),
+        ),
+    ]);
+    final label = Text(widget.label, style: theme.textTheme.bodyMedium);
+    final value = Text.rich(valueSpan, textAlign: TextAlign.right);
+    final glyph = Icon(
+      _expanded ? Icons.expand_less : Icons.info_outline,
+      size: _iconSize,
+      color: theme.colorScheme.primary,
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -882,55 +1005,37 @@ class _PaneExplainRowState extends State<PaneExplainRow> {
           borderRadius: BorderRadius.circular(6),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  flex: 4,
-                  child: Text(widget.label, style: theme.textTheme.bodyMedium),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 5,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final oneLine = _fitsOneLine(
+                    context, constraints.maxWidth, bodyStyle, valueSpan);
+                // The value keeps its right rail and its glyph either way;
+                // only the label moves — off the line, to the one above.
+                final valueRow = Row(
+                  children: [
+                    Expanded(child: value),
+                    const SizedBox(width: _iconGap),
+                    glyph,
+                  ],
+                );
+                if (oneLine) {
+                  return Row(
                     children: [
-                      Flexible(
-                        // One paragraph rather than two widgets, so a value
-                        // and its note wrap around each other instead of the
-                        // note squeezing the value onto two lines.
-                        child: Text.rich(
-                          TextSpan(children: [
-                            TextSpan(
-                              text: widget.value,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: widget.valueColor,
-                              ),
-                            ),
-                            if (widget.valueNote != null)
-                              TextSpan(
-                                text: '  ${widget.valueNote}',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.textTheme.bodySmall?.color
-                                      ?.withValues(alpha: 0.6),
-                                ),
-                              ),
-                          ]),
-                          textAlign: TextAlign.right,
-                          style: theme.textTheme.bodyMedium,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        _expanded ? Icons.expand_less : Icons.info_outline,
-                        size: 16,
-                        color: theme.colorScheme.primary,
-                      ),
+                      label,
+                      const SizedBox(width: _labelGap),
+                      Expanded(child: valueRow),
                     ],
-                  ),
-                ),
-              ],
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    label,
+                    const SizedBox(height: 2),
+                    valueRow,
+                  ],
+                );
+              },
             ),
           ),
         ),

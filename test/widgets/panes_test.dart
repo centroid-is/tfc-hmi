@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -1019,6 +1020,138 @@ void main() {
       await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
       expect(answer, isNull);
+    });
+  });
+
+  group('PaneHeader — identity stays legible', () {
+    /// A pane at its default width, as a station panel shows it.
+    Future<void> pumpHeader(
+      WidgetTester tester, {
+      required String title,
+      String? subtitle,
+      PaneStatus? status,
+    }) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topRight,
+            child: SizedBox(
+              width: SidePaneDefaults.width,
+              child: PaneHeader(
+                title: title,
+                subtitle: subtitle,
+                icon: Icons.conveyor_belt,
+                status: status,
+                onClose: () {},
+              ),
+            ),
+          ),
+        ),
+      ));
+    }
+
+    testWidgets('a long key beside a long status is not ellipsised',
+        (tester) async {
+      // The pair that came out as `CVS02.CN0…` when the chip shared the
+      // title row: a full PLC key and the widest standard status.
+      const title = 'CVS02.CN01.FD01';
+      await pumpHeader(
+        tester,
+        title: title,
+        subtitle: 'Conveyor',
+        status: const PaneStatus.unknown('Connecting'),
+      );
+
+      final paragraph = tester.renderObject<RenderParagraph>(find.text(title));
+      expect(paragraph.didExceedMaxLines, isFalse,
+          reason: 'the identity is what the operator opened the pane for');
+    });
+
+    testWidgets('the status chip sits under the title, level with the subtitle',
+        (tester) async {
+      await pumpHeader(
+        tester,
+        title: 'CVS02.CN01.FD01',
+        subtitle: 'Conveyor',
+        status: const PaneStatus.stopped(),
+      );
+
+      final title = tester.getRect(find.text('CVS02.CN01.FD01'));
+      final subtitle = tester.getRect(find.text('Conveyor'));
+      final chip = tester.getRect(find.byType(PaneStatusChip));
+      final close = tester.getRect(find.byIcon(Icons.close));
+
+      // Second line: below the title, beside the subtitle, clear of the
+      // close button's column.
+      expect(chip.top, greaterThanOrEqualTo(title.bottom));
+      expect(chip.left, greaterThan(subtitle.right));
+      expect(chip.right, lessThanOrEqualTo(close.left));
+      // Subtitle and chip are one row: their vertical centres coincide.
+      expect(chip.center.dy, closeTo(subtitle.center.dy, 1));
+    });
+
+    testWidgets('no subtitle still puts the chip on its own line',
+        (tester) async {
+      await pumpHeader(
+        tester,
+        title: 'DI-3725-A',
+        status: const PaneStatus.warning('2 forced'),
+      );
+      final title = tester.getRect(find.text('DI-3725-A'));
+      final chip = tester.getRect(find.byType(PaneStatusChip));
+      expect(chip.top, greaterThanOrEqualTo(title.bottom));
+    });
+  });
+
+  group('PaneExplainRow — label and value', () {
+    Future<void> pumpRow(
+      WidgetTester tester, {
+      required String label,
+      required String value,
+      double width = 348,
+    }) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: width,
+              child: PaneExplainRow(
+                label: label,
+                value: value,
+                explanationBuilder: (_) => const Text('why'),
+              ),
+            ),
+          ),
+        ),
+      ));
+    }
+
+    testWidgets('share one line while both fit', (tester) async {
+      await pumpRow(tester, label: 'LFT', value: 'NOF');
+      final label = tester.getRect(find.text('LFT'));
+      final value = tester.getRect(find.text('NOF'));
+      expect(value.center.dy, closeTo(label.center.dy, 1));
+      expect(value.left, greaterThan(label.right));
+    });
+
+    testWidgets('stack the value under the label when they do not',
+        (tester) async {
+      const label = 'Last fault (LFT)';
+      const value = 'CNF · Fieldbus communication lost';
+      await pumpRow(tester, label: label, value: value);
+
+      final labelRect = tester.getRect(find.text(label));
+      final valueRect = tester.getRect(find.text(value));
+      expect(valueRect.top, greaterThanOrEqualTo(labelRect.bottom),
+          reason: 'a long row stacks instead of squeezing the value');
+      for (final t in [label, value]) {
+        expect(
+            tester
+                .renderObject<RenderParagraph>(find.text(t))
+                .didExceedMaxLines,
+            isFalse);
+      }
     });
   });
 

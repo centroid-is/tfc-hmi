@@ -2536,22 +2536,25 @@ class _ConveyorState extends ConsumerState<Conveyor>
                           ],
                         ),
                         const SizedBox(height: 8),
-                        // The drive's own two status words — under the names
-                        // the drive itself uses. HMIS and LFT are what the
-                        // keypad and NVE41295 call these parameters, so an
-                        // electrician can walk from the pane to the drive
-                        // without translating; the value carries the keypad
-                        // mnemonic and then says it in words, and the
-                        // explanation behind the row says the rest.
+                        // The drive's own two status words — in operator
+                        // words first, with the name the drive itself uses in
+                        // brackets. HMIS and LFT are what the keypad and
+                        // NVE41295 call these parameters, so an electrician
+                        // can still walk from the pane to the drive without
+                        // translating, while an operator reads `Status` and
+                        // `Last fault` without ever having seen the keypad;
+                        // the value carries the keypad mnemonic and then says
+                        // it in words, and the explanation behind the row
+                        // says the rest.
                         PaneExplainRow(
-                          label: 'HMIS',
+                          label: 'Status (HMIS)',
                           value: '${driveState.mnemonic} · ${driveState.label}',
                           valueColor: _severityColor(context, driveState),
                           explanationBuilder: (context) =>
                               _Atv320Explainer(explanation: driveState),
                         ),
                         PaneExplainRow(
-                          label: 'LFT',
+                          label: 'Last fault (LFT)',
                           value: '${lastFault.mnemonic} · ${lastFault.label}',
                           // Stored, not live: only tinted while the drive is
                           // actually in the fault. Otherwise the row is
