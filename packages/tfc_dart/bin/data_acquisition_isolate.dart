@@ -31,12 +31,66 @@ class DataAcquisitionIsolateConfig {
 ///
 /// Supports OPC UA (single server via [serverJson]) and/or M2400 devices
 /// (multiple servers via [jbtmJson]).
+///
+/// The body runs inside a [runZonedGuarded] so that a stray asynchronous error
+/// is logged instead of killing acquisition. Isolates are spawned with
+/// `errorsAreFatal`, so before this guard existed one escaped rejection stopped
+/// data collection for a whole server until the supervisor noticed. Every other
+/// long-lived isolate in the product was already guarded this way — the drift
+/// isolate (`_spawnGuardedIsolate`), the pool health monitor, and the UI
+/// isolate — and this was the one that runs `pg.Pool` in-process, so a
+/// `SocketException` surfacing from a socket callback with no Dart await chain
+/// to carry it lands here and nowhere else.
+///
+/// Startup is deliberately NOT covered by the guard. If the setup below fails —
+/// the database never comes up, the config is unusable — the error is rethrown
+/// so the isolate dies and the supervisor respawns it. Swallowing that would
+/// leave a live isolate with nothing running inside it, which is worse than the
+/// crash it replaces: silent instead of loud, and with no path to recovery.
 @pragma('vm:entry-point')
 Future<void> dataAcquisitionIsolateEntry(
     DataAcquisitionIsolateConfig config) async {
   initLogConfig();
   final logger = Logger();
 
+  // Completed only on a startup failure. Steady-state errors are handled by
+  // the zone and must NOT complete it, or the isolate would exit on the first
+  // recoverable hiccup.
+  final startupFailed = Completer<void>();
+
+  runZonedGuarded(
+    () async {
+      try {
+        await _runDataAcquisition(config, logger);
+      } catch (error, stack) {
+        // Setup failed. Let the isolate die so the supervisor can respawn it.
+        if (!startupFailed.isCompleted) {
+          startupFailed.completeError(error, stack);
+        }
+      }
+    },
+    (error, stack) {
+      // Steady state: log loudly and keep collecting. Loud matters — with the
+      // isolate no longer dying, this line is the only evidence anything went
+      // wrong, so it must never be quietened to a warning.
+      logger.e(
+        'Data acquisition isolate caught an unhandled error '
+        '(isolate stays alive): $error\n$stack',
+      );
+    },
+  );
+
+  await startupFailed.future;
+}
+
+/// Sets up the acquisition stack and then parks forever.
+///
+/// Split out of [dataAcquisitionIsolateEntry] so the entry point can tell a
+/// startup failure (fatal, respawn) from a steady-state stray error (log and
+/// carry on). Everything it constructs — [StateMan], [Collector], [Database]
+/// and every timer and stream they own — inherits the guarded zone.
+Future<void> _runDataAcquisition(
+    DataAcquisitionIsolateConfig config, Logger logger) async {
   final dbConfig = DatabaseConfig.fromJson(config.dbConfigJson);
   final keyMappings = KeyMappings.fromJson(config.keyMappingsJson);
 
@@ -161,11 +215,18 @@ Future<void> _spawnWithRespawn(
   var restartDelay = const Duration(seconds: 2);
   const maxDelay = Duration(seconds: 30);
 
+  // How long an isolate must stay up before we believe it is healthy and let
+  // the backoff go back to its floor. Must be comfortably longer than the time
+  // a doomed isolate takes to die, or a crash loop resets itself.
+  const healthyAfter = Duration(seconds: 60);
+  Timer? healthyTimer;
+
   Future<void> spawn() async {
     final errorPort = ReceivePort();
     final exitPort = ReceivePort();
 
     void scheduleRespawn(String reason) {
+      healthyTimer?.cancel();
       errorPort.close();
       exitPort.close();
       logger.w(
@@ -196,8 +257,20 @@ Future<void> _spawnWithRespawn(
         onError: errorPort.sendPort,
         onExit: exitPort.sendPort,
       );
-      // Reset backoff on successful spawn
-      restartDelay = const Duration(seconds: 2);
+      // Reset the backoff only once the isolate has proven it can STAY up.
+      //
+      // This used to reset immediately here, on a successful spawn — but a
+      // doomed isolate always spawns successfully and dies afterwards, so the
+      // doubling below was erased on every cycle. The delay never grew past its
+      // 2s floor and `maxDelay` was unreachable: a reliably-failing isolate
+      // respawned about thirty times a minute, forever, each attempt opening a
+      // Postgres pool, an OPC UA session and (for the weigher isolate) eight
+      // TCP sockets. That turned one dead isolate into sustained load on the
+      // database and the PLCs, and buried the original error in respawn spam.
+      healthyTimer?.cancel();
+      healthyTimer = Timer(healthyAfter, () {
+        restartDelay = const Duration(seconds: 2);
+      });
     } catch (e) {
       logger.e('Failed to spawn isolate for $name: $e');
       scheduleRespawn('spawn failure');
