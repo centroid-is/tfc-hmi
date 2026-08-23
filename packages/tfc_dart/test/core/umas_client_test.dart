@@ -962,6 +962,46 @@ void main() {
           reason: 'readPlcId should be called exactly once');
       expect(initCount, 1, reason: 'init should be called exactly once');
     });
+
+    test('a symbol cache browsed across a PLC download is invalidatable',
+        () async {
+      // A full browse is many round trips. The keepalive (every 10s) and the
+      // project-CRC watch (every 30s) both refresh _projectCrc while it runs,
+      // so a download landing mid-browse moves _projectCrc under us. The
+      // cache must be stamped with the project it was browsed FROM, or the
+      // staleness check compares the new CRC against itself and the stale
+      // cache -- symbol paths pointing at variables that have since moved --
+      // survives until the app restarts.
+      final mock = _buildFullMock();
+      late final UmasClient client;
+      var dd26Calls = 0;
+      client = UmasClient(sendFn: (request) async {
+        final code = await mock.send(request);
+        if (request is UmasRequest && request.protocolDataUnit[2] == 0x26) {
+          // Second 0x26 is the DD02 variable-name read, i.e. mid-browse.
+          if (++dd26Calls == 2) client.debugSetProjectCrc(0xBBBB);
+        }
+        return code;
+      });
+
+      await client.readPlcId();
+      await client.init();
+      client.debugSetProjectCrc(0xAAAA);
+
+      try {
+        await client.lookupSymbol('anything');
+      } catch (_) {
+        // Empty dictionary in this mock; the browse is what matters.
+      }
+      expect(client.symbolCacheBuilt, isTrue, reason: 'sanity: browse ran');
+
+      client.invalidateSymbolCacheIfProjectChanged();
+
+      expect(client.symbolCacheBuilt, isFalse,
+          reason: 'cache was browsed under project 0xAAAA while the PLC moved '
+              'to 0xBBBB, but it got stamped with the post-browse CRC -- so '
+              'it can never be invalidated');
+    });
   });
 
   group('UmasClient keepAlive and echo', () {
