@@ -105,6 +105,12 @@ jobs:
       - name: Export the public sideload certificate
         working-directory: centroid-hmi
         shell: powershell
+        # ASCII only below this line. Windows PowerShell 5.1 reads the script
+        # GitHub writes for it as ANSI, not UTF-8, so a non-ASCII character in
+        # a string literal arrives as mojibake and can terminate the token
+        # early: an em-dash here failed the build with
+        # "ParserError: UnexpectedToken". Inside a # comment it is harmless,
+        # which is why the em-dash further down this file has never bitten.
         run: |
           $ErrorActionPreference = "Stop"
           $password = ConvertTo-SecureString "${{ secrets.MSIX_CERT_PASSWORD }}" -AsPlainText -Force
@@ -121,7 +127,7 @@ jobs:
           # is the assertion anyone reviewing "we publish our signing cert"
           # will look for.
           if ($exported.HasPrivateKey) {
-            throw "Exported certificate carries a private key — refusing to publish it"
+            throw "Exported certificate carries a private key - refusing to publish it"
           }
 
           # Trusting the wrong certificate is indistinguishable from trusting
