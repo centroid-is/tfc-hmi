@@ -328,8 +328,44 @@ void main() {
       }
     });
 
-    testWidgets('other kinds get no Status section', (tester) async {
-      final config = ThirdPartyEquipmentConfig(runKey: ''); // multivac
+    // Used to assert the opposite: that only the SpeedBatcher had a Status
+    // section, because only it has a `p_stat_*` handshake struct. Every other
+    // machine now gets one too, built from the per-kind suffix list in
+    // [kEquipmentStatusBits] appended to a statusKey *prefix* -- the permits
+    // are separate globals per line rather than a struct.
+    //
+    // Driven off that map rather than a hardcoded list of kinds, so adding a
+    // machine to it cannot leave this test describing the old world.
+    for (final entry in kEquipmentStatusBits.entries) {
+      testWidgets('${entry.key.name} gets a Status section', (tester) async {
+        final config = ThirdPartyEquipmentConfig(runKey: '')
+          ..kind = entry.key
+          ..statusKey = 'BER02';
+        await tester.pumpWidget(wrap(SizedBox(
+          width: 300,
+          height: 160,
+          child: ThirdPartyEquipment(config: config),
+        )));
+
+        await tester.tap(find.byType(ThirdPartyEquipment));
+        await tester.pumpAndSettle();
+
+        expect(find.text('STATUS'), findsOneWidget,
+            reason: '${entry.key.name} has ${entry.value.length} status bits '
+                'configured, so the pane must show them');
+      });
+    }
+
+    testWidgets('the SpeedBatcher keeps its own diodes, not the generic ones',
+        (tester) async {
+      // It is absent from kEquipmentStatusBits because its handshake is a
+      // struct (`p_stat_*`) rather than per-line permit globals, so it draws
+      // SpeedBatcherStatusDiodes instead. The two must never both appear:
+      // that would be one machine showing its handshake twice, in two
+      // vocabularies.
+      final config = ThirdPartyEquipmentConfig(runKey: '')
+        ..kind = ThirdPartyEquipmentKind.speedBatcher
+        ..statusKey = 'SPB01.SP_HMI';
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
         height: 160,
@@ -339,8 +375,11 @@ void main() {
       await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      expect(find.text('STATUS'), findsNothing,
-          reason: 'Only the SpeedBatcher has a p_stat_* handshake struct.');
+      expect(find.byType(SpeedBatcherStatusDiodes), findsOneWidget);
+      expect(find.byType(EquipmentStatusDiodes), findsNothing,
+          reason: 'the SpeedBatcher would be showing its handshake twice');
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.speedBatcher], isNull,
+          reason: 'if it were added to the map both sections would render');
     });
 
     testWidgets('the pane does not outlive the asset that opened it',
