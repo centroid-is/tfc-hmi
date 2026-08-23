@@ -48,6 +48,7 @@ import 'package:tfc/drawings/drawing_overlay.dart';
 import 'package:tfc/providers/chat.dart';
 import 'package:tfc/providers/mcp_bridge.dart';
 import 'package:tfc/providers/navigator_key.dart';
+import 'package:tfc/providers/page_manager.dart';
 import 'package:tfc/providers/scaffold_messenger_key.dart';
 
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
@@ -328,6 +329,16 @@ Future<void> _startApp([bool debugMode = false]) async {
   );
 
   runApp(ProviderScope(
+    overrides: [
+      // The page manager above was loaded from local SharedPreferences in
+      // 2.3 ms and used to build the menus; hand it to the app instead of
+      // dropping it. `pageManagerProvider` still fetches the database copy
+      // and still wins the moment it arrives — this only decides what the
+      // plant page shows while that is outstanding. Without it a server that
+      // is powered off or behind a cut link leaves the page blank for the ten
+      // seconds the connection takes to give up.
+      bootstrapPageManagerProvider.overrideWithValue(pageManager),
+    ],
     child: UpgradeAlert(
       upgrader: upgrader,
       onUpdate: () {

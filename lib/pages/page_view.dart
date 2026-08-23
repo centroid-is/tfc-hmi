@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:tfc/core/preferences.dart';
-import 'package:tfc/page_creator/page.dart';
+import 'package:tfc/page_creator/page.dart' show AssetPage;
 
 import '../chat/asset_context_menu.dart';
 import '../core/feature_flags.dart';
@@ -17,6 +17,7 @@ import '../widgets/proposal_visual.dart';
 import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
 import '../providers/state_man.dart';
+import '../theme.dart' show HmiStateColors;
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
 import '../widgets/base_scaffold.dart';
 import '../widgets/panes/side_pane.dart';
@@ -675,57 +676,202 @@ class _AssetStackState extends ConsumerState<AssetStack> {
   }
 }
 
-class AssetView extends ConsumerWidget {
+class AssetView extends StatelessWidget {
   final String pageName;
   const AssetView({Key? key, required this.pageName}) : super(key: key);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return BaseScaffold(
       title: 'Asset View',
+      body: PlantPageView(pageName: pageName),
+    );
+  }
+}
+
+/// The plant page itself: the canvas, its assets, and — while the database has
+/// not confirmed the layout — a mark saying so.
+///
+/// Split out of [AssetView] so it can be tested without the app shell.
+class PlantPageView extends ConsumerStatefulWidget {
+  final String pageName;
+  const PlantPageView({Key? key, required this.pageName}) : super(key: key);
+
+  /// Identifies the "not confirmed with the server yet" strip.
+  static const Key unverifiedBannerKey = Key('unverified-page-banner');
+
+  @override
+  ConsumerState<PlantPageView> createState() => _PlantPageViewState();
+}
+
+class _PlantPageViewState extends ConsumerState<PlantPageView> {
+  // Memo for [_confirmedPage], keyed on the identity of the two inputs. The
+  // comparison serializes the page, so it must happen once per new pair of
+  // copies — not once per build.
+  AssetPage? _lastFromDatabase;
+  AssetPage? _lastCached;
+  AssetPage? _reconciled;
+
+  /// The instance to render once the database has confirmed [dbPage].
+  ///
+  /// `AssetStack` keys every asset by `ObjectKey(asset)` — object identity —
+  /// so that reordering moves elements instead of restarting each asset's
+  /// subscriptions (#180). The database copy is deserialized separately from
+  /// the cached one, so *every* `Asset` in it is a different instance even
+  /// when the layout is byte-for-byte the same. Handing it straight to
+  /// `AssetStack` would therefore tear the whole page down and rebuild it the
+  /// moment Postgres answers: every subscription restarts, every asset flashes
+  /// back through its loading state, and any equipment pane the operator has
+  /// opened closes under their finger (pane-owning assets close their pane
+  /// from `dispose` — see `SidePaneOwner`).
+  ///
+  /// So when the server confirms exactly what was already on screen, keep the
+  /// instance that is already mounted. When the layout genuinely differs the
+  /// database copy is used and the teardown is correct — that is the same
+  /// rebuild the app already does after every page-editor save.
+  AssetPage? _confirmedPage(AssetPage? dbPage, AssetPage? cachedPage) {
+    if (dbPage == null || cachedPage == null) return dbPage;
+    if (identical(dbPage, _lastFromDatabase) &&
+        identical(cachedPage, _lastCached)) {
+      return _reconciled;
+    }
+    _lastFromDatabase = dbPage;
+    _lastCached = cachedPage;
+    final same = jsonEncode(dbPage.toJson()) == jsonEncode(cachedPage.toJson());
+    return _reconciled = same ? cachedPage : dbPage;
+  }
+
+  String get pageName => widget.pageName;
+
+  @override
+  Widget build(BuildContext context) {
+    // `pageManagerProvider` is the authority and it wins the moment it
+    // answers: riverpod rebuilds this widget with the database copy, which is
+    // used from then on — including across later refreshes, because
+    // `valueOrNull` keeps the last resolved value. The cached copy is only
+    // ever read while there is no database copy at all, so there is no path
+    // by which a stale page outlives the fresh one.
+    //
+    // What that does not cover is a database that never answers. Then the
+    // cached page stays on screen indefinitely, which is the right call — a
+    // blank page tells the operator nothing, and the live values on the page
+    // come from OPC UA, not from here. But the layout itself could be out of
+    // date: an asset moved, deleted, or re-pointed at a different tag on
+    // another station. So it is rendered under a standing mark for as long as
+    // it is unconfirmed, in the theme's "unreadable state" violet. The mark
+    // clears by itself the instant the database copy lands.
+    final fromDatabase = ref.watch(pageManagerProvider).valueOrNull;
+    final pageManager = fromDatabase ?? ref.watch(bootstrapPageManagerProvider);
+    final unverified = fromDatabase == null && pageManager != null;
+
+    if (pageManager == null) {
+      // Nothing cached and nothing loaded — as blank as it ever was.
+      return const SizedBox.shrink();
+    }
+
+    // When the database confirms the layout that is already mounted, keep the
+    // mounted instance rather than swapping in an identical-but-new one.
+    final page = unverified
+        ? pageManager.pages[pageName]
+        : _confirmedPage(
+            pageManager.pages[pageName],
+            ref.read(bootstrapPageManagerProvider)?.pages[pageName],
+          );
+
+    final Widget content;
+    if (page == null) {
+      content = Center(
+        child: Text(unverified
+            // A page created on another station is simply absent from this
+            // station's cache. Saying "not found" would be a guess.
+            ? 'Waiting for the server to send the plant pages…'
+            : 'Page: "$pageName" not found'),
+      );
+    } else {
       // An equipment pane (a tapped conveyor, a sensor) docks over the right
       // edge; when it would cover the very device the operator tapped — and
       // only then — the inset re-fits the plant view beside it. Assets open
       // their pane from their own build context, which is how `showSidePane`
       // knows where the tapped device is.
-      body: SidePaneInset(
-          child: ZoomableCanvas(
-        child: LayoutBuilder(
-          builder: (context, constraints) => FutureBuilder<PageManager>(
-            future: ref.watch(pageManagerProvider.future),
-            builder: (context, snap) {
-              final pageManager = snap.data;
-              if (pageManager == null) {
-                return const SizedBox.shrink();
-              }
-              if (pageManager.pages[pageName] == null) {
-                return Center(
-                  child: Text('Page: "$pageName" not found'),
-                );
-              }
-              // A tap on empty page -- nothing under it that takes taps --
-              // closes an open pane. Translucent so every asset still sees
-              // the tap first: an asset's own GestureDetector sits deeper in
-              // the tree and wins the arena, and this one only fires when
-              // no asset claimed it. Inside the ZoomableCanvas on purpose:
-              // outside it, the canvas's scale recognizer would take the
-              // sweep for a plain tap and this would never fire.
-              return GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () => closeSidePane(),
-                child: AssetStack(
-                  assets: pageManager.pages[pageName]?.assets ?? [],
-                  constraints: constraints,
-                  absorb: false,
-                  selectedAssets: const {},
-                  mirroringDisabled:
-                      pageManager.pages[pageName]?.mirroringDisabled ?? false,
-                ),
-              );
-            },
+      content = SidePaneInset(
+        child: ZoomableCanvas(
+          child: LayoutBuilder(
+            // A tap on empty page -- nothing under it that takes taps --
+            // closes an open pane. Translucent so every asset still sees
+            // the tap first: an asset's own GestureDetector sits deeper in
+            // the tree and wins the arena, and this one only fires when
+            // no asset claimed it. Inside the ZoomableCanvas on purpose:
+            // outside it, the canvas's scale recognizer would take the
+            // sweep for a plain tap and this would never fire.
+            builder: (context, constraints) => GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => closeSidePane(),
+              child: AssetStack(
+                assets: page.assets,
+                constraints: constraints,
+                absorb: false,
+                selectedAssets: const {},
+                mirroringDisabled: page.mirroringDisabled,
+              ),
+            ),
           ),
         ),
-      )),
+      );
+    }
+
+    // The Column is here whether or not the strip is, and the strip's slot is
+    // always child 0. Collapsing to a bare `content` when the mark clears
+    // would change the depth of everything below it, and Flutter reconciles
+    // by position — so the whole plant page would be torn down and every
+    // asset re-subscribed purely because a banner went away. Keeping the
+    // shape fixed means the mark appearing or clearing costs one zero-height
+    // box, and nothing under it is disturbed.
+    //
+    // The strip sits outside the canvas on purpose: inside it, it would zoom
+    // and pan away with the plant.
+    return Column(
+      children: [
+        if (unverified)
+          const _UnverifiedPageBanner()
+        else
+          const SizedBox.shrink(),
+        Expanded(child: content),
+      ],
+    );
+  }
+}
+
+/// Says that what is on screen is the last layout this station saw, not one
+/// the server has confirmed.
+class _UnverifiedPageBanner extends StatelessWidget {
+  const _UnverifiedPageBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = HmiStateColors.of(context);
+    return Container(
+      key: PlantPageView.unverifiedBannerKey,
+      width: double.infinity,
+      color: colors.violet,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.cloud_off, size: 16, color: colors.onState),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'Last known layout — the server has not confirmed it. '
+              'Assets may have moved or changed since.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: colors.onState),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
