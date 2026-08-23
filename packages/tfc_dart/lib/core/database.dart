@@ -541,6 +541,31 @@ class Database {
   // Track tables that need creation (when DB was down during first insert)
   final Set<String> _pendingTableCreation = {};
 
+  /// Tables we have already complained about being untypeable, so a tag that
+  /// is null for an hour produces one line rather than one per sample.
+  final Set<String> _warnedUntypeable = {};
+
+  /// Whether [value] carries enough information to give a column a type.
+  ///
+  /// Null does not. [_getPostgresType] answers TEXT for it, which is a guess
+  /// dressed as an answer: the column is created TEXT, and Postgres does not
+  /// then reject the doubles that follow — it coerces them, so the table
+  /// records '42.5' as a string for the rest of its life with nothing in the
+  /// logs to say so. Charts get a String where they expect a num, and
+  /// [AppDatabase.queryTimeseriesDataDownsampled] silently falls back to the
+  /// raw query because `text` is in neither of its numeric type sets.
+  ///
+  /// A struct is typeable when at least one member is, since the members that
+  /// are not can be left out of the CREATE and arrive later through schema
+  /// evolution, typed from a value that actually has one.
+  static bool _canInferType(dynamic value) {
+    if (value == null) return false;
+    if (value is Map<String, dynamic>) {
+      return value.values.any((v) => v != null);
+    }
+    return true;
+  }
+
   /// Insert a time-series data point (buffered for batch writes)
   Future<void> insertTimeseriesData(
       String tableName, DateTime time, dynamic value) async {
@@ -553,6 +578,22 @@ class Database {
         !_pendingTableCreation.contains(tableName)) {
       try {
         if (!await db.tableExists(tableName)) {
+          // A sample that cannot type the table is dropped here rather than
+          // buffered. Buffering it would only move the decision downstream:
+          // the table still would not exist, the insert would fail 42P01,
+          // `_isPermanentDbError` would re-raise it, and it would be retried
+          // every five seconds forever — strictly worse than the TEXT column
+          // this guard exists to prevent. Dropping is also the honest answer.
+          // A null tells us the value is absent; it does not tell us what the
+          // value would have been, and no column type can be built from it.
+          if (!_canInferType(value)) {
+            if (_warnedUntypeable.add(tableName)) {
+              logger.w('$tableName: first sample is null, so there is nothing '
+                  'to infer a column type from. Skipping samples until a '
+                  'non-null value arrives.');
+            }
+            return;
+          }
           await _tryToCreateTimeseriesTable(tableName, value);
         }
       } catch (e) {
@@ -618,7 +659,24 @@ class Database {
     // Create table if it was pending
     if (_pendingTableCreation.contains(tableName)) {
       if (!await db.tableExists(tableName)) {
-        await _tryToCreateTimeseriesTable(tableName, writes.first.value);
+        // The same rule as the fast path in [insertTimeseriesData], applied
+        // to a batch: type the table from the first write that can type it,
+        // not blindly from the first write. A database that was down while a
+        // tag was null gets here with nulls at the head of the batch, and
+        // `writes.first` would pick one of them.
+        final typeable =
+            writes.where((w) => _canInferType(w.value)).firstOrNull;
+        if (typeable == null) {
+          if (_warnedUntypeable.add(tableName)) {
+            logger.w('$tableName: every buffered sample is null, so there is '
+                'nothing to infer a column type from. Dropping '
+                '${writes.length} sample(s) until a non-null value arrives.');
+          }
+          // Dropped, not re-queued: re-queueing would retry the same
+          // untypeable batch every five seconds until it overflowed.
+          return;
+        }
+        await _tryToCreateTimeseriesTable(tableName, typeable.value);
       }
       _pendingTableCreation.remove(tableName);
     }
@@ -655,6 +713,21 @@ class Database {
         colValue = row[colName];
         break;
       }
+    }
+    if (colValue == null) {
+      // Every row is null for a column that does not exist yet. Adding it
+      // would mean typing it from a null — the same TEXT guess this change
+      // exists to remove — and refusing outright would fail the same 42703
+      // on the caller's retry, forever. Drop the key instead: a null in a
+      // column that does not exist carries no information, and the column
+      // will be created properly by the first batch that has a real value.
+      for (final row in rows) {
+        row.remove(colName);
+      }
+      logger.i('Schema evolution: "$colName" is null in every row of this '
+          'batch, so there is no type to give it; omitting it from the '
+          'insert until a batch carries a value');
+      return;
     }
     final colType = _getPostgresType(colValue);
     final quotedTable = tableName.replaceAll('"', '""');
@@ -1224,6 +1297,12 @@ ORDER BY at.time;
     for (final entry in value.entries) {
       final columnName = entry.key;
       final columnValue = entry.value;
+      // A member that is null in the sample we happen to be creating from
+      // gets no column now. Giving it one would mean typing it TEXT from a
+      // null and then coercing every real value into a string forever; left
+      // out, the first sample that carries a value adds it through
+      // [_addMissingColumn] with the type that value actually has.
+      if (columnValue == null) continue;
       final columnType = _getPostgresType(columnValue);
       columns[columnName] = columnType;
     }
