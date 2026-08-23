@@ -525,17 +525,35 @@ func TestWindowsInstaller_Install_PublisherComparisonIsExact(t *testing.T) {
 	}
 }
 
-// PowerShell pads and wraps; the queries' answers get trimmed before comparison,
-// or every publisher would look different from every other one.
-func TestWindowsInstaller_Install_PublisherAnswersAreTrimmed(t *testing.T) {
-	runner := conflictRunner("  "+sideloadPublisher+"\r\n", sideloadPublisher+"\n", true)
+// PowerShell pads and wraps, and the same publisher must compare equal to itself
+// whichever way it arrived. A distinguished name is easily long enough to be
+// wrapped by the formatter; if a wrapped copy did not match an unwrapped one, an
+// ordinary update would read as a conflict and uninstall a working HMI.
+func TestWindowsInstaller_Install_IdenticalPublishersCompareEqualHoweverFormatted(t *testing.T) {
+	// Long enough that the formatter would wrap it at the 120-column default.
+	const longDN = "CN=Centroid ehf. Sildarvinnsla Station Signing Authority, " +
+		"O=Centroid ehf., L=Reykjavik, S=Hofudborgarsvaedid, C=IS"
+	wrapped := strings.Replace(longDN, "O=Centroid", "\n    O=Centroid", 1)
 
-	err := installWindows(runner, "/tmp/app.msix")
-	if err == nil {
-		t.Fatal("expected an error, got nil")
-	}
-	if n := countRemoveAppxCalls(runner.calls); n != 0 {
-		t.Errorf("whitespace around identical publishers was read as a conflict; calls: %v", runner.calls)
+	for _, tc := range []struct {
+		name                string
+		installed, incoming string
+	}{
+		{"padding and line endings", "  " + sideloadPublisher + "\r\n", sideloadPublisher + "\n"},
+		{"one side wrapped by the formatter", wrapped, longDN},
+		{"both sides wrapped", wrapped, wrapped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := conflictRunner(tc.installed, tc.incoming, true)
+
+			err := installWindows(runner, "/tmp/app.msix")
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if n := countRemoveAppxCalls(runner.calls); n != 0 {
+				t.Errorf("the same publisher formatted two ways was read as a conflict; calls: %v", runner.calls)
+			}
+		})
 	}
 }
 

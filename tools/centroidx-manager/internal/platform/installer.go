@@ -12,13 +12,16 @@ import (
 // attached, which is how the manager runs it. Any phrase long enough to be worth
 // matching is long enough to be split in half by that.
 //
-// The HRESULT matches below would survive without it: the formatter breaks at
-// spaces and a hex code is one short token, so nothing can land inside it. It is
-// applied anyway, because "normalise before matching output" is the rule this
-// file wants, and the next matcher added here may well be a phrase. The case
-// that genuinely needs it today is elevationRequiredSignals in
-// trustCertificateWindows, whose signals are multi-word — that belongs to the
-// change fixing #300 and is deliberately left alone here.
+// What needs it is publisherAnswer: a distinguished name is long enough to be
+// wrapped, and a publisher that arrived across two lines has to compare equal to
+// the same publisher that fitted on one, or an ordinary update would read as a
+// conflict and uninstall a working HMI. Wrapping breaks at spaces, so collapsing
+// restores the name exactly.
+//
+// The HRESULT matches would survive without it — the formatter cannot break
+// inside a single short hex token — but they go through it too, because
+// "normalise before matching output" is the rule this file wants and the next
+// matcher added here may well be a phrase.
 func collapseWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
@@ -120,6 +123,7 @@ const publisherConflictHRESULT = "80073cf3"
 //
 // Windows permits at most one package per identity Name per user — that is the
 // conflict — so this yields a single value, not a list.
+//
 // -ErrorAction Stop makes any cmdlet error terminating, so PowerShell exits
 // non-zero and the answer is discarded. Without it a non-terminating error is
 // written to stderr while the process still exits 0, and because the manager
@@ -269,12 +273,11 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	}
 
 	detail := strings.TrimSpace(string(out))
-	// Everything below matches against matchable, never against detail: PowerShell
-	// hard-wraps error records to the host width and indents the continuations, so
-	// any phrase long enough to be worth matching is long enough to be split in
-	// half. Collapsing runs of whitespace to single spaces undoes the formatter's
-	// line breaks and its indent in one step. detail stays raw, because it is what
-	// the operator reads.
+	// Only HRESULTs are read out of the message; which cause a 0x80073CF3 is gets
+	// decided by asking Windows, below. detail stays raw because it is what the
+	// operator reads, and matching goes through the collapsed, lower-cased copy —
+	// see collapseWhitespace for why that is the house rule even where a hex code
+	// could not have been split.
 	matchable := collapseWhitespace(strings.ToLower(detail))
 
 	// "Already installed" is checked first and returns, so that it can never
