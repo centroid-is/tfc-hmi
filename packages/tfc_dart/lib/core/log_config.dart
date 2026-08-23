@@ -180,8 +180,9 @@ class _FileOutput extends LogOutput {
 RandomAccessFile? _logFile;
 
 /// Call once at startup (before creating any Logger instances) to configure
-/// the global log filter from CENTROID_LOG_LEVEL, and -- when
-/// CENTROID_LOG_FILE is set -- to mirror every log line into that file.
+/// the global log filter and printer from CENTROID_LOG_LEVEL, to record which
+/// level was resolved (see [logLevelBanner]), and -- when CENTROID_LOG_FILE is
+/// set -- to mirror every log line into that file.
 ///
 /// The file sink exists because [ConsoleOutput] writes through `print()`,
 /// which only reaches a file if whoever launched the process happens to be
