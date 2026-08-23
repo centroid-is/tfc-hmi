@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	ghdownload "github.com/centroid-is/centroidx-manager/internal/github"
 )
@@ -55,12 +56,56 @@ func DownloadAndVerify(ctx context.Context, assetURL string, checksumURL string,
 
 	// Step 5: Rename temp file to the final name.
 	finalPath := filepath.Join(destDir, assetFilename)
-	if err := os.Rename(tmpPath, finalPath); err != nil {
+	if err := replaceFile(tmpPath, finalPath); err != nil {
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("rename verified download: %w", err)
 	}
 
 	return finalPath, nil
+}
+
+// renameFile is os.Rename, indirected so tests can drive the retry path
+// without needing a real locked file.
+var renameFile = os.Rename
+
+// renameAttempts and renameRetryDelay bound the retry in replaceFile. A
+// scanner normally releases a file within a moment; anything longer is a real
+// problem and should be reported rather than waited out, because the update UI
+// is sitting in front of an operator.
+const renameAttempts = 4
+
+var renameRetryDelay = 250 * time.Millisecond
+
+// replaceFile moves tmpPath onto finalPath, replacing whatever is already
+// there.
+//
+// os.Rename on Windows is MoveFileEx(MOVEFILE_REPLACE_EXISTING), which fails
+// with ACCESS_DENIED or SHARING_VIOLATION when the destination is open without
+// FILE_SHARE_DELETE — Defender scanning the package we just wrote, or AppX
+// staging still holding a reference from the previous install. The payload
+// lands in os.TempDir() under a fixed per-platform name, so once that happens
+// every later update in the same session hits the same locked file and fails
+// the same way, until something clears %TEMP%. rename(2) on Unix replaces
+// regardless of open handles, so this only bites Windows.
+//
+// Removing the destination first turns the usual case into a create rather
+// than a replace, and the bounded retry covers a scanner that has not let go
+// yet.
+func replaceFile(tmpPath, finalPath string) error {
+	var err error
+	for attempt := range renameAttempts {
+		if attempt > 0 {
+			time.Sleep(renameRetryDelay)
+		}
+		// Best-effort: on a first install there is nothing to remove, and a
+		// destination we cannot remove may still be renamable.
+		_ = os.Remove(finalPath)
+
+		if err = renameFile(tmpPath, finalPath); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // fetchExpectedHash downloads checksumURL, parses it as SHA256SUMS.txt format,
