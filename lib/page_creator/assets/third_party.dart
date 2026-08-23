@@ -482,16 +482,18 @@ class SpeedBatcherStatusBit {
   const SpeedBatcherStatusBit(this.member, this.label, this.onColor);
 }
 
-/// The five handshake bits, in display order — same names, labels and colours
-/// as the retired flat SpeedBatcher asset (`speedbatcher.dart`), so the pane
-/// reads identically to what the operators already know. Blue for Cleaning,
-/// green for the rest.
+/// The five handshake bits, in display order. Same members and colours as the
+/// retired flat SpeedBatcher asset (`speedbatcher.dart`); two labels reworded
+/// to match the other machines' panes -- "Drop Ok from PLC" was the
+/// engineer's phrase for the same bit the Multivac pane calls "ready for
+/// fish", and "Dropped Batch" sat beside "Batch ready" as a dangling fragment.
+/// Blue for Cleaning, green for the rest.
 const List<SpeedBatcherStatusBit> speedBatcherStatusBits = [
   SpeedBatcherStatusBit('p_stat_Running', 'Running', Colors.green),
   SpeedBatcherStatusBit('p_stat_Cleaning', 'Cleaning', Colors.blue),
   SpeedBatcherStatusBit('p_stat_BatchReady', 'Batch ready', Colors.green),
-  SpeedBatcherStatusBit('p_stat_DropOk', 'Drop Ok from PLC', Colors.green),
-  SpeedBatcherStatusBit('p_stat_Dropped', 'Dropped Batch', Colors.green),
+  SpeedBatcherStatusBit('p_stat_DropOk', 'Conveyor may drop', Colors.green),
+  SpeedBatcherStatusBit('p_stat_Dropped', 'Batch dropped', Colors.green),
 ];
 
 /// The machine's name as it reads inside a diode label.
@@ -1191,7 +1193,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         scale: child.scale,
         graphConfig: GraphAssetConfig.preview(
             key: child.key.isEmpty ? null : child.key)
-          ..headerText = 'Weight CW${weights.length + 1} — trend',
+          ..headerText = 'Weight, ${weights.isEmpty ? 'infeed' : 'outfeed'} scale — trend',
       ));
     }
 
@@ -1291,7 +1293,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                     // Non-breaking space inside the parenthesis: the label
                     // column is narrow enough to wrap, and the break must
                     // fall before "(30 min)", never inside it.
-                    label: 'Accept rate CW${i + 1} '
+                    label: 'Accept rate, ${i == 0 ? 'infeed' : 'outfeed'} scale '
                         '(${config.acceptWindowMinutes}\u{00A0}min)',
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1311,7 +1313,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   ),
                 for (final (i, weight) in weights.indexed)
                   PaneDetailRow(
-                    label: 'Weight CW${i + 1}',
+                    label: 'Weight, ${i == 0 ? 'infeed' : 'outfeed'} scale',
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

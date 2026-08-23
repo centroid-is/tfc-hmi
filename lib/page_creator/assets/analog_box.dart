@@ -817,7 +817,7 @@ class AnalogBoxPane extends StatelessWidget {
       status: error
           ? const PaneStatus.fault('Sensor error')
           : value == null
-              ? const PaneStatus.unknown('No signal')
+              ? const PaneStatus.unknown('No data')
               : const PaneStatus.running('Live'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

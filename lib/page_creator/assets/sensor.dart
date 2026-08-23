@@ -1030,7 +1030,7 @@ class SensorFbPane extends StatelessWidget {
           // must not reach the FB. The field keys embed the current value so
           // the box resets if the PLC reports a different one.
           PaneSection(
-            title: 'Debounce',
+            title: 'Signal delays',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
