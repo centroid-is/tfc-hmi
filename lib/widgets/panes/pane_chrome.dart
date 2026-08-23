@@ -658,52 +658,64 @@ class PaneGraphTile extends StatelessWidget {
           builder: expandedBuilder,
         ),
         // The header keeps its inset; the preview below only gets a hairline
-        // of it, so the plot uses the card rather than floating in it.
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+        // of it, so the plot uses the card rather than floating in it. The
+        // size-up glyph is pinned to the tile's corner rather than ending
+        // the header row: with a long label or a wrapping legend it used to
+        // drift down to wherever the row happened to end.
+        child: Stack(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Row(
-                children: [
-                  if (label != null)
-                    Flexible(
-                      child: Text(
-                        label!,
-                        style: theme.textTheme.labelSmall,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  // The legend takes the slack rather than sharing it with a
-                  // Spacer — competing for the row is what wrapped two short
-                  // series names onto two lines.
-                  if (legend.isNotEmpty) ...[
-                    if (label != null) const SizedBox(width: 10),
-                    Expanded(
-                      child: Wrap(
-                        spacing: 10,
-                        runSpacing: 2,
-                        children: [
-                          for (final entry in legend.entries)
-                            _LegendDot(label: entry.key, color: entry.value),
-                        ],
-                      ),
-                    ),
-                  ] else
-                    const Spacer(),
-                  Icon(
-                    Icons.open_in_full,
-                    size: 14,
-                    color: theme.colorScheme.primary,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 28, 0),
+                  child: Row(
+                    children: [
+                      if (label != null)
+                        Flexible(
+                          child: Text(
+                            label!,
+                            style: theme.textTheme.labelSmall,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      // The legend takes the slack rather than sharing it with a
+                      // Spacer — competing for the row is what wrapped two short
+                      // series names onto two lines.
+                      if (legend.isNotEmpty) ...[
+                        if (label != null) const SizedBox(width: 10),
+                        Expanded(
+                          child: Wrap(
+                            spacing: 10,
+                            runSpacing: 2,
+                            children: [
+                              for (final entry in legend.entries)
+                                _LegendDot(
+                                    label: entry.key, color: entry.value),
+                            ],
+                          ),
+                        ),
+                      ] else
+                        const Spacer(),
+                    ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 2),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                  child: SizedBox(height: height, child: preview),
+                ),
+              ],
             ),
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-              child: SizedBox(height: height, child: preview),
+            Positioned(
+              top: 8,
+              right: 10,
+              child: Icon(
+                Icons.open_in_full,
+                size: 14,
+                color: theme.colorScheme.primary,
+              ),
             ),
           ],
         ),

@@ -89,7 +89,7 @@ class TextAssetConfig extends BaseAsset {
 
   TextAssetConfig.preview()
       : textContent = 'Temperature: \$temp°C\nPressure: \$press bar',
-        textColor = Colors.black,
+        textColor = null,
         enableVariableSubstitution = false,
         decimalPlaces = 2 {
     textPos = TextPos.inside;
@@ -99,6 +99,22 @@ class TextAssetConfig extends BaseAsset {
   factory TextAssetConfig.fromJson(Map<String, dynamic> json) =>
       _$TextAssetConfigFromJson(json);
   Map<String, dynamic> toJson() => _$TextAssetConfigToJson(this);
+}
+
+
+/// The colour a text asset paints with.
+///
+/// Plain black is read as "the theme's text colour", not as black: the
+/// preview default used to be a literal black and 72 text assets on the
+/// plant pages carry it, so in the dark scheme every label was black on deep
+/// teal. A black that was actually chosen is indistinguishable from that
+/// default, and nobody wants black on dark -- so black follows the theme and
+/// every other colour is honoured as set.
+Color? textAssetColor(BuildContext context, Color? configured) {
+  final themeColor = Theme.of(context).textTheme.bodyLarge?.color;
+  if (configured == null) return themeColor;
+  if (configured.toARGB32() == Colors.black.toARGB32()) return themeColor;
+  return configured;
 }
 
 class TextAssetWidget extends ConsumerStatefulWidget {
@@ -138,8 +154,7 @@ class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
             widget.config.textContent,
             alignment: Alignment.topLeft,
             style: TextStyle(
-              color: widget.config.textColor ??
-                  Theme.of(context).textTheme.bodyLarge?.color,
+              color: textAssetColor(context, widget.config.textColor),
             ),
           ),
         );
@@ -172,8 +187,7 @@ class _TextAssetWidgetState extends ConsumerState<TextAssetWidget> {
             alignment: Alignment.topLeft,
             textAlign: TextAlign.left,
             style: TextStyle(
-              color: widget.config.textColor ??
-                  Theme.of(context).textTheme.bodyLarge?.color,
+              color: textAssetColor(context, widget.config.textColor),
             ),
           ),
         );

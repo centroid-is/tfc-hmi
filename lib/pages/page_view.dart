@@ -703,13 +703,24 @@ class AssetView extends ConsumerWidget {
                   child: Text('Page: "$pageName" not found'),
                 );
               }
-              return AssetStack(
-                assets: pageManager.pages[pageName]?.assets ?? [],
-                constraints: constraints,
-                absorb: false,
-                selectedAssets: const {},
-                mirroringDisabled:
-                    pageManager.pages[pageName]?.mirroringDisabled ?? false,
+              // A tap on empty page -- nothing under it that takes taps --
+              // closes an open pane. Translucent so every asset still sees
+              // the tap first: an asset's own GestureDetector sits deeper in
+              // the tree and wins the arena, and this one only fires when
+              // no asset claimed it. Inside the ZoomableCanvas on purpose:
+              // outside it, the canvas's scale recognizer would take the
+              // sweep for a plain tap and this would never fire.
+              return GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => closeSidePane(),
+                child: AssetStack(
+                  assets: pageManager.pages[pageName]?.assets ?? [],
+                  constraints: constraints,
+                  absorb: false,
+                  selectedAssets: const {},
+                  mirroringDisabled:
+                      pageManager.pages[pageName]?.mirroringDisabled ?? false,
+                ),
               );
             },
           ),

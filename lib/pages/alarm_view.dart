@@ -13,6 +13,24 @@ class AlarmViewPage extends StatefulWidget {
 class _AlarmViewPageState extends State<AlarmViewPage> {
   AlarmActive? _selectedAlarm;
 
+  /// Set once the operator has closed the detail pane on purpose; from then
+  /// on the page stops choosing for them until they pick an alarm again.
+  bool _operatorCleared = false;
+
+  void _onActiveAlarms(List<AlarmActive> active) {
+    if (_operatorCleared) return;
+    final current = _selectedAlarm;
+    // Keep a selection that is still active; replace one that has cleared
+    // (or none at all) with the worst of what is active now.
+    if (current != null &&
+        active.any((a) => a.notification.uid == current.notification.uid)) {
+      return;
+    }
+    final pick = mostCriticalAlarm(active);
+    if (pick?.notification.uid == current?.notification.uid) return;
+    setState(() => _selectedAlarm = pick);
+  }
+
   @override
   Widget build(BuildContext context) {
     return BaseScaffold(
@@ -29,6 +47,7 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
                 onShow: (alarm) {
                   setState(() {
                     _selectedAlarm = alarm;
+                    _operatorCleared = false;
                   });
                 },
                 onViewChanged: () {
@@ -36,6 +55,7 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
                     _selectedAlarm = null;
                   });
                 },
+                onActiveAlarms: _onActiveAlarms,
               ),
             ),
             const SizedBox(width: 24),
@@ -48,6 +68,7 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
                       onClose: () {
                         setState(() {
                           _selectedAlarm = null;
+                          _operatorCleared = true;
                         });
                       },
                     )
@@ -63,4 +84,19 @@ class _AlarmViewPageState extends State<AlarmViewPage> {
       ),
     );
   }
+}
+
+/// The alarm to show when the operator has not picked one: the most severe
+/// active alarm, newest first within a level. Arriving on the page to an
+/// empty "Select an alarm" pane when something IS wrong was a wasted tap;
+/// the worst thing on the line is what they came to read.
+AlarmActive? mostCriticalAlarm(List<AlarmActive> active) {
+  if (active.isEmpty) return null;
+  final sorted = [...active]..sort((a, b) {
+      final byLevel = b.notification.rule.level.index
+          .compareTo(a.notification.rule.level.index);
+      if (byLevel != 0) return byLevel;
+      return b.notification.timestamp.compareTo(a.notification.timestamp);
+    });
+  return sorted.first;
 }

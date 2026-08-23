@@ -527,10 +527,16 @@ class ListActiveAlarms extends ConsumerStatefulWidget {
   final void Function(AlarmActive)? onShow;
   final void Function()? onViewChanged;
 
+  /// Every time the active list arrives (not the history), after the frame,
+  /// with the alarms in list order. The page uses it to pick a default
+  /// selection, so the detail pane is not empty on arrival.
+  final void Function(List<AlarmActive> active)? onActiveAlarms;
+
   const ListActiveAlarms({
     super.key,
     this.onShow,
     this.onViewChanged,
+    this.onActiveAlarms,
   });
 
   @override
@@ -542,11 +548,19 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
   bool _showHistory = false;
   final _searchBarKey = GlobalKey<FuzzySearchBarState>();
 
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<(AlarmMan, List<(AlarmActive, DateTime?)>)>(
-      stream: Stream.fromFuture(ref.watch(alarmManProvider.future)).asyncExpand(
-        (alarmMan) => _showHistory
+  /// The list's stream, made once per mode (active / history). Built inline
+  /// it was a new object on every rebuild -- every search keystroke -- and
+  /// StreamBuilder answered each with its spinner.
+  Stream<(AlarmMan, List<(AlarmActive, DateTime?)>)>? _stream;
+  bool? _streamShowsHistory;
+
+  Stream<(AlarmMan, List<(AlarmActive, DateTime?)>)> _streamFor(
+      bool showHistory) {
+    final cached = _stream;
+    if (cached != null && _streamShowsHistory == showHistory) return cached;
+    _streamShowsHistory = showHistory;
+    return _stream = Stream.fromFuture(ref.read(alarmManProvider.future)).asyncExpand(
+        (alarmMan) => showHistory
             ? alarmMan.history().map((history) => (
                   alarmMan,
                   history
@@ -557,13 +571,25 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                 ))
             : alarmMan.activeAlarms().map((active) =>
                 (alarmMan, active.map((a) => (a, null as DateTime?)).toList())),
-      ),
+      );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<(AlarmMan, List<(AlarmActive, DateTime?)>)>(
+      stream: _streamFor(_showHistory),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
 
         var (alarmMan, alarms) = snapshot.data!;
+        if (!_showHistory && widget.onActiveAlarms != null) {
+          final active = [for (final a in alarms) a.$1];
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onActiveAlarms!(active);
+          });
+        }
         if (_showHistory) {
           alarms = fuzzyFilter(alarms, _searchQuery, [
             (e) => e.$1.alarm.config.title,
