@@ -381,20 +381,25 @@ void main() {
       }
     });
 
-    // Test 6d: refreshing is best-effort once a usable binary is already
-    // there. Windows refuses to open a running .exe for writing, and a
-    // manager left running from an earlier launch would otherwise turn a
-    // refresh that used to be a no-op into a hard failure of the whole
-    // update. Keeping the older binary beats not launching at all.
+    // Test 6d: a read-only installed binary gets replaced anyway.
     //
-    // Forced with a read-only file, so POSIX only — Windows ignores the mode
-    // bits and this would not reproduce there.
-    test('ensureExtracted keeps the existing binary when the refresh cannot be written',
-        () async {
+    // This test used to assert the opposite, and it was right to at the time:
+    // writing straight to the destination needed write permission on the file
+    // itself, so a read-only manager could never be refreshed. Staging changed
+    // that — a rename needs write permission on the directory, not on the file
+    // being replaced — and the refresh now succeeds. That is the better
+    // behaviour, so it is pinned rather than preserved.
+    //
+    // The best-effort fallback still exists for writes that genuinely cannot
+    // complete; test 6f covers it with a failure that staging cannot route
+    // around.
+    //
+    // POSIX only — Windows ignores the mode bits, so there is nothing to prove
+    // there.
+    test('ensureExtracted replaces a read-only installed binary', () async {
       final tempDir = await Directory.systemTemp.createTemp('mltest6d_');
       final managerFile = File('${tempDir.path}/centroidx-manager');
-      final existing = Uint8List.fromList(List<int>.filled(10, 0xEE));
-      await managerFile.writeAsBytes(existing);
+      await managerFile.writeAsBytes(Uint8List.fromList(List<int>.filled(10, 0xEE)));
       await Process.run('chmod', ['444', managerFile.path]);
 
       try {
@@ -406,11 +411,10 @@ void main() {
           platformIsMacOS: false,
         );
 
-        // Must not throw: the caller goes on to launch the old manager.
         await launcher.ensureExtracted();
 
-        expect(await managerFile.readAsBytes(), equals(existing),
-            reason: 'the unwritable original must survive');
+        expect(await managerFile.readAsBytes(), equals(_fakeAssetBytes),
+            reason: 'staging replaces the file rather than writing through it');
       } finally {
         await Process.run('chmod', ['644', managerFile.path]);
         await tempDir.delete(recursive: true);
@@ -438,6 +442,12 @@ void main() {
 
         await expectLater(
             launcher.ensureExtracted(), throwsA(isA<FileSystemException>()));
+
+        // The staged write succeeds here and only the rename fails, so this
+        // is the path that can strand a full-sized staging file next to the
+        // manager. Clean up even while failing.
+        expect(await File('$managerPath.new').exists(), isFalse,
+            reason: 'a failed refresh must not leave its staging file behind');
       } finally {
         await tempDir.delete(recursive: true);
       }
@@ -465,6 +475,73 @@ void main() {
         final dest = File(managerPath);
         expect(await dest.exists(), isTrue);
         expect(await dest.length(), equals(_fakeAssetBytes.length));
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 6f: a refresh that fails PART WAY through must not destroy the
+    // binary it was replacing.
+    //
+    // writeAsBytes truncates on open, so writing straight to the destination
+    // stakes the installed manager on the write completing. If it dies in the
+    // middle -- disk full is the realistic one on a station that has been
+    // logging for months -- the old copy is already gone, and the best-effort
+    // branch then reports "continuing with the copy already installed" about
+    // a file it has just truncated. The warning would be a lie and the caller
+    // would go on to launch a partial binary.
+    //
+    // Staging to a sibling and renaming in makes the destination change all at
+    // once or not at all. Forced here by occupying the staging path with a
+    // directory, which no write can replace.
+    test('a refresh that cannot be staged leaves the installed binary intact',
+        () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6f_');
+      final managerFile = File('${tempDir.path}/centroidx-manager');
+      final installed = Uint8List.fromList(List<int>.filled(6, 0xAB));
+      await managerFile.writeAsBytes(installed);
+      // Occupy the staging path so the staged write cannot succeed.
+      await Directory('${managerFile.path}.new').create(recursive: true);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerFile.path,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.ensureExtracted();
+
+        expect(await managerFile.readAsBytes(), equals(installed),
+            reason: 'the installed manager must survive a failed refresh '
+                'whole, not truncated');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    // Test 6g: staging must not leave litter behind on the happy path.
+    test('a successful refresh leaves no staging file behind', () async {
+      final tempDir = await Directory.systemTemp.createTemp('mltest6g_');
+      final managerFile = File('${tempDir.path}/centroidx-manager');
+      await managerFile.writeAsBytes(<int>[0xAB]);
+
+      try {
+        final launcher = ManagerLauncher(
+          pathResolver: () async => managerFile.path,
+          assetLoader: (_) async => _fakeAssetBytes,
+          commandRunner: (exe, args) async => ProcessResult(0, 0, '', ''),
+          platformIsWindows: false,
+          platformIsMacOS: false,
+        );
+
+        await launcher.ensureExtracted();
+
+        expect(await managerFile.readAsBytes(), equals(_fakeAssetBytes));
+        expect(await File('${managerFile.path}.new').exists(), isFalse,
+            reason: 'the staging file must be renamed away, not left behind');
       } finally {
         await tempDir.delete(recursive: true);
       }
