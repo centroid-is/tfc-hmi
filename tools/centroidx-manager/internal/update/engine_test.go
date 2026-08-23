@@ -1134,3 +1134,56 @@ func TestEngine_ListAllReleases_UnknownChannel(t *testing.T) {
 		t.Fatal("expected error for unknown channel, got nil")
 	}
 }
+
+// TestPlatformAssetCandidates_AreTheNamesTheReleaseActuallyPublishes pins the
+// asset names against literals.
+//
+// Deliberately not built with the same fmt.Sprintf the code uses. The existing
+// coverage in this file regenerates the expected name from the same rule as
+// selectPlatformAssetName, so it agrees with the implementation by
+// construction: mutating the format string to "MUTANT_%s_%s%s", or .deb to
+// .zzz, leaves it green. A test that cannot disagree with the code is not
+// covering it.
+//
+// These strings are a contract with the release pipeline, so they are written
+// out the way the workflows write them. If one changes, the pipeline and this
+// list have to change together — which is the whole point.
+//
+//	.github/workflows/tag.yml             centroidx_windows_amd64.msix, centroidx_darwin_arm64.dmg
+//	.github/workflows/main-prerelease.yml the same, plus centroidx_windows_x64.zip
+func TestPlatformAssetCandidates_AreTheNamesTheReleaseActuallyPublishes(t *testing.T) {
+	got := platformAssetCandidates()
+
+	var want []string
+	switch runtime.GOOS {
+	case "windows":
+		// The legacy name is second and must stay: releases up to and
+		// including v2026.3.26 published the msix as plain "centroidx.msix",
+		// and dropping it would break a rollback to any of them.
+		want = []string{"centroidx_windows_amd64.msix", "centroidx.msix"}
+	case "darwin":
+		if runtime.GOARCH != "arm64" {
+			t.Skipf("only darwin/arm64 is published, not %s", runtime.GOARCH)
+		}
+		want = []string{"centroidx_darwin_arm64.dmg"}
+	case "linux":
+		if runtime.GOARCH != "amd64" {
+			t.Skipf("only linux/amd64 is named by the pipeline, not %s", runtime.GOARCH)
+		}
+		// No release has ever published this; the manager asks for it anyway,
+		// which is the accepted Linux gap. Pinned so the name cannot drift
+		// silently if that decision is ever revisited.
+		want = []string{"centroidx_linux_amd64.deb"}
+	default:
+		t.Skipf("no published assets for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("platformAssetCandidates() = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("platformAssetCandidates()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
