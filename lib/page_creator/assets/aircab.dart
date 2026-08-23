@@ -136,14 +136,14 @@ class AirCab extends StatelessWidget {
       LEDConfig(
         key: config.pressureKey,
         onColor: AssetColor.green,
-        offColor: const AssetColor.literal(Colors.white),
+        offColor: AssetColor.grey,
       )
         ..text = "Pressure"
         ..textPos = TextPos.right,
       LEDConfig(
         key: config.softStartKey,
         onColor: AssetColor.green,
-        offColor: const AssetColor.literal(Colors.white),
+        offColor: AssetColor.grey,
       )
         ..text = "Soft start"
         ..textPos = TextPos.right,
@@ -163,14 +163,17 @@ class AirCab extends StatelessWidget {
         ..key = config.buttonFeedbackKey!;
     }
 
+    // Theme roles, not literals: a grey[200] box with a black26 border and
+    // white "off" LEDs was a light-theme widget pasted onto the dark page.
+    final scheme = Theme.of(context).colorScheme;
     return AspectRatio(
       aspectRatio: 1,
       child: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: Colors.grey[200],
+          color: scheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.black26),
+          border: Border.all(color: scheme.outlineVariant),
         ),
         child: Column(
           children: [

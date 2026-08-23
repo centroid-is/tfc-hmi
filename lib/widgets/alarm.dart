@@ -649,55 +649,64 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
             borderRadius: BorderRadius.circular(12),
             color: Theme.of(context).colorScheme.surface,
           ),
-          child: Row(
-            children: [
-              // Search field
-              Expanded(
-                child: FuzzySearchBar(
-                  key: _searchBarKey,
-                  hintText:
-                      'Search ${_showHistory ? "historical" : "active"} alarms...',
-                  onChanged: (value) {
-                    setState(() {
-                      _searchQuery = value;
-                    });
-                  },
-                ),
-              ),
-              // Toggle
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: SegmentedButton<bool>(
-                  style: ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    side: WidgetStateProperty.all(BorderSide.none),
+          child: LayoutBuilder(builder: (context, constraints) {
+            // The list column is 2/5 of the page, so in a narrow window the
+            // bar can be under 250 px -- less than the labelled toggle alone,
+            // and the search field then overflowed. Below that, the segments
+            // keep their icons and say their name in a tooltip instead.
+            final compact = constraints.maxWidth < 360;
+            return Row(
+              children: [
+                // Search field
+                Expanded(
+                  child: FuzzySearchBar(
+                    key: _searchBarKey,
+                    hintText:
+                        'Search ${_showHistory ? "historical" : "active"} alarms...',
+                    onChanged: (value) {
+                      setState(() {
+                        _searchQuery = value;
+                      });
+                    },
                   ),
-                  segments: const [
-                    ButtonSegment<bool>(
-                      value: false,
-                      icon: Icon(Icons.warning, size: 18),
-                      label: Text('Active'),
-                    ),
-                    ButtonSegment<bool>(
-                      value: true,
-                      icon: Icon(Icons.history, size: 18),
-                      label: Text('History'),
-                    ),
-                  ],
-                  selected: {_showHistory},
-                  onSelectionChanged: (Set<bool> newSelection) {
-                    setState(() {
-                      _showHistory = newSelection.first;
-                      _searchQuery = '';
-                      _searchBarKey.currentState?.clear();
-                    });
-                    widget.onViewChanged?.call();
-                  },
                 ),
-              ),
-            ],
-          ),
+                // Toggle
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  child: SegmentedButton<bool>(
+                    style: ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      side: WidgetStateProperty.all(BorderSide.none),
+                    ),
+                    segments: [
+                      ButtonSegment<bool>(
+                        value: false,
+                        icon: const Icon(Icons.warning, size: 18),
+                        label: compact ? null : const Text('Active'),
+                        tooltip: compact ? 'Active' : null,
+                      ),
+                      ButtonSegment<bool>(
+                        value: true,
+                        icon: const Icon(Icons.history, size: 18),
+                        label: compact ? null : const Text('History'),
+                        tooltip: compact ? 'History' : null,
+                      ),
+                    ],
+                    selected: {_showHistory},
+                    onSelectionChanged: (Set<bool> newSelection) {
+                      setState(() {
+                        _showHistory = newSelection.first;
+                        _searchQuery = '';
+                        _searchBarKey.currentState?.clear();
+                      });
+                      widget.onViewChanged?.call();
+                    },
+                  ),
+                ),
+              ],
+            );
+          }),
         ),
       ),
     );

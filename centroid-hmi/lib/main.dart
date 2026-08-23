@@ -127,8 +127,26 @@ void main() {
   // behave exactly as before; this only adds a copy that persists.
   final priorOnError = FlutterError.onError;
   FlutterError.onError = (FlutterErrorDetails details) {
-    logger.e('Flutter framework error: ${details.exceptionAsString()}',
-        error: details.exception, stackTrace: details.stack);
+    // The message alone does not say WHICH Row overflowed: a layout error's
+    // stack is the paint stack, all framework frames. The widget lives in the
+    // details' information collector -- "The relevant error-causing widget
+    // was: Row  lib/foo.dart:123" for build errors, and for layout overflows
+    // "The specific RenderFlex in question is: ... creator: Column <- Padding
+    // <- ..." -- so keep those lines, trimmed: the creator chain runs to the
+    // root and its head is what names the asset.
+    final culprit = details.informationCollector
+            ?.call()
+            .map((n) => n.toStringDeep())
+            .where((s) =>
+                s.contains('error-causing widget') || s.contains('creator:'))
+            .map((s) => s.length > 400 ? '${s.substring(0, 400)}...' : s)
+            .join('\n') ??
+        '';
+    logger.e(
+        'Flutter framework error: ${details.exceptionAsString()}'
+        '${culprit.isEmpty ? '' : '\n$culprit'}',
+        error: details.exception,
+        stackTrace: details.stack);
     if (priorOnError != null) priorOnError(details);
   };
 
@@ -657,10 +675,13 @@ class MyApp extends ConsumerWidget {
                               child: const Icon(Icons.chat),
                             ),
                           ),
-                        // MCP server status indicator (debug only)
+                        // MCP server status indicator (debug only). Kept
+                        // above the navigation bar: at 8 px from the bottom it
+                        // sat on the last destination's label once the window
+                        // was narrower than ~1100 px.
                         if (kDebugMode && mcpRunning && !navMenuOpen)
                           Positioned(
-                            bottom: chatEnabled && !chatVisible ? 82 : 8,
+                            bottom: chatEnabled && !chatVisible ? 82 : 90,
                             right: chatEnabled && !chatVisible ? 76 : 8,
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
