@@ -193,8 +193,13 @@ void initLogConfig() {
   Logger.defaultFilter = () => EnvLogFilter();
   Logger.defaultPrinter = () => hotPathPrinter();
 
+  final banner = logLevelBanner();
+
   final path = Platform.environment['CENTROID_LOG_FILE'];
-  if (path == null || path.isEmpty) return;
+  if (path == null || path.isEmpty) {
+    Logger().i(banner);
+    return;
+  }
 
   // The Windows runner sets this once it has already pointed the process
   // stdout at that same file. ConsoleOutput therefore lands there anyway, and
@@ -202,15 +207,40 @@ void initLogConfig() {
   // positions -- the runner writing from offset 0, this one appending at EOF,
   // each overwriting the other. main.dart already honours the flag for its
   // own file; the logger has to as well.
-  if (Platform.environment['CENTROID_LOG_REDIRECTED'] == '1') return;
+  if (Platform.environment['CENTROID_LOG_REDIRECTED'] == '1') {
+    Logger().i(banner);
+    return;
+  }
 
   try {
     _logFile ??= File(path).openSync(mode: FileMode.append);
     final file = _logFile!;
     Logger.defaultOutput = () => MultiOutput([ConsoleOutput(), _FileOutput(file)]);
-    file.writeStringSync(
-        '--- log opened ${DateTime.now().toIso8601String()} ---\n');
+    // In the header, not only through the logger: the header is unfiltered, so
+    // a station running at warning or error still records which level it is
+    // running at. Otherwise the one line that explains why the log looks empty
+    // would itself be filtered out.
+    file.writeStringSync('--- log opened ${DateTime.now().toIso8601String()} '
+        '| $banner ---\n');
   } catch (e) {
     stderr.writeln('[log] file logging unavailable ($path): $e');
   }
+  Logger().i(banner);
+}
+
+/// One line naming the level this process resolved, and where it came from.
+///
+/// Support reads a station's log file cold, months later, with no idea what
+/// the box was configured for. Without this, "there are no debug lines" and
+/// "the subsystem never ran" look identical. Exposed separately so a caller
+/// can put it wherever else it needs to go.
+String logLevelBanner() {
+  final env = Platform.environment['CENTROID_LOG_LEVEL'];
+  final source = (env == null || env.isEmpty)
+      ? 'CENTROID_LOG_LEVEL unset, default for a '
+          '${kShippedBuild ? 'release/profile' : 'debug'} build'
+      : 'CENTROID_LOG_LEVEL=$env';
+  return '[log] level ${logLevelFor(env).name} ($source). '
+      'Set CENTROID_LOG_LEVEL to trace/debug/info/warning/error, '
+      'or all to also override per-logger levels.';
 }

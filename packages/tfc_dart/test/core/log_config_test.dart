@@ -302,6 +302,44 @@ void main() {
       expect(printer.errorMethodCount, greaterThan(0));
     });
 
+    test('records which level was resolved, and where it came from', () {
+      // Support reads a station log cold. "No debug lines" and "the subsystem
+      // never ran" look identical without this.
+      final banner = logLevelBanner();
+      expect(banner, contains('[log] level '));
+      expect(banner, contains(logLevelFromEnv().name));
+      expect(banner, contains('CENTROID_LOG_LEVEL'));
+      // Says where the value came from, so nobody has to guess.
+      expect(banner, contains('unset, default for a debug build'),
+          reason: 'no CENTROID_LOG_LEVEL in the test environment');
+    });
+
+    test('initLogConfig itself emits the banner, and at a level the default '
+        'admits', () {
+      // Capture what initLogConfig actually logs, not a re-creation of it.
+      final captured = <LogEvent>[];
+      void listener(LogEvent e) => captured.add(e);
+      Logger.addLogListener(listener);
+      final emitted = <String>[];
+      void outListener(OutputEvent e) => emitted.addAll(e.lines);
+      Logger.addOutputListener(outListener);
+      try {
+        initLogConfig();
+      } finally {
+        Logger.removeLogListener(listener);
+        Logger.removeOutputListener(outListener);
+      }
+
+      final banners =
+          captured.where((e) => '${e.message}'.contains('[log] level'));
+      expect(banners, isNotEmpty,
+          reason: 'initLogConfig must record the resolved level');
+      expect(banners.first.level, equals(Level.info),
+          reason: 'trace or debug would be invisible at the shipped default');
+      // And it survived the filter all the way to output.
+      expect(emitted.where((l) => l.contains('[log] level')), isNotEmpty);
+    });
+
     test('a bare Logger() built after initLogConfig drops trace', () {
       initLogConfig();
       final out = _CapturingOutput();
