@@ -374,6 +374,17 @@ const missingDependency = "Add-AppxPackage : Deployment failed with HRESULT: 0x8
 	"neutral or x64 processor architecture and minimum version 9.29.952.0, along with this " +
 	"package to install."
 
+// publisherOutput is what a publisher query prints when it has an answer: the
+// value wrapped in the script's own tokens. An empty publisher means the query
+// found nothing and printed nothing, which is not the same as printing an empty
+// token — a distinction the tests below rely on.
+func publisherOutput(dn string) []byte {
+	if dn == "" {
+		return nil
+	}
+	return []byte(publisherTokenStart + dn + publisherTokenEnd)
+}
+
 // The two publishers a conflict is made of. The installed one is CentroidX's
 // current sideload identity, traced to centroid-hmi/pubspec.yaml's
 // msix_config.publisher; the other is any second signing identity, which is what
@@ -387,7 +398,7 @@ const (
 // two publisher queries with what the test wants Windows to say. A nil entry
 // means the query produced no output; errored says it failed outright.
 func conflictRunner(installed, incoming string, retryOK bool) *mockRunnerSeq {
-	outputs := [][]byte{[]byte(conflict0x80073CF3), []byte(installed), []byte(incoming), nil, nil}
+	outputs := [][]byte{[]byte(conflict0x80073CF3), publisherOutput(installed), publisherOutput(incoming), nil, nil}
 	errs := []error{errors.New("exit status 1"), nil, nil, nil, nil}
 	if !retryOK {
 		outputs[4] = []byte("Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF9, Install failed.")
@@ -477,8 +488,29 @@ func TestWindowsInstaller_Install_0x80073CF3KeepsInstalledPackageUnlessPublisher
 	}
 }
 
-// A query that fails outright is not an answer. mockRunnerSeq returns an error
-// for the publisher query, and the installation must survive it.
+// The exit code is advisory, on the same contract trustCertificateWindows
+// established: a complete token is better evidence than a zero exit, because
+// only a successful query can print one. A publisher reported alongside a
+// non-zero exit is still a publisher.
+func TestWindowsInstaller_Install_TokenOutranksTheExitCode(t *testing.T) {
+	runner := conflictRunner(sideloadPublisher, otherPublisher, true)
+	// Both queries answer properly but exit non-zero — a trailing warning, a
+	// noisy profile, anything PowerShell decides to be unhappy about.
+	runner.errors[1] = errors.New("exit status 1")
+	runner.errors[2] = errors.New("exit status 1")
+
+	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+	if n := countRemoveAppxCalls(runner.calls); n != 1 {
+		t.Errorf("a tokenised answer was discarded because of the exit code; calls: %v", runner.calls)
+	}
+}
+
+// A query that fails outright is not an answer. The exit code is advisory — a
+// token is trusted whatever the exit status, as in trustCertificateWindows — so
+// what actually rules these out is that a failed query prints no token, only its
+// error. The installation must survive that.
 func TestWindowsInstaller_Install_PublisherQueryFailureKeepsInstalledPackage(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -650,6 +682,18 @@ func TestWindowsInstaller_Install_UnrecognisedQueryOutputIsNotAPublisher(t *test
 		{"deployment warning", "WARNING: The package repository is being rebuilt."},
 		{"whitespace only", "   \r\n  "},
 		{"empty", ""},
+		// The token started but never finished: the script died midway, or the
+		// output was truncated. Half an answer is not an answer.
+		{"unterminated token", publisherTokenStart + sideloadPublisher},
+		{"end token only", sideloadPublisher + publisherTokenEnd},
+		// A complete token is not enough on its own. If Select-Object ever
+		// stopped yielding a string the token would faithfully wrap the result,
+		// and anything that is not a publisher would read as a different one.
+		{"token wrapping a non-publisher", publisherTokenStart + "System.Object[]" + publisherTokenEnd},
+		{"token wrapping nothing", publisherTokenStart + publisherTokenEnd},
+		// A publisher-shaped string loose in an error message must not be
+		// mistaken for the answer; only the token may carry it.
+		{"untokenised publisher in an error", "Get-AppxPackage : cannot find a package published by CN=Contoso"},
 	}
 	// Both queries are checked: whichever one is poisoned, nothing may be removed.
 	for _, at := range []struct {
@@ -686,13 +730,13 @@ func TestWindowsInstaller_Install_UnrecognisedQueryOutputIsNotAPublisher(t *test
 // manager cannot tell the difference from the outside.
 func TestWindowsInstaller_PublisherQueriesStopOnError(t *testing.T) {
 	installed := installedPublisherCommand()
-	for _, want := range []string{windowsPackageName, "-ErrorAction Stop", "-ExpandProperty Publisher"} {
+	for _, want := range []string{windowsPackageName, "-ErrorAction Stop", "-ExpandProperty Publisher", publisherTokenStart, publisherTokenEnd} {
 		if !strings.Contains(installed, want) {
 			t.Errorf("installed-publisher query is missing %q: %s", want, installed)
 		}
 	}
 	asset := assetPublisherCommand(`C:\tmp\app.msix`)
-	for _, want := range []string{"$ErrorActionPreference='Stop'", "AppxManifest.xml", "Identity.Publisher", `C:\tmp\app.msix`} {
+	for _, want := range []string{"$ErrorActionPreference='Stop'", "AppxManifest.xml", "Identity.Publisher", `C:\tmp\app.msix`, publisherTokenStart, publisherTokenEnd} {
 		if !strings.Contains(asset, want) {
 			t.Errorf("asset-publisher query is missing %q: %s", want, asset)
 		}

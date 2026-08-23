@@ -124,16 +124,24 @@ const publisherConflictHRESULT = "80073cf3"
 // Windows permits at most one package per identity Name per user — that is the
 // conflict — so this yields a single value, not a list.
 //
-// -ErrorAction Stop makes any cmdlet error terminating, so PowerShell exits
-// non-zero and the answer is discarded. Without it a non-terminating error is
-// written to stderr while the process still exits 0, and because the manager
-// captures combined output that error text would arrive here looking like an
-// answer — a "publisher" that matches nothing, which reads as a difference,
-// which uninstalls. The dangerous direction is reached by doing nothing special,
-// so this is not optional.
+// -ErrorAction Stop makes a cmdlet error terminating, which stops the script
+// before it can print a token — the same reason trustCertificateScript needs it,
+// where a non-terminating error would skip the catch and emit the success token
+// for an import that never happened. Here it would let the script run on to
+// Write-Output with whatever $p ended up being, and a token is trusted precisely
+// because only a successful query can print one.
+//
+// The token is what makes the query safe to read at all. The manager captures
+// combined output, so a PowerShell error arrives on the same channel as the
+// answer; without a token to look for, that error text would be taken for a
+// publisher, and a "publisher" that matches nothing reads as a difference, which
+// uninstalls. The dangerous direction is the one reached by doing nothing
+// special, so neither of these is optional.
 func installedPublisherCommand() string {
-	return "Get-AppxPackage -Name '" + windowsPackageName + "' -ErrorAction Stop | " +
-		"Select-Object -ExpandProperty Publisher"
+	return "$ErrorActionPreference='Stop'; " +
+		"$p = Get-AppxPackage -Name '" + windowsPackageName + "' -ErrorAction Stop | " +
+		"Select-Object -ExpandProperty Publisher; " +
+		"if ($p) { Write-Output ('" + publisherTokenStart + "' + $p + '" + publisherTokenEnd + "') }"
 }
 
 // assetPublisherCommand reads Identity/@Publisher out of the .msix about to be
@@ -159,7 +167,9 @@ func assetPublisherCommand(assetPath string) string {
 		"$z=[IO.Compression.ZipFile]::OpenRead('" + assetPath + "'); " +
 		"try { $e=$z.GetEntry('AppxManifest.xml'); if ($e) { " +
 		"$r=New-Object IO.StreamReader($e.Open()); " +
-		"([xml]$r.ReadToEnd()).Package.Identity.Publisher } } finally { $z.Dispose() }"
+		"$p=([xml]$r.ReadToEnd()).Package.Identity.Publisher; " +
+		"if ($p) { Write-Output ('" + publisherTokenStart + "' + $p + '" + publisherTokenEnd + "') } } } " +
+		"finally { if ($z) { $z.Dispose() } }"
 }
 
 // publisherConflict reports whether the failed install is the publisher
@@ -196,30 +206,58 @@ func publisherConflict(runner CommandRunner, assetPath string) bool {
 	return installed != incoming
 }
 
+// Tokens the publisher queries emit around their answer, on the same contract as
+// the trust script's: the manager reads the value only from between them, and
+// their absence means "could not tell", never an answer. Two adjacent functions
+// in this file deciding success two different ways is how it got into trouble.
+//
+// A delimited pair rather than a single marker because this carries data, not a
+// verdict: the value has no fixed length, so it needs an end as well as a start.
+const (
+	publisherTokenStart = "CENTROIDX_PUBLISHER["
+	publisherTokenEnd   = "]END"
+)
+
 // publisherDNMarker is the one thing every Appx Publisher string has: it is an
 // X.500 distinguished name, and a distinguished name has a common name. Both
 // CentroidX's own "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB" and Microsoft's
 // "CN=Microsoft Corporation, O=..., C=US" carry it.
 const publisherDNMarker = "CN="
 
-// publisherAnswer runs a query and returns its answer only if the answer could
-// be a publisher at all. Anything else — a PowerShell error that reached stdout,
-// a warning, an empty result — is "could not determine", never an answer.
+// publisherAnswer runs a query and returns the publisher it reported, or "" for
+// "could not tell". Everything that is not a complete, plausible answer is the
+// latter — a PowerShell error that reached stdout, a warning, a half-written
+// token, an empty result.
 //
-// The check is here because the failure direction is asymmetric and unforgiving.
-// An unrecognised string is not equal to the other publisher, so passing it
-// through would read as "the publishers differ" and uninstall a working HMI on
-// the strength of a diagnostic message. Requiring the shape of a publisher turns
-// every such surprise into a refusal to act.
+// The verdict comes from the script's own tokens, and the exit code is advisory,
+// exactly as in trustCertificateWindows. Only our own Write-Output can produce
+// the token pair, and it only runs with a publisher in hand, so a complete token
+// is better evidence than a zero exit — while a non-zero exit with no token
+// stays what it always was: no answer.
+//
+// The value is then checked for the shape of a publisher. That is not
+// redundant with the token: if Select-Object ever stopped yielding a string, the
+// token would faithfully wrap something like "System.Object[]", and an
+// unrecognised string is not equal to the other publisher — so it would read as
+// "the publishers differ" and uninstall a working HMI. The failure direction
+// here is unforgiving enough to justify checking both.
 //
 // Whitespace is collapsed first so that a distinguished name the formatter
 // wrapped across lines compares equal to the same name that fitted on one.
 func publisherAnswer(runner CommandRunner, command string) string {
-	out, err := runner.Run("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
-	if err != nil {
+	out, _ := runner.Run("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+
+	collapsed := collapseWhitespace(string(out))
+	start := strings.Index(collapsed, publisherTokenStart)
+	if start < 0 {
 		return ""
 	}
-	answer := collapseWhitespace(string(out))
+	rest := collapsed[start+len(publisherTokenStart):]
+	end := strings.Index(rest, publisherTokenEnd)
+	if end < 0 {
+		return ""
+	}
+	answer := strings.TrimSpace(rest[:end])
 	if !strings.Contains(strings.ToUpper(answer), publisherDNMarker) {
 		return ""
 	}
