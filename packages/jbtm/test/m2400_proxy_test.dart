@@ -5,6 +5,90 @@ import 'dart:typed_data';
 import 'package:jbtm/jbtm.dart';
 import 'package:test/test.dart';
 
+/// Number of file descriptors this process currently holds.
+///
+/// Used by the descriptor-leak test below. POSIX only — `fdLeakSkip` guards
+/// the call sites, so this is never reached on Windows.
+int fdCount() {
+  if (Platform.isLinux) {
+    return Directory('/proc/self/fd').listSync().length;
+  }
+  // macOS has no /proc, and listing /dev/fd races against the listing's own
+  // descriptor. lsof is part of the base system and is present on the GitHub
+  // macos runners.
+  final result = Process.runSync('lsof', ['-p', '$pid']);
+  if (result.exitCode != 0) {
+    throw StateError('lsof failed: ${result.stderr}');
+  }
+  return (result.stdout as String)
+      .split('\n')
+      .where((line) => line.isNotEmpty)
+      .length;
+}
+
+/// Skip reason for descriptor-counting tests, or null when they can run.
+final String? fdLeakSkip =
+    Platform.isWindows ? 'no POSIX file-descriptor table on Windows' : null;
+
+// ---- TEMPORARY DIAGNOSTIC (fdlinux probe) ---------------------------------
+Map<String, String> fdSnapshot() {
+  final out = <String, String>{};
+  if (!Platform.isLinux) return out;
+  for (final e in Directory('/proc/self/fd').listSync()) {
+    final name = e.path.split('/').last;
+    String target;
+    try {
+      target = Link(e.path).targetSync();
+    } catch (err) {
+      target = '<unreadable>';
+    }
+    out[name] = target;
+  }
+  return out;
+}
+
+Map<String, String> socketTable() {
+  final table = <String, String>{};
+  if (!Platform.isLinux) return table;
+  for (final f in const ['/proc/net/tcp', '/proc/net/tcp6']) {
+    final file = File(f);
+    if (!file.existsSync()) continue;
+    for (final line in file.readAsLinesSync().skip(1)) {
+      final p = line.trim().split(RegExp(r'\s+'));
+      if (p.length < 10) continue;
+      table[p[9]] = 'local=${p[1]} rem=${p[2]} st=${p[3]}';
+    }
+  }
+  return table;
+}
+
+void dumpFd(String label, Map<String, String> before, Map<String, String> now) {
+  if (!Platform.isLinux) return;
+  final sockets = socketTable();
+  String describe(String fd, String target) {
+    final m = RegExp(r'^socket:\[(\d+)\]$').firstMatch(target);
+    if (m != null) {
+      final info = sockets[m.group(1)!];
+      return '$target ${info ?? "(no /proc/net/tcp row)"}';
+    }
+    return target;
+  }
+
+  final added = <String>[];
+  final removed = <String>[];
+  for (final e in now.entries) {
+    if (before[e.key] != e.value) added.add('  +fd ${e.key} -> ${describe(e.key, e.value)}');
+  }
+  for (final e in before.entries) {
+    if (now[e.key] != e.value) removed.add('  -fd ${e.key} -> ${e.value}');
+  }
+  print('[fdlinux] $label: before=${before.length} now=${now.length} '
+      'delta=${now.length - before.length}');
+  for (final l in removed) print('[fdlinux] $label$l');
+  for (final l in added) print('[fdlinux] $label$l');
+}
+// ---- end TEMPORARY DIAGNOSTIC ---------------------------------------------
+
 void main() {
   // TestTcpServer acts as the fake upstream M2400 device.
   late TestTcpServer upstream;
@@ -480,5 +564,141 @@ void main() {
       await proxy.shutdown();
       // If we get here without exception, the test passes
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Descriptor lifetime
+  //
+  // Every other downstream-disconnect test above uses `client.destroy()` — an
+  // abrupt RST, which self-cleans. The *graceful* path (peer sends FIN, i.e.
+  // `close()`) is what the docker healthcheck in docker/weigher-proxy does
+  // every 30s, and it closes only the read half. dart:io frees the descriptor
+  // when both halves are shut, and Socket carries no NativeFinalizer, so an
+  // unreachable Socket the proxy simply dropped from `_clients` keeps its
+  // descriptor for the life of the process.
+  // ---------------------------------------------------------------------------
+  group('descriptor lifetime', () {
+    test('graceful client close makes the proxy close its half too', () async {
+      await proxy.start();
+      await upstream.waitForClient();
+
+      final client = await connectClient(proxy.listenPort);
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(proxy.clientCount, equals(1));
+
+      // The proxy closing its side surfaces on this client as either a FIN
+      // (done) or an RST (error) depending on timing; both mean the peer
+      // descriptor is gone.
+      final peerClosed = Completer<void>();
+      void signal() {
+        if (!peerClosed.isCompleted) peerClosed.complete();
+      }
+
+      client.listen((_) {}, onDone: signal, onError: (_) => signal());
+
+      // Half-close: shut the write side only, exactly like
+      // `exec 3<>/dev/tcp/host/port` returning in the healthcheck.
+      unawaited(client.close());
+
+      await peerClosed.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => fail(
+          'proxy never closed its half of a gracefully-closed client — '
+          'the accepted socket (and its descriptor) is leaked',
+        ),
+      );
+      expect(proxy.clientCount, equals(0));
+    });
+
+    test('repeated graceful connect/close cycles return fds to baseline',
+        () async {
+      await proxy.start();
+      await upstream.waitForClient();
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      const cycles = 60;
+      final baseline = fdCount();
+
+      for (var i = 0; i < cycles; i++) {
+        final client = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          proxy.listenPort,
+        );
+        client.listen((_) {}, onError: (_) {});
+        // Graceful close, then release this side entirely so the only
+        // descriptor a growing count can be attributed to is the proxy's.
+        unawaited(client.close());
+        client.destroy();
+        await Future.delayed(const Duration(milliseconds: 2));
+      }
+
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      expect(proxy.clientCount, equals(0));
+
+      final after = fdCount();
+      // Slack for descriptors the runtime may open incidentally (lsof itself
+      // opens none in-process, but timers/isolates can). The leak is 1:1 with
+      // the cycle count, so anything near `cycles` is unmistakable.
+      expect(
+        after - baseline,
+        lessThanOrEqualTo(5),
+        reason: 'leaked ${after - baseline} descriptors over $cycles '
+            'graceful connect/close cycles (baseline $baseline, now $after)',
+      );
+    }, skip: fdLeakSkip);
+
+    test('shutdown() leaves no descriptors behind after graceful churn',
+        () async {
+      // TEMPORARY fdlinux probe: repeat the whole sequence many times, with
+      // and without a settle before shutdown(), and report the distribution.
+      final results = <String>[];
+      for (final settleMs in [0, 50]) {
+        for (var iter = 0; iter < 15; iter++) {
+          final up = TestTcpServer();
+          await up.start();
+          final p = M2400Proxy(
+            upstreamHost: 'localhost',
+            upstreamPort: up.port,
+            listenPort: 0,
+            listenAddress: InternetAddress.loopbackIPv4,
+          );
+          await p.start();
+          await up.waitForClient();
+          await Future.delayed(const Duration(milliseconds: 100));
+
+          final baseCount = fdCount();
+          final baseSnap = fdSnapshot();
+
+          for (var i = 0; i < 30; i++) {
+            final client = await Socket.connect(
+              InternetAddress.loopbackIPv4,
+              p.listenPort,
+            );
+            client.listen((_) {}, onError: (_) {});
+            unawaited(client.close());
+            client.destroy();
+            await Future.delayed(const Duration(milliseconds: 2));
+          }
+
+          final clientsBefore = p.clientCount;
+          if (settleMs > 0) {
+            await Future.delayed(Duration(milliseconds: settleMs));
+          }
+          await p.shutdown();
+          await Future.delayed(const Duration(milliseconds: 300));
+          final after = fdCount();
+          final delta = after - baseCount;
+          results.add('settle=$settleMs#$iter delta=$delta '
+              'clientsBeforeShutdown=$clientsBefore '
+              'clientsAfter=${p.clientCount}');
+          if (delta > -2) {
+            dumpFd('settle=$settleMs#$iter', baseSnap, fdSnapshot());
+          }
+          await up.shutdown();
+        }
+      }
+      fail('fdlinux probe results:\n${results.join('\n')}');
+    }, skip: fdLeakSkip, timeout: const Timeout(Duration(minutes: 5)));
   });
 }
