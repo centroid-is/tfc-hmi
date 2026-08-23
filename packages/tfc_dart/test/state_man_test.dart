@@ -213,8 +213,7 @@ void main() {
         await sub2.cancel();
       });
 
-      test('resendLastValue fails silently after raw stream completes',
-          () async {
+      test('resendLastValue is a no-op after raw stream completes', () async {
         ads = createADS();
         final raw = StreamController<DynamicValue>();
         ads.subscribe(raw.stream, null);
@@ -226,13 +225,12 @@ void main() {
         await raw.close();
         await Future.delayed(Duration.zero);
 
-        // This is the bug: resendLastValue tries to add to a closed subject
-        // Currently this throws or silently fails
-        expect(
-          () => ads.resendLastValue(),
-          // ReplaySubject.add on a closed subject throws StateError
-          throwsStateError,
-        );
+        // A spent entry can still be reachable from ClientWrapper.streams,
+        // and ClientWrapper._handleRecovery walks that set in a plain for
+        // loop. Throwing here aborted the loop, so every key after this one
+        // went unrefreshed after a reconnect. Adding to a closed subject is
+        // pointless anyway -- nobody can receive it -- so it returns quietly.
+        expect(() => ads.resendLastValue(), returnsNormally);
 
         await sub.cancel();
       });
@@ -585,7 +583,7 @@ void main() {
       });
 
       test(
-          'session loss — resendLastValues after raw stream done throws',
+          'session loss — resendLastValues after raw stream done is a no-op',
           () async {
         ads = createADS();
         final raw = StreamController<DynamicValue>();
@@ -599,8 +597,10 @@ void main() {
         await raw.close();
         await Future.delayed(Duration.zero);
 
-        // resendLastValues is called on session ACTIVATED
-        expect(() => ads.resendLastValue(), throwsStateError);
+        // resendLastValues is called on session ACTIVATED, once per stream
+        // the wrapper knows about. It must not throw for a spent one, or the
+        // keys behind it in the set never get their value back.
+        expect(() => ads.resendLastValue(), returnsNormally);
 
         await sub.cancel();
       });

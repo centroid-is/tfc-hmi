@@ -705,13 +705,30 @@ class ServerDisabledException extends StateManException {
 class SingleWorker {
   List<Completer<bool>> waiters = [];
 
+  /// How long a waiter blocks before giving up on the current owner.
+  ///
+  /// The owner only calls [complete] from the `finally` of its own work, so a
+  /// PLC (or isolate) that never answers means that `finally` never runs. An
+  /// unbounded wait here then parks every other key on the server with no
+  /// retry and no log. Giving up returns `false`, which puts the caller back
+  /// on its normal retry ladder -- it re-checks whether the work is still
+  /// needed before trying again, so this can never create duplicate work.
+  final Duration waitTimeout;
+
+  SingleWorker({this.waitTimeout = const Duration(seconds: 5)});
+
   Future<bool> doTheWork() async {
-    waiters.add(Completer<bool>());
+    final completer = Completer<bool>();
+    waiters.add(completer);
     if (waiters.length == 1) {
-      waiters.last.complete(true);
+      completer.complete(true);
+      return completer.future;
     }
 
-    return waiters.last.future;
+    return completer.future.timeout(waitTimeout, onTimeout: () {
+      waiters.remove(completer);
+      return false;
+    });
   }
 
   void complete() {
@@ -883,6 +900,11 @@ class ClientWrapper {
       _connectedSince = null;
     }
     _connectionStatus = next;
+    // StateMan._() installs a stateStream listener that calls this, and
+    // nothing ever cancels it -- not close(), not dispose(). close() disposes
+    // the wrapper, which closes this controller, so a state event racing
+    // shutdown would otherwise throw out of that listener.
+    if (_connectionController.isClosed) return;
     _connectionController.add(next);
   }
 
@@ -1736,14 +1758,14 @@ class StateMan {
         throw StateManException("Key: \"$key\" not found");
       }
       final (id, idx) = nodeId;
-      parameters[client] = {
-        id: [
-          AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
-          AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
-          AttributeId.UA_ATTRIBUTEID_DATATYPE,
-          AttributeId.UA_ATTRIBUTEID_VALUE,
-        ]
-      };
+      // Accumulate: assigning a fresh map here dropped every node but the
+      // last one for each client, so readMany returned a single value.
+      (parameters[client] ??= {})[id] = [
+        AttributeId.UA_ATTRIBUTEID_DESCRIPTION,
+        AttributeId.UA_ATTRIBUTEID_DISPLAYNAME,
+        AttributeId.UA_ATTRIBUTEID_DATATYPE,
+        AttributeId.UA_ATTRIBUTEID_VALUE,
+      ];
     }
 
     for (final pair in parameters.entries) {
@@ -1923,6 +1945,7 @@ class StateMan {
       ads._rawSub?.cancel();
       ads._rawSub = null;
       if (!ads._subject.isClosed) ads._subject.close();
+      _unregisterStream(ads);
     }
 
     // Changed keys with a live OPC UA monitor: re-point the monitored item
@@ -1941,6 +1964,7 @@ class StateMan {
         _subscriptions.remove(key);
         ads._idleTimer?.cancel();
         if (!ads._subject.isClosed) ads._subject.close();
+        _unregisterStream(ads);
         continue;
       }
       logger.i('[$alias] key mapping changed, resubscribing live: $key');
@@ -2052,6 +2076,20 @@ class StateMan {
     return keyMappings.lookupNodeId(key);
   }
 
+  /// Drop [ads] from every wrapper's resend set.
+  ///
+  /// [ClientWrapper.streams] is what [ClientWrapper._handleRecovery] walks
+  /// after an inactivity blip. An entry left behind once its subject is closed
+  /// is retained for the lifetime of the process, and every path that retires a
+  /// subscription must come through here -- there are three (idle timeout, raw
+  /// stream done, and key-mapping edits), and only the first two went through
+  /// the dispose callback.
+  void _unregisterStream(AutoDisposingStream ads) {
+    for (final w in clients) {
+      w.streams.remove(ads);
+    }
+  }
+
   @visibleForTesting
   void addSubscription({
     required String key,
@@ -2088,12 +2126,13 @@ class StateMan {
     // Register entry synchronously before any await so concurrent
     // callers for the same key hit the early return above.
     if (!_subscriptions.containsKey(key)) {
-      final ads = AutoDisposingStream<DynamicValue>(key, (key) {
+      late final AutoDisposingStream<DynamicValue> ads;
+      ads = AutoDisposingStream<DynamicValue>(key, (key) {
         _subscriptions.remove(key);
-        // Remove from wrapper's stream set on disposal
-        for (final w in clients) {
-          w.streams.remove(_subscriptions[key]);
-        }
+        // Remove from wrapper's stream set on disposal. Captured, not looked
+        // up: reading _subscriptions[key] here is always null -- the line
+        // above just removed it -- so this used to remove nothing at all.
+        _unregisterStream(ads);
         logger.d('Unsubscribed from $key');
       });
       _subscriptions[key] = ads;
@@ -2215,9 +2254,15 @@ class StateMan {
           try {
             // keepAliveCount=30 → inactivity after (100ms×30)+5s ≈ 8s.
             // Tolerates intermittent packet loss on unstable connections.
-            wrapper.subscriptionId = await client.subscriptionCreate(
-              requestedMaxKeepAliveCount: 30,
-            );
+            // Bounded: a server that accepts the channel and then never
+            // answers CreateSubscription would otherwise hold the worker
+            // forever, and with it every key routed to this server -- not on
+            // the retry ladder, on a bare await. The timeout drops through to
+            // the catch, the `finally` releases the worker, and the normal
+            // ladder takes over.
+            wrapper.subscriptionId = await client
+                .subscriptionCreate(requestedMaxKeepAliveCount: 30)
+                .timeout(const Duration(seconds: 10));
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
             wrapper.startHeartbeat(wrapper.subscriptionId!);
@@ -2457,6 +2502,13 @@ class AutoDisposingStream<T> {
         _logger.w('[$key] raw stream DONE — '
             'subject will close! listeners=$_listenerCount, '
             'subjectClosed=${_subject.isClosed}');
+        // A spent entry must not leave an idle timer armed. _onDispose
+        // removes BY KEY, so a timer surviving into the next subscription for
+        // this key would evict the live entry that replaced this one, and the
+        // subscriber after that would ask the PLC for four more monitored
+        // items while the displaced entry kept streaming.
+        _idleTimer?.cancel();
+        _idleTimer = null;
         _subject.close();
         // Retire the entry as well. The idle path already does both -- it
         // calls _onDispose before closing -- but this one used to close and
@@ -2488,6 +2540,8 @@ class AutoDisposingStream<T> {
   void _handleCancel() {
     _listenerCount--;
     _logger.d('[$key] listener removed (count=$_listenerCount)');
+    // Nothing left to retire, and nothing that may outlive this entry.
+    if (_subject.isClosed) return;
     if (_listenerCount == 0) {
       _logger.w(
           '[$key] no listeners left, starting ${idleTimeout.inSeconds}s idle timer');
@@ -2501,6 +2555,10 @@ class AutoDisposingStream<T> {
   }
 
   void resendLastValue() {
+    // A spent entry can still be reachable from ClientWrapper.streams; adding
+    // to its closed subject throws StateError, which would abort the recovery
+    // loop and leave every later key on that server unrefreshed.
+    if (_subject.isClosed) return;
     if (_lastValue != null) {
       _subject.add(_lastValue!);
     }
