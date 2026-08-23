@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'common.dart';
 import 'option_variable.dart';
+import 'helper/database_recovery.dart';
 import 'helper/timeseries_notify_mixin.dart';
 import '../../providers/current_page_assets.dart';
 import '../../providers/database.dart';
@@ -489,6 +490,18 @@ class _RateValueChartViewState extends ConsumerState<_RateValueChartView> {
     super.initState();
     _selectedInterval = Duration(minutes: widget.initialInterval);
     _graph = _getOrCreateGraph(_selectedInterval.inMinutes);
+    // This window is meant to be dragged off the readout and left running, so
+    // it has to survive the database coming up after it did. See
+    // reinitOnDatabaseAvailable.
+    reinitOnDatabaseAvailable(
+      ref,
+      currentDatabase: () => _db,
+      onDatabaseAvailable: (_) {
+        if (!mounted) return;
+        _pollTimer?.cancel();
+        _init();
+      },
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 

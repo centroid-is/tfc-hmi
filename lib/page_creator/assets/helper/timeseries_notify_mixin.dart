@@ -7,6 +7,7 @@ import 'package:tfc_dart/core/database_drift.dart' as drift_db;
 
 import '../../../providers/database.dart';
 import '../../../providers/state_man.dart';
+import 'database_recovery.dart';
 import 'timeseries_cache.dart';
 
 /// Mixin on [ConsumerState] that replaces timer-based polling with
@@ -69,6 +70,14 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
   void tsInit() {
     tsCache.init(tsKeys);
     _tsWatchIntervalVariable();
+    // The database is often not up yet — on a plant-wide power cut Flutter is
+    // drawing while Postgres is still replaying WAL. Without this the readout
+    // takes the null and stays blank until the station is restarted.
+    reinitOnDatabaseAvailable(
+      ref,
+      currentDatabase: () => _tsDb,
+      onDatabaseAvailable: (_) => _tsRestartData(),
+    );
     _tsInitData();
   }
 
@@ -121,6 +130,21 @@ mixin TimeseriesNotifyMixin<T extends ConsumerStatefulWidget>
         }
       });
     });
+  }
+
+  /// Drop what the previous (failed or superseded) connection left behind and
+  /// fetch again. Only reached when a *different* Database instance turns up,
+  /// so it cannot loop on a database that stays down.
+  void _tsRestartData() {
+    if (!_tsAlive) return;
+    for (final sub in _tsNotifySubs) {
+      sub.cancel();
+    }
+    _tsNotifySubs.clear();
+    _tsNotifyAlive.clear();
+    _tsRefreshTimer?.cancel();
+    _tsRefreshTimer = null;
+    _tsInitData();
   }
 
   Future<void> _tsInitData() async {

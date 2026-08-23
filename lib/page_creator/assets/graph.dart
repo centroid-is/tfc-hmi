@@ -13,6 +13,7 @@ import 'package:tfc_dart/converter/duration_converter.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'common.dart';
+import 'helper/database_recovery.dart';
 import '../../widgets/graph.dart';
 import '../../providers/database.dart';
 import '../../providers/state_man.dart';
@@ -676,6 +677,20 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
         tooltipBuilder: _buildTooltip,
         categoryColors: widget.config.colorPalette);
     _graph.theme(_themeFor(_chartTheme));
+    // The database is regularly not up yet when the first page renders — on a
+    // plant-wide power cut Flutter is drawing while Postgres is still
+    // replaying WAL. Without this the trend takes the null and stays empty
+    // until the station is restarted. Same teardown/rebuild pair
+    // didUpdateWidget uses; _init's generation counter settles any overlap.
+    reinitOnDatabaseAvailable(
+      ref,
+      currentDatabase: () => _db,
+      onDatabaseAvailable: (_) {
+        if (!mounted) return;
+        _cleanup();
+        _init();
+      },
+    );
     _init();
   }
 
@@ -1115,6 +1130,13 @@ class _GraphAssetState extends ConsumerState<GraphAsset> {
       subscription.cancel();
     }
     _realtimeSubscriptions.clear();
+    // _initRealtimeUpdates starts a 1 Hz throttle timer and assigns it here
+    // unconditionally. Leaving it running orphans one timer per teardown —
+    // per dispose, and per didUpdateWidget re-init — each holding this State
+    // alive for the life of the process.
+    _rtThrottleTimer?.cancel();
+    _rtThrottleTimer = null;
+    _rtThrottleBuffer.clear();
   }
 }
 
