@@ -347,7 +347,8 @@ Future<void> _startApp([bool debugMode = false]) async {
             flutterPid: pid,
           ),
           log: stderr.writeln,
-          show: (message) => globalScaffoldMessengerKey.currentState?.showSnackBar(
+          show: (message) =>
+              globalScaffoldMessengerKey.currentState?.showSnackBar(
             SnackBar(
               content: Text(message),
               duration: const Duration(seconds: 10),
@@ -625,7 +626,8 @@ class MyApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeAsync = ref.watch(themeNotifierProvider);
     final schemeAsync = ref.watch(colorSchemeNotifierProvider);
-    final (light, dark) = themesForScheme(schemeAsync.valueOrNull ?? AppColorScheme.solarized);
+    final (light, dark) = themesForScheme(
+        schemeAsync.valueOrNull ?? AppColorScheme.solarized);
 
     // Initialize MCP server lifecycle management
     ref.watch(mcpServerLifecycleProvider);

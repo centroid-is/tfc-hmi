@@ -599,8 +599,7 @@ class _SidePaneShell extends StatefulWidget {
 class _SidePaneShellState extends State<_SidePaneShell>
     // Two controllers, so not the Single- variant: [_controller] slides the
     // sheet in and out, [_fade] fades the body around a content swap.
-    with
-        TickerProviderStateMixin {
+    with TickerProviderStateMixin {
   /// The pane's own Navigator. The pane lives in the root overlay, and
   /// `Overlay.rearrange` keeps it above every route the app Navigator will
   /// ever push — so a `DropdownButton` menu or `showDialog` opened from pane
