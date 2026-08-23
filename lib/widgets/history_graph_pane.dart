@@ -9,6 +9,7 @@ import 'package:tfc_dart/core/collector.dart';
 import 'package:tfc_dart/core/database.dart';
 
 import 'graph.dart';
+import '../page_creator/assets/graph.dart' show describeTrendFetchError;
 import '../providers/collector.dart';
 import '../models/history_models.dart';
 
@@ -175,19 +176,16 @@ class _HistoryGraphPaneState extends ConsumerState<HistoryGraphPane> {
               data = snap.data!;
               _pausedData = data;
             } else if (snap.hasError) {
-              // Say what went wrong. A key whose table is missing, whose node
-              // the server no longer publishes, or whose collection is not
-              // configured used to sit on the spinner for good.
+              // Say what went wrong, in the same words the asset trends use.
+              // A key whose table is missing used to sit on the spinner.
               return Center(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
                   child: Text(
-                    'No data for ${widget.keys.join(', ')}\n${snap.error}',
+                    describeTrendFetchError(
+                        widget.keys.join(', '), snap.error!),
                     textAlign: TextAlign.center,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodyMedium
-                        ?.copyWith(color: Theme.of(context).colorScheme.error),
+                    style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ),
               );

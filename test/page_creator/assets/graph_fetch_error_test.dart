@@ -11,6 +11,7 @@ void main() {
       );
       expect(text, contains('No history for weigher4h.weight'));
       expect(text, contains('not being collected'));
+      expect(text, contains('PLC does not publish'));
       expect(text, isNot(contains('42P01')),
           reason: 'the SQLSTATE is for us, not the operator');
     });

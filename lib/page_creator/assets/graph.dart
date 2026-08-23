@@ -188,8 +188,9 @@ String describeTrendFetchError(String keys, Object e) {
   final text = e.toString();
   if (text.contains('42P01') || text.contains('does not exist')) {
     return 'No history for $keys.\n'
-        'This key is not being collected, so there is no table to read. '
-        'Add it to the collector to start recording.';
+        'There is no table for this key: it is not being collected, or its '
+        'collection never started because the PLC does not publish it. '
+        'Check the key mapping and the collector.';
   }
   return 'Could not load history for $keys.\n$text';
 }
