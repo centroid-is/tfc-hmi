@@ -286,3 +286,31 @@ func TestReplaceFile_GivesUpAndReportsTheRealError(t *testing.T) {
 		t.Errorf("retry is not bounded: %d attempts", attempts)
 	}
 }
+
+// The gap this closes was found by mutation: reverting DownloadAndVerify to a
+// plain os.Rename killed no test, because the others exercise replaceFile
+// directly. This one goes through the real download path with an obstructed
+// destination, so the wiring itself is covered.
+func TestDownloadAndVerify_ReplacesAnObstructedDestination(t *testing.T) {
+	checksumContent := buildChecksumContent(testAssetContent, testAssetFilename)
+	srv, assetURL, checksumURL := newTestServer(t, testAssetContent, checksumContent)
+	defer srv.Close()
+
+	destDir := t.TempDir()
+	// Stands in for a Windows destination that plain os.Rename cannot replace.
+	if err := os.Mkdir(filepath.Join(destDir, testAssetFilename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := DownloadAndVerify(context.Background(), assetURL, checksumURL, testAssetFilename, destDir, nil)
+	if err != nil {
+		t.Fatalf("download did not clear the obstructed destination: %v", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read verified file: %v", readErr)
+	}
+	if string(data) != testAssetContent {
+		t.Errorf("file content mismatch: got %q", string(data))
+	}
+}
