@@ -177,7 +177,7 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
   @override
   void dispose() {
     // The pane is docked to the root overlay and would outlive this route.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _sub?.cancel();
     _controller.dispose();
     super.dispose();

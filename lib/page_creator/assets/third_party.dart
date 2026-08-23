@@ -494,6 +494,19 @@ const List<SpeedBatcherStatusBit> speedBatcherStatusBits = [
   SpeedBatcherStatusBit('p_stat_Dropped', 'Dropped Batch', Colors.green),
 ];
 
+/// The machine's name as it reads inside a diode label.
+///
+/// Shorter than [ThirdPartyEquipmentKindInfo.label], which carries the make
+/// ("Afak / Strapex strapping line") -- a row saying "Fish waiting to drop to
+/// Afak / Strapex strapping line" is worse than useless.
+String equipmentShortName(ThirdPartyEquipmentKind kind) => switch (kind) {
+      ThirdPartyEquipmentKind.multivac => 'Multivac',
+      ThirdPartyEquipmentKind.speedBatcher => 'SpeedBatcher',
+      ThirdPartyEquipmentKind.boxErector => 'box erector',
+      ThirdPartyEquipmentKind.strappingLine => 'strapping machine',
+      ThirdPartyEquipmentKind.fishAligner => 'batch aligner',
+    };
+
 /// One diode in a non-SpeedBatcher machine's Status section.
 ///
 /// [suffix] is appended to the asset's [ThirdPartyEquipmentConfig.statusKey],
@@ -504,9 +517,29 @@ const List<SpeedBatcherStatusBit> speedBatcherStatusBits = [
 /// plus a fixed suffix list is the closest equivalent.
 class EquipmentStatusBit {
   final String suffix;
+
+  /// Label template. `{m}` is replaced with the machine's name, so a row reads
+  /// "Fish waiting to drop to Multivac" rather than "Fish waiting to drop" --
+  /// the pane is one of several open at once and a bare label leaves the
+  /// operator working out which machine it belongs to.
   final String label;
+
   final Color onColor;
   const EquipmentStatusBit(this.suffix, this.label, this.onColor);
+
+  /// [label] with the machine name filled in, sentence-cased.
+  ///
+  /// The names are stored the way they read MID-sentence -- "box erector",
+  /// "batch aligner", but "Multivac", which is a make and capitalised
+  /// wherever it falls. Some rows start with the name and some do not, so the
+  /// first letter of the finished label is what gets capitalised, not the
+  /// name: "Box erector is ready for box bottom", "Way out of box erector is
+  /// clear".
+  String labelFor(String machine) {
+    final filled = label.replaceAll('{m}', machine);
+    if (filled.isEmpty) return filled;
+    return filled[0].toUpperCase() + filled.substring(1);
+  }
 }
 
 /// The diodes each kind shows, in display order.
@@ -544,25 +577,25 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
   // Green means "yes, now", amber something in progress, blue the outfeed side,
   // so a glance down the column reads the same on every machine.
   ThirdPartyEquipmentKind.strappingLine: [
-    EquipmentStatusBit('PermitInfeed', 'Ready for box', Colors.green),
-    EquipmentStatusBit('PermitOutfeed', 'Way out clear', Colors.blue),
+    EquipmentStatusBit('PermitInfeed', '{m} is ready for box', Colors.green),
+    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', Colors.blue),
   ],
   ThirdPartyEquipmentKind.boxErector: [
-    EquipmentStatusBit('PermitBottomInfeed', 'Ready for box bottom', Colors.green),
-    EquipmentStatusBit('PermitBlockInfeed', 'Ready for block', Colors.green),
-    EquipmentStatusBit('PermitOutfeed', 'Way out clear', Colors.blue),
+    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', Colors.green),
+    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', Colors.green),
+    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', Colors.blue),
   ],
   ThirdPartyEquipmentKind.multivac: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting to release', Colors.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop', Colors.amber),
-    EquipmentStatusBit('DropOk', 'Ready for fish', Colors.green),
-    EquipmentStatusBit('DropFinished', 'Drop complete', Colors.blue),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', Colors.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', Colors.amber),
+    EquipmentStatusBit('DropOk', '{m} is ready for fish', Colors.green),
+    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', Colors.blue),
   ],
   ThirdPartyEquipmentKind.fishAligner: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting to release', Colors.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop', Colors.amber),
-    EquipmentStatusBit('DropOk', 'Ready for fish', Colors.green),
-    EquipmentStatusBit('DropFinished', 'Drop complete', Colors.blue),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', Colors.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', Colors.amber),
+    EquipmentStatusBit('DropOk', '{m} is ready for fish', Colors.green),
+    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', Colors.blue),
   ],
 };
 
@@ -579,9 +612,13 @@ class EquipmentStatusDiodes extends StatelessWidget {
     super.key,
     required this.bits,
     required this.values,
+    required this.machine,
   });
 
   final List<EquipmentStatusBit> bits;
+
+  /// Name filled into each label's `{m}`.
+  final String machine;
 
   /// Latest value per suffix. A missing entry renders unknown -- the same grey
   /// `!` a missing struct member gets on the SpeedBatcher.
@@ -589,11 +626,24 @@ class EquipmentStatusDiodes extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A hairline between rows, at the same alpha the pane chrome uses for its
+    // header and footer borders, so the section reads as a list of separate
+    // states rather than one block of text with dots beside it. Between only:
+    // a rule under the last row would fight the section's own boundary.
+    final rule = Divider(
+      height: 1,
+      thickness: 1,
+      color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
+    );
     return Column(
       children: [
-        for (final bit in bits)
+        for (final (i, bit) in bits.indexed) ...[
+          if (i > 0) rule,
           PaneDetailRow(
-            label: bit.label,
+            // The diode is a fixed 22 px against a label that wraps, so centre
+            // it -- top-aligned it hangs off the first line of a two-line row.
+            crossAxisAlignment: CrossAxisAlignment.center,
+            label: bit.labelFor(machine),
             child: SizedBox(
               // 22 px for the same reason as the SpeedBatcher's: below this the
               // unknown state's `!` blurs into the off state.
@@ -611,6 +661,7 @@ class EquipmentStatusDiodes extends StatelessWidget {
               ),
             ),
           ),
+        ],
       ],
     );
   }
@@ -677,6 +728,7 @@ class SpeedBatcherStatusDiodes extends StatelessWidget {
       children: [
         for (final bit in speedBatcherStatusBits)
           PaneDetailRow(
+            crossAxisAlignment: CrossAxisAlignment.center,
             label: bit.label,
             // 22 px, not smaller: the unknown state is a grey fill with a
             // white `!`, and below this size the glyph blurs out and unknown
@@ -1082,7 +1134,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     // A docked pane lives in the root overlay, so it would survive a page
     // change and go on showing a machine that is no longer on screen. Scoped
     // by id so we never close someone else's pane.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _sub?.cancel();
     _raw.dispose();
     _statusSub?.cancel();
@@ -1091,6 +1143,10 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       sub.cancel();
     }
     _bitSubs.clear();
+    // Safe because the closeSidePane above is `immediate` -- the overlay entry
+    // is gone in this frame, not gliding out over the next dozen. Without that
+    // the pane would still be mounted and rebuilding against this notifier,
+    // and disposing it here threw on the next rebuild.
     _statusBits.dispose();
     super.dispose();
   }
@@ -1292,6 +1348,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               child: EquipmentStatusDiodes(
                 bits: kEquipmentStatusBits[config.kind]!,
                 values: _statusBits.value,
+                machine: equipmentShortName(config.kind),
               ),
             ),
           if (config.notes != null && config.notes!.isNotEmpty)

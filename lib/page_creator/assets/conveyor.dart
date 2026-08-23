@@ -1756,7 +1756,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
   void dispose() {
     // A docked pane outlives the route that opened it, so a page change must
     // not leave this conveyor's pane behind.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _augerAnimationTimer?.cancel();
     _augerPhase.dispose();
     _simulateBatchesTimer?.cancel();

@@ -437,12 +437,21 @@ class PaneDetailRow extends StatelessWidget {
   /// Tints the value, e.g. red for a fault code.
   final Color? valueColor;
 
+  /// How the label and the value line up.
+  ///
+  /// Top-aligned by default, which is right for two blocks of text: a label
+  /// that wraps should start level with its value. A fixed-height child --
+  /// a diode, a chip -- wants centring instead, or it hangs at the top of a
+  /// row whose height its wrapping label decided.
+  final CrossAxisAlignment crossAxisAlignment;
+
   const PaneDetailRow({
     super.key,
     required this.label,
     this.value,
     this.child,
     this.valueColor,
+    this.crossAxisAlignment = CrossAxisAlignment.start,
   }) : assert(value != null || child != null,
             'PaneDetailRow needs either a value or a child');
 
@@ -452,7 +461,7 @@ class PaneDetailRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: crossAxisAlignment,
         children: [
           Expanded(
             flex: 4,

@@ -222,7 +222,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
   @override
   void dispose() {
     // The pane outlives this widget's route otherwise.
-    closeSidePane(id: _paneId);
+    closeSidePane(id: _paneId, immediate: true);
     _controller.dispose();
     _progress.dispose();
     super.dispose();

@@ -238,7 +238,17 @@ Rect? _paintRectOf(BuildContext context) {
 /// When [id] is given the pane closes only if that id is the one showing —
 /// use this from an asset's `dispose()` so a pane cannot outlive the widget
 /// that opened it after a page change.
-void closeSidePane({String? id}) => SidePaneHost.close(id: id);
+/// Close the docked pane, optionally without the exit animation.
+///
+/// [immediate] removes the overlay entry in this frame instead of gliding it
+/// out. Use it from a `dispose()`: the normal path awaits the slide, so the
+/// pane stays mounted and rebuilding for the length of it -- against a state
+/// object that has just been torn down. Anything the pane reads (a
+/// ValueNotifier, a stream) is gone by then, and the rebuild throws. Leaving
+/// the page is also the one time the glide buys nothing, since the page it
+/// was gliding away from is going too.
+void closeSidePane({String? id, bool immediate = false}) =>
+    SidePaneHost.close(id: id, immediate: immediate);
 
 /// Whether a pane (optionally a specific [id]) is currently open.
 bool isSidePaneOpen({String? id}) =>
@@ -453,12 +463,26 @@ abstract final class SidePaneHost {
     ValueChanged<double>? onWidthChanged,
     Rect? avoidRect,
   }) {
-    // Replacing an open pane: drop the old one without its exit animation so
-    // the two never overlap. An engaged inset rides across the swap (see
-    // [_insetEngaged]) — without `keepInset` the page would snap out and
-    // glide back in for what the operator experiences as one open pane.
-    final keepInset = _openId != null && _insetEngaged;
-    _removeNow(keepInset: keepInset);
+    // Replacing an open pane: keep the sheet and swap what is inside it. The
+    // old path removed the overlay entry and inserted a new one, so the pane
+    // slid out and back in -- a container animating for a content change,
+    // which is the one thing a persistent side sheet should never do.
+    final shell = _shellKey?.currentState;
+    if (shell != null && _openId != null) {
+      // The pane it is replacing is finished with, even though the sheet
+      // stays: the old path removed the entry and _removeNow ran this, and
+      // callers rely on it. The page editor's, for one, flushes the config
+      // edits made in the pane it is leaving into the undo history -- skip it
+      // and edits to the previous asset are silently dropped.
+      final previous = _onClosed;
+      _openId = id;
+      _onClosed = onClosed;
+      _avoidRect = avoidRect;
+      _width = width ?? SidePaneDefaults.width;
+      shell.swapTo(id, builder);
+      previous?.call();
+      return;
+    }
     _avoidRect = avoidRect;
 
     final overlay = Overlay.of(context, rootOverlay: true);
@@ -479,11 +503,11 @@ abstract final class SidePaneHost {
     overlay.insert(_entry!);
   }
 
-  static void close({String? id}) {
+  static void close({String? id, bool immediate = false}) {
     if (_openId == null) return;
     if (id != null && id != _openId) return;
     final shell = _shellKey?.currentState;
-    if (shell == null) {
+    if (shell == null || immediate) {
       _removeNow();
       return;
     }
@@ -546,7 +570,9 @@ class _SidePaneShell extends StatefulWidget {
 }
 
 class _SidePaneShellState extends State<_SidePaneShell>
-    with SingleTickerProviderStateMixin {
+    // Two controllers, so not the Single- variant: [_controller] slides the
+    // sheet in and out, [_fade] fades the body around a content swap.
+    with TickerProviderStateMixin {
   /// The pane's own Navigator. The pane lives in the root overlay, and
   /// `Overlay.rearrange` keeps it above every route the app Navigator will
   /// ever push — so a `DropdownButton` menu or `showDialog` opened from pane
@@ -557,6 +583,45 @@ class _SidePaneShellState extends State<_SidePaneShell>
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   late final OverlayEntry _paneEntry = OverlayEntry(builder: _buildPane);
+
+  /// The content currently shown, and the id it belongs to.
+  ///
+  /// Held in state rather than read off the widget so an open pane can be
+  /// pointed at different content without the overlay entry being replaced --
+  /// see [swapTo].
+  late WidgetBuilder _builder = widget.builder;
+  late Object _contentKey = SidePaneHost._openId ?? 'pane';
+
+  /// Fades the body out and back in around a content change.
+  ///
+  /// Deliberately sequential rather than a cross-fade. Two translucent copies
+  /// stacked let the sheet's own surface show through both, so the middle of
+  /// the transition reads as a flash -- and an incoming child that also scales
+  /// makes the content jump while it brightens. One thing on screen at a time,
+  /// no scale, and the sheet itself never moves.
+  late final AnimationController _fade = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 110),
+    value: 1,
+  );
+
+  /// Show different content in this pane, without closing it.
+  ///
+  /// Tapping a second device while a pane is open used to tear the whole shell
+  /// down and build a new one, so the sheet slid out and back in for what the
+  /// operator experiences as one pane changing what it is about. The sheet now
+  /// stays exactly where it is.
+  Future<void> swapTo(String id, WidgetBuilder builder) async {
+    if (_contentKey == id) return;
+    await _fade.reverse();
+    if (!mounted) return;
+    setState(() {
+      _builder = builder;
+      _contentKey = id;
+    });
+    if (!mounted) return;
+    await _fade.forward();
+  }
 
   late final AnimationController _controller = AnimationController(
     vsync: this,
@@ -582,6 +647,7 @@ class _SidePaneShellState extends State<_SidePaneShell>
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
     SidePaneHost._forget(widget.key);
+    _fade.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -687,7 +753,13 @@ class _SidePaneShellState extends State<_SidePaneShell>
       ),
       color: Theme.of(context).colorScheme.surface,
       clipBehavior: Clip.antiAlias,
-      child: widget.builder(context),
+      child: FadeTransition(
+        opacity: CurvedAnimation(parent: _fade, curve: Curves.easeInOut),
+        child: KeyedSubtree(
+          key: ValueKey<Object>(_contentKey),
+          child: _builder(context),
+        ),
+      ),
     );
 
     if (widget.resizable) {
