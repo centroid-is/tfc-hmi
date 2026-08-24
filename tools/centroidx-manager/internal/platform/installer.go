@@ -230,9 +230,11 @@ const (
 )
 
 // publisherDNMarker is the one thing every Appx Publisher string has: it is an
-// X.500 distinguished name, and a distinguished name has a common name. Both
-// CentroidX's own "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB" and Microsoft's
-// "CN=Microsoft Corporation, O=..., C=US" carry it.
+// X.500 distinguished name, and a distinguished name has a common name. Ours
+// ("CN=Centroid, O=Centroid ehf., C=IS"), the GUID one stations were installed
+// under before it, and Microsoft's ("CN=Microsoft Corporation, O=..., C=US")
+// all carry it -- which is what lets the conflict check compare two publishers
+// without knowing either.
 const publisherDNMarker = "CN="
 
 // publisherAnswer runs a query and returns the publisher it reported, or "" for
