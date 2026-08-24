@@ -70,6 +70,15 @@ func Run(opts Options) {
 		default:
 			runInstallMode(w, th, eng)
 		}
+
+		// The mode function returns when the window is gone, and nothing is
+		// left to do -- but app.Main() below is still parked on an event loop
+		// with no windows in it, and it is the only other goroutine. The Go
+		// runtime calls that a deadlock and kills the process with a fatal
+		// error and a stack trace, which is what an operator closing the
+		// manager left in the log every time. Exiting here is Gio's own
+		// answer: app.Main() never returns by design.
+		os.Exit(0)
 	}()
 	app.Main()
 }
