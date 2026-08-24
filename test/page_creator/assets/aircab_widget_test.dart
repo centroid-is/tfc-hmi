@@ -12,7 +12,12 @@
 /// be written for; it cannot pass both at once.
 library;
 
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FontLoader;
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -36,7 +41,8 @@ AirCabConfig _config() => AirCabConfig(
 /// test rebuilds the subtree outright. Reusing it would leave `AnimatedTheme`
 /// mid-lerp after a single frame, and the assertion would read the *previous*
 /// scheme's color.
-Future<void> _pump(WidgetTester tester, ThemeData theme) async {
+Future<void> _pump(WidgetTester tester, ThemeData theme,
+    {double width = 220, double height = 220}) async {
   await tester.pumpWidget(
     ProviderScope(
       child: MaterialApp(
@@ -45,8 +51,8 @@ Future<void> _pump(WidgetTester tester, ThemeData theme) async {
         home: Scaffold(
           body: Center(
             child: SizedBox(
-              width: 220,
-              height: 220,
+              width: width,
+              height: height,
               child: AirCab(config: _config()),
             ),
           ),
@@ -123,6 +129,60 @@ void main() {
         expect(led.config.offColor.isRole, isTrue,
             reason: 'role-backed colors re-resolve when the scheme changes');
       }
+    });
+  });
+
+  /// The cabinet used to wrap itself in `AspectRatio(1)`, so it was square no
+  /// matter what box the page gave it — and on a square the caption font
+  /// (half its row) always outruns the width beside the lamp, so "Pressure"
+  /// and "Soft start" ellipsized at *every* size. Jon: "make the golden wider
+  /// so the text doesnt …". Width can only help if the widget accepts it.
+  group('a wider cabinet gives its width to the captions', () {
+    // Measured with the real UI font: the FlutterTest fallback is a square
+    // font (every glyph a full em), which overstates "Pressure" by ~1.7× and
+    // would demand a 3:1 box for words that fit at 2:1 on a station.
+    setUpAll(() async {
+      final bytes =
+          File('lib/fonts/roboto-mono/RobotoMono-Regular.ttf').readAsBytesSync();
+      // The solarized theme names 'roboto-mono' as its family; load 'Roboto'
+      // too so a default-styled Text resolves to the same metrics.
+      for (final family in const ['roboto-mono', 'Roboto']) {
+        await (FontLoader(family)
+              ..addFont(Future.value(ByteData.view(bytes.buffer))))
+            .load();
+      }
+    });
+
+    testWidgets('at 2:1 both captions render in full', (tester) async {
+      await _pump(tester, solarized().$2, width: 400, height: 200);
+
+      for (final caption in const ['Pressure', 'Soft start']) {
+        final paragraph =
+            tester.renderObject<RenderParagraph>(find.text(caption));
+        expect(paragraph.didExceedMaxLines, isFalse);
+        final wanted = TextPainter(
+          text: paragraph.text,
+          textDirection: TextDirection.ltr,
+          maxLines: 1,
+        )..layout();
+        expect(
+          wanted.width,
+          lessThanOrEqualTo(paragraph.size.width + 0.5),
+          reason: '"$caption" wants ${wanted.width.toStringAsFixed(1)}px and '
+              'was given ${paragraph.size.width.toStringAsFixed(1)}px — the '
+              'word is ellipsized even though the cabinet was handed twice '
+              'the width',
+        );
+      }
+    });
+
+    testWidgets('the cabinet fills a non-square box instead of letterboxing',
+        (tester) async {
+      await _pump(tester, solarized().$2, width: 400, height: 200);
+      final box = tester.getSize(find.byType(AirCab));
+      expect(box.width, 400,
+          reason: 'an AspectRatio(1) wrapper would clamp this to 200 and '
+              'centre a square in the empty width');
     });
   });
 }
