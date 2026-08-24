@@ -22,8 +22,9 @@
 #   1. Creates a self-signed certificate with Publisher CN matching MSIX manifest
 #   2. Exports the PFX (private key) — store securely, never commit to source control
 #   3. Exports the CER (public key only) — distribute to target machines for trust
-#   4. Prints the PFX as base64 for storage as a GitHub Actions secret
-#   5. Prints instructions for storing secrets in CI
+#   4. Removes the certificate from the user store (the PFX has the key now)
+#   5. Prints the PFX as base64 for storage as a GitHub Actions secret
+#   6. Prints instructions for storing secrets in CI
 #
 # REQUIRED SECRETS (store in GitHub repository secrets):
 #   MSIX_CERT_PFX_BASE64  — base64-encoded content of centroidx-sideload.pfx
@@ -124,7 +125,21 @@ Export-Certificate `
 Write-Host "  Exported: $CerOutputPath"
 Write-Host ""
 
-Write-Host "Step 4: Encoding PFX as base64 for GitHub secret..."
+Write-Host "Step 4: Removing the certificate from the user store..."
+# The PFX now holds the private key, and this is a RELEASE SIGNING key: leaving a
+# second, exportable copy sitting in whoever ran this script's personal store is
+# a copy nobody is tracking. The store entry is not needed by anything -- CI signs
+# from the PFX secret, stations only ever see the CER.
+Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force
+if (Test-Path "Cert:\CurrentUser\My\$($cert.Thumbprint)") {
+    Write-Warning "Could not remove the certificate from Cert:\CurrentUser\My."
+    Write-Warning "Delete thumbprint $($cert.Thumbprint) by hand: the private key is still there."
+} else {
+    Write-Host "  Removed from Cert:\CurrentUser\My (the key lives in the PFX now)"
+}
+Write-Host ""
+
+Write-Host "Step 5: Encoding PFX as base64 for GitHub secret..."
 $pfxBytes  = [IO.File]::ReadAllBytes((Resolve-Path $PfxOutputPath))
 $pfxBase64 = [Convert]::ToBase64String($pfxBytes)
 Write-Host ""
