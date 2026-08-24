@@ -13,7 +13,14 @@ void RedirectIOToConsole();
 
 // Redirects stdout and stderr to a log file. Truncates |path|; call
 // RotateLogs first to keep the previous run.
-void RedirectIOToFile(const char* path);
+// Redirects this process's stdout and stderr to the file at |path|.
+//
+// Returns whether the ENGINE's streams were resynced along with them, i.e.
+// whether Dart's print() output will also reach the file. That is only
+// possible when the process has a console (see the implementation), so a
+// launch from a shortcut gets the C++ side only and the Dart side has to
+// write the file itself.
+bool RedirectIOToFile(const char* path);
 
 // Default log file location: %LOCALAPPDATA%\centroid-hmi\logs\hmi.log,
 // creating the directory. Returns an empty string if it cannot be created.
