@@ -186,14 +186,15 @@ func TestWindowsInstaller_TrustCertificate_UnelevatedIsReportedInAnyLanguage(t *
 			if len(runner.calls) < 3 || !hasArgContaining(allArgs(runner.calls[2]), "RunAs") {
 				t.Fatalf("expected an elevated retry, got calls: %d", len(runner.calls))
 			}
-			if !strings.Contains(err.Error(), "elevated") {
-				t.Errorf("expected the error to name elevation, got: %v", err)
+			// Short and plain: the operator gets what happened, not a
+			// PowerShell error record and a command to paste.
+			if !strings.Contains(err.Error(), "publisher") {
+				t.Errorf("expected the error to be about approving the "+
+					"publisher, got: %v", err)
 			}
-			if !strings.Contains(err.Error(), "Import-Certificate -FilePath") {
-				t.Errorf("expected the one-time remediation command, got: %v", err)
-			}
-			if !strings.Contains(err.Error(), `C:\tmp\centroidx.cer`) {
-				t.Errorf("expected the cert path in the remediation command, got: %v", err)
+			if len(err.Error()) > 160 {
+				t.Errorf("the message is a wall of text again (%d chars): %v",
+					len(err.Error()), err)
 			}
 		})
 	}

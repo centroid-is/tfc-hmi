@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"os"
 	"errors"
 	"os/exec"
 	"strings"
@@ -422,9 +423,21 @@ func certPresentScript(certPath string) string {
 // store, never by the elevated child's output (it runs in another console we
 // cannot read).
 func elevatedTrustScript(certPath string) string {
+	// Elevate the MANAGER, not PowerShell: the approval prompt then names
+	// "CentroidX Version Manager", which is the program the operator just
+	// started, instead of "Windows PowerShell", which looks like something
+	// they did not ask for. -trust-cert is the flag the elevated copy runs.
+	self, err := os.Executable()
+	if err != nil || self == "" {
+		self = "powershell"
+	}
+	args := `'-trust-cert','` + certPath + `'`
+	if self == "powershell" {
+		args = `'-NoProfile','-NonInteractive','-Command','` + importCertificateCommand(certPath) + `'`
+	}
 	return `try { ` +
-		`$p = Start-Process -FilePath 'powershell' -Verb RunAs -Wait -PassThru -WindowStyle Hidden ` +
-		`-ArgumentList '-NoProfile','-NonInteractive','-Command','` + importCertificateCommand(certPath) + `'; ` +
+		`$p = Start-Process -FilePath '` + self + `' -Verb RunAs -Wait -PassThru -WindowStyle Hidden ` +
+		`-ArgumentList ` + args + `; ` +
 		`Write-Output ('CENTROIDX_ELEVATED_EXIT=' + $p.ExitCode) } ` +
 		`catch { Write-Output '` + trustDeclinedToken + `'; Write-Output $_.Exception.Message }`
 }
@@ -463,6 +476,15 @@ func trustCertificateScript(certPath string) string {
 		`Write-Output $_.Exception.Message; exit 1 }`
 }
 
+// ImportCertificateNow performs the import with no elevation attempt and no
+// store check: it is what the elevated copy of the manager runs. Exported so
+// main can route -trust-cert straight to it; going through
+// trustCertificateWindows there would ask for elevation again from a process
+// that already has it.
+func ImportCertificateNow(certPath string) error {
+	return importCertificateDirect(execRunner{}, certPath)
+}
+
 // trustCertificateWindows imports a certificate into LocalMachine\TrustedPeople.
 //
 // Writing to a machine-level store requires administrator rights, and the
@@ -480,7 +502,12 @@ func trustCertificateWindows(runner CommandRunner, certPath string) error {
 	if certAlreadyTrusted(runner, certPath) {
 		return nil
 	}
+	return importCertificateDirect(runner, certPath)
+}
 
+// importCertificateDirect runs the import and, when it fails for rights,
+// retries once through an elevated copy of the manager.
+func importCertificateDirect(runner CommandRunner, certPath string) error {
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
@@ -512,21 +539,19 @@ func trustCertificateWindows(runner CommandRunner, certPath string) error {
 				"-Command",
 				elevatedTrustScript(certPath),
 			)
+			_ = elevOut
 			if certAlreadyTrusted(runner, certPath) {
 				return nil
 			}
 			elevDetail := strings.TrimSpace(string(elevOut))
 			if strings.Contains(strings.ToUpper(elevDetail), trustDeclinedToken) {
 				return &commandError{
-					op: "Import-Certificate needs administrator approval and the elevation prompt was declined. " +
-						"The release stays untrusted until it is approved once; alternatively run this from an elevated PowerShell: " +
-						importCertificateCommand(certPath),
+					op:    "Approval was declined, so the publisher is still not approved.",
 					cause: cause,
 				}
 			}
 			return &commandError{
-				op: "Import-Certificate failed even elevated (" + elevDetail + "). Run this once from an elevated PowerShell: " +
-					importCertificateCommand(certPath) + " — detail: " + detail,
+				op:    "Approving the publisher failed: " + firstLine(elevDetail),
 				cause: cause,
 			}
 		}
@@ -692,3 +717,12 @@ func (e *commandError) Error() string {
 }
 
 func (e *commandError) Unwrap() error { return e.cause }
+
+// firstLine keeps an error to its first line: the rest of a PowerShell error
+// record is the script that produced it, which an operator has no use for.
+func firstLine(s string) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
+}

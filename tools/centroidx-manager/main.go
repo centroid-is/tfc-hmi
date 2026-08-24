@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/centroid-is/centroidx-manager/internal/platform"
 	"github.com/centroid-is/centroidx-manager/internal/ui"
 	"github.com/centroid-is/centroidx-manager/internal/update"
 )
@@ -62,8 +63,19 @@ func main() {
 	prsMode := flag.Bool("prs", false, "Show open PRs with CI artifacts to install from (dev/testing)")
 	localPkg := flag.String("local-package", "", "Install from a local package file (dev/testing: skip GitHub Releases)")
 	artifactURL := flag.String("artifact-url", "", "Download and install from a direct URL (dev/testing: CI artifact URLs)")
+	trustCert := flag.String("trust-cert", "", "Import a signing certificate into the machine trust store (used by the elevated copy of the manager; assumes it is already elevated)")
 
 	flag.Parse()
+
+	// The elevated copy: import and exit, no window, no UI. Everything the
+	// operator sees happens in the parent that asked Windows for approval.
+	if *trustCert != "" {
+		if err := platform.ImportCertificateNow(*trustCert); err != nil {
+			fmt.Fprintf(os.Stderr, "trust certificate: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if !update.ValidChannel(*channel) {
 		fmt.Fprintf(os.Stderr, "unknown channel %q: expected %q or %q\n", *channel, update.ChannelStable, update.ChannelLatest)
