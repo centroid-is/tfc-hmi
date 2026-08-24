@@ -33,6 +33,14 @@ void main() {
           'opcua_node': {'namespace': 3, 'identifier': 'Pump3.Pressure'},
           'collect': {'enabled': false},
         },
+        'weigher9v.acceptWeight': {
+          'm2400_node': {
+            'record_type': 'recBatch',
+            'field': 'weight',
+            'server_alias': 'weigher9v',
+            'status_filter': 0,
+          },
+        },
       },
     };
 
@@ -222,8 +230,8 @@ void main() {
         final stored =
             jsonDecode(rows.first.value!) as Map<String, dynamic>;
         final nodes = stored['nodes'] as Map<String, dynamic>;
-        // Original two keys still there, no new key added
-        expect(nodes.length, 2);
+        // The seeded keys are still there and nothing was added
+        expect(nodes.length, 3);
         expect(nodes.containsKey('motor.rpm'), isFalse);
       });
     });
@@ -341,6 +349,144 @@ void main() {
         // Original values unchanged
         expect(opcuaNode['namespace'], 2);
         expect(opcuaNode['identifier'], 'Belt.Speed');
+      });
+    });
+
+    group('create_key_mapping for other protocols', () {
+      // The mapping tools spoke only OPC UA while the plant's weighers are
+      // M2400 devices. Three times running, a weigher mapping fix had to be
+      // clicked into the key repository by hand because the tool could not
+      // express it -- most recently sixteen combined-series duplicates.
+
+      test('an m2400 binding round-trips into the proposal', () async {
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('create_key_mapping', {
+          'key': 'weigher1v.acceptWeightCopy',
+          'm2400_node': {
+            'record_type': 'recBatch',
+            'field': 'weight',
+            'server_alias': 'weigher1v',
+            'status_filter': 0,
+          },
+          'collect': {'name': 'batcher1.acceptWeight'},
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['key'], 'weigher1v.acceptWeightCopy');
+        expect(json['m2400_node']['record_type'], 'recBatch');
+        expect(json['m2400_node']['status_filter'], 0);
+        expect(json.containsKey('opcua_node'), isFalse);
+        // The whole point of the duplicate: its rows land in the combined
+        // series, not its own.
+        expect(json['collect']['name'], 'batcher1.acceptWeight');
+      });
+
+      test('a modbus binding round-trips, with a UMAS name', () async {
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('create_key_mapping', {
+          'key': 'elevator.auto',
+          'modbus_node': {
+            'register_type': 'holdingRegister',
+            'address': 0,
+            'server_alias': 'm340',
+          },
+          'variable_name': 'M_Elevator.i_isAuto',
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['modbus_node']['register_type'], 'holdingRegister');
+        expect(json['variable_name'], 'M_Elevator.i_isAuto');
+      });
+
+      test('two binding kinds at once are refused', () async {
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('create_key_mapping', {
+          'key': 'confused.key',
+          'namespace': 2,
+          'identifier': 'Some.Node',
+          'm2400_node': {'record_type': 'recStat'},
+        });
+
+        expect(result.isError, isTrue);
+      });
+
+      test('no binding at all is refused', () async {
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('create_key_mapping', {
+          'key': 'unbound.key',
+        });
+
+        expect(result.isError, isTrue);
+      });
+
+      test('a variable_name without modbus_node is refused', () async {
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('create_key_mapping', {
+          'key': 'umas.orphan',
+          'variable_name': 'Some.Symbol',
+        });
+
+        expect(result.isError, isTrue);
+      });
+    });
+
+    group('update_key_mapping for other protocols', () {
+      test('replaces an m2400 binding whole', () async {
+        // The accept/reject filter fix: status_filter 1 -> 0, discovered on
+        // the wire. This is the edit that had to be done by hand three times.
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('update_key_mapping', {
+          'key': 'weigher9v.acceptWeight',
+          'm2400_node': {
+            'record_type': 'recBatch',
+            'field': 'weight',
+            'server_alias': 'weigher9v',
+            'status_filter': 15,
+          },
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['m2400_node']['status_filter'], 15);
+        expect(json['_op'], 'update');
+      });
+
+      test('OPC UA flat fields against an m2400 key are refused', () async {
+        // The old handler cast existing namespace as int and crashed on any
+        // non-OPC UA key; now it says what to do instead.
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('update_key_mapping', {
+          'key': 'weigher9v.acceptWeight',
+          'identifier': 'Some.Node',
+        });
+
+        expect(result.isError, isTrue);
+        final text = (result.content.first as TextContent).text;
+        expect(text, contains('m2400'));
+      });
+
+      test('mixing binding kinds in one update is refused', () async {
+        client = await setupAutoConfirm();
+
+        final result = await client.callTool('update_key_mapping', {
+          'key': 'belt.speed',
+          'identifier': 'Belt.Speed2',
+          'modbus_node': {'register_type': 'coil', 'address': 1},
+        });
+
+        expect(result.isError, isTrue);
       });
     });
   });

@@ -458,9 +458,31 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       // survive.
       final entry = _keyMappings!.nodes[key] ?? KeyMappingEntry();
 
+      // Node kinds are exclusive: a proposal that re-points a key to one
+      // protocol clears the others, because an entry carrying two bindings
+      // is ambiguous -- reads resolve through whichever the server getter
+      // finds first, silently.
       final opcuaNode = m['opcua_node'];
       if (opcuaNode is Map<String, dynamic>) {
         entry.opcuaNode = OpcUANodeConfig.fromJson(opcuaNode);
+        entry.m2400Node = null;
+        entry.modbusNode = null;
+      }
+      final m2400Node = m['m2400_node'];
+      if (m2400Node is Map<String, dynamic>) {
+        entry.m2400Node = M2400NodeConfig.fromJson(m2400Node);
+        entry.opcuaNode = null;
+        entry.modbusNode = null;
+      }
+      final modbusNode = m['modbus_node'];
+      if (modbusNode is Map<String, dynamic>) {
+        entry.modbusNode = ModbusNodeConfig.fromJson(modbusNode);
+        entry.opcuaNode = null;
+        entry.m2400Node = null;
+      }
+      // UMAS symbol name: set when given, cleared by an explicit null.
+      if (m.containsKey('variable_name')) {
+        entry.variableName = m['variable_name'] as String?;
       }
 
       final collect = m['collect'];
