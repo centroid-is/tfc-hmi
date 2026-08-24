@@ -28,6 +28,8 @@ func (d *darwinInstaller) LaunchApp() error {
 	return err
 }
 
+func (d *darwinInstaller) InstalledVersion() string { return "" }
+
 func (d *darwinInstaller) IsInstalled() bool {
 	out, err := d.runner.Run("test", "-d", "/Applications/CentroidX.app")
 	_ = out

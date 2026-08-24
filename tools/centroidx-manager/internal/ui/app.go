@@ -126,8 +126,13 @@ func runURLInstallMode(w *app.Window, th *material.Theme, eng *update.Engine, op
 	go func() {
 		err := eng.InstallFromURL(context.Background(), opts.ArtifactURL, func(dl, total int64) {
 			if total > 0 {
-				state.progress = float32(dl) / float32(total)
-				w.Invalidate()
+				next := float32(dl) / float32(total)
+				// A frame per half-percent, not per network chunk -- see
+				// the picker's OnProgress for why.
+				if next-state.progress >= 0.005 || next >= 1 {
+					state.progress = next
+					w.Invalidate()
+				}
 			}
 		})
 		if err != nil {
@@ -161,8 +166,13 @@ func runInstallMode(w *app.Window, th *material.Theme, eng *update.Engine) {
 		destDir := os.TempDir()
 		err := eng.Install(context.Background(), destDir, func(dl, total int64) {
 			if total > 0 {
-				state.progress = float32(dl) / float32(total)
-				w.Invalidate()
+				next := float32(dl) / float32(total)
+				// A frame per half-percent, not per network chunk -- see
+				// the picker's OnProgress for why.
+				if next-state.progress >= 0.005 || next >= 1 {
+					state.progress = next
+					w.Invalidate()
+				}
 			}
 		})
 		if err != nil {
@@ -230,8 +240,13 @@ func runUpdateMode(w *app.Window, th *material.Theme, eng *update.Engine, opts O
 							DestDir: destDir,
 							OnProgress: func(dl, total int64) {
 								if total > 0 {
-									state.progress = float32(dl) / float32(total)
-									w.Invalidate()
+									next := float32(dl) / float32(total)
+									// A frame per half-percent, not per network chunk -- see
+									// the picker's OnProgress for why.
+									if next-state.progress >= 0.005 || next >= 1 {
+										state.progress = next
+										w.Invalidate()
+									}
 								}
 							},
 						})

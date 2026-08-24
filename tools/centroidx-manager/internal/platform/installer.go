@@ -44,6 +44,12 @@ type Installer interface {
 	// LaunchApp starts the installed application after update.
 	LaunchApp() error
 
+	// InstalledVersion reports the version of the currently installed
+	// package, empty when none is installed or the platform cannot say. The
+	// UI shows it next to "is installed", so a failed update reads as "still
+	// on 2026.8.22" rather than as success.
+	InstalledVersion() string
+
 	// IsInstalled returns true if the application package is currently installed.
 	IsInstalled() bool
 
@@ -66,11 +72,14 @@ type CommandRunner interface {
 type execRunner struct{}
 
 func (e execRunner) Run(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).CombinedOutput()
+	cmd := exec.Command(name, args...)
+	hideConsole(cmd)
+	return cmd.CombinedOutput()
 }
 
 func (e execRunner) Start(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	hideConsole(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -391,7 +400,47 @@ const (
 	trustFailedToken   = "CENTROIDX_TRUST_FAILED"
 	trustNotElevated   = "ELEVATED=FALSE"
 	trustScriptSuccess = "> $null"
+	trustPresentToken  = "CENTROIDX_TRUST_PRESENT"
+	trustAbsentToken   = "CENTROIDX_TRUST_ABSENT"
+	trustDeclinedToken = "CENTROIDX_TRUST_DECLINED"
 )
+
+// certPresentScript answers, in our own vocabulary, whether the certificate
+// at certPath is already in the machine store. Reading the store needs no
+// rights, so this runs before any elevation is considered: on a station that
+// was set up once, every later update passes here and no UAC prompt is ever
+// shown.
+func certPresentScript(certPath string) string {
+	return `$t = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 '` + certPath + `').Thumbprint; ` +
+		`if (Test-Path ('` + certStoreLocation + `\' + $t)) { Write-Output '` + trustPresentToken + `' } ` +
+		`else { Write-Output '` + trustAbsentToken + `' }`
+}
+
+// elevatedTrustScript re-runs the import in an elevated PowerShell, which
+// shows the operator one UAC prompt. Declining it is a legitimate answer and
+// gets its own token; everything else is judged afterwards by looking in the
+// store, never by the elevated child's output (it runs in another console we
+// cannot read).
+func elevatedTrustScript(certPath string) string {
+	return `try { ` +
+		`$p = Start-Process -FilePath 'powershell' -Verb RunAs -Wait -PassThru -WindowStyle Hidden ` +
+		`-ArgumentList '-NoProfile','-NonInteractive','-Command','` + importCertificateCommand(certPath) + `'; ` +
+		`Write-Output ('CENTROIDX_ELEVATED_EXIT=' + $p.ExitCode) } ` +
+		`catch { Write-Output '` + trustDeclinedToken + `'; Write-Output $_.Exception.Message }`
+}
+
+// certAlreadyTrusted reports whether the certificate is in the store.
+// Unknown (script failed, no token) counts as not trusted, so the flow falls
+// through to the import which produces the better diagnostics.
+func certAlreadyTrusted(runner CommandRunner, certPath string) bool {
+	out, err := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		certPresentScript(certPath),
+	)
+	return err == nil && strings.Contains(strings.ToUpper(string(out)), trustPresentToken)
+}
 
 // trustCertificateScript imports the certificate and reports, in its own
 // vocabulary, what happened.
@@ -427,6 +476,11 @@ func trustCertificateScript(certPath string) string {
 // that is reported as a failure: the caller treats trust as best-effort, so a
 // false success would be silent and permanent.
 func trustCertificateWindows(runner CommandRunner, certPath string) error {
+	// Already trusted: done, and no UAC prompt on an ordinary update.
+	if certAlreadyTrusted(runner, certPath) {
+		return nil
+	}
+
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
@@ -449,9 +503,29 @@ func trustCertificateWindows(runner CommandRunner, certPath string) error {
 
 	if strings.Contains(upper, trustFailedToken) {
 		if strings.Contains(upper, trustNotElevated) {
+			// The one case elevation can fix. Ask Windows for it -- the
+			// operator sees a single UAC prompt -- and then believe only the
+			// store, not the elevated child's exit code.
+			elevOut, _ := runner.Run(
+				"powershell",
+				"-NoProfile", "-NonInteractive",
+				"-Command",
+				elevatedTrustScript(certPath),
+			)
+			if certAlreadyTrusted(runner, certPath) {
+				return nil
+			}
+			elevDetail := strings.TrimSpace(string(elevOut))
+			if strings.Contains(strings.ToUpper(elevDetail), trustDeclinedToken) {
+				return &commandError{
+					op: "Import-Certificate needs administrator approval and the elevation prompt was declined. " +
+						"The release stays untrusted until it is approved once; alternatively run this from an elevated PowerShell: " +
+						importCertificateCommand(certPath),
+					cause: cause,
+				}
+			}
 			return &commandError{
-				op: "Import-Certificate failed: the manager is not running as administrator and " +
-					certStoreLocation + " requires it. Run this once from an elevated PowerShell: " +
+				op: "Import-Certificate failed even elevated (" + elevDetail + "). Run this once from an elevated PowerShell: " +
 					importCertificateCommand(certPath) + " — detail: " + detail,
 				cause: cause,
 			}

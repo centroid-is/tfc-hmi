@@ -61,16 +61,19 @@ func TestWindowsInstaller_TrustCertificate_DelegatesToTrustCertificateWindows(t 
 	// certificate is trusted — that assumption was the defect, and this test
 	// was its second instance: it asserted success from a mock that said
 	// nothing, in a file no local run could compile.
-	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustOKToken)}, errors: []error{nil}}
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(trustAbsentToken), []byte(trustOKToken)},
+		errors:  []error{nil, nil},
+	}
 	inst := &windowsInstaller{runner: runner}
 
 	if err := inst.TrustCertificate(`C:\tmp\centroidx.cer`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(runner.calls) == 0 {
-		t.Fatal("no command was recorded")
+	if len(runner.calls) < 2 {
+		t.Fatal("expected the presence check and then the import")
 	}
-	all := allArgs(runner.calls[0])
+	all := allArgs(runner.calls[1])
 	if !hasArgContaining(all, "Import-Certificate") {
 		t.Errorf("expected Import-Certificate, got: %v", all)
 	}

@@ -27,6 +27,8 @@ func (l *linuxInstaller) LaunchApp() error {
 	return launchAppDetached(l.runner, "/opt/centroidx/centroidx")
 }
 
+func (l *linuxInstaller) InstalledVersion() string { return "" }
+
 func (l *linuxInstaller) IsInstalled() bool {
 	out, err := l.runner.Run("dpkg", "-s", "centroidx")
 	return err == nil && len(out) > 0

@@ -92,14 +92,14 @@ func TestWindowsInstaller_Install(t *testing.T) {
 func TestWindowsInstaller_TrustCertificate(t *testing.T) {
 	// The runner has to report the success token: silence no longer means
 	// success, which is the point of the change this test now sits on top of.
-	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustOKToken)}, errors: []error{nil}}
+	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustAbsentToken), []byte(trustOKToken)}, errors: []error{nil, nil}}
 	if err := trustCertificateWindows(runner, "/tmp/cert.cer"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(runner.calls) == 0 {
-		t.Fatal("no commands were recorded")
+	if len(runner.calls) < 2 {
+		t.Fatal("expected the presence check and then the import")
 	}
-	call := runner.calls[0]
+	call := runner.calls[1]
 	all := allArgs(call)
 	if !hasArg(all, "powershell") {
 		t.Errorf("expected 'powershell' in command, got: %v", all)
@@ -129,9 +129,28 @@ func TestWindowsInstaller_TrustCertificate(t *testing.T) {
 // way a wrong constant passed every test until someone read the generator.
 
 func TestWindowsInstaller_TrustCertificate_SucceedsOnOKToken(t *testing.T) {
-	runner := &mockRunnerSeq{outputs: [][]byte{[]byte("CENTROIDX_TRUST_OK\r\n")}, errors: []error{nil}}
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(trustAbsentToken), []byte("CENTROIDX_TRUST_OK\r\n")},
+		errors:  []error{nil, nil},
+	}
 	if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// A certificate that is already in the store is not imported again: the
+// import would only cost an elevation prompt on every routine update, and
+// the store answer needs no rights at all.
+func TestWindowsInstaller_TrustCertificate_AlreadyTrustedSkipsImport(t *testing.T) {
+	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustPresentToken)}, errors: []error{nil}}
+	if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected only the presence check, got %d calls", len(runner.calls))
+	}
+	if hasArgContaining(allArgs(runner.calls[0]), "Import-Certificate") {
+		t.Errorf("the presence check must not import: %v", allArgs(runner.calls[0]))
 	}
 }
 
@@ -147,13 +166,27 @@ func TestWindowsInstaller_TrustCertificate_UnelevatedIsReportedInAnyLanguage(t *
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out := "CENTROIDX_TRUST_FAILED ELEVATED=FALSE\r\n" + tc.body
-			runner := &mockRunnerSeq{outputs: [][]byte{[]byte(out)}, errors: []error{errors.New("exit status 1")}}
+			// absent -> unelevated failure -> elevated attempt -> still absent.
+			runner := &mockRunnerSeq{
+				outputs: [][]byte{
+					[]byte(trustAbsentToken),
+					[]byte(out),
+					[]byte("CENTROIDX_ELEVATED_EXIT=1"),
+					[]byte(trustAbsentToken),
+				},
+				errors: []error{nil, errors.New("exit status 1"), nil, nil},
+			}
 
 			err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
 			if err == nil {
 				t.Fatal("expected an error, got nil")
 			}
-			if !strings.Contains(err.Error(), "administrator") {
+			// A rights failure now triggers one elevated retry (a UAC prompt)
+			// before giving up.
+			if len(runner.calls) < 3 || !hasArgContaining(allArgs(runner.calls[2]), "RunAs") {
+				t.Fatalf("expected an elevated retry, got calls: %d", len(runner.calls))
+			}
+			if !strings.Contains(err.Error(), "elevated") {
 				t.Errorf("expected the error to name elevation, got: %v", err)
 			}
 			if !strings.Contains(err.Error(), "Import-Certificate -FilePath") {
@@ -166,11 +199,53 @@ func TestWindowsInstaller_TrustCertificate_UnelevatedIsReportedInAnyLanguage(t *
 	}
 }
 
+// The elevated retry can actually fix it: when the store says the certificate
+// is there afterwards, the trust step succeeded, whatever the child's exit
+// code claimed (it runs in a console we cannot read).
+func TestWindowsInstaller_TrustCertificate_ElevatedRetrySucceeds(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{
+			[]byte(trustAbsentToken),
+			[]byte("CENTROIDX_TRUST_FAILED ELEVATED=FALSE\r\nAccess is denied."),
+			[]byte("CENTROIDX_ELEVATED_EXIT=0"),
+			[]byte(trustPresentToken),
+		},
+		errors: []error{nil, errors.New("exit status 1"), nil, nil},
+	}
+	if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err != nil {
+		t.Fatalf("the store says trusted; expected success, got: %v", err)
+	}
+}
+
+// Declining the UAC prompt is a legitimate answer and is reported as what it
+// was, not as a mystery failure.
+func TestWindowsInstaller_TrustCertificate_DeclinedElevationIsNamed(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{
+			[]byte(trustAbsentToken),
+			[]byte("CENTROIDX_TRUST_FAILED ELEVATED=FALSE\r\nAccess is denied."),
+			[]byte("CENTROIDX_TRUST_DECLINED\r\nThe operation was canceled by the user."),
+			[]byte(trustAbsentToken),
+		},
+		errors: []error{nil, errors.New("exit status 1"), nil, nil},
+	}
+	err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "declined") {
+		t.Errorf("expected the declined prompt to be named, got: %v", err)
+	}
+}
+
 // An elevated manager that still fails has a different problem, and saying
 // "run as administrator" to someone who already is wastes their time.
 func TestWindowsInstaller_TrustCertificate_ElevatedFailureIsNotBlamedOnAdmin(t *testing.T) {
 	out := "CENTROIDX_TRUST_FAILED ELEVATED=TRUE\r\nImport-Certificate : Cannot find path 'C:\\tmp\\centroidx.cer'."
-	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(out)}, errors: []error{errors.New("exit status 1")}}
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(trustAbsentToken), []byte(out)},
+		errors:  []error{nil, errors.New("exit status 1")},
+	}
 
 	err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
 	if err == nil {
@@ -198,7 +273,10 @@ func TestWindowsInstaller_TrustCertificate_UnrecognisedOutputIsNotSuccess(t *tes
 		{"garbage, exit 1", "something else entirely", errors.New("exit status 1")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runner := &mockRunnerSeq{outputs: [][]byte{[]byte(tc.out)}, errors: []error{tc.err}}
+			runner := &mockRunnerSeq{
+				outputs: [][]byte{[]byte(trustAbsentToken), []byte(tc.out)},
+				errors:  []error{nil, tc.err},
+			}
 			if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err == nil {
 				t.Fatal("unrecognised output was treated as a successful trust")
 			}
@@ -210,10 +288,13 @@ func TestWindowsInstaller_TrustCertificate_UnrecognisedOutputIsNotSuccess(t *tes
 // cmdlet error terminating so the catch fires — otherwise both tokens could be
 // emitted, or neither.
 func TestWindowsInstaller_TrustCertificate_AsksWindowsForElevation(t *testing.T) {
-	runner := &mockRunnerSeq{outputs: [][]byte{[]byte("CENTROIDX_TRUST_OK")}, errors: []error{nil}}
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(trustAbsentToken), []byte("CENTROIDX_TRUST_OK")},
+		errors:  []error{nil, nil},
+	}
 	_ = trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
 
-	all := allArgs(runner.calls[0])
+	all := allArgs(runner.calls[1])
 	for _, want := range []string{"IsInRole", "WindowsBuiltInRole", "-ErrorAction Stop", "CENTROIDX_TRUST_OK", "CENTROIDX_TRUST_FAILED"} {
 		if !hasArgContaining(all, want) {
 			t.Errorf("expected %q in the script, got: %v", want, all)

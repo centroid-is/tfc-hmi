@@ -289,6 +289,7 @@ type PRInstaller interface {
 	Install(assetPath string) error
 	LaunchApp() error
 	IsInstalled() bool
+	InstalledVersion() string
 	Uninstall() error
 }
 

@@ -26,6 +26,17 @@ func (w *windowsInstaller) LaunchApp() error {
 	return launchWindowsApp(w.runner)
 }
 
+func (w *windowsInstaller) InstalledVersion() string {
+	out, err := w.runner.Run(
+		"powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Get-AppxPackage -Name 'Centroid.CentroidX' | Select-Object -ExpandProperty Version",
+	)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func (w *windowsInstaller) IsInstalled() bool {
 	out, err := w.runner.Run(
 		"powershell", "-NoProfile", "-NonInteractive", "-Command",

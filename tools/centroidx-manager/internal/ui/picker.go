@@ -21,6 +21,7 @@ import (
 // PickerInstaller abstracts the platform install check for the picker.
 type PickerInstaller interface {
 	IsInstalled() bool
+	InstalledVersion() string
 	Uninstall() error
 }
 
@@ -33,6 +34,7 @@ type pickerState struct {
 	itemClicks     []widget.Clickable
 	installBtn     widget.Clickable
 	uninstallBtn   widget.Clickable
+	trustBtn       widget.Clickable
 	stableBtn      widget.Clickable
 	latestBtn      widget.Clickable
 	channel        string
@@ -42,6 +44,10 @@ type pickerState struct {
 	progress       float32
 	statusMsg      string
 	isInstalled    bool
+
+	// What Get-AppxPackage reports right now; shown beside "is installed"
+	// so a failed update reads as "still on 2026.8.22", not as success.
+	installedVersion string
 }
 
 // runPickerMode fetches versions and runs the picker event loop.
@@ -50,10 +56,11 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, instal
 		channel = update.ChannelStable
 	}
 	state := &pickerState{
-		loading:     true,
-		selected:    -1,
-		channel:     channel,
-		isInstalled: installer.IsInstalled(),
+		loading:          true,
+		selected:         -1,
+		channel:          channel,
+		isInstalled:      installer.IsInstalled(),
+		installedVersion: installer.InstalledVersion(),
 	}
 	state.listState.List.Axis = layout.Vertical
 	state.notesListState.List.Axis = layout.Vertical
@@ -131,17 +138,53 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 				DestDir: os.TempDir(),
 				OnProgress: func(dl, total int64) {
 					if total > 0 {
-						state.progress = float32(dl) / float32(total)
-						w.Invalidate()
+						next := float32(dl) / float32(total)
+						// A frame per half-percent, not per network chunk:
+						// invalidating on every chunk repainted the whole
+						// window hundreds of times a second and made the
+						// picker feel laggy while downloading.
+						if next-state.progress >= 0.005 || next >= 1 {
+							state.progress = next
+							w.Invalidate()
+						}
 					}
 				},
 			})
 			if err != nil {
 				state.err = err
 				state.statusMsg = userFriendlyMessage(err)
+				// The install failed; say what is ACTUALLY on the machine.
+				// The green "is installed" under a red error was read as
+				// "it worked" -- it was the previous install talking.
+				state.isInstalled = installer.IsInstalled()
+				state.installedVersion = installer.InstalledVersion()
 			} else {
 				state.statusMsg = fmt.Sprintf("CentroidX %s installed!", displayVersion(selected.Version))
 				state.isInstalled = true
+				state.installedVersion = installer.InstalledVersion()
+			}
+			state.installing = false
+			w.Invalidate()
+		}()
+	}
+
+	// Handle the trust button: import the release signing certificate into
+	// the machine store, deliberately, with its one UAC approval -- instead
+	// of the trust step only ever running as a side effect of an install.
+	if state.trustBtn.Clicked(gtx) && !state.installing {
+		state.installing = true
+		version := ""
+		if state.selected >= 0 && state.selected < len(state.releases) {
+			version = state.releases[state.selected].Version
+		}
+		state.statusMsg = "Trusting the release signing certificate..."
+		go func() {
+			if err := eng.TrustCertificateFor(context.Background(), version, state.channel); err != nil {
+				state.err = err
+				state.statusMsg = userFriendlyMessage(err)
+			} else {
+				state.err = nil
+				state.statusMsg = "Certificate trusted. Installs will not need it again."
 			}
 			state.installing = false
 			w.Invalidate()
@@ -159,6 +202,7 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 			} else {
 				state.statusMsg = "Uninstalled!"
 				state.isInstalled = false
+				state.installedVersion = ""
 			}
 			state.installing = false
 			w.Invalidate()
@@ -392,7 +436,11 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 				if !state.isInstalled {
 					return layout.Dimensions{}
 				}
-				lbl := material.Body2(th, "CentroidX is installed")
+				text := "CentroidX is installed"
+				if state.installedVersion != "" {
+					text = "CentroidX " + state.installedVersion + " is installed"
+				}
+				lbl := material.Body2(th, text)
 				lbl.Color = ColorSuccess()
 				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, lbl.Layout)
 			}),
@@ -407,6 +455,14 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							btn := material.Button(th, &state.installBtn, "Install this version")
 							btn.Background = ColorAccent()
+							return btn.Layout(gtx)
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							// The one-time station setup: puts the signing
+							// certificate in the machine store (one UAC
+							// approval) so installs stop failing 0x800B0109.
+							btn := material.Button(th, &state.trustBtn, "Trust certificate")
 							return btn.Layout(gtx)
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),

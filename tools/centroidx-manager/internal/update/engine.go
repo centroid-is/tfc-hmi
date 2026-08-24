@@ -453,6 +453,28 @@ func (e *Engine) trustReleaseCertificate(ctx context.Context, assets []*gogithub
 	e.log("trusted the release signing certificate %s", filepath.Base(certPath))
 }
 
+// TrustCertificateFor downloads the signing certificate published with the
+// given release (empty version: the newest on the channel) and imports it
+// into the machine trust store. On Windows that asks for one UAC approval
+// when the manager is not elevated. Behind the picker's "Trust certificate"
+// button, so a station can be set up deliberately instead of the trust step
+// only ever running as a side effect of an install.
+func (e *Engine) TrustCertificateFor(ctx context.Context, version, channel string) error {
+	info, err := e.FetchReleaseInfo(ctx, version, channel)
+	if err != nil {
+		return err
+	}
+	certPath, err := downloadCertAsset(ctx, info.Assets, os.TempDir())
+	if err != nil {
+		return fmt.Errorf("download the release signing certificate: %w", err)
+	}
+	if certPath == "" {
+		return fmt.Errorf("release %s publishes no signing certificate", info.Version)
+	}
+	defer func() { _ = os.Remove(certPath) }()
+	return e.installer.TrustCertificate(certPath)
+}
+
 // Install is a shortcut for a first-time install of the latest release.
 // It calls Update with Version="" (latest).
 func (e *Engine) Install(ctx context.Context, destDir string, onProgress func(downloaded, total int64)) error {
