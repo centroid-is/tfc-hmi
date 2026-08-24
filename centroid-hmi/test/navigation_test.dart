@@ -114,6 +114,40 @@ void main() {
     });
   });
 
+  group('resolveStartupPath', () {
+    final menu = buildTopLevelMenuItems(
+      god: false,
+      isLinux: false,
+      pageMenuItems: [
+        _page('Home', '/'),
+        MenuItem(label: 'Lines', path: '/lines', icon: Icons.folder, children: [
+          _page('Line 1', '/lines/one'),
+        ]),
+      ],
+    );
+
+    test('the default stays the default', () {
+      expect(resolveStartupPath('/', menuItems: menu), '/');
+    });
+
+    test('a routable page wins, nested pages included', () {
+      expect(resolveStartupPath('/lines/one', menuItems: menu), '/lines/one');
+    });
+
+    test('a built-in destination wins', () {
+      expect(resolveStartupPath('/alarm-view', menuItems: menu), '/alarm-view');
+    });
+
+    test('a deleted or unpublished page falls back to /', () {
+      expect(resolveStartupPath('/gone', menuItems: menu), '/');
+    });
+
+    test('a section groups but does not route, so it falls back to /', () {
+      expect(resolveStartupPath('/lines', menuItems: menu), '/');
+      expect(resolveStartupPath('/advanced', menuItems: menu), '/');
+    });
+  });
+
   group('firstMenuPath', () {
     test('finds the first path depth-first', () {
       expect(

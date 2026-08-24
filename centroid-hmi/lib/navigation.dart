@@ -86,6 +86,26 @@ List<MenuItem> buildTopLevelMenuItems({
 /// Whether this process runs in god mode.
 bool get environmentVariableIsGod => Platform.environment['TFC_GOD'] == 'true';
 
+/// Resolves this station's stored startup URL against the assembled menu.
+///
+/// The stored path only wins while it is still a routable destination:
+/// sections group pages but do not route, and a page that has been deleted
+/// or unpublished since the operator picked it must not strand the app on
+/// "not found" at boot. Everything else falls back to `/`, which always
+/// routes — Home, or the RouteRedirect stub standing in for a deleted Home.
+String resolveStartupPath(String stored, {required List<MenuItem> menuItems}) {
+  if (stored == '/') return '/';
+  return _menuHasRoutablePath(menuItems, stored) ? stored : '/';
+}
+
+bool _menuHasRoutablePath(List<MenuItem> items, String path) {
+  for (final item in items) {
+    if (item.path == path && !item.isNavigationSection) return true;
+    if (_menuHasRoutablePath(item.children, path)) return true;
+  }
+  return false;
+}
+
 /// Depth-first first path in [items] — where `/` and refused pages fall back
 /// to when the Home page itself is gone. Null when no page is reachable at
 /// all.
