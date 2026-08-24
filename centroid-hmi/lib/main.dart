@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
 import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
+import 'package:tfc/core/startup_url.dart';
 import 'package:tfc/core/update_channel.dart';
 import 'package:tfc/core/update_launch.dart';
 import 'package:tfc/route_registry.dart';
@@ -294,6 +295,16 @@ Future<void> _startApp([bool debugMode = false]) async {
     pagePaths: pageManager.pages.keys,
   );
 
+  // Which page this station opens on, chosen per-station in the page
+  // editor's Pages dialog. Device-local — stations on one database front
+  // different equipment — and validated against the assembled menu so a
+  // startup page deleted or unpublished since it was picked falls back
+  // to '/'.
+  final startupPath = resolveStartupPath(
+    await readStartupUrl(prefs),
+    menuItems: topLevelMenuItems,
+  );
+
   // Paths at which Beamer should clear its beaming history. Landing on a
   // top-level destination means there is nowhere to go "back" to, so we drop
   // the accumulated history there — otherwise `canBeamBack` stays true and the
@@ -372,6 +383,7 @@ Future<void> _startApp([bool debugMode = false]) async {
       child: MyApp(
         locationBuilder: locationBuilder,
         clearHistoryOn: topLevelPaths,
+        initialPath: startupPath,
       ),
     ),
   ));
@@ -590,7 +602,9 @@ class MyApp extends ConsumerWidget {
     super.key,
     required RoutesLocationBuilder locationBuilder,
     Set<String> clearHistoryOn = const <String>{},
+    String initialPath = '/',
   }) : routerDelegate = BeamerDelegate(
+          initialPath: initialPath,
           notFoundPage: const BeamPage(child: PageNotFound()),
           transitionDelegate: MyNoAnimationTransitionDelegate(),
           clearBeamingHistoryOn: clearHistoryOn,

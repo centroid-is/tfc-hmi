@@ -204,8 +204,13 @@ void setUpEditorEnvironment() {
   registry.menuItems.clear();
   registry
       .addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
+  // A section, as in the app (there it always has children): the Pages
+  // dialog offers no startup toggle on rows that group instead of routing.
   registry.addMenuItem(const MenuItem(
-      label: 'Advanced', path: '/advanced', icon: Icons.settings));
+      label: 'Advanced',
+      path: '/advanced',
+      icon: Icons.settings,
+      isSection: true));
 }
 
 /// Pumps the editor with [assets] on the home page, at 1400x1000 unless

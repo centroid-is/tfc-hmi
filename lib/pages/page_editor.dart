@@ -23,6 +23,8 @@ import '../widgets/panes/pane_chrome.dart' show PaneAction;
 import '../widgets/leave_guard.dart';
 import '../widgets/panes/side_pane.dart';
 import '../page_creator/page.dart';
+import '../core/startup_url.dart';
+import '../providers/preferences.dart' show localPreferencesProvider;
 import '../models/menu_item.dart';
 import '../route_registry.dart';
 import '../routes.dart';
@@ -757,6 +759,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// from [_hasUnsavedChanges]'s JSON compare because app-registered items are
   /// not part of the pages JSON at all.
   bool _navOrderDirty = false;
+
+  /// The URL this station opens on at startup, as shown in the Pages dialog.
+  /// Device-local (see [localPreferencesProvider]) and written the moment it
+  /// is toggled — it is not part of the shared pages JSON, so the editor's
+  /// save/undo machinery has no say over it.
+  String _startupUrl = startupUrlDefault;
 
   /// Backs the palette's search box. A controller rather than a bare string:
   /// the palette is torn down whenever it is closed, and a controller-less
@@ -3533,7 +3541,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     return combined;
   }
 
-  void _showPageManagerDialog() {
+  Future<void> _showPageManagerDialog() async {
+    // Fetch this station's startup URL before the dialog builds, so the
+    // rocket lights up on the right row from the first frame.
+    _startupUrl = await readStartupUrl(ref.read(localPreferencesProvider));
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -3580,6 +3592,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
                               appItems[roots[i]]!,
                               reorderIndex: i,
                               dialogSetState: dialogSetState,
+                              dialogContext: context,
                             )
                           else
                             _buildTreeNode(
@@ -3621,13 +3634,45 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   /// The row's second line: what the entry is, and whether operators can see
   /// it. Null when there is nothing to say (a plain, published page).
-  Widget? _treeNodeSubtitle({required bool isSection, required bool isDraft}) {
+  Widget? _treeNodeSubtitle({
+    required bool isSection,
+    required bool isDraft,
+    bool isStartup = false,
+  }) {
     final parts = [
       if (isSection) 'Section',
       if (isDraft) 'Draft — not published',
+      if (isStartup) 'Startup page — this station',
     ];
     if (parts.isEmpty) return null;
     return Text(parts.join(' · '));
+  }
+
+  /// Makes [path] this station's startup URL — or, when it already is,
+  /// resets to the default. Takes effect on the next app start, like every
+  /// other change made in this dialog.
+  void _setStartupUrl(String path, StateSetter dialogSetState) {
+    _startupUrl = _startupUrl == path ? startupUrlDefault : path;
+    unawaited(writeStartupUrl(ref.read(localPreferencesProvider), _startupUrl));
+    dialogSetState(() {});
+  }
+
+  /// The per-row toggle marking [path] as this station's startup page.
+  Widget _startupToggle(
+      String path, StateSetter dialogSetState, BuildContext dialogContext) {
+    final isStartup = _startupUrl == path;
+    return IconButton(
+      key: ValueKey('startup-$path'),
+      icon: Icon(
+        isStartup ? Icons.rocket_launch : Icons.rocket_launch_outlined,
+        size: 18,
+        color: isStartup ? Theme.of(dialogContext).colorScheme.primary : null,
+      ),
+      onPressed: () => _setStartupUrl(path, dialogSetState),
+      tooltip: isStartup
+          ? 'This station starts here — tap to reset to the default (/)'
+          : 'Start this station on this page',
+    );
   }
 
   /// Publishes or unpublishes [pagePath].
@@ -3697,11 +3742,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
               : null,
         ),
       ),
-      subtitle: _treeNodeSubtitle(isSection: isSection, isDraft: isDraft),
+      subtitle: _treeNodeSubtitle(
+        isSection: isSection,
+        isDraft: isDraft,
+        // The default gets no subtitle: with nothing chosen the lit rocket
+        // on `/` says enough, and the common case stays one line tall.
+        isStartup: !isSection &&
+            _startupUrl == pageName &&
+            _startupUrl != startupUrlDefault,
+      ),
       selected: isSelected && !isSection,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (!isSection)
+            _startupToggle(pageName, dialogSetState, dialogContext),
           if (isSection && depth < 3)
             PopupMenuButton<String>(
               icon: const Icon(Icons.add, size: 18),
@@ -3901,6 +3956,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _startupToggle(mapKey, dialogSetState, dialogContext),
             if (page != null)
               IconButton(
                 icon: const Icon(Icons.edit, size: 18),
@@ -3925,11 +3981,31 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   }
 
   /// A top-level destination the app registered itself. It has no page to
-  /// select, edit or publish here — the row exists to be dragged into order.
+  /// select, edit or publish here — the row exists to be dragged into order
+  /// (and, for routable destinations, to be picked as this station's startup
+  /// page).
   Widget _buildAppItemNode(MenuItem item,
-      {required int reorderIndex, StateSetter? dialogSetState}) {
+      {required int reorderIndex,
+      StateSetter? dialogSetState,
+      BuildContext? dialogContext}) {
     final movable =
         item.path != null && movableBuiltinPaths.contains(item.path);
+    final trailing = <Widget>[
+      // Built-in sections (Advanced) group but do not route, so they cannot
+      // be a startup destination.
+      if (!item.isNavigationSection &&
+          item.path != null &&
+          dialogSetState != null &&
+          dialogContext != null)
+        _startupToggle(item.path!, dialogSetState, dialogContext),
+      if (movable && dialogSetState != null)
+        IconButton(
+          key: ValueKey('demote-builtin-${item.path}'),
+          icon: const Icon(Icons.subdirectory_arrow_right, size: 18),
+          tooltip: 'Move into Advanced',
+          onPressed: () => _demoteBuiltin(item.path!, dialogSetState),
+        ),
+    ];
     return ListTile(
       key: ValueKey('app-item-${item.path}'),
       dense: true,
@@ -3945,15 +4021,12 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         ],
       ),
       title: Text(item.label),
-      subtitle: const Text('Built-in — drag to reorder'),
-      trailing: movable && dialogSetState != null
-          ? IconButton(
-              key: ValueKey('demote-builtin-${item.path}'),
-              icon: const Icon(Icons.subdirectory_arrow_right, size: 18),
-              tooltip: 'Move into Advanced',
-              onPressed: () => _demoteBuiltin(item.path!, dialogSetState),
-            )
-          : null,
+      subtitle: Text(item.path == _startupUrl
+          ? 'Built-in — Startup page — this station'
+          : 'Built-in — drag to reorder'),
+      trailing: trailing.isEmpty
+          ? null
+          : Row(mainAxisSize: MainAxisSize.min, children: trailing),
     );
   }
 

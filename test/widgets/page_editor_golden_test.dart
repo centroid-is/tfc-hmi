@@ -36,7 +36,9 @@ import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:tfc/core/startup_url.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/page_creator/assets/beckhoff.dart';
 import 'package:tfc/page_creator/assets/drawn_box.dart';
@@ -285,6 +287,21 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/page_editor_pages_draft_dark.png'),
+      );
+    });
+
+    // The startup-page toggle shares this dialog: a lit rocket and a
+    // "Startup page — this station" subtitle on the chosen row, hollow
+    // rockets on every other page row, none on sections.
+    testGoldenWidgets('Pages dialog — a nested page chosen as startup',
+        (tester) async {
+      await SharedPreferencesAsync().setString(startupUrlPrefsKey, '/lines/one');
+      await _pumpEditor(tester, theme: dark, pages: _pagesWithADraft());
+      await tester.tap(find.byIcon(Icons.arrow_drop_down));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/page_editor_pages_startup_dark.png'),
       );
     });
 

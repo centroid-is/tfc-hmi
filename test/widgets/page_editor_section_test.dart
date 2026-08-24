@@ -186,7 +186,10 @@ void main() {
     registry.addMenuItem(
         const MenuItem(label: 'Home', path: '/', icon: Icons.home));
     registry.addMenuItem(const MenuItem(
-        label: 'Advanced', path: '/advanced', icon: Icons.settings));
+        label: 'Advanced',
+        path: '/advanced',
+        icon: Icons.settings,
+        isSection: true));
   });
 
   group('empty sections in the page editor', () {
