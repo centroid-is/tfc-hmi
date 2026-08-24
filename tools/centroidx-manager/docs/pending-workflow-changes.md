@@ -8,6 +8,13 @@ Written 2026-08-24. **Steps 1-3 are DONE (2026-08-24, from the mac):**
   -- the same parameters generate-cert.ps1 asks Windows for. PFX, CER, key
   and password live in `~/centroidx-cert-2026-08-24/` on the mac; move them
   to the password manager.
+- **If it is ever re-minted with openssl: `string_mask = pkix` is
+  load-bearing.** The appx signer compares the manifest publisher and the
+  certificate subject at the DER level. OpenSSL 3 defaults to UTF8String;
+  Windows encodes the same ASCII as PrintableString, so the first mint
+  failed `msix:create` with `SignerSign() ... 0x8007000B` while every
+  string *looked* identical. generate-cert.ps1 never hits this because
+  Windows encodes both sides.
 - `MSIX_CERT_PFX_BASE64` and `MSIX_CERT_PASSWORD` were replaced via
   `gh secret set` at 12:06Z.
 - The workflow edits (the windows.yml subject assertion, and signing the
