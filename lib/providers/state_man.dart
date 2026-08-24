@@ -135,6 +135,23 @@ final keyStreamProvider =
   final stateMan = ref.watch(stateManProvider).valueOrNull;
   if (stateMan == null) return const Stream<DynamicValue>.empty();
 
+  // A key like `Line1.$sb_line_stats_period` names its target through a
+  // variable, and StateMan resolves that variable ONCE, at subscribe time.
+  // Holding one subscription for the raw key is therefore wrong in both
+  // directions: subscribed before the OptionVariable publishes, the resolve
+  // throws and the failure would be held forever; subscribed after, the
+  // stream stays pointed at the old target when the operator picks a new
+  // period. Before subscriptions were shared, every widget rebuild happened
+  // to retry the resolve, which is what made substitution appear to work.
+  //
+  // So a substituted key re-subscribes when the substitutions change — the
+  // provider rebuilds, resolves against the new values, and every watcher is
+  // handed the new stream. Plain keys skip this entirely; substitution
+  // changes are operator clicks, not process data.
+  if (key.contains(r'$')) {
+    ref.watch(substitutionsChangedProvider);
+  }
+
   // A subject rather than the raw stream: it is broadcast, so a rebuild may
   // re-listen freely, and it replays the last value, so an asset that
   // re-listens shows what it last knew instead of blanking.
