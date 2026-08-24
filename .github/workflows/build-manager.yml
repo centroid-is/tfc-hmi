@@ -306,6 +306,11 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: ${{ matrix.cgo }}
+          # GitHub's Windows runners run elevated, so TestWritable's premise
+          # -- an unelevated process cannot write Program Files -- does not
+          # hold here and the test provides this escape hatch for exactly
+          # that. The assertion still runs anywhere unelevated.
+          CENTROIDX_TEST_ELEVATED: ${{ runner.os == 'Windows' && '1' || '' }}
         run: go test ./...
 
   integration-test:
