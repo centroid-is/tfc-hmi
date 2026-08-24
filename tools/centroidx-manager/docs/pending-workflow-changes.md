@@ -1,89 +1,107 @@
-# Manager build: two workflow changes to apply from a machine with workflow scope
+# Release changes to apply from a machine with workflow scope
 
-Written 2026-08-24. The Go-side fixes for the failed station install landed in
-59300482; these two finish the job but live in `.github/workflows/`, which the
-token on the plant PC cannot push.
+Written 2026-08-24. The Go and Dart sides are on main; the steps below live in
+`.github/workflows/`, which the token on the plant PC cannot push, or need
+secrets that PC does not hold.
 
-## 1. No console window (the "PowerShell window" operators see)
+The goal: approval prompts say **Centroid** instead of **Unknown publisher**.
 
-The manager is built as a console binary, so launching it opens a console and
-every log line lands there. Build it as a GUI app:
+## Why anything has to change
 
-In `.github/workflows/build-manager.yml` (the `go build` step) and
-`.github/workflows/windows.yml` (the "Build centroidx-manager for Windows"
-step), change:
+Windows names a publisher only when the thing being approved is signed and the
+signature chains to a trusted root. Two things were in the way:
 
-    go build -o centroidx-manager_windows_amd64.exe .
+- the manager exe was not signed at all, and
+- our certificate's subject was `CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB`,
+  because an MSIX publisher must equal the signing subject exactly. Signing
+  with it would only have made the prompt read out the GUID.
+
+So the publisher is now a name. `centroid-hmi/pubspec.yaml` says:
+
+    publisher: CN=Centroid, O=Centroid ehf., C=IS
+
+That changes the package identity, which Windows treats as a different package
+sharing a name. Stations cannot upgrade across it -- the old one is removed and
+the new one installed. The manager already does exactly that (it is the
+0x80073CF3 path it has had for a while) and now saves the station's data across
+the removal, because the package container holds the key mappings, the page
+layout and the update channel, and `Remove-AppxPackage` deletes it.
+
+## 1. Mint the certificate (once, not in CI)
+
+    cd tfc-hmi
+    # elevated PowerShell
+    .\scripts\generate-cert.ps1
+
+It now mints `CN=Centroid, O=Centroid ehf., C=IS` and refuses to continue if
+the subject does not come out exactly that. Replace the two existing secrets
+with the new PFX:
+
+    MSIX_CERT_PFX_BASE64   the base64 the script prints
+    MSIX_CERT_PASSWORD     the password entered
+
+Keep the PFX. Signing a later release with a *different* certificate puts every
+station back to Unknown until it trusts the new one.
+
+## 2. `windows.yml`: the exported-certificate assertion
+
+Line ~135 checks the subject of the certificate it publishes. Change:
+
+    $expected = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
 
 to:
 
-    go build -ldflags="-H windowsgui" -o centroidx-manager_windows_amd64.exe .
+    $expected = "CN=Centroid, O=Centroid ehf., C=IS"
 
-Windows builds only — keep the Linux/macOS matrix entries as they are.
+Without this the release job fails -- by design: it is the assertion that keeps
+us from publishing a certificate nobody can install with.
 
-## 2. Sign the manager exe so Windows names the publisher
+## 3. Sign the manager exe
 
-Today the exe is unsigned and every elevation prompt it raises says
-**Unknown**. Signing it with the *sideload* certificate would not fix that:
-that certificate's subject is `CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB`,
-because an MSIX publisher has to equal the signing subject exactly
-(`centroid-hmi/pubspec.yaml`), so the prompt would read out the GUID instead.
-Changing the package publisher to a name would change the package identity and
-every station would have to uninstall before it could update -- too much for a
-label.
-
-So: a second certificate, used for our executables only, whose subject can say
-Centroid.
-
-### 2a. Mint it once (not in CI)
-
-    cd tfc-hmi
-    .\scripts\generate-codesign-cert.ps1 -Password (Read-Host -AsSecureString)
-
-That writes `centroidx-codesign.pfx`, `centroidx-codesign.cer`, and a base64
-copy of the PFX. Store the PFX somewhere safe: signing later builds with a
-*different* certificate puts every station back to Unknown until it trusts the
-new one. Then add two repository secrets:
-
-    CODESIGN_CERT_PFX_BASE64   contents of centroidx-codesign.pfx.base64.txt
-    CODESIGN_CERT_PASSWORD     the password used above
-
-### 2b. Sign, in `build-manager.yml` and `windows.yml`
-
-After the Windows `go build` step:
+`build-manager.yml` (line ~108) and `windows.yml` (line ~58) build it unsigned.
+After the Windows build step, with the same secret that signs the MSIX:
 
     - name: Sign the manager executable
       shell: powershell
       run: |
-        $bytes = [Convert]::FromBase64String("${{ secrets.CODESIGN_CERT_PFX_BASE64 }}")
-        [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/codesign.pfx", $bytes)
+        $bytes = [Convert]::FromBase64String("${{ secrets.MSIX_CERT_PFX_BASE64 }}")
+        [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/signing.pfx", $bytes)
         & "C:\Program Files (x86)\Windows Kitsin.0.22621.0d\signtool.exe" sign `
-          /f "$env:RUNNER_TEMP/codesign.pfx" /p "${{ secrets.CODESIGN_CERT_PASSWORD }}" `
+          /f "$env:RUNNER_TEMP/signing.pfx" /p "${{ secrets.MSIX_CERT_PASSWORD }}" `
           /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
           centroidx-manager_windows_amd64.exe
-        Remove-Item "$env:RUNNER_TEMP/codesign.pfx"
+        Remove-Item "$env:RUNNER_TEMP/signing.pfx"
 
-The timestamp matters: without it every signature stops verifying the day the
+Windows builds only -- keep the Linux/macOS matrix entries as they are. The
+timestamp matters: without it, every signature stops verifying the day the
 certificate expires, including on builds already installed.
 
-### 2c. Publish the public half as a release asset
+## 4. Nothing to do for the trust step
 
-Upload `centroidx-codesign.cer` next to the MSIX and `centroidx-sideload.cer`,
-**named so it contains `codesign`** -- that substring is how the manager tells
-the two certificates apart (`downloadCodesignAsset` in
-`internal/update/engine.go`).
+The manager imports the published certificate into `LocalMachine\TrustedPeople`
+*and* `LocalMachine\Root` in a single elevated run, so the operator approves
+once and every prompt after that names Centroid.
+`scripts\install-cert.ps1` does the same for a station set up by hand.
 
-The manager side is already in place: during an install it imports that asset
-into `Cert:\LocalMachine\Root` in the same elevated step it already uses for
-the package certificate, so the operator is asked once. From then on the
-prompt reads **Centroid** instead of **Unknown**.
+## 5. Rolling it out
 
-## 3. The real fix, when it is worth paying for
+Every station has to be told to update once through the manager. It will:
 
-Everything above is self-signed: the name only appears on stations that have
-imported our root, and SmartScreen still warns the first time a build is
-downloaded anywhere else. A code-signing certificate from a public CA (OV, or
-EV for immediate SmartScreen reputation) removes both, with no root imports
-and no trust step at all -- 2a and 2c disappear, 2b just uses the purchased
-PFX. If CentroidX is ever handed to a customer who installs it themselves,
-that is the version to buy.
+1. fail the install with 0x80073CF3 (different publisher),
+2. save `Packages\<old family>\LocalCache\Roaming`,
+3. remove the old package,
+4. install the new one,
+5. copy the saved data into the new container.
+
+Worth watching the first one rather than sending it to twenty at once. The
+station keeps its key mappings and layout; a station that somehow loses them
+still has whatever the server holds.
+
+## 6. The real fix, when it is worth paying for
+
+Everything above is self-signed: the name appears on stations that trusted our
+root, and SmartScreen still warns the first time a build is downloaded
+elsewhere. A code-signing certificate from a public CA (OV, or EV for immediate
+SmartScreen reputation) removes both, and the Root import disappears with it.
+If CentroidX is ever handed to a customer who installs it themselves, that is
+the version to buy.

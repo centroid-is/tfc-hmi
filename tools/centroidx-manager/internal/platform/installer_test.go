@@ -93,7 +93,7 @@ func TestWindowsInstaller_TrustCertificate(t *testing.T) {
 	// The runner has to report the success token: silence no longer means
 	// success, which is the point of the change this test now sits on top of.
 	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustAbsentToken), []byte(trustOKToken)}, errors: []error{nil, nil}}
-	if err := trustCertificateWindows(runner, "/tmp/cert.cer"); err != nil {
+	if err := trustCertificateInStores(runner, "/tmp/cert.cer", certStoreLocation); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(runner.calls) < 2 {
@@ -123,6 +123,11 @@ func TestWindowsInstaller_TrustCertificate(t *testing.T) {
 
 // ---- certificate trust -----------------------------------------------------
 //
+// These exercise the import mechanics against a single store, which keeps the
+// mocked call sequence readable. That the installer fills BOTH stores from one
+// certificate -- TrustedPeople for the package, Root for the publisher name --
+// and asks for approval once is covered in codesign_trust_test.go.
+//
 // These assert on tokens the manager itself emits, never on Windows prose.
 // The station locales are mixed and unknown, so any English phrase we matched
 // would be unreliable in production while passing every test here — the same
@@ -133,7 +138,7 @@ func TestWindowsInstaller_TrustCertificate_SucceedsOnOKToken(t *testing.T) {
 		outputs: [][]byte{[]byte(trustAbsentToken), []byte("CENTROIDX_TRUST_OK\r\n")},
 		errors:  []error{nil, nil},
 	}
-	if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err != nil {
+	if err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -143,7 +148,7 @@ func TestWindowsInstaller_TrustCertificate_SucceedsOnOKToken(t *testing.T) {
 // the store answer needs no rights at all.
 func TestWindowsInstaller_TrustCertificate_AlreadyTrustedSkipsImport(t *testing.T) {
 	runner := &mockRunnerSeq{outputs: [][]byte{[]byte(trustPresentToken)}, errors: []error{nil}}
-	if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err != nil {
+	if err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(runner.calls) != 1 {
@@ -177,7 +182,7 @@ func TestWindowsInstaller_TrustCertificate_UnelevatedIsReportedInAnyLanguage(t *
 				errors: []error{nil, errors.New("exit status 1"), nil, nil},
 			}
 
-			err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+			err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation)
 			if err == nil {
 				t.Fatal("expected an error, got nil")
 			}
@@ -213,7 +218,7 @@ func TestWindowsInstaller_TrustCertificate_ElevatedRetrySucceeds(t *testing.T) {
 		},
 		errors: []error{nil, errors.New("exit status 1"), nil, nil},
 	}
-	if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err != nil {
+	if err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation); err != nil {
 		t.Fatalf("the store says trusted; expected success, got: %v", err)
 	}
 }
@@ -230,7 +235,7 @@ func TestWindowsInstaller_TrustCertificate_DeclinedElevationIsNamed(t *testing.T
 		},
 		errors: []error{nil, errors.New("exit status 1"), nil, nil},
 	}
-	err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+	err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation)
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -248,7 +253,7 @@ func TestWindowsInstaller_TrustCertificate_ElevatedFailureIsNotBlamedOnAdmin(t *
 		errors:  []error{nil, errors.New("exit status 1")},
 	}
 
-	err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+	err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation)
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -278,7 +283,7 @@ func TestWindowsInstaller_TrustCertificate_UnrecognisedOutputIsNotSuccess(t *tes
 				outputs: [][]byte{[]byte(trustAbsentToken), []byte(tc.out)},
 				errors:  []error{nil, tc.err},
 			}
-			if err := trustCertificateWindows(runner, `C:\tmp\centroidx.cer`); err == nil {
+			if err := trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation); err == nil {
 				t.Fatal("unrecognised output was treated as a successful trust")
 			}
 		})
@@ -293,7 +298,7 @@ func TestWindowsInstaller_TrustCertificate_AsksWindowsForElevation(t *testing.T)
 		outputs: [][]byte{[]byte(trustAbsentToken), []byte("CENTROIDX_TRUST_OK")},
 		errors:  []error{nil, nil},
 	}
-	_ = trustCertificateWindows(runner, `C:\tmp\centroidx.cer`)
+	_ = trustCertificateInStores(runner, `C:\tmp\centroidx.cer`, certStoreLocation)
 
 	all := allArgs(runner.calls[1])
 	for _, want := range []string{"IsInRole", "WindowsBuiltInRole", "-ErrorAction Stop", "CENTROIDX_TRUST_OK", "CENTROIDX_TRUST_FAILED"} {
@@ -472,19 +477,30 @@ func publisherOutput(dn string) []byte {
 // msix_config.publisher; the other is any second signing identity, which is what
 // moving between Store and sideload signing produces.
 const (
-	sideloadPublisher = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
-	otherPublisher    = "CN=Centroid ehf., O=Centroid ehf., L=Reykjavik, C=IS"
+	// What releases are signed with now: a name, because Windows reads the
+	// publisher out on approval prompts.
+	sideloadPublisher = "CN=Centroid, O=Centroid ehf., C=IS"
+	// What stations installed before that change. An incoming package signed
+	// under the name conflicts with this one, which is the case the removal
+	// path exists for.
+	otherPublisher = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
 )
 
 // conflictRunner builds a runner for a 0x80073CF3 install failure, answering the
 // two publisher queries with what the test wants Windows to say. A nil entry
 // means the query produced no output; errored says it failed outright.
 func conflictRunner(installed, incoming string, retryOK bool) *mockRunnerSeq {
-	outputs := [][]byte{[]byte(conflict0x80073CF3), publisherOutput(installed), publisherOutput(incoming), nil, nil}
-	errs := []error{errors.New("exit status 1"), nil, nil, nil, nil}
+	// install, installed-publisher, incoming-publisher, save the station's
+	// data, remove, install again. The data save sits before the removal
+	// because the removal is what destroys the container.
+	outputs := [][]byte{
+		[]byte(conflict0x80073CF3), publisherOutput(installed), publisherOutput(incoming),
+		[]byte(dataSavedToken), nil, nil,
+	}
+	errs := []error{errors.New("exit status 1"), nil, nil, nil, nil, nil}
 	if !retryOK {
-		outputs[4] = []byte("Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF9, Install failed.")
-		errs[4] = errors.New("exit status 1")
+		outputs[5] = []byte("Add-AppxPackage : Deployment failed with HRESULT: 0x80073CF9, Install failed.")
+		errs[5] = errors.New("exit status 1")
 	}
 	return &mockRunnerSeq{outputs: outputs, errors: errs}
 }
@@ -497,8 +513,15 @@ func TestWindowsInstaller_Install_DifferingPublisherRemovesAndRetries(t *testing
 	if err := installWindows(runner, "/tmp/app.msix"); err != nil {
 		t.Fatalf("expected the retry to succeed, got: %v", err)
 	}
-	if len(runner.calls) != 5 {
-		t.Fatalf("expected install, two publisher queries, remove, install; got %d: %v", len(runner.calls), runner.calls)
+	// install, two publisher queries, data save, remove, install, data restore.
+	if len(runner.calls) != 7 {
+		t.Fatalf("expected install, two publisher queries, save, remove, install, restore; got %d: %v", len(runner.calls), runner.calls)
+	}
+	if !hasArgContaining(allArgs(runner.calls[3]), dataSavedToken) {
+		t.Errorf("call 3: the station's data was not saved before the removal, got: %v", allArgs(runner.calls[3]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[6]), dataRestoredToken) {
+		t.Errorf("call 6: the station's data was not put back after the install, got: %v", allArgs(runner.calls[6]))
 	}
 	if !hasArgContaining(allArgs(runner.calls[1]), "-ExpandProperty Publisher") {
 		t.Errorf("call 1: expected the installed-publisher query, got: %v", allArgs(runner.calls[1]))
@@ -512,11 +535,11 @@ func TestWindowsInstaller_Install_DifferingPublisherRemovesAndRetries(t *testing
 	if !hasArgContaining(allArgs(runner.calls[2]), "app.msix") {
 		t.Errorf("call 2: expected the asset path in the manifest read, got: %v", allArgs(runner.calls[2]))
 	}
-	if !hasArgContaining(allArgs(runner.calls[3]), "Remove-AppxPackage") {
-		t.Errorf("call 3: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[3]))
+	if !hasArgContaining(allArgs(runner.calls[4]), "Remove-AppxPackage") {
+		t.Errorf("call 4: expected Remove-AppxPackage, got: %v", allArgs(runner.calls[4]))
 	}
-	if !hasArgContaining(allArgs(runner.calls[4]), "Add-AppxPackage") {
-		t.Errorf("call 4: expected the install retry, got: %v", allArgs(runner.calls[4]))
+	if !hasArgContaining(allArgs(runner.calls[5]), "Add-AppxPackage") {
+		t.Errorf("call 5: expected the install retry, got: %v", allArgs(runner.calls[5]))
 	}
 }
 

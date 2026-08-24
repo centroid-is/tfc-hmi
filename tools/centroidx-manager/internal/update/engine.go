@@ -468,31 +468,6 @@ func (e *Engine) trustReleaseCertificate(ctx context.Context, assets []*gogithub
 	}
 	e.log("trusted the release signing certificate %s", filepath.Base(certPath))
 
-	e.trustCodesignCertificate(ctx, assets, destDir)
-}
-
-// trustCodesignCertificate trusts the certificate our own executables are
-// signed with, when a release publishes one. Best effort and silent when the
-// release has no such asset: it changes nothing about whether an install
-// works, only whether the approval prompts an update raises say "Centroid" or
-// "Unknown". It runs right after the package certificate so a station is asked
-// for approval once, not twice.
-func (e *Engine) trustCodesignCertificate(ctx context.Context, assets []*gogithub.ReleaseAsset, destDir string) {
-	certPath, err := downloadCodesignAsset(ctx, assets, destDir)
-	if err != nil {
-		e.log("warn: could not download the code-signing certificate: %v", err)
-		return
-	}
-	if certPath == "" {
-		return
-	}
-	defer func() { _ = os.Remove(certPath) }()
-
-	if err := e.installer.TrustCodesignCertificate(certPath); err != nil {
-		e.log("warn: could not trust the code-signing certificate, so approval prompts will not name the publisher: %v", err)
-		return
-	}
-	e.log("trusted the code-signing certificate %s", filepath.Base(certPath))
 }
 
 // TrustCertificateFor downloads the signing certificate published with the
@@ -571,19 +546,13 @@ func (e *Engine) InstallFromURL(ctx context.Context, url string, onProgress func
 // downloadCertAsset looks for a .cer asset in the release asset list and
 // downloads it to destDir. Returns the local path on success, ("", nil) if no
 // cert asset is present, or ("", err) on download failure.
-// pickCertAsset chooses between the two certificates a release can publish.
-// They are told apart by name: anything with "codesign" in it is what our own
-// executables are signed with, everything else ending .cer/.crt is what the
-// package is signed with. Mixing them up fails in a way nothing reports --
-// the wrong certificate lands in the wrong store and the package is rejected
-// for an untrusted publisher -- so the rule lives in one place.
-func pickCertAsset(assets []*gogithub.ReleaseAsset, codesign bool) *gogithub.ReleaseAsset {
+// pickCertAsset finds the certificate published with a release: the one that
+// signs both the package and our executables. Returns nil when a release
+// publishes none, which the caller treats as best-effort rather than an error.
+func pickCertAsset(assets []*gogithub.ReleaseAsset) *gogithub.ReleaseAsset {
 	for _, a := range assets {
 		name := a.GetName()
 		if !strings.HasSuffix(name, ".cer") && !strings.HasSuffix(name, ".crt") {
-			continue
-		}
-		if strings.Contains(strings.ToLower(name), "codesign") != codesign {
 			continue
 		}
 		return a
@@ -595,15 +564,7 @@ func pickCertAsset(assets []*gogithub.ReleaseAsset, codesign bool) *gogithub.Rel
 // returns "" when the release publishes none (not an error: the caller treats
 // trust as best effort).
 func downloadCertAsset(ctx context.Context, assets []*gogithub.ReleaseAsset, destDir string) (string, error) {
-	return downloadAssetTo(ctx, pickCertAsset(assets, false), destDir)
-}
-
-// downloadCodesignAsset fetches the certificate our executables are signed
-// with. Trusting it as a root is what makes Windows name the publisher on an
-// elevation prompt instead of saying "Unknown"; without it every prompt looks
-// like something unasked-for.
-func downloadCodesignAsset(ctx context.Context, assets []*gogithub.ReleaseAsset, destDir string) (string, error) {
-	return downloadAssetTo(ctx, pickCertAsset(assets, true), destDir)
+	return downloadAssetTo(ctx, pickCertAsset(assets), destDir)
 }
 
 // downloadAssetTo writes one asset into destDir. Certificates are public by

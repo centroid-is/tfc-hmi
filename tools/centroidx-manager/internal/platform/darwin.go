@@ -40,9 +40,3 @@ func (d *darwinInstaller) Uninstall() error {
 	_, err := d.runner.Run("rm", "-rf", "/Applications/CentroidX.app")
 	return err
 }
-
-// TrustCodesignCertificate is a no-op here for the same reason as
-// TrustCertificate: the anonymous-publisher problem it solves is Windows'.
-func (d *darwinInstaller) TrustCodesignCertificate(_ string) error {
-	return nil
-}

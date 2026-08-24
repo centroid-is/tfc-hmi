@@ -42,12 +42,6 @@ type Installer interface {
 	// On Linux/macOS: no-op (certificate trust handled differently or not needed).
 	TrustCertificate(certPath string) error
 
-	// TrustCodesignCertificate installs the certificate our own executables
-	// are signed with into the trusted roots, which is what makes Windows
-	// name the publisher on an elevation prompt. Separate from
-	// TrustCertificate: that one is about Windows accepting the package, this
-	// one is about the operator recognising who is asking.
-	TrustCodesignCertificate(certPath string) error
 
 	// LaunchApp starts the installed application after update.
 	LaunchApp() error
@@ -354,6 +348,14 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	// failure to a bucket of three causes and publisherConflict picks the one
 	// removal actually repairs — by querying Windows, not by parsing it.
 	if strings.Contains(matchable, publisherConflictHRESULT) && publisherConflict(runner, assetPath) {
+		// Removing the package takes its data container with it, and the
+		// station keeps real work in there -- key mappings, the page layout,
+		// the update channel, all written through SharedPreferences, which
+		// under MSIX lands inside the container rather than in the profile.
+		// A publisher change is the only thing that reaches this path, so
+		// this is a one-time migration, but "one-time" is the whole plant.
+		saved := savePackageData(runner)
+
 		// Remove conflicting package(s) with the same identity name
 		runner.Run(
 			"powershell",
@@ -374,6 +376,9 @@ func installWindows(runner CommandRunner, assetPath string) error {
 				return &commandError{op: "Add-AppxPackage failed after removing conflict: " + detail2, cause: err2}
 			}
 			return &commandError{op: "Add-AppxPackage failed after removing conflict", cause: err2}
+		}
+		if saved {
+			restorePackageData(runner)
 		}
 		return nil
 	}
@@ -438,25 +443,33 @@ func certPresentScript(certPath, store string) string {
 // gets its own token; everything else is judged afterwards by looking in the
 // store, never by the elevated child's output (it runs in another console we
 // cannot read).
-func elevatedTrustScript(certPath, store string) string {
+func elevatedTrustScript(certPath string, stores []string) string {
 	// Elevate the MANAGER, not PowerShell: the approval prompt then names
 	// "CentroidX Version Manager", which is the program the operator just
 	// started, instead of "Windows PowerShell", which looks like something
-	// they did not ask for. -trust-cert is the flag the elevated copy runs.
+	// they did not ask for.
 	self, err := os.Executable()
 	if err != nil || self == "" {
 		self = "powershell"
 	}
-	// Which store the elevated copy writes to travels as the flag it is
-	// given, so the elevated run cannot import somewhere the caller did not
-	// ask for.
-	flag := "-trust-cert"
-	if store == codesignStoreLocation {
-		flag = "-trust-root"
+
+	// One elevated run for every store that still needs the certificate:
+	// the operator is asked once, not once per store. Which store the
+	// elevated copy writes to travels as the flag it is given, so it cannot
+	// import somewhere the caller did not ask for.
+	var flags []string
+	var direct []string
+	for _, store := range stores {
+		flag := "-trust-cert"
+		if store == codesignStoreLocation {
+			flag = "-trust-root"
+		}
+		flags = append(flags, `'`+flag+`','`+certPath+`'`)
+		direct = append(direct, importCertificateCommand(certPath, store))
 	}
-	args := `'` + flag + `','` + certPath + `'`
+	args := strings.Join(flags, ",")
 	if self == "powershell" {
-		args = `'-NoProfile','-NonInteractive','-Command','` + importCertificateCommand(certPath, store) + `'`
+		args = `'-NoProfile','-NonInteractive','-Command','` + strings.Join(direct, "; ") + `'`
 	}
 	return `try { ` +
 		`$p = Start-Process -FilePath '` + self + `' -Verb RunAs -Wait -PassThru -WindowStyle Hidden ` +
@@ -505,7 +518,7 @@ func trustCertificateScript(certPath, store string) string {
 // trustCertificateWindows there would ask for elevation again from a process
 // that already has it.
 func ImportCertificateNow(certPath string) error {
-	return importCertificateDirect(execRunner{}, certPath, certStoreLocation)
+	return importCertificateUnelevated(execRunner{}, certPath, certStoreLocation)
 }
 
 // ImportRootCertificateNow is the same for the code-signing certificate,
@@ -513,7 +526,7 @@ func ImportCertificateNow(certPath string) error {
 // main's -trust-root, the flag the elevated copy of the manager is started
 // with.
 func ImportRootCertificateNow(certPath string) error {
-	return importCertificateDirect(execRunner{}, certPath, codesignStoreLocation)
+	return importCertificateUnelevated(execRunner{}, certPath, codesignStoreLocation)
 }
 
 // trustCertificateWindows imports a certificate into LocalMachine\TrustedPeople.
@@ -529,28 +542,99 @@ func ImportRootCertificateNow(certPath string) error {
 // that is reported as a failure: the caller treats trust as best-effort, so a
 // false success would be silent and permanent.
 func trustCertificateWindows(runner CommandRunner, certPath string) error {
-	// Already trusted: done, and no UAC prompt on an ordinary update.
-	if certAlreadyTrusted(runner, certPath, certStoreLocation) {
-		return nil
-	}
-	return importCertificateDirect(runner, certPath, certStoreLocation)
+	// Two stores, one certificate: TrustedPeople is what makes Windows accept
+	// the package, Root is what makes it name Centroid instead of "Unknown"
+	// on the approval prompts an install and its updates raise. The same
+	// certificate signs both, so both stores are filled in one go and the
+	// operator is asked for approval once.
+	return trustCertificateInStores(runner, certPath, certStoreLocation, codesignStoreLocation)
 }
 
-// trustCodesignCertificateWindows puts the certificate our executables are
-// signed with into the machine's trusted roots, so Windows names the
-// publisher instead of saying "Unknown" on the approval prompts an update
-// asks for. Best effort, like the sideload certificate: a station that
-// refuses it still installs and updates, it just keeps the anonymous prompt.
-func trustCodesignCertificateWindows(runner CommandRunner, certPath string) error {
-	if certAlreadyTrusted(runner, certPath, codesignStoreLocation) {
+// trustCertificateInStores imports certPath into every store that does not
+// already hold it, asking Windows for elevation at most once no matter how
+// many stores are missing.
+//
+// The presence check runs first and needs no rights, so a station that was
+// set up once never sees a prompt again on a routine update. What cannot be
+// done unelevated is collected and handed to a single elevated run rather
+// than elevating per store, because two consecutive UAC dialogs read as
+// something going wrong.
+func trustCertificateInStores(runner CommandRunner, certPath string, stores ...string) error {
+	var missing []string
+	for _, store := range stores {
+		if !certAlreadyTrusted(runner, certPath, store) {
+			missing = append(missing, store)
+		}
+	}
+	if len(missing) == 0 {
 		return nil
 	}
-	return importCertificateDirect(runner, certPath, codesignStoreLocation)
+
+	var needElevation []string
+	var firstErr error
+	for _, store := range missing {
+		err := importCertificateUnelevated(runner, certPath, store)
+		switch {
+		case err == nil:
+		case errors.Is(err, errNeedsElevation):
+			needElevation = append(needElevation, store)
+		case firstErr == nil:
+			firstErr = err
+		}
+	}
+
+	if len(needElevation) > 0 {
+		if err := elevateTrust(runner, certPath, needElevation); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
-// importCertificateDirect runs the import and, when it fails for rights,
-// retries once through an elevated copy of the manager.
-func importCertificateDirect(runner CommandRunner, certPath, store string) error {
+// errNeedsElevation marks the one failure elevation can repair. It is a
+// sentinel rather than a message match because the message is Windows' and
+// comes in whatever language the station runs.
+var errNeedsElevation = errors.New("the machine certificate store needs administrator rights")
+
+// elevateTrust runs one elevated import covering every store in stores, then
+// believes only the store itself -- the elevated child runs in a console we
+// cannot read, so its exit code says nothing we can rely on.
+func elevateTrust(runner CommandRunner, certPath string, stores []string) error {
+	elevOut, _ := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		elevatedTrustScript(certPath, stores),
+	)
+
+	var stillMissing bool
+	for _, store := range stores {
+		if !certAlreadyTrusted(runner, certPath, store) {
+			stillMissing = true
+			break
+		}
+	}
+	if !stillMissing {
+		return nil
+	}
+
+	elevDetail := strings.TrimSpace(string(elevOut))
+	if strings.Contains(strings.ToUpper(elevDetail), trustDeclinedToken) {
+		return &commandError{
+			op:    "Approval was declined, so the publisher is still not approved.",
+			cause: errNeedsElevation,
+		}
+	}
+	return &commandError{
+		op:    "Approving the publisher failed: " + firstLine(elevDetail),
+		cause: errNeedsElevation,
+	}
+}
+
+// importCertificateUnelevated runs the import once, as this process. Rights
+// are the one failure it reports as a sentinel instead of a message, so the
+// caller can gather every store that needs the same single elevation.
+func importCertificateUnelevated(runner CommandRunner, certPath, store string) error {
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
@@ -573,30 +657,7 @@ func importCertificateDirect(runner CommandRunner, certPath, store string) error
 
 	if strings.Contains(upper, trustFailedToken) {
 		if strings.Contains(upper, trustNotElevated) {
-			// The one case elevation can fix. Ask Windows for it -- the
-			// operator sees a single UAC prompt -- and then believe only the
-			// store, not the elevated child's exit code.
-			elevOut, _ := runner.Run(
-				"powershell",
-				"-NoProfile", "-NonInteractive",
-				"-Command",
-				elevatedTrustScript(certPath, store),
-			)
-			_ = elevOut
-			if certAlreadyTrusted(runner, certPath, store) {
-				return nil
-			}
-			elevDetail := strings.TrimSpace(string(elevOut))
-			if strings.Contains(strings.ToUpper(elevDetail), trustDeclinedToken) {
-				return &commandError{
-					op:    "Approval was declined, so the publisher is still not approved.",
-					cause: cause,
-				}
-			}
-			return &commandError{
-				op:    "Approving the publisher failed: " + firstLine(elevDetail),
-				cause: cause,
-			}
+			return errNeedsElevation
 		}
 		return &commandError{op: "Import-Certificate failed: " + detail, cause: cause}
 	}
@@ -668,13 +729,104 @@ func launchAppDetached(runner CommandRunner, appPath string, args ...string) err
 	return runner.Start(appPath, args...)
 }
 
+// Tokens the data-migration scripts speak, for the same reason the trust
+// scripts have their own: what Windows says depends on the locale a station
+// runs, and nothing here may depend on that.
+const (
+	dataSavedToken    = "CENTROIDX_DATA_SAVED"
+	dataNoneToken     = "CENTROIDX_DATA_NONE"
+	dataRestoredToken = "CENTROIDX_DATA_RESTORED"
+)
+
+// packageDataBackupDir is where the container's contents wait between the
+// uninstall and the install that replaces it. TEMP, not the container's own
+// parent: the parent is deleted along with the package.
+const packageDataBackupDir = `centroidx-package-data`
+
+// savePackageDataScript copies the installed package's roaming data aside.
+//
+// Under MSIX a write to %APPDATA% is redirected into the package container,
+// so everything the app saved through SharedPreferences lives at
+// Packages\<family>\LocalCache\Roaming and dies with the package. The family
+// name embeds a hash of the publisher, which is precisely what is changing,
+// so it is read from Windows rather than assumed.
+func savePackageDataScript() string {
+	return `$ErrorActionPreference='Stop'; ` +
+		`$p = Get-AppxPackage -Name '` + windowsPackageName + `'; ` +
+		`if (-not $p) { Write-Output '` + dataNoneToken + `'; exit 0 }; ` +
+		`$src = Join-Path $env:LOCALAPPDATA ('Packages\' + $p.PackageFamilyName + '\LocalCache\Roaming'); ` +
+		`if (-not (Test-Path $src)) { Write-Output '` + dataNoneToken + `'; exit 0 }; ` +
+		`$dst = Join-Path $env:TEMP '` + packageDataBackupDir + `'; ` +
+		`if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }; ` +
+		`Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force; ` +
+		// Say saved only if something was actually written. A token that
+		// reports a copy that did not happen is worse than no token: the
+		// restore afterwards would find nothing and also say nothing.
+		`if (@(Get-ChildItem -Recurse -File -LiteralPath $dst).Count -gt 0) { Write-Output '` + dataSavedToken + `' } ` +
+		`else { Write-Output '` + dataNoneToken + `' }`
+}
+
+// restorePackageDataScript copies the saved data into the newly installed
+// package's container.
+//
+// The saved copy wins (-Force): it is the station's real configuration, and
+// the package it is being restored into is one that has just been installed
+// and not yet launched, so anything already there is a default.
+func restorePackageDataScript() string {
+	return `$ErrorActionPreference='Stop'; ` +
+		`$p = Get-AppxPackage -Name '` + windowsPackageName + `'; ` +
+		`if (-not $p) { exit 0 }; ` +
+		`$src = Join-Path $env:TEMP '` + packageDataBackupDir + `'; ` +
+		`if (-not (Test-Path $src)) { exit 0 }; ` +
+		`$dst = Join-Path $env:LOCALAPPDATA ('Packages\' + $p.PackageFamilyName + '\LocalCache\Roaming'); ` +
+		`New-Item -ItemType Directory -Force -Path $dst | Out-Null; ` +
+		// -Path, not -LiteralPath: the wildcard has to expand. -LiteralPath
+		// takes it as a file actually named "*", finds nothing, and copies
+		// nothing -- which is what this did until a simulated container
+		// came out empty on the other side.
+		`Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force; ` +
+		// And the token is earned, not announced: an empty destination is a
+		// station that just lost its settings, and it must not read as done.
+		`if (@(Get-ChildItem -Recurse -File -LiteralPath $dst).Count -gt 0) { Write-Output '` + dataRestoredToken + `' }`
+}
+
+// savePackageData reports whether there is anything to put back afterwards.
+// Failure is not fatal: the alternative to a station losing its local
+// settings is a station that cannot install at all, which is worse.
+func savePackageData(runner CommandRunner) bool {
+	out, err := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		savePackageDataScript(),
+	)
+	return err == nil && strings.Contains(string(out), dataSavedToken)
+}
+
+// restorePackageData puts the saved data into the new container.
+func restorePackageData(runner CommandRunner) bool {
+	out, err := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		restorePackageDataScript(),
+	)
+	return err == nil && strings.Contains(string(out), dataRestoredToken)
+}
+
 // windowsPackageName is the MSIX identity name from centroid-hmi's msix_config.
 const windowsPackageName = "Centroid.CentroidX"
 
-// sideloadPublisherCN is the subject of the self-signed certificate the
-// releases are signed with (centroid-hmi/pubspec.yaml, msix_config.publisher).
-// Used to ask the machine store whether this station already trusts us.
-const sideloadPublisherCN = "2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
+// sideloadPublisherCN is the subject of the certificate releases are signed
+// with (centroid-hmi/pubspec.yaml, msix_config.publisher). Used to ask the
+// machine store whether this station already trusts us.
+//
+// It was a GUID until the publisher became a name -- a package publisher has
+// to equal the certificate subject exactly, and the GUID was what Windows
+// read out on every approval prompt. TestPublisherMatchesPubspec keeps this
+// and the pubspec from drifting apart; drift would mean a station reporting
+// that it trusts nothing while the certificate sits in the store.
+const sideloadPublisherCN = "CN=Centroid, O=Centroid ehf., C=IS"
 
 // windowsAppID is the Application Id in the generated AppxManifest, which the
 // AppsFolder URI needs after the "!".

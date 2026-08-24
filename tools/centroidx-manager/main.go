@@ -68,18 +68,24 @@ func main() {
 
 	flag.Parse()
 
-	// The elevated copy: import and exit, no window, no UI. Everything the
-	// operator sees happens in the parent that asked Windows for approval.
-	if *trustCert != "" {
-		if err := platform.ImportCertificateNow(*trustCert); err != nil {
-			fmt.Fprintf(os.Stderr, "trust certificate: %v\n", err)
-			os.Exit(1)
+	// The elevated copy: import and exit, no window, no UI. Both flags can
+	// arrive together -- one elevated run fills both stores, so the operator
+	// approves once -- so neither returns before the other has had its turn.
+	if *trustCert != "" || *trustRoot != "" {
+		failed := false
+		if *trustCert != "" {
+			if err := platform.ImportCertificateNow(*trustCert); err != nil {
+				fmt.Fprintf(os.Stderr, "trust certificate: %v\n", err)
+				failed = true
+			}
 		}
-		return
-	}
-	if *trustRoot != "" {
-		if err := platform.ImportRootCertificateNow(*trustRoot); err != nil {
-			fmt.Fprintf(os.Stderr, "trust root certificate: %v\n", err)
+		if *trustRoot != "" {
+			if err := platform.ImportRootCertificateNow(*trustRoot); err != nil {
+				fmt.Fprintf(os.Stderr, "trust root certificate: %v\n", err)
+				failed = true
+			}
+		}
+		if failed {
 			os.Exit(1)
 		}
 		return

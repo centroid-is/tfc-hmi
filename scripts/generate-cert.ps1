@@ -8,6 +8,16 @@
 # old cert, users CANNOT upgrade from the previous package — they must uninstall and
 # reinstall from scratch. The cert is the identity anchor for the entire product lifecycle.
 #
+# WHY THE SUBJECT IS A NAME AND NOT A GUID:
+#   The MSIX publisher must equal this subject exactly, and Windows reads the
+#   publisher out on every approval prompt an install or update raises. While it
+#   was a GUID, those prompts said "Unknown publisher". A name makes them say
+#   Centroid -- but only once the certificate is trusted as a ROOT on the
+#   station, which scripts\install-cert.ps1 and the version manager both do.
+#
+#   The same certificate also signs centroidx-manager.exe. One certificate, two
+#   stores: TrustedPeople so Windows accepts the package, Root so it names us.
+#
 # WHAT THIS SCRIPT DOES:
 #   1. Creates a self-signed certificate with Publisher CN matching MSIX manifest
 #   2. Exports the PFX (private key) — store securely, never commit to source control
@@ -24,8 +34,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ExpectedSubject = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
-$FriendlyName    = "CentroidX Sideload Signing Certificate"
+$ExpectedSubject = "CN=Centroid, O=Centroid ehf., C=IS"
+$FriendlyName    = "CentroidX Signing Certificate"
 $PfxOutputPath   = "centroidx-sideload.pfx"
 $CerOutputPath   = "centroidx-sideload.cer"
 
@@ -142,7 +152,9 @@ Write-Host "  NEXT STEPS:"
 Write-Host "  1. Add MSIX_CERT_PFX_BASE64 to GitHub repository secrets"
 Write-Host "  2. Add MSIX_CERT_PASSWORD to GitHub repository secrets"
 Write-Host "  3. Run scripts\install-cert.ps1 on each target machine"
-Write-Host "     to trust this cert (required before MSIX can install)"
+Write-Host "     to trust this cert (required before MSIX can install)."
+Write-Host "     Stations that install through the version manager get this"
+Write-Host "     done for them during the approval it already asks for."
 Write-Host "  4. NEVER commit $PfxOutputPath to source control"
 Write-Host "     (it is already in .gitignore)"
 Write-Host "  5. Store the PFX file in a secure location (password manager)"

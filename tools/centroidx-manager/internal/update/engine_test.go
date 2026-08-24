@@ -62,9 +62,7 @@ type mockInstaller struct {
 	// order records the sequence of interface calls. Trusting the certificate
 	// after installing would be useless — the signature is checked during the
 	// install — so the ordering is part of the contract.
-	order          []string
-	codesignCerts  []string
-	codesignErr    error
+	order      []string
 	installErr error
 	trustErr   error
 	launchErr  error
@@ -86,15 +84,6 @@ func (m *mockInstaller) TrustCertificate(certPath string) error {
 		return m.trustErr
 	}
 	m.trustedCerts = append(m.trustedCerts, certPath)
-	return nil
-}
-
-func (m *mockInstaller) TrustCodesignCertificate(certPath string) error {
-	m.order = append(m.order, "trust-codesign")
-	if m.codesignErr != nil {
-		return m.codesignErr
-	}
-	m.codesignCerts = append(m.codesignCerts, certPath)
 	return nil
 }
 

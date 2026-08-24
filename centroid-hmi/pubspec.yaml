@@ -146,7 +146,11 @@ msix_config:
   msix_version: 2026.8.23.1
   display_name: CentroidX
   description: 'Industrial HMI application, monitors and controls automated processing lines. Connects to OPC UA servers and PostgreSQL databases, gathers data and displays it in a user-friendly way.'
-  publisher: CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB
+  # Must equal the signing certificate subject exactly, byte for byte: the
+  # MSIX publisher IS the certificate subject. It is also what Windows reads
+  # out on an approval prompt, which is why it is a name and no longer a GUID.
+  # Changing it changes the package identity -- see scripts/generate-signing-cert.ps1.
+  publisher: CN=Centroid, O=Centroid ehf., C=IS
   publisher_display_name: Centroid
   logo_path: assets/icon.png
   identity_name: Centroid.CentroidX

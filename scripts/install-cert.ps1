@@ -8,10 +8,13 @@
 #   store. This allows MSIX packages signed with this cert to be installed without requiring
 #   Developer Mode or triggering extra Windows security dialogs.
 #
-# WHY TrustedPeople (NOT Root):
-#   Importing to LocalMachine\Root triggers an additional Windows security dialog warning
-#   even from elevated processes. TrustedPeople is the correct store for sideload MSIX certs
-#   and does not produce this warning.
+# TWO STORES, ONE CERTIFICATE:
+#   TrustedPeople is what Add-AppxPackage checks, and it alone is enough to install.
+#   Root is what makes Windows NAME the publisher -- without it, every approval prompt
+#   the app or the version manager raises says "Unknown publisher", which is the moment
+#   an operator most needs to recognise who is asking. Importing to Root costs one extra
+#   Windows security dialog here, during setup, and removes an anonymous prompt from
+#   every install and update afterwards.
 #
 # USAGE:
 #   # With default path (centroidx-sideload.pfx in current directory):
@@ -37,8 +40,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ExpectedCnFragment = "2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
+$ExpectedCnFragment = "CN=Centroid"
 $TrustedPeopleStore = "Cert:\LocalMachine\TrustedPeople"
+$RootStore          = "Cert:\LocalMachine\Root"
 
 Write-Host ""
 Write-Host "====================================================="
@@ -61,7 +65,7 @@ if (-not (Test-Path $PfxPath)) {
 }
 
 Write-Host "PFX file: $PfxPath"
-Write-Host "Target store: $TrustedPeopleStore"
+Write-Host "Target stores: $TrustedPeopleStore and $RootStore"
 Write-Host ""
 
 # Prompt for password if not provided
@@ -77,6 +81,13 @@ $imported = Import-PfxCertificate `
     -FilePath $PfxPath `
     -CertStoreLocation $TrustedPeopleStore `
     -Password $Password
+
+Write-Host ""
+Write-Host "Importing certificate to $RootStore (so prompts name the publisher) ..."
+Import-PfxCertificate `
+    -FilePath $PfxPath `
+    -CertStoreLocation $RootStore `
+    -Password $Password | Out-Null
 
 Write-Host ""
 Write-Host "Import completed."
@@ -103,5 +114,6 @@ Write-Host "  Thumbprint: $($found.Thumbprint)"
 Write-Host "  Subject:    $($found.Subject)"
 Write-Host ""
 Write-Host "  CentroidX MSIX packages signed with this certificate"
-Write-Host "  can now be installed on this machine."
+Write-Host "  can now be installed on this machine, and approval"
+Write-Host "  prompts name Centroid instead of Unknown."
 Write-Host "====================================================="
