@@ -182,6 +182,81 @@ void main() {
     expect(stateMan.listeners['A'], 0);
   });
 
+  group('a key named through a substitution variable', () {
+    // `Line1.$sb_line_stats_period` — the speedbatcher throughput readouts.
+    // StateMan resolves the variable once, at subscribe time. When
+    // subscriptions moved off the widgets and into this provider, a
+    // substituted key was subscribed exactly once for its RAW spelling:
+    // subscribed before the OptionVariable published, the resolve threw and
+    // the failure was held forever; subscribed after, a period change left
+    // the stream pointed at the old target. Every throughput number on the
+    // speedbatcher screen broke the day that landed. Before the sharing,
+    // widgets rebuilt their subscriptions every frame, and that waste was
+    // also what retried the resolve.
+
+    test('resolves once the variable is published', () async {
+      final stateMan = _SubstitutingStateMan();
+      addTearDown(stateMan.closeSubs);
+      final container = _container(stateMan);
+      final sub = container.listen(
+          keyStreamProvider(r'Line1.$sb_line_stats_period'), (_, __) {});
+      addTearDown(sub.close);
+      await _settle();
+      // Subscribed before the OptionVariable published: nothing resolved yet.
+      expect(stateMan.subscribedResolved, isEmpty);
+
+      stateMan.setSubstitution('sb_line_stats_period', 'avgBPM1Minute');
+      await _settle();
+
+      expect(stateMan.subscribedResolved, ['Line1.avgBPM1Minute'],
+          reason: 'publishing the variable must retry the resolve');
+    });
+
+    test('re-points when the operator picks a new period', () async {
+      final stateMan = _SubstitutingStateMan();
+      addTearDown(stateMan.closeSubs);
+      final container = _container(stateMan);
+      stateMan._subs['sb_line_stats_period'] = 'avgBPM1Minute';
+      final sub = container.listen(
+          keyStreamProvider(r'Line1.$sb_line_stats_period'), (_, __) {});
+      addTearDown(sub.close);
+      await _settle();
+      expect(stateMan.subscribedResolved, ['Line1.avgBPM1Minute']);
+
+      stateMan.setSubstitution('sb_line_stats_period', 'avgBPM30Minute');
+      await _settle();
+
+      expect(stateMan.subscribedResolved,
+          ['Line1.avgBPM1Minute', 'Line1.avgBPM30Minute'],
+          reason: 'a period change must re-subscribe at the new target');
+
+      // And the new stream delivers.
+      stateMan.controllers['Line1.avgBPM30Minute']!
+          .add(DynamicValue(value: 4.2));
+      await _settle();
+      final v = await container
+          .read(keyStreamProvider(r'Line1.$sb_line_stats_period'))
+          .first;
+      expect(v.asDouble, closeTo(4.2, 1e-9));
+    });
+
+    test('a plain key ignores substitution changes', () async {
+      final stateMan = _SubstitutingStateMan();
+      addTearDown(stateMan.closeSubs);
+      final container = _container(stateMan);
+      final sub = container.listen(keyStreamProvider('CV.Drive'), (_, __) {});
+      addTearDown(sub.close);
+      await _settle();
+      expect(stateMan.subscribedResolved, ['CV.Drive']);
+
+      stateMan.setSubstitution('sb_line_stats_period', 'avgBPM5Minute');
+      await _settle();
+
+      expect(stateMan.subscribedResolved, ['CV.Drive'],
+          reason: 'operator clicks must not churn unrelated subscriptions');
+    });
+  });
+
   test('nothing is subscribed before there is a StateMan', () async {
     final container = ProviderContainer(overrides: [
       stateManProvider.overrideWith((ref) => Completer<StateMan>().future),
@@ -196,6 +271,41 @@ void main() {
     // every asset already renders while it waits for a first reading.
     expect(await container.read(keyStreamProvider('A')).isEmpty, isTrue);
   });
+}
+
+/// A fake with real substitution semantics: `$var` keys resolve against the
+/// current substitutions at subscribe time and throw while unresolved —
+/// mirroring `StateMan.resolveKey` + `_throwIfUnresolved`.
+class _SubstitutingStateMan extends Fake implements StateMan {
+  final Map<String, String> _subs = {};
+  final _subs$ = StreamController<Map<String, String>>.broadcast();
+  final List<String> subscribedResolved = [];
+  final Map<String, StreamController<DynamicValue>> controllers = {};
+
+  @override
+  Stream<Map<String, String>> get substitutionsChanged => _subs$.stream;
+
+  void setSubstitution(String name, String value) {
+    _subs[name] = value;
+    _subs$.add(Map.of(_subs));
+  }
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    var resolved = key;
+    for (final e in _subs.entries) {
+      resolved = resolved.replaceAll('\$${e.key}', e.value);
+    }
+    if (resolved.contains(r'$')) {
+      throw StateError('unresolved variable in "$resolved"');
+    }
+    subscribedResolved.add(resolved);
+    final c = StreamController<DynamicValue>.broadcast();
+    controllers[resolved] = c;
+    return c.stream;
+  }
+
+  void closeSubs() => _subs$.close();
 }
 
 class _ThrowingStateMan extends Fake implements StateMan {
