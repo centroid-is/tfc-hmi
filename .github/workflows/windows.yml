@@ -57,6 +57,48 @@ jobs:
         working-directory: tools/centroidx-manager
         run: go build -o centroidx-manager_windows_amd64.exe .
 
+      # The manager asks stations for elevation, and an unsigned exe makes
+      # that prompt say "Unknown publisher". Signed with the same certificate
+      # as the MSIX and timestamped, so the signature keeps verifying after
+      # the certificate itself expires. This runs BEFORE the bundle step so
+      # the copy every station extracts from the app's assets is the signed
+      # one.
+      - name: Sign centroidx-manager with the sideload certificate
+        working-directory: tools/centroidx-manager
+        shell: powershell
+        env:
+          MSIX_CERT_PFX_BASE64: ${{ secrets.MSIX_CERT_PFX_BASE64 }}
+          MSIX_CERT_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:MSIX_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object { [version]$_.Directory.Parent.Name } | Select-Object -Last 1
+          if (-not $signtool) { throw "signtool.exe not found under Windows Kits" }
+          & $signtool.FullName sign /f $pfx /p $env:MSIX_CERT_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+            centroidx-manager_windows_amd64.exe
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign exited $LASTEXITCODE" }
+          Remove-Item $pfx
+          # Positive evidence, not a swallowed chain error: signtool verify
+          # would fail here by design (the runner has not trusted our root),
+          # so assert the three things that must be true regardless of trust:
+          # a signature exists, it was made by OUR subject, and it carries a
+          # timestamp so it outlives the certificate's expiry.
+          $sig = Get-AuthenticodeSignature centroidx-manager_windows_amd64.exe
+          if ($sig.Status -eq 'NotSigned' -or -not $sig.SignerCertificate) {
+            throw "manager exe is not signed"
+          }
+          $subject = "CN=Centroid, O=Centroid ehf., C=IS"
+          if ($sig.SignerCertificate.Subject -ne $subject) {
+            throw "signed by '$($sig.SignerCertificate.Subject)', expected '$subject'"
+          }
+          if (-not $sig.TimeStamperCertificate) {
+            throw "signature carries no timestamp - it would stop verifying when the certificate expires"
+          }
+          Write-Host "Signed by $subject, timestamped, status: $($sig.Status)"
+
       - name: Bundle manager binary into Flutter assets
         shell: bash
         run: |
@@ -132,7 +174,10 @@ jobs:
 
           # Trusting the wrong certificate is indistinguishable from trusting
           # none. pubspec.yaml anchors the package identity to this subject.
-          $expected = "CN=2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
+          # A name, no longer a GUID: it is what Windows reads out on every
+          # approval prompt, and it must equal the certificate subject byte
+          # for byte.
+          $expected = "CN=Centroid, O=Centroid ehf., C=IS"
           if ($exported.Subject -ne $expected) {
             throw "Exported certificate subject is '$($exported.Subject)', expected '$expected'"
           }
