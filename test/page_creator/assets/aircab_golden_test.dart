@@ -67,12 +67,17 @@ Future<void> _pumpCabinet(
               key: _boundaryKey,
               child: ColoredBox(
                 color: theme.colorScheme.surface,
+                // 2:1, not a square: the cabinet fills the box it is given
+                // (no AspectRatio wrapper any more), and it takes about
+                // twice the width for "Pressure" and "Soft start" to render
+                // beside their lamps without ellipsizing — which is how the
+                // asset is meant to be laid out on a page.
                 child: SizedBox(
-                  width: 240,
+                  width: 440,
                   height: 240,
                   child: Center(
                     child: SizedBox(
-                      width: 200,
+                      width: 400,
                       height: 200,
                       child: AirCab(config: _config()),
                     ),

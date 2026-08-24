@@ -166,9 +166,13 @@ class AirCab extends StatelessWidget {
     // Theme roles, not literals: a grey[200] box with a black26 border and
     // white "off" LEDs was a light-theme widget pasted onto the dark page.
     final scheme = Theme.of(context).colorScheme;
-    return AspectRatio(
-      aspectRatio: 1,
-      child: Container(
+    // No AspectRatio(1) wrapper: the cabinet fills whatever box the page
+    // gives it. On a forced square the caption font (half its row) always
+    // outran the width beside the lamp, so "Pressure"/"Soft start"
+    // ellipsized at every size — the button and the lamps keep their own
+    // aspect locks, so any extra width goes to the captions, which is the
+    // only part that wants it.
+    return Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHighest,
@@ -298,7 +302,6 @@ class AirCab extends StatelessWidget {
             ),
           ],
         ),
-      ),
     );
   }
 }
