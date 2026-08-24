@@ -260,8 +260,9 @@ func layoutDestinationStep(gtx layout.Context, th *material.Theme, wz *wizardSta
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return option(gtx, kindPortableValue, "Portable  —  choose a folder",
-				"Unpacks this build into the folder below. No certificate, no elevation, "+
-					"and it will not update itself.")
+				"Unpacks this build into the folder below -- Program Files by "+
+					"default, which asks for administrator approval once -- and adds a "+
+					"Start-menu entry. No certificate, and it will not update itself.")
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if wz.kind != kindPortable {

@@ -23,6 +23,9 @@ import (
 // makes the manager behave like a normal installer, and it needs no
 // certificate and no elevation.
 
+// versionFile records which release a portable folder holds.
+const versionFile = "CENTROIDX_VERSION"
+
 // portableAssetName is the zip published beside the platform installer.
 func portableAssetName() string {
 	return fmt.Sprintf("centroidx_%s_x64.zip", runtime.GOOS)
@@ -40,13 +43,47 @@ func SelectPortableAsset(assets []*gogithub.ReleaseAsset) *gogithub.ReleaseAsset
 }
 
 // DefaultPortableDir is where a portable install lands unless the operator
-// picks somewhere else: beside their other per-user programs, so it needs no
-// elevation and survives a Windows reinstall of the machine account.
+// picks somewhere else: Program Files, where Windows programs live and where
+// anyone looking for the HMI will look for it. Writing there needs
+// administrator rights, which the manager asks for once, the same way it
+// asks for the certificate -- a per-user folder would avoid the prompt but
+// hide the install somewhere nobody thinks to look.
 func DefaultPortableDir() string {
+	if runtime.GOOS == "windows" {
+		if pf := os.Getenv("ProgramFiles"); pf != "" {
+			return filepath.Join(pf, "CentroidX")
+		}
+		return filepath.Join(`C:\Program Files`, "CentroidX")
+	}
 	if dir, err := os.UserHomeDir(); err == nil && dir != "" {
 		return filepath.Join(dir, "CentroidX")
 	}
 	return filepath.Join(os.TempDir(), "CentroidX")
+}
+
+// writable reports whether dir (or the nearest existing parent) can be
+// written to without elevation. Asked before unpacking so the manager can
+// raise one approval prompt up front rather than failing halfway through.
+func writable(dir string) bool {
+	probe := dir
+	for {
+		if _, err := os.Stat(probe); err == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return false
+		}
+		probe = parent
+	}
+	f, err := os.CreateTemp(probe, ".centroidx-write-probe-")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 // InstallPortable downloads the release's portable zip and unpacks it into
@@ -92,21 +129,72 @@ func (e *Engine) InstallPortable(ctx context.Context, version, channel, destDir 
 		return err
 	}
 
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", destDir, err)
+	// Program Files is the default, and writing there needs administrator
+	// rights: ask Windows for them once, for the whole unpack, rather than
+	// failing halfway through with half a program on disk.
+	if !writable(destDir) {
+		e.log("portable install into %s needs elevation; asking", destDir)
+		if err := unpackElevated(zipPath, destDir, info.Version); err != nil {
+			return err
+		}
+		if PortableVersionIn(destDir) != info.Version {
+			return fmt.Errorf("the elevated unpack into %s did not complete (was the approval declined?)", destDir)
+		}
+	} else {
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return fmt.Errorf("create %s: %w", destDir, err)
+		}
+		if err := unzip(zipPath, destDir); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(destDir, versionFile),
+			[]byte(info.Version+"\n"), 0o644); err != nil {
+			return fmt.Errorf("record the installed version: %w", err)
+		}
 	}
-	if err := unzip(zipPath, destDir); err != nil {
-		return err
+
+	if exe := FindPortableExe(destDir); exe != "" {
+		if err := createShortcut(exe, "CentroidX"); err != nil {
+			e.log("warn: could not create the Start-menu shortcut: %v", err)
+		}
 	}
-	_ = os.WriteFile(filepath.Join(destDir, "CENTROIDX_VERSION"), []byte(info.Version+"\n"), 0o644)
 	e.log("portable install of %s in %s", info.Version, destDir)
 	return nil
+}
+
+// FindPortableExe locates centroidx.exe inside an unpacked folder. The zip
+// carries a top-level centroidx-windows-x64/ directory, so the executable is
+// one level down, but a flat layout is accepted too.
+func FindPortableExe(dir string) string {
+	candidates := []string{
+		filepath.Join(dir, "centroidx.exe"),
+		filepath.Join(dir, "centroidx-windows-x64", "centroidx.exe"),
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		c := filepath.Join(dir, entry.Name(), "centroidx.exe")
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	return ""
 }
 
 // PortableVersionIn reports the version recorded in a portable folder, or
 // empty when there is none.
 func PortableVersionIn(dir string) string {
-	b, err := os.ReadFile(filepath.Join(dir, "CENTROIDX_VERSION"))
+	b, err := os.ReadFile(filepath.Join(dir, versionFile))
 	if err != nil {
 		return ""
 	}
