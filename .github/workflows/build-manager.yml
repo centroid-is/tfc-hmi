@@ -107,6 +107,44 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
         run: go build -o "${{ matrix.binary_name || matrix.artifact_name }}" .
 
+      # Same certificate and shape as windows.yml's manager signing step: the
+      # exe published as a release asset must name Centroid on the elevation
+      # prompt, exactly like the copy bundled inside the app. Gated on the
+      # secret the way the Apple signing below is, so a context without
+      # secrets (dependabot) still builds - unsigned there, loudly signed
+      # everywhere that publishes.
+      - name: Sign the manager executable
+        if: matrix.os == 'windows-latest' && env.MSIX_CERT_PFX_BASE64 != ''
+        working-directory: tools/centroidx-manager
+        shell: powershell
+        env:
+          MSIX_CERT_PFX_BASE64: ${{ secrets.MSIX_CERT_PFX_BASE64 }}
+          MSIX_CERT_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "${{ matrix.binary_name || matrix.artifact_name }}"
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:MSIX_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object { [version]$_.Directory.Parent.Name } | Select-Object -Last 1
+          if (-not $signtool) { throw "signtool.exe not found under Windows Kits" }
+          & $signtool.FullName sign /f $pfx /p $env:MSIX_CERT_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign exited $LASTEXITCODE" }
+          Remove-Item $pfx
+          $sig = Get-AuthenticodeSignature $exe
+          if ($sig.Status -eq 'NotSigned' -or -not $sig.SignerCertificate) {
+            throw "manager exe is not signed"
+          }
+          $subject = "CN=Centroid, O=Centroid ehf., C=IS"
+          if ($sig.SignerCertificate.Subject -ne $subject) {
+            throw "signed by '$($sig.SignerCertificate.Subject)', expected '$subject'"
+          }
+          if (-not $sig.TimeStamperCertificate) {
+            throw "signature carries no timestamp"
+          }
+          Write-Host "Signed by $subject, timestamped, status: $($sig.Status)"
+
       - name: Package macOS .app bundle and DMG
         if: matrix.os == 'macos-latest'
         working-directory: tools/centroidx-manager
