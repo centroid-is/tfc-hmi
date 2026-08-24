@@ -40,6 +40,8 @@ void RedirectIOToConsole() {
   FlutterDesktopResyncOutputStreams();
 }
 
+
+
 void RedirectIOToFile(const char* path) {
   // Open with FILE_SHARE_READ | FILE_SHARE_WRITE so Dart can also write to this file.
   // freopen_s does NOT expose sharing flags and defaults to exclusive access,
@@ -115,7 +117,7 @@ void RedirectIOToFile(const char* path) {
           _dup2(pipeFd, 2);
           ::SetStdHandle(STD_OUTPUT_HANDLE, writeEnd);
           ::SetStdHandle(STD_ERROR_HANDLE, writeEnd);
-          std::ios::sync_with_stdio(false);
+  std::ios::sync_with_stdio(false);
           std::ios::sync_with_stdio(true);
           FlutterDesktopResyncOutputStreams();
           return;
@@ -139,9 +141,10 @@ void RedirectIOToFile(const char* path) {
   if (!fp) { _close(fd); return; }
   setvbuf(fp, nullptr, _IONBF, 0);
 
-  // Replace CRT stdout with our file stream.
-  *stdout = *fp;
   // Wire fd 1 and fd 2 to the same file so Dart (which uses fd 1) can reach it.
+  // _dup2 is what actually redirects; the struct copy that used to stand here
+  // (*stdout = *fp) was the corruption, and it is not needed -- the CRT's
+  // stdout writes through fd 1, which now points at hFile.
   _dup2(fd, 1);
   _dup2(fd, 2);
 
@@ -153,13 +156,26 @@ void RedirectIOToFile(const char* path) {
   std::ios::sync_with_stdio(false);
   std::ios::sync_with_stdio(true);
 
-  // Point the *engine's* stdout/stderr at the new streams as well. Without
-  // this, everything the Dart side writes through print() — which is every
-  // logger package line, via ConsoleOutput — keeps going to the streams the
-  // engine captured at startup, i.e. nowhere in a windowed app. The two
-  // console paths above have always called this; the file path never did,
-  // which is why file logging captured the C++ side only.
-  FlutterDesktopResyncOutputStreams();
+  // Point the *engine's* stdout/stderr at the new streams as well, but ONLY
+  // when this process actually has a console.
+  //
+  // The engine's resync reopens stdout and stderr on CONOUT$ (its header says
+  // to call it "after an AllocConsole call"). With no console attached that
+  // reopen fails, leaves the stream closed, and the engine then duplicates
+  // from the closed descriptor -- an invalid CRT parameter, which aborts the
+  // process with 0xc0000409 inside flutter_windows.dll.
+  //
+  // Every launch from a shortcut, the Start menu or an MSIX tile has no
+  // console, so the app died before its window ever appeared, leaving only a
+  // zero-byte log; launching from a terminal has one, which is why it looked
+  // fine in development and in every scripted run.
+  //
+  // The cost of skipping it is that Dart's print() output does not reach the
+  // log file on a console-less launch -- the C++ side still does. Losing log
+  // lines beats not starting.
+  if (::GetConsoleWindow() != nullptr) {
+    FlutterDesktopResyncOutputStreams();
+  }
 }
 
 std::vector<std::string> GetCommandLineArguments() {
