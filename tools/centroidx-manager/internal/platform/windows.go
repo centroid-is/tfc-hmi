@@ -22,6 +22,10 @@ func (w *windowsInstaller) TrustCertificate(certPath string) error {
 	return trustCertificateWindows(w.runner, certPath)
 }
 
+func (w *windowsInstaller) TrustCodesignCertificate(certPath string) error {
+	return trustCodesignCertificateWindows(w.runner, certPath)
+}
+
 func (w *windowsInstaller) LaunchApp() error {
 	return launchWindowsApp(w.runner)
 }

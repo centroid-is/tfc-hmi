@@ -42,6 +42,13 @@ type Installer interface {
 	// On Linux/macOS: no-op (certificate trust handled differently or not needed).
 	TrustCertificate(certPath string) error
 
+	// TrustCodesignCertificate installs the certificate our own executables
+	// are signed with into the trusted roots, which is what makes Windows
+	// name the publisher on an elevation prompt. Separate from
+	// TrustCertificate: that one is about Windows accepting the package, this
+	// one is about the operator recognising who is asking.
+	TrustCodesignCertificate(certPath string) error
+
 	// LaunchApp starts the installed application after update.
 	LaunchApp() error
 
@@ -385,11 +392,20 @@ func installWindows(runner CommandRunner, assetPath string) error {
 // manager could write to it without elevation.
 const certStoreLocation = `Cert:\LocalMachine\TrustedPeople`
 
+// codesignStoreLocation is where the certificate our own executables are
+// signed with has to land. Trusted Root, not TrustedPeople: TrustedPeople
+// satisfies Windows' sideloading check for a package, but only a chain to a
+// trusted root makes Windows name a publisher on an elevation prompt. Until
+// the root is there, an operator approving an update is asked to approve
+// something Windows calls "Unknown", which is exactly the moment we want them
+// paying attention to the name.
+const codesignStoreLocation = `Cert:\LocalMachine\Root`
+
 // importCertificateCommand builds the PowerShell that imports certPath. It is
 // also handed to the operator verbatim when the manager cannot run it itself,
 // so the two can never drift apart.
-func importCertificateCommand(certPath string) string {
-	return `Import-Certificate -FilePath '` + certPath + `' -CertStoreLocation ` + certStoreLocation
+func importCertificateCommand(certPath, store string) string {
+	return `Import-Certificate -FilePath '` + certPath + `' -CertStoreLocation ` + store
 }
 
 // Tokens the trust script emits about itself. Everything the manager decides
@@ -411,9 +427,9 @@ const (
 // rights, so this runs before any elevation is considered: on a station that
 // was set up once, every later update passes here and no UAC prompt is ever
 // shown.
-func certPresentScript(certPath string) string {
+func certPresentScript(certPath, store string) string {
 	return `$t = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 '` + certPath + `').Thumbprint; ` +
-		`if (Test-Path ('` + certStoreLocation + `\' + $t)) { Write-Output '` + trustPresentToken + `' } ` +
+		`if (Test-Path ('` + store + `\' + $t)) { Write-Output '` + trustPresentToken + `' } ` +
 		`else { Write-Output '` + trustAbsentToken + `' }`
 }
 
@@ -422,7 +438,7 @@ func certPresentScript(certPath string) string {
 // gets its own token; everything else is judged afterwards by looking in the
 // store, never by the elevated child's output (it runs in another console we
 // cannot read).
-func elevatedTrustScript(certPath string) string {
+func elevatedTrustScript(certPath, store string) string {
 	// Elevate the MANAGER, not PowerShell: the approval prompt then names
 	// "CentroidX Version Manager", which is the program the operator just
 	// started, instead of "Windows PowerShell", which looks like something
@@ -431,9 +447,16 @@ func elevatedTrustScript(certPath string) string {
 	if err != nil || self == "" {
 		self = "powershell"
 	}
-	args := `'-trust-cert','` + certPath + `'`
+	// Which store the elevated copy writes to travels as the flag it is
+	// given, so the elevated run cannot import somewhere the caller did not
+	// ask for.
+	flag := "-trust-cert"
+	if store == codesignStoreLocation {
+		flag = "-trust-root"
+	}
+	args := `'` + flag + `','` + certPath + `'`
 	if self == "powershell" {
-		args = `'-NoProfile','-NonInteractive','-Command','` + importCertificateCommand(certPath) + `'`
+		args = `'-NoProfile','-NonInteractive','-Command','` + importCertificateCommand(certPath, store) + `'`
 	}
 	return `try { ` +
 		`$p = Start-Process -FilePath '` + self + `' -Verb RunAs -Wait -PassThru -WindowStyle Hidden ` +
@@ -445,12 +468,12 @@ func elevatedTrustScript(certPath string) string {
 // certAlreadyTrusted reports whether the certificate is in the store.
 // Unknown (script failed, no token) counts as not trusted, so the flow falls
 // through to the import which produces the better diagnostics.
-func certAlreadyTrusted(runner CommandRunner, certPath string) bool {
+func certAlreadyTrusted(runner CommandRunner, certPath, store string) bool {
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command",
-		certPresentScript(certPath),
+		certPresentScript(certPath, store),
 	)
 	return err == nil && strings.Contains(strings.ToUpper(string(out)), trustPresentToken)
 }
@@ -468,9 +491,9 @@ func certAlreadyTrusted(runner CommandRunner, certPath string) bool {
 // token for an import that did not happen. (This is deliberately scoped to this
 // script — the same flag is missing from Add-AppxPackage in installWindows, but
 // that changes which installs count as failures and is tracked separately.)
-func trustCertificateScript(certPath string) string {
+func trustCertificateScript(certPath, store string) string {
 	return `$e = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); ` +
-		`try { ` + importCertificateCommand(certPath) + ` -ErrorAction Stop ` + trustScriptSuccess + `; ` +
+		`try { ` + importCertificateCommand(certPath, store) + ` -ErrorAction Stop ` + trustScriptSuccess + `; ` +
 		`Write-Output '` + trustOKToken + `' } ` +
 		`catch { Write-Output ('` + trustFailedToken + ` ELEVATED=' + $e.ToString().ToUpper()); ` +
 		`Write-Output $_.Exception.Message; exit 1 }`
@@ -482,7 +505,15 @@ func trustCertificateScript(certPath string) string {
 // trustCertificateWindows there would ask for elevation again from a process
 // that already has it.
 func ImportCertificateNow(certPath string) error {
-	return importCertificateDirect(execRunner{}, certPath)
+	return importCertificateDirect(execRunner{}, certPath, certStoreLocation)
+}
+
+// ImportRootCertificateNow is the same for the code-signing certificate,
+// which belongs in the root store -- see codesignStoreLocation. Routed from
+// main's -trust-root, the flag the elevated copy of the manager is started
+// with.
+func ImportRootCertificateNow(certPath string) error {
+	return importCertificateDirect(execRunner{}, certPath, codesignStoreLocation)
 }
 
 // trustCertificateWindows imports a certificate into LocalMachine\TrustedPeople.
@@ -499,20 +530,32 @@ func ImportCertificateNow(certPath string) error {
 // false success would be silent and permanent.
 func trustCertificateWindows(runner CommandRunner, certPath string) error {
 	// Already trusted: done, and no UAC prompt on an ordinary update.
-	if certAlreadyTrusted(runner, certPath) {
+	if certAlreadyTrusted(runner, certPath, certStoreLocation) {
 		return nil
 	}
-	return importCertificateDirect(runner, certPath)
+	return importCertificateDirect(runner, certPath, certStoreLocation)
+}
+
+// trustCodesignCertificateWindows puts the certificate our executables are
+// signed with into the machine's trusted roots, so Windows names the
+// publisher instead of saying "Unknown" on the approval prompts an update
+// asks for. Best effort, like the sideload certificate: a station that
+// refuses it still installs and updates, it just keeps the anonymous prompt.
+func trustCodesignCertificateWindows(runner CommandRunner, certPath string) error {
+	if certAlreadyTrusted(runner, certPath, codesignStoreLocation) {
+		return nil
+	}
+	return importCertificateDirect(runner, certPath, codesignStoreLocation)
 }
 
 // importCertificateDirect runs the import and, when it fails for rights,
 // retries once through an elevated copy of the manager.
-func importCertificateDirect(runner CommandRunner, certPath string) error {
+func importCertificateDirect(runner CommandRunner, certPath, store string) error {
 	out, err := runner.Run(
 		"powershell",
 		"-NoProfile", "-NonInteractive",
 		"-Command",
-		trustCertificateScript(certPath),
+		trustCertificateScript(certPath, store),
 	)
 
 	detail := strings.TrimSpace(string(out))
@@ -537,10 +580,10 @@ func importCertificateDirect(runner CommandRunner, certPath string) error {
 				"powershell",
 				"-NoProfile", "-NonInteractive",
 				"-Command",
-				elevatedTrustScript(certPath),
+				elevatedTrustScript(certPath, store),
 			)
 			_ = elevOut
-			if certAlreadyTrusted(runner, certPath) {
+			if certAlreadyTrusted(runner, certPath, store) {
 				return nil
 			}
 			elevDetail := strings.TrimSpace(string(elevOut))

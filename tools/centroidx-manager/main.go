@@ -64,6 +64,7 @@ func main() {
 	localPkg := flag.String("local-package", "", "Install from a local package file (dev/testing: skip GitHub Releases)")
 	artifactURL := flag.String("artifact-url", "", "Download and install from a direct URL (dev/testing: CI artifact URLs)")
 	trustCert := flag.String("trust-cert", "", "Import a signing certificate into the machine trust store (used by the elevated copy of the manager; assumes it is already elevated)")
+	trustRoot := flag.String("trust-root", "", "Import our code-signing certificate into the machine trusted roots (used by the elevated copy of the manager; assumes it is already elevated)")
 
 	flag.Parse()
 
@@ -72,6 +73,13 @@ func main() {
 	if *trustCert != "" {
 		if err := platform.ImportCertificateNow(*trustCert); err != nil {
 			fmt.Fprintf(os.Stderr, "trust certificate: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *trustRoot != "" {
+		if err := platform.ImportRootCertificateNow(*trustRoot); err != nil {
+			fmt.Fprintf(os.Stderr, "trust root certificate: %v\n", err)
 			os.Exit(1)
 		}
 		return

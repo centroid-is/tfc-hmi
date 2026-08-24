@@ -38,3 +38,9 @@ func (l *linuxInstaller) Uninstall() error {
 	_, err := l.runner.Run("sudo", "dpkg", "-r", "centroidx")
 	return err
 }
+
+// TrustCodesignCertificate is a no-op here for the same reason as
+// TrustCertificate: the anonymous-publisher problem it solves is Windows'.
+func (l *linuxInstaller) TrustCodesignCertificate(_ string) error {
+	return nil
+}
