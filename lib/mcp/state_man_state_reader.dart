@@ -22,13 +22,23 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
 class StateManStateReader implements StateReader, ServerAliasProvider {
   final StateMan? _stateMan;
   final Map<String, dynamic> _cache = {};
-  final List<StreamSubscription<DynamicValue>> _subscriptions = [];
+  final Map<String, StreamSubscription<DynamicValue>> _subscriptions = {};
 
-  /// Keys available from this reader.
+  /// Keys whose subscription is currently being established, so a burst of
+  /// queries against a fresh key opens one subscription rather than one per
+  /// query.
+  final Set<String> _subscribing = {};
+
+  /// Keys available from this reader, re-read from the source on every use.
   ///
-  /// In production, sourced from [StateMan.keyMappings.nodes.keys].
-  /// In test mode, provided directly via [forTest].
-  final List<String> _keys;
+  /// In production this consults [StateMan.keyMappings] *live*. It used to be
+  /// copied once at construction — which quietly broke the workflow this MCP
+  /// server itself prescribes: an agent proposes a key mapping, the operator
+  /// accepts it, `StateMan.updateKeyMappings` makes it readable immediately —
+  /// and then `get_tag_value` answered "Tag not found" against the stale
+  /// snapshot until the app was restarted. The mapping was live everywhere
+  /// except in the tool telling the agent it did not exist.
+  final List<String> Function() _keySource;
 
   /// Test-only streams for subscription simulation.
   final Map<String, Stream<DynamicValue>> _testStreams;
@@ -62,7 +72,7 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   StateManStateReader(StateMan stateMan,
       {this.subscribeTimeout = defaultSubscribeTimeout})
       : _stateMan = stateMan,
-        _keys = stateMan.keyMappings.nodes.keys.toList(),
+        _keySource = (() => stateMan.keyMappings.nodes.keys.toList()),
         _testStreams = const {},
         _testSubscribe = null;
 
@@ -73,13 +83,17 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   ///
   /// Pass [subscribe] instead of [streams] to simulate the await on
   /// `StateMan.subscribe` itself -- e.g. a key that never resolves.
+  ///
+  /// Pass [liveKeys] to simulate a key list that changes after construction —
+  /// the situation an accepted key-mapping proposal creates in production.
   StateManStateReader.forTest({
     required List<String> keys,
     Map<String, Stream<DynamicValue>> streams = const {},
     Future<Stream<DynamicValue>> Function(String key)? subscribe,
+    List<String> Function()? liveKeys,
     this.subscribeTimeout = defaultSubscribeTimeout,
   })  : _stateMan = null,
-        _keys = keys,
+        _keySource = (liveKeys ?? (() => keys)),
         _testStreams = streams,
         _testSubscribe = subscribe;
 
@@ -93,8 +107,9 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   /// resolve within [subscribeTimeout] are skipped -- they will return null
   /// from [getValue], but they no longer hold up the remaining keys.
   Future<void> init() async {
-    for (var i = 0; i < _keys.length; i += subscribeConcurrency) {
-      final batch = _keys.skip(i).take(subscribeConcurrency);
+    final keys = _keySource();
+    for (var i = 0; i < keys.length; i += subscribeConcurrency) {
+      final batch = keys.skip(i).take(subscribeConcurrency);
       await Future.wait(batch.map(_subscribeKey));
     }
   }
@@ -104,6 +119,7 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   /// Never throws: subscription failures are logged and the key is left
   /// uncached.
   Future<void> _subscribeKey(String key) async {
+    if (_subscriptions.containsKey(key) || !_subscribing.add(key)) return;
     try {
       Stream<DynamicValue> stream;
       if (_stateMan == null) {
@@ -132,10 +148,15 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
               'StateManStateReader: subscription error for key "$key": $error');
         },
       );
-      _subscriptions.add(sub);
+      _subscriptions[key] = sub;
     } catch (e) {
       io.stderr.writeln(
           'StateManStateReader: failed to subscribe to key "$key": $e');
+    } finally {
+      // On failure the key leaves the pending set, so a later query retries
+      // rather than being locked out by one bad attempt. Queries are
+      // human-paced; StateMan's own backoff bounds anything faster.
+      _subscribing.remove(key);
     }
   }
 
@@ -151,10 +172,21 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
   }
 
   @override
-  List<String> get keys => _keys;
+  List<String> get keys => _keySource();
 
   @override
-  dynamic getValue(String key) => _cache[key];
+  dynamic getValue(String key) {
+    // A key that gained a mapping after [init] has no subscription yet.
+    // Start one on first touch; this read still answers from the cache —
+    // null, honestly, until the first value lands — and the next one sees
+    // the live value. Sync interface, so awaiting here is not an option.
+    if (!_subscriptions.containsKey(key) &&
+        !_subscribing.contains(key) &&
+        _keySource().contains(key)) {
+      unawaited(_subscribeKey(key));
+    }
+    return _cache[key];
+  }
 
   @override
   Map<String, dynamic> get currentValues => Map.unmodifiable(_cache);
@@ -170,10 +202,11 @@ class StateManStateReader implements StateReader, ServerAliasProvider {
 
   /// Cancel all stream subscriptions and clear the cache.
   void dispose() {
-    for (final sub in _subscriptions) {
+    for (final sub in _subscriptions.values) {
       sub.cancel();
     }
     _subscriptions.clear();
+    _subscribing.clear();
     _cache.clear();
   }
 }

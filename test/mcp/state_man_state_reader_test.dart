@@ -172,6 +172,140 @@ void main() {
       }
     });
 
+    group('a mapping accepted after startup', () {
+      // The situation an accepted key-mapping proposal creates: StateMan's
+      // updateKeyMappings makes the key readable immediately, but this reader
+      // used to have copied the key list at construction — so get_tag_value
+      // answered "Tag not found" for a key the rest of the app was already
+      // reading, until the app was restarted. The MCP server's own
+      // instructions tell an agent to verify a new mapping with
+      // get_tag_value, so the stale snapshot broke the exact workflow the
+      // server prescribes.
+
+      test('appears in keys without a restart', () async {
+        final live = ['old'];
+        final reader = StateManStateReader.forTest(
+          keys: const [],
+          liveKeys: () => List.of(live),
+        );
+        await reader.init();
+        expect(reader.keys, ['old']);
+
+        live.add('accepted.later');
+        expect(reader.keys, unorderedEquals(['old', 'accepted.later']),
+            reason: 'keys must consult the mapping source live');
+      });
+
+      test('is subscribed on first touch and readable on the next', () async {
+        final live = <String>[];
+        final controller = StreamController<DynamicValue>.broadcast();
+        final subscribed = <String>[];
+        final reader = StateManStateReader.forTest(
+          keys: const [],
+          liveKeys: () => List.of(live),
+          subscribe: (key) async {
+            subscribed.add(key);
+            return controller.stream;
+          },
+        );
+        await reader.init();
+        expect(subscribed, isEmpty);
+
+        live.add('accepted.later');
+        // First touch: nothing cached yet — null, honestly — but the
+        // subscription starts.
+        expect(reader.getValue('accepted.later'), isNull);
+        await Future.delayed(Duration.zero);
+        expect(subscribed, ['accepted.later']);
+
+        controller.add(DynamicValue(value: true));
+        await Future.delayed(Duration.zero);
+        expect(reader.getValue('accepted.later'), isTrue,
+            reason: 'the next read sees the live value');
+
+        await controller.close();
+        reader.dispose();
+      });
+
+      test('a burst of reads opens one subscription, not one per read',
+          () async {
+        final controller = StreamController<DynamicValue>.broadcast();
+        var subscribes = 0;
+        final reader = StateManStateReader.forTest(
+          keys: const [],
+          liveKeys: () => ['fresh'],
+          subscribe: (key) async {
+            subscribes++;
+            await Future.delayed(const Duration(milliseconds: 5));
+            return controller.stream;
+          },
+        );
+        for (var i = 0; i < 10; i++) {
+          reader.getValue('fresh');
+        }
+        await Future.delayed(const Duration(milliseconds: 20));
+        expect(subscribes, 1);
+
+        await controller.close();
+        reader.dispose();
+      });
+
+      test('a key that is not mapped is not subscribed', () async {
+        var subscribes = 0;
+        final reader = StateManStateReader.forTest(
+          keys: const [],
+          liveKeys: () => ['known'],
+          subscribe: (key) async {
+            subscribes++;
+            return const Stream<DynamicValue>.empty();
+          },
+        );
+        reader.getValue('never.mapped');
+        await Future.delayed(Duration.zero);
+        expect(subscribes, 0,
+            reason: 'lazy subscription is gated on the mapping existing');
+        reader.dispose();
+      });
+
+      test('a failed subscribe does not lock the key out', () async {
+        var attempts = 0;
+        final controller = StreamController<DynamicValue>.broadcast();
+        final reader = StateManStateReader.forTest(
+          keys: const [],
+          liveKeys: () => ['flaky'],
+          subscribe: (key) async {
+            attempts++;
+            if (attempts == 1) throw StateError('server was rebooting');
+            return controller.stream;
+          },
+        );
+        reader.getValue('flaky');
+        await Future.delayed(Duration.zero);
+        expect(attempts, 1);
+
+        // The next human-paced query tries again and succeeds.
+        reader.getValue('flaky');
+        await Future.delayed(Duration.zero);
+        controller.add(DynamicValue(value: 7));
+        await Future.delayed(Duration.zero);
+        expect(reader.getValue('flaky'), 7);
+
+        await controller.close();
+        reader.dispose();
+      });
+
+      test('a removed mapping disappears from keys', () async {
+        final live = ['doomed'];
+        final reader = StateManStateReader.forTest(
+          keys: const [],
+          liveKeys: () => List.of(live),
+        );
+        expect(reader.keys, ['doomed']);
+        live.clear();
+        expect(reader.keys, isEmpty);
+      });
+    });
+
     test('dispose cancels all subscriptions', () async {
       final controller = StreamController<DynamicValue>.broadcast();
       final reader = StateManStateReader.forTest(
