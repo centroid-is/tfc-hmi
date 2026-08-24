@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:json_annotation/json_annotation.dart';
 
@@ -131,17 +129,6 @@ class AirCab extends StatelessWidget {
   final AirCabConfig config;
   const AirCab({super.key, required this.config});
 
-  /// Between a lamp and its caption, and between the two lamp cells.
-  static const double _gap = 2;
-
-  /// The lamp's share of its row. Big enough to read as a lamp across the
-  /// hall; the rest of the row's width is the caption's, and in a square box
-  /// that is what keeps the caption from going below fine print.
-  static const double _lampFraction = 0.72;
-
-  /// How much of a lamp cell's height the caption under it may take. The
-  /// rest, less [_gap], is the lamp itself.
-
   @override
   Widget build(BuildContext context) {
     // Prepare two LEDs (Pressure, Soft start)
@@ -191,12 +178,8 @@ class AirCab extends StatelessWidget {
         child: Column(
           children: [
             // ─── Top “label” row ───
-            // A quarter of the box, not a third: the label is a short tag
-            // ("+ST203") and every pixel it gives up goes to the lamps below,
-            // which at a third were eight pixels across on the home page. A
-            // fifth made the tag itself fine print.
             Expanded(
-              flex: 1,
+              flex: 2,
               // The font size is computed for the row, the same way the rows
               // below compute theirs -- a FittedBox would have scaled a
               // fixed-size raster instead, which is what left it soft.
@@ -209,7 +192,7 @@ class AirCab extends StatelessWidget {
 
             // ─── Bottom “content” row ───
             Expanded(
-              flex: 3,
+              flex: 4,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -227,63 +210,87 @@ class AirCab extends StatelessWidget {
 
                   const SizedBox(width: 8),
 
-                  // b) Right side: the two lamps, stacked, each with its
-                  //    caption beside it. The lamp IS the state -- it takes
-                  //    the row's full height; the caption is sized to what
-                  //    is left beside it, one size for both rows so the pair
-                  //    reads as a list. (A caption under the lamp read better
-                  //    as text but shrank the lamp to a dot; the operator
-                  //    reads the lamp across the hall, the caption up close.)
+                  // b) Right side: Two LEDs stacked vertically (flex = 3)
                   Expanded(
                     flex: 4,
-                    child: LayoutBuilder(
-                      builder: (ctx, box) {
-                        final rowHeight =
-                            math.max(0.0, (box.maxHeight - _gap) / 2);
-                        final lamp = rowHeight * _lampFraction;
-                        final captionBox = Size(
-                            math.max(0.0, box.maxWidth - lamp - _gap),
-                            rowHeight);
-                        final baseStyle = DefaultTextStyle.of(ctx).style;
-                        final fontSize = ledConfigs
-                            .map((led) => fittedFontSize(
-                                  text: led.text!,
-                                  style: baseStyle,
-                                  box: captionBox,
-                                  textScaler: MediaQuery.textScalerOf(ctx),
-                                  textDirection: Directionality.of(ctx),
-                                ))
-                            .reduce(math.min);
-                        return Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            for (final (i, led) in ledConfigs.indexed) ...[
-                              if (i > 0) const SizedBox(height: _gap),
-                              Expanded(
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    SizedBox.square(
-                                      dimension: lamp,
-                                      child: Led(led),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // ─── LED Row #1 (“Pressure”) ───
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (ctx, rowConstraints) {
+                              // Compute fontSize as a fraction of row’s height:
+                              final double fontSize = rowConstraints.maxHeight * 0.5;
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  // 1) Icon: keep it square using AspectRatio(1)
+                                  AspectRatio(
+                                    aspectRatio: 1,
+                                    child: FractionallySizedBox(
+                                      widthFactor: 0.8,
+                                      heightFactor: 0.8,
+                                      child: Led(ledConfigs[0]),
                                     ),
-                                    const SizedBox(width: _gap),
-                                    Expanded(
-                                      child: Text(
-                                        led.text!,
-                                        style: TextStyle(fontSize: fontSize),
-                                        softWrap: false,
-                                        overflow: TextOverflow.visible,
-                                        maxLines: 1,
+                                  ),
+
+                                  const SizedBox(width: 4),
+
+                                  // 2) Text “Pressure” at exactly the computed fontSize
+                                  Expanded(
+                                    child: Text(
+                                      ledConfigs[0].text!,
+                                      style: TextStyle(
+                                        fontSize: fontSize,
                                       ),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 1,
                                     ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ],
-                        );
-                      },
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+
+                        const SizedBox(height: 4),
+
+                        // ─── LED Row #2 (“Soft start”) ───
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (ctx, rowConstraints) {
+                              // We use the same formula for fontSize (same fraction of height).
+                              // Because both rows have the same Expanded(flex:1), rowConstraints.maxHeight is identical.
+                              final double fontSize = rowConstraints.maxHeight * 0.5;
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  AspectRatio(
+                                    aspectRatio: 1,
+                                    child: FractionallySizedBox(
+                                      widthFactor: 0.8,
+                                      heightFactor: 0.8,
+                                      child: Led(ledConfigs[1]),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      ledConfigs[1].text!,
+                                      style: TextStyle(
+                                        fontSize: fontSize,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 1,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
