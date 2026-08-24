@@ -179,7 +179,7 @@ func (wz *wizardState) refreshTrust(installer PickerInstaller) {
 func layoutWizardBody(gtx layout.Context, th *material.Theme, state *pickerState, wz *wizardState) layout.Dimensions {
 	title := "Where should CentroidX go?"
 	if wz.step == stepCertificate {
-		title = "Publisher certificate"
+		title = "Approve the publisher"
 	}
 
 	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -260,9 +260,7 @@ func layoutDestinationStep(gtx layout.Context, th *material.Theme, wz *wizardSta
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return option(gtx, kindPortableValue, "Portable  —  choose a folder",
-				"Unpacks this build into the folder below -- Program Files by "+
-					"default, which asks for administrator approval once -- and adds a "+
-					"Start-menu entry. No certificate, and it will not update itself.")
+				"Unpacked into the folder below, with a Start-menu entry. Does not update itself.")
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if wz.kind != kindPortable {
@@ -298,12 +296,11 @@ func layoutDestinationStep(gtx layout.Context, th *material.Theme, wz *wizardSta
 }
 
 func layoutCertificateStep(gtx layout.Context, th *material.Theme, wz *wizardState) layout.Dimensions {
-	body := "This release is signed by Centroid's own certificate, and Windows refuses to " +
-		"install the package until this machine trusts it — that is the 0x800B0109 error. " +
-		"Press Install and approve the Windows prompt that follows; it is asked once, and " +
-		"later updates will not ask again."
+	// Short on purpose: what happens next, and nothing else. The operator is
+	// about to see a Windows prompt, not read about code signing.
+	body := "Windows will ask you to approve Centroid as a publisher. This is asked once."
 	if wz.trustKnown && wz.trusted {
-		body = "The certificate is already trusted on this machine. Press Install to continue."
+		body = "Publisher already approved on this machine."
 	}
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
