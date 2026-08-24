@@ -1,10 +1,9 @@
 package ui
 
 import (
+	"strings"
 	"context"
-	"fmt"
 	"image"
-	"os"
 
 	"gioui.org/app"
 	"gioui.org/layout"
@@ -31,10 +30,20 @@ type pickerState struct {
 	selected       int
 	listState      widget.List
 	notesListState widget.List
+
+	// The selected release's notes, one entry per line, and which selection
+	// they belong to. A list of lines lays out only what is on screen; the
+	// whole notes body as a single label was shaped in full on every frame,
+	// and the newest build -- the rolling prerelease, whose notes carry every
+	// commit since the last tag -- was the one that felt laggy to click.
+	notesCache    []string
+	notesCacheFor int
+
+	// The install wizard (Destination -> Certificate -> Install).
+	wizard wizardState
 	itemClicks     []widget.Clickable
 	installBtn     widget.Clickable
 	uninstallBtn   widget.Clickable
-	trustBtn       widget.Clickable
 	stableBtn      widget.Clickable
 	latestBtn      widget.Clickable
 	channel        string
@@ -59,6 +68,7 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, instal
 		loading:          true,
 		selected:         -1,
 		channel:          channel,
+		notesCacheFor:    -1,
 		isInstalled:      installer.IsInstalled(),
 		installedVersion: installer.InstalledVersion(),
 	}
@@ -113,6 +123,33 @@ func loadReleases(state *pickerState, eng *update.Engine, w *app.Window) {
 }
 
 // layoutPicker renders the channel switcher above the split list + detail view.
+// notesLines returns the selected release's notes split into lines, cached
+// until the selection changes.
+// selectedVersion is the version the picker is pointed at, empty when
+// nothing is selected (which the engine reads as "newest on the channel").
+func (s *pickerState) selectedVersion() string {
+	if s.selected < 0 || s.selected >= len(s.releases) {
+		return ""
+	}
+	return s.releases[s.selected].Version
+}
+
+func (s *pickerState) notesLines() []string {
+	if s.selected < 0 || s.selected >= len(s.releases) {
+		return []string{"No release notes available."}
+	}
+	if s.notesCache != nil && s.notesCacheFor == s.selected {
+		return s.notesCache
+	}
+	notes := s.releases[s.selected].Notes
+	if strings.TrimSpace(notes) == "" {
+		notes = "No release notes available."
+	}
+	s.notesCache = strings.Split(strings.ReplaceAll(notes, "\r\n", "\n"), "\n")
+	s.notesCacheFor = s.selected
+	return s.notesCache
+}
+
 func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, eng *update.Engine, installer PickerInstaller, w *app.Window) layout.Dimensions {
 	// Channel switching is handled before the loading/error/empty returns, and
 	// the switcher is drawn above them — a channel with nothing installable is
@@ -126,69 +163,11 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 		loadReleases(state, eng, w)
 	}
 
-	// Handle install button click
+	// Handle install button click: open the wizard rather than starting a
+	// download. Where it lands and whether the certificate is trusted are
+	// the two things that decide whether an install works at all.
 	if state.installBtn.Clicked(gtx) && state.selected >= 0 && state.selected < len(state.releases) && !state.installing {
-		state.installing = true
-		selected := state.releases[state.selected]
-		state.statusMsg = fmt.Sprintf("Installing %s...", displayVersion(selected.Version))
-		go func() {
-			err := eng.Update(context.Background(), update.UpdateOptions{
-				Version: selected.Version,
-				Channel: state.channel,
-				DestDir: os.TempDir(),
-				OnProgress: func(dl, total int64) {
-					if total > 0 {
-						next := float32(dl) / float32(total)
-						// A frame per half-percent, not per network chunk:
-						// invalidating on every chunk repainted the whole
-						// window hundreds of times a second and made the
-						// picker feel laggy while downloading.
-						if next-state.progress >= 0.005 || next >= 1 {
-							state.progress = next
-							w.Invalidate()
-						}
-					}
-				},
-			})
-			if err != nil {
-				state.err = err
-				state.statusMsg = userFriendlyMessage(err)
-				// The install failed; say what is ACTUALLY on the machine.
-				// The green "is installed" under a red error was read as
-				// "it worked" -- it was the previous install talking.
-				state.isInstalled = installer.IsInstalled()
-				state.installedVersion = installer.InstalledVersion()
-			} else {
-				state.statusMsg = fmt.Sprintf("CentroidX %s installed!", displayVersion(selected.Version))
-				state.isInstalled = true
-				state.installedVersion = installer.InstalledVersion()
-			}
-			state.installing = false
-			w.Invalidate()
-		}()
-	}
-
-	// Handle the trust button: import the release signing certificate into
-	// the machine store, deliberately, with its one UAC approval -- instead
-	// of the trust step only ever running as a side effect of an install.
-	if state.trustBtn.Clicked(gtx) && !state.installing {
-		state.installing = true
-		version := ""
-		if state.selected >= 0 && state.selected < len(state.releases) {
-			version = state.releases[state.selected].Version
-		}
-		state.statusMsg = "Trusting the release signing certificate..."
-		go func() {
-			if err := eng.TrustCertificateFor(context.Background(), version, state.channel); err != nil {
-				state.err = err
-				state.statusMsg = userFriendlyMessage(err)
-			} else {
-				state.err = nil
-				state.statusMsg = "Certificate trusted. Installs will not need it again."
-			}
-			state.installing = false
-			w.Invalidate()
-		}()
+		state.wizard.open()
 	}
 
 	// Handle uninstall button click
@@ -216,6 +195,8 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 		}
 	}
 
+	handleWizardEvents(gtx, state, eng, installer, w)
+
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layoutChannelBar(gtx, th, state)
@@ -224,6 +205,10 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 			return horizontalRule(gtx)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			// The wizard owns the body while it is open.
+			if state.wizard.step != stepNone {
+				return layoutWizardBody(gtx, th, state, &state.wizard)
+			}
 			return layoutPickerBody(gtx, th, state, installer, w)
 		}),
 	)
@@ -398,13 +383,9 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 				if state.selected < 0 {
 					return layout.Dimensions{}
 				}
-				r := state.releases[state.selected]
-				notes := r.Notes
-				if notes == "" {
-					notes = "No release notes available."
-				}
-				return material.List(th, &state.notesListState).Layout(gtx, 1, func(gtx layout.Context, _ int) layout.Dimensions {
-					return material.Body1(th, notes).Layout(gtx)
+				lines := state.notesLines()
+				return material.List(th, &state.notesListState).Layout(gtx, len(lines), func(gtx layout.Context, i int) layout.Dimensions {
+					return material.Body1(th, lines[i]).Layout(gtx)
 				})
 			}),
 
@@ -455,14 +436,6 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							btn := material.Button(th, &state.installBtn, "Install this version")
 							btn.Background = ColorAccent()
-							return btn.Layout(gtx)
-						}),
-						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							// The one-time station setup: puts the signing
-							// certificate in the machine store (one UAC
-							// approval) so installs stop failing 0x800B0109.
-							btn := material.Button(th, &state.trustBtn, "Trust certificate")
 							return btn.Layout(gtx)
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),

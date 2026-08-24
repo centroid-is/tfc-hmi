@@ -3,11 +3,42 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/centroid-is/centroidx-manager/internal/ui"
 	"github.com/centroid-is/centroidx-manager/internal/update"
 )
+
+// initLogFile mirrors the log into %TEMP%\centroidx-manager.log. Built as a
+// GUI app the manager has no console, so stderr alone would swallow exactly
+// the lines that explain a failed station install -- the trust warning Jon
+// debugged from was only ever on screen because the build still had a
+// console. Best effort: no log file is no reason not to run.
+func initLogFile() {
+	path := filepath.Join(os.TempDir(), "centroidx-manager.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	log.SetOutput(fileAndConsole{file: f})
+	log.Printf("---- centroidx-manager started (pid %d) ----", os.Getpid())
+}
+
+// fileAndConsole writes the log to the file and, when there is still a
+// console, to stderr as well.
+//
+// Not io.MultiWriter: it stops at the first writer that errors, and after
+// hideOwnConsole freed the console stderr is a dead handle -- so every line
+// failed on stderr and never reached the file. The file is the one that has
+// to work; the console is a nicety for whoever runs the manager from a shell.
+type fileAndConsole struct{ file *os.File }
+
+func (w fileAndConsole) Write(p []byte) (int, error) {
+	_, _ = os.Stderr.Write(p)
+	return w.file.Write(p)
+}
 
 // Build-time variables — set via -ldflags at release time.
 // Example: go build -ldflags "-X main.githubOwner=centroid-is -X main.githubRepo=tfc-hmi"
@@ -17,6 +48,10 @@ var (
 )
 
 func main() {
+	// The console window first, before anything can print into it.
+	hideOwnConsole()
+	initLogFile()
+
 	// --- CLI flags ---
 	updateMode := flag.Bool("update", false, "Run in update mode (called by Flutter app)")
 	pickerMode := flag.Bool("picker", false, "Open version picker UI for rollback/manual install")

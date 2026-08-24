@@ -603,6 +603,11 @@ func launchAppDetached(runner CommandRunner, appPath string, args ...string) err
 // windowsPackageName is the MSIX identity name from centroid-hmi's msix_config.
 const windowsPackageName = "Centroid.CentroidX"
 
+// sideloadPublisherCN is the subject of the self-signed certificate the
+// releases are signed with (centroid-hmi/pubspec.yaml, msix_config.publisher).
+// Used to ask the machine store whether this station already trusts us.
+const sideloadPublisherCN = "2F2634E3-C7B6-45A4-A112-0D039FC2ECDB"
+
 // windowsAppID is the Application Id in the generated AppxManifest, which the
 // AppsFolder URI needs after the "!".
 //

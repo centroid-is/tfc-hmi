@@ -1041,9 +1041,9 @@ func TestEngine_Update_LatestChannel(t *testing.T) {
 // ---- ListAllReleases channels ----------------------------------------------
 
 func TestEngine_ListAllReleases_LatestChannel_IncludesRollingPrerelease(t *testing.T) {
-	// The rolling prerelease is newer than the newest tag, so it heads the list
-	// — and it is only visible at all because publish date, not version,
-	// orders the latest channel.
+	// Latest carries the prereleases -- ordered by publish date, since a
+	// rolling tag has no version to sort on -- and only those: the tagged
+	// releases beside them here belong to Stable.
 	client := &mockReleasesClient{
 		releases: []*gogithub.RepositoryRelease{
 			buildChannelRelease("v2026.3.26", false, false, time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC), platformAssets()),
@@ -1057,7 +1057,7 @@ func TestEngine_ListAllReleases_LatestChannel_IncludesRollingPrerelease(t *testi
 	if err != nil {
 		t.Fatalf("ListAllReleases(latest) returned error: %v", err)
 	}
-	expected := []string{"main-latest", "2026.3.26", "2026.2.17"}
+	expected := []string{"main-latest"}
 	if len(result) != len(expected) {
 		t.Fatalf("expected %d releases, got %d", len(expected), len(result))
 	}
@@ -1098,14 +1098,51 @@ func TestEngine_ListAllReleases_SkipsDrafts(t *testing.T) {
 	}
 	eng := NewEngine(client, &mockInstaller{})
 
-	for _, channel := range []string{ChannelStable, ChannelLatest} {
-		result, err := eng.ListAllReleases(context.Background(), channel)
-		if err != nil {
-			t.Fatalf("ListAllReleases(%q) returned error: %v", channel, err)
-		}
-		if len(result) != 1 || result[0].Version != "2026.3.26" {
-			t.Errorf("channel %q: expected drafts skipped, got %+v", channel, result)
-		}
+	// Stable lists the tagged release; Latest lists prereleases only, and
+	// there is no prerelease here -- the draft is skipped on both.
+	result, err := eng.ListAllReleases(context.Background(), ChannelStable)
+	if err != nil {
+		t.Fatalf("ListAllReleases(stable) returned error: %v", err)
+	}
+	if len(result) != 1 || result[0].Version != "2026.3.26" {
+		t.Errorf("stable: expected drafts skipped, got %+v", result)
+	}
+
+	latestResult, err := eng.ListAllReleases(context.Background(), ChannelLatest)
+	if err != nil {
+		t.Fatalf("ListAllReleases(latest) returned error: %v", err)
+	}
+	if len(latestResult) != 0 {
+		t.Errorf("latest: a draft is not a prerelease to offer, got %+v", latestResult)
+	}
+}
+
+// Latest is the development channel: it lists prereleases and nothing else.
+// Listing the tagged releases there too made the two tabs read as "some" and
+// "all"; Stable is where a tagged version is picked or rolled back to.
+func TestEngine_ListAllReleases_LatestChannelIsPrereleasesOnly(t *testing.T) {
+	client := &mockReleasesClient{
+		releases: []*gogithub.RepositoryRelease{
+			buildChannelRelease("main-latest", true, false, time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), platformAssets()),
+			buildChannelRelease("v2026.8.23", false, false, time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC), platformAssets()),
+		},
+	}
+	eng := NewEngine(client, &mockInstaller{})
+
+	latestList, err := eng.ListAllReleases(context.Background(), ChannelLatest)
+	if err != nil {
+		t.Fatalf("ListAllReleases(latest) returned error: %v", err)
+	}
+	if len(latestList) != 1 || latestList[0].Version != "main-latest" {
+		t.Errorf("latest must list the prerelease alone, got %+v", latestList)
+	}
+
+	stableList, err := eng.ListAllReleases(context.Background(), ChannelStable)
+	if err != nil {
+		t.Fatalf("ListAllReleases(stable) returned error: %v", err)
+	}
+	if len(stableList) != 1 || stableList[0].Version != "2026.8.23" {
+		t.Errorf("stable must list the tagged release alone, got %+v", stableList)
 	}
 }
 
@@ -1124,8 +1161,9 @@ func TestEngine_ListAllReleases_LatestChannel_StillNeedsAnAsset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAllReleases(latest) returned error: %v", err)
 	}
-	if len(result) != 1 || result[0].Version != "2026.3.26" {
-		t.Errorf("expected the asset-less prerelease skipped, got %+v", result)
+	if len(result) != 0 {
+		t.Errorf("expected the asset-less prerelease skipped and no tagged "+
+			"release on latest, got %+v", result)
 	}
 }
 

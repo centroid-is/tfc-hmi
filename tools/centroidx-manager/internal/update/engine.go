@@ -40,6 +40,12 @@ type ReleaseInfo struct {
 	Notes       string
 	Assets      []*gogithub.ReleaseAsset
 	PublishedAt time.Time
+
+	// Prerelease is GitHub's own flag. The Latest channel lists these and
+	// nothing else: a tagged release belongs on Stable, and listing it in
+	// both tabs made "Latest" read as "everything", which is not what an
+	// operator picking a development build is looking for.
+	Prerelease bool
 }
 
 // UpdateOptions controls the behaviour of Engine.Update.
@@ -195,6 +201,15 @@ func (e *Engine) ListAllReleases(ctx context.Context, channel string) ([]Release
 			continue
 		}
 		info := releaseToInfo(r)
+		// Latest is the development channel: prereleases only. Tagged
+		// releases are what Stable lists, and showing them in both made the
+		// two tabs look like "some" and "all" rather than two channels.
+		if latest && !info.Prerelease {
+			continue
+		}
+		if !latest && info.Prerelease {
+			continue
+		}
 		v, err := ParseVersion(info.Version)
 		if err != nil {
 			// Unparseable tags are the rolling prerelease's own shape, so they
@@ -251,6 +266,7 @@ func releaseToInfo(r *gogithub.RepositoryRelease) *ReleaseInfo {
 		Notes:       r.GetBody(),
 		Assets:      r.Assets,
 		PublishedAt: publishedAt,
+		Prerelease:  r.GetPrerelease(),
 	}
 }
 
