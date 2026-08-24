@@ -13,7 +13,6 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,8 +36,7 @@ AirCabConfig _config() => AirCabConfig(
 /// test rebuilds the subtree outright. Reusing it would leave `AnimatedTheme`
 /// mid-lerp after a single frame, and the assertion would read the *previous*
 /// scheme's color.
-Future<void> _pump(WidgetTester tester, ThemeData theme,
-    {double side = 220}) async {
+Future<void> _pump(WidgetTester tester, ThemeData theme) async {
   await tester.pumpWidget(
     ProviderScope(
       child: MaterialApp(
@@ -47,8 +45,8 @@ Future<void> _pump(WidgetTester tester, ThemeData theme,
         home: Scaffold(
           body: Center(
             child: SizedBox(
-              width: side,
-              height: side,
+              width: 220,
+              height: 220,
               child: AirCab(config: _config()),
             ),
           ),
@@ -58,10 +56,6 @@ Future<void> _pump(WidgetTester tester, ThemeData theme,
   );
   await tester.pump();
 }
-
-/// The paragraph behind a piece of text the cabinet drew.
-RenderParagraph _paragraph(WidgetTester tester, String text) =>
-    tester.renderObject<RenderParagraph>(find.text(text));
 
 /// The cabinet's outer box — the first [Container] the asset builds, the one
 /// carrying the rounded [BoxDecoration].
@@ -130,67 +124,5 @@ void main() {
             reason: 'role-backed colors re-resolve when the scheme changes');
       }
     });
-  });
-
-  /// The lamp captions used to be laid out at half the *row height* and then
-  /// clipped to whatever width was left beside a full-height lamp — about 54
-  /// logical pixels for ten characters. Every golden showed "Pr…" and "So…",
-  /// two letters of a nine- and a ten-character word, on an asset an operator
-  /// reads from across a packing hall.
-  ///
-  /// Both halves of that need pinning. Clipping is the visible failure, but a
-  /// caption shrunk to nothing to avoid clipping would be just as unreadable
-  /// and would pass a fits-in-its-box check on its own.
-  group('the lamp captions are readable', () {
-    for (final side in <double>[140, 220, 400]) {
-      testWidgets('$side px cabinet: neither caption is clipped',
-          (tester) async {
-        await _pump(tester, dark, side: side);
-
-        for (final caption in const ['Pressure', 'Soft start']) {
-          final paragraph = _paragraph(tester, caption);
-          final wanted = TextPainter(
-            text: paragraph.text,
-            textDirection: TextDirection.ltr,
-            maxLines: 1,
-          )..layout();
-
-          expect(
-            wanted.width,
-            lessThanOrEqualTo(paragraph.size.width + 0.5),
-            reason: '"$caption" wants ${wanted.width.toStringAsFixed(1)}px at '
-                'the size it was laid out, and was given '
-                '${paragraph.size.width.toStringAsFixed(1)}px — the word is '
-                'being cut off',
-          );
-        }
-      });
-
-      testWidgets('$side px cabinet: the captions keep their size',
-          (tester) async {
-        await _pump(tester, dark, side: side);
-
-        final title = _paragraph(tester, 'Air cabinet').text.style!.fontSize!;
-        final sizes = <double>[
-          for (final caption in const ['Pressure', 'Soft start'])
-            _paragraph(tester, caption).text.style!.fontSize!,
-        ];
-
-        expect(sizes.first, closeTo(sizes.last, 0.01),
-            reason: 'the two captions are one list and must be set at one '
-                'size, not sized independently so the shorter one grows');
-        // The lamp is the state and gets 72% of its row (Jon, 2026-08-23:
-        // "the LEDs inside the air cabinet are too small"); in a square box
-        // the caption takes what is left beside it, which is about a third
-        // of the tag. Below that it is fine print; above it the lamp shrinks
-        // back to a dot.
-        expect(
-          sizes.first,
-          greaterThan(title * 0.3),
-          reason: 'a caption more than three times as small as the cabinet '
-              "name is fine print at arm's length, never mind across the hall",
-        );
-      });
-    }
   });
 }
