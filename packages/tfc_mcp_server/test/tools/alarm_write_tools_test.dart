@@ -165,6 +165,7 @@ void main() {
       required String title,
       required String description,
       List<Map<String, dynamic>> rules = const [],
+      bool navigationIndicator = false,
     }) =>
         {
           'uid': uid,
@@ -172,6 +173,7 @@ void main() {
           'title': title,
           'description': description,
           'rules': rules,
+          'navigation_indicator': navigationIndicator,
         };
 
     /// Reads back the stored alarm config, to prove a tool did not write it.
@@ -699,6 +701,98 @@ void main() {
 
         final config = await configService.getAlarmConfig('nope');
         expect(config, isNull);
+      });
+    });
+
+    group('navigation_indicator survives the tools', () {
+      // The plant bug behind PR #340: an operator flipped the navigation
+      // switch on an alarm, and it later read false again. The pulse chain
+      // itself was proven working -- what silenced it was update_alarm,
+      // which read-modify-writes title/description/key/rules but built its
+      // proposal without navigation_indicator. AlarmConfig.fromJson defaults
+      // the missing field to false and updateAlarm replaces the alarm whole,
+      // so ANY MCP alarm edit -- a retitle was enough -- silently stripped
+      // the flag. The review diff never mentioned it, and the dev machine
+      // could not reproduce it because the repro needs an MCP edit between
+      // the flip and the check, not just the editor forms.
+
+      test('update_alarm keeps a flag it was not asked to touch', () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-nav',
+            title: 'Freezer jam',
+            description: 'Jam after freezer 2',
+            navigationIndicator: true,
+          ),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-nav',
+          'title': 'Freezer 2 jam',
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['navigation_indicator'], isTrue,
+            reason: 'a retitle must not strip the navigation flag');
+      });
+
+      test('update_alarm can flip the flag deliberately', () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-nav',
+            title: 'Freezer jam',
+            description: 'Jam after freezer 2',
+          ),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-nav',
+          'navigation_indicator': true,
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['navigation_indicator'], isTrue);
+      });
+
+      test('create_alarm can set the flag from the start', () async {
+        await setupWithAutoConfirm();
+
+        final result = await client.callTool('create_alarm', {
+          'title': 'Nav Alarm',
+          'description': 'Announces in the bar',
+          'navigation_indicator': true,
+          'rules': [
+            {'level': 'error', 'formula': 'pump3.current > 15'},
+          ],
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['navigation_indicator'], isTrue);
+      });
+
+      test('created alarms default the flag off', () async {
+        await setupWithAutoConfirm();
+
+        final result = await client.callTool('create_alarm', {
+          'title': 'Quiet Alarm',
+          'description': 'No bar pulse',
+          'rules': [
+            {'level': 'info', 'formula': 'pump3.current > 1'},
+          ],
+        });
+
+        expect(result.isError, isNot(true));
+        final text = (result.content.first as TextContent).text;
+        final json = jsonDecode(text) as Map<String, dynamic>;
+        expect(json['navigation_indicator'], isFalse);
       });
     });
   });
