@@ -55,8 +55,12 @@ type Installer interface {
 	// IsInstalled returns true if the application package is currently installed.
 	IsInstalled() bool
 
-	// Uninstall removes the application package.
-	Uninstall() error
+	// Uninstall removes the application package. keepSettings decides what
+	// happens to the station's own configuration: put aside for the next
+	// install (the usual case, since an uninstall is normally a step in a
+	// rollback or a version change Windows will not do in place), or removed
+	// along with the application.
+	Uninstall(keepSettings bool) error
 }
 
 // CommandRunner abstracts exec.Command for testing.
@@ -820,7 +824,8 @@ func launchAppDetached(runner CommandRunner, appPath string, args ...string) err
 const (
 	dataSavedToken    = "CENTROIDX_DATA_SAVED"
 	dataNoneToken     = "CENTROIDX_DATA_NONE"
-	dataRestoredToken = "CENTROIDX_DATA_RESTORED"
+	dataRestoredToken  = "CENTROIDX_DATA_RESTORED"
+	dataDiscardedToken = "CENTROIDX_DATA_DISCARDED"
 )
 
 // packageDataBackupDir is where the container's contents wait between the
@@ -877,6 +882,28 @@ func restorePackageDataScript() string {
 		// And the token is earned, not announced: an empty destination is a
 		// station that just lost its settings, and it must not read as done.
 		`if (@(Get-ChildItem -Recurse -File -LiteralPath $dst).Count -gt 0) { Write-Output '` + dataRestoredToken + `' }`
+}
+
+// discardPackageDataBackupScript deletes a container copy an earlier
+// uninstall put aside. Used when the operator asks for the settings to go
+// with the application: a copy they were never told about must not survive
+// the request to remove them.
+func discardPackageDataBackupScript() string {
+	return `$ErrorActionPreference='Stop'; ` +
+		`$src = Join-Path $env:TEMP '` + packageDataBackupDir + `'; ` +
+		`if (Test-Path $src) { Remove-Item -Recurse -Force -LiteralPath $src }; ` +
+		`Write-Output '` + dataDiscardedToken + `'`
+}
+
+// discardPackageDataBackup removes the saved copy, if there is one.
+func discardPackageDataBackup(runner CommandRunner) bool {
+	out, err := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		discardPackageDataBackupScript(),
+	)
+	return err == nil && strings.Contains(string(out), dataDiscardedToken)
 }
 
 // savePackageData reports whether there is anything to put back afterwards.

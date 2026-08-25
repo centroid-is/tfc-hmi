@@ -98,7 +98,8 @@ func layoutPRPicker(gtx layout.Context, th *material.Theme, state *prPickerState
 		state.installing = true
 		state.statusMsg = "Uninstalling..."
 		go func() {
-			if err := installer.Uninstall(); err != nil {
+			// Dev/testing picker: always keeps settings, there is no UI for it here.
+			if err := installer.Uninstall(true); err != nil {
 				state.statusMsg = userFriendlyMessage(err)
 				state.err = err
 			} else {
@@ -290,7 +291,7 @@ type PRInstaller interface {
 	LaunchApp() error
 	IsInstalled() bool
 	InstalledVersion() string
-	Uninstall() error
+	Uninstall(keepSettings bool) error
 }
 
 // pickBestArtifact selects the platform-appropriate artifact to install.

@@ -66,7 +66,7 @@ func (w *windowsInstaller) IsInstalled() bool {
 	return strings.TrimSpace(string(out)) == "Ok"
 }
 
-func (w *windowsInstaller) Uninstall() error {
+func (w *windowsInstaller) Uninstall(keepSettings bool) error {
 	// Removing the package removes its data container with it, and that is
 	// where the station's own configuration lives -- key mappings, the page
 	// layout, the update channel, everything written through
@@ -79,7 +79,14 @@ func (w *windowsInstaller) Uninstall() error {
 	// expect to reconfigure the station on the way. So the container is put
 	// aside first, and the next install that finds no package installed puts
 	// it back (see installWindows).
-	savePackageData(w.runner)
+	// Asked to keep them, put them aside; asked not to, clear any copy an
+	// earlier uninstall left behind as well -- otherwise "remove my settings"
+	// would be undone by a copy nobody knew existed.
+	if keepSettings {
+		savePackageData(w.runner)
+	} else {
+		discardPackageDataBackup(w.runner)
+	}
 
 	out, err := w.runner.Run(
 		"powershell", "-NoProfile", "-NonInteractive", "-Command",

@@ -16,7 +16,7 @@ func TestUninstall_SavesTheStationsDataFirst(t *testing.T) {
 		errors:  []error{nil, nil},
 	}
 	inst := &windowsInstaller{runner: runner}
-	if err := inst.Uninstall(); err != nil {
+	if err := inst.Uninstall(true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(runner.calls) != 2 {
@@ -24,6 +24,33 @@ func TestUninstall_SavesTheStationsDataFirst(t *testing.T) {
 	}
 	if !hasArgContaining(allArgs(runner.calls[0]), dataSavedToken) {
 		t.Errorf("call 0 was not the data save: %v", allArgs(runner.calls[0]))
+	}
+	if !hasArgContaining(allArgs(runner.calls[1]), "Remove-AppxPackage") {
+		t.Errorf("call 1 was not the removal: %v", allArgs(runner.calls[1]))
+	}
+}
+
+// Asked to take the settings with it, the uninstall must not quietly keep a
+// copy -- and must clear any copy an earlier uninstall left behind, or the
+// request would be undone by something the operator never knew existed.
+func TestUninstall_WithoutKeepSettingsDiscardsTheCopy(t *testing.T) {
+	runner := &mockRunnerSeq{
+		outputs: [][]byte{[]byte(dataDiscardedToken), nil},
+		errors:  []error{nil, nil},
+	}
+	inst := &windowsInstaller{runner: runner}
+	if err := inst.Uninstall(false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected the discard and then the removal, got %d calls", len(runner.calls))
+	}
+	all := allArgs(runner.calls[0])
+	if !hasArgContaining(all, dataDiscardedToken) {
+		t.Errorf("call 0 was not the discard: %v", all)
+	}
+	if hasArgContaining(all, dataSavedToken) {
+		t.Errorf("settings were saved despite being asked to remove them: %v", all)
 	}
 	if !hasArgContaining(allArgs(runner.calls[1]), "Remove-AppxPackage") {
 		t.Errorf("call 1 was not the removal: %v", allArgs(runner.calls[1]))
