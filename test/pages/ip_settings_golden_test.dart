@@ -1,9 +1,10 @@
 /// Golden images of the IP settings page, for design review and PR
 /// descriptions.
 ///
-/// Frames: the device overview (ethernet static, wifi DHCP, a dead port),
-/// a bond with its member ports, the interface dialog prefilled with a
-/// static config, its inline validation error, and the create-bond dialog.
+/// Frames: the device overview (ethernet static, wifi DHCP, a dead port,
+/// RX/TX rates, healthy probe chips), the failing-probes header, a bond
+/// with its member ports, the interface dialog prefilled with a static
+/// config, its inline validation error, and the create-bond dialog.
 ///
 /// To update: flutter test test/pages/ip_settings_golden_test.dart --update-goldens --run-skipped
 @Tags(['golden'])
@@ -26,7 +27,11 @@ import '../helpers/test_helpers.dart';
 /// stay on one or two rows per card.
 const Size _viewport = Size(900, 720);
 
-Widget _buildPage(FakeNetworkManagerClient client) {
+Widget _buildPage(
+  FakeNetworkManagerClient client, {
+  bool internetReachable = true,
+  bool dnsWorking = true,
+}) {
   // Traffic-rate sampling clock: two seconds per sample, so the driven
   // refresh tick below produces stable, readable rates in the images.
   var tick = DateTime(2026, 8, 25, 12);
@@ -41,8 +46,8 @@ Widget _buildPage(FakeNetworkManagerClient client) {
     home: Scaffold(
       body: IpSettingsBody(
         client: client,
-        probe: () async => true,
-        dnsProbe: () async => true,
+        probe: () async => internetReachable,
+        dnsProbe: () async => dnsWorking,
         clock: clock,
       ),
     ),
@@ -50,14 +55,21 @@ Widget _buildPage(FakeNetworkManagerClient client) {
 }
 
 Future<void> _pumpPage(
-    WidgetTester tester, FakeNetworkManagerClient client) async {
+  WidgetTester tester,
+  FakeNetworkManagerClient client, {
+  bool internetReachable = true,
+  bool dnsWorking = true,
+}) async {
   await tester.binding.setSurfaceSize(_viewport);
   // 1:1 pixels — these goldens are for reading, not for pixel archaeology.
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   addTearDown(() => tester.binding.setSurfaceSize(null));
 
-  await pumpAndLoad(tester, _buildPage(client));
+  await pumpAndLoad(
+      tester,
+      _buildPage(client,
+          internetReachable: internetReachable, dnsWorking: dnsWorking));
 }
 
 Future<void> _expectGolden(WidgetTester tester, String name) =>
@@ -220,6 +232,12 @@ void main() {
     await _pumpPage(tester, _overviewClient());
     await _tickTraffic(tester);
     await _expectGolden(tester, 'ip_settings_overview.png');
+  });
+
+  testWidgets('probes failing — no internet, DNS failing', (tester) async {
+    await _pumpPage(tester, _overviewClient(),
+        internetReachable: false, dnsWorking: false);
+    await _expectGolden(tester, 'ip_settings_probes_failing.png');
   });
 
   testWidgets('bond — master card with member ports', (tester) async {
