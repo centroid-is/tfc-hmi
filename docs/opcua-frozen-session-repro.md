@@ -114,6 +114,36 @@ a shell went a full day without it, which may just be renewal-race luck.
   socket is Established, tear down and reconnect. That converts any variant of
   this bug from "frozen until an operator notices" into a logged blip.
 
+## REPRODUCED from source, 2026-08-25 08:32
+
+Release build of main (937979c0) built on the station, launched via Explorer
+(the plant condition: no console, no inherited handles). The permanent-dead-
+client shape reproduced **1.9 seconds after startup**, first try:
+
+    08:32:30.241  [.74] SecureChannel OPN_SENT -> OPEN     (+0.87s)
+    08:32:30.242  [.74] Channel opened
+    08:32:31.227  [.74] SecureChannel OPEN -> CLOSING, session UA_SESSIONSTATE_CREATE_REQUEST  (+1.86s)
+    -- and .74 never appears in the log again. No retry, no reconnect.
+
+So this shape is NOT the 1-minute renewal: the channel died 0.98s after
+opening, during session creation, and the client is permanently dead from
+t=+2s with zero further log lines. The reconnect loop never fires, exactly
+as predicted from the code: `client.runIterate` keeps returning true for a
+session-less client, so the `runIterate()` future never completes and the
+caller never reaches its catch/retry.
+
+Launch-mode sensitivity, observed twice: the same binary launched from a
+shell (inherited stdout handles) held .74 Established; launched via Explorer
+it lost .74 both times. Something about the plant launch mode changes the
+odds of losing the session-create race -- worth keeping the Explorer launch
+as the repro condition.
+
+The second shape -- a client with an Established socket freezing later (the
+ST201 case) -- has not yet been caught under instrumentation; the watch is
+socket table + channel/session log lines every 15s. The .74 capture already
+demonstrates the core defect the bindings work must fix: a client failure
+that never completes `runIterate()` is invisible and permanent.
+
 ## Artifacts
 
 On the test station, session scratchpad `log-backup-081006/` (first
