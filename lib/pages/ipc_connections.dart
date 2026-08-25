@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:dbus/dbus.dart';
+import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'dart:async';
 import '../dbus/ipc-ruler.dart';
 import '../widgets/base_scaffold.dart';
@@ -141,63 +142,30 @@ class _ConnectionsPageContentState extends State<_ConnectionsPageContent> {
   void _applyFilters() {
     final query = _searchController.text.trim().toLowerCase();
 
-    // Filter signals
-    List<SignalInfo> filtered = _allSignals.where((signal) {
-      // If type is selected, must match
-      if (_selectedType != null && signal.sigType != _selectedType) {
-        return false;
-      }
-
-      // If query is not empty, match name or description
-      if (query.isNotEmpty) {
-        final nameMatch = signal.name.toLowerCase().contains(query);
-        final descMatch = signal.description.toLowerCase().contains(query);
-        if (!nameMatch && !descMatch) return false;
-      }
-      return true;
-    }).toList();
-
-    // We do not store a separate “filtered slots” list,
-    // because each slot is displayed only if connected
-    // to a particular signal (in the sub-item).
-    // However, we also want to match the user’s search against the slot name/description
-    // if that slot is connected. We'll handle that logic below, so that if the slot
-    // matches the query (and the signal’s type matches), we keep the signal even if
-    // the signal alone wouldn't have matched.
-    // This logic can get more elaborate if needed.
-
-    List<SignalInfo> finalFilter = [];
+    // A signal is kept when it — or any of its connected slots (each slot is
+    // displayed only under its signal, so a matching slot must keep its
+    // signal visible) — matches the search; the type filter always applies.
+    // The best match anywhere on the row decides its rank.
+    final scored = <(int, SignalInfo)>[];
     for (final sig in _allSignals) {
-      final connectedSlots =
-          _allSlots.where((slot) => slot.connectedTo == sig.name);
-
-      // If the signal didn’t match, see if a connected slot might match the type+search query
-      final bool signalTypeFilterPassed =
-          _selectedType == null || sig.sigType == _selectedType;
-      bool keepSignal = filtered.contains(sig);
-
-      // If signal is not in filtered, we check if any connected slot passes the filters
-      if (!keepSignal && signalTypeFilterPassed) {
-        // see if a slot matches the search text
-        for (final s in connectedSlots) {
-          if (_selectedType != null && s.slotType != _selectedType) {
-            continue;
-          }
-          final nameMatch = s.name.toLowerCase().contains(query);
-          final descMatch = s.description.toLowerCase().contains(query);
-          if (query.isEmpty || nameMatch || descMatch) {
-            keepSignal = true;
-            break;
-          }
-        }
+      if (_selectedType != null && sig.sigType != _selectedType) continue;
+      if (query.isEmpty) {
+        scored.add((0, sig));
+        continue;
       }
-
-      if (keepSignal) {
-        finalFilter.add(sig);
+      int? best = fuzzyScoreFields(
+          [sig.name.toLowerCase(), sig.description.toLowerCase()], query);
+      for (final slot in _allSlots) {
+        if (slot.connectedTo != sig.name) continue;
+        if (_selectedType != null && slot.slotType != _selectedType) continue;
+        final s = fuzzyScoreFields(
+            [slot.name.toLowerCase(), slot.description.toLowerCase()], query);
+        if (s != null && (best == null || s > best)) best = s;
       }
+      if (best != null) scored.add((best, sig));
     }
 
-    setState(() => _filteredSignals = finalFilter);
+    setState(() => _filteredSignals = rankedItems(scored));
   }
 
   /// Called when user taps “Disconnect” on a sub-slot
@@ -415,17 +383,13 @@ class _AddSlotDialogState extends State<AddSlotDialog> {
 
   void _applyFilter(String query) {
     setState(() {
-      _filteredSlots = widget.allSlots.where((slot) {
-        if (slot.slotType != widget.signal.sigType ||
-            slot.connectedTo.isNotEmpty) {
-          return false;
-        }
-        if (query.isEmpty) return true;
-
-        final searchText = query.toLowerCase();
-        return slot.name.toLowerCase().contains(searchText) ||
-            slot.description.toLowerCase().contains(searchText);
-      }).toList();
+      final connectable = widget.allSlots
+          .where((slot) =>
+              slot.slotType == widget.signal.sigType &&
+              slot.connectedTo.isEmpty)
+          .toList();
+      _filteredSlots = fuzzyFilter(
+          connectable, query, [(slot) => slot.name, (slot) => slot.description]);
     });
   }
 

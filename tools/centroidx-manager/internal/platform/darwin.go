@@ -36,7 +36,7 @@ func (d *darwinInstaller) IsInstalled() bool {
 	return err == nil
 }
 
-func (d *darwinInstaller) Uninstall() error {
+func (d *darwinInstaller) Uninstall(_ bool) error {
 	_, err := d.runner.Run("rm", "-rf", "/Applications/CentroidX.app")
 	return err
 }

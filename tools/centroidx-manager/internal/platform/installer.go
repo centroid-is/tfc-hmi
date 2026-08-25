@@ -55,8 +55,12 @@ type Installer interface {
 	// IsInstalled returns true if the application package is currently installed.
 	IsInstalled() bool
 
-	// Uninstall removes the application package.
-	Uninstall() error
+	// Uninstall removes the application package. keepSettings decides what
+	// happens to the station's own configuration: put aside for the next
+	// install (the usual case, since an uninstall is normally a step in a
+	// rollback or a version change Windows will not do in place), or removed
+	// along with the application.
+	Uninstall(keepSettings bool) error
 }
 
 // CommandRunner abstracts exec.Command for testing.
@@ -319,7 +323,13 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	// deliberately below every stable version) has to uninstall first. Left to
 	// Add-AppxPackage that arrives as a bare HRESULT; read out of the package
 	// beforehand it can be a sentence that says what to do.
-	if msg := downgradeRefusal(runner, assetPath); msg != "" {
+	// One query answers both questions: whether Windows will refuse this
+	// package for its version, and whether anything is installed at all --
+	// which decides what happens to a container put aside by an earlier
+	// uninstall. Asking twice would cost a second PowerShell start on every
+	// install for an answer we already have.
+	msg, freshInstall := packageVersionCheck(runner, assetPath)
+	if msg != "" {
 		return &commandError{op: msg, cause: errors.New("package version is not higher than the installed one")}
 	}
 	// First attempt: install directly.
@@ -330,6 +340,13 @@ func installWindows(runner CommandRunner, assetPath string) error {
 		"Add-AppxPackage -Path '"+assetPath+"' -ForceApplicationShutdown",
 	)
 	if err == nil {
+		if freshInstall {
+			// An uninstall saved the station's configuration on its way out
+			// and this install is where it comes back. Restoring only on a
+			// fresh install is what keeps a stale copy from being written
+			// over the live container of an ordinary in-place upgrade.
+			restorePackageData(runner)
+		}
 		return nil
 	}
 
@@ -401,6 +418,20 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	return &commandError{op: "Add-AppxPackage failed", cause: err}
 }
 
+// installedPackageVersion is what Windows says is installed right now, or ""
+// when nothing is (or when the query failed, which the callers treat the same
+// way: proceed rather than block).
+func installedPackageVersion(runner CommandRunner) string {
+	out, err := runner.Run(
+		"powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Get-AppxPackage -Name '"+windowsPackageName+"' | Select-Object -ExpandProperty Version",
+	)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // downgradeRefusal returns the sentence to show the operator when Windows
 // would refuse this package for its version, or "" when the install can go
 // ahead.
@@ -410,33 +441,40 @@ func installWindows(runner CommandRunner, assetPath string) error {
 // attempted anyway -- guessing wrong here would block an install that would
 // have worked, which is worse than the HRESULT it might produce.
 func downgradeRefusal(runner CommandRunner, assetPath string) string {
+	msg, _ := packageVersionCheck(runner, assetPath)
+	return msg
+}
+
+// packageVersionCheck reads the version inside the package and what is
+// installed, and answers both things the install needs to know: the sentence
+// to show when Windows would refuse this package (empty when it would not),
+// and whether this is a fresh install onto a machine with nothing on it.
+//
+// Both halves are read rather than assumed, and either being unreadable means
+// proceed: guessing wrong here would block an install that would have worked,
+// which is worse than the HRESULT it might produce. An unreadable package
+// also means "not a fresh install" -- nothing is restored on a guess.
+func packageVersionCheck(runner CommandRunner, assetPath string) (string, bool) {
 	incoming, err := PackageVersionOf(assetPath)
 	if err != nil || incoming == "" {
-		return ""
+		return "", false
 	}
-	out, err := runner.Run(
-		"powershell", "-NoProfile", "-NonInteractive", "-Command",
-		"Get-AppxPackage -Name '"+windowsPackageName+"' | Select-Object -ExpandProperty Version",
-	)
-	if err != nil {
-		return ""
-	}
-	installed := strings.TrimSpace(string(out))
+	installed := installedPackageVersion(runner)
 	if installed == "" {
-		return "" // nothing installed: any version installs
+		return "", true // nothing installed: any version installs
 	}
 
 	switch ComparePackageVersions(incoming, installed) {
 	case 1:
-		return ""
+		return "", false
 	case 0:
 		return "CentroidX " + installed + " is already installed, and this build carries " +
 			"the same version number, so Windows will not replace it. Uninstall CentroidX " +
-			"first, then install this build."
+			"first, then install this build.", false
 	default:
 		return "CentroidX " + installed + " is installed and this build is " + incoming +
 			", which Windows treats as older -- it only ever replaces a package with a " +
-			"higher version. Uninstall CentroidX first, then install this build."
+			"higher version. Uninstall CentroidX first, then install this build.", false
 	}
 }
 
@@ -786,7 +824,8 @@ func launchAppDetached(runner CommandRunner, appPath string, args ...string) err
 const (
 	dataSavedToken    = "CENTROIDX_DATA_SAVED"
 	dataNoneToken     = "CENTROIDX_DATA_NONE"
-	dataRestoredToken = "CENTROIDX_DATA_RESTORED"
+	dataRestoredToken  = "CENTROIDX_DATA_RESTORED"
+	dataDiscardedToken = "CENTROIDX_DATA_DISCARDED"
 )
 
 // packageDataBackupDir is where the container's contents wait between the
@@ -836,9 +875,35 @@ func restorePackageDataScript() string {
 		// nothing -- which is what this did until a simulated container
 		// came out empty on the other side.
 		`Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force; ` +
+		// One shot: the copy is consumed by the install that restores it.
+		// Left behind, it would be waiting for some unrelated future
+		// install to write a stale configuration over a working one.
+		`Remove-Item -Recurse -Force -LiteralPath $src; ` +
 		// And the token is earned, not announced: an empty destination is a
 		// station that just lost its settings, and it must not read as done.
 		`if (@(Get-ChildItem -Recurse -File -LiteralPath $dst).Count -gt 0) { Write-Output '` + dataRestoredToken + `' }`
+}
+
+// discardPackageDataBackupScript deletes a container copy an earlier
+// uninstall put aside. Used when the operator asks for the settings to go
+// with the application: a copy they were never told about must not survive
+// the request to remove them.
+func discardPackageDataBackupScript() string {
+	return `$ErrorActionPreference='Stop'; ` +
+		`$src = Join-Path $env:TEMP '` + packageDataBackupDir + `'; ` +
+		`if (Test-Path $src) { Remove-Item -Recurse -Force -LiteralPath $src }; ` +
+		`Write-Output '` + dataDiscardedToken + `'`
+}
+
+// discardPackageDataBackup removes the saved copy, if there is one.
+func discardPackageDataBackup(runner CommandRunner) bool {
+	out, err := runner.Run(
+		"powershell",
+		"-NoProfile", "-NonInteractive",
+		"-Command",
+		discardPackageDataBackupScript(),
+	)
+	return err == nil && strings.Contains(string(out), dataDiscardedToken)
 }
 
 // savePackageData reports whether there is anything to put back afterwards.

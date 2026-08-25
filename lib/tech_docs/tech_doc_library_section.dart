@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
 
@@ -158,19 +159,13 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       List<PlcAssetSummary> plcSummaries) {
     final uploadProgress = ref.watch(techDocUploadProgressProvider);
 
-    // Apply filter then sort tech docs.
-    var filtered = docs.where((d) {
-      if (_filter.isEmpty) return true;
-      return d.name.toLowerCase().contains(_filter.toLowerCase());
-    }).toList();
+    // While a search is active, order by match relevance instead of the
+    // chosen sort column.
+    var filtered = fuzzyFilter<TechDocSummary>(docs, _filter, [(d) => d.name]);
+    if (_filter.isEmpty) filtered = _sortDocs(filtered.toList());
 
-    filtered = _sortDocs(filtered);
-
-    // Apply filter to PLC entries.
-    final filteredPlc = plcSummaries.where((p) {
-      if (_filter.isEmpty) return true;
-      return p.assetKey.toLowerCase().contains(_filter.toLowerCase());
-    }).toList();
+    final filteredPlc =
+        fuzzyFilter<PlcAssetSummary>(plcSummaries, _filter, [(p) => p.assetKey]);
 
     final totalItems = filtered.length + filteredPlc.length;
 

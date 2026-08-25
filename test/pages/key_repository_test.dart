@@ -837,6 +837,36 @@ void main() {
       expect(find.text('temperature_sensor'), findsOneWidget);
       expect(find.text('pressure_valve'), findsOneWidget);
     });
+
+    testWidgets('search results are ordered by match quality', (tester) async {
+      // Inserted weakest match first: an exact hit must rank above a
+      // word-boundary substring hit, which ranks above a subsequence hit.
+      KeyMappingEntry entry(String identifier) => KeyMappingEntry(
+            opcuaNode: OpcUANodeConfig(namespace: 2, identifier: identifier)
+              ..serverAlias = 'main_server',
+          );
+      await tester.pumpWidget(buildTestableKeyRepository(
+        keyMappings: KeyMappings(nodes: {
+          'thermal_probe': entry('ThermalProbe'),
+          'motor_temp': entry('MotorTemp'),
+          'temp': entry('Temp'),
+        }),
+      ));
+      await tester.pumpAndSettle();
+
+      final searchField = find.widgetWithText(TextField, 'Search keys...');
+      await tester.enterText(searchField, 'temp');
+      await tester.pumpAndSettle();
+
+      // The search field's EditableText also holds 'temp'; match only the
+      // card title Texts.
+      final yOf = (String name) => tester
+          .getTopLeft(
+              find.byWidgetPredicate((w) => w is Text && w.data == name))
+          .dy;
+      expect(yOf('temp'), lessThan(yOf('motor_temp')));
+      expect(yOf('motor_temp'), lessThan(yOf('thermal_probe')));
+    });
   });
 
   // ==================== Group 8: Save and Load ====================

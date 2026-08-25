@@ -8,6 +8,7 @@ import 'package:flutter/gestures.dart'
     show kMiddleMouseButton, kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc/providers/page_manager.dart';
 import '../page_creator/asset_update.dart';
 import '../page_creator/assets/common.dart';
@@ -2891,14 +2892,21 @@ class _PageEditorState extends ConsumerState<PageEditor> {
 
   Widget _buildPalette() {
     final query = _paletteSearchController.text.trim().toLowerCase();
-    final entries = AssetRegistry.defaultFactories.entries.where((entry) {
-      if (query.isEmpty) return true;
-      final asset = entry.value();
-      // Keywords let an umbrella asset be found by what it contains — the
-      // 3rd-party tile answers to "multivac".
-      return asset.displayName.toLowerCase().contains(query) ||
-          asset.searchKeywords.any((k) => k.toLowerCase().contains(query));
-    }).toList();
+    var entries = AssetRegistry.defaultFactories.entries.toList();
+    if (query.isNotEmpty) {
+      final scored = <(int, MapEntry<Type, Asset Function()>)>[];
+      for (final entry in entries) {
+        final asset = entry.value();
+        // Keywords let an umbrella asset be found by what it contains — the
+        // 3rd-party tile answers to "multivac".
+        final score = fuzzyScoreFields([
+          asset.displayName.toLowerCase(),
+          for (final k in asset.searchKeywords) k.toLowerCase(),
+        ], query);
+        if (score != null) scored.add((score, entry));
+      }
+      entries = rankedItems(scored);
+    }
 
     return Column(
       children: [

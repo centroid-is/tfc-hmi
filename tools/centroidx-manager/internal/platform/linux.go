@@ -34,7 +34,7 @@ func (l *linuxInstaller) IsInstalled() bool {
 	return err == nil && len(out) > 0
 }
 
-func (l *linuxInstaller) Uninstall() error {
+func (l *linuxInstaller) Uninstall(_ bool) error {
 	_, err := l.runner.Run("sudo", "dpkg", "-r", "centroidx")
 	return err
 }

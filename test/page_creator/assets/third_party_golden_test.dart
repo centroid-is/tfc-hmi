@@ -452,5 +452,100 @@ void main() {
         matchesGoldenFile('goldens/third_party_strappingLine_unknown.png'),
       );
     });
+
+    // The batch aligner's Status section, one diode per state: Waiting too
+    // long OFF (white), Fish waiting to drop LIT amber, ready-for-fish LIT
+    // green, and Drop complete absent from the map — a key the PLC does not
+    // serve — as the grey `!` unknown. The generic per-bit pane the
+    // non-SpeedBatcher kinds share; this is the golden to judge it by.
+    testWidgets('fishAligner — status pane diodes', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 560,
+                child: Material(
+                  child: SidePane(
+                    title: 'BA-01',
+                    subtitle: 'Batch aligner',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: EquipmentStatusDiodes(
+                        bits: kEquipmentStatusBits[
+                            ThirdPartyEquipmentKind.fishAligner]!,
+                        values: const {
+                          'WaitingFrustration': false,
+                          'DropRequestFeedback': true,
+                          'DropOk': true,
+                        },
+                        machine: equipmentShortName(
+                            ThirdPartyEquipmentKind.fishAligner),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_fishAligner_status_pane.png'),
+      );
+    });
+
+    // The editor with the batch aligner selected: the Status Key Prefix field
+    // and its suffix-listing help text, which no kind but the SpeedBatcher
+    // had before — without it these diodes could never be pointed at keys.
+    testWidgets('fishAligner — editor status key field', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(600, 1100);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.fishAligner,
+        statusKey: 'CN22.Aligner',
+      );
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: Center(
+              child: RepaintBoundary(
+                key: _key,
+                child: SizedBox(
+                  width: 400,
+                  height: 1040,
+                  child: Material(
+                    child: Builder(
+                        builder: (context) => config.configure(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile(
+            'goldens/third_party_fishAligner_editor_status_key.png'),
+      );
+    });
   });
 }

@@ -21,7 +21,10 @@ import (
 type PickerInstaller interface {
 	IsInstalled() bool
 	InstalledVersion() string
-	Uninstall() error
+	// keepSettings: put the station's configuration aside for the next
+	// install, or let it go with the application -- the checkbox beside the
+	// Uninstall button.
+	Uninstall(keepSettings bool) error
 }
 
 // pickerState holds all mutable state for the version picker UI.
@@ -44,6 +47,14 @@ type pickerState struct {
 	itemClicks     []widget.Clickable
 	installBtn     widget.Clickable
 	uninstallBtn   widget.Clickable
+
+	// Checked: the station's configuration -- key mappings, page layout,
+	// update channel -- is put aside and comes back on the next install.
+	// Cleared: it goes with the application. Checked by default, because an
+	// uninstall from here is nearly always a step in a rollback or a version
+	// change Windows will not do in place, and losing the configuration is
+	// not what was being asked for.
+	keepSettings   widget.Bool
 	stableBtn      widget.Clickable
 	latestBtn      widget.Clickable
 	channel        string
@@ -72,6 +83,7 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, instal
 		isInstalled:      installer.IsInstalled(),
 		installedVersion: installer.InstalledVersion(),
 	}
+	state.keepSettings.Value = true
 	state.listState.List.Axis = layout.Vertical
 	state.notesListState.List.Axis = layout.Vertical
 
@@ -173,13 +185,20 @@ func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, en
 	// Handle uninstall button click
 	if state.uninstallBtn.Clicked(gtx) && state.isInstalled && !state.installing {
 		state.installing = true
-		state.statusMsg = "Uninstalling..."
+		keep := state.keepSettings.Value
+		state.statusMsg = "Uninstalling, keeping settings..."
+		if !keep {
+			state.statusMsg = "Uninstalling and removing settings..."
+		}
 		go func() {
-			if err := installer.Uninstall(); err != nil {
+			if err := installer.Uninstall(keep); err != nil {
 				state.statusMsg = userFriendlyMessage(err)
 				state.err = err
 			} else {
-				state.statusMsg = "Uninstalled!"
+				state.statusMsg = "Uninstalled. Settings come back on the next install."
+				if !keep {
+					state.statusMsg = "Uninstalled, settings removed."
+				}
 				state.isInstalled = false
 				state.installedVersion = ""
 			}
@@ -446,6 +465,14 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 							btn := material.Button(th, &state.uninstallBtn, "Uninstall")
 							btn.Background = ColorError()
 							return btn.Layout(gtx)
+						}),
+						layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if !state.isInstalled {
+								return layout.Dimensions{}
+							}
+							cb := material.CheckBox(th, &state.keepSettings, "Keep settings")
+							return layout.Inset{Top: unit.Dp(6)}.Layout(gtx, cb.Layout)
 						}),
 					)
 				})
