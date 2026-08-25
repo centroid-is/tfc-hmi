@@ -55,7 +55,9 @@ jobs:
 
       - name: Build Linux
         working-directory: centroid-hmi
-        run: flutter build linux --release --dart-define=GIT_SHA=${{ env.BUILD_SHA }}
+        # TFC_CHAT/TFC_KNOWLEDGE off: shipped binaries exclude the AI chat and
+        # knowledge features for now (lib/core/feature_flags.dart).
+        run: flutter build linux --release --dart-define=GIT_SHA=${{ env.BUILD_SHA }} --dart-define=TFC_CHAT=false --dart-define=TFC_KNOWLEDGE=false
 
       # The bundle is already relocatable — the runner has an $ORIGIN/lib
       # rpath — so a plain tarball of the directory runs anywhere with GTK3.

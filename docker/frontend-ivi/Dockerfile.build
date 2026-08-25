@@ -84,7 +84,9 @@ RUN flutter pub get
 #   - Native FFI assets (open62541, etc.)
 #   - Flutter engine (libflutter_engine.so)
 ARG BUILD_MODE=debug
-RUN flutter build linux --${BUILD_MODE}
+# TFC_CHAT/TFC_KNOWLEDGE off: the shipped image excludes the AI chat and
+# knowledge features for now (lib/core/feature_flags.dart).
+RUN flutter build linux --${BUILD_MODE} --dart-define=TFC_CHAT=false --dart-define=TFC_KNOWLEDGE=false
 
 # Assemble the ivi-homescreen bundle from the Linux build output
 RUN BUILD_DIR=$(find build/linux -path "*/${BUILD_MODE}/bundle" -type d | head -1) \
