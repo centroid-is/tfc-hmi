@@ -986,6 +986,14 @@ class ConveyorConfig extends BaseAsset {
   @override
   String get category => 'Visualization';
 
+  /// The belt is pure geometry and its turns are chiral: on a mirrored
+  /// station a left bend must become a right bend, or the page shows a belt
+  /// that does not exist on the floor. The frequency/exclamation overlays
+  /// counter-mirror inside [ConveyorPainter], so no text flips with it.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  bool get mirrorsWithPage => true;
+
   String? key;
   String? batchesKey;
   String? frequencyKey;
@@ -2185,6 +2193,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
       beltWidthOverride: beltWidth,
     );
 
+    final mirror = AssetMirrorScope.of(context);
     final conveyorPaint = CustomPaint(
       size: paintSize,
       painter: ConveyorPainter(
@@ -2197,6 +2206,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
         batches: _batches,
         angle: widget.config.coordinates.angle ?? 0.0,
         geometry: geometry,
+        mirrorX: mirror?.xMirror ?? false,
+        mirrorY: mirror?.yMirror ?? false,
         straightBeltWidth: beltWidth,
         paintSize: paintSize,
       ),
@@ -2937,6 +2948,15 @@ class ConveyorPainter extends CustomPainter {
   final double angle;
   final ConveyorPathGeometry? geometry;
 
+  /// The page-wide mirror in effect around this asset (see
+  /// [AssetMirrorScope]). The flip itself is applied by `AssetStack` as an
+  /// outer `Transform`; the painter only needs the flags to counter-mirror
+  /// the text it draws itself — the way [angle] is counter-rotated — so the
+  /// frequency figure and the fault mark stay readable while the belt
+  /// geometry mirrors.
+  final bool mirrorX;
+  final bool mirrorY;
+
   /// Explicit belt width for a *straight* belt, in logical pixels.
   ///
   /// Null keeps the original convention of filling the box height. Turned
@@ -2957,8 +2977,19 @@ class ConveyorPainter extends CustomPainter {
       required this.batches,
       required this.angle,
       this.geometry,
+      this.mirrorX = false,
+      this.mirrorY = false,
       this.straightBeltWidth,
       this.paintSize});
+
+  /// Undoes the outer mirror after the counter-rotation, so overlay text
+  /// paints upright. The canvas at that point carries mirror ∘ rotate ∘
+  /// counter-rotate = mirror alone, and a mirror is its own inverse.
+  void _counterMirror(Canvas canvas) {
+    if (mirrorX || mirrorY) {
+      canvas.scale(mirrorX ? -1.0 : 1.0, mirrorY ? -1.0 : 1.0);
+    }
+  }
 
   /// Belt outline used by [hitTest], resolved once per painter instance —
   /// hit tests run on every pointer event, the outline never changes.
@@ -3203,6 +3234,7 @@ class ConveyorPainter extends CustomPainter {
     canvas.translate(center.dx, center.dy);
     // Counter-rotate
     canvas.rotate(-angle * pi / 180);
+    _counterMirror(canvas);
     // Draw exclamation mark centered at (0,0)
     final textPainter = TextPainter(
       text: TextSpan(
@@ -3276,6 +3308,7 @@ class ConveyorPainter extends CustomPainter {
     final center = _overlayCenter(size);
     canvas.translate(center.dx, center.dy);
     canvas.rotate(-angle * pi / 180);
+    _counterMirror(canvas);
     final textPainter = TextPainter(
       text: TextSpan(
         text: frequency!.toStringAsFixed(1),
@@ -3303,6 +3336,8 @@ class ConveyorPainter extends CustomPainter {
       oldDelegate.bidirectional != bidirectional ||
       oldDelegate.showFrequency != showFrequency ||
       oldDelegate.frequency != frequency ||
+      oldDelegate.mirrorX != mirrorX ||
+      oldDelegate.mirrorY != mirrorY ||
       oldDelegate.straightBeltWidth != straightBeltWidth ||
       // Geometry is rebuilt each frame when turns are configured, so curved
       // conveyors repaint on every rebuild (needed for batch animation).
