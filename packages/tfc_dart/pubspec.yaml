@@ -54,9 +54,10 @@ dependency_overrides:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      # isolate-self-heal @ the reviewed commit, pinned by sha so the
+      # isolate-self-heal head (respawn + bounded handshake selects +
+      # transport-leak fix + respawn backoff), pinned by sha so the
       # verification build is reproducible bit-for-bit.
-      ref: 748173956491a639a3ad56e71bfdcb0105e967e9
+      ref: 2474f7375fac05972de644259f70b804c4578baf
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git

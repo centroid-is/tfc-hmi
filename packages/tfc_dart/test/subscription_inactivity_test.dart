@@ -66,10 +66,21 @@ void main() {
 
     // Long secure channel lifetime + no connectivity check so the client
     // doesn't kill the channel while responses are buffered.
+    //
+    // requestTimeout is part of the inactivity window: open62541 declares
+    // subscription inactivity after roughly publishingInterval ×
+    // maxKeepAliveCount + requestTimeout (1s + 5s here, comfortably above
+    // the 2s buffer below). The bindings' default dropped to 500ms in
+    // 1.5.7+2 to bound handshake selects; this test deliberately keeps the
+    // old generous value because its subject is delay tolerance, not
+    // detection latency. Production (StateMan, keepAliveCount=30) runs the
+    // 500ms default and accepts a ~3.5s window — Inactivity is transient
+    // there and recovers on its own.
     final client = Client(
       logLevel: LogLevel.UA_LOGLEVEL_WARNING,
       secureChannelLifeTime: Duration(minutes: 10),
       connectivityCheckInterval: Duration.zero,
+      requestTimeout: Duration(seconds: 5),
     );
     final clientTimer = Timer.periodic(Duration(milliseconds: 10), (_) {
       client.runIterate(Duration(milliseconds: 10));

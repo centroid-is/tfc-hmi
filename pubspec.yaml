@@ -27,11 +27,10 @@ dependencies:
   flutter_riverpod: ^2.6.1
   flutter_colorpicker: ^1.1.0
   # path: ../open62541_dart
-  # Exact version, not a range: pubspec.lock is gitignored, so a range lets a
-  # tagged build pick up code that was never tested here, and lets the same
-  # tag rebuild into a different binary. Hosted on pub.dev since 1.5.7.
-  # Keep in step with packages/*/pubspec.yaml and centroid-hmi/pubspec.yaml.
-  open62541: 1.5.7+1
+  # Hosted on pub.dev since 1.5.7; temporarily overridden below with the
+  # isolate-self-heal branch until 1.5.7+2 releases. Keep in step with
+  # packages/*/pubspec.yaml and centroid-hmi/pubspec.yaml.
+  open62541: ^1.5.7
   postgres: ^3.4.5
   intl: ^0.20.2
   collection: ^1.18.0
@@ -128,6 +127,13 @@ flutter:
 dependency_overrides:
 #   open62541:
 #     path: ../open62541_bindings
+  open62541:
+    git:
+      url: https://github.com/centroid-is/open62541_dart.git
+      # isolate-self-heal head (respawn + bounded handshake selects +
+      # transport-leak fix + respawn backoff); swap for hosted 1.5.7+2 once
+      # released. Keep in step with packages/tfc_dart and centroid-hmi.
+      ref: 2474f7375fac05972de644259f70b804c4578baf
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
