@@ -48,9 +48,9 @@ dependencies:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
       # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref lets a
-      # tagged build pick up code that was never tested here. Head of `main` as
-      # of 2026-08-23. Must stay in step with the root pubspec.yaml.
-      ref: 631702f8354ca5a4c030ab3a0eddd510caeba711
+      # tagged build pick up code that was never tested here. Release 1.5.7
+      # (2026-08-25). Must stay in step with the root pubspec.yaml.
+      ref: 575b75c91c2148d06eb89b98c7956c8c0546c87b
   tfc:
     path: ../
   flutter_riverpod: ^2.6.1
@@ -125,9 +125,9 @@ dependency_overrides:
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      # Head of `main` as of 2026-08-23; keep in step with the root pubspec.yaml
+      # Release 1.5.7 (2026-08-25); keep in step with the root pubspec.yaml
       # and with the `dependencies:` entry above.
-      ref: 631702f8354ca5a4c030ab3a0eddd510caeba711
+      ref: 575b75c91c2148d06eb89b98c7956c8c0546c87b
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
