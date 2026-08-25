@@ -79,17 +79,25 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     // Rotate before opening: RedirectIOToFile truncates, and the previous
     // run's log is the one worth keeping after a crash.
     RotateLogs(log_path, max_archives);
-    RedirectIOToFile(log_path.c_str());
+    const bool engine_streams_follow = RedirectIOToFile(log_path.c_str());
 
     // Tell the Dart side where the log went. It previously discovered this
     // only from CENTROID_LOG_FILE being set by hand, so when the runner
     // started picking a default path the Dart half went back to having no
     // destination at all.
     ::SetEnvironmentVariableA("CENTROID_LOG_FILE", log_path.c_str());
-    // ...and that the redirect above already carries its stdout, so it must
-    // not also open and write the same file itself — that would duplicate
-    // every line.
-    ::SetEnvironmentVariableA("CENTROID_LOG_REDIRECTED", "1");
+    // ...and, only when the redirect also took the ENGINE's streams with
+    // it, that the Dart side must not open and write the same file itself:
+    // that would duplicate every line.
+    //
+    // Without a console the engine cannot be resynced (its resync reopens
+    // CONOUT$), so print() output never reaches this file through the
+    // runner. Claiming otherwise is what left every shortcut launch with a
+    // zero-byte log: the runner said "I have got it" and the Dart writer
+    // stood down, and neither wrote anything.
+    if (engine_streams_follow) {
+      ::SetEnvironmentVariableA("CENTROID_LOG_REDIRECTED", "1");
+    }
 
     // Only now can crash records actually be written somewhere.
     tfc::InstallCrashHandlers(tfc::DirectoryOf(log_path));

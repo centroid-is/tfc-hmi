@@ -42,24 +42,31 @@ void RedirectIOToConsole() {
 
 
 
-void RedirectIOToFile(const char* path) {
+bool RedirectIOToFile(const char* path) {
   // Open with FILE_SHARE_READ | FILE_SHARE_WRITE so Dart can also write to this file.
   // freopen_s does NOT expose sharing flags and defaults to exclusive access,
   // which blocks Dart's File.openSync() from appending to the same log file.
   int wlen = ::MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
-  if (wlen <= 0) return;
+  if (wlen <= 0) return false;
   std::vector<wchar_t> wpath(wlen);
   ::MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath.data(), wlen);
 
+  // FILE_APPEND_DATA rather than GENERIC_WRITE: every write goes to the end
+  // of the file no matter where this handle's offset is. On a console-less
+  // launch the Dart logger writes this same file through its own handle, so
+  // the two would otherwise advance independently and the C++ side (notably
+  // open62541, which logs straight to fd 1) would overwrite whatever Dart had
+  // appended from the start of the file. CREATE_ALWAYS still truncates first,
+  // so a run begins with an empty log.
   HANDLE hFile = ::CreateFileW(
       wpath.data(),
-      GENERIC_WRITE,
+      FILE_APPEND_DATA | SYNCHRONIZE,
       FILE_SHARE_READ | FILE_SHARE_WRITE,
       nullptr,
       CREATE_ALWAYS,
       FILE_ATTRIBUTE_NORMAL,
       nullptr);
-  if (hFile == INVALID_HANDLE_VALUE) return;
+  if (hFile == INVALID_HANDLE_VALUE) return false;
 
   // If we already have a console (launched from a terminal or under an IDE
   // that attaches one), tee instead of redirecting.
@@ -117,10 +124,10 @@ void RedirectIOToFile(const char* path) {
           _dup2(pipeFd, 2);
           ::SetStdHandle(STD_OUTPUT_HANDLE, writeEnd);
           ::SetStdHandle(STD_ERROR_HANDLE, writeEnd);
-  std::ios::sync_with_stdio(false);
+          std::ios::sync_with_stdio(false);
           std::ios::sync_with_stdio(true);
           FlutterDesktopResyncOutputStreams();
-          return;
+          return true;
         }
         _close(pipeFd);
       }
@@ -134,11 +141,12 @@ void RedirectIOToFile(const char* path) {
   }
 
   // Associate the Win32 handle with a CRT file descriptor, then with stdout.
-  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(hFile), _O_WRONLY | _O_TEXT);
-  if (fd == -1) { ::CloseHandle(hFile); return; }
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(hFile),
+                           _O_WRONLY | _O_APPEND | _O_TEXT);
+  if (fd == -1) { ::CloseHandle(hFile); return false; }
 
   FILE *fp = _fdopen(fd, "w");
-  if (!fp) { _close(fd); return; }
+  if (!fp) { _close(fd); return false; }
   setvbuf(fp, nullptr, _IONBF, 0);
 
   // Wire fd 1 and fd 2 to the same file so Dart (which uses fd 1) can reach it.
@@ -173,9 +181,11 @@ void RedirectIOToFile(const char* path) {
   // The cost of skipping it is that Dart's print() output does not reach the
   // log file on a console-less launch -- the C++ side still does. Losing log
   // lines beats not starting.
-  if (::GetConsoleWindow() != nullptr) {
-    FlutterDesktopResyncOutputStreams();
+  if (::GetConsoleWindow() == nullptr) {
+    return false;
   }
+  FlutterDesktopResyncOutputStreams();
+  return true;
 }
 
 std::vector<std::string> GetCommandLineArguments() {
