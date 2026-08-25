@@ -951,17 +951,13 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       return _filterCache!;
     }
     final q = _searchQuery.toLowerCase();
-    final matched = <_KeyRow>[];
+    final scored = <(int, _KeyRow)>[];
     for (final row in rows) {
-      for (final field in row.searchFields) {
-        if (fuzzyMatch(field, q)) {
-          matched.add(row);
-          break;
-        }
-      }
+      final score = fuzzyScoreFields(row.searchFields, q);
+      if (score != null) scored.add((score, row));
     }
     _filterCacheQuery = _searchQuery;
-    return _filterCache = matched;
+    return _filterCache = rankedItems(scored);
   }
 
   /// The three server-alias lists used to be getters that rebuilt on every
