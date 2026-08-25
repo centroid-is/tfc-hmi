@@ -90,6 +90,19 @@ class AlarmVisibilityConfig extends BaseAsset {
   @JsonKey(name: 'show_when_inactive', defaultValue: false)
   bool showWhenInactive;
 
+  /// Whether this beacon also announces its active alarms in the navigation
+  /// bar: while one is active, the nav entry of the page this beacon sits on
+  /// pulses at the alarm's level, so an operator on another screen sees where
+  /// to go without watching the alarm list. The page being looked at never
+  /// pulses — its alarms are already on screen.
+  ///
+  /// On by default: placing a beacon already says "this page cares about
+  /// these alarms", and asking for that intent a second time is how the
+  /// navigation pulse went unused for a month. Turn it off per beacon for
+  /// alarms that belong on the page but not in everyone's face.
+  @JsonKey(name: 'announce_in_navigation', defaultValue: true)
+  bool announceInNavigation;
+
   /// Palette/preview instance — renders a static active-look frame instead of
   /// subscribing to live alarms. Never persisted.
   @JsonKey(includeFromJson: false, includeToJson: false)
@@ -98,13 +111,15 @@ class AlarmVisibilityConfig extends BaseAsset {
   AlarmVisibilityConfig({
     List<String>? alarmUids,
     this.showWhenInactive = false,
+    this.announceInNavigation = true,
   }) : alarmUids = alarmUids ?? [] {
     textPos = TextPos.below;
   }
 
   AlarmVisibilityConfig.preview()
       : alarmUids = [],
-        showWhenInactive = false {
+        showWhenInactive = false,
+        announceInNavigation = true {
     isPreview = true;
     textPos = TextPos.below;
   }
@@ -789,6 +804,21 @@ class _AlarmVisibilityConfigEditorState
               ),
               value: config.showWhenInactive,
               onChanged: (v) => setState(() => config.showWhenInactive = v),
+              contentPadding: EdgeInsets.zero,
+            ),
+
+            // -- Announce in navigation --
+            SwitchListTile(
+              title: const Text('Announce in navigation'),
+              subtitle: Text(
+                config.announceInNavigation
+                    ? 'While an alarm here is active, this page\'s '
+                        'navigation entry pulses'
+                    : 'Alarms show on this page only',
+              ),
+              value: config.announceInNavigation,
+              onChanged: (v) =>
+                  setState(() => config.announceInNavigation = v),
               contentPadding: EdgeInsets.zero,
             ),
             const SizedBox(height: 16),

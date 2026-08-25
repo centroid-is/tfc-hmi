@@ -42,6 +42,10 @@ void main() {
       final config = AlarmVisibilityConfig();
       expect(config.alarmUids, isEmpty);
       expect(config.showWhenInactive, isFalse);
+      // On by default: the beacon placement is the opt-in, the switch is the
+      // per-beacon opt-out. This default is what makes the navigation pulse
+      // work without a second, hidden setting.
+      expect(config.announceInNavigation, isTrue);
       expect(config.isPreview, isFalse);
       expect(config.textPos, TextPos.below);
       expect(config.displayName, 'Alarm');
@@ -60,6 +64,7 @@ void main() {
       final config = AlarmVisibilityConfig(
         alarmUids: ['uid-1', 'uid-2'],
         showWhenInactive: true,
+        announceInNavigation: false,
       )
         ..text = 'Pump alarms'
         ..coordinates = Coordinates(x: 0.25, y: 0.5)
@@ -68,6 +73,8 @@ void main() {
       final restored = AlarmVisibilityConfig.fromJson(config.toJson());
       expect(restored.alarmUids, ['uid-1', 'uid-2']);
       expect(restored.showWhenInactive, isTrue);
+      expect(restored.announceInNavigation, isFalse,
+          reason: 'an explicit opt-out must survive the round trip');
       expect(restored.text, 'Pump alarms');
       expect(restored.coordinates.x, 0.25);
       expect(restored.coordinates.y, 0.5);
@@ -78,10 +85,14 @@ void main() {
     test('fromJson tolerates missing new fields (legacy pages)', () {
       final json = AlarmVisibilityConfig().toJson()
         ..remove('alarm_uids')
-        ..remove('show_when_inactive');
+        ..remove('show_when_inactive')
+        ..remove('announce_in_navigation');
       final restored = AlarmVisibilityConfig.fromJson(json);
       expect(restored.alarmUids, isEmpty);
       expect(restored.showWhenInactive, isFalse);
+      // Every beacon already on a plant page predates the switch; defaulting
+      // them on is the whole migration.
+      expect(restored.announceInNavigation, isTrue);
     });
 
     test('AssetRegistry.parse finds it by asset_name', () {

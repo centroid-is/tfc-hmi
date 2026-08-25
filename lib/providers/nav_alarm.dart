@@ -25,11 +25,13 @@ part 'nav_alarm.g.dart';
 
 /// Page path -> the highest active alarm level announcing itself there.
 ///
-/// A page is announcing when it holds an Alarm asset bound to an active alarm
-/// whose [AlarmConfig.navigationIndicator] is on. A beacon with an empty uid
-/// list watches every alarm (see [matchingActiveAlarms]), so such a page picks
-/// up every nav-flagged alarm — the same "all alarms" semantics the beacon
-/// itself has.
+/// A page is announcing when it holds an Alarm asset with
+/// [AlarmVisibilityConfig.announceInNavigation] on — the default — bound to an
+/// active alarm. The switch lives on the beacon, not the alarm: an alarm is a
+/// plant-wide fact, where it announces is a per-page presentation choice, and
+/// the beacon is that choice. A beacon with an empty uid list watches every
+/// alarm (see [matchingActiveAlarms]), so such a page announces every active
+/// alarm — the same "all alarms" semantics the beacon itself has.
 ///
 /// Alarms waiting on an acknowledgement are included, matching the beacon: the
 /// signal ends when the alarm is dealt with, not when the condition clears.
@@ -42,14 +44,15 @@ Map<String, AlarmLevel> navigationAlarmLevels({
   required Map<String, AssetPage> pages,
   required Iterable<AlarmActive> active,
 }) {
-  final announcing =
-      active.where((a) => a.alarm.config.navigationIndicator).toList();
+  final announcing = active.toList();
   if (announcing.isEmpty) return const {};
 
   final levels = <String, AlarmLevel>{};
   for (final entry in pages.entries) {
     AlarmLevel? highest;
-    for (final beacon in entry.value.assets.whereType<AlarmVisibilityConfig>()) {
+    for (final beacon
+        in entry.value.assets.whereType<AlarmVisibilityConfig>()) {
+      if (!beacon.announceInNavigation) continue;
       for (final alarm in matchingActiveAlarms(announcing, beacon.alarmUids)) {
         final level = alarm.notification.rule.level;
         if (highest == null || level.index > highest.index) highest = level;

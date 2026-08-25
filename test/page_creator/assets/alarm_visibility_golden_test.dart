@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/alarm_visibility.dart';
+import 'package:tfc/providers/alarm.dart' show alarmManProvider;
 import 'package:tfc/theme.dart' show solarized;
 import 'package:tfc/widgets/alarm.dart' show alarmLevelColors;
 import 'package:tfc_dart/core/alarm.dart';
@@ -343,5 +344,75 @@ void main() {
         matchesGoldenFile('goldens/alarm_visibility_config_picker.png'),
       );
     });
+
+    testWidgets('config editor announce switch: on by default, and off',
+        (tester) async {
+      // The full configure() form, because the announce switch lives there
+      // between "Show idle marker" and the label fields — a golden of the
+      // switch alone would not show an operator where to find it.
+      Widget editor(AlarmVisibilityConfig config) {
+        final (light, _) = solarized();
+        return ProviderScope(
+          overrides: [
+            alarmManProvider.overrideWith((ref) async => _PickerAlarmMan([
+                  _alarmConfigFx(
+                      uid: 'cn3',
+                      title: 'CN03 conveyor stopped',
+                      description: 'Drive fault on conveyor 3.'),
+                ])),
+          ],
+          child: MaterialApp(
+            theme: light,
+            home: Scaffold(
+              backgroundColor: light.colorScheme.surface,
+              body: SingleChildScrollView(
+                child: Center(
+                  child: Material(
+                    color: light.colorScheme.surface,
+                    child: Builder(builder: (context) => config.configure(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      Future<void> capture(AlarmVisibilityConfig config, String name) async {
+        await tester.pumpWidget(editor(config));
+        // Let the alarm list future resolve and the switch finish moving —
+        // the second capture reuses the element tree, so the toggle animates
+        // rather than being built in place. The pulse preview is static
+        // until Play is pressed, so the frame is stable after that.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await expectLater(
+          find.byType(SingleChildScrollView).first,
+          matchesGoldenFile('goldens/$name.png'),
+        );
+      }
+
+      await capture(AlarmVisibilityConfig(alarmUids: ['cn3']),
+          'alarm_visibility_config_announce_on');
+      await capture(
+          AlarmVisibilityConfig(alarmUids: ['cn3'])
+            ..announceInNavigation = false,
+          'alarm_visibility_config_announce_off');
+    });
   });
+}
+
+/// Just enough [AlarmMan] for the config editor's alarm picker: the editor
+/// reads `.alarms` once to list them. Same implements-not-extends reasoning
+/// as the other fakes — the real constructor is private and opens OPC UA
+/// evaluation streams.
+class _PickerAlarmMan implements AlarmMan {
+  _PickerAlarmMan(List<AlarmConfig> configs)
+      : alarms = configs.map((c) => Alarm(config: c)).toSet();
+
+  @override
+  final Set<Alarm> alarms;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

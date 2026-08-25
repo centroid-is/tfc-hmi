@@ -73,18 +73,12 @@ class AlarmConfig {
   final String description;
   final List<AlarmRule> rules;
 
-  /// Whether this alarm also announces itself in the navigation bar.
-  ///
-  /// While it is active, the navigation entry of every page carrying an Alarm
-  /// asset bound to it pulses — so an operator on another screen sees which
-  /// page to go to without watching the alarm list. The page being looked at
-  /// never pulses: the alarm is already visible there.
-  ///
-  /// Off by default. The navigation bar is the one surface an operator cannot
-  /// look away from, so what appears in it is opt-in per alarm rather than
-  /// every alarm at once.
-  @JsonKey(name: 'navigation_indicator', defaultValue: false)
-  final bool navigationIndicator;
+  // Navigation announcement lives on the Alarm beacon asset
+  // (`AlarmVisibilityConfig.announceInNavigation`), not here: an alarm is a
+  // plant-wide fact, where it announces is a per-page presentation choice,
+  // and the beacon *is* that choice. There briefly was a
+  // `navigation_indicator` flag on this class (#247); stored copies of it in
+  // `alarm_man_config` are ignored on load and dropped on the next save.
 
   AlarmConfig({
     required this.uid,
@@ -92,18 +86,15 @@ class AlarmConfig {
     required this.title,
     required this.description,
     required this.rules,
-    this.navigationIndicator = false,
   });
 
   @override
   String toString() {
-    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, rules: $rules, navigationIndicator: $navigationIndicator)';
+    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, rules: $rules)';
   }
 
-  /// Drift row constructor for the `Alarm` table. That table has no column for
-  /// [navigationIndicator] — alarm configuration is persisted as the
-  /// `alarm_man_config` preference JSON, not as rows — so a row read back here
-  /// takes the default.
+  /// Drift row constructor for the `Alarm` table — alarm configuration is
+  /// persisted as the `alarm_man_config` preference JSON, not as rows.
   factory AlarmConfig.fromDb({
     required String uid,
     String? key,
@@ -130,7 +121,6 @@ class AlarmConfig {
       title: copy.title,
       description: copy.description,
       rules: copy.rules.map((e) => AlarmRule.from(e)).toList(),
-      navigationIndicator: copy.navigationIndicator,
     );
   }
 }
