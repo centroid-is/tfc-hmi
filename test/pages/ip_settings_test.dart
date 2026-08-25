@@ -75,15 +75,14 @@ void main() {
     await pumpAndLoad(tester,
         _buildPage(client, internetReachable: false, dnsWorking: false));
     expect(find.text('No internet'), findsOneWidget);
-    expect(find.text('DNS failing'), findsOneWidget);
-    expect(find.textContaining('Probing 1.1.1.1:443'), findsOneWidget);
+    expect(find.text('DNS server failing'), findsOneWidget);
   });
 
   testWidgets('healthy probes show green chips', (tester) async {
     final client = FakeNetworkManagerClient(devices: []);
     await pumpAndLoad(tester, _buildPage(client));
     expect(find.text('Internet reachable'), findsOneWidget);
-    expect(find.text('DNS OK'), findsOneWidget);
+    expect(find.text('DNS server OK'), findsOneWidget);
   });
 
   testWidgets('RX/TX shows totals, then rates after a refresh tick',
@@ -128,6 +127,7 @@ void main() {
         wireless: FakeDeviceWireless(
           activeAccessPoint: FakeAccessPoint(ssidText: 'PlantNet', strength: 78),
         ),
+        statistics: FakeDeviceStatistics(rxBytes: 1024, txBytes: 2048),
       ),
     ]);
     await pumpAndLoad(tester, _buildPage(client));
@@ -135,6 +135,9 @@ void main() {
     expect(find.text('PlantNet'), findsOneWidget);
     expect(find.text('78%'), findsOneWidget);
     expect(find.text('DHCP'), findsOneWidget);
+    expect(find.text('1.0 KB'), findsOneWidget,
+        reason: 'RX/TX renders on wifi too, not just ethernet');
+    expect(find.text('2.0 KB'), findsOneWidget);
   });
 
   testWidgets('disconnected and no-link devices read as such', (tester) async {
@@ -282,6 +285,31 @@ void main() {
     expect(added['ipv4']?['method'], const DBusString('auto'));
   });
 
+  testWidgets('an interface can be taken down and brought back up',
+      (tester) async {
+    final upDevice = FakeNetworkManagerDevice(interface: 'eth0');
+    final downDevice = FakeNetworkManagerDevice(
+        interface: 'eth1', state: NetworkManagerDeviceState.disconnected);
+    final client =
+        FakeNetworkManagerClient(devices: [upDevice, downDevice]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    // Connected card offers Disconnect.
+    await tester.tap(find.byIcon(Icons.more_vert).first);
+    await settle(tester);
+    expect(find.text('Connect'), findsNothing);
+    await tester.tap(find.text('Disconnect'));
+    await settle(tester);
+    expect(upDevice.disconnectCalled, isTrue);
+
+    // Disconnected card offers Connect, which activates the device.
+    await tester.tap(find.byIcon(Icons.more_vert).last);
+    await settle(tester);
+    await tester.tap(find.text('Connect'));
+    await settle(tester);
+    expect(client.activations, [('eth1', null)]);
+  });
+
   testWidgets('bond creation adds master plus members and activates them',
       (tester) async {
     final client = FakeNetworkManagerClient(devices: [
@@ -355,7 +383,7 @@ void main() {
     );
     await pumpAndLoad(tester, _buildPage(client));
 
-    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.tap(find.byIcon(Icons.more_vert).first);
     await settle(tester);
     await tester.tap(find.text('Delete bond'));
     await settle(tester);

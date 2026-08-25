@@ -220,9 +220,9 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
   PaneStatus _dnsStatus() {
     switch (_dnsWorking) {
       case true:
-        return const PaneStatus.running('DNS OK');
+        return const PaneStatus.running('DNS server OK');
       case false:
-        return const PaneStatus.warning('DNS failing');
+        return const PaneStatus.warning('DNS server failing');
       default:
         return const PaneStatus.unknown('Checking DNS…');
     }
@@ -243,6 +243,30 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
       builder: (context) => CreateBondDialog(nmClient: client),
     );
     if (created == true && mounted) setState(() {});
+  }
+
+  Future<void> _disconnectDevice(NetworkManagerDevice device) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      await device.disconnect();
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to disconnect: $e')),
+      );
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _connectDevice(NetworkManagerDevice device) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      await client.activateConnection(device: device);
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to connect: $e')),
+      );
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _deleteBond(NetworkManagerDevice device) async {
@@ -315,15 +339,7 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                       PaneStatusChip(status: _internetStatus()),
                       const SizedBox(width: 8),
                       PaneStatusChip(status: _dnsStatus()),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Probing $internetProbeHost:$internetProbePort '
-                          'and resolving $dnsProbeHostname every 10 s',
-                          style: Theme.of(context).textTheme.bodySmall,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
+                      const Spacer(),
                       Tooltip(
                         message: _ethernetDevices.length >= 2
                             ? 'Bond two ethernet ports for failover '
@@ -354,6 +370,8 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                               clock: widget.clock ?? DateTime.now,
                               onConfigure: () =>
                                   _openInterfaceSettings(device),
+                              onConnect: () => _connectDevice(device),
+                              onDisconnect: () => _disconnectDevice(device),
                               onDeleteBond: device.deviceType ==
                                       NetworkManagerDeviceType.bond
                                   ? () => _deleteBond(device)
@@ -381,6 +399,8 @@ class DeviceCard extends StatefulWidget {
   final NetworkManagerClient client;
   final NetworkManagerDevice device;
   final VoidCallback onConfigure;
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
   final VoidCallback? onDeleteBond;
   final DateTime Function() clock;
 
@@ -389,6 +409,8 @@ class DeviceCard extends StatefulWidget {
     required this.client,
     required this.device,
     required this.onConfigure,
+    required this.onConnect,
+    required this.onDisconnect,
     this.onDeleteBond,
     this.clock = DateTime.now,
   });
@@ -436,6 +458,17 @@ class _DeviceCardState extends State<DeviceCard> {
   void dispose() {
     _statisticsSubscription?.cancel();
     super.dispose();
+  }
+
+  List<PopupMenuItem<String>> _menuItems(NetworkManagerDevice device) {
+    return [
+      if (device.state == NetworkManagerDeviceState.activated)
+        const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
+      if (device.state == NetworkManagerDeviceState.disconnected)
+        const PopupMenuItem(value: 'connect', child: Text('Connect')),
+      if (widget.onDeleteBond != null)
+        const PopupMenuItem(value: 'delete', child: Text('Delete bond')),
+    ];
   }
 
   static IconData _iconFromType(NetworkManagerDeviceType type) {
@@ -587,23 +620,25 @@ class _DeviceCardState extends State<DeviceCard> {
                           ),
                         ),
                         PaneStatusChip(status: status),
-                        if (onDeleteBond != null)
+                        IconButton(
+                          icon: const Icon(Icons.settings),
+                          tooltip: 'Configure IPv4',
+                          onPressed: onConfigure,
+                        ),
+                        if (_menuItems(device).isNotEmpty)
                           PopupMenuButton<String>(
-                            tooltip: 'Bond actions',
+                            tooltip: 'Interface actions',
                             onSelected: (value) {
-                              if (value == 'delete') onDeleteBond();
+                              switch (value) {
+                                case 'disconnect':
+                                  widget.onDisconnect();
+                                case 'connect':
+                                  widget.onConnect();
+                                case 'delete':
+                                  onDeleteBond?.call();
+                              }
                             },
-                            itemBuilder: (context) => const [
-                              PopupMenuItem(
-                                  value: 'delete',
-                                  child: Text('Delete bond')),
-                            ],
-                          )
-                        else
-                          IconButton(
-                            icon: const Icon(Icons.settings),
-                            tooltip: 'Configure IPv4',
-                            onPressed: onConfigure,
+                            itemBuilder: (context) => _menuItems(device),
                           ),
                       ],
                     ),

@@ -277,4 +277,12 @@ class FakeNetworkManagerDevice extends _Unstubbed
 
   @override
   Stream<List<String>> get propertiesChanged => const Stream.empty();
+
+  /// Whether [disconnect] was called.
+  bool disconnectCalled = false;
+
+  @override
+  Future<void> disconnect() async {
+    disconnectCalled = true;
+  }
 }

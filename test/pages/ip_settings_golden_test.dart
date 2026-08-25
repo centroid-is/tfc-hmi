@@ -75,15 +75,20 @@ Future<void> _pumpPage(
 Future<void> _expectGolden(WidgetTester tester, String name) =>
     expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name'));
 
-/// Statistics for the overview's eth0, kept module-level so the test can
-/// drive a refresh tick and put a rate into the frame. Reset per test so
-/// the driven tick doesn't leak counter growth into the other frames.
+/// Statistics fixtures, kept module-level so the tests can drive a refresh
+/// tick and put rates into the frames. Reset per test so the driven tick
+/// doesn't leak counter growth into the other frames.
 late FakeDeviceStatistics _eth0Stats;
+late FakeDeviceStatistics _wlanStats;
+late FakeDeviceStatistics _bondStats;
 
-Future<void> _tickTraffic(WidgetTester tester) async {
-  _eth0Stats.rxBytes += 4 * 1024 * 1024;
-  _eth0Stats.txBytes += 2 * 1024 * 1024;
-  _eth0Stats.emit();
+Future<void> _tickTraffic(
+    WidgetTester tester, List<FakeDeviceStatistics> stats) async {
+  for (final s in stats) {
+    s.rxBytes += 8 * 1024 * 1024;
+    s.txBytes += 4 * 1024 * 1024;
+    s.emit();
+  }
   await settle(tester);
 }
 
@@ -139,6 +144,7 @@ FakeNetworkManagerClient _overviewClient() => FakeNetworkManagerClient(
             activeAccessPoint:
                 FakeAccessPoint(ssidText: 'PlantNet', strength: 78),
           ),
+          statistics: _wlanStats,
           activeConnection: FakeActiveConnection(id: 'PlantNet'),
         ),
       ],
@@ -159,6 +165,7 @@ FakeNetworkManagerClient _bondClient() {
         {'address': '10.104.1.1'},
       ],
     ),
+    statistics: _bondStats,
     activeConnection: FakeActiveConnection(id: 'bond0'),
   );
   FakeNetworkManagerDevice member(String name, String mac) =>
@@ -225,12 +232,16 @@ void main() {
   setUp(() {
     _eth0Stats = FakeDeviceStatistics(
         rxBytes: 1610612736, txBytes: 100 * 1024 * 1024);
+    _wlanStats = FakeDeviceStatistics(
+        rxBytes: 200 * 1024 * 1024, txBytes: 48 * 1024 * 1024);
+    _bondStats = FakeDeviceStatistics(
+        rxBytes: 3 * 1024 * 1024 * 1024, txBytes: 512 * 1024 * 1024);
   });
 
   testWidgets('overview — ethernet static, dead port, wifi DHCP',
       (tester) async {
     await _pumpPage(tester, _overviewClient());
-    await _tickTraffic(tester);
+    await _tickTraffic(tester, [_eth0Stats, _wlanStats]);
     await _expectGolden(tester, 'ip_settings_overview.png');
   });
 
@@ -240,8 +251,17 @@ void main() {
     await _expectGolden(tester, 'ip_settings_probes_failing.png');
   });
 
+  testWidgets('interface actions — card menu with disconnect',
+      (tester) async {
+    await _pumpPage(tester, _overviewClient());
+    await tester.tap(find.byIcon(Icons.more_vert).first);
+    await settle(tester);
+    await _expectGolden(tester, 'ip_settings_card_menu.png');
+  });
+
   testWidgets('bond — master card with member ports', (tester) async {
     await _pumpPage(tester, _bondClient());
+    await _tickTraffic(tester, [_bondStats]);
     await _expectGolden(tester, 'ip_settings_bond.png');
   });
 
