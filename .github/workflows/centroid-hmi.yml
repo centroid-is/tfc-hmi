@@ -68,7 +68,11 @@ jobs:
 
       - name: Build for eLinux
         working-directory: centroid-hmi
-        run: flutter-elinux build elinux ${{ inputs.release && '--release' || '--debug' }}
+        # TFC_CHAT/TFC_KNOWLEDGE off: the published image excludes the AI chat
+        # and knowledge features for now (lib/core/feature_flags.dart). Applied
+        # to debug builds too — the PR image is deployed to stations for
+        # testing, not used as a dev environment.
+        run: flutter-elinux build elinux ${{ inputs.release && '--release' || '--debug' }} --dart-define=TFC_CHAT=false --dart-define=TFC_KNOWLEDGE=false
 
       - name: Move build artifacts
         working-directory: centroid-hmi
