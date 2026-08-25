@@ -1,4 +1,4 @@
-import 'dart:async' show Completer;
+import 'dart:async' show Completer, StreamController;
 import 'dart:collection' show LinkedHashMap;
 
 import 'package:flutter/material.dart';
@@ -12,8 +12,10 @@ import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/providers/database.dart' show databaseProvider;
+import 'package:tfc/providers/state_man.dart' show stateManProvider;
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/database.dart' show Database;
+import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 void main() {
   // ProviderScope + MaterialApp so showDialog has a Navigator. No provider
@@ -696,24 +698,124 @@ void main() {
       expect(find.text('Build checkweighers'), findsNothing);
     });
 
-    testWidgets('the status struct key field is SpeedBatcher-only',
+    // Used to assert the field was SpeedBatcher-only. Every kind's pane has a
+    // Status section, so every kind must be able to point its diodes at keys
+    // — with the field gated to the SpeedBatcher the other machines' diodes
+    // could never leave the unknown state.
+    testWidgets('every kind exposes a status key field that writes the config',
         (tester) async {
-      final speedBatcher = ThirdPartyEquipmentConfig(
-        kind: ThirdPartyEquipmentKind.speedBatcher,
+      for (final kind in ThirdPartyEquipmentKind.values) {
+        final config = ThirdPartyEquipmentConfig(kind: kind);
+        await tester.pumpWidget(wrap(
+          Builder(builder: (context) => config.configure(context)),
+        ));
+        await tester.pumpAndSettle();
+
+        // The SpeedBatcher reads members of one struct; the rest read
+        // separate bools under a prefix, and the label says which it is.
+        final label = kind == ThirdPartyEquipmentKind.speedBatcher
+            ? 'Status Struct Key'
+            : 'Status Key Prefix';
+        final field = find.widgetWithText(TextField, label);
+        expect(field, findsOneWidget,
+            reason: '${kind.name} has a Status section in its side pane, so '
+                'its key must be settable in the editor.');
+
+        await tester.enterText(field, 'CN22.Aligner');
+        expect(config.statusKey, 'CN22.Aligner',
+            reason: '${kind.name}: typing into the field must land in '
+                'config.statusKey.');
+
+        // Fresh tree per kind — the editor holds per-widget controllers.
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('the prefix help text spells out the suffixes the pane appends',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.fishAligner,
       );
       await tester.pumpWidget(wrap(
-        Builder(builder: (context) => speedBatcher.configure(context)),
+        Builder(builder: (context) => config.configure(context)),
       ));
       await tester.pumpAndSettle();
-      expect(find.text('Status Struct Key'), findsOneWidget);
 
-      final multivac = ThirdPartyEquipmentConfig();
-      await tester.pumpWidget(wrap(
-        Builder(builder: (context) => multivac.configure(context)),
-      ));
-      await tester.pumpAndSettle();
-      expect(find.text('Status Struct Key'), findsNothing,
-          reason: 'No other kind has the p_stat_* handshake struct.');
+      for (final bit
+          in kEquipmentStatusBits[ThirdPartyEquipmentKind.fishAligner]!) {
+        expect(find.textContaining('.${bit.suffix}'), findsOneWidget,
+            reason: 'The operator types a prefix; the help text is the only '
+                'place that says what gets appended to it.');
+      }
     });
   });
+
+  group('Status bit subscriptions', () {
+    // One test per kind in the map: the diodes are only as real as the
+    // subscriptions behind them. These went through keyStreamProvider with a
+    // bare ref.read once — the autoDispose provider had no listener, was
+    // disposed at end of frame, and closed the stream before the first value
+    // arrived, so every diode sat at unknown no matter what was configured.
+    for (final entry in kEquipmentStatusBits.entries) {
+      testWidgets('${entry.key.name} holds a live subscription per diode',
+          (tester) async {
+        final stateMan = _RecordingStateMan();
+        final config = ThirdPartyEquipmentConfig(runKey: '')
+          ..kind = entry.key
+          ..statusKey = 'CN22.Machine';
+        await tester.pumpWidget(ProviderScope(
+          overrides: [
+            stateManProvider.overrideWith((ref) async => stateMan),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 300,
+                  height: 160,
+                  child: ThirdPartyEquipment(config: config),
+                ),
+              ),
+            ),
+          ),
+        ));
+        await tester.pumpAndSettle();
+
+        expect(
+          stateMan.controllers.keys.toSet(),
+          {for (final bit in entry.value) 'CN22.Machine.${bit.suffix}'},
+          reason: '${entry.key.name}: every diode must subscribe its '
+              'prefix.suffix key.',
+        );
+
+        // And the subscription is alive: a value pushed now reaches the
+        // pane's diode row instead of hitting a closed stream.
+        final first = entry.value.first;
+        stateMan.controllers['CN22.Machine.${first.suffix}']!
+            .add(DynamicValue(value: true));
+        await tester.pump();
+
+        await tester.tap(find.byType(ThirdPartyEquipment));
+        await tester.pumpAndSettle();
+        final diodes = tester.widget<EquipmentStatusDiodes>(
+            find.byType(EquipmentStatusDiodes));
+        expect(diodes.values[first.suffix], isTrue,
+            reason: '${entry.key.name}: the ${first.suffix} value off the '
+                'wire must light its diode.');
+      });
+    }
+  });
+}
+
+/// Hands out one controllable stream per subscribed key, so tests can both
+/// assert what was subscribed and push values down it afterwards.
+class _RecordingStateMan extends Fake implements StateMan {
+  final Map<String, StreamController<DynamicValue>> controllers = {};
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async {
+    return controllers
+        .putIfAbsent(key, () => StreamController<DynamicValue>.broadcast())
+        .stream;
+  }
 }
