@@ -33,6 +33,14 @@ dependencies:
   petitparser: ^7.0.0
 
 dependency_overrides:
+  open62541:
+    git:
+      url: https://github.com/centroid-is/open62541_dart.git
+      # isolate-self-heal head; tfc_dart's StateMan uses its new keepConnected
+      # parameters, and this package compiles tfc_dart under ITS OWN
+      # resolution, so the override must exist here too. Swap for hosted
+      # 1.5.7+2 once released. Keep in step with the root pubspec.yaml.
+      ref: 2474f7375fac05972de644259f70b804c4578baf
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
