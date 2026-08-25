@@ -194,6 +194,23 @@ jobs:
           name: centroidx-sideload.cer
           path: centroid-hmi/centroidx-sideload.cer
 
+      # tag.yml calls this workflow with a ref and has already committed the
+      # tag's version into pubspec.yaml — a stable build must not be restamped.
+      # PR and workflow_dispatch builds have no ref and are stamped, which is
+      # right: an MSIX built from a PR should not claim a release's version
+      # either. The leading zero sorts below every stable `2026.x`, so a stable
+      # release is always an upgrade from a main build; run_number is monotonic,
+      # so main builds order correctly among themselves. Per-build only — never
+      # committed back.
+      - name: Stamp an unstable package version
+        if: inputs.ref == ''
+        working-directory: centroid-hmi
+        shell: bash
+        run: |
+          MSIX_VERSION="0.$(date -u +%Y).$(date -u +%-m).${{ github.run_number }}"
+          sed -i "s/^  msix_version: .*/  msix_version: $MSIX_VERSION/" pubspec.yaml
+          echo "stamped msix_version: $MSIX_VERSION"
+
       - name: Build MSIX (sideload, signed)
         working-directory: centroid-hmi
         shell: powershell
