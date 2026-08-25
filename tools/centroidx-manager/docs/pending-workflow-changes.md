@@ -49,39 +49,56 @@ SmartScreen reputation) removes both, and the Root import disappears with it.
 If CentroidX is ever handed to a customer who installs it themselves, that is
 the version to buy.
 
-## 7. Deferred: give main-latest builds their own version
+## 7. Give main builds their own version (decided, needs applying)
 
-Not decided yet -- parked 2026-08-25.
+`tag.yml` rewrites `msix_version` from the tag and commits it; nothing else
+does. So every main build carried the last stable release's number, and two
+things followed on the test station:
 
-`tag.yml` rewrites `msix_version` from the tag and commits it, but
-`main-prerelease.yml` builds straight from whatever `pubspec.yaml` says. So
-every main build carries the *last stable release's* number. Two symptoms,
-both seen on the test station:
+- installing one main build over another failed with 0x80073CFB. Windows keys
+  a package by identity -- name, publisher, version, architecture -- and never
+  by content, so the same version is the same package however much the
+  contents changed
+- the version manager reported a main build as the stable channel: it reads
+  `Get-AppxPackage`, which said `2026.8.23.1`, and that is genuinely the
+  stable release's version
 
-- the version manager reports a main build as the stable channel -- it is
-  reading `Get-AppxPackage`, which says `2026.8.23.1`, and that is genuinely
-  the stable release's version
-- installing one main build over another fails with 0x80073CFB
-  (ERROR_PACKAGE_ALREADY_EXISTS), because the version did not change
+Scheme: **0.year.month.run_number** for anything not built from a tag. The
+leading zero reads as unstable and sorts below every stable `2026.x`; the run
+number is monotonic, so builds order correctly within a month and across
+months and years.
 
-An MSIX `Identity Version` is four numbers, 0-65535 each, so a label like
-"unstable" cannot go in it; the release name carries that. Jon's preference is
-a leading zero, which also sorts every main build below every stable release.
-Two shapes fit:
+One step in `.github/workflows/windows.yml`, immediately before "Build MSIX
+(sideload, signed)". Conditioned on `inputs.ref == ''` because `tag.yml`
+passes a ref and has already committed the tag's version -- a stable build
+must not be restamped. PR and dispatch builds are stamped too, which is right:
+an MSIX built from a PR should not claim a release's version either.
 
-    MSIX_VERSION="0.$(date -u +%Y.%-m.%-d)"                       # 0.2026.8.25
-    # one build per day; a second the same day collides again
+```yaml
+      - name: Stamp an unstable package version
+        if: inputs.ref == ''
+        working-directory: centroid-hmi
+        shell: bash
+        run: |
+          MSIX_VERSION="0.$(date -u +%Y).$(date -u +%-m).${{ github.run_number }}"
+          sed -i "s/^  msix_version: .*/  msix_version: $MSIX_VERSION/" pubspec.yaml
+          echo "stamped msix_version: $MSIX_VERSION"
+```
 
-    MSIX_VERSION="0.$(date -u +%Y.%m%d).$(( 10#$(date -u +%H) * 60 + 10#$(date -u +%M) ))"
-    # 0.2026.825.312 = unstable | 2026 | Aug 25 | 05:12 UTC; several a day
+Do not commit the stamp back to main: `tag.yml` commits its version
+deliberately, a prerelease stamp is per-build only.
 
-Stamp it in the Windows build job before the MSIX step, and do NOT commit it
-back to main -- `tag.yml` commits its version deliberately, a prerelease stamp
-is per-build only.
+The plant PC's token has no `workflow` scope, so this cannot be pushed from
+there. It is committed on the branch `chore/stamp-unstable-msix-version`
+locally, and exported as a patch (`stamp-unstable-msix-version.patch` in that
+session's scratchpad) -- or just paste the step above.
 
-Consequence either way: `0.x` is below every stable `2026.x`, so stable always
-installs over a main build, and moving *to* a main build from stable is a
-downgrade, which Windows refuses. Making that one click needs a manager-side
-change: recognise the downgrade and take the uninstall-then-install route the
-publisher-conflict path already uses, carrying the container data across.
-Not written yet.
+### The consequence to know about
+
+`0.x` sits below stable, so a stable release always installs over a main build
+-- the direction the plant travels. The reverse (stable to main build) is a
+downgrade, which Windows refuses outright, so a station on stable must
+uninstall before it can take a main build. Making that one click needs a
+manager change: recognise the downgrade and take the uninstall-then-install
+route the publisher-conflict path already uses, carrying
+`LocalCache\Roaming` across so key mappings and layout survive. Not written yet.
