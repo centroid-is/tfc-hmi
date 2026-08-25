@@ -312,6 +312,16 @@ const alreadyInstalledHRESULT = "80073cfb"
 func installWindows(runner CommandRunner, assetPath string) error {
 	// Normalize path to Windows backslashes for PowerShell
 	assetPath = strings.ReplaceAll(assetPath, "/", "\\")
+
+	// Say what has to happen before Windows refuses it. Deployment replaces a
+	// package only with a HIGHER version -- it never looks at content -- so an
+	// operator moving from a stable install to a main build (0.year.month.run,
+	// deliberately below every stable version) has to uninstall first. Left to
+	// Add-AppxPackage that arrives as a bare HRESULT; read out of the package
+	// beforehand it can be a sentence that says what to do.
+	if msg := downgradeRefusal(runner, assetPath); msg != "" {
+		return &commandError{op: msg, cause: errors.New("package version is not higher than the installed one")}
+	}
 	// First attempt: install directly.
 	out, err := runner.Run(
 		"powershell",
@@ -337,10 +347,10 @@ func installWindows(runner CommandRunner, assetPath string) error {
 	// fix. See alreadyInstalledHRESULT.
 	if strings.Contains(matchable, alreadyInstalledHRESULT) {
 		return &commandError{
-			op: "Add-AppxPackage failed: this package is already installed and Windows blocked " +
-				"the reinstall (0x80073CFB). The installed CentroidX was left alone. This means " +
-				"the release was rebuilt or re-signed without a version bump — cut a new version " +
-				"rather than re-cutting this one — detail: " + detail,
+			op: "This build carries a version already installed, so Windows blocked the " +
+				"reinstall (0x80073CFB) and left the installed CentroidX alone. Uninstall " +
+				"CentroidX first, then install this build. (If that is unexpected, the release " +
+				"was rebuilt without a version bump.) Detail: " + detail,
 			cause: err,
 		}
 	}
@@ -389,6 +399,45 @@ func installWindows(runner CommandRunner, assetPath string) error {
 		return &commandError{op: "Add-AppxPackage failed: " + detail, cause: err}
 	}
 	return &commandError{op: "Add-AppxPackage failed", cause: err}
+}
+
+// downgradeRefusal returns the sentence to show the operator when Windows
+// would refuse this package for its version, or "" when the install can go
+// ahead.
+//
+// Both halves are read rather than assumed: the version inside the .msix, and
+// what Get-AppxPackage reports. If either cannot be read the install is
+// attempted anyway -- guessing wrong here would block an install that would
+// have worked, which is worse than the HRESULT it might produce.
+func downgradeRefusal(runner CommandRunner, assetPath string) string {
+	incoming, err := PackageVersionOf(assetPath)
+	if err != nil || incoming == "" {
+		return ""
+	}
+	out, err := runner.Run(
+		"powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"Get-AppxPackage -Name '"+windowsPackageName+"' | Select-Object -ExpandProperty Version",
+	)
+	if err != nil {
+		return ""
+	}
+	installed := strings.TrimSpace(string(out))
+	if installed == "" {
+		return "" // nothing installed: any version installs
+	}
+
+	switch ComparePackageVersions(incoming, installed) {
+	case 1:
+		return ""
+	case 0:
+		return "CentroidX " + installed + " is already installed, and this build carries " +
+			"the same version number, so Windows will not replace it. Uninstall CentroidX " +
+			"first, then install this build."
+	default:
+		return "CentroidX " + installed + " is installed and this build is " + incoming +
+			", which Windows treats as older -- it only ever replaces a package with a " +
+			"higher version. Uninstall CentroidX first, then install this build."
+	}
 }
 
 // certStoreLocation is where a sideload signing certificate has to land.

@@ -723,8 +723,14 @@ func TestWindowsInstaller_Install_AlreadyInstalledKeepsInstalledPackage(t *testi
 	if !strings.Contains(err.Error(), "0x80073CFB") {
 		t.Errorf("expected the HRESULT in the error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "left alone") {
+	if !strings.Contains(err.Error(), "alone") {
 		t.Errorf("expected the error to say the installation was kept, got: %v", err)
+	}
+	// ...and what to do about it. The old wording told the reader to cut a new
+	// release, which is advice for whoever builds it, not for the operator
+	// standing at the station with a build that will not install.
+	if !strings.Contains(err.Error(), "Uninstall") {
+		t.Errorf("expected the error to name the remedy, got: %v", err)
 	}
 }
 
