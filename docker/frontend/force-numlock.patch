@@ -1,0 +1,19 @@
+--- a/src/flutter/shell/platform/linux_embedded/plugins/key_event_plugin.cc	2026-08-25 21:02:31
++++ b/src/flutter/shell/platform/linux_embedded/plugins/key_event_plugin.cc	2026-08-25 21:02:39
+@@ -111,6 +111,16 @@
+                                  uint32_t mods_latched,
+                                  uint32_t mods_locked,
+                                  uint32_t group) {
++  // Keep NumLock latched regardless of what the compositor reports. Weston's
++  // VNC seat never latches it, which resolves keypad keys to their navigation
++  // keysyms (KP_7 -> KP_Home) whose utf32 value is 0 -- a dead numpad over
++  // the mirror. This HMI has no use for keypad navigation, so digits always
++  // win, on every seat.
++  const xkb_mod_index_t num_lock_index =
++      xkb_keymap_mod_get_index(xkb_keymap_, XKB_MOD_NAME_NUM);
++  if (num_lock_index != XKB_MOD_INVALID) {
++    mods_locked |= (1u << num_lock_index);
++  }
+   xkb_state_update_mask(xkb_state_, mods_depressed, mods_latched, mods_locked,
+                         0, 0, group);
+   xkb_mods_mask_ =
