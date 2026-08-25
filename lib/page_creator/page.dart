@@ -6,6 +6,7 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'assets/common.dart';
 import 'assets/registry.dart';
 import '../models/menu_item.dart';
+import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc/converter/icon.dart';
 
@@ -771,16 +772,8 @@ class _IconPickerDialogState extends State<_IconPickerDialog> {
 
   void _onSearchChanged(String query) {
     setState(() {
-      if (query.isEmpty) {
-        _filtered = widget.iconEntries;
-        return;
-      }
-      final queryWords =
-          query.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
-      _filtered = widget.iconEntries.where((entry) {
-        final name = entry.name.replaceAll('_', ' ').toLowerCase();
-        return queryWords.every((word) => name.contains(word));
-      }).toList();
+      _filtered = fuzzyFilter(widget.iconEntries, query,
+          [(entry) => entry.name.replaceAll('_', ' ')]);
     });
   }
 

@@ -10,6 +10,7 @@ import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_client_wrapper.dart' show ModbusDataType;
 import 'package:tfc_dart/core/collector.dart';
@@ -472,9 +473,7 @@ class _KeySearchDialogState extends ConsumerState<KeySearchDialog> {
             .read(stateManProvider.future)
             .then((stateMan) => stateMan.keys);
     setState(() {
-      _searchResults = allKeys
-          .where((key) => key.toLowerCase().contains(query.toLowerCase()))
-          .toList();
+      _searchResults = fuzzyFilter(allKeys, query, [(key) => key]);
     });
   }
 

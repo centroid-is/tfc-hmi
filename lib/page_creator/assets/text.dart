@@ -5,6 +5,7 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc/widgets/panes/color_picker_dialog.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc_dart/core/fuzzy_match.dart';
 
 import 'common.dart';
 import '../../providers/state_man.dart';
@@ -713,13 +714,7 @@ class _KeyInsertionDialogState extends ConsumerState<_KeyInsertionDialog> {
 
   void _performSearch(String query) {
     setState(() {
-      if (query.isEmpty) {
-        _searchResults = _allKeys;
-      } else {
-        _searchResults = _allKeys
-            .where((key) => key.toLowerCase().contains(query.toLowerCase()))
-            .toList();
-      }
+      _searchResults = fuzzyFilter(_allKeys, query, [(key) => key]);
     });
   }
 
