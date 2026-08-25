@@ -1427,6 +1427,7 @@ class StateMan {
           DateTime? unactivatedSince;
           DateTime? lastForcedTeardown;
           DateTime? lastVitalsAt;
+          ClientState? lastSnapshot;
           final unresponsive = WatchdogUnresponsiveTracker(
               unresponsiveAfter: sup.unresponsiveAfter);
 
@@ -1517,6 +1518,21 @@ class StateMan {
               // exactly like that and never resolves. Past stuckTimeout,
               // stop believing it: disconnect resets the state machine and
               // the supervisor retries from scratch.
+              //
+              // Progress-aware (#346 F4): the clock restarts on every
+              // observed channel/session/status CHANGE. Under bounded
+              // handshake selects a secured handshake can legitimately take
+              // a while — the bench saw ACTIVATE_REQUESTED, i.e. progress,
+              // axed by a flat 30s bound, which turned slow handshakes into
+              // teardown loops. Stuck means stuck in ONE state.
+              final last = lastSnapshot;
+              final progressed = last == null ||
+                  snapshot.channelState != last.channelState ||
+                  snapshot.sessionState != last.sessionState ||
+                  snapshot.recoveryStatus != last.recoveryStatus;
+              if (progressed) {
+                unactivatedSince = DateTime.now();
+              }
               unactivatedSince ??= DateTime.now();
               final stuckFor = DateTime.now().difference(unactivatedSince);
               if (stuckFor >= sup.stuckTimeout) {
@@ -1529,6 +1545,7 @@ class StateMan {
               }
             }
 
+            lastSnapshot = snapshot;
             await _supervisorDelay(sup.pollInterval);
           }
           logger.i(
