@@ -26,14 +26,7 @@ dependencies:
   riverpod_annotation: ^2.6.1
   flutter_riverpod: ^2.6.1
   flutter_colorpicker: ^1.1.0
-  open62541:
-    # path: ../open62541_dart
-    git:
-      url: https://github.com/centroid-is/open62541_dart.git
-      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref lets a
-      # tagged build pick up code that was never tested here, and lets the same
-      # tag rebuild into a different binary. Head of `main` as of 2026-08-23.
-      ref: 631702f8354ca5a4c030ab3a0eddd510caeba711
+  open62541: ^1.5.7+2
   postgres: ^3.4.5
   intl: ^0.20.2
   collection: ^1.18.0
