@@ -144,6 +144,30 @@ socket table + channel/session log lines every 15s. The .74 capture already
 demonstrates the core defect the bindings work must fix: a client failure
 that never completes `runIterate()` is invisible and permanent.
 
+### Second shape captured, same run, 08:39 (+7 min)
+
+Operator report: ST101 frozen. Socket table at that moment:
+
+    10.104.60.71  Established     <- the reported-frozen station's server
+    10.104.60.72  CloseWait       <- server sent FIN; client never closed its side
+    10.104.60.73  CloseWait       <- same
+    .91/.92/.93   Established
+
+`CloseWait` is the tell: the SERVER closed the connection, and the client has
+sat on the half-closed socket since -- no close, no log line, no reconnect.
+Across the entire run there is not a single log line for .71/.72/.73: no
+channel transitions, no errors. Only .74's two lines exist.
+
+So both shapes are one defect: nothing surfaces "session/connection died" to
+the reconnect loop. Dies at session-create (+2s, the .74 case) or the server
+hangs up later (CloseWait case) -- either way `client.runIterate` keeps
+returning true, the `runIterate()` future never completes, and the retry path
+never runs. The UI shows the last values indefinitely.
+
+Repro reliability so far: one Explorer launch of a from-source release build
+produced BOTH shapes within 7 minutes, against live plant servers.
+Log snapshot at the freeze: `repro/hmi-at-st101-freeze.log` on the station.
+
 ## Artifacts
 
 On the test station, session scratchpad `log-backup-081006/` (first
