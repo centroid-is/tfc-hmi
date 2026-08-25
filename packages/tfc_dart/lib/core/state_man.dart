@@ -871,8 +871,15 @@ class ClientWrapper {
   int _reconnectCount = 0;
   String _lastError = '';
 
-  /// Record one OPC-UA value emission for the requests-per-second rate.
-  void recordRequest() => _requestRate.increment();
+  /// Record one OPC-UA value emission for the requests-per-second rate --
+  /// and as activity for the stale watchdog. On servers whose heartbeat
+  /// item never ticks (the plant's TwinCAT servers, #345 bench notes),
+  /// data emissions are the ONLY freshness signal; them stopping is the
+  /// silent-FIN symptom the watchdog exists to catch.
+  void recordRequest() {
+    _requestRate.increment();
+    _lastHeartbeatTick = DateTime.now();
+  }
 
   /// Capture the last error string surfaced at a heartbeat/channel failure.
   void recordError(String error) => _lastError = error;
@@ -901,7 +908,10 @@ class ClientWrapper {
   /// Last-seen recovery status code.
   int get recoveryStatus => _lastClientState?.recoveryStatus ?? 0;
 
-  /// Seconds since the last heartbeat/data tick, or 0 if none yet.
+  /// Seconds since the last activity: a heartbeat tick or a monitored-item
+  /// value emission. 0 only before [startHeartbeat] first arms the clock --
+  /// i.e. before any subscription exists, where the supervisor is gated off
+  /// by subscriptionId anyway.
   double get lastDataAgeSec {
     final tick = _lastHeartbeatTick;
     if (tick == null) return 0;
@@ -955,6 +965,13 @@ class ClientWrapper {
 
   void startHeartbeat(int subId) {
     _heartbeatSub?.cancel();
+    // Arm the activity clock at the moment the subscription exists. Without
+    // a baseline, a heartbeat that never ticks left lastDataAgeSec at 0 --
+    // "no tick yet" read as "perfectly fresh" -- and the stale watchdog was
+    // blind on any server that does not publish server-time updates, which
+    // is exactly where the plant froze (#345). From here the age can only be
+    // kept down by real ticks or real data.
+    _lastHeartbeatTick = DateTime.now();
     final serverTimeNode = NodeId.fromNumeric(0, 2258);
     // Generation counter: isolate stream cancel() is async and stale
     // callbacks can fire after stopHeartbeat(). Each callback checks
