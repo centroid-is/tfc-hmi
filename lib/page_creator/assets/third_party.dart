@@ -1194,7 +1194,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         scale: child.scale,
         graphConfig: GraphAssetConfig.preview(
             key: child.key.isEmpty ? null : child.key)
-          ..headerText = 'Weight, ${weights.isEmpty ? 'infeed' : 'outfeed'} scale — trend',
+          ..headerText = 'Weight, checkweigher ${weights.length + 1} — trend',
       ));
     }
 
@@ -1294,7 +1294,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                     // Non-breaking space inside the parenthesis: the label
                     // column is narrow enough to wrap, and the break must
                     // fall before "(30 min)", never inside it.
-                    label: 'Accept rate, ${i == 0 ? 'infeed' : 'outfeed'} scale '
+                    label: 'Accept rate, checkweigher ${i + 1} '
                         '(${config.acceptWindowMinutes}\u{00A0}min)',
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1314,7 +1314,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   ),
                 for (final (i, weight) in weights.indexed)
                   PaneDetailRow(
-                    label: 'Weight, ${i == 0 ? 'infeed' : 'outfeed'} scale',
+                    label: 'Weight, checkweigher ${i + 1}',
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
