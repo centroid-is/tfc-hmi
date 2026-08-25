@@ -123,13 +123,97 @@ class OpcuaSupervisionConfig {
   /// freeze in docs/opcua-frozen-session-repro.md.
   final Duration heartbeatStaleTimeout;
 
+  /// How long consecutive failed state polls may continue before the
+  /// connection watchdog declares the client isolate unresponsive and says
+  /// so loudly. A wedged isolate answers nothing — not even a disconnect —
+  /// so every poll comes back null and nothing at this layer can recover
+  /// it; past this window the watchdog stops retrying silently and starts
+  /// announcing that this server's values are frozen.
+  final Duration unresponsiveAfter;
+
   const OpcuaSupervisionConfig({
     this.pollInterval = const Duration(milliseconds: 250),
     this.retryInterval = const Duration(milliseconds: 500),
     this.maxBackoff = const Duration(seconds: 5),
     this.stuckTimeout = const Duration(seconds: 30),
     this.heartbeatStaleTimeout = const Duration(seconds: 15),
+    this.unresponsiveAfter = const Duration(seconds: 30),
   });
+}
+
+/// Pure decision logic for the connection watchdog's "isolate is wedged"
+/// escalation (see the ClientIsolate branch of the StateMan constructor).
+///
+/// When a secured OPC UA connection dies, the client isolate can wedge in
+/// native code and stop answering state queries entirely: every poll comes
+/// back null, forever. Nothing at this layer can fix that — even disconnect
+/// is a message the wedged isolate never processes — but the operator must
+/// not be left staring at silently frozen values. This tracker watches the
+/// run of consecutive null polls and, once [unresponsiveAfter] of wall time
+/// has elapsed since the FIRST null of the run, declares the isolate
+/// unresponsive so the watchdog can announce it (rate-limited by
+/// [announceInterval]). Any successful poll fully resets the run.
+///
+/// Time is injected through the record/query methods, so the logic is
+/// synchronous and unit-testable without real waiting.
+class WatchdogUnresponsiveTracker {
+  WatchdogUnresponsiveTracker({
+    required this.unresponsiveAfter,
+    this.announceInterval = const Duration(minutes: 1),
+  });
+
+  /// How long consecutive null polls must span before [isUnresponsive].
+  /// Elapsed time, not poll counts: each poll eats ~5s when it times out,
+  /// so counting polls would scale the window with the timeout.
+  final Duration unresponsiveAfter;
+
+  /// Minimum spacing between announcements ([shouldAnnounce] true).
+  final Duration announceInterval;
+
+  DateTime? _firstNullAt;
+  DateTime? _lastNullAt;
+  DateTime? _lastAnnouncedAt;
+
+  /// A state poll timed out or errored (came back null) at [now].
+  void recordNullPoll(DateTime now) {
+    _firstNullAt ??= now;
+    _lastNullAt = now;
+  }
+
+  /// A state poll succeeded: the isolate is answering. Fully resets the run,
+  /// including the announcement rate limit, so a fresh wedge announces
+  /// immediately once its own window elapses.
+  void recordGoodPoll() {
+    _firstNullAt = null;
+    _lastNullAt = null;
+    _lastAnnouncedAt = null;
+  }
+
+  /// True once the current run of consecutive null polls spans at least
+  /// [unresponsiveAfter] of wall time.
+  bool get isUnresponsive =>
+      _firstNullAt != null &&
+      _lastNullAt!.difference(_firstNullAt!) >= unresponsiveAfter;
+
+  /// Whether to announce the unresponsive state at [now]. Returning true
+  /// consumes the rate-limit budget: at most one announcement per
+  /// [announceInterval]. Never true while responsive, and a refusal while
+  /// responsive does not consume the budget.
+  bool shouldAnnounce(DateTime now) {
+    if (!isUnresponsive) return false;
+    final last = _lastAnnouncedAt;
+    if (last != null && now.difference(last) < announceInterval) return false;
+    _lastAnnouncedAt = now;
+    return true;
+  }
+
+  /// How long the isolate has gone unanswering as of [now]: elapsed time
+  /// since the first null poll of the current run, zero while responsive.
+  Duration unresponsiveFor(DateTime now) {
+    final since = _firstNullAt;
+    if (since == null) return Duration.zero;
+    return now.difference(since);
+  }
 }
 
 class Base64Converter implements JsonConverter<Uint8List?, String?> {
@@ -1256,6 +1340,14 @@ class StateMan {
     return completer.future;
   }
 
+  /// Watchdog diagnostic probe: a bare print so the line reaches stdout
+  /// capture even when logger output is filtered or reformatted. Grep the
+  /// plant logs for "[WD".
+  static void _wdProbe(String message) {
+    // ignore: avoid_print
+    print('[WD] $message');
+  }
+
   StateMan._({
     required this.config,
     required this.keyMappings,
@@ -1320,6 +1412,9 @@ class StateMan {
           final sup = supervision;
           DateTime? unactivatedSince;
           DateTime? lastForcedTeardown;
+          DateTime? lastVitalsAt;
+          final unresponsive = WatchdogUnresponsiveTracker(
+              unresponsiveAfter: sup.unresponsiveAfter);
 
           Future<void> forceTeardown(String reason) async {
             logger.e('[$alias ${wrapper.config.endpoint}] $reason '
@@ -1335,11 +1430,43 @@ class StateMan {
               logger.e(
                   '[$alias ${wrapper.config.endpoint}] state poll failed: $error');
             });
+            // Vitals probe, time-based on purpose: a poll-count cadence
+            // (every Nth poll) is ~30s while polls answer fast but stretches
+            // to ~10 minutes of silence when every poll eats the full 5s
+            // timeout — exactly the wedged-isolate case where visibility
+            // matters most.
+            final pollNow = DateTime.now();
+            if (lastVitalsAt == null ||
+                pollNow.difference(lastVitalsAt) >=
+                    const Duration(seconds: 30)) {
+              lastVitalsAt = pollNow;
+              final vitals =
+                  '$alias age=${wrapper.lastDataAgeSec.toStringAsFixed(1)} '
+                  'sub=${wrapper.subscriptionId} '
+                  's=${snapshot?.sessionState.name} '
+                  'c=${snapshot?.channelState.name}';
+              logger.i('[WD] $vitals');
+              _wdProbe(vitals);
+            }
+
             if (snapshot == null) {
+              unresponsive.recordNullPoll(pollNow);
+              if (unresponsive.isUnresponsive &&
+                  unresponsive.shouldAnnounce(pollNow)) {
+                final wedgedSec =
+                    unresponsive.unresponsiveFor(pollNow).inSeconds;
+                logger.e('[$alias ${wrapper.config.endpoint}] OPC UA isolate '
+                    'unresponsive for ${wedgedSec}s: state polls all time '
+                    'out. The connection is dead and cannot be recovered '
+                    'from this layer; awaiting bindings-level self-heal '
+                    '(open62541_dart). Values for this server are FROZEN.');
+                _wdProbe('UNRESPONSIVE $alias ${wedgedSec}s');
+              }
               if (!_shouldRun) break;
               await _supervisorDelay(sup.pollInterval);
               continue;
             }
+            unresponsive.recordGoodPoll();
 
             if (snapshot.sessionState ==
                 SessionState.UA_SESSIONSTATE_ACTIVATED) {
