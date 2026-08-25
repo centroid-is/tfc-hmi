@@ -41,7 +41,6 @@ AlarmActive _active(String uid, {AlarmLevel level = AlarmLevel.error}) {
         title: 'Alarm $uid',
         description: 'desc',
         rules: [rule],
-        navigationIndicator: true,
       ),
     ),
     notification: AlarmNotification(

@@ -8,12 +8,11 @@ import 'package:tfc/providers/nav_alarm.dart';
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
 
-/// An active alarm, [navigationIndicator] on unless said otherwise — every
-/// case here is about what the navigation bar does with one.
+/// An active alarm — every case here is about what the navigation bar does
+/// with one. The announce switch lives on the beacon, not here.
 AlarmActive activeFx({
   String uid = 'a1',
   AlarmLevel level = AlarmLevel.error,
-  bool navigationIndicator = true,
   DateTime? timestamp,
 }) {
   final rule = AlarmRule(
@@ -28,7 +27,6 @@ AlarmActive activeFx({
         title: 'Alarm $uid',
         description: 'desc',
         rules: [rule],
-        navigationIndicator: navigationIndicator,
       ),
     ),
     notification: AlarmNotification(
@@ -47,8 +45,8 @@ AssetPage pageFx(String path, List<Asset> assets) => AssetPage(
       mirroringDisabled: false,
     );
 
-AlarmVisibilityConfig beacon(List<String> uids) =>
-    AlarmVisibilityConfig(alarmUids: uids);
+AlarmVisibilityConfig beacon(List<String> uids, {bool announce = true}) =>
+    AlarmVisibilityConfig(alarmUids: uids, announceInNavigation: announce);
 
 void main() {
   group('navigationAlarmLevels', () {
@@ -63,16 +61,32 @@ void main() {
       expect(levels, {'/freezer': AlarmLevel.warning});
     });
 
-    test('an alarm without the navigation flag stays out of the bar', () {
+    test('a beacon with the announce switch off stays out of the bar', () {
       final levels = navigationAlarmLevels(
         pages: {
-          '/freezer': pageFx('/freezer', [beacon(['a1'])]),
+          '/freezer': pageFx('/freezer', [beacon(['a1'], announce: false)]),
         },
-        active: [activeFx(uid: 'a1', navigationIndicator: false)],
+        active: [activeFx(uid: 'a1')],
       );
 
       expect(levels, isEmpty,
-          reason: 'The switch in the alarm editor is the whole gate.');
+          reason: 'The switch on the beacon is the whole gate.');
+    });
+
+    test('one page can announce while another shows the same alarm quietly',
+        () {
+      // The expressiveness the alarm-level flag could never have: where an
+      // alarm announces is a property of the placement, so two beacons on
+      // two pages for one alarm may disagree.
+      final levels = navigationAlarmLevels(
+        pages: {
+          '/freezer': pageFx('/freezer', [beacon(['a1'])]),
+          '/overview': pageFx('/overview', [beacon(['a1'], announce: false)]),
+        },
+        active: [activeFx(uid: 'a1', level: AlarmLevel.error)],
+      );
+
+      expect(levels, {'/freezer': AlarmLevel.error});
     });
 
     test('a page with no beacon for the alarm stays quiet', () {

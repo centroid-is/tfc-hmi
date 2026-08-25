@@ -14,6 +14,7 @@ AlarmVisibilityConfig _$AlarmVisibilityConfigFromJson(
               .toList() ??
           [],
       showWhenInactive: json['show_when_inactive'] as bool? ?? false,
+      announceInNavigation: json['announce_in_navigation'] as bool? ?? true,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -36,6 +37,7 @@ Map<String, dynamic> _$AlarmVisibilityConfigToJson(
       'plcAssetKey': instance.plcAssetKey,
       'alarm_uids': instance.alarmUids,
       'show_when_inactive': instance.showWhenInactive,
+      'announce_in_navigation': instance.announceInNavigation,
     };
 
 const _$TextPosEnumMap = {

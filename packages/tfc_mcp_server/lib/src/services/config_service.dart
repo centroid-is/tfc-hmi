@@ -317,10 +317,6 @@ class ConfigService implements KeyMappingLookup {
         'title': alarm['title'] as String? ?? '',
         'description': alarm['description'] as String? ?? '',
         'rules': alarm['rules'] is List ? alarm['rules'] as List : const [],
-        // Surfaced so update_alarm can carry it through a read-modify-write.
-        // Left out, the tool rebuilt the alarm without it, fromJson defaulted
-        // it to false on accept, and any MCP edit silently stripped the flag.
-        'navigation_indicator': alarm['navigation_indicator'] as bool? ?? false,
       };
     });
   }

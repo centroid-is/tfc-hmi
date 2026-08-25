@@ -101,12 +101,6 @@ void _registerCreateAlarm({
           description:
               'Optional alarm key (e.g., "pump3.overcurrent")',
         ),
-        'navigation_indicator': JsonSchema.boolean(
-          description:
-              'Announce this alarm in the navigation bar while active: every '
-              'page carrying an Alarm beacon bound to it pulses its nav '
-              'entry. Off by default.',
-        ),
         'rules': JsonSchema.array(
           description: 'Alarm rules with severity and expression',
           items: JsonSchema.object(
@@ -134,8 +128,6 @@ void _registerCreateAlarm({
       final title = arguments['title'] as String;
       final description = arguments['description'] as String;
       final key = arguments['key'] as String?;
-      final navigationIndicator =
-          arguments['navigation_indicator'] as bool? ?? false;
       final rawRules = arguments['rules'] as List<dynamic>;
 
       // Validate all expressions before building proposal
@@ -158,10 +150,6 @@ void _registerCreateAlarm({
         'title': title,
         'description': description,
         'rules': rules,
-        // Always present, never inferred: a proposal missing this field is
-        // deserialized as false on accept, which is how the flag used to be
-        // silently stripped by updates.
-        'navigation_indicator': navigationIndicator,
       };
       if (key != null) {
         proposal['key'] = key;
@@ -221,11 +209,6 @@ void _registerUpdateAlarm({
         'key': JsonSchema.string(
           description: 'Updated alarm key',
         ),
-        'navigation_indicator': JsonSchema.boolean(
-          description:
-              'Announce this alarm in the navigation bar while active. Omit '
-              'to keep the current setting.',
-        ),
         'rules': JsonSchema.array(
           description: 'Updated alarm rules (replaces all existing rules)',
           items: JsonSchema.object(
@@ -269,8 +252,6 @@ void _registerUpdateAlarm({
           existing['description'] as String;
       final newKey =
           arguments['key'] as String? ?? existing['key'] as String?;
-      final oldNav = existing['navigation_indicator'] as bool? ?? false;
-      final newNav = arguments['navigation_indicator'] as bool? ?? oldNav;
 
       List<Map<String, dynamic>> newRules;
       if (arguments.containsKey('rules') && arguments['rules'] != null) {
@@ -302,11 +283,6 @@ void _registerUpdateAlarm({
         'title': newTitle,
         'description': newDescription,
         'rules': newRules,
-        // Carried through even when untouched: left out of the proposal it
-        // deserializes as false on accept, and the plant lost its navigation
-        // flags to exactly that -- any MCP edit, a retitle was enough,
-        // silently reset the flag with nothing in the review diff to say so.
-        'navigation_indicator': newNav,
       };
       if (newKey != null) {
         proposal['key'] = newKey;
@@ -326,9 +302,6 @@ void _registerUpdateAlarm({
       }
       if (arguments.containsKey('rules')) {
         changes['rules'] = 'Updated';
-      }
-      if (newNav != oldNav) {
-        changes['navigation_indicator'] = '$oldNav -> $newNav';
       }
 
       final diff = proposalService.formatUpdateDiff(
