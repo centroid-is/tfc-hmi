@@ -2376,7 +2376,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
             final jogBwd = dynValue['p_stat_JogBwd'].asBool;
             final stopOnRelease = dynValue['p_stat_ManualStopOnRelease'].asBool;
             final frequency = dynValue['p_stat_Frequency'].asDouble;
-            final runMinutes = dynValue['p_stat_RunMinutes'].asInt;
+            final runTime =
+                formatRunTime(dynValue['p_stat_RunMinutes'].asInt);
 
             // `p_stat_State` and `p_stat_LastFault` are the PLC enums
             // `hmis_e` and `lft_e` — plain integers over OPC UA.
@@ -2528,9 +2529,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
                             ),
                             PaneMetricTile(
                               label: 'Run hours',
-                              value:
-                                  '${runMinutes ~/ 60}:${(runMinutes % 60).toString().padLeft(2, '0')}',
-                              unit: 'h:m',
+                              value: runTime.value,
+                              unit: runTime.unit,
                               icon: Icons.schedule,
                             ),
                           ],
@@ -2664,6 +2664,26 @@ class _ConveyorState extends ConsumerState<Conveyor>
       ),
     );
   }
+}
+
+/// Formats the drive's accumulated run-time counter for a [PaneMetricTile].
+///
+/// The tile is fixed-width, so the string has to stay short at every
+/// magnitude — a belt months past its last reset used to render `224:37`,
+/// which no longer fit and ellipsised to `224:…`. Precision follows
+/// magnitude instead: minutes while the counter is under an hour, hours and
+/// minutes up to a day, and past that whole hours like the drive's own hour
+/// meter — service intervals are quoted in whole hours, and at that scale
+/// the minutes are noise.
+({String value, String unit}) formatRunTime(int runMinutes) {
+  if (runMinutes < 60) {
+    return (value: '$runMinutes', unit: 'min');
+  }
+  if (runMinutes < 24 * 60) {
+    final minutes = (runMinutes % 60).toString().padLeft(2, '0');
+    return (value: '${runMinutes ~/ 60}:$minutes', unit: 'h:m');
+  }
+  return (value: '${runMinutes ~/ 60}', unit: 'h');
 }
 
 /// Maps a decoded drive value onto the themed equipment-state colors.
