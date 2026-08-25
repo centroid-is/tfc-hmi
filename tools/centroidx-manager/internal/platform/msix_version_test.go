@@ -119,6 +119,26 @@ func TestDowngradeRefusal_SameVersionIsNamedAsSuch(t *testing.T) {
 	}
 }
 
+// Rolling back to an older release is the same refusal for the same reason,
+// and it is a real operation: a station on a bad release has to go back. The
+// check knows nothing about channels -- it compares versions -- so stable to
+// older stable reads exactly like stable to a main build.
+func TestDowngradeRefusal_RollbackToAnOlderStableIsExplained(t *testing.T) {
+	dir := t.TempDir()
+	msix := writeMsix(t, dir, "2026.8.23.1")
+	runner := &mockRunnerSeq{outputs: [][]byte{[]byte("2026.9.4.1")}, errors: []error{nil}}
+
+	msg := downgradeRefusal(runner, msix)
+	if msg == "" {
+		t.Fatal("a rollback must be explained, not left to an HRESULT")
+	}
+	for _, want := range []string{"2026.9.4.1", "2026.8.23.1", "older", "Uninstall"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected %q in the rollback message, got: %s", want, msg)
+		}
+	}
+}
+
 func TestDowngradeRefusal_NewerInstallsSilently(t *testing.T) {
 	dir := t.TempDir()
 	msix := writeMsix(t, dir, "2026.9.1.0")
