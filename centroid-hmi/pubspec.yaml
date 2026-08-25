@@ -43,14 +43,11 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   flutter_launcher_icons: ^0.14.3
-  open62541:
-    # path: ../../open62541_dart
-    git:
-      url: https://github.com/centroid-is/open62541_dart.git
-      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref lets a
-      # tagged build pick up code that was never tested here. Release 1.5.7
-      # (2026-08-25). Must stay in step with the root pubspec.yaml.
-      ref: 575b75c91c2148d06eb89b98c7956c8c0546c87b
+  # path: ../../open62541_dart
+  # Exact version, not a range: pubspec.lock is gitignored, so a range lets a
+  # tagged build pick up code that was never tested here. Hosted on pub.dev
+  # since 1.5.7. Must stay in step with the root pubspec.yaml.
+  open62541: 1.5.7+1
   tfc:
     path: ../
   flutter_riverpod: ^2.6.1
@@ -122,12 +119,9 @@ dependency_overrides:
   #   git:
   #     url: https://github.com/centroid-is/tfc-hmi.git
   #     ref: main
-  open62541:
-    git:
-      url: https://github.com/centroid-is/open62541_dart.git
-      # Release 1.5.7 (2026-08-25); keep in step with the root pubspec.yaml
-      # and with the `dependencies:` entry above.
-      ref: 575b75c91c2148d06eb89b98c7956c8c0546c87b
+  # Keep in step with the root pubspec.yaml and the `dependencies:` entry
+  # above.
+  open62541: 1.5.7+1
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git

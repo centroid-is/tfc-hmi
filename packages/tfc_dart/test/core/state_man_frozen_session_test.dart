@@ -43,7 +43,6 @@ const testSupervision = OpcuaSupervisionConfig(
   maxBackoff: Duration(seconds: 1),
   stuckTimeout: Duration(seconds: 3),
   heartbeatStaleTimeout: Duration(seconds: 2),
-  connectTimeout: Duration(seconds: 2),
 );
 
 void main() {

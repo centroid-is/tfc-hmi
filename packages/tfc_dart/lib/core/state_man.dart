@@ -123,17 +123,12 @@ class OpcuaSupervisionConfig {
   /// freeze in docs/opcua-frozen-session-repro.md.
   final Duration heartbeatStaleTimeout;
 
-  /// Bound on a single connect attempt so a wedged connect cannot park the
-  /// supervisor.
-  final Duration connectTimeout;
-
   const OpcuaSupervisionConfig({
     this.pollInterval = const Duration(milliseconds: 250),
     this.retryInterval = const Duration(milliseconds: 500),
     this.maxBackoff = const Duration(seconds: 5),
     this.stuckTimeout = const Duration(seconds: 30),
     this.heartbeatStaleTimeout = const Duration(seconds: 15),
-    this.connectTimeout = const Duration(seconds: 10),
   });
 }
 
@@ -1259,49 +1254,55 @@ class StateMan {
         // open62541's latched connectStatus — with capped backoff. The
         // hand-rolled loop it replaces parked forever on a session that died
         // while runIterate kept returning true (#345).
-        unawaited((wrapper.client as Client)
-            .keepConnected(wrapper.config.endpoint));
+        //
+        // catchError, not unawaited: dart:async's unawaited() attaches no
+        // handler, so an error here (e.g. delete() during shutdown erroring
+        // the pending first-activation future) would be an unhandled async
+        // error in the caller's zone.
+        (wrapper.client as Client)
+            .keepConnected(wrapper.config.endpoint)
+            .catchError((Object e) {
+          logger.d(
+              '[$alias ${wrapper.config.endpoint}] keepConnected ended: $e');
+        });
       }
       if (wrapper.client is ClientIsolate) {
         final clientref = wrapper.client as ClientIsolate;
+
+        // The bindings' supervisor (ClientIsolate.keepConnected, 1.5.7+1)
+        // owns the run_iterate pump and reconnection INSIDE the isolate:
+        // it re-issues connect — resetting open62541's latched
+        // connectStatus — with capped backoff whenever the session leaves
+        // ACTIVATED, without depending on any error crossing the isolate
+        // boundary. The future completes on first activation; if the
+        // endpoint is down it keeps trying until delete().
+        // catchError, not unawaited: delete() during shutdown errors this
+        // still-pending first-activation future with
+        // ClientIsolateClosedException, and dart:async's unawaited() attaches
+        // no handler — the error would be unhandled in the caller's zone.
+        clientref
+            .keepConnected(
+          wrapper.config.endpoint,
+          retryInterval: supervision.retryInterval,
+          maxBackoff: supervision.maxBackoff,
+        )
+            .catchError((Object e) {
+          logger.d(
+              '[$alias ${wrapper.config.endpoint}] keepConnected ended: $e');
+        });
+
         () async {
-          // Supervisor mirroring open62541 1.5.7's Client.keepConnected for
-          // the isolate client, which has no built-in one, plus two
-          // watchdogs. Recovery is driven off observed session state and
-          // data age only: docs/opcua-frozen-session-repro.md (#345) caught
-          // sessions freezing with the socket still Established and
-          // runIterate still returning true, so neither a completed
-          // runIterate future nor a connect error can be the trigger.
+          // Two watchdogs on top of the bindings' supervisor, because the
+          // plant freeze (docs/opcua-frozen-session-repro.md, #345) can
+          // leave open62541's own state machine convinced everything is
+          // fine: a session wedged mid-create looks "connecting" forever,
+          // and a session that died on an Established socket can keep
+          // reading ACTIVATED with no transition ever surfacing. Both are
+          // broken out of by forcing a disconnect — the bindings'
+          // supervisor then reconnects on its own.
           final sup = supervision;
-          var backoff = sup.retryInterval;
           DateTime? unactivatedSince;
           DateTime? lastForcedTeardown;
-          var pumpRunning = false;
-
-          // Self-restarting pump. The isolate's iterate loop stops whenever
-          // native runIterate returns non-GOOD (e.g. connectStatus latched
-          // bad after a teardown), but the event loop MUST keep being pumped
-          // or a subsequent connect handshake can never progress — the same
-          // reasoning as the bindings' Client.keepConnected pump, which
-          // deliberately ignores the iterate result. Restarting from
-          // whenComplete (not from the supervisor loop) keeps the pump alive
-          // even while the supervisor is parked in a bounded connect() await.
-          void ensurePump() {
-            if (pumpRunning || !_shouldRun) return;
-            pumpRunning = true;
-            clientref.runIterate().catchError((error) {
-              logger.t(
-                  '[$alias ${wrapper.config.endpoint}] run iterate error: $error');
-            }).whenComplete(() {
-              pumpRunning = false;
-              if (_shouldRun) {
-                unawaited(
-                    _supervisorDelay(const Duration(milliseconds: 50)).then(
-                  (_) => ensurePump(),
-                ));
-              }
-            });
-          }
 
           Future<void> forceTeardown(String reason) async {
             logger.e('[$alias ${wrapper.config.endpoint}] $reason '
@@ -1312,7 +1313,6 @@ class StateMan {
           }
 
           while (_shouldRun) {
-            ensurePump();
             final snapshot = await _boundedAwait(
                 clientref.state, const Duration(seconds: 5), (error) {
               logger.e(
@@ -1327,7 +1327,6 @@ class StateMan {
             if (snapshot.sessionState ==
                 SessionState.UA_SESSIONSTATE_ACTIVATED) {
               unactivatedSince = null;
-              backoff = sup.retryInterval;
 
               // Belt-and-braces watchdog (#345 item 4): a session can die on
               // an Established socket with the native state still reading
@@ -1346,53 +1345,30 @@ class StateMan {
                 await forceTeardown(
                     'no heartbeat/data for ${(staleMs / 1000).toStringAsFixed(1)}s '
                     'while session reads ACTIVATED (socket may still be Established)');
-                continue;
               }
-              await _supervisorDelay(sup.pollInterval);
-              continue;
+            } else {
+              // Stuck watchdog: the bindings' supervisor waits politely on
+              // anything that looks like a connect in flight, but a channel
+              // that expires mid-session-create (the .74 shape) looks
+              // exactly like that and never resolves. Past stuckTimeout,
+              // stop believing it: disconnect resets the state machine and
+              // the supervisor retries from scratch.
+              unactivatedSince ??= DateTime.now();
+              final stuckFor = DateTime.now().difference(unactivatedSince);
+              if (stuckFor >= sup.stuckTimeout) {
+                await forceTeardown(
+                    'session stuck for ${stuckFor.inSeconds}s '
+                    '(channel: ${snapshot.channelState.name}, session: ${snapshot.sessionState.name}, '
+                    'recovery: ${snapshot.recoveryStatus})');
+                // Give the next attempt a full stuck window of its own.
+                unactivatedSince = DateTime.now();
+              }
             }
 
-            unactivatedSince ??= DateTime.now();
-            final stuckFor = DateTime.now().difference(unactivatedSince);
-
-            // A connect/handshake still looks in-flight — give it time
-            // rather than hammering it, but only until the watchdog fires.
-            final connecting = snapshot.recoveryStatus == UA_STATUSCODE_GOOD &&
-                snapshot.channelState !=
-                    SecureChannelState.UA_SECURECHANNELSTATE_CLOSED;
-            if (connecting && stuckFor < sup.stuckTimeout) {
-              await _supervisorDelay(sup.pollInterval);
-              continue;
-            }
-
-            if (stuckFor >= sup.stuckTimeout) {
-              await forceTeardown(
-                  'session stuck for ${stuckFor.inSeconds}s '
-                  '(channel: ${snapshot.channelState.name}, session: ${snapshot.sessionState.name}, '
-                  'recovery: ${snapshot.recoveryStatus})');
-            }
-
-            // Either we never connected, or open62541's connect latch has gone
-            // bad and it has given up. Re-issue connect to reset connectStatus
-            // and restart the state machine. Bounded so a connect that cannot
-            // complete does not park the supervisor (#345).
-            await _boundedAwait(
-                clientref.connect(wrapper.config.endpoint), sup.connectTimeout,
-                (error) {
-              logger.e(
-                  'Failed to connect to ${wrapper.config.endpoint}: $error');
-            });
-            // The stuck clock measures THIS attempt, not the whole outage:
-            // reset after the connect returns so the bounded await and the
-            // backoff below cannot eat the next attempt's stuck window and
-            // tear down a handshake that never got pump time.
-            unactivatedSince = DateTime.now();
-            await _supervisorDelay(backoff);
-            backoff *= 2;
-            if (backoff > sup.maxBackoff) backoff = sup.maxBackoff;
+            await _supervisorDelay(sup.pollInterval);
           }
           logger.i(
-              '[$alias ${wrapper.config.endpoint}] connection supervisor exited');
+              '[$alias ${wrapper.config.endpoint}] connection watchdog exited');
         }();
       }
 
@@ -2236,6 +2212,15 @@ class StateMan {
     for (final wrapper in clients) {
       try {
         if (wrapper.client is ClientIsolate) {
+          // Stop the bindings' in-isolate supervisor first, or it would
+          // reconnect in the window before delete() below tears it down.
+          // Fire-and-forget on purpose: the isolate handles messages in
+          // order, so the stop lands before the disconnect below, and an
+          // awaited timeout here would leave a pending timer behind for
+          // widget-test teardown to trip over.
+          (wrapper.client as ClientIsolate)
+              .stopKeepConnected()
+              .catchError((_) {});
           await (wrapper.client as ClientIsolate).disconnect();
         } else {
           // Stop the bindings' auto-reconnect supervisor before disconnecting,

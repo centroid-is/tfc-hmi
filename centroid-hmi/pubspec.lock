@@ -873,12 +873,11 @@ packages:
   open62541:
     dependency: "direct main"
     description:
-      path: "."
-      ref: "575b75c91c2148d06eb89b98c7956c8c0546c87b"
-      resolved-ref: "575b75c91c2148d06eb89b98c7956c8c0546c87b"
-      url: "https://github.com/centroid-is/open62541_dart.git"
-    source: git
-    version: "1.5.7"
+      name: open62541
+      sha256: e37861900702c60a17d7ba204b5f35852654b2e142bef6491cf551d333d83b6d
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.5.7+1"
   openai_dart:
     dependency: transitive
     description:

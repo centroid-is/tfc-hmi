@@ -31,13 +31,10 @@ dependencies:
   amplify_secure_storage_dart: ^0.5.6
 
   # OPC UA
-  open62541:
-    git:
-      url: https://github.com/centroid-is/open62541_dart.git
-      # Pinned, not a branch: pubspec.lock is gitignored, so a branch ref
-      # lets a tagged build pick up untested code. Release 1.5.7
-      # (2026-08-25). Keep in step with the root pubspec.yaml.
-      ref: 575b75c91c2148d06eb89b98c7956c8c0546c87b
+  # Exact version, not a range: pubspec.lock is gitignored, so a range lets
+  # a tagged build pick up untested code. Hosted on pub.dev since 1.5.7.
+  # Keep in step with the root pubspec.yaml.
+  open62541: 1.5.7+1
 
   # JBTM (M2400 device protocol types)
   jbtm:
