@@ -17,7 +17,9 @@ class TcpProxy {
   final int targetPort;
   ServerSocket? _server;
   final List<_Pair> _pairs = [];
+  final List<Socket> _blackholed = [];
   bool _rejecting = false;
+  bool _frozen = false;
 
   /// When true, server→client traffic is buffered (not forwarded).
   /// Client→server traffic is always forwarded (keeps the server-side
@@ -54,6 +56,17 @@ class TcpProxy {
       } catch (_) {}
       return;
     }
+    if (_frozen) {
+      // Frozen: accept the connection so the client's socket table shows
+      // Established, then never speak and never forward — the OPC UA client
+      // sends HEL and waits on a wire that stays silent forever. This is the
+      // ".74" shape from docs/opcua-frozen-session-repro.md: a connect that
+      // wedges without ever surfacing an error.
+      _blackholed.add(clientSocket);
+      clientSocket.done.catchError((_) {});
+      clientSocket.listen((_) {}, onError: (_) {}, onDone: () {});
+      return;
+    }
     try {
       final serverSocket = await Socket.connect(
           InternetAddress.loopbackIPv4, targetPort,
@@ -84,6 +97,27 @@ class TcpProxy {
     }
   }
 
+  /// Freeze mode — the frozen-session lifecycle from
+  /// docs/opcua-frozen-session-repro.md: every existing pair keeps its
+  /// client-side socket open (Established in the socket table) but stops
+  /// forwarding in BOTH directions, and its server side is torn down (the
+  /// server sees the peer vanish, like the plant servers that later sent
+  /// FIN). New connections are accepted and then blackholed. From the
+  /// client's perspective nothing errors — traffic just stops.
+  void freeze() {
+    _frozen = true;
+    for (final pair in List.of(_pairs)) {
+      pair.freeze();
+    }
+  }
+
+  /// Leave freeze mode: NEW connections forward to the server again.
+  /// Connections wedged during the freeze stay dead — the plant sockets
+  /// never came back either; recovery requires the client to reconnect.
+  void unfreeze() {
+    _frozen = false;
+  }
+
   /// Reject mode: destroy existing connections and reject new ones instantly.
   /// The ServerSocket stays open so the client gets an immediate RST
   /// (not a slow connect-timeout on Windows).
@@ -110,6 +144,12 @@ class TcpProxy {
       conn.close();
     }
     _pairs.clear();
+    for (final sock in _blackholed) {
+      try {
+        sock.destroy();
+      } catch (_) {}
+    }
+    _blackholed.clear();
   }
 }
 
@@ -120,6 +160,7 @@ class _Pair {
   StreamSubscription? _clientSub;
   StreamSubscription? _serverSub;
   bool _closed = false;
+  bool _frozen = false;
   final List<List<int>> _serverBuffer = [];
 
   _Pair(this.client, this.server, this.proxy);
@@ -129,6 +170,7 @@ class _Pair {
     server.done.catchError((_) {});
     _clientSub = client.listen(
       (data) {
+        if (_frozen) return; // dropped on the floor, no error to the client
         // Client→server always forwarded
         try {
           server.add(data);
@@ -150,6 +192,20 @@ class _Pair {
       onDone: () => _doClose(onClose),
       onError: (_) => _doClose(onClose),
     );
+  }
+
+  /// Keep the client socket Established but silence the wire: stop reading
+  /// the server side and destroy it (the real server sees the peer die),
+  /// drop anything the client sends. Crucially the client-side socket is
+  /// neither closed nor errored — it looks healthy forever.
+  void freeze() {
+    if (_closed || _frozen) return;
+    _frozen = true;
+    _serverSub?.cancel();
+    _serverSub = null;
+    try {
+      server.destroy();
+    } catch (_) {}
   }
 
   void flushBuffer() {
