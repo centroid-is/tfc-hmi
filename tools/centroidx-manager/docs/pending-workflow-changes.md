@@ -48,3 +48,40 @@ elsewhere. A code-signing certificate from a public CA (OV, or EV for immediate
 SmartScreen reputation) removes both, and the Root import disappears with it.
 If CentroidX is ever handed to a customer who installs it themselves, that is
 the version to buy.
+
+## 7. Deferred: give main-latest builds their own version
+
+Not decided yet -- parked 2026-08-25.
+
+`tag.yml` rewrites `msix_version` from the tag and commits it, but
+`main-prerelease.yml` builds straight from whatever `pubspec.yaml` says. So
+every main build carries the *last stable release's* number. Two symptoms,
+both seen on the test station:
+
+- the version manager reports a main build as the stable channel -- it is
+  reading `Get-AppxPackage`, which says `2026.8.23.1`, and that is genuinely
+  the stable release's version
+- installing one main build over another fails with 0x80073CFB
+  (ERROR_PACKAGE_ALREADY_EXISTS), because the version did not change
+
+An MSIX `Identity Version` is four numbers, 0-65535 each, so a label like
+"unstable" cannot go in it; the release name carries that. Jon's preference is
+a leading zero, which also sorts every main build below every stable release.
+Two shapes fit:
+
+    MSIX_VERSION="0.$(date -u +%Y.%-m.%-d)"                       # 0.2026.8.25
+    # one build per day; a second the same day collides again
+
+    MSIX_VERSION="0.$(date -u +%Y.%m%d).$(( 10#$(date -u +%H) * 60 + 10#$(date -u +%M) ))"
+    # 0.2026.825.312 = unstable | 2026 | Aug 25 | 05:12 UTC; several a day
+
+Stamp it in the Windows build job before the MSIX step, and do NOT commit it
+back to main -- `tag.yml` commits its version deliberately, a prerelease stamp
+is per-build only.
+
+Consequence either way: `0.x` is below every stable `2026.x`, so stable always
+installs over a main build, and moving *to* a main build from stable is a
+downgrade, which Windows refuses. Making that one click needs a manager-side
+change: recognise the downgrade and take the uninstall-then-install route the
+publisher-conflict path already uses, carrying the container data across.
+Not written yet.
