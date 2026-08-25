@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show stderr;
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
@@ -1039,22 +1038,24 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     }
     for (final entry in wanted.entries) {
       if (_bitSubs.containsKey(entry.key)) continue;
-      try {
-        _bitSubs[entry.key] = ref
-            .read(keyStreamProvider(entry.value))
-            .listen((v) {
-          if (!mounted) return;
-          _statusBits.value = Map.of(_statusBits.value)
-            ..[entry.key] = v.asBool;
-        }, onError: (_) {
-          if (!mounted) return;
-          // Unknown, not false: a key that errors has told us nothing.
-          _statusBits.value = Map.of(_statusBits.value)..[entry.key] = null;
-        });
-      } catch (e) {
-        stderr.writeln(
-            'ThirdPartyEquipment: could not subscribe "${entry.value}": $e');
-      }
+      // Straight through StateMan like [_hoistStream], NOT through
+      // `keyStreamProvider`: that provider is autoDispose, and a bare
+      // `ref.read` from here registers no listener, so it is disposed at the
+      // end of the frame and closes its subject before the first value can
+      // arrive — the diode would sit at unknown forever.
+      _bitSubs[entry.key] = ref
+          .read(stateManProvider.future)
+          .asStream()
+          .asyncExpand((sm) => sm.subscribe(entry.value).asStream())
+          .asyncExpand((s) => s)
+          .listen((v) {
+        if (!mounted) return;
+        _statusBits.value = Map.of(_statusBits.value)..[entry.key] = v.asBool;
+      }, onError: (_) {
+        if (!mounted) return;
+        // Unknown, not false: a key that errors has told us nothing.
+        _statusBits.value = Map.of(_statusBits.value)..[entry.key] = null;
+      });
     }
   }
 
@@ -1695,21 +1696,30 @@ class _ThirdPartyEquipmentConfigEditorState
             ),
             const SizedBox(height: 16),
 
-            // -- Status struct key (SpeedBatcher handshake) --
-            if (config.kind == ThirdPartyEquipmentKind.speedBatcher) ...[
-              KeyField(
-                label: 'Status Struct Key',
-                initialValue: config.statusKey,
-                onChanged: (v) => setState(() => config.statusKey = v),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Struct with the p_stat_* handshake bits — feeds the '
-                'diodes in the side pane\'s Status section.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 16),
-            ],
+            // -- Status key --
+            // Every kind's pane has a Status section, so every kind gets the
+            // field — without it the diodes can never leave the unknown
+            // state. The SpeedBatcher reads members of one struct; the other
+            // machines read separate bools, so their key is a prefix and the
+            // help text spells out the suffixes the pane appends.
+            KeyField(
+              label: config.kind == ThirdPartyEquipmentKind.speedBatcher
+                  ? 'Status Struct Key'
+                  : 'Status Key Prefix',
+              initialValue: config.statusKey,
+              onChanged: (v) => setState(() => config.statusKey = v),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              config.kind == ThirdPartyEquipmentKind.speedBatcher
+                  ? 'Struct with the p_stat_* handshake bits — feeds the '
+                      'diodes in the side pane\'s Status section.'
+                  : 'Feeds the diodes in the side pane\'s Status section: '
+                      '${(kEquipmentStatusBits[config.kind] ?? const []).map((b) => '.${b.suffix}').join(', ')} '
+                      'are appended to this prefix.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
 
             // -- Colours --
             _colorRow('Running Color', config.runningColor,
