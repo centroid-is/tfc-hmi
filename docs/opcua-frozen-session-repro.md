@@ -168,6 +168,38 @@ Repro reliability so far: one Explorer launch of a from-source release build
 produced BOTH shapes within 7 minutes, against live plant servers.
 Log snapshot at the freeze: `repro/hmi-at-st101-freeze.log` on the station.
 
+### The discriminator: only the SECURED servers fail
+
+Server mapping, from the station's live config:
+
+    .71 = st101   username/password + SSL cert (SignAndEncrypt)
+    .72 = st201   username/password + SSL cert
+    .73 = st301   username/password + SSL cert
+    .74 = baader  username/password + SSL cert
+    .91 = speedbatcher1   no security
+    .92 = speedbatcher2   no security
+    .93 = speedbatcher3   no security
+
+Every failure -- in both plant incidents and this instrumented run -- is on a
+secured server. The three anonymous ones have never faltered. The bug lives in
+the SignAndEncrypt / authenticated-session path: encrypted channel renewal and
+session lifecycle.
+
+Timeline of the instrumented run (app start 08:32:29):
+
+    +0:02   .74 (baader)  channel closes mid-session-create; dead forever
+    ~+7min  ST101 reported frozen; .71 socket still Established  <- third variant:
+            dead session on a fully-open socket, no FIN
+    +7min   .72/.73 sockets in CloseWait (server sent FIN, client oblivious)
+    +8min   .72/.73 sockets reaped entirely; ST201 reported frozen
+    all run .91/.92/.93 healthy
+
+The .71 variant matters for the watchdog design: socket-state checks alone
+cannot see it. Only a keepalive/data-age check catches all three variants.
+
+(The .7x credentials sit in plaintext in shared_preferences.json on the
+station -- separate issue, noted here so it is not lost.)
+
 ## Artifacts
 
 On the test station, session scratchpad `log-backup-081006/` (first
