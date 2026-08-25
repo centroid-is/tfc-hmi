@@ -67,6 +67,74 @@ List<String> splitDnsServers(String input) => input
     .where((s) => s.isNotEmpty)
     .toList();
 
+/// Internet reachability probe target. NetworkManager's own HTTP
+/// connectivity check needs a configured endpoint and is disabled on the
+/// plant machines, so the page probes Cloudflare's anycast resolver over
+/// TCP instead (ICMP would need privileges).
+const internetProbeHost = '1.1.1.1';
+const internetProbePort = 443;
+
+/// Hostname resolved to check that DNS itself works — deliberately distinct
+/// from the raw-IP probe above, so "internet up, DNS broken" is visible.
+const dnsProbeHostname = 'one.one.one.one';
+
+/// Human-readable byte count for the RX/TX counters, e.g. `1.5 GB`.
+String formatBytes(int bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  var value = bytes.toDouble();
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  final text =
+      unit == 0 ? '$bytes' : value.toStringAsFixed(value >= 100 ? 0 : 1);
+  return '$text ${units[unit]}';
+}
+
+/// Human-readable throughput, e.g. `2.1 MB/s`.
+String formatRate(double bytesPerSecond) =>
+    '${formatBytes(bytesPerSecond.round())}/s';
+
+/// RX/TX throughput in bytes per second.
+class TrafficRates {
+  final double rxPerSecond;
+  final double txPerSecond;
+
+  const TrafficRates({required this.rxPerSecond, required this.txPerSecond});
+}
+
+/// Turns NetworkManager's cumulative RX/TX byte counters into rates.
+///
+/// Feed it a sample per statistics update; from the second sample on it
+/// yields the average rate over the interval. Counter resets (interface
+/// bounce) clamp to zero instead of going negative.
+class TrafficRateTracker {
+  DateTime? _lastTime;
+  int _lastRx = 0;
+  int _lastTx = 0;
+
+  /// The most recently computed rates, or null before two samples arrived.
+  TrafficRates? rates;
+
+  TrafficRates? update(DateTime now, int rxBytes, int txBytes) {
+    final last = _lastTime;
+    if (last != null) {
+      final seconds = now.difference(last).inMilliseconds / 1000.0;
+      if (seconds > 0) {
+        rates = TrafficRates(
+          rxPerSecond: max(0, (rxBytes - _lastRx) / seconds),
+          txPerSecond: max(0, (txBytes - _lastTx) / seconds),
+        );
+      }
+    }
+    _lastTime = now;
+    _lastRx = rxBytes;
+    _lastTx = txBytes;
+    return rates;
+  }
+}
+
 /// Random (version 4) UUID for new NetworkManager connections.
 String generateUuid([Random? random]) {
   final rng = random ?? Random.secure();

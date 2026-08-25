@@ -27,9 +27,25 @@ import '../helpers/test_helpers.dart';
 const Size _viewport = Size(900, 720);
 
 Widget _buildPage(FakeNetworkManagerClient client) {
+  // Traffic-rate sampling clock: two seconds per sample, so the driven
+  // refresh tick below produces stable, readable rates in the images.
+  var tick = DateTime(2026, 8, 25, 12);
+  DateTime clock() {
+    final now = tick;
+    tick = tick.add(const Duration(seconds: 2));
+    return now;
+  }
+
   return MaterialApp(
     debugShowCheckedModeBanner: false,
-    home: Scaffold(body: IpSettingsBody(client: client)),
+    home: Scaffold(
+      body: IpSettingsBody(
+        client: client,
+        probe: () async => true,
+        dnsProbe: () async => true,
+        clock: clock,
+      ),
+    ),
   );
 }
 
@@ -47,11 +63,24 @@ Future<void> _pumpPage(
 Future<void> _expectGolden(WidgetTester tester, String name) =>
     expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name'));
 
+/// Statistics for the overview's eth0, kept module-level so the test can
+/// drive a refresh tick and put a rate into the frame. Reset per test so
+/// the driven tick doesn't leak counter growth into the other frames.
+late FakeDeviceStatistics _eth0Stats;
+
+Future<void> _tickTraffic(WidgetTester tester) async {
+  _eth0Stats.rxBytes += 4 * 1024 * 1024;
+  _eth0Stats.txBytes += 2 * 1024 * 1024;
+  _eth0Stats.emit();
+  await settle(tester);
+}
+
 FakeNetworkManagerDevice _staticEthernet() => FakeNetworkManagerDevice(
       interface: 'eth0',
       hwAddress: '00:0A:95:9D:68:16',
       mtu: 1500,
       wired: FakeDeviceWired(speed: 1000),
+      statistics: _eth0Stats,
       ip4Config: FakeIp4Config(
         addressData: [
           {'address': '10.104.29.10', 'prefix': 24},
@@ -181,9 +210,15 @@ String? _packageRoot(String package) {
 void main() {
   setUpAll(_loadFonts);
 
+  setUp(() {
+    _eth0Stats = FakeDeviceStatistics(
+        rxBytes: 1610612736, txBytes: 100 * 1024 * 1024);
+  });
+
   testWidgets('overview — ethernet static, dead port, wifi DHCP',
       (tester) async {
     await _pumpPage(tester, _overviewClient());
+    await _tickTraffic(tester);
     await _expectGolden(tester, 'ip_settings_overview.png');
   });
 

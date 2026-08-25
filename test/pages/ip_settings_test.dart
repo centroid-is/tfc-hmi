@@ -7,9 +7,21 @@ import 'package:tfc/pages/ip_settings.dart';
 import '../helpers/fake_network_manager.dart';
 import '../helpers/test_helpers.dart';
 
-Widget _buildPage(FakeNetworkManagerClient client) {
+Widget _buildPage(
+  FakeNetworkManagerClient client, {
+  bool internetReachable = true,
+  bool dnsWorking = true,
+  DateTime Function()? clock,
+}) {
   return MaterialApp(
-    home: Scaffold(body: IpSettingsBody(client: client)),
+    home: Scaffold(
+      body: IpSettingsBody(
+        client: client,
+        probe: () async => internetReachable,
+        dnsProbe: () async => dnsWorking,
+        clock: clock,
+      ),
+    ),
   );
 }
 
@@ -55,6 +67,53 @@ void main() {
     expect(find.text('00:0A:95:9D:68:16'), findsOneWidget);
     expect(find.text('1000 Mb/s'), findsOneWidget);
     expect(find.textContaining('Wired connection 1'), findsOneWidget);
+  });
+
+  testWidgets('internet and DNS probes drive the header chips',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [_staticEthernet()]);
+    await pumpAndLoad(tester,
+        _buildPage(client, internetReachable: false, dnsWorking: false));
+    expect(find.text('No internet'), findsOneWidget);
+    expect(find.text('DNS failing'), findsOneWidget);
+    expect(find.textContaining('Probing 1.1.1.1:443'), findsOneWidget);
+  });
+
+  testWidgets('healthy probes show green chips', (tester) async {
+    final client = FakeNetworkManagerClient(devices: []);
+    await pumpAndLoad(tester, _buildPage(client));
+    expect(find.text('Internet reachable'), findsOneWidget);
+    expect(find.text('DNS OK'), findsOneWidget);
+  });
+
+  testWidgets('RX/TX shows totals, then rates after a refresh tick',
+      (tester) async {
+    final stats = FakeDeviceStatistics(
+        rxBytes: 1610612736, txBytes: 100 * 1024 * 1024);
+    final client = FakeNetworkManagerClient(devices: [
+      FakeNetworkManagerDevice(interface: 'eth0', statistics: stats),
+    ]);
+    var t = DateTime(2026, 1, 1, 12);
+    DateTime clock() {
+      final now = t;
+      t = t.add(const Duration(seconds: 2));
+      return now;
+    }
+
+    await pumpAndLoad(tester, _buildPage(client, clock: clock));
+
+    expect(stats.refreshRates, contains(2000),
+        reason: 'NM only ticks counters while a refresh rate is set');
+    expect(find.text('1.5 GB'), findsOneWidget);
+    expect(find.text('100 MB'), findsOneWidget);
+
+    stats.rxBytes += 4 * 1024 * 1024;
+    stats.txBytes += 2 * 1024 * 1024;
+    stats.emit();
+    await settle(tester);
+
+    expect(find.textContaining('2.0 MB/s'), findsOneWidget);
+    expect(find.textContaining('1.0 MB/s'), findsOneWidget);
   });
 
   testWidgets('wifi card shows SSID, signal and DHCP method', (tester) async {

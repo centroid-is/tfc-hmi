@@ -6,6 +6,7 @@
 /// implementation fails loudly in tests instead of silently returning null.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dbus/dbus.dart';
@@ -24,15 +25,6 @@ class FakeNetworkManagerClient extends _Unstubbed
 
   final FakeNetworkManagerSettings fakeSettings;
 
-  @override
-  final NetworkManagerConnectivityState connectivity;
-
-  @override
-  final bool connectivityCheckEnabled;
-
-  @override
-  final String connectivityCheckUri;
-
   /// `(interface, connection id)` per [activateConnection] call.
   final List<(String, String?)> activations = [];
 
@@ -45,9 +37,6 @@ class FakeNetworkManagerClient extends _Unstubbed
   FakeNetworkManagerClient({
     this.devices = const [],
     FakeNetworkManagerSettings? settings,
-    this.connectivity = NetworkManagerConnectivityState.full,
-    this.connectivityCheckEnabled = true,
-    this.connectivityCheckUri = 'http://ping.centroid.is/',
   }) : fakeSettings = settings ?? FakeNetworkManagerSettings();
 
   @override
@@ -184,6 +173,33 @@ class FakeIp4Config extends _Unstubbed implements NetworkManagerIP4Config {
 class FakeDhcp4Config extends _Unstubbed
     implements NetworkManagerDHCP4Config {}
 
+class FakeDeviceStatistics extends _Unstubbed
+    implements NetworkManagerDeviceStatistics {
+  @override
+  int rxBytes;
+
+  @override
+  int txBytes;
+
+  /// Values passed to [setRefreshRateMs].
+  final List<int> refreshRates = [];
+
+  final _controller = StreamController<List<String>>.broadcast();
+
+  FakeDeviceStatistics({this.rxBytes = 0, this.txBytes = 0});
+
+  @override
+  Stream<List<String>> get propertiesChanged => _controller.stream;
+
+  @override
+  Future<void> setRefreshRateMs(int value) async {
+    refreshRates.add(value);
+  }
+
+  /// Announces new counter values, like NM does on a refresh tick.
+  void emit() => _controller.add(['RxBytes', 'TxBytes']);
+}
+
 class FakeDeviceWired extends _Unstubbed implements NetworkManagerDeviceWired {
   @override
   final int speed;
@@ -242,6 +258,9 @@ class FakeNetworkManagerDevice extends _Unstubbed
   @override
   final NetworkManagerDeviceWireless? wireless;
 
+  @override
+  final NetworkManagerDeviceStatistics? statistics;
+
   FakeNetworkManagerDevice({
     this.deviceType = NetworkManagerDeviceType.ethernet,
     this.interface = 'eth0',
@@ -253,6 +272,7 @@ class FakeNetworkManagerDevice extends _Unstubbed
     this.mtu = 0,
     this.wired,
     this.wireless,
+    this.statistics,
   });
 
   @override

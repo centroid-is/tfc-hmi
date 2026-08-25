@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:core';
+import 'dart:io';
 
 import 'package:dbus/dbus.dart';
 import 'package:flutter/material.dart';
@@ -37,7 +38,25 @@ class IpSettingsBody extends StatefulWidget {
   @visibleForTesting
   final NetworkManagerClient? client;
 
-  const IpSettingsBody({super.key, this.dbusClient, this.client})
+  /// Test seam — replaces the TCP probe to [internetProbeHost].
+  @visibleForTesting
+  final Future<bool> Function()? probe;
+
+  /// Test seam — replaces the DNS lookup of [dnsProbeHostname].
+  @visibleForTesting
+  final Future<bool> Function()? dnsProbe;
+
+  /// Test seam — replaces [DateTime.now] in the traffic-rate sampling.
+  @visibleForTesting
+  final DateTime Function()? clock;
+
+  const IpSettingsBody(
+      {super.key,
+      this.dbusClient,
+      this.client,
+      this.probe,
+      this.dnsProbe,
+      this.clock})
       : assert(dbusClient != null || client != null,
             'Either a dbusClient or an injected client is required');
 
@@ -51,6 +70,12 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
   late final Future<void> _connectFuture;
   final List<StreamSubscription> _subscriptions = [];
 
+  /// null while the first probe is in flight.
+  bool? _internetReachable;
+  bool? _dnsWorking;
+  Timer? _probeTimer;
+  bool _probing = false;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +83,51 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
     client =
         widget.client ?? NetworkManagerClient(bus: widget.dbusClient);
     _connectFuture = client.connect().then((_) => _subscribe());
+    _runProbe();
+    _probeTimer = Timer.periodic(
+        const Duration(seconds: 10), (_) => _runProbe());
+  }
+
+  static Future<bool> _tcpProbe() async {
+    try {
+      final socket = await Socket.connect(
+          internetProbeHost, internetProbePort,
+          timeout: const Duration(seconds: 3));
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> _dnsLookupProbe() async {
+    try {
+      final addresses = await InternetAddress.lookup(dnsProbeHostname)
+          .timeout(const Duration(seconds: 3));
+      return addresses.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _runProbe() async {
+    if (_probing) return;
+    _probing = true;
+    try {
+      final results = await Future.wait([
+        (widget.probe ?? _tcpProbe)(),
+        (widget.dnsProbe ?? _dnsLookupProbe)(),
+      ]);
+      if (mounted &&
+          (results[0] != _internetReachable || results[1] != _dnsWorking)) {
+        setState(() {
+          _internetReachable = results[0];
+          _dnsWorking = results[1];
+        });
+      }
+    } finally {
+      _probing = false;
+    }
   }
 
   void _subscribe() {
@@ -65,18 +135,37 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
       if (mounted) setState(() {});
     }
 
+    for (final device in client.devices) {
+      if (_supportedDeviceType(device.deviceType)) {
+        _enableTrafficCounters(device);
+      }
+    }
     _subscriptions.add(client.deviceAdded
         .where((device) => _supportedDeviceType(device.deviceType))
-        .listen(refresh));
+        .listen((device) {
+      _enableTrafficCounters(device);
+      refresh(device);
+    }));
     _subscriptions.add(client.deviceRemoved
         .where((device) => _supportedDeviceType(device.deviceType))
         .listen(refresh));
-    // Connectivity state, primary connection, etc.
+    // Primary connection, connectivity, etc.
     _subscriptions.add(client.propertiesChanged.listen(refresh));
+    if (mounted) setState(() {});
+  }
+
+  /// NM only ticks the RX/TX counters while a refresh rate is set.
+  static void _enableTrafficCounters(NetworkManagerDevice device) {
+    final statistics = device.statistics;
+    if (statistics == null) return;
+    unawaited(statistics.setRefreshRateMs(2000).catchError((Object _) {
+      // Counters simply stay static.
+    }));
   }
 
   @override
   void dispose() {
+    _probeTimer?.cancel();
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
@@ -117,21 +206,25 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
           (device) => device.deviceType == NetworkManagerDeviceType.ethernet)
       .toList();
 
-  PaneStatus _connectivityStatus() {
-    if (!client.connectivityCheckEnabled) {
-      return const PaneStatus.unknown('Connectivity check disabled');
-    }
-    switch (client.connectivity) {
-      case NetworkManagerConnectivityState.full:
-        return const PaneStatus.running('Internet connected');
-      case NetworkManagerConnectivityState.limited:
-        return const PaneStatus.warning('Internet limited');
-      case NetworkManagerConnectivityState.portal:
-        return const PaneStatus.warning('Captive portal');
-      case NetworkManagerConnectivityState.none:
-        return const PaneStatus.stopped('Internet disconnected');
+  PaneStatus _internetStatus() {
+    switch (_internetReachable) {
+      case true:
+        return const PaneStatus.running('Internet reachable');
+      case false:
+        return const PaneStatus.stopped('No internet');
       default:
-        return const PaneStatus.unknown('Internet status unknown');
+        return const PaneStatus.unknown('Checking internet…');
+    }
+  }
+
+  PaneStatus _dnsStatus() {
+    switch (_dnsWorking) {
+      case true:
+        return const PaneStatus.running('DNS OK');
+      case false:
+        return const PaneStatus.warning('DNS failing');
+      default:
+        return const PaneStatus.unknown('Checking DNS…');
     }
   }
 
@@ -219,13 +312,14 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
                   child: Row(
                     children: [
-                      PaneStatusChip(status: _connectivityStatus()),
+                      PaneStatusChip(status: _internetStatus()),
+                      const SizedBox(width: 8),
+                      PaneStatusChip(status: _dnsStatus()),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          client.connectivityCheckEnabled
-                              ? 'Checked against ${client.connectivityCheckUri}'
-                              : '',
+                          'Probing $internetProbeHost:$internetProbePort '
+                          'and resolving $dnsProbeHostname every 10 s',
                           style: Theme.of(context).textTheme.bodySmall,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -257,6 +351,7 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                             return DeviceCard(
                               client: client,
                               device: device,
+                              clock: widget.clock ?? DateTime.now,
                               onConfigure: () =>
                                   _openInterfaceSettings(device),
                               onDeleteBond: device.deviceType ==
@@ -280,12 +375,14 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
 // ---------------------------------------------------------------------------
 
 /// One network interface: identity, live status chip, and the addressing an
-/// operator actually asks about (IP, gateway, DNS, MAC, link speed, SSID).
-class DeviceCard extends StatelessWidget {
+/// operator actually asks about (IP, gateway, DNS, MAC, link speed, SSID),
+/// plus RX/TX traffic with rates once two statistics samples are in.
+class DeviceCard extends StatefulWidget {
   final NetworkManagerClient client;
   final NetworkManagerDevice device;
   final VoidCallback onConfigure;
   final VoidCallback? onDeleteBond;
+  final DateTime Function() clock;
 
   const DeviceCard({
     super.key,
@@ -293,7 +390,53 @@ class DeviceCard extends StatelessWidget {
     required this.device,
     required this.onConfigure,
     this.onDeleteBond,
+    this.clock = DateTime.now,
   });
+
+  @override
+  State<DeviceCard> createState() => _DeviceCardState();
+}
+
+class _DeviceCardState extends State<DeviceCard> {
+  final _tracker = TrafficRateTracker();
+  NetworkManagerDeviceStatistics? _statistics;
+  StreamSubscription? _statisticsSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _attachStatistics();
+  }
+
+  @override
+  void didUpdateWidget(DeviceCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _attachStatistics();
+  }
+
+  void _attachStatistics() {
+    final statistics = widget.device.statistics;
+    if (statistics == _statistics) return;
+    _statisticsSubscription?.cancel();
+    _statistics = statistics;
+    if (statistics == null) return;
+    _sample(statistics);
+    _statisticsSubscription = statistics.propertiesChanged.listen((_) {
+      _sample(statistics);
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _sample(NetworkManagerDeviceStatistics statistics) {
+    _tracker.update(
+        widget.clock(), statistics.rxBytes, statistics.txBytes);
+  }
+
+  @override
+  void dispose() {
+    _statisticsSubscription?.cancel();
+    super.dispose();
+  }
 
   static IconData _iconFromType(NetworkManagerDeviceType type) {
     switch (type) {
@@ -331,6 +474,7 @@ class DeviceCard extends StatelessWidget {
   }
 
   List<(String, String)> _details() {
+    final device = widget.device;
     final details = <(String, String)>[];
     final ip4 = device.ip4Config;
 
@@ -357,6 +501,25 @@ class DeviceCard extends StatelessWidget {
     }
     if (device.mtu > 0) details.add(('MTU', '${device.mtu}'));
 
+    final statistics = device.statistics;
+    if (statistics != null) {
+      final rates = _tracker.rates;
+      details.add((
+        'RX',
+        rates == null
+            ? formatBytes(statistics.rxBytes)
+            : '${formatRate(rates.rxPerSecond)} · '
+                '${formatBytes(statistics.rxBytes)}',
+      ));
+      details.add((
+        'TX',
+        rates == null
+            ? formatBytes(statistics.txBytes)
+            : '${formatRate(rates.txPerSecond)} · '
+                '${formatBytes(statistics.txBytes)}',
+      ));
+    }
+
     final accessPoint = device.wireless?.activeAccessPoint;
     if (accessPoint != null) {
       final ssid = utf8.decode(accessPoint.ssid, allowMalformed: true);
@@ -365,7 +528,7 @@ class DeviceCard extends StatelessWidget {
     }
 
     if (device.deviceType == NetworkManagerDeviceType.bond) {
-      final members = client.devices
+      final members = widget.client.devices
           .where((d) =>
               d.activeConnection?.master?.interface == device.interface)
           .map((d) => d.interface)
@@ -382,6 +545,9 @@ class DeviceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final device = widget.device;
+    final onConfigure = widget.onConfigure;
+    final onDeleteBond = widget.onDeleteBond;
     return StreamBuilder<Object>(
         stream: device.propertiesChanged,
         builder: (context, snapshot) {
@@ -425,7 +591,7 @@ class DeviceCard extends StatelessWidget {
                           PopupMenuButton<String>(
                             tooltip: 'Bond actions',
                             onSelected: (value) {
-                              if (value == 'delete') onDeleteBond!();
+                              if (value == 'delete') onDeleteBond();
                             },
                             itemBuilder: (context) => const [
                               PopupMenuItem(

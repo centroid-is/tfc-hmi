@@ -80,6 +80,44 @@ void main() {
     expect(splitDnsServers('  '), isEmpty);
   });
 
+  group('traffic formatting', () {
+    test('formatBytes picks a readable unit', () {
+      expect(formatBytes(0), '0 B');
+      expect(formatBytes(1023), '1023 B');
+      expect(formatBytes(1024), '1.0 KB');
+      expect(formatBytes(1536), '1.5 KB');
+      expect(formatBytes(100 * 1024 * 1024), '100 MB');
+      expect(formatBytes(1610612736), '1.5 GB');
+    });
+
+    test('formatRate appends per-second', () {
+      expect(formatRate(2097152.0), '2.0 MB/s');
+      expect(formatRate(0), '0 B/s');
+    });
+  });
+
+  group('TrafficRateTracker', () {
+    test('needs two samples before yielding a rate', () {
+      final tracker = TrafficRateTracker();
+      final t0 = DateTime(2026, 1, 1, 12);
+      expect(tracker.update(t0, 1000, 500), isNull);
+      final rates = tracker.update(
+          t0.add(const Duration(seconds: 2)), 1000 + 4096, 500 + 2048)!;
+      expect(rates.rxPerSecond, 2048.0);
+      expect(rates.txPerSecond, 1024.0);
+    });
+
+    test('a counter reset clamps to zero instead of going negative', () {
+      final tracker = TrafficRateTracker();
+      final t0 = DateTime(2026, 1, 1, 12);
+      tracker.update(t0, 1000000, 1000000);
+      final rates =
+          tracker.update(t0.add(const Duration(seconds: 1)), 10, 10)!;
+      expect(rates.rxPerSecond, 0);
+      expect(rates.txPerSecond, 0);
+    });
+  });
+
   test('generateUuid produces version-4 variant-1 UUIDs', () {
     final uuid = generateUuid(Random(42));
     expect(
