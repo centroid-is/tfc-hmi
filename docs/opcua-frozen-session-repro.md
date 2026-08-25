@@ -194,8 +194,13 @@ Timeline of the instrumented run (app start 08:32:29):
     +8min   .72/.73 sockets reaped entirely; ST201 reported frozen
     all run .91/.92/.93 healthy
 
-The .71 variant matters for the watchdog design: socket-state checks alone
-cannot see it. Only a keepalive/data-age check catches all three variants.
+Follow-up at 08:42:43: .71 moved Established -> CloseWait, ~3.5 minutes after
+its freeze was noticed. So the "three variants" are one lifecycle: the session
+dies silently on an open socket (values freeze -- the only symptom), minutes
+later the server times the session out and sends FIN (CloseWait), then the OS
+reaps the socket. Socket-state evidence is minutes LATE; only a
+keepalive/data-age watchdog catches the freeze when it happens. (.74 is the
+same lifecycle compressed: create never completed, server FIN came fast.)
 
 (The .7x credentials sit in plaintext in shared_preferences.json on the
 station -- separate issue, noted here so it is not lost.)
