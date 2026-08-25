@@ -1223,6 +1223,22 @@ class StateMan {
   /// and completed by [close] so every supervisor wakes and exits promptly.
   final Map<Timer, Completer<void>> _supervisorSleeps = {};
 
+  /// Bench side-channel (see the watchdog vitals): hmi.log has two writers
+  /// on a console-less launch and clobbers lines, so watchdog evidence goes
+  /// to its own file when CENTROID_WD_PROBE names one. No-op otherwise.
+  static final String? _wdProbePath =
+      Platform.environment['CENTROID_WD_PROBE'];
+  static void _wdProbe(String line) {
+    final p = _wdProbePath;
+    if (p == null) return;
+    try {
+      File(p).writeAsStringSync(
+          '${DateTime.now().toIso8601String().substring(11, 19)} $line\n',
+          mode: FileMode.append,
+          flush: true);
+    } catch (_) {}
+  }
+
   /// Sleep for [d], or return immediately when [close] has run (which also
   /// wakes sleeps already in progress).
   Future<void> _supervisorDelay(Duration d) {
@@ -1302,6 +1318,12 @@ class StateMan {
           wrapper.config.endpoint,
           retryInterval: supervision.retryInterval,
           maxBackoff: supervision.maxBackoff,
+          // The self-heal of last resort (open62541_dart isolate-self-heal):
+          // on dead secured connections the isolate wedges in native code and
+          // answers nothing -- state polls, disconnect, everything times out
+          // (plant bench, docs/opcua-frozen-session-repro.md). Only the
+          // bindings can abandon and respawn the isolate; this arms it.
+          unresponsiveTimeout: supervision.heartbeatStaleTimeout,
         )
             .catchError((Object e) {
           logger.d(
@@ -1324,17 +1346,44 @@ class StateMan {
           Future<void> forceTeardown(String reason) async {
             logger.e('[$alias ${wrapper.config.endpoint}] $reason '
                 '— forcing teardown and reconnect');
-            await _boundedAwait(
-                clientref.disconnect(), const Duration(seconds: 5), (_) {});
+            _wdProbe('TEARDOWN ${wrapper.config.serverAlias}: $reason');
+            final r = await _boundedAwait(
+                clientref.disconnect().then((_) => true),
+                const Duration(seconds: 5),
+                (e) => _wdProbe(
+                    'TEARDOWN ${wrapper.config.serverAlias}: disconnect error $e'));
+            _wdProbe('TEARDOWN ${wrapper.config.serverAlias}: disconnect '
+                '${r == true ? 'completed' : 'TIMED OUT (isolate not answering?)'}');
             lastForcedTeardown = DateTime.now();
           }
 
+          var pollCount = 0;
           while (_shouldRun) {
             final snapshot = await _boundedAwait(
                 clientref.state, const Duration(seconds: 5), (error) {
               logger.e(
                   '[$alias ${wrapper.config.endpoint}] state poll failed: $error');
             });
+            // Watchdog vitals, one line per server every ~30s. This exists
+            // because the watchdog failed silently twice on the plant bench
+            // and the log could not say which gate held it back; a watchdog
+            // whose inputs are invisible cannot be debugged from the field.
+            if (pollCount++ % 120 == 0) {
+              // age and subId first: the log wraps long lines, and these two
+              // are the fields the stale gate is made of.
+              final vitals =
+                  '[WD ${wrapper.config.serverAlias ?? wrapper.config.endpoint}] '
+                  'age=${wrapper.lastDataAgeSec.toStringAsFixed(1)} sub=${wrapper.subscriptionId} '
+                  's=${snapshot?.sessionState.name.replaceFirst('UA_SESSIONSTATE_', '')} '
+                  'c=${snapshot?.channelState.name.replaceFirst('UA_SECURECHANNELSTATE_', '')}';
+              logger.i(vitals);
+              // Side-channel for the bench: hmi.log has two writers on a
+              // console-less launch and lines get clobbered, so absence of a
+              // line there proves nothing. CENTROID_WD_PROBE names a file
+              // this appends to with its own handle. Bench-only; unset in
+              // production.
+              _wdProbe(vitals);
+            }
             if (snapshot == null) {
               if (!_shouldRun) break;
               await _supervisorDelay(sup.pollInterval);

@@ -34,7 +34,12 @@ dependencies:
   # Exact version, not a range: pubspec.lock is gitignored, so a range lets
   # a tagged build pick up untested code. Hosted on pub.dev since 1.5.7.
   # Keep in step with the root pubspec.yaml.
-  open62541: 1.5.7+1
+  open62541:
+    git:
+      url: https://github.com/centroid-is/open62541_dart.git
+      # isolate-self-heal @ the reviewed commit, pinned by sha so the
+      # verification build is reproducible bit-for-bit.
+      ref: 748173956491a639a3ad56e71bfdcb0105e967e9
 
   # JBTM (M2400 device protocol types)
   jbtm:
