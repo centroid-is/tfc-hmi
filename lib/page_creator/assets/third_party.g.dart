@@ -48,6 +48,7 @@ ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
       strapMachines: (json['strapMachines'] as num?)?.toInt() ?? 3,
       childTextAngle: (json['childTextAngle'] as num?)?.toDouble() ?? 0.0,
       acceptWindowMinutes: (json['acceptWindowMinutes'] as num?)?.toInt() ?? 30,
+      acceptBarsClockAligned: json['acceptBarsClockAligned'] as bool? ?? true,
       children: _childrenFromJson(json['children'] as List?),
     )
       ..variant = json['asset_name'] as String
@@ -83,6 +84,7 @@ Map<String, dynamic> _$ThirdPartyEquipmentConfigToJson(
       'children': _childrenToJson(instance.children),
       'childTextAngle': instance.childTextAngle,
       'acceptWindowMinutes': instance.acceptWindowMinutes,
+      'acceptBarsClockAligned': instance.acceptBarsClockAligned,
       'text': instance.text,
     };
 

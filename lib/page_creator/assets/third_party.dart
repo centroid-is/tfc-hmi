@@ -18,7 +18,11 @@ import 'led.dart' show LEDPainter, LEDType;
 import 'graph.dart' show GraphAssetConfig;
 import 'number.dart' show NumberConfig, NumberWidget, showNumberGraphDialog;
 import 'ratio_number.dart'
-    show RatioNumberConfig, RatioNumberWidget, showRatioAnalysisDialog;
+    show
+        RatioNumberConfig,
+        RatioNumberWidget,
+        ratioIntervalChips,
+        showRatioAnalysisDialog;
 import 'registry.dart';
 import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
@@ -350,6 +354,20 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// with the value instead of living in someone's head.
   int acceptWindowMinutes;
 
+  /// Whether the accept/reject chart's bars sit on clock boundaries.
+  ///
+  /// True — the default — buckets a 10-minute interval at :00, :10, :20 and so
+  /// on, which is how the figure gets compared against a shift clock or a
+  /// production log. False buckets backwards from "now", so every refresh
+  /// slides the bars and two operators looking at the same chart a minute
+  /// apart are reading different windows.
+  ///
+  /// Lives on the station rather than on each readout because it is applied to
+  /// both of them on load: the two checkweighers must bucket alike or their
+  /// accept rates cannot be read side by side.
+  @JsonKey(defaultValue: true)
+  bool acceptBarsClockAligned;
+
   /// `Asset.text` is what `AssetStack` (in `lib/pages/page_view.dart`) reads to
   /// paint the label OUTSIDE the asset's rotated subtree. Aliasing `text` onto
   /// `tag` — the same trick `SensorConfig` uses — keeps the label upright
@@ -384,6 +402,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.strapMachines = 3,
     this.childTextAngle = 0.0,
     this.acceptWindowMinutes = 30,
+    this.acceptBarsClockAligned = true,
     List<ThirdPartyChildEntry>? children,
   })  : children =
             children != null ? List<ThirdPartyChildEntry>.of(children) : [],
@@ -411,18 +430,49 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// all. Keys start empty for the operator to fill in.
   factory ThirdPartyEquipmentConfig.speedBatcherStation({
     int acceptWindowMinutes = 30,
+    bool acceptBarsClockAligned = true,
   }) {
     final config = ThirdPartyEquipmentConfig(
       kind: ThirdPartyEquipmentKind.speedBatcher,
       acceptWindowMinutes: acceptWindowMinutes,
+      acceptBarsClockAligned: acceptBarsClockAligned,
     );
     config.children.addAll(buildSpeedBatcherStationChildren(
-        acceptWindowMinutes: acceptWindowMinutes));
+      acceptWindowMinutes: acceptWindowMinutes,
+      acceptBarsClockAligned: acceptBarsClockAligned,
+    ));
     return config;
   }
 
   factory ThirdPartyEquipmentConfig.fromJson(Map<String, dynamic> json) =>
-      _$ThirdPartyEquipmentConfigFromJson(json);
+      _$ThirdPartyEquipmentConfigFromJson(json)..applyAcceptReadoutSettings();
+
+  /// Pushes the station's accept-rate settings down onto its readouts.
+  ///
+  /// Stations placed before the presets fix persisted the RatioNumber default
+  /// ([1, 5, 10, 60, 240]), which does not contain 30 — so the chart opened on
+  /// a window none of its toggles could show. Repaired on load rather than by
+  /// a migration script: the parent owns these children, and "the window the
+  /// figure is quoted over is offerable" is an invariant of the station, not a
+  /// one-off data fix. Only ADDS the window; a preset list someone widened by
+  /// hand is left alone otherwise.
+  ///
+  /// [acceptBarsClockAligned] is pushed down the same way, which is why it is
+  /// a station setting: editing it on one checkweigher's readout would be
+  /// overwritten here on the next load, and the two must match anyway.
+  void applyAcceptReadoutSettings() {
+    for (final entry in children) {
+      final child = entry.child;
+      if (child is! RatioNumberConfig) continue;
+      child.barsClockAligned = acceptBarsClockAligned;
+      // Not a station setting: a count is a whole number on every machine.
+      child.integersOnly = true;
+      if (acceptWindowMinutes <= 0) continue;
+      if (child.intervalPresets.contains(acceptWindowMinutes)) continue;
+      child.intervalPresets = [...child.intervalPresets, acceptWindowMinutes]
+        ..sort();
+    }
+  }
 
   @override
   Map<String, dynamic> toJson() => _$ThirdPartyEquipmentConfigToJson(this);
@@ -829,6 +879,7 @@ NumberConfig thirdPartyNumber({
 /// smuggled into a units string.
 RatioNumberConfig thirdPartyAcceptRatio({
   required int windowMinutes,
+  bool clockAlignedBars = true,
   RelativeSize? size,
 }) {
   final ratio = RatioNumberConfig(
@@ -838,10 +889,60 @@ RatioNumberConfig thirdPartyAcceptRatio({
     key1Label: 'accepted',
     key2Label: 'total',
     sinceMinutes: Duration(minutes: windowMinutes),
+    // The chart's interval toggles come from here, and the readout opens that
+    // chart on [windowMinutes]. Leaving the RatioNumber default in place
+    // ([1, 5, 10, 60, 240]) meant a 30-minute station opened its chart on a
+    // window the toggles could not show: none of them lit up, and there was
+    // no way back to 30 once another was pressed.
+    intervalPresets: acceptWindowPresets(windowMinutes),
+    barsClockAligned: clockAlignedBars,
+    // The bars count packs. A Y axis offering 2.5 of one is noise, and on a
+    // short window — where the counts are single digits — it is most of the
+    // axis.
+    integersOnly: true,
     decimalPlaces: 1,
   );
   if (size != null) ratio.size = size;
   return ratio;
+}
+
+/// The accept-rate window as it reads to an operator — `30 min`, `4 h`, `1 d`.
+///
+/// The space is non-breaking: this string is dropped into a parenthesis at the
+/// end of a pane row label narrow enough to wrap, and the break must fall
+/// before the parenthesis, never inside it.
+String formatAcceptWindow(int minutes) {
+  if (minutes < 60) return '$minutes\u{00A0}min';
+  if (minutes % 1440 == 0) return '${minutes ~/ 1440}\u{00A0}d';
+  if (minutes % 60 == 0) return '${minutes ~/ 60}\u{00A0}h';
+  return '$minutes\u{00A0}min';
+}
+
+/// Interval toggles for an accept-rate readout's chart.
+///
+/// The standard ladder with the station's own averaging window folded in, so
+/// the window the figure is quoted over is always one of the offered ones.
+List<int> acceptWindowPresets(int windowMinutes) =>
+    <int>{1, 5, 10, 30, 60, 240, if (windowMinutes > 0) windowMinutes}.toList()
+      ..sort();
+
+/// The windows the side pane offers for the accept-rate readouts.
+///
+/// The configured [acceptWindowMinutes] plus whatever intervals the readouts
+/// themselves were given — the same presets the accept/reject chart's toggles
+/// use, so the picker and the chart it opens never disagree about which
+/// windows exist. Sorted, de-duplicated, and always containing the configured
+/// window so the pane opens on a window it can actually offer.
+List<int> thirdPartyAcceptWindowOptions(
+  Iterable<RatioNumberConfig> ratios, {
+  required int acceptWindowMinutes,
+}) {
+  final options = <int>{
+    acceptWindowMinutes,
+    for (final ratio in ratios) ...ratio.intervalPresets,
+  }.where((m) => m > 0).toList()
+    ..sort();
+  return options;
 }
 
 /// Builds the standard set of live assets for the SpeedBatcher station.
@@ -862,6 +963,7 @@ RatioNumberConfig thirdPartyAcceptRatio({
 /// averaging window is visible on the mimic rather than assumed.
 List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
   int acceptWindowMinutes = 30,
+  bool acceptBarsClockAligned = true,
 }) {
   final entries = <ThirdPartyChildEntry>[];
 
@@ -898,6 +1000,7 @@ List<ThirdPartyChildEntry> buildSpeedBatcherStationChildren({
       keepUpright: true,
       child: thirdPartyAcceptRatio(
         windowMinutes: acceptWindowMinutes,
+        clockAlignedBars: acceptBarsClockAligned,
         size: slot,
       ),
     ));
@@ -987,6 +1090,17 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
 
   /// One subscription per bit, keyed by suffix.
   final Map<String, StreamSubscription<DynamicValue>> _bitSubs = {};
+
+  /// The averaging window the pane's accept-rate readouts are counting over.
+  ///
+  /// Pane-local and deliberately not written back to the config: widening the
+  /// view to see whether a bad minute was a blip is a question, not a page
+  /// edit. Reopening the pane comes back on the configured window. Held here
+  /// rather than in the pane body because the pane lives in an overlay that is
+  /// rebuilt on every open, and it is merged into the pane's listenable so a
+  /// pick repaints the rows exactly like a value arriving does.
+  late final ValueNotifier<int> _acceptWindow =
+      ValueNotifier<int>(widget.config.acceptWindowMinutes);
 
   /// The key [_statusStream] was built for; compared against [_wantedStatusKey]
   /// so a kind change away from SpeedBatcher drops the subscription too.
@@ -1151,6 +1265,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     // the pane would still be mounted and rebuilding against this notifier,
     // and disposing it here threw on the next rebuild.
     _statusBits.dispose();
+    _acceptWindow.dispose();
     super.dispose();
   }
 
@@ -1206,7 +1321,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // Merged rather than nested: the status struct only feeds the pane, so
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
-        listenable: Listenable.merge([_raw, _statusRaw, _statusBits]),
+        listenable:
+            Listenable.merge([_raw, _statusRaw, _statusBits, _acceptWindow]),
         builder: (context, _) => _paneFor(context, _isRunning, weights),
       ),
     );
@@ -1256,6 +1372,14 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       for (final entry in config.children)
         if (entry.child case final RatioNumberConfig ratio) ratio,
     ];
+    final acceptOptions = thirdPartyAcceptWindowOptions(acceptRatios,
+        acceptWindowMinutes: config.acceptWindowMinutes);
+    // A window the options no longer contain — the page was edited while the
+    // pane was open — falls back to the configured one rather than leaving the
+    // dropdown on a value it has no item for, which asserts.
+    final acceptWindow = acceptOptions.contains(_acceptWindow.value)
+        ? _acceptWindow.value
+        : config.acceptWindowMinutes;
 
     return SidePane(
       title: config.tag?.isNotEmpty == true
@@ -1289,25 +1413,80 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                 // figure opens its accept/reject bar chart (the
                 // RatioNumberWidget's own tap-through), the weight opens its
                 // trend.
+                // The window, stated once for both scales rather than
+                // repeated in each figure's label: a rolling average read as
+                // "right now" is the whole reason this asset carries a window,
+                // and one row directly above the figures says it without
+                // pushing every label onto three lines.
+                //
+                // One picker for both, too — they are the same product stream
+                // a few metres apart, and reading them over different windows
+                // would compare nothing to nothing.
+                //
+                // Nothing to pick between: an empty picker is worse than
+                // none, but the window still has to be on the pane.
+                if (acceptRatios.isNotEmpty && acceptOptions.length == 1)
+                  PaneDetailRow(
+                    label: 'Accept rate window',
+                    value: formatAcceptWindow(acceptWindow),
+                  ),
+                if (acceptRatios.isNotEmpty && acceptOptions.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    // Full width, and explicitly so: the section's Column
+                    // centres whatever does not stretch, which left this
+                    // block floating a few pixels right of every label
+                    // beside it.
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Accept rate window',
+                              style: Theme.of(context).textTheme.bodyMedium),
+                          const SizedBox(height: 4),
+                          // Literally the chart's picker, one size down.
+                          // Full width rather than in a [PaneDetailRow]'s
+                          // value column, which is too narrow for a ladder of
+                          // chips to reflow in.
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: ratioIntervalChips(
+                              options: acceptOptions,
+                              selectedMinutes: acceptWindow,
+                              onSelected: (m) => _acceptWindow.value = m,
+                              dense: true,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 for (final (i, ratio) in acceptRatios.indexed)
                   PaneDetailRow(
-                    // Non-breaking space inside the parenthesis: the label
-                    // column is narrow enough to wrap, and the break must
-                    // fall before "(30 min)", never inside it.
-                    label: 'Accept rate, checkweigher ${i + 1} '
-                        '(${config.acceptWindowMinutes}\u{00A0}min)',
+                    label: 'Accept rate, checkweigher ${i + 1}',
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         SizedBox(
                           height: 22,
-                          child: RatioNumberWidget(config: ratio),
+                          child: RatioNumberWidget(
+                            config: ratio,
+                            intervalOverride: Duration(minutes: acceptWindow),
+                            intervalOptions: acceptOptions,
+                          ),
                         ),
                         _chartButton(
                           icon: Icons.bar_chart,
                           tooltip: 'Accept/reject chart',
-                          onPressed: () =>
-                              showRatioAnalysisDialog(context, ref, ratio),
+                          // The chart opens on the window the pane is
+                          // showing, not on the configured one — otherwise
+                          // tapping through to explain a figure changes the
+                          // figure.
+                          onPressed: () => showRatioAnalysisDialog(
+                              context, ref, ratio,
+                              interval: Duration(minutes: acceptWindow)),
                         ),
                       ],
                     ),
@@ -1646,6 +1825,7 @@ class _ThirdPartyEquipmentConfigEditorState
                     config.children.isEmpty) {
                   config.children.addAll(buildSpeedBatcherStationChildren(
                     acceptWindowMinutes: config.acceptWindowMinutes,
+                    acceptBarsClockAligned: config.acceptBarsClockAligned,
                   ));
                 }
               }),
@@ -1926,6 +2106,22 @@ class _ThirdPartyEquipmentConfigEditorState
                 'checkweighers.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Clock-aligned accept bars'),
+                subtitle: Text(
+                  config.acceptBarsClockAligned
+                      ? 'Bars sit on the clock — a 10 min interval buckets at '
+                          ':00, :10, :20'
+                      : 'Bars are measured back from now, so they slide with '
+                          'every refresh',
+                ),
+                value: config.acceptBarsClockAligned,
+                onChanged: (v) => setState(() {
+                  config.acceptBarsClockAligned = v;
+                  config.applyAcceptReadoutSettings();
+                }),
+              ),
             ],
             const SizedBox(height: 8),
             if (config.children.isEmpty)
@@ -1960,6 +2156,7 @@ class _ThirdPartyEquipmentConfigEditorState
     setState(() {
       widget.config.children.addAll(buildSpeedBatcherStationChildren(
         acceptWindowMinutes: widget.config.acceptWindowMinutes,
+        acceptBarsClockAligned: widget.config.acceptBarsClockAligned,
       ));
     });
   }

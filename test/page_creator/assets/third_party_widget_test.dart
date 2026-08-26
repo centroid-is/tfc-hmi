@@ -8,6 +8,7 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/led.dart';
 import 'package:tfc/page_creator/assets/number.dart';
+import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
@@ -277,12 +278,11 @@ void main() {
       // One live accept-rate and one live weight row per checkweigher. The
       // figures are the point — the operator opens the pane to read the
       // machine.
-      // Non-breaking space before "min": the label column wraps, and the
-      // break must never split "(30 min)".
-      expect(find.text('Accept rate, checkweigher 1 (30\u{00A0}min)'),
-          findsOneWidget);
-      expect(find.text('Accept rate, checkweigher 2 (30\u{00A0}min)'),
-          findsOneWidget);
+      expect(find.text('Accept rate, checkweigher 1'), findsOneWidget);
+      expect(find.text('Accept rate, checkweigher 2'), findsOneWidget);
+      // The averaging window is stated once for both, on its own row: a
+      // rolling figure must never read as "right now".
+      expect(find.text('Accept rate window'), findsOneWidget);
       expect(find.text('Weight, checkweigher 1'), findsOneWidget);
       expect(find.text('Weight, checkweigher 2'), findsOneWidget);
       // No PLC in this test, so the value is `---`, but the unit must be
@@ -305,6 +305,96 @@ void main() {
           reason: 'Key names are wiring, not operator information.');
       expect(find.textContaining('running when'), findsNothing);
       expect(find.text('Footprint'), findsNothing);
+    });
+
+    testWidgets('the accept-rate window can be picked from the pane',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        runKey: 'ST201.SB01.Running',
+        children: buildSpeedBatcherStationChildren(acceptWindowMinutes: 30),
+      );
+      await tester.pumpWidget(wrapWithParkedDatabase(SizedBox(
+        width: 300,
+        height: 600,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Accept rate window'), findsOneWidget);
+      // The chart's own chips, not a picker of the pane's invention — the
+      // two surfaces must offer the same windows, spelled the same way.
+      ChoiceChip chipFor(String label) => tester
+          .widgetList<ChoiceChip>(find.byType(ChoiceChip))
+          .firstWhere((c) => (c.label as Text).data == label);
+      expect(find.byType(ChoiceChip), findsNWidgets(6));
+      // The pane opens on the configured window.
+      expect(chipFor('30m').selected, isTrue);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, '4h'));
+      await tester.pumpAndSettle();
+
+      // One picker, both scales: reading the two checkweighers over
+      // different windows would compare nothing to nothing.
+      expect(chipFor('4h').selected, isTrue);
+      expect(chipFor('30m').selected, isFalse);
+      // The two in the pane carry the override; the two painted on the mimic
+      // are the same configs and must be left on their configured window.
+      final paneRatios = tester
+          .widgetList<RatioNumberWidget>(find.byType(RatioNumberWidget))
+          .where((w) => w.intervalOverride != null)
+          .toList();
+      expect(paneRatios, hasLength(2),
+          reason: 'Both readouts count over the picked window.');
+      expect(
+          paneRatios
+              .every((w) => w.intervalOverride == const Duration(minutes: 240)),
+          isTrue);
+      // Every window the picker offers, so the cache the count comes from is
+      // filled to the widest of them rather than to the configured one.
+      expect(paneRatios.first.intervalOptions, contains(240));
+
+      // Pane-local: widening the view to see whether a bad minute was a blip
+      // is a question, not a page edit.
+      expect(config.acceptWindowMinutes, 30);
+      expect(
+          config.children
+              .map((e) => e.child)
+              .whereType<RatioNumberConfig>()
+              .every((r) => r.sinceMinutes == const Duration(minutes: 30)),
+          isTrue);
+    });
+
+    testWidgets('a single window is stated, not offered as a picker',
+        (tester) async {
+      // A readout stripped down to one preset has nothing to pick between,
+      // and an empty dropdown is worse than no dropdown.
+      final children = buildSpeedBatcherStationChildren(acceptWindowMinutes: 30);
+      for (final entry in children) {
+        final child = entry.child;
+        if (child is RatioNumberConfig) child.intervalPresets = [30];
+      }
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        runKey: 'ST201.SB01.Running',
+        children: children,
+      );
+      await tester.pumpWidget(wrapWithParkedDatabase(SizedBox(
+        width: 300,
+        height: 600,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      // The row stays — the window must always be on the pane — but there is
+      // nothing to pick between, so it reads as a plain value.
+      expect(find.text('Accept rate window'), findsOneWidget);
+      expect(find.byType(ChoiceChip), findsNothing);
+      expect(find.text('30\u{00A0}min'), findsOneWidget);
     });
 
     testWidgets('a SpeedBatcher pane carries the Status section with all '
