@@ -68,23 +68,25 @@ void main() {
   });
 
   group('AssetRegistry.parse with minimal MCP JSON', () {
-    test('fails to parse ButtonConfig without required fields', () {
-      // This is the root cause of the bug: AssetRegistry.parse calls
-      // ButtonConfig.fromJson which requires outward_color, inward_color,
-      // button_type, coordinates, size -- none of which are in the MCP
-      // proposal's minimal JSON.
-      expect(
-        () => AssetRegistry.parse({
-          'assets': [
-            {
-              'asset_name': 'ButtonConfig',
-              'key': 'ceiling.lights.1',
-              'title': 'Bathroom Ceiling',
-            },
-          ],
-        }),
-        throwsA(anything),
-      );
+    test('drops a ButtonConfig without required fields instead of throwing',
+        () {
+      // ButtonConfig.fromJson requires button_type, coordinates and size --
+      // none of which are in the MCP proposal's minimal JSON, so this entry
+      // cannot become an asset. It is skipped, not rethrown: a rethrow used
+      // to reach PageManager.load()'s catch and reset every page to defaults
+      // (2026-08-26 plant outage). Callers detect the miss by the asset
+      // simply not being in the result -- see asset_update.dart's
+      // "no longer parses" failure.
+      final parsed = AssetRegistry.parse({
+        'assets': [
+          {
+            'asset_name': 'ButtonConfig',
+            'key': 'ceiling.lights.1',
+            'title': 'Bathroom Ceiling',
+          },
+        ],
+      });
+      expect(parsed, isEmpty);
     });
 
     test('succeeds with fully populated ButtonConfig JSON', () {

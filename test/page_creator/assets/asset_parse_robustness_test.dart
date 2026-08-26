@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart' show Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc/theme.dart' show HmiColorRole, SolarizedColors;
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 
@@ -20,11 +21,60 @@ void main() {
 
     test('unknown role resolves to the grey fallback', () {
       final c = const ColorConverter().fromJson({'role': 'chartreuse'});
-      expect(c, const Color(0xFF9E9E9E));
+      expect(c, SolarizedColors.base1,
+          reason: 'same neutral degrade as AssetColorConverter picks');
     });
 
     test('empty map resolves to a color instead of throwing', () {
       expect(const ColorConverter().fromJson({}), isA<Color>());
+    });
+
+    test('every HmiColorRole has a fallback literal', () {
+      // Drift guard: a role added to the enum but not to the fallback map
+      // would silently degrade to grey on a config this converter has to
+      // read. Fail here instead, where it is cheap to notice.
+      expect(
+        HmiColorRole.values.map((r) => r.name).toSet()
+          ..removeAll(ColorConverter.roleFallbacks.keys),
+        isEmpty,
+        reason: 'add the new role to ColorConverter.roleFallbacks',
+      );
+    });
+
+    test('the fallback is the theme-family color, not a raw Material hue', () {
+      // HmiStateColors.of falls back to solarizedLight without a theme
+      // extension; the context-free fallback must land in the same family.
+      expect(const ColorConverter().fromJson({'role': 'green'}),
+          SolarizedColors.green);
+      expect(const ColorConverter().fromJson({'role': 'red'}),
+          SolarizedColors.red);
+    });
+
+    test('a string where a number belongs falls back instead of throwing', () {
+      // The 2026-08-26 recovery was manual JSON surgery on the postgres row;
+      // a hand-typed "1.0" must not be able to blank a screen.
+      final c = const ColorConverter()
+          .fromJson({'red': '1.0', 'green': 0.5, 'blue': null, 'alpha': true});
+      expect(c, isA<Color>());
+      expect(c.a, 1.0, reason: 'a non-numeric alpha falls back to opaque');
+    });
+
+    test('out-of-range channels clamp instead of overflowing', () {
+      final c = const ColorConverter()
+          .fromJson({'red': 42.0, 'green': -3.0, 'blue': 0.0, 'alpha': 9.0});
+      expect(c.r, 1.0);
+      expect(c.g, 0.0);
+      expect(c.a, 1.0);
+    });
+
+    test('OptionalColorConverter degrades to null, never throws', () {
+      const converter = OptionalColorConverter();
+      expect(converter.fromJson({'role': 'green'}), isNull);
+      expect(converter.fromJson({'red': '1.0', 'green': 1, 'blue': 1}), isNull);
+      expect(converter.fromJson(null), isNull);
+      // Integer channels are a legitimate hand-edited shape: 1 not 1.0.
+      expect(converter.fromJson({'red': 1, 'green': 0, 'blue': 0, 'alpha': 1}),
+          isNotNull);
     });
 
     test('literal maps still round-trip exactly', () {

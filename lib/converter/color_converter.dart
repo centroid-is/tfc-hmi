@@ -1,8 +1,9 @@
-import 'package:flutter/widgets.dart' show BuildContext, Color, immutable;
+import 'package:flutter/widgets.dart'
+    show BuildContext, Color, immutable, visibleForTesting;
 
 import 'package:json_annotation/json_annotation.dart';
 
-import '../theme.dart' show HmiColorRole;
+import '../theme.dart' show HmiColorRole, SolarizedColors;
 
 /// A persistable color that is either a reference into the active color
 /// scheme ([HmiColorRole]) or a literal RGBA value.
@@ -82,37 +83,57 @@ class ColorConverter implements JsonConverter<Color, Map<String, dynamic>> {
   /// which took out the entire page-config parse and blanked every screen on
   /// a plant HMI. A color is never allowed to do that again — resolve to a
   /// fixed literal approximation instead.
-  static const Map<String, Color> _roleFallbacks = {
-    'green': Color(0xFF4CAF50),
-    'yellow': Color(0xFFFDD835),
-    'blue': Color(0xFF2196F3),
-    'grey': Color(0xFF9E9E9E),
-    'red': Color(0xFFF44336),
-    'violet': Color(0xFF9C27B0),
-    'primary': Color(0xFF607D8B),
-    'secondary': Color(0xFF78909C),
-    'tertiary': Color(0xFF90A4AE),
-    'error': Color(0xFFF44336),
-    'surface': Color(0xFFFAFAFA),
-    'onSurface': Color(0xFF212121),
+  ///
+  /// The values mirror the Solarized-light palette, which is what
+  /// `HmiStateColors.of` and [HmiColorRole.resolve] fall back to when no
+  /// theme extension is in play — so a degraded color lands in the same
+  /// family as the properly-resolved one instead of a raw Material hue.
+  /// `test/page_creator/assets/asset_parse_robustness_test.dart` fails if
+  /// [HmiColorRole] grows an entry that is missing here.
+  @visibleForTesting
+  static const Map<String, Color> roleFallbacks = {
+    'green': SolarizedColors.green,
+    'yellow': SolarizedColors.yellow,
+    'blue': SolarizedColors.blue,
+    'grey': SolarizedColors.base1,
+    'red': SolarizedColors.red,
+    'violet': SolarizedColors.magenta,
+    // Scheme roles: the solarized *light* ColorScheme's values.
+    'primary': SolarizedColors.green,
+    'secondary': SolarizedColors.base1,
+    'tertiary': SolarizedColors.yellow,
+    'error': SolarizedColors.red,
+    'surface': SolarizedColors.base3,
+    'onSurface': SolarizedColors.base00,
   };
+
+  /// One channel of a stored color, as a 0..1 double.
+  ///
+  /// Deliberately type-testing rather than casting: a hand-edited config (the
+  /// 2026-08-26 recovery was manual JSON surgery) can carry a string or a
+  /// bool where a number belongs, and `as num?` would throw on it — the one
+  /// thing this converter must never do.
+  static double _channel(Map<String, dynamic> json, String key,
+      [double fallback = 0.5]) {
+    final value = json[key];
+    if (value is num && value.isFinite) return value.toDouble().clamp(0.0, 1.0);
+    return fallback;
+  }
 
   @override
   Color fromJson(Map<String, dynamic> json) {
     final role = json['role'];
     if (role is String) {
-      return _roleFallbacks[role] ?? _roleFallbacks['grey']!;
+      return roleFallbacks[role] ?? roleFallbacks['grey']!;
     }
-    // Missing channels default instead of throwing, for the same reason as
-    // the role fallback above: a malformed stored color must render wrong,
-    // not blank the HMI.
-    double channel(String key, [double fallback = 0.5]) =>
-        (json[key] as num?)?.toDouble() ?? fallback;
+    // Missing or malformed channels default instead of throwing, for the same
+    // reason as the role fallback above: a bad stored color must render
+    // wrong, not blank the HMI.
     return Color.fromRGBO(
-      (channel('red') * 255).toInt(),
-      (channel('green') * 255).toInt(),
-      (channel('blue') * 255).toInt(),
-      channel('alpha', 1.0),
+      (_channel(json, 'red') * 255).toInt(),
+      (_channel(json, 'green') * 255).toInt(),
+      (_channel(json, 'blue') * 255).toInt(),
+      _channel(json, 'alpha', 1.0),
     );
   }
 
@@ -131,18 +152,17 @@ class OptionalColorConverter
 
   @override
   Color? fromJson(Map<String, dynamic>? json) {
+    // "No color" is the natural degraded answer here, so anything that is not
+    // a usable literal triple — absent, role-format, or a hand-edited string
+    // where a number belongs — reads as null. Like [ColorConverter], this
+    // must never throw: it is reached from the same page-config parse.
     if (json == null ||
-        json['red'] == null ||
-        json['green'] == null ||
-        json['blue'] == null) {
+        json['red'] is! num ||
+        json['green'] is! num ||
+        json['blue'] is! num) {
       return null;
     }
-    return Color.fromRGBO(
-      (json['red']! * 255).toInt(),
-      (json['green']! * 255).toInt(),
-      (json['blue']! * 255).toInt(),
-      json['alpha'] ?? 1.0,
-    );
+    return const ColorConverter().fromJson(json);
   }
 
   @override
