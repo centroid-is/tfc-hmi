@@ -307,6 +307,12 @@ class _AssetStackState extends ConsumerState<AssetStack> {
         // We'll accumulate all Positioned children here
         final positionedChildren = <Widget>[];
 
+        // Where each asset ended up, for the mark that says which one the
+        // open side pane is about. Built here rather than measured later
+        // because this loop already has the geometry, and identity-keyed
+        // because two assets of a type are equal only by identity.
+        final frames = Map<Object, _AssetFrame>.identity();
+
         for (final asset in widget.assets) {
           // 1) normalized coords with optional mirroring
           final fx = xMirror ? 1 - asset.coordinates.x : asset.coordinates.x;
@@ -381,6 +387,13 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final aabbH = assetW * sinA + assetH * cosA;
           final halfAabbW = aabbW / 2;
           final halfAabbH = aabbH / 2;
+
+          frames[asset] = _AssetFrame(
+            center: center,
+            size: assetSize,
+            aabb: Size(aabbW, aabbH),
+            angle: angleRadians,
+          );
 
           positionedChildren.add(
             Positioned(
@@ -459,7 +472,28 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                               ? IgnorePointer(
                                   child: AssetEditModeScope(
                                       child: asset.build(context)))
-                              : asset.build(context),
+                              // Everything the asset builds sits under the
+                              // scope, so when it opens its pane from its
+                              // own build context the pane host learns
+                              // which asset that pane is about — and
+                              // [_OpenPaneMark] can say so on the mimic
+                              // without a single asset opting in. Runtime
+                              // only: in the editor the asset's gestures
+                              // are ignored anyway, and the config pane is
+                              // opened by the editor, over an asset it
+                              // already draws a selection border around.
+                              : SidePaneSubject(
+                                  subject: asset,
+                                  // Through a Builder so the context the
+                                  // asset builds with is itself inside the
+                                  // scope. An asset that opens its pane with
+                                  // the context handed to `build` — rather
+                                  // than one from a widget of its own — is
+                                  // then marked like any other, and
+                                  // `showSidePane` measures that asset's box
+                                  // for `avoidRect` instead of the whole
+                                  // canvas's.
+                                  child: Builder(builder: asset.build)),
                         ),
                       ),
                     ),
@@ -673,6 +707,11 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           // );
         }
 
+        // One mark, added last so it draws over the assets and their labels
+        // — only one pane is open at a time, and a mark per asset would put
+        // an animated overlay on every device on the page.
+        positionedChildren.add(_OpenPaneMark(frames: frames));
+
         // The scope carries the *effective* flags, so assets that paint
         // their own text can counter-mirror it (see AssetMirrorScope).
         return AssetMirrorScope(
@@ -686,6 +725,190 @@ class _AssetStackState extends ConsumerState<AssetStack> {
       },
     );
   }
+}
+
+/// Where one asset ended up on the canvas, in canvas pixels.
+///
+/// [size] is the asset's own, unrotated box — what the asset paints into and
+/// what the editor's selection border is drawn around — while [aabb] is the
+/// axis-aligned box that box needs once it is turned by [angle].
+@immutable
+class _AssetFrame {
+  final Offset center;
+  final Size size;
+  final Size aabb;
+  final double angle;
+
+  const _AssetFrame({
+    required this.center,
+    required this.size,
+    required this.aabb,
+    required this.angle,
+  });
+}
+
+/// Marks the asset the open side pane belongs to.
+///
+/// A pane is a strip against the right edge, well away from the machine it is
+/// about, and on a mimic with four identical conveyors in a row the header
+/// alone does not settle which one an operator is jogging. So while a pane is
+/// open its asset wears a thin ring.
+///
+/// Deliberately quiet: an outline in the same ink the labels use, one that
+/// fades in, sits just OUTSIDE the asset's box and never fills it. Equipment
+/// state on this page is carried by what an asset is filled with
+/// ([HmiStateColors]) — a mark that tinted the asset itself would read as one
+/// more state, which is the one thing it must not do.
+class _OpenPaneMark extends StatefulWidget {
+  /// Every asset on the canvas, by identity — the pane names its asset, not
+  /// its position, so the geometry is looked up here.
+  final Map<Object, _AssetFrame> frames;
+
+  const _OpenPaneMark({required this.frames});
+
+  @override
+  State<_OpenPaneMark> createState() => _OpenPaneMarkState();
+}
+
+class _OpenPaneMarkState extends State<_OpenPaneMark> {
+  /// The frame to draw the ring in. Kept after the pane closes so the ring
+  /// has somewhere to fade OUT of — clearing it would snap the mark away
+  /// while the pane it belongs to is still gliding off screen.
+  _AssetFrame? _frame;
+  bool _shown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SidePaneHost.subject.addListener(_onSubjectChanged);
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_OpenPaneMark oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A rebuild is already under way (the canvas resized, an asset moved), so
+    // take the new geometry without asking for another one.
+    _sync(notify: false);
+  }
+
+  @override
+  void dispose() {
+    SidePaneHost.subject.removeListener(_onSubjectChanged);
+    super.dispose();
+  }
+
+  void _onSubjectChanged() {
+    if (mounted) _sync();
+  }
+
+  void _sync({bool notify = true}) {
+    final subject = SidePaneHost.subject.value;
+    // An unknown subject — the page editor's config pane, the database stats
+    // pane, anything opened from outside an asset — leaves the page unmarked.
+    final live = subject == null ? null : widget.frames[subject];
+    if (live == null && !_shown) return;
+    if (identical(live, _frame) && (live != null) == _shown) return;
+    void apply() {
+      _shown = live != null;
+      if (live != null) _frame = live;
+    }
+
+    if (notify) {
+      setState(apply);
+    } else {
+      apply();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final frame = _frame;
+    // Nothing has been marked on this page yet: no ring, and no box in the
+    // stack that could take a tap meant for an asset.
+    if (frame == null) return const SizedBox.shrink();
+
+    // Enough clearance that the ring reads as being around the asset rather
+    // than drawn on it, bounded so a sensor dot is not swallowed and a
+    // full-width conveyor does not get a hairline.
+    final pad = math.min(math.max(frame.size.shortestSide * 0.14, 4.0), 10.0);
+    final ink = Theme.of(context).colorScheme.onSurface;
+
+    return Positioned(
+      left: frame.center.dx - frame.aabb.width / 2 - pad,
+      top: frame.center.dy - frame.aabb.height / 2 - pad,
+      width: frame.aabb.width + 2 * pad,
+      height: frame.aabb.height + 2 * pad,
+      child: IgnorePointer(
+        child: AnimatedOpacity(
+          opacity: _shown ? 1 : 0,
+          // Just under the pane's own 220ms glide: the mark should be there
+          // by the time the operator's eye arrives at the pane, and gone
+          // before the pane has finished leaving.
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          child: _rotatedAssetFrame(
+            angle: frame.angle,
+            width: frame.size.width + 2 * pad,
+            height: frame.size.height + 2 * pad,
+            child: CustomPaint(
+              key: openPaneMarkKey,
+              painter: _OpenPaneRingPainter(
+                color: ink,
+                radius: pad + 2,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Marks the ring drawn around the asset whose side pane is open. At most one
+/// per page, and only while a pane opened from an asset is showing.
+const Key openPaneMarkKey = ValueKey('open-pane-mark');
+
+/// The ring itself: a soft glow with a crisp line on top of it.
+///
+/// Two strokes rather than a [BoxDecoration] because the decoration's
+/// `boxShadow` is a filled, blurred copy of the shape — with nothing filling
+/// the shape on top of it, that shadow reads as a grey pane laid over the
+/// asset. A stroke blurred by a [MaskFilter] leaves the middle alone, which
+/// is the whole point: the asset's own colour is its state and has to come
+/// through untouched.
+class _OpenPaneRingPainter extends CustomPainter {
+  final Color color;
+  final double radius;
+
+  const _OpenPaneRingPainter({required this.color, required this.radius});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      Radius.circular(radius),
+    );
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..color = color.withValues(alpha: 0.18)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+    );
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = color.withValues(alpha: 0.5),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_OpenPaneRingPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.radius != radius;
 }
 
 class AssetView extends StatelessWidget {
