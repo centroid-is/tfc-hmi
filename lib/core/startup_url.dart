@@ -26,3 +26,30 @@ Future<void> writeStartupUrl(PreferencesApi prefs, String url) async {
     await prefs.setString(startupUrlPrefsKey, url);
   }
 }
+
+/// Deletes a stray `startup_url` row from the shared database-backed
+/// preferences, keeping whatever the device-local store holds.
+///
+/// The startup URL is per-station and only ever written device-locally — but
+/// the database sync copies every row it holds over the local store on every
+/// boot and reconnect, so a row that lands in `flutter_preferences` by any
+/// route (tooling writing prefs directly, a future code path using the wrong
+/// provider) silently overwrites the station's choice from then on. Same
+/// failure class, and same cure, as the MCP config's
+/// `migrateMcpConfigToDeviceLocal`.
+///
+/// [shared] removes mirror into the same physical store as [local], so the
+/// local value is captured first and re-written after. Idempotent — safe to
+/// run on every database (re)connect.
+Future<void> migrateStartupUrlToDeviceLocal({
+  required PreferencesApi shared,
+  required PreferencesApi local,
+}) async {
+  final sharedValue = await shared.getString(startupUrlPrefsKey);
+  if (sharedValue == null) return;
+  final localValue = await local.getString(startupUrlPrefsKey);
+  await shared.remove(startupUrlPrefsKey);
+  if (localValue != null) {
+    await local.setString(startupUrlPrefsKey, localValue);
+  }
+}

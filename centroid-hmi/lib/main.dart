@@ -300,10 +300,17 @@ Future<void> _startApp([bool debugMode = false]) async {
   // different equipment — and validated against the assembled menu so a
   // startup page deleted or unpublished since it was picked falls back
   // to '/'.
+  final storedStartupUrl = await readStartupUrl(prefs);
   final startupPath = resolveStartupPath(
-    await readStartupUrl(prefs),
+    storedStartupUrl,
     menuItems: topLevelMenuItems,
   );
+  // One line that settles "why didn't it open on my page": whether the
+  // choice ever reached this device's store, and whether validation kept it.
+  logger.i(startupPath == storedStartupUrl
+      ? 'Startup page: $startupPath'
+      : 'Startup page: $storedStartupUrl is stored but no longer routable '
+          '— falling back to $startupPath');
 
   // Paths at which Beamer should clear its beaming history. Landing on a
   // top-level destination means there is nowhere to go "back" to, so we drop
