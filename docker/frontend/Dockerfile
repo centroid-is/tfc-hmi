@@ -1,3 +1,50 @@
+# =============================================================================
+# Stage: rebuild the Wayland embedder with force-numlock.patch
+#
+# The bundle ships a prebuilt libflutter_elinux_wayland.so whose xkb state is
+# driven solely by the compositor's wl_keyboard.modifiers events. Weston's VNC
+# seat never latches NumLock, so keypad keys resolve to navigation keysyms and
+# produce no characters — a dead numpad over the VNC mirror. Rebuild the .so
+# from the exact source tag matching the bundled engine, with the patch keeping
+# NumLock always latched, and swap it into the bundle below.
+# =============================================================================
+FROM debian:trixie-slim AS embedder-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang build-essential cmake pkg-config git ca-certificates \
+    libgles2-mesa-dev libegl1-mesa-dev libxkbcommon-dev libwayland-dev \
+    libdrm-dev libgbm-dev libinput-dev libudev-dev libsystemd-dev \
+    wayland-protocols libx11-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# The embedder repo tags releases by Flutter engine hash. This must match the
+# engine of the Flutter version flutter-elinux builds with (bin/internal/
+# engine.version — Flutter 3.47.0 since #350). Update alongside any
+# flutter-elinux version bump; a mismatch fails loudly at link time, not
+# silently.
+ARG EMBEDDER_REF=5f77625673
+RUN git clone https://github.com/flutter-elinux/flutter-embedded-linux.git /embedder \
+    && git -C /embedder checkout ${EMBEDDER_REF}
+
+COPY force-numlock.patch /tmp/force-numlock.patch
+RUN git -C /embedder apply --stat --apply /tmp/force-numlock.patch
+
+# The embedder links against the engine at build/libflutter_engine.so
+# (hardcoded in its cmake). Use the one from the app bundle so the .so is
+# built against exactly the engine it will run with.
+ARG APP_BUNDLE
+COPY ${APP_BUNDLE}/lib/libflutter_engine.so /embedder/build/
+
+# Release regardless of the bundle's build mode: the wrapper ABI is identical,
+# only optimization and embedder-internal assertions differ.
+RUN cmake -S /embedder -B /embedder/build \
+      -DCMAKE_BUILD_TYPE=Release -DBUILD_ELINUX_SO=ON -DBACKEND_TYPE=WAYLAND \
+    && cmake --build /embedder/build -j"$(nproc)" \
+    && ls -la /embedder/build/libflutter_elinux_wayland.so
+
+# =============================================================================
+# Stage: runtime
+# =============================================================================
 FROM debian:trixie-slim
 
 # Install only the required libraries
@@ -44,6 +91,10 @@ ARG APP_BUNDLE
 ENV BUNDLE=${APP_BUNDLE}
 
 COPY ${APP_BUNDLE} $APP_DIR/
+
+# Swap in the numlock-patched Wayland embedder built above (see the
+# embedder-builder stage and force-numlock.patch).
+COPY --from=embedder-builder /embedder/build/libflutter_elinux_wayland.so $APP_DIR/lib/
 
 # Download libpdfium.so (flutter-elinux skips the CMake FFI plugin pipeline)
 ARG PDFIUM_RELEASE=chromium%2F7520
