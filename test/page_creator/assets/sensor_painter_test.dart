@@ -249,6 +249,55 @@ void main() {
     });
   });
 
+  // ── Optic housing fill ──────────────────────────────────────────────────
+  // The housing rectangle carries the output bit as well as the cone does:
+  // idle light grey while the sensor is clear, the active colour while it
+  // reports detection. Asserted on the recorded paint colour rather than on a
+  // golden so the rule is readable when the golden churns for other reasons.
+
+  group('OpticFieldPainter housing fill follows the output', () {
+    Color housingFillOf(OpticFieldPainter painter) {
+      final canvas = _RectColorRecorder();
+      painter.paint(canvas, const Size(256, 128));
+      // Fill first, border second — see OpticFieldPainter.paint.
+      return canvas.rectColors.first;
+    }
+
+    test('clear paints the idle light grey', () {
+      expect(
+        housingFillOf(OpticFieldPainter(
+          isActive: false,
+          activeColor: Colors.green,
+          inactiveColor: Colors.grey.shade400,
+        )),
+        isSameColorAs(Colors.grey.shade300),
+      );
+    });
+
+    test('detected paints the active colour', () {
+      expect(
+        housingFillOf(OpticFieldPainter(
+          isActive: true,
+          activeColor: Colors.green,
+          inactiveColor: Colors.grey.shade400,
+        )),
+        isSameColorAs(Colors.green),
+      );
+    });
+
+    test('stale outranks the output bit', () {
+      expect(
+        housingFillOf(OpticFieldPainter(
+          isActive: true,
+          activeColor: Colors.green,
+          inactiveColor: Colors.grey.shade400,
+          isStale: true,
+        )),
+        isSameColorAs(Colors.grey),
+      );
+    });
+  });
+
   // ── Golden matrix ───────────────────────────────────────────────────────
   // The 8-state colour matrix from `01-UI-SPEC.md` §Test Coverage Contract,
   // plus a 9th stale-state golden (which sits outside the matrix per the
@@ -585,4 +634,17 @@ void main() {
               'short-circuits the label render block on null/empty text.');
     });
   });
+}
+
+/// A canvas that keeps the colour of every `drawRect` and ignores the rest, so
+/// a painter's fill choice can be asserted directly instead of read off a
+/// rasterised golden.
+class _RectColorRecorder implements Canvas {
+  final List<Color> rectColors = <Color>[];
+
+  @override
+  void drawRect(Rect rect, Paint paint) => rectColors.add(paint.color);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }

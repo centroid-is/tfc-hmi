@@ -71,8 +71,11 @@ void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
 /// Housing fill colour — slightly lighter than the border so the puck reads
 /// as solid against the dark UI background. Stale flag overrides to a single
 /// `Colors.grey` value (no shade nuance).
-Color _housingFill({required bool isStale}) =>
-    isStale ? Colors.grey : Colors.grey.shade300;
+///
+/// [litColor] fills the housing with the sensor's active colour instead of the
+/// idle grey; pass it only while the output is on.
+Color _housingFill({required bool isStale, Color? litColor}) =>
+    isStale ? Colors.grey : (litColor ?? Colors.grey.shade300);
 
 /// Housing border colour. Same stale override rule as the fill.
 Color _housingBorder({required bool isStale}) =>
@@ -173,9 +176,11 @@ class RedLightBeamPainter extends CustomPainter {
 /// extending rightward.
 ///
 /// Visual contract (from UI-SPEC §Color matrix):
-/// - `isActive == false`: cone outlined in `inactiveColor` (no fill).
+/// - `isActive == false`: cone outlined in `inactiveColor` (no fill), housing
+///   filled the idle light grey.
 /// - `isActive == true`:  cone filled with `activeColor` at α=0.40, with
-///   `activeColor` outline still visible underneath.
+///   `activeColor` outline still visible underneath, and the housing filled
+///   solid `activeColor`.
 /// - `isStale == true`:   entire glyph in `Colors.grey`.
 class OpticFieldPainter extends CustomPainter {
   OpticFieldPainter({
@@ -196,10 +201,15 @@ class OpticFieldPainter extends CustomPainter {
     final h = size.height;
     final s = h < size.shortestSide ? h : size.shortestSide;
 
-    // Housing rectangle on the left.
+    // Housing rectangle on the left. Its fill carries the output bit as well
+    // as the cone does: idle grey while clear, the active colour while the
+    // sensor reports detection.
     final housingRect = Rect.fromLTRB(0.05 * w, 0.30 * h, 0.30 * w, 0.70 * h);
     final housingFill = Paint()
-      ..color = _housingFill(isStale: isStale)
+      ..color = _housingFill(
+        isStale: isStale,
+        litColor: isActive ? activeColor : null,
+      )
       ..style = PaintingStyle.fill;
     final housingBorder = Paint()
       ..color = _housingBorder(isStale: isStale)
