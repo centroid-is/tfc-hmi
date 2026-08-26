@@ -58,6 +58,17 @@ jobs:
           echo "SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
+      # Trial of upstream flutter-elinux (community org) at the 3.47.0 release,
+      # which carries its own native-asset hooks support (85d268b) — the reason
+      # our centroid-is fork's `hooks` branch existed. Shadows the toolchain
+      # image's baked /flutter-elinux; if this build is green the pin moves into
+      # tfc-toolchain and this step goes away.
+      - name: Use upstream flutter-elinux 3.47.0
+        run: |
+          git clone https://github.com/flutter-elinux/flutter-elinux.git /opt/flutter-elinux-347
+          git -C /opt/flutter-elinux-347 checkout 4d63880dfaba6e30530b88f2344e0a7b870228b2
+          echo "/opt/flutter-elinux-347/bin" >> "$GITHUB_PATH"
+
       - name: Setup elinux platform
         working-directory: centroid-hmi
         run: flutter-elinux create --platforms=elinux .
@@ -178,6 +189,17 @@ jobs:
           test -n "$SHA" || (echo "Empty SHA"; exit 1)
           echo "SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # Trial of upstream flutter-elinux (community org) at the 3.47.0 release,
+      # which carries its own native-asset hooks support (85d268b) — the reason
+      # our centroid-is fork's `hooks` branch existed. Shadows the toolchain
+      # image's baked /flutter-elinux; if this build is green the pin moves into
+      # tfc-toolchain and this step goes away.
+      - name: Use upstream flutter-elinux 3.47.0
+        run: |
+          git clone https://github.com/flutter-elinux/flutter-elinux.git /opt/flutter-elinux-347
+          git -C /opt/flutter-elinux-347 checkout 4d63880dfaba6e30530b88f2344e0a7b870228b2
+          echo "/opt/flutter-elinux-347/bin" >> "$GITHUB_PATH"
 
       - name: Setup elinux platform
         working-directory: centroid-hmi
