@@ -47,6 +47,11 @@ class ConnectionStatusChip extends StatelessWidget {
         // is the operator's only top-level signal that the UMAS
         // session is the failure surface.
         EffectiveDeviceStatus.umasUnhealthy => Colors.amber.shade700,
+        // Deep orange — "link claims up, values frozen". The frozen-
+        // session failure looks exactly like healthy-and-quiet from the
+        // socket's point of view; this chip state is the only place an
+        // operator can tell the difference.
+        EffectiveDeviceStatus.opcuaUnhealthy => Colors.deepOrange,
       };
     }
     if (status == null) {
@@ -67,6 +72,7 @@ class ConnectionStatusChip extends StatelessWidget {
         EffectiveDeviceStatus.connecting => 'Connecting...',
         EffectiveDeviceStatus.disconnected => 'Disconnected',
         EffectiveDeviceStatus.umasUnhealthy => 'UMAS error',
+        EffectiveDeviceStatus.opcuaUnhealthy => 'No data',
       };
     }
     if (status == null) {
@@ -90,6 +96,12 @@ class ConnectionStatusChip extends StatelessWidget {
           '  • Data Dictionary disabled in EcoStruxure project\n'
           '  • Another client holds the PLC reservation\n'
           '  • Pairing key drift (try a session reset)';
+    }
+    if (effectiveStatus == EffectiveDeviceStatus.opcuaUnhealthy) {
+      return 'The connection looks up but no values are arriving —\n'
+          'the heartbeat has gone silent (dead session, stalled\n'
+          'subscription, or a stopped client loop). Values shown for\n'
+          'this server are frozen at their last received state.';
     }
     return null;
   }
