@@ -757,11 +757,20 @@ enum ConnectionStatus { connected, connecting, disconnected }
 ///   - [umasUnhealthy]: TCP is connected, `umasEnabled == true`, but
 ///     the UMAS session is not `paired` (init failed, identification
 ///     failed, or the session was reset by a recent protocol error).
+///   - [opcuaUnhealthy]: the OPC UA client's last known state says
+///     connected, but the data plane is dead: the heartbeat monitored
+///     item (server time, same subscription as every data key) has not
+///     ticked within [ClientWrapper.heartbeatStaleAfter], or the
+///     session/subscription is known lost. This is the frozen-session
+///     shape from docs/opcua-frozen-session-repro.md — TCP Established,
+///     channel formally open, no state event ever emitted again — which
+///     a purely event-driven status can never catch.
 enum EffectiveDeviceStatus {
   disconnected,
   connecting,
   connected,
   umasUnhealthy,
+  opcuaUnhealthy,
 }
 
 class ClientWrapper {
@@ -882,6 +891,92 @@ class ClientWrapper {
   /// [connectionStatus] for the current value.
   Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
 
+  /// Heartbeat older than this while "connected" → [EffectiveDeviceStatus
+  /// .opcuaUnhealthy]. The heartbeat samples the server-time node at 100 ms
+  /// on the same subscription as every data key, so 15 s of silence means
+  /// the operator has been looking at frozen values for 15 s.
+  static const heartbeatStaleAfter = Duration(seconds: 15);
+
+  /// How long after a connect the heartbeat may take to produce its first
+  /// tick before the silence itself is a finding. Covers subscription +
+  /// monitored-item setup on a slow server; boot measurements on the plant
+  /// boxes put the real figure under 3 s.
+  static const heartbeatStartGrace = Duration(seconds: 30);
+
+  Timer? _healthTimer;
+
+  // Staleness is a function of time, not of events — the frozen-session
+  // failure emits nothing at all, so only a clock can notice it. The clock
+  // only runs while someone is watching: an always-on periodic timer leaks
+  // past every widget test that builds a StateMan without draining it
+  // ("A Timer is still pending…"), and an unobserved wrapper has nobody to
+  // tell anyway — the synchronous [effectiveStatus] getter re-derives on
+  // every read, so nothing goes stale while the timer is parked.
+  late final BehaviorSubject<EffectiveDeviceStatus> _effectiveStatus$ =
+      BehaviorSubject<EffectiveDeviceStatus>.seeded(
+    _deriveEffectiveStatus(),
+    onListen: _startHealthTimer,
+    onCancel: _stopHealthTimer,
+  );
+
+  void _startHealthTimer() {
+    // The replayed seed may predate this listener — refresh it first.
+    _recomputeEffectiveStatus();
+    _healthTimer ??= Timer.periodic(
+        const Duration(seconds: 2), (_) => _recomputeEffectiveStatus());
+  }
+
+  void _stopHealthTimer() {
+    _healthTimer?.cancel();
+    _healthTimer = null;
+  }
+
+  /// Combined link + data-plane health (analog of the Modbus adapter's
+  /// TD-004 stream). Unlike [connectionStatus] this cannot go stale: it is
+  /// derived from the heartbeat clock on every read, and pushed to
+  /// [effectiveStatusStream] on a 2 s timer while anyone listens, so a
+  /// client that dies without emitting a single state event still drops
+  /// out of `connected` within seconds.
+  EffectiveDeviceStatus get effectiveStatus => _deriveEffectiveStatus();
+
+  Stream<EffectiveDeviceStatus> get effectiveStatusStream =>
+      _effectiveStatus$.stream;
+
+  EffectiveDeviceStatus _deriveEffectiveStatus() {
+    switch (_connectionStatus) {
+      case ConnectionStatus.disconnected:
+        return EffectiveDeviceStatus.disconnected;
+      case ConnectionStatus.connecting:
+        return EffectiveDeviceStatus.connecting;
+      case ConnectionStatus.connected:
+        break;
+    }
+    // The event-driven status says connected — verify the data plane
+    // agrees before rendering green.
+    if (sessionLost || _inactive) return EffectiveDeviceStatus.opcuaUnhealthy;
+    final tick = _lastHeartbeatTick;
+    if (tick == null) {
+      final since = _connectedSince;
+      if (since == null ||
+          DateTime.now().difference(since) > heartbeatStartGrace) {
+        return EffectiveDeviceStatus.opcuaUnhealthy;
+      }
+      // Subscription + heartbeat still warming up after a fresh connect.
+      return EffectiveDeviceStatus.connecting;
+    }
+    if (DateTime.now().difference(tick) > heartbeatStaleAfter) {
+      return EffectiveDeviceStatus.opcuaUnhealthy;
+    }
+    return EffectiveDeviceStatus.connected;
+  }
+
+  void _recomputeEffectiveStatus() {
+    if (_effectiveStatus$.isClosed) return;
+    final next = _deriveEffectiveStatus();
+    if (_effectiveStatus$.valueOrNull == next) return;
+    _effectiveStatus$.add(next);
+  }
+
   void updateConnectionStatus(ClientState state) {
     // Capture the raw state even when the derived ConnectionStatus is
     // unchanged — channel/session sub-states shift while the coarse status
@@ -906,6 +1001,9 @@ class ClientWrapper {
     // shutdown would otherwise throw out of that listener.
     if (_connectionController.isClosed) return;
     _connectionController.add(next);
+    // Push genuine transitions immediately — the health timer only runs
+    // while the stream is listened to, and even then this skips its lag.
+    _recomputeEffectiveStatus();
   }
 
   static ConnectionStatus _mapState(ClientState state) {
@@ -936,6 +1034,7 @@ class ClientWrapper {
         if (gen != _heartbeatGeneration) return;
         _lastHeartbeatTick = DateTime.now();
         recordRequest();
+        _recomputeEffectiveStatus();
         if (_inactive) {
           _logger.i('[${config.endpoint}] Heartbeat recovered (sub=$subId)');
           _handleRecovery();
@@ -992,6 +1091,18 @@ class ClientWrapper {
   @visibleForTesting
   void simulateInactivity() => _inactive = true;
 
+  /// Set the last heartbeat tick and re-derive health — lets tests age the
+  /// heartbeat without waiting out [heartbeatStaleAfter] in real time.
+  @visibleForTesting
+  void debugSetLastHeartbeatTick(DateTime tick) {
+    _lastHeartbeatTick = tick;
+    _recomputeEffectiveStatus();
+  }
+
+  /// Re-derive [effectiveStatus] now instead of waiting for the 2 s timer.
+  @visibleForTesting
+  void debugRecomputeEffectiveStatus() => _recomputeEffectiveStatus();
+
   /// Simulate a fatal heartbeat error (SubscriptionDeleted/SecureChannelClosed).
   @visibleForTesting
   void simulateFatalHeartbeatError() {
@@ -1009,6 +1120,8 @@ class ClientWrapper {
 
   void dispose() {
     stopHeartbeat();
+    _stopHealthTimer();
+    _effectiveStatus$.close();
     _connectionController.close();
   }
 }

@@ -802,6 +802,11 @@ class _OpcUAServersSectionState extends ConsumerState<_OpcUAServersSection> {
           onRemove: () => _removeServer(index),
           connectionStatus: wrapper?.connectionStatus,
           connectionStream: wrapper?.connectionStream,
+          // Data-plane health: catches the frozen-session shape where the
+          // channel stays formally open but no value ever arrives again,
+          // which the event-driven connectionStream can never report.
+          effectiveStatus: wrapper?.effectiveStatus,
+          effectiveStatusStream: wrapper?.effectiveStatusStream,
           stateManLoading: stateManAsync.isLoading,
           reorderIndex: reorderable ? index : null,
         );
@@ -2294,6 +2299,12 @@ class _ServerConfigCard extends StatefulWidget {
   final VoidCallback onRemove;
   final ConnectionStatus? connectionStatus;
   final Stream<ConnectionStatus>? connectionStream;
+
+  /// Combined link + data-plane health from [ClientWrapper]. Timer-derived,
+  /// so it goes `opcuaUnhealthy` when values silently stop flowing — the
+  /// case the pure [connectionStream] chip used to render green forever.
+  final EffectiveDeviceStatus? effectiveStatus;
+  final Stream<EffectiveDeviceStatus>? effectiveStatusStream;
   final bool stateManLoading;
 
   /// Index of this card in the enclosing [ReorderableListView], or null when
@@ -2308,6 +2319,8 @@ class _ServerConfigCard extends StatefulWidget {
     required this.onRemove,
     this.connectionStatus,
     this.connectionStream,
+    this.effectiveStatus,
+    this.effectiveStatusStream,
     this.stateManLoading = false,
     this.reorderIndex,
   });
@@ -2323,6 +2336,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   late TextEditingController _serverAliasController;
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _stateSubscription;
+  EffectiveDeviceStatus? _effectiveStatus;
+  StreamSubscription<EffectiveDeviceStatus>? _effectiveStatusSub;
 
   /// False until the user touches the password field. While false the stored
   /// password is passed through untouched on save, so the field can stay
@@ -2340,15 +2355,19 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     _serverAliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
     _connectionStatus = widget.connectionStatus;
+    _effectiveStatus = widget.effectiveStatus;
     _listenToState();
   }
 
   @override
   void didUpdateWidget(covariant _ServerConfigCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.connectionStream != widget.connectionStream) {
+    if (oldWidget.connectionStream != widget.connectionStream ||
+        oldWidget.effectiveStatusStream != widget.effectiveStatusStream) {
       _stateSubscription?.cancel();
+      _effectiveStatusSub?.cancel();
       _connectionStatus = widget.connectionStatus;
+      _effectiveStatus = widget.effectiveStatus;
       _listenToState();
     }
   }
@@ -2357,11 +2376,15 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     _stateSubscription = widget.connectionStream?.listen((status) {
       if (mounted) setState(() => _connectionStatus = status);
     });
+    _effectiveStatusSub = widget.effectiveStatusStream?.listen((status) {
+      if (mounted) setState(() => _effectiveStatus = status);
+    });
   }
 
   @override
   void dispose() {
     _stateSubscription?.cancel();
+    _effectiveStatusSub?.cancel();
     _endpointController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
@@ -2555,6 +2578,7 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
           children: [
             ConnectionStatusChip(
               status: _connectionStatus,
+              effectiveStatus: _effectiveStatus,
               stateManLoading: widget.stateManLoading,
               disabled: !widget.server.enabled,
             ),

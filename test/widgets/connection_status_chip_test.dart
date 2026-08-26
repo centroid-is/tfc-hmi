@@ -5,6 +5,7 @@
 ///   - `connecting`       → orange "Connecting..."
 ///   - `disconnected`     → red "Disconnected"
 ///   - `umasUnhealthy`    → amber "UMAS error"  (TD-004 NEW)
+///   - `opcuaUnhealthy`   → deep-orange "No data" (frozen-session fix)
 ///
 /// And when only the legacy TCP [ConnectionStatus] is supplied, the
 /// chip falls back to its pre-TD-004 behavior (no regression for
@@ -39,6 +40,27 @@ void main() {
       final tooltip = t.widget<Tooltip>(find.byType(Tooltip));
       expect(tooltip.message, contains('Data Dictionary'));
       expect(tooltip.message, contains('reservation'));
+    });
+
+    testWidgets('opcuaUnhealthy renders "No data" pill with a frozen-values '
+        'tooltip', (t) async {
+      // The frozen-session shape: the event-driven status still says
+      // connected, but the heartbeat went silent and effectiveStatus
+      // dropped to opcuaUnhealthy. The chip must side with the data plane.
+      await _pump(
+        t,
+        const ConnectionStatusChip(
+          status: ConnectionStatus.connected,
+          effectiveStatus: EffectiveDeviceStatus.opcuaUnhealthy,
+        ),
+      );
+      expect(find.text('No data'), findsOneWidget);
+      expect(find.text('Connected'), findsNothing);
+      // The tooltip must tell the operator the on-screen values are stale —
+      // that is the whole point of the state.
+      final tooltip = t.widget<Tooltip>(find.byType(Tooltip));
+      expect(tooltip.message, contains('frozen'));
+      expect(tooltip.message, contains('heartbeat'));
     });
 
     testWidgets('connected EffectiveDeviceStatus renders "Connected"',
