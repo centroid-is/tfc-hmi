@@ -830,8 +830,8 @@ void main() {
         'p_stat_Running': true,
         'p_stat_Cleaning': false,
       }));
-      expect(speedBatcherStatusBitOf(status, 'p_stat_Running'), isTrue);
-      expect(speedBatcherStatusBitOf(status, 'p_stat_Cleaning'), isFalse);
+      expect(structStatusBitOf(status, 'p_stat_Running'), isTrue);
+      expect(structStatusBitOf(status, 'p_stat_Cleaning'), isFalse);
     });
 
     test('a missing member degrades to unknown instead of throwing', () {
@@ -842,15 +842,55 @@ void main() {
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         'p_stat_Running': true,
       }));
-      expect(speedBatcherStatusBitOf(status, 'p_stat_BatchReady'), isNull);
+      expect(structStatusBitOf(status, 'p_stat_BatchReady'), isNull);
     });
 
     test('no struct at all — or a non-struct value — is unknown', () {
-      expect(speedBatcherStatusBitOf(null, 'p_stat_Running'), isNull);
+      expect(structStatusBitOf(null, 'p_stat_Running'), isNull);
       expect(
-          speedBatcherStatusBitOf(
+          structStatusBitOf(
               DynamicValue(value: true), 'p_stat_Running'),
           isNull);
+    });
+  });
+
+  group('strapping line status bits', () {
+    test('the members are the ones ST_StrappingLine_HMI publishes', () {
+      // Read off the live st101 address space at
+      // ns=4;s=STM01.STM01.hmi. Getting these wrong is silent: a member the
+      // struct does not carry renders as the grey `!` forever rather than
+      // failing, so the names are pinned here.
+      expect(strappingLineStatusBits.map((b) => b.member), [
+        'p_stat_WaitingFrustration',
+        'p_stat_InfeedPermitted',
+        'p_stat_OutfeedPermitted',
+      ]);
+    });
+
+    test('the frustration row names the strapper as what is waited ON', () {
+      // The bit means the line is ready and the machine has not taken the box
+      // -- not that product is being released TO somewhere. The two readings
+      // invert who is at fault, and an operator acts on the difference.
+      final frustration = strappingLineStatusBits
+          .firstWhere((b) => b.member == 'p_stat_WaitingFrustration');
+      expect(frustration.labelFor('strapping machine'),
+          'Waiting for strapping machine to take the next box');
+      expect(frustration.onColor.toARGB32(), Colors.red.toARGB32(),
+          reason: 'it is the one bit that says something is wrong');
+    });
+
+    test('a label with no {m} is left alone', () {
+      // The SpeedBatcher's labels predate templating and carry no placeholder.
+      for (final bit in speedBatcherStatusBits) {
+        expect(bit.labelFor('SpeedBatcher'), bit.label);
+      }
+    });
+
+    test('the strapper is struct-backed, not prefix-backed', () {
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.strappingLine],
+          same(strappingLineStatusBits));
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.strappingLine], isNull,
+          reason: 'both maps would render two Status sections');
     });
   });
 

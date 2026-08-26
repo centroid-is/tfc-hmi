@@ -450,30 +450,62 @@ void main() {
       });
     }
 
-    testWidgets('the SpeedBatcher keeps its own diodes, not the generic ones',
+    test('no kind reads its status both ways', () {
+      // The two maps are the whole switch between "one subscription for the
+      // struct" and "one per bit". A kind in both would render two Status
+      // sections and hold both sets of subscriptions open -- the machine
+      // showing its handshake twice, in two vocabularies.
+      for (final kind in kStructStatusBits.keys) {
+        expect(kEquipmentStatusBits[kind], isNull,
+            reason: '${kind.name} is struct-backed; it must not also have a '
+                'suffix list');
+      }
+    });
+
+    // Driven off the map rather than a hardcoded list of kinds, so adding a
+    // struct-backed machine cannot leave this test describing the old world.
+    for (final entry in kStructStatusBits.entries) {
+      testWidgets('${entry.key.name} draws struct diodes, not prefix ones',
+          (tester) async {
+        final config = ThirdPartyEquipmentConfig(runKey: '')
+          ..kind = entry.key
+          ..statusKey = 'STRUCT';
+        await tester.pumpWidget(wrap(SizedBox(
+          width: 300,
+          height: 160,
+          child: ThirdPartyEquipment(config: config),
+        )));
+
+        await tester.tap(find.byType(ThirdPartyEquipment));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(StructStatusDiodes), findsOneWidget);
+        expect(find.byType(EquipmentStatusDiodes), findsNothing,
+            reason: '${entry.key.name} would be showing its handshake twice');
+      });
+    }
+
+    testWidgets('a struct kind hoists the struct key, not per-bit keys',
         (tester) async {
-      // It is absent from kEquipmentStatusBits because its handshake is a
-      // struct (`p_stat_*`) rather than per-line permit globals, so it draws
-      // SpeedBatcherStatusDiodes instead. The two must never both appear:
-      // that would be one machine showing its handshake twice, in two
-      // vocabularies.
+      // The point of the struct path: the strapper costs ONE subscription for
+      // every diode. Before this it appended .PermitInfeed/.PermitOutfeed to
+      // the prefix, which was both three keys and the wrong member names --
+      // FB_StrappingLine spells them p_stat_InfeedPermitted/OutfeedPermitted.
       final config = ThirdPartyEquipmentConfig(runKey: '')
-        ..kind = ThirdPartyEquipmentKind.speedBatcher
-        ..statusKey = 'SPB01.SP_HMI';
+        ..kind = ThirdPartyEquipmentKind.strappingLine
+        ..statusKey = 'STM01';
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
         height: 160,
         child: ThirdPartyEquipment(config: config),
       )));
-
-      await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      expect(find.byType(SpeedBatcherStatusDiodes), findsOneWidget);
-      expect(find.byType(EquipmentStatusDiodes), findsNothing,
-          reason: 'the SpeedBatcher would be showing its handshake twice');
-      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.speedBatcher], isNull,
-          reason: 'if it were added to the map both sections would render');
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugStatusStream, isNotNull,
+          reason: 'the struct key must be hoisted');
+      expect(state.debugStatusBitKeys, isEmpty,
+          reason: 'a struct kind must open no per-bit subscriptions');
     });
 
     testWidgets('the pane does not outlive the asset that opened it',
@@ -626,7 +658,7 @@ void main() {
       }));
       await tester.pumpWidget(wrap(SizedBox(
         width: 320,
-        child: SpeedBatcherStatusDiodes(status: status),
+        child: StructStatusDiodes(status: status, bits: speedBatcherStatusBits, machine: 'SpeedBatcher'),
       )));
 
       final painters = diodePaintersOf(tester);
@@ -648,7 +680,7 @@ void main() {
       }));
       await tester.pumpWidget(wrap(SizedBox(
         width: 320,
-        child: SpeedBatcherStatusDiodes(status: status),
+        child: StructStatusDiodes(status: status, bits: speedBatcherStatusBits, machine: 'SpeedBatcher'),
       )));
 
       expect(diodePaintersOf(tester)[1].color, Colors.blue);

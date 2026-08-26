@@ -312,8 +312,10 @@ void main() {
                         status, const PaneStatus.stale()),
                     child: PaneSection(
                       title: 'Status',
-                      child: SpeedBatcherStatusDiodes(
+                      child: StructStatusDiodes(
                         status: status,
+                        bits: speedBatcherStatusBits,
+                        machine: 'SpeedBatcher',
                       ),
                     ),
                   ),
