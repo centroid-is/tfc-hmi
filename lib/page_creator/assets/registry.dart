@@ -177,12 +177,21 @@ class AssetRegistry {
                 foundWidgets.add(asset);
                 return; // Found an asset, don't crawl deeper
               } catch (e, stackTrace) {
+                // Never rethrow: one unparseable asset used to propagate up
+                // to PageManager.load()'s catch, which resets EVERY page to
+                // defaults — a single bad field blanked a whole plant HMI
+                // (2026-08-26). Skip the asset and keep the rest of the
+                // plant on screen. The cost is the same as an unrecognized
+                // asset type: this entry will not render and will be
+                // dropped if the page is re-saved by this build.
                 _log.e(
-                  'Failed to parse asset of type $assetName',
+                  'Failed to parse asset of type $assetName — skipping it '
+                  '(it will not render, and will be dropped if the page is '
+                  're-saved by this build)',
                   error: e,
                   stackTrace: stackTrace,
                 );
-                rethrow;
+                return;
               }
             }
           }
