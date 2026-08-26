@@ -965,16 +965,24 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
       width: frame.aabb.width + 2 * _standoff,
       height: frame.aabb.height + 2 * _standoff,
     );
-    final cell = HitMask.cellFor(area.size);
+    bool reaches(Offset point) => pointerReaches(box, point);
+
     final mask = HitMask.probe(
       area: area,
-      cell: cell,
-      hit: (point) => pointerReaches(box, point),
-    ).dilated(math.max(1, (_standoff / cell).round()));
+      cell: HitMask.cellFor(area.size),
+      hit: reaches,
+    );
 
     final toCanvas = box.getTransformTo(self);
     return [
-      for (final ring in hitBoundaryContours(mask))
+      // The same predicate again, to bisect each crossing onto the real edge
+      // and to measure the standoff from it — a grid alone answers only to
+      // within half a sample, unevenly.
+      for (final ring in hitBoundaryContours(
+        mask,
+        refine: reaches,
+        standoff: _standoff,
+      ))
         [
           for (final point in ring)
             MatrixUtils.transformPoint(toCanvas, point),

@@ -150,53 +150,6 @@ void main() {
     });
   });
 
-  group('dilation', () {
-    test('pushes the outline off the shape by the cells asked for', () {
-      final mask = HitMask.probe(area: area, cell: 2, hit: disc);
-      final grown = hitBoundarySegments(mask.dilated(2));
-      final radii = _radii(grown, centre);
-
-      // Two cells of 2px: the ring now clears the disc instead of sitting on
-      // it, which is what keeps it off the glyph.
-      expect(radii.min, greaterThan(30));
-      expect(radii.max, lessThan(30 + 4 + 3));
-    });
-
-    test('gives a belt thinner than the sample spacing an outline with '
-        'room in it', () {
-      // A thin belt on a coarse grid catches a single row of samples, and
-      // its raw outline is a slit one cell tall — drawn, that is two lines
-      // on top of each other. Dilating opens it into something that reads as
-      // a shape around the belt.
-      final mask = HitMask.probe(
-        area: area,
-        cell: 4,
-        hit: (p) =>
-            p.dy > 56.5 && p.dy < 59.5 && p.dx > 20 && p.dx < 100,
-      );
-      expect(mask.isEmpty, isFalse, reason: 'one row of samples lands on it');
-
-      final tight = _bounds(hitBoundarySegments(mask));
-      expect(tight.height, closeTo(4, 0.01));
-      expect(tight.width, greaterThan(70),
-          reason: 'the outline runs the length of the belt');
-
-      final opened = _bounds(hitBoundarySegments(mask.dilated(1)));
-      expect(opened.height, closeTo(4 + 2 * 4, 0.01));
-      expect(opened.width, closeTo(tight.width + 2 * 4, 0.01));
-    });
-
-    test('dilating by nothing changes nothing', () {
-      final mask = HitMask.probe(area: area, cell: 4, hit: disc);
-      expect(identical(mask.dilated(0), mask), isTrue);
-    });
-
-    test('an empty mask stays empty', () {
-      final mask = HitMask.probe(area: area, cell: 4, hit: (_) => false);
-      expect(mask.dilated(3).isEmpty, isTrue);
-    });
-  });
-
   group('contours', () {
     test('a disc traces as one ring, a shape with a hole as two', () {
       final disc1 = traceContours(
@@ -217,7 +170,7 @@ void main() {
 
     test('a ring closes: it comes back to where it started', () {
       final contour = traceContours(
-          hitBoundarySegments(HitMask.probe(area: area, cell: 2, hit: disc)))
+              hitBoundarySegments(HitMask.probe(area: area, cell: 2, hit: disc)))
           .single;
       // Not repeated at the end — the painter closes the path — so "closed"
       // means the last point is a step away from the first.
@@ -250,10 +203,7 @@ void main() {
       // Chaikin's twice: four times the points, and every one of them still
       // on the disc's edge within a fraction of a cell.
       expect(smooth.length, rough.length * 4);
-      final radii = _radii(
-        [for (var i = 0; i < smooth.length; i++) (smooth[i], smooth[i])],
-        centre,
-      );
+      final radii = _radii([for (final p in smooth) (p, p)], centre);
       expect(radii.min, greaterThan(30 - 4));
       expect(radii.max, lessThan(30 + 4));
     });
@@ -288,6 +238,100 @@ void main() {
       final stub = [Offset.zero, const Offset(1, 0), const Offset(0, 1)];
       expect(smoothContour(stub), same(stub));
       expect(smoothContour(stub, iterations: 0), same(stub));
+    });
+  });
+
+  group('refinement', () {
+    test('bisects each crossing onto the real edge', () {
+      // The grid answers to within half a sample and the error is uneven —
+      // it depends where the shape falls against the grid, which is how a
+      // belt centred in its box came out 2px clear above and 3px below.
+      const coarse = 8.0;
+      final mask = HitMask.probe(area: area, cell: coarse, hit: disc);
+
+      final rough = _radii(hitBoundarySegments(mask), centre);
+      final refined = _radii(hitBoundarySegments(mask, refine: disc), centre);
+
+      expect(refined.max - refined.min, lessThan(0.5),
+          reason: 'every crossing lands on the rim of the disc');
+      expect(refined.max - refined.min, lessThan(rough.max - rough.min),
+          reason: 'and it is tighter than the grid alone manages');
+      expect(refined.min, closeTo(30, 0.2));
+      expect(refined.max, closeTo(30, 0.2));
+    });
+
+    test('agrees with itself across a shared cell edge', () {
+      // Neighbouring squares bisect the same edge independently, and
+      // [traceContours] chains on the points being identical, not close.
+      final mask = HitMask.probe(area: area, cell: 4, hit: disc);
+      final contours = traceContours(
+          hitBoundarySegments(mask, refine: disc));
+      expect(contours, hasLength(1),
+          reason: 'one ring, so every crossing met its neighbour exactly');
+    });
+  });
+
+  group('standoff', () {
+    test('stands the ring off the shape by the distance asked for', () {
+      final mask = HitMask.probe(area: area, cell: 3, hit: disc);
+      final ring = hitBoundaryContours(
+        mask,
+        refine: disc,
+        standoff: 4,
+      ).single;
+      final radii = _radii([for (final p in ring) (p, p)], centre);
+
+      // Evenly, all the way round — the complaint that started this was a
+      // ring 2px clear of a belt above and 3px clear below.
+      expect(radii.min, closeTo(34, 0.6));
+      expect(radii.max, closeTo(34, 0.6));
+    });
+
+    test('moves the edge of a hole into the hole', () {
+      // Both edges stand off the material, so the inner one shrinks.
+      final rings = hitBoundaryContours(
+        HitMask.probe(
+          area: area,
+          cell: 2,
+          hit: (p) {
+            final r = (p - centre).distance;
+            return r <= 40 && r >= 20;
+          },
+        ),
+        refine: (p) {
+          final r = (p - centre).distance;
+          return r <= 40 && r >= 20;
+        },
+        standoff: 3,
+      );
+      expect(rings, hasLength(2));
+
+      final radii = [
+        for (final ring in rings)
+          _radii([for (final p in ring) (p, p)], centre),
+      ]..sort((a, b) => a.max.compareTo(b.max));
+      expect(radii.first.max, closeTo(17, 1), reason: 'inside the hole');
+      expect(radii.last.max, closeTo(43, 1), reason: 'outside the disc');
+    });
+
+    test('without a predicate there is nothing to stand off from', () {
+      final mask = HitMask.probe(area: area, cell: 3, hit: disc);
+      final plain = hitBoundaryContours(mask, standoff: 4).single;
+      final radii = _radii([for (final p in plain) (p, p)], centre);
+      expect(radii.max, lessThan(33),
+          reason: 'the standoff is ignored, not guessed at');
+    });
+
+    test('leaves a ring alone at zero, and one too short to have a normal',
+        () {
+      final ring = [
+        for (var i = 0; i < 12; i++)
+          Offset(60 + 20 * math.cos(i * math.pi / 6),
+              60 + 20 * math.sin(i * math.pi / 6)),
+      ];
+      expect(offsetContour(ring, 0, inside: disc), same(ring));
+      final stub = [Offset.zero, const Offset(1, 1)];
+      expect(offsetContour(stub, 3, inside: disc), same(stub));
     });
   });
 

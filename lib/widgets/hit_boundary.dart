@@ -110,55 +110,65 @@ class HitMask {
     return mask;
   }
 
-  /// The same mask grown by [cells] samples in every direction.
-  ///
-  /// Two jobs: it lifts the outline clear of the glyph, so the ring sits
-  /// around what you can tap instead of on top of it, and it closes the
-  /// one-sample gaps a coarse grid leaves in a thin belt — a boundary broken
-  /// into fragments reads as noise, not as a shape.
-  HitMask dilated(int cells) {
-    if (cells <= 0) return this;
-    final grown = Uint8List(cols * rows);
-    final reach = cells * cells;
-    for (var row = 0; row < rows; row++) {
-      for (var col = 0; col < cols; col++) {
-        if (!at(col, row)) continue;
-        for (var dy = -cells; dy <= cells; dy++) {
-          for (var dx = -cells; dx <= cells; dx++) {
-            // Round rather than square: a square structuring element leaves
-            // corners on every bend of the outline.
-            if (dx * dx + dy * dy > reach) continue;
-            final c = col + dx;
-            final r = row + dy;
-            if (c < 0 || r < 0 || c >= cols || r >= rows) continue;
-            grown[r * cols + c] = 1;
-          }
-        }
-      }
-    }
-    return HitMask._(
-      area: area,
-      cell: cell,
-      cols: cols,
-      rows: rows,
-      hits: grown,
-    );
-  }
 }
 
 /// The line between the samples that hit and the samples that did not.
 ///
-/// Marching squares over the sample grid, each segment running between the
-/// midpoints of the cell edges it crosses. The segments come back loose
-/// rather than assembled into loops: consecutive segments already share
-/// endpoints exactly, so stroking them with round caps draws as one
-/// continuous outline, and the alternative — chaining them into polylines —
-/// is bookkeeping that nothing here needs.
+/// Marching squares over the sample grid. Each segment runs between the two
+/// cell edges the boundary crosses, and where it crosses them is found by
+/// [refine] rather than assumed to be halfway: a grid answers only to within
+/// half a cell, so an edge halfway between two samples and an edge just past
+/// one of them come out in the same place. That error is not even — it
+/// depends on where the shape happens to fall against the grid — so a belt
+/// centred in its box was traced 2px clear of it above and 3px clear below.
+/// Bisecting the same predicate the samples came from puts each crossing
+/// within a twentieth of a pixel of the real edge, and the outline sits
+/// evenly around what it is tracing.
+///
+/// Without [refine] the crossings fall back to the midpoints, which is the
+/// grid's own answer — enough to see a shape, not enough to draw around one.
+///
+/// The segments come back loose rather than assembled: consecutive segments
+/// share endpoints exactly (a shared cell edge bisects to the same point from
+/// either side), so [traceContours] can chain them by identity.
 ///
 /// A shape with a hole gives the outer and the inner boundary both, which is
 /// the honest answer: both are edges of what takes a tap.
-List<(Offset, Offset)> hitBoundarySegments(HitMask mask) {
+List<(Offset, Offset)> hitBoundarySegments(
+  HitMask mask, {
+  bool Function(Offset point)? refine,
+}) {
   final segments = <(Offset, Offset)>[];
+
+  /// Where the boundary crosses the cell edge between two neighbouring
+  /// samples, exactly one of which is a hit.
+  Offset crossing(int c1, int r1, int c2, int r2) {
+    final p1 = mask.centreOf(c1, r1);
+    final p2 = mask.centreOf(c2, r2);
+    final midpoint = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
+    if (refine == null) return midpoint;
+    var inside = mask.at(c1, r1) ? p1 : p2;
+    var outside = mask.at(c1, r1) ? p2 : p1;
+    // Six halvings of one cell: past a twentieth of a pixel at the finest
+    // spacing this samples at, and deterministic, so the two squares either
+    // side of this edge agree on the point to the bit.
+    for (var i = 0; i < 6; i++) {
+      final mid = Offset(
+        (inside.dx + outside.dx) / 2,
+        (inside.dy + outside.dy) / 2,
+      );
+      if (refine(mid)) {
+        inside = mid;
+      } else {
+        outside = mid;
+      }
+    }
+    return Offset(
+      (inside.dx + outside.dx) / 2,
+      (inside.dy + outside.dy) / 2,
+    );
+  }
+
   // One square per group of four neighbouring samples.
   for (var row = -1; row < mask.rows; row++) {
     for (var col = -1; col < mask.cols; col++) {
@@ -170,14 +180,12 @@ List<(Offset, Offset)> hitBoundarySegments(HitMask mask) {
       final code = (tl ? 1 : 0) | (tr ? 2 : 0) | (br ? 4 : 0) | (bl ? 8 : 0);
       if (code == 0 || code == 15) continue;
 
-      final a = mask.centreOf(col, row);
-      final c = mask.centreOf(col + 1, row + 1);
-      final half = mask.cell / 2;
-      // Midpoints of the four edges of the square.
-      final top = Offset(a.dx + half, a.dy);
-      final right = Offset(c.dx, a.dy + half);
-      final bottom = Offset(a.dx + half, c.dy);
-      final left = Offset(a.dx, a.dy + half);
+      // Crossings on the four edges of the square, each found only if the
+      // case at hand actually crosses that edge.
+      late final top = crossing(col, row, col + 1, row);
+      late final right = crossing(col + 1, row, col + 1, row + 1);
+      late final bottom = crossing(col, row + 1, col + 1, row + 1);
+      late final left = crossing(col, row, col, row + 1);
 
       switch (code) {
         case 1:
@@ -310,10 +318,78 @@ List<Offset> smoothContour(List<Offset> ring, {int iterations = 2}) {
   return current;
 }
 
-/// The rings of [mask], traced and smoothed — the whole pipeline.
-List<List<Offset>> hitBoundaryContours(HitMask mask, {int smoothing = 2}) => [
-      for (final ring in traceContours(hitBoundarySegments(mask)))
-        smoothContour(ring, iterations: smoothing),
+/// Moves every point of [ring] [distance] away from the region it encloses.
+///
+/// The standoff is applied here, to the finished ring, rather than by growing
+/// the sample grid before tracing: a grid can only grow in whole cells, so
+/// the clearance came out as whatever the spacing happened to be — 3px on one
+/// asset, 12px on a bigger one, and uneven around a single shape. Offsetting
+/// along the local normal gives the same clearance everywhere.
+///
+/// Which way is out is settled by asking [inside] rather than by the ring's
+/// winding, so the boundary of a hole moves into the hole — also away from
+/// the material, which is what the eye expects.
+List<Offset> offsetContour(
+  List<Offset> ring,
+  double distance, {
+  required bool Function(Offset point) inside,
+}) {
+  if (ring.length < 3 || distance == 0) return ring;
+
+  final normals = <Offset>[
+    for (var i = 0; i < ring.length; i++)
+      () {
+        final before = ring[(i - 1 + ring.length) % ring.length];
+        final after = ring[(i + 1) % ring.length];
+        final tangent = after - before;
+        final length = tangent.distance;
+        return length == 0
+            ? Offset.zero
+            : Offset(tangent.dy / length, -tangent.dx / length);
+      }(),
+  ];
+
+  // One probe settles the whole ring: the normals are consistent along it, so
+  // the side that is outside at one point is outside at all of them.
+  var sign = 1.0;
+  for (var i = 0; i < ring.length; i++) {
+    final normal = normals[i];
+    if (normal == Offset.zero) continue;
+    final ahead = inside(ring[i] + normal * 1.5);
+    final behind = inside(ring[i] - normal * 1.5);
+    if (ahead == behind) continue; // Grazing the edge here; try another point.
+    sign = ahead ? -1.0 : 1.0;
+    break;
+  }
+
+  return [
+    for (var i = 0; i < ring.length; i++) ring[i] + normals[i] * distance * sign,
+  ];
+}
+
+/// The rings of [mask]: traced, smoothed, and stood off — the whole pipeline.
+///
+/// [refine] is the predicate the mask was sampled with. Given it, crossings
+/// are bisected onto the real edge instead of being left at the grid's
+/// resolution, and the standoff can be measured from that edge. Without it
+/// the rings are the grid's own answer and [standoff] is ignored, since there
+/// is nothing to ask which way is out.
+List<List<Offset>> hitBoundaryContours(
+  HitMask mask, {
+  bool Function(Offset point)? refine,
+  double standoff = 0,
+  int smoothing = 2,
+}) =>
+    [
+      for (final ring in traceContours(hitBoundarySegments(mask, refine: refine)))
+        if (refine == null || standoff == 0)
+          smoothContour(ring, iterations: smoothing)
+        else
+          offsetContour(
+            smoothContour(ring, iterations: smoothing),
+            standoff,
+            inside: refine,
+          ),
     ];
 
 /// Draws [contours] as a quiet ring: a blurred stroke with a fine line on it.
