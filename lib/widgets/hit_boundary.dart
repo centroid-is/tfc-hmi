@@ -5,25 +5,37 @@
 /// the AI proposal outline is the same box dashed. That is a second opinion
 /// about the asset's shape, and second opinions drift — a conveyor turn is an
 /// arc across a box it fills maybe a third of, a straight belt with an
-/// explicit width is a band down the middle, and both used to be framed by a
-/// rectangle that claimed far more than the operator can actually hit
+/// explicit width is a band down the middle, and a rectangle around either
+/// claims far more than the operator can actually hit
 /// (`ConveyorPainter.hitTest` takes only the painted belt).
 ///
-/// So this module does not describe the asset at all. It *asks* it: sample
-/// the hit test over a grid, and trace the line between the points that
-/// answered and the points that did not. Whatever the asset really takes
-/// taps on is what gets drawn — including, usefully, a hit area that has come
-/// adrift from the glyph, which then shows up as a ring around empty space.
+/// There are two ways to get the real shape here, and they are for different
+/// jobs.
 ///
-/// The sampling is pure given a predicate ([HitMask.probe]) and the tracing
-/// is pure given a mask ([hitBoundarySegments]), so both are tested against
-/// shapes with known outlines rather than against a live widget tree.
+/// **At runtime, the asset says so.** An asset whose hit test is a path
+/// publishes that same path — the object its `hitTest` consults, not a copy
+/// of it — with [AssetHitShape]. The plant view flattens it, stands it off
+/// and draws it: exact, analytic, and free. An asset that publishes nothing
+/// is a box and gets one, which is the truth for most of them.
+///
+/// **In tests, the asset is interrogated.** [HitMask.probe] samples a hit
+/// test over a grid and [hitBoundarySegments] traces the line between the
+/// points that answered and the points that did not, so a declared shape can
+/// be held against what the widget really does. That is the drift alarm: it
+/// is what stops a published path from quietly becoming a third opinion, and
+/// it costs ten thousand hit tests, which is why it belongs in CI and not
+/// under an operator's finger.
+///
+/// The sampling is pure given a predicate and the tracing is pure given a
+/// mask, so both are tested against shapes with known outlines rather than
+/// against a live widget tree.
 library;
 
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/widgets.dart';
 
 /// A grid of yes/no answers over [area], one per cell centre.
 @immutable
@@ -391,6 +403,52 @@ List<List<Offset>> hitBoundaryContours(
             inside: refine,
           ),
     ];
+
+/// Publishes the shape this subtree takes taps on.
+///
+/// Wrap the widget whose box the shape is measured in — the `CustomPaint`
+/// whose painter hit-tests against it — and hand over **the path the hit test
+/// itself consults**. Handing over a second path drawn to look right would
+/// put the mark back where it started: a picture of where an asset is
+/// supposed to be tappable, which is not evidence of anything and is exactly
+/// what drifts.
+///
+/// Assets that take taps on their whole face publish nothing. A box is the
+/// truth for them, and the plant view draws one.
+///
+/// Not an [InheritedWidget]: nothing below this needs to read it. The plant
+/// view finds it by walking down into the asset, the same way it finds the
+/// box to measure, so the shape can be published from wherever the geometry
+/// already exists rather than plumbed up to the asset's config.
+class AssetHitShape extends StatelessWidget {
+  /// The tappable shape, in the coordinates of [child]'s render box.
+  final Path path;
+
+  final Widget child;
+
+  const AssetHitShape({super.key, required this.path, required this.child});
+
+  @override
+  Widget build(BuildContext context) => child;
+}
+
+/// Walks [path] into rings of points, one per closed subpath.
+///
+/// [step] is the spacing along the path; the curve is already smooth, so this
+/// only has to be fine enough that a straight line between neighbours is
+/// indistinguishable from the arc it replaces.
+List<List<Offset>> flattenPath(Path path, {double step = 2}) {
+  final rings = <List<Offset>>[];
+  for (final metric in path.computeMetrics()) {
+    final ring = <Offset>[];
+    for (var distance = 0.0; distance < metric.length; distance += step) {
+      final tangent = metric.getTangentForOffset(distance);
+      if (tangent != null) ring.add(tangent.position);
+    }
+    if (ring.length > 2) rings.add(ring);
+  }
+  return rings;
+}
 
 /// Draws [contours] as a quiet ring: a blurred stroke with a fine line on it.
 ///

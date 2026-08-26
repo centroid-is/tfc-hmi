@@ -12,8 +12,8 @@
 //
 // Contract under test:
 //   - a pane opened from inside an asset marks that asset, and only it;
-//   - the outline is traced from the asset's HIT TEST, not from its box — an
-//     asset that takes taps on a disc is marked with a disc;
+//   - an asset that publishes the shape it takes taps on is marked with that
+//     shape, not with its box;
 //   - the mark follows a swap to another asset's pane;
 //   - closing the pane takes the mark with it;
 //   - a pane opened from outside any asset (the page editor's config pane,
@@ -70,9 +70,7 @@ void main() {
   List<List<Offset>> markOutline(WidgetTester tester) {
     final paint = tester.widget<CustomPaint>(find.byKey(openPaneMarkKey));
     final painter = paint.painter;
-    expect(painter, isA<HitBoundaryPainter>(),
-        reason: 'the asset was there to be asked, so the mark is its traced '
-            'hit boundary and not the fallback box');
+    expect(painter, isA<HitBoundaryPainter>());
     final origin = tester.getTopLeft(find.byKey(openPaneMarkKey));
     return [
       for (final ring in (painter as HitBoundaryPainter).contours)
@@ -139,13 +137,13 @@ void main() {
         reason: 'one pane is open, so exactly one asset is marked');
   });
 
-  testWidgets('the outline is the asset\'s hit test, not its box',
+  testWidgets('a published shape is what gets marked, not the box',
       (tester) async {
     // The conveyor case in miniature. A turned belt is an arc across a box it
     // barely fills and `ConveyorPainter.hitTest` claims only the painted
     // belt, so a mark drawn as the box would frame a great deal of page that
-    // ignores taps. Here the asset takes taps on a disc inside a rectangle:
-    // the mark has to come back a disc.
+    // ignores taps. Here the asset takes taps on a disc inside a rectangle
+    // and publishes that disc: the mark has to come back a disc.
     final asset = _DiscAsset(radius: 40);
     await tester.pumpWidget(_wrap([asset]));
     await tester.pumpAndSettle();
@@ -158,16 +156,35 @@ void main() {
     final centre = bounds.center;
     for (final ring in markOutline(tester)) {
       for (final point in ring) {
-        // Every traced point sits on the rim of the disc, standing off it by
-        // a few pixels — nothing out at the corners of the box.
-        expect((point - centre).distance, greaterThan(40 - 2));
-        expect((point - centre).distance, lessThan(40 + 12));
+        // Every point sits on the rim of the disc, standing off it evenly —
+        // nothing out at the corners of the box.
+        expect((point - centre).distance, closeTo(44, 1.5));
       }
     }
 
     final box = tester.getRect(find.byType(AssetStack));
     expect(bounds.width, lessThan(box.width * 0.2 + 24),
         reason: 'the outline is the disc, not the asset rectangle');
+  });
+
+  testWidgets('an asset that publishes nothing is marked with its face',
+      (tester) async {
+    // Most assets take taps on an opaque box, and for them the box is not a
+    // second opinion — it is the answer.
+    await tester.pumpWidget(_wrap([_PaneAsset('one', x: 0.5)]));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('one'));
+    await tester.pumpAndSettle();
+
+    expect(markOpacity(tester), 1);
+    // Its face, stood off from it — four corners, near enough square.
+    final face = tester.getRect(find.byKey(const ValueKey('face:one')));
+    final bounds = markBounds(tester);
+    expect(bounds.center.dx, closeTo(face.center.dx, 1));
+    expect(bounds.center.dy, closeTo(face.center.dy, 1));
+    expect(bounds.width, closeTo(face.width + 8, 2));
+    expect(bounds.height, closeTo(face.height + 8, 2));
   });
 
   testWidgets('closing the pane clears the mark', (tester) async {
@@ -282,21 +299,26 @@ class _DiscAsset extends BaseAsset {
         // new painter WITHOUT painting it, so a remembered size is stale — and
         // a painter that hit-tests against a stale size hit-tests nothing.
         // `ConveyorPainter` takes its `paintSize` for the same reason.
-        builder: (context, constraints) => GestureDetector(
-          // deferToChild: the painter decides, so the disc decides.
-          onTap: () {
-            taps++;
-            showSidePane(
-              context: context,
-              id: 'pane:disc',
-              builder: (_) => const Text('pane disc'),
-            );
-          },
-          child: CustomPaint(
-            key: discKey,
-            painter: _DiscPainter(radius, constraints.biggest),
-          ),
-        ),
+        builder: (context, constraints) {
+          final painter = _DiscPainter(radius, constraints.biggest);
+          return GestureDetector(
+            // deferToChild: the painter decides, so the disc decides.
+            onTap: () {
+              taps++;
+              showSidePane(
+                context: context,
+                id: 'pane:disc',
+                builder: (_) => const Text('pane disc'),
+              );
+            },
+            // The same path the painter hit-tests against, handed over as-is
+            // — the contract [AssetHitShape] is for.
+            child: AssetHitShape(
+              path: painter.shape,
+              child: CustomPaint(key: discKey, painter: painter),
+            ),
+          );
+        },
       );
 
   @override
@@ -315,6 +337,11 @@ class _DiscPainter extends CustomPainter {
 
   const _DiscPainter(this.radius, this.box);
 
+  /// One derivation, two callers: [hitTest] answers from it and the asset
+  /// publishes it.
+  Path get shape => Path()
+    ..addOval(Rect.fromCircle(center: box.center(Offset.zero), radius: radius));
+
   @override
   void paint(Canvas canvas, Size size) => canvas.drawCircle(
         size.center(Offset.zero),
@@ -323,8 +350,7 @@ class _DiscPainter extends CustomPainter {
       );
 
   @override
-  bool hitTest(Offset position) =>
-      (position - box.center(Offset.zero)).distance <= radius;
+  bool hitTest(Offset position) => shape.contains(position);
 
   @override
   bool shouldRepaint(_DiscPainter oldDelegate) =>

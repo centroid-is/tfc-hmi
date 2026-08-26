@@ -274,16 +274,16 @@ class _AssetStackState extends ConsumerState<AssetStack> {
   /// serves every following tick.
   final Map<(String, TextStyle), Size> _labelSizeCache = {};
 
-  /// The box that decides whether a tap lands on [asset], or null when the
-  /// asset has no laid-out element yet.
+  /// The shape [asset] takes taps on, in that shape's own coordinates, with
+  /// the box it was measured in — or null when the asset publishes none.
   ///
   /// Walks the canvas subtree for the [ObjectKey] this stack hangs on each
   /// asset's `Positioned` — the same route the page editor takes to measure
-  /// an asset — and then down to the [_HitPermissiveSizedBox] that forwards
-  /// pointer positions into the asset. Everything below that box is the
-  /// asset's own doing, which is exactly what [_OpenPaneMark] wants to ask
-  /// about: not where the asset is, but what of it answers a tap.
-  RenderBox? _hitBoxOf(Object asset) {
+  /// an asset — and then down for an [AssetHitShape]. Only assets whose hit
+  /// test is a path publish one; the rest take taps on their whole face, and
+  /// [_OpenPaneMark] draws that face.
+  ({Path path, RenderBox box})? _hitShapeOf(Object asset) {
+    if (!mounted) return null;
     final key = ObjectKey(asset);
     Element? positioned;
     void findPositioned(Element element) {
@@ -295,24 +295,28 @@ class _AssetStackState extends ConsumerState<AssetStack> {
       element.visitChildElements(findPositioned);
     }
 
-    if (!mounted) return null;
     context.visitChildElements(findPositioned);
     final root = positioned;
     if (root == null) return null;
 
-    RenderBox? box;
-    void findHitBox(Element element) {
-      if (box != null) return;
-      final ro = element.renderObject;
-      if (ro is _RenderHitPermissiveConstrainedBox && ro.hasSize) {
-        box = ro;
+    ({Path path, RenderBox box})? found;
+    void findShape(Element element) {
+      if (found != null) return;
+      final widget = element.widget;
+      if (widget is AssetHitShape) {
+        // The published path is in the coordinates of the widget it wraps,
+        // and that widget's box is the first render object below here.
+        final ro = element.findRenderObject();
+        if (ro is RenderBox && ro.hasSize && ro.attached) {
+          found = (path: widget.path, box: ro);
+        }
         return;
       }
-      element.visitChildElements(findHitBox);
+      element.visitChildElements(findShape);
     }
 
-    root.visitChildElements(findHitBox);
-    return box;
+    root.visitChildElements(findShape);
+    return found;
   }
 
   Size _measureLabel(String text, TextStyle style) {
@@ -753,7 +757,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
         // — only one pane is open at a time, and a mark per asset would put
         // an animated overlay on every device on the page.
         positionedChildren.add(
-          _OpenPaneMark(frames: frames, hitBoxOf: _hitBoxOf),
+          _OpenPaneMark(frames: frames, hitShapeOf: _hitShapeOf),
         );
 
         // The scope carries the *effective* flags, so assets that paint
@@ -812,13 +816,17 @@ class _AssetFrame {
 /// alone does not settle which one an operator is jogging. So while a pane is
 /// open, its asset is outlined.
 ///
-/// The outline is traced from the asset's own hit test rather than from its
-/// box (see `hit_boundary.dart`): a conveyor turn is an arc across a box it
-/// barely fills, and `ConveyorPainter.hitTest` claims only the painted belt,
-/// so a rectangle would mark a great deal of page the operator cannot touch.
-/// Tracing what actually answers a pointer makes the mark and the tap area
-/// the same statement — and a hit area that has come adrift from the glyph
-/// shows up as an outline around empty space, which is worth knowing.
+/// The outline is the asset's own, where it has one. A conveyor turn is an
+/// arc across a box it barely fills and `ConveyorPainter.hitTest` claims only
+/// the painted belt, so a rectangle would mark a great deal of page the
+/// operator cannot touch; the belt publishes the very path its hit test
+/// answers from ([AssetHitShape]) and that is what gets drawn. The mark and
+/// the tap target are then the same object, not two descriptions of it.
+///
+/// Assets that publish nothing take taps on their whole face, and their face
+/// is what gets marked. `hit_boundary_drift_test` holds both kinds against
+/// the hit test they actually have, so a published shape cannot quietly stop
+/// being true.
 ///
 /// Deliberately quiet: a fine line in the same ink the labels use, fading in,
 /// standing just off the asset and never filling it. Equipment state on this
@@ -830,11 +838,11 @@ class _OpenPaneMark extends StatefulWidget {
   /// its position, so the geometry is looked up here.
   final Map<Object, _AssetFrame> frames;
 
-  /// The box to ask about an asset's hit test, or null when it has no
-  /// laid-out element.
-  final RenderBox? Function(Object asset) hitBoxOf;
+  /// The shape an asset publishes for what it takes taps on, or null when it
+  /// publishes none.
+  final ({Path path, RenderBox box})? Function(Object asset) hitShapeOf;
 
-  const _OpenPaneMark({required this.frames, required this.hitBoxOf});
+  const _OpenPaneMark({required this.frames, required this.hitShapeOf});
 
   @override
   State<_OpenPaneMark> createState() => _OpenPaneMarkState();
@@ -852,17 +860,15 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
   _AssetFrame? _frame;
   bool _shown = false;
 
-  /// The traced outline, in this widget's coordinates — which are the
-  /// canvas's, since the mark fills the stack.
+  /// The outline, in this widget's coordinates — which are the canvas's,
+  /// since the mark fills the stack.
   ///
-  /// Null means the probe has not answered: either it has not run yet
-  /// ([_answered] false), or it ran and could not find the asset's box
-  /// ([_answered] true), in which case the asset's rectangle is drawn as a
-  /// fallback. An empty list is an answer in its own right — the asset takes
-  /// no taps anywhere — and draws nothing.
+  /// Null means there is no published shape to draw: either it has not been
+  /// looked for yet ([_answered] false), or it has and the asset publishes
+  /// none ([_answered] true), in which case its face is drawn instead.
   List<List<Offset>>? _outline;
   bool _answered = false;
-  bool _probeScheduled = false;
+  bool _lookupScheduled = false;
 
   @override
   void initState() {
@@ -917,29 +923,29 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
     } else {
       apply();
     }
-    if (shown && !_answered) _scheduleProbe();
+    if (shown && !_answered) _scheduleLookup();
   }
 
-  /// Traces the asset's hit test after the frame it was laid out in.
+  /// Looks the asset's shape up after the frame it was laid out in.
   ///
   /// Post-frame because the asset may have only just been built — a pane
   /// opened from a tap on an asset that moved in the same frame, say — and a
-  /// render object cannot be measured or hit-tested mid-build.
-  void _scheduleProbe() {
-    if (_probeScheduled) return;
-    _probeScheduled = true;
+  /// widget that is not laid out has no box to map its shape out of.
+  void _scheduleLookup() {
+    if (_lookupScheduled) return;
+    _lookupScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _probeScheduled = false;
-      if (mounted) _probe();
+      _lookupScheduled = false;
+      if (mounted) _lookUp();
     });
   }
 
-  void _probe() {
+  void _lookUp() {
     final target = _target;
     final frame = _frame;
     if (target == null || frame == null || !_shown) return;
 
-    final outline = _traceOutline(target, frame);
+    final outline = _outlineFor(target, frame);
     if (_answered && outline == _outline) return;
     setState(() {
       _outline = outline;
@@ -947,47 +953,52 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
     });
   }
 
-  /// The asset's hit boundary in canvas coordinates, or null when the asset
-  /// could not be asked.
-  List<List<Offset>>? _traceOutline(Object target, _AssetFrame frame) {
-    final box = widget.hitBoxOf(target);
+  /// What to outline, in canvas coordinates, stood off from the asset.
+  ///
+  /// The asset's published shape where it has one, and its face where it does
+  /// not — an asset that takes taps on an opaque box is honestly a box. Null
+  /// only while there is nothing laid out to measure against.
+  List<List<Offset>>? _outlineFor(Object target, _AssetFrame frame) {
     final self = context.findRenderObject();
-    if (box == null || !box.attached || !box.hasSize) return null;
     if (self is! RenderBox || !self.attached || !self.hasSize) return null;
 
-    // The area to sweep: the asset's rotated bounding box, in the hit box's
-    // own coordinates. The two are concentric — the hit box is the asset's
-    // unrotated rect, centred in the bounding box it paints out into — and
-    // the sweep is widened by the standoff so the outline has somewhere to
-    // land when the asset fills its box exactly.
-    final area = Rect.fromCenter(
-      center: Offset(box.size.width / 2, box.size.height / 2),
-      width: frame.aabb.width + 2 * _standoff,
-      height: frame.aabb.height + 2 * _standoff,
-    );
-    bool reaches(Offset point) => pointerReaches(box, point);
+    final shape = widget.hitShapeOf(target);
+    // Into the canvas's coordinates first, so the standoff is a distance on
+    // screen rather than one in the asset's own scale — and so the rotation
+    // and mirroring the asset already went through come along rather than
+    // being re-derived here.
+    final path = shape != null
+        ? shape.path.transform(shape.box.getTransformTo(self).storage)
+        : _facePath(frame);
 
-    final mask = HitMask.probe(
-      area: area,
-      cell: HitMask.cellFor(area.size),
-      hit: reaches,
-    );
-
-    final toCanvas = box.getTransformTo(self);
     return [
-      // The same predicate again, to bisect each crossing onto the real edge
-      // and to measure the standoff from it — a grid alone answers only to
-      // within half a sample, unevenly.
-      for (final ring in hitBoundaryContours(
-        mask,
-        refine: reaches,
-        standoff: _standoff,
-      ))
-        [
-          for (final point in ring)
-            MatrixUtils.transformPoint(toCanvas, point),
-        ],
+      for (final ring in flattenPath(path))
+        offsetContour(ring, _standoff, inside: path.contains),
     ];
+  }
+
+  /// The asset's own rectangle, turned with it — the shape of an asset that
+  /// answers a pointer anywhere on its face.
+  ///
+  /// Corners rounded by a hair. Square ones read as a crop mark over a plant
+  /// view; the editor's selection border is deliberately hard-edged because
+  /// it is about the box, and this is about the machine.
+  Path _facePath(_AssetFrame frame) {
+    final rect = Rect.fromCenter(
+      center: Offset.zero,
+      width: frame.size.width,
+      height: frame.size.height,
+    );
+    final corner = math.min(6.0, rect.shortestSide / 4);
+    final turned = Matrix4.identity()
+      ..translateByDouble(frame.center.dx, frame.center.dy, 0, 1)
+      ..rotateZ(frame.angle);
+    // `transform` returns a new path rather than turning this one, so it
+    // cannot be the last step of a cascade — the cascade would hand back the
+    // untransformed path, and the mark would be drawn at the canvas origin.
+    final face = Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(corner)));
+    return face.transform(turned.storage);
   }
 
   @override
@@ -1015,22 +1026,13 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
           // before the pane has finished leaving.
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOut,
-          child: outline == null
-              // The asset could not be asked — no element, mid-rebuild. Its
-              // rectangle is a poorer answer than its hit test, but it still
-              // points at the right machine.
-              ? CustomPaint(
-                  key: openPaneMarkKey,
-                  painter: _AssetBoxMarkPainter(
-                    frame: frame,
-                    standoff: _standoff,
-                    color: ink,
-                  ),
-                )
-              : CustomPaint(
-                  key: openPaneMarkKey,
-                  painter: HitBoundaryPainter(contours: outline, color: ink),
-                ),
+          child: CustomPaint(
+            key: openPaneMarkKey,
+            painter: HitBoundaryPainter(
+              contours: outline ?? const [],
+              color: ink,
+            ),
+          ),
         ),
       ),
     );
@@ -1040,62 +1042,6 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
 /// Marks the outline drawn around the asset whose side pane is open. At most
 /// one per page, and only while a pane opened from an asset is showing.
 const Key openPaneMarkKey = ValueKey('open-pane-mark');
-
-/// The fallback mark: the asset's own rectangle, turned with it.
-///
-/// Used only when the asset's hit test could not be reached, so it is the
-/// same shape the editor's selection border draws — a second opinion about
-/// where the asset is, which is precisely why it is not the normal path.
-class _AssetBoxMarkPainter extends CustomPainter {
-  final _AssetFrame frame;
-  final double standoff;
-  final Color color;
-
-  const _AssetBoxMarkPainter({
-    required this.frame,
-    required this.standoff,
-    required this.color,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromCenter(
-      center: Offset.zero,
-      width: frame.size.width + 2 * standoff,
-      height: frame.size.height + 2 * standoff,
-    );
-    final rrect = RRect.fromRectAndRadius(
-      rect,
-      Radius.circular(standoff + 2),
-    );
-    canvas.save();
-    canvas.translate(frame.center.dx, frame.center.dy);
-    canvas.rotate(frame.angle);
-    canvas.drawRRect(
-      rrect,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..color = color.withValues(alpha: 0.18)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
-    );
-    canvas.drawRRect(
-      rrect,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
-        ..color = color.withValues(alpha: 0.5),
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_AssetBoxMarkPainter oldDelegate) =>
-      oldDelegate.frame != frame ||
-      oldDelegate.standoff != standoff ||
-      oldDelegate.color != color;
-}
-
 
 class AssetView extends StatelessWidget {
   final String pageName;
