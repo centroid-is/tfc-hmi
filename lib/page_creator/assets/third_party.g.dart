@@ -35,12 +35,12 @@ ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
       runKey: json['runKey'] as String? ?? '',
       invertRunPolarity: json['invertRunPolarity'] as bool? ?? false,
       statusKey: json['statusKey'] as String? ?? '',
-      runningColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
-          json['runningColor'], const ColorConverter().fromJson),
-      stoppedColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
-          json['stoppedColor'], const ColorConverter().fromJson),
-      outlineColor: _$JsonConverterFromJson<Map<String, dynamic>, Color>(
-          json['outlineColor'], const ColorConverter().fromJson),
+      runningColor: _$JsonConverterFromJson<Map<String, dynamic>, AssetColor>(
+          json['runningColor'], const AssetColorConverter().fromJson),
+      stoppedColor: _$JsonConverterFromJson<Map<String, dynamic>, AssetColor>(
+          json['stoppedColor'], const AssetColorConverter().fromJson),
+      outlineColor: _$JsonConverterFromJson<Map<String, dynamic>, AssetColor>(
+          json['outlineColor'], const AssetColorConverter().fromJson),
       strokeWidth: (json['strokeWidth'] as num?)?.toDouble() ?? 2.0,
       tag: json['tag'] as String?,
       showTag: json['showTag'] as bool? ?? false,
@@ -73,9 +73,9 @@ Map<String, dynamic> _$ThirdPartyEquipmentConfigToJson(
       'runKey': instance.runKey,
       'invertRunPolarity': instance.invertRunPolarity,
       'statusKey': instance.statusKey,
-      'runningColor': const ColorConverter().toJson(instance.runningColor),
-      'stoppedColor': const ColorConverter().toJson(instance.stoppedColor),
-      'outlineColor': const ColorConverter().toJson(instance.outlineColor),
+      'runningColor': const AssetColorConverter().toJson(instance.runningColor),
+      'stoppedColor': const AssetColorConverter().toJson(instance.stoppedColor),
+      'outlineColor': const AssetColorConverter().toJson(instance.outlineColor),
       'strokeWidth': instance.strokeWidth,
       'tag': instance.tag,
       'showTag': instance.showTag,

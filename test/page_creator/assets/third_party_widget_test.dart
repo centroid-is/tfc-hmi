@@ -11,6 +11,8 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
+import 'package:tfc/theme.dart'
+    show AppColorScheme, HmiColorRole, MutedColors, themesForScheme;
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/providers/database.dart' show databaseProvider;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -450,6 +452,46 @@ void main() {
       });
     }
 
+    testWidgets('a lit diode follows the active colour scheme',
+        (tester) async {
+      // The complaint this pins: a hardcoded Colors.green (#4CAF50) ignores
+      // the operator's scheme choice and paints Material's saturated green
+      // beside a muted, gray-first UI. Under AppColorScheme.muted every lit
+      // diode must resolve to MutedColors.runningGreen.
+      final (lightMuted, _) = themesForScheme(AppColorScheme.muted);
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_InfeedPermitted': true,
+      }));
+
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          theme: lightMuted,
+          home: Scaffold(
+            body: StructStatusDiodes(
+              status: status,
+              bits: const [
+                StructStatusBit('p_stat_InfeedPermitted', 'Ready',
+                    HmiColorRole.green),
+              ],
+              machine: 'strapping machine',
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      final lit = tester
+          .widgetList<CustomPaint>(find.byType(CustomPaint))
+          .map((c) => c.painter)
+          .whereType<LEDPainter>()
+          .where((p) => p.color != null)
+          .toList();
+      expect(lit, hasLength(1));
+      expect(lit.single.color!.toARGB32(),
+          MutedColors.runningGreen.toARGB32(),
+          reason: 'a lit diode must come from HmiStateColors, not Colors.green');
+    });
+
     test('no kind reads its status both ways', () {
       // The two maps are the whole switch between "one subscription for the
       // struct" and "one per bit". A kind in both would render two Status
@@ -663,8 +705,14 @@ void main() {
 
       final painters = diodePaintersOf(tester);
       expect(painters, hasLength(speedBatcherStatusBits.length));
-      // Column order == speedBatcherStatusBits order.
-      expect(painters[0].color, Colors.green, reason: 'Running is true');
+      // Column order == speedBatcherStatusBits order. The lit colour comes
+      // from the scheme now, so it is compared against the same role the bit
+      // declares rather than a hardcoded Colors.green -- `wrap` supplies no
+      // HmiStateColors, so this resolves through theme.dart's Solarized
+      // fallback.
+      final ctx = tester.element(find.byType(StructStatusDiodes));
+      expect(painters[0].color, HmiColorRole.green.resolve(ctx),
+          reason: 'Running is true');
       expect(painters[1].color, Colors.white, reason: 'Cleaning is false');
       for (var i = 2; i < painters.length; i++) {
         expect(painters[i].color, isNull,
@@ -683,7 +731,8 @@ void main() {
         child: StructStatusDiodes(status: status, bits: speedBatcherStatusBits, machine: 'SpeedBatcher'),
       )));
 
-      expect(diodePaintersOf(tester)[1].color, Colors.blue);
+      final ctx = tester.element(find.byType(StructStatusDiodes));
+      expect(diodePaintersOf(tester)[1].color, HmiColorRole.blue.resolve(ctx));
     });
   });
 

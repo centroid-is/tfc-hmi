@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
@@ -13,6 +14,7 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus;
 
@@ -33,8 +35,11 @@ void main() {
 
     test('stopped defaults to grey — red is reserved for faults', () {
       final config = ThirdPartyEquipmentConfig();
-      expect(config.stoppedColor.toARGB32(), Colors.grey.toARGB32());
-      expect(config.runningColor.toARGB32(), Colors.green.toARGB32());
+      // Roles, not literals: a literal is frozen at pick time and ignores a
+      // later scheme switch, which is what left the running LED a saturated
+      // Material green under the muted scheme.
+      expect(config.stoppedColor, AssetColor.grey);
+      expect(config.runningColor, AssetColor.green);
     });
 
     test('displayName and category place it in its own palette group', () {
@@ -50,9 +55,9 @@ void main() {
         kind: ThirdPartyEquipmentKind.strappingLine,
         runKey: 'ST301.PK01.STRAP01.Running',
         invertRunPolarity: true,
-        runningColor: Colors.lime,
-        stoppedColor: Colors.orange,
-        outlineColor: Colors.indigo,
+        runningColor: const AssetColor.literal(Colors.lime),
+        stoppedColor: const AssetColor.literal(Colors.orange),
+        outlineColor: const AssetColor.literal(Colors.indigo),
         strokeWidth: 3.5,
         tag: 'STRAP-01',
         showTag: true,
@@ -67,9 +72,19 @@ void main() {
       expect(restored.kind, ThirdPartyEquipmentKind.strappingLine);
       expect(restored.runKey, 'ST301.PK01.STRAP01.Running');
       expect(restored.invertRunPolarity, isTrue);
-      expect(restored.runningColor.toARGB32(), Colors.lime.toARGB32());
-      expect(restored.stoppedColor.toARGB32(), Colors.orange.toARGB32());
-      expect(restored.outlineColor.toARGB32(), Colors.indigo.toARGB32());
+      // A literal must survive as a literal -- pages saved before the role
+      // system existed hold these, and they must not be reinterpreted as a
+      // role. Compared by value, not by object: a MaterialColor narrows to a
+      // plain Color through the JSON map, which is the same colour but not
+      // the same instance.
+      for (final (actual, expected) in [
+        (restored.runningColor, Colors.lime),
+        (restored.stoppedColor, Colors.orange),
+        (restored.outlineColor, Colors.indigo),
+      ]) {
+        expect(actual.isRole, isFalse);
+        expect(actual.literal!.toARGB32(), expected.toARGB32());
+      }
       expect(restored.strokeWidth, 3.5);
       expect(restored.tag, 'STRAP-01');
       expect(restored.showTag, isTrue);
@@ -819,9 +834,11 @@ void main() {
         'p_stat_Dropped',
       ]);
       for (final bit in speedBatcherStatusBits) {
-        expect(bit.onColor.toARGB32(),
-            (bit.member == 'p_stat_Cleaning' ? Colors.blue : Colors.green)
-                .toARGB32());
+        expect(
+            bit.onRole,
+            bit.member == 'p_stat_Cleaning'
+                ? HmiColorRole.blue
+                : HmiColorRole.green);
       }
     });
 
@@ -917,7 +934,7 @@ void main() {
           .firstWhere((b) => b.member == 'p_stat_WaitingFrustration');
       expect(frustration.labelFor('strapping machine'),
           'Waiting for strapping machine to take the next box');
-      expect(frustration.onColor.toARGB32(), Colors.red.toARGB32(),
+      expect(frustration.onRole, HmiColorRole.red,
           reason: 'it is the one bit that says something is wrong');
     });
 

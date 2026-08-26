@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 
 import '../../providers/state_man.dart';
 import '../../widgets/panes/color_picker_dialog.dart';
@@ -298,17 +299,24 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   String statusKey;
 
   /// LED colour while the machine is running.
-  @ColorConverter()
-  Color runningColor;
+  ///
+  /// An [AssetColor] rather than a bare [Color] so it can hold a scheme ROLE.
+  /// A literal is frozen at the moment the picker was used and ignores a later
+  /// scheme switch -- every one of these assets was storing Material's
+  /// `#4CAF50`, which is why the running LED stayed a saturated green while
+  /// the muted scheme drew everything around it in `#8DA28A`. Literals still
+  /// load: [AssetColorConverter] reads both shapes.
+  @AssetColorConverter()
+  AssetColor runningColor;
 
   /// LED colour while the machine is stopped.
-  @ColorConverter()
-  Color stoppedColor;
+  @AssetColorConverter()
+  AssetColor stoppedColor;
 
   /// Outline colour of the machine drawing. The dotted boundary uses the same
   /// colour at reduced opacity.
-  @ColorConverter()
-  Color outlineColor;
+  @AssetColorConverter()
+  AssetColor outlineColor;
 
   /// Outline stroke width in logical pixels.
   double strokeWidth;
@@ -394,9 +402,9 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.runKey = '',
     this.invertRunPolarity = false,
     this.statusKey = '',
-    Color? runningColor,
-    Color? stoppedColor,
-    Color? outlineColor,
+    AssetColor? runningColor,
+    AssetColor? stoppedColor,
+    AssetColor? outlineColor,
     this.strokeWidth = 2.0,
     this.tag,
     this.showTag = false,
@@ -408,12 +416,12 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     List<ThirdPartyChildEntry>? children,
   })  : children =
             children != null ? List<ThirdPartyChildEntry>.of(children) : [],
-        runningColor = runningColor ?? Colors.green,
+        runningColor = runningColor ?? AssetColor.green,
         // Grey, not red: stopped is a normal state on this line, and red is
         // reserved for something actually being wrong. The unknown state stays
         // tellable from stopped by the `!` glyph LEDPainter adds.
-        stoppedColor = stoppedColor ?? Colors.grey,
-        outlineColor = outlineColor ?? Colors.blueGrey {
+        stoppedColor = stoppedColor ?? AssetColor.grey,
+        outlineColor = outlineColor ?? AssetColor.secondary {
     textPos = TextPos.below;
     // These machines are wide; the BaseAsset 3%×3% default would squash the
     // top view into an unreadable stamp. `fromJson` assigns `..size` after the
@@ -536,10 +544,16 @@ class StructStatusBit {
   /// read identically down a pane.
   final String label;
 
-  /// Diode colour when the bit is true. Off is white, unknown is the grey `!`.
-  final Color onColor;
+  /// Diode colour when the bit is true, as a SCHEME ROLE rather than a literal.
+  ///
+  /// The app ships two colour schemes and `AppColorScheme.muted` follows
+  /// ISA-101's gray-first guidance; a hardcoded `Colors.green` ignores the
+  /// operator's choice and paints a saturated Material green next to muted
+  /// everything-else. Resolved per build through [HmiColorRole.resolve], the
+  /// same way `sensor.dart` resolves its active/inactive colours.
+  final HmiColorRole onRole;
 
-  const StructStatusBit(this.member, this.label, this.onColor);
+  const StructStatusBit(this.member, this.label, this.onRole);
 
   /// [label] with the machine name filled in, sentence-cased. Same rule as
   /// [EquipmentStatusBit.labelFor]; a template with no `{m}` is returned as
@@ -558,11 +572,11 @@ class StructStatusBit {
 /// fish", and "Dropped Batch" sat beside "Batch ready" as a dangling fragment.
 /// Blue for Cleaning, green for the rest.
 const List<StructStatusBit> speedBatcherStatusBits = [
-  StructStatusBit('p_stat_Running', 'Running', Colors.green),
-  StructStatusBit('p_stat_Cleaning', 'Cleaning', Colors.blue),
-  StructStatusBit('p_stat_BatchReady', 'Batch ready', Colors.green),
-  StructStatusBit('p_stat_DropOk', 'Conveyor may drop', Colors.green),
-  StructStatusBit('p_stat_Dropped', 'Batch dropped', Colors.green),
+  StructStatusBit('p_stat_Running', 'Running', HmiColorRole.green),
+  StructStatusBit('p_stat_Cleaning', 'Cleaning', HmiColorRole.blue),
+  StructStatusBit('p_stat_BatchReady', 'Batch ready', HmiColorRole.green),
+  StructStatusBit('p_stat_DropOk', 'Conveyor may drop', HmiColorRole.green),
+  StructStatusBit('p_stat_Dropped', 'Batch dropped', HmiColorRole.green),
 ];
 
 /// The strapping line's handshake, as published by `FB_StrappingLine` in
@@ -600,13 +614,13 @@ const List<StructStatusBit> speedBatcherStatusBits = [
 /// TIME since infeed was last permitted -- likewise free to add.
 const List<StructStatusBit> strappingLineStatusBits = [
   StructStatusBit('p_stat_WaitingFrustration',
-      'Waiting for {m} to take the next box', Colors.red),
+      'Waiting for {m} to take the next box', HmiColorRole.red),
   StructStatusBit('p_stat_StrappingMachines[0].p_stat_Rdy', 'StrapX 1 ready',
-      Colors.green),
+      HmiColorRole.green),
   StructStatusBit('p_stat_StrappingMachines[1].p_stat_Rdy', 'StrapX 2 ready',
-      Colors.green),
+      HmiColorRole.green),
   StructStatusBit(
-      'p_stat_InfeedPermitted', '{m} is ready for box', Colors.green),
+      'p_stat_InfeedPermitted', '{m} is ready for box', HmiColorRole.green),
   // Not "way out is clear": that reads as an observation about physical
   // clearance, and the bit is a PERMISSION -- and one travelling the opposite
   // way to the row above it. Infeed is the machine telling us it can take a
@@ -615,7 +629,7 @@ const List<StructStatusBit> strappingLineStatusBits = [
   // readable as the two questions an operator actually has: can it take one,
   // can it pass one on.
   StructStatusBit(
-      'p_stat_OutfeedPermitted', '{m} may send boxes on', Colors.green),
+      'p_stat_OutfeedPermitted', '{m} may send boxes on', HmiColorRole.green),
 ];
 
 /// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
@@ -662,8 +676,10 @@ class EquipmentStatusBit {
   /// operator working out which machine it belongs to.
   final String label;
 
-  final Color onColor;
-  const EquipmentStatusBit(this.suffix, this.label, this.onColor);
+  /// Diode colour when the bit is true, as a scheme role. See
+  /// [StructStatusBit.onRole] for why this is not a literal.
+  final HmiColorRole onRole;
+  const EquipmentStatusBit(this.suffix, this.label, this.onRole);
 
   /// [label] with the machine name filled in, sentence-cased.
   ///
@@ -718,21 +734,21 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
   // handshake as one `ST_StrappingLine_HMI` struct, so it lives in
   // [kStructStatusBits] and costs one subscription rather than one per permit.
   ThirdPartyEquipmentKind.boxErector: [
-    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', Colors.green),
-    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', Colors.green),
-    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', Colors.blue),
+    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', HmiColorRole.green),
+    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
+    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', HmiColorRole.blue),
   ],
   ThirdPartyEquipmentKind.multivac: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', Colors.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', Colors.amber),
-    EquipmentStatusBit('DropOk', '{m} is ready for fish', Colors.green),
-    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', Colors.blue),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', HmiColorRole.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', HmiColorRole.yellow),
+    EquipmentStatusBit('DropOk', '{m} is ready for fish', HmiColorRole.green),
+    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
   ],
   ThirdPartyEquipmentKind.fishAligner: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', Colors.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', Colors.amber),
-    EquipmentStatusBit('DropOk', '{m} is ready for fish', Colors.green),
-    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', Colors.blue),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', HmiColorRole.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', HmiColorRole.yellow),
+    EquipmentStatusBit('DropOk', '{m} is ready for fish', HmiColorRole.green),
+    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
   ],
 };
 
@@ -790,7 +806,7 @@ class EquipmentStatusDiodes extends StatelessWidget {
                 painter: LEDPainter(
                   color: switch (values[bit.suffix]) {
                     null => null,
-                    true => bit.onColor,
+                    true => bit.onRole.resolve(context),
                     false => Colors.white,
                   },
                   ledType: LEDType.circle,
@@ -920,7 +936,7 @@ class StructStatusDiodes extends StatelessWidget {
                 painter: LEDPainter(
                   color: switch (structStatusBitOf(status, bit.member)) {
                     null => null,
-                    true => bit.onColor,
+                    true => bit.onRole.resolve(context),
                     false => Colors.white,
                   },
                   ledType: LEDType.circle,
@@ -1694,7 +1710,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     final config = widget.config;
     final ledColor = isRunning == null
         ? null
-        : (isRunning ? config.runningColor : config.stoppedColor);
+        : (isRunning ? config.runningColor : config.stoppedColor)
+            .resolve(context);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -1713,7 +1730,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
             return ThirdPartyEquipmentBody(
               painter: thirdPartyPainterFor(
                 config.kind,
-                color: config.outlineColor,
+                color: config.outlineColor.resolve(context),
                 strokeWidth: config.strokeWidth,
                 strapMachines: config.strapMachines,
               ),
@@ -1905,10 +1922,6 @@ class _ThirdPartyEquipmentConfigEditorState
     super.dispose();
   }
 
-  Widget _colorRow(String label, Color color, ValueChanged<Color> onChanged) {
-    return ColorPickerRow(label: label, color: color, onChanged: onChanged);
-  }
-
   @override
   Widget build(BuildContext context) {
     final config = widget.config;
@@ -1932,14 +1945,14 @@ class _ThirdPartyEquipmentConfigEditorState
               child: ThirdPartyEquipmentBody(
                 painter: thirdPartyPainterFor(
                   config.kind,
-                  color: config.outlineColor,
+                  color: config.outlineColor.resolve(context),
                   strokeWidth: config.strokeWidth,
                   strapMachines: config.strapMachines,
                 ),
                 paintSize: previewSize,
                 // Preview always shows the running colour — the operator is
                 // picking colours here, not reading live state.
-                ledColor: config.runningColor,
+                ledColor: config.runningColor.resolve(context),
                 // Children are deliberately NOT rendered in the preview: they
                 // subscribe to real keys, and the editor should not open live
                 // subscriptions just to draw a thumbnail.
@@ -2045,14 +2058,20 @@ class _ThirdPartyEquipmentConfigEditorState
             const SizedBox(height: 16),
 
             // -- Colours --
-            _colorRow('Running Color', config.runningColor,
-                (c) => setState(() => config.runningColor = c)),
+            AssetColorPickerRow(
+                label: 'Running Color',
+                color: config.runningColor,
+                onChanged: (c) => setState(() => config.runningColor = c)),
             const SizedBox(height: 8),
-            _colorRow('Stopped Color', config.stoppedColor,
-                (c) => setState(() => config.stoppedColor = c)),
+            AssetColorPickerRow(
+                label: 'Stopped Color',
+                color: config.stoppedColor,
+                onChanged: (c) => setState(() => config.stoppedColor = c)),
             const SizedBox(height: 8),
-            _colorRow('Outline Color', config.outlineColor,
-                (c) => setState(() => config.outlineColor = c)),
+            AssetColorPickerRow(
+                label: 'Outline Color',
+                color: config.outlineColor,
+                onChanged: (c) => setState(() => config.outlineColor = c)),
             const SizedBox(height: 16),
 
             // -- Stroke width --
