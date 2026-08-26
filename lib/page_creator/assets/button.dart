@@ -22,8 +22,16 @@ part 'button.g.dart';
 @JsonSerializable()
 class FeedbackConfig {
   String key = "Default";
-  @ColorConverter()
-  Color color = Colors.green;
+
+  /// Face colour while the feedback key reads true.
+  ///
+  /// An [AssetColor] so it can hold a scheme ROLE. A literal is frozen at pick
+  /// time and ignores a later scheme switch, which is how the air cabinet's
+  /// button came to flash Material's `#4CAF50` on a muted, gray-first page.
+  /// Literals still load -- [AssetColorConverter] reads both shapes -- so
+  /// pages saved before this are unaffected.
+  @AssetColorConverter()
+  AssetColor color = AssetColor.green;
 
   FeedbackConfig();
 
@@ -366,7 +374,7 @@ class _ButtonState extends ConsumerState<Button> {
           return widget.config.disabledColor;
         }
         if (feedbackActive) {
-          return widget.config.feedback!.color;
+          return widget.config.feedback!.color.resolve(context);
         }
         // For toggle buttons, use toggled state; for regular buttons, use pressed state
         final shouldShowPressed =
@@ -961,9 +969,9 @@ class _ConfigContentState extends State<_ConfigContent> {
           ],
         ),
         const SizedBox(height: 8),
-        ColorPickerRow(
+        AssetColorPickerRow(
           label: 'Feedback Color',
-          color: widget.config.feedback?.color ?? Colors.green,
+          color: widget.config.feedback?.color ?? AssetColor.green,
           onChanged: (value) {
             setState(() {
               widget.config.feedback ??= FeedbackConfig();

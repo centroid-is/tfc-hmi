@@ -232,7 +232,7 @@ void main() {
         buttonType: ButtonType.square,
       )..feedback = (FeedbackConfig()
         ..key = 'fb/key'
-        ..color = const Color(0xFF00FF00) /* green */);
+        ..color = const AssetColor.literal(Color(0xFF00FF00)) /* green */);
 
       await tester.pumpWidget(wrap(
         overrides: [stateManProvider.overrideWith((_) async => fake)],
@@ -285,7 +285,7 @@ void main() {
         buttonType: ButtonType.square,
       )..feedback = (FeedbackConfig()
         ..key = 'fb/key'
-        ..color = const Color(0xFF00FF00));
+        ..color = const AssetColor.literal(Color(0xFF00FF00)));
 
       await tester.pumpWidget(wrap(
         overrides: [stateManProvider.overrideWith((_) async => fake)],
@@ -331,7 +331,7 @@ void main() {
         buttonType: ButtonType.square,
       )..feedback = (FeedbackConfig()
         ..key = 'fb/key'
-        ..color = const Color(0xFF00FF00));
+        ..color = const AssetColor.literal(Color(0xFF00FF00)));
 
       await tester.pumpWidget(wrap(
         overrides: [stateManProvider.overrideWith((_) async => fake)],
