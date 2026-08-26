@@ -3,7 +3,7 @@
 // A pane is a strip against the right edge of a screen full of machinery. On
 // a mimic with four identical conveyors in a row, the pane's header does not
 // settle WHICH of them an operator is about to jog — so the asset the pane
-// was opened from wears a thin ring for as long as the pane is up.
+// was opened from is outlined for as long as the pane is up.
 //
 // Nothing about this is per-asset: an asset opens its pane from its own build
 // context (it already has to, for `showSidePane`'s `avoidRect`), and the
@@ -12,11 +12,15 @@
 //
 // Contract under test:
 //   - a pane opened from inside an asset marks that asset, and only it;
+//   - the outline is traced from the asset's HIT TEST, not from its box — an
+//     asset that takes taps on a disc is marked with a disc;
 //   - the mark follows a swap to another asset's pane;
 //   - closing the pane takes the mark with it;
 //   - a pane opened from outside any asset (the page editor's config pane,
 //     the database stats pane) marks nothing;
 //   - the mark never takes a tap meant for the asset underneath it.
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -25,6 +29,7 @@ import 'package:shared_preferences_platform_interface/in_memory_shared_preferenc
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/pages/page_view.dart';
+import 'package:tfc/widgets/hit_boundary.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 
 void main() {
@@ -39,9 +44,9 @@ void main() {
     closeSidePane(immediate: true);
   });
 
-  /// The ring, or nothing. `findsNothing` covers both "never marked" and
-  /// "faded out": the mark stays in the tree at zero opacity once it has been
-  /// used, so an opacity check is what says whether it is on screen.
+  /// How visible the mark is. The mark stays in the tree at zero opacity once
+  /// it has been used — so that it has something to fade out of — which makes
+  /// opacity, not presence, the question of whether it is on screen.
   double markOpacity(WidgetTester tester) {
     final finder = find.byKey(openPaneMarkKey);
     if (finder.evaluate().isEmpty) return 0;
@@ -57,9 +62,42 @@ void main() {
         .value;
   }
 
-  /// The centre of the ring on screen — which asset it is around.
-  Offset markCentre(WidgetTester tester) =>
-      tester.getRect(find.byKey(openPaneMarkKey)).center;
+  /// The traced outline, in screen coordinates — one list of points per ring.
+  ///
+  /// Read off the painter rather than off the widget's box: the mark fills
+  /// the canvas and paints into it, so its render box says nothing about
+  /// which asset is marked.
+  List<List<Offset>> markOutline(WidgetTester tester) {
+    final paint = tester.widget<CustomPaint>(find.byKey(openPaneMarkKey));
+    final painter = paint.painter;
+    expect(painter, isA<HitBoundaryPainter>(),
+        reason: 'the asset was there to be asked, so the mark is its traced '
+            'hit boundary and not the fallback box');
+    final origin = tester.getTopLeft(find.byKey(openPaneMarkKey));
+    return [
+      for (final ring in (painter as HitBoundaryPainter).contours)
+        [for (final point in ring) point + origin],
+    ];
+  }
+
+  /// What the outline encloses, in screen coordinates.
+  Rect markBounds(WidgetTester tester) {
+    var rect = Rect.fromLTRB(double.infinity, double.infinity,
+        double.negativeInfinity, double.negativeInfinity);
+    for (final ring in markOutline(tester)) {
+      for (final p in ring) {
+        rect = Rect.fromLTRB(
+          math.min(rect.left, p.dx),
+          math.min(rect.top, p.dy),
+          math.max(rect.right, p.dx),
+          math.max(rect.bottom, p.dy),
+        );
+      }
+    }
+    return rect;
+  }
+
+  Offset markCentre(WidgetTester tester) => markBounds(tester).center;
 
   testWidgets('a pane opened from an asset marks that asset', (tester) async {
     // Both well clear of the right edge: the pane docks over it, and a tap
@@ -76,11 +114,17 @@ void main() {
 
     expect(isSidePaneOpen(id: 'pane:left'), isTrue);
     expect(markOpacity(tester), 1);
-    expect(
-      markCentre(tester).dx,
-      closeTo(tester.getCenter(find.text('left')).dx, 1),
-      reason: 'the ring belongs to the asset the pane was opened from',
-    );
+
+    // This asset takes taps across its whole box, so the outline is that box
+    // — standing just off it, not drawn on it.
+    final box = tester.getRect(find.byKey(const ValueKey('face:left')));
+    final outline = markBounds(tester);
+    expect(outline.center.dx, closeTo(box.center.dx, 2),
+        reason: 'the mark belongs to the asset the pane was opened from');
+    expect(outline.width, greaterThan(box.width));
+    expect(outline.width, lessThan(box.width + 20));
+    expect(outline.height, greaterThan(box.height));
+    expect(outline.height, lessThan(box.height + 20));
 
     // A second asset: the pane swaps, and so does the ring.
     await tester.tap(find.text('right'));
@@ -89,10 +133,41 @@ void main() {
     expect(markOpacity(tester), 1);
     expect(
       markCentre(tester).dx,
-      closeTo(tester.getCenter(find.text('right')).dx, 1),
+      closeTo(tester.getCenter(find.text('right')).dx, 2),
     );
     expect(find.byKey(openPaneMarkKey), findsOneWidget,
         reason: 'one pane is open, so exactly one asset is marked');
+  });
+
+  testWidgets('the outline is the asset\'s hit test, not its box',
+      (tester) async {
+    // The conveyor case in miniature. A turned belt is an arc across a box it
+    // barely fills and `ConveyorPainter.hitTest` claims only the painted
+    // belt, so a mark drawn as the box would frame a great deal of page that
+    // ignores taps. Here the asset takes taps on a disc inside a rectangle:
+    // the mark has to come back a disc.
+    final asset = _DiscAsset(radius: 40);
+    await tester.pumpWidget(_wrap([asset]));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(discKey));
+    await tester.pumpAndSettle();
+    expect(asset.taps, 1, reason: 'the tap landed inside the disc');
+
+    final bounds = markBounds(tester);
+    final centre = bounds.center;
+    for (final ring in markOutline(tester)) {
+      for (final point in ring) {
+        // Every traced point sits on the rim of the disc, standing off it by
+        // a few pixels — nothing out at the corners of the box.
+        expect((point - centre).distance, greaterThan(40 - 2));
+        expect((point - centre).distance, lessThan(40 + 12));
+      }
+    }
+
+    final box = tester.getRect(find.byType(AssetStack));
+    expect(bounds.width, lessThan(box.width * 0.2 + 24),
+        reason: 'the outline is the disc, not the asset rectangle');
   });
 
   testWidgets('closing the pane clears the mark', (tester) async {
@@ -183,6 +258,79 @@ Widget _wrap(
   );
 }
 
+/// An asset that takes taps on a disc and ignores the rest of its box, the
+/// way a conveyor takes them on the painted belt alone.
+class _DiscAsset extends BaseAsset {
+  final double radius;
+  int taps = 0;
+
+  _DiscAsset({required this.radius}) {
+    coordinates = Coordinates(x: 0.25, y: 0.5);
+    size = const RelativeSize(width: 0.2, height: 0.2);
+  }
+
+  @override
+  String get displayName => 'DiscAsset';
+
+  @override
+  String get category => 'Test';
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        // The painter is handed its box rather than remembering one from the
+        // last paint: a rebuild whose `shouldRepaint` says no installs the
+        // new painter WITHOUT painting it, so a remembered size is stale — and
+        // a painter that hit-tests against a stale size hit-tests nothing.
+        // `ConveyorPainter` takes its `paintSize` for the same reason.
+        builder: (context, constraints) => GestureDetector(
+          // deferToChild: the painter decides, so the disc decides.
+          onTap: () {
+            taps++;
+            showSidePane(
+              context: context,
+              id: 'pane:disc',
+              builder: (_) => const Text('pane disc'),
+            );
+          },
+          child: CustomPaint(
+            key: discKey,
+            painter: _DiscPainter(radius, constraints.biggest),
+          ),
+        ),
+      );
+
+  @override
+  Widget configure(BuildContext context) => const SizedBox.shrink();
+
+  @override
+  Map<String, dynamic> toJson() => {constAssetName: 'DiscAsset'};
+}
+
+/// Identifies the disc asset's painted surface.
+const Key discKey = ValueKey('disc-asset');
+
+class _DiscPainter extends CustomPainter {
+  final double radius;
+  final Size box;
+
+  const _DiscPainter(this.radius, this.box);
+
+  @override
+  void paint(Canvas canvas, Size size) => canvas.drawCircle(
+        size.center(Offset.zero),
+        radius,
+        Paint()..color = const Color(0xFF888888),
+      );
+
+  @override
+  bool hitTest(Offset position) =>
+      (position - box.center(Offset.zero)).distance <= radius;
+
+  @override
+  bool shouldRepaint(_DiscPainter oldDelegate) =>
+      oldDelegate.radius != radius || oldDelegate.box != box;
+}
+
 /// An asset that opens a pane from its own build context, the way every
 /// pane-owning asset in the app does.
 class _PaneAsset extends BaseAsset {
@@ -211,6 +359,7 @@ class _PaneAsset extends BaseAsset {
           );
         },
         child: ColoredBox(
+          key: ValueKey('face:$name'),
           color: const Color(0xFF888888),
           child: Center(child: Text(name)),
         ),
