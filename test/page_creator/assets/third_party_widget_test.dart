@@ -172,7 +172,7 @@ void main() {
         strapMachines: 2,
         runKey: 'ST301.PK01.STRAP01.Running',
         tag: 'STRAP-01',
-        notes: 'Two Strapex heads in series.',
+        notes: 'Two StrapX heads in series.',
       );
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
@@ -196,7 +196,7 @@ void main() {
           reason: 'AssetStack must see no label while showTag is off.');
       expect(find.text('STRAP-01'), findsOneWidget);
       expect(
-          find.textContaining('2 x Strapex'), findsWidgets,
+          find.textContaining('2 x StrapX'), findsWidgets,
           reason: 'Strapper count must reach the pane title.');
       expect(find.text('NOTES'), findsOneWidget);
 

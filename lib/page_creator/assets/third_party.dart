@@ -68,7 +68,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
       case ThirdPartyEquipmentKind.boxErector:
         return 'Box erector';
       case ThirdPartyEquipmentKind.strappingLine:
-        return 'Afak / Strapex strapping line';
+        return 'Afak / StrapX strapping line';
       case ThirdPartyEquipmentKind.fishAligner:
         return 'Batch aligner';
     }
@@ -78,7 +78,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
   /// model number. Used for the side-pane title.
   String labelFor({int strapMachines = 3}) =>
       this == ThirdPartyEquipmentKind.strappingLine
-          ? 'Strapping line — ${strapMachines.clamp(1, 3)} x Strapex'
+          ? 'Strapping line — ${strapMachines.clamp(1, 3)} x StrapX'
           : label;
 
   /// Real machine footprint, shown in the side pane. See the source notes at
@@ -329,7 +329,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// position, interlock quirks, whatever the operator needs at 03:00.
   String? notes;
 
-  /// Strapex arches on the strapping line — the `-N` in SL-15-N. Ignored by
+  /// StrapX arches on the strapping line — the `-N` in SL-15-N. Ignored by
   /// the other kinds.
   int strapMachines;
 
@@ -585,18 +585,37 @@ const List<StructStatusBit> speedBatcherStatusBits = [
 /// the box. The Multivac's identically-shaped bit still reads the other way
 /// round, which is why the wording here is deliberately not shared with it.
 ///
-/// The struct carries more than these three -- the two Strapex ready/error
-/// pairs, the last sensor's full `FB_Sensor`, and a TIME since infeed was last
-/// permitted. They are all reachable through the same single subscription;
-/// only these three are drawn as diodes because only they are booleans about
-/// the line as a whole.
+/// The two heads come out of the same subscription: `p_stat_StrappingMachines`
+/// is an `ARRAY [1..2] OF ST_StrapX`, and the path syntax indexes into it. The
+/// labels count from 1 for the operator even though the Dart list is 0-based --
+/// see [structMemberPath].
+///
+/// Each head also carries `p_stat_Err`, which is the same signal latched after
+/// 15 s not-ready. It is deliberately NOT drawn: four rows saying almost the
+/// same thing is the redundancy this pane just lost, and the ready bit already
+/// tells the operator which head is holding the line. Adding it later is one
+/// line, with no new key.
+///
+/// The struct carries more still -- the last sensor's full `FB_Sensor` and a
+/// TIME since infeed was last permitted -- likewise free to add.
 const List<StructStatusBit> strappingLineStatusBits = [
   StructStatusBit('p_stat_WaitingFrustration',
       'Waiting for {m} to take the next box', Colors.red),
+  StructStatusBit('p_stat_StrappingMachines[0].p_stat_Rdy', 'StrapX 1 ready',
+      Colors.green),
+  StructStatusBit('p_stat_StrappingMachines[1].p_stat_Rdy', 'StrapX 2 ready',
+      Colors.green),
   StructStatusBit(
       'p_stat_InfeedPermitted', '{m} is ready for box', Colors.green),
+  // Not "way out is clear": that reads as an observation about physical
+  // clearance, and the bit is a PERMISSION -- and one travelling the opposite
+  // way to the row above it. Infeed is the machine telling us it can take a
+  // box; outfeed is us telling the machine it may pass one on, wired straight
+  // out to ECT.ST101_RM01.O2. Naming both after the machine keeps the pair
+  // readable as the two questions an operator actually has: can it take one,
+  // can it pass one on.
   StructStatusBit(
-      'p_stat_OutfeedPermitted', 'Way out of {m} is clear', Colors.blue),
+      'p_stat_OutfeedPermitted', '{m} may send boxes on', Colors.green),
 ];
 
 /// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
@@ -613,8 +632,8 @@ const Map<ThirdPartyEquipmentKind, List<StructStatusBit>> kStructStatusBits = {
 /// The machine's name as it reads inside a diode label.
 ///
 /// Shorter than [ThirdPartyEquipmentKindInfo.label], which carries the make
-/// ("Afak / Strapex strapping line") -- a row saying "Fish waiting to drop to
-/// Afak / Strapex strapping line" is worse than useless.
+/// ("Afak / StrapX strapping line") -- a row saying "Fish waiting to drop to
+/// Afak / StrapX strapping line" is worse than useless.
 String equipmentShortName(ThirdPartyEquipmentKind kind) => switch (kind) {
       ThirdPartyEquipmentKind.multivac => 'Multivac',
       ThirdPartyEquipmentKind.speedBatcher => 'SpeedBatcher',
@@ -794,9 +813,43 @@ class EquipmentStatusDiodes extends StatelessWidget {
 /// against the live PLC — a missing bit must render as the grey `!`, not take
 /// the pane down.
 bool? structStatusBitOf(DynamicValue? status, String member) {
-  if (status == null || !status.isObject) return null;
-  if (!status.contains(member)) return null;
-  return status[member].asBool;
+  var cur = status;
+  for (final segment in structMemberPath(member)) {
+    // `contains` is the guard for both kinds of segment: false for a missing
+    // object key, for an out-of-range index, and for an index into something
+    // that is not an array. `operator[]` THROWS on every one of those, and a
+    // bit the struct does not carry must render as the grey `!` rather than
+    // taking the pane down.
+    if (cur == null || !cur.contains(segment)) return null;
+    cur = cur[segment];
+  }
+  return cur?.asBool;
+}
+
+/// Splits a member path into object keys and array indices.
+///
+/// `'p_stat_StrappingMachines[0].p_stat_Rdy'` becomes
+/// `['p_stat_StrappingMachines', 0, 'p_stat_Rdy']`. The syntax mirrors an OPC
+/// UA node id so a path can be checked against `browse_nodes` output by eye.
+///
+/// **The indices are 0-based, and the PLC's are not.** `ST_StrappingLine_HMI`
+/// declares `ARRAY [1..2] OF ST_StrapX`, and the server's browse names keep
+/// that: `p_stat_StrappingMachines[1]` is the FIRST head. Reading the struct
+/// hands us a plain Dart list, so here the first head is index 0. The labels
+/// are written for the operator and count from 1.
+@visibleForTesting
+Iterable<Object> structMemberPath(String member) sync* {
+  for (final part in member.split('.')) {
+    final open = part.indexOf('[');
+    if (open < 0) {
+      yield part;
+      continue;
+    }
+    if (open > 0) yield part.substring(0, open);
+    for (final m in RegExp(r'\[(\d+)\]').allMatches(part.substring(open))) {
+      yield int.parse(m.group(1)!);
+    }
+  }
 }
 
 /// Resolves the pane's header badge from the handshake struct.
@@ -1490,11 +1543,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   value:
                       config.kind.labelFor(strapMachines: config.strapMachines),
                 ),
-                if (config.kind.hasStrapMachines)
-                  PaneDetailRow(
-                    label: 'Strappers on the line',
-                    value: '${config.strapMachines}',
-                  ),
+                // No separate head-count row: the Machine line above already
+                // ends in "N x StrapX", and the pane read the same number
+                // twice. The count is still editable in the config editor.
                 // Live figures, not key names or static wording — the pane
                 // is for reading the machine, not its wiring. Charts stay
                 // behind a tap so the pane itself does not crowd: the accept

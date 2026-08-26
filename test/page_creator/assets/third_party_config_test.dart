@@ -56,7 +56,7 @@ void main() {
         strokeWidth: 3.5,
         tag: 'STRAP-01',
         showTag: true,
-        notes: 'Afak SL-15-3, three Strapex heads.',
+        notes: 'Afak SL-15-3, three StrapX heads.',
       )
         ..coordinates = Coordinates(x: 0.25, y: 0.5, angle: 90)
         ..size = const RelativeSize(width: 0.2, height: 0.14);
@@ -73,7 +73,7 @@ void main() {
       expect(restored.strokeWidth, 3.5);
       expect(restored.tag, 'STRAP-01');
       expect(restored.showTag, isTrue);
-      expect(restored.notes, 'Afak SL-15-3, three Strapex heads.');
+      expect(restored.notes, 'Afak SL-15-3, three StrapX heads.');
       expect(restored.coordinates.x, 0.25);
       expect(restored.coordinates.angle, 90);
       expect(restored.size.width, 0.2);
@@ -629,8 +629,8 @@ void main() {
 
     test('label and footprint follow the strapper count', () {
       const kind = ThirdPartyEquipmentKind.strappingLine;
-      expect(kind.labelFor(strapMachines: 1), contains('1 x Strapex'));
-      expect(kind.labelFor(strapMachines: 3), contains('3 x Strapex'));
+      expect(kind.labelFor(strapMachines: 1), contains('1 x StrapX'));
+      expect(kind.labelFor(strapMachines: 3), contains('3 x StrapX'));
       // Only the 3-strapper length is published; the others must say so.
       expect(kind.footprint(strapMachines: 3), isNot(contains('estimated')));
       expect(kind.footprint(strapMachines: 2), contains('estimated'));
@@ -862,9 +862,51 @@ void main() {
       // failing, so the names are pinned here.
       expect(strappingLineStatusBits.map((b) => b.member), [
         'p_stat_WaitingFrustration',
+        'p_stat_StrappingMachines[0].p_stat_Rdy',
+        'p_stat_StrappingMachines[1].p_stat_Rdy',
         'p_stat_InfeedPermitted',
         'p_stat_OutfeedPermitted',
       ]);
+    });
+
+    test('a head path resolves through the array', () {
+      // ST_StrappingLine_HMI declares ARRAY [1..2], and the server's browse
+      // names keep that 1-based -- but reading the struct hands us a Dart
+      // list, so head 1 is index 0. Getting this backwards would silently
+      // swap the two heads' diodes, which no type error would catch.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_StrappingMachines': [
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': true})),
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': false})),
+        ],
+      }));
+
+      expect(structMemberPath('p_stat_StrappingMachines[0].p_stat_Rdy'),
+          ['p_stat_StrappingMachines', 0, 'p_stat_Rdy']);
+      expect(
+          structStatusBitOf(status, 'p_stat_StrappingMachines[0].p_stat_Rdy'),
+          isTrue);
+      expect(
+          structStatusBitOf(status, 'p_stat_StrappingMachines[1].p_stat_Rdy'),
+          isFalse);
+    });
+
+    test('an out-of-range head is unknown, not a crash', () {
+      // DynamicValue.operator[] throws on a bad index; a strapper wired for
+      // one head must give the grey `!` rather than taking the pane down.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_StrappingMachines': [
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': true})),
+        ],
+      }));
+
+      expect(
+          structStatusBitOf(status, 'p_stat_StrappingMachines[1].p_stat_Rdy'),
+          isNull);
+      expect(structStatusBitOf(status, 'p_stat_Missing[0].p_stat_Rdy'), isNull);
     });
 
     test('the frustration row names the strapper as what is waited ON', () {
