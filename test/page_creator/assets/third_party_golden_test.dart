@@ -455,6 +455,65 @@ void main() {
       );
     });
 
+    // The strapping line's Status section off the `ST_StrappingLine_HMI`
+    // struct, every diode state at once: the new frustration bit LIT red —
+    // the line has run 15 s with a clear way out and a blocked infeed, the
+    // one state that says something is wrong — infeed-permitted OFF (white),
+    // and outfeed-permitted absent from the struct, rendered as the grey `!`
+    // rather than claiming "off". The labels are the `{m}` templates filled
+    // with "strapping machine", so this golden also pins the wording that
+    // names the strapper as the thing being waited ON.
+    testWidgets('strappingLine — status pane diodes', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_WaitingFrustration': true,
+        'p_stat_InfeedPermitted': false,
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 560,
+                child: Material(
+                  child: SidePane(
+                    title: 'STM-01',
+                    subtitle: 'Afak / Strapex strapping line',
+                    icon: Icons.precision_manufacturing,
+                    // The strapper's header still reads the run key — the
+                    // struct override is SpeedBatcher-only (Cleaning).
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: StructStatusDiodes(
+                        status: status,
+                        bits: strappingLineStatusBits,
+                        machine: equipmentShortName(
+                            ThirdPartyEquipmentKind.strappingLine),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile(
+            'goldens/third_party_strappingLine_status_pane.png'),
+      );
+    });
+
     // The batch aligner's Status section, one diode per state: Waiting too
     // long OFF (white), Fish waiting to drop LIT amber, ready-for-fish LIT
     // green, and Drop complete absent from the map — a key the PLC does not

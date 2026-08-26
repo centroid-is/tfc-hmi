@@ -833,9 +833,9 @@ void main() {
         ));
         await tester.pumpAndSettle();
 
-        // The SpeedBatcher reads members of one struct; the rest read
-        // separate bools under a prefix, and the label says which it is.
-        final label = kind == ThirdPartyEquipmentKind.speedBatcher
+        // A struct kind reads members of one node; the rest read separate
+        // bools under a prefix, and the label says which it is.
+        final label = kStructStatusBits.containsKey(kind)
             ? 'Status Struct Key'
             : 'Status Key Prefix';
         final field = find.widgetWithText(TextField, label);
