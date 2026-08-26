@@ -13,8 +13,11 @@ instead of needing a native VNC client?
   `[screen-share] command=` line in the weston image's `weston.ini`. That swaps
   VeNCrypt/X509 for Apple-DH (ARD), which noVNC does support, and everything
   else — PAM login, Tight encoding, multiple viewers — works unchanged.
-- The flag removes RFB-level encryption, so the VNC port must stop being
-  published on the host and the TLS must move to the noVNC side (`wss://`).
+- The flag is misnamed: it drops the *requirement* for encryption, not the
+  capability. Native clients still negotiate RSA-AES-256 for themselves
+  (verified with TigerVNC 1.15) — only the browser session ends up plaintext at
+  the RFB layer, so the VNC port must stop being published on the host and the
+  TLS must move to the noVNC side (`wss://`). See "Two VNC servers, or one?".
 - Verified end to end against the real `ghcr.io/centroid-is/weston:latest`
   image: authenticated as `centroid`, pulled a live framebuffer through
   websockify, ~41 KiB for a full 1280x800 frame.
@@ -147,6 +150,119 @@ proxy:
 
 Once 5900 is unpublished, the plaintext RFB hop stays inside the compose
 network and only the TLS-wrapped WebSocket is reachable from the plant network.
+
+## Two VNC servers, or one? (and where to put the encryption)
+
+Two follow-up questions came up: could we run *two* VNC sessions — one local
+and plaintext for noVNC, one exposed with TLS for native clients — and could we
+encrypt only on the way out, leaving the inside plaintext?
+
+**Short answer: two servers work, but you almost certainly don't want them,**
+because the flag above does not do what its name suggests.
+
+### `--disable-transport-layer-security` does not disable encryption
+
+It removes the *requirement*. neatvnc keeps offering RSA-AES; only the
+`REQUIRE_ENCRYPTION` flag goes away, which is what lets Apple DH onto the list.
+Each client then picks the strongest type **it** supports. Verified with
+TigerVNC 1.15 against our image with the flag on:
+
+```
+Server offers security type RA2_256(129)
+Server offers security type RA2(5)
+Server offers security type DH(30)
+Choosing security type RA2_256(129)      <- RSA-AES-256, fully encrypted
+```
+
+For comparison, the same client against what we ship **today**:
+
+```
+Choosing security type VeNCrypt(19)
+CVeNCrypt:   Choosing security type X509Plain (262)
+TLS:         Server certificate errors: The certificate is NOT trusted. The
+             certificate issuer is unknown.
+TLS:         Server certificate doesn't match given server name
+```
+
+Our current "TLS" is a self-signed cert that every operator clicks past. RSA-AES
+is trust-on-first-use with no certificate to generate, ship, or rotate — so for
+native clients the flag is arguably an *upgrade*, not a downgrade.
+
+What each client ends up with once the flag is on:
+
+| client | picks | session encrypted? |
+|---|---|---|
+| TigerVNC ≥ 1.12, RealVNC | RA2_256 / RA2 | yes — verified with TigerVNC 1.15 |
+| noVNC | ARD (30) | no — credentials only |
+| gtk-vnc (Remmina, virt-viewer) | ARD (30) | no — credentials only [^gtkvnc] |
+| macOS Screen Sharing | ARD (30) | no — credentials only |
+
+[^gtkvnc]: read from gtk-vnc's `vncconnection.c`, which lists ARD but no
+    RSA-AES. Not confirmed against a live client — a headless `gvncviewer` run
+    never reached the server.
+
+### So: encrypt at the edge, plaintext inside
+
+This is the recommended shape, and it needs only **one** VNC server:
+
+- **Native clients** encrypt themselves at the RFB layer (RSA-AES-256). No
+  proxy, no certificates.
+- **Browsers** get their encryption from `wss://` at websockify — the separate
+  layer, terminated at the edge. That is the layer you were asking about, and
+  noVNC needs it anyway.
+- **Nothing plaintext leaves the host**, provided `5900:5900` is unpublished so
+  the plaintext-capable port only exists on the compose network.
+
+The residual risk is that the server still *permits* an unencrypted session, so
+a misconfigured native client could pick ARD and get plaintext pixels. The
+mitigation is the network boundary, not the flag: don't publish 5900.
+
+### If you still want the two-port split
+
+It does work — I ran it. weston's module loader dedups by path, but
+`Module '…' already loaded` is only a log line: it still returns the entrypoint
+and calls `wet_module_init` a second time. So listing screen-share twice gives
+you two independent shares of the same output:
+
+```ini
+[core]
+modules=screen-share.so,screen-share.so
+
+[screen-share]
+command=/usr/local/bin/share-vnc.sh
+start-on-startup=true
+```
+
+Both shares run the *same* command string — there is one `[screen-share]`
+section and a second one is ignored — so the command has to be a wrapper that
+distinguishes its own invocations:
+
+```sh
+#!/bin/sh
+if mkdir /tmp/vnc-primary 2>/dev/null; then     # first invocation wins
+  exec weston --backend=vnc-backend.so --vnc-tls-cert=…/tls.crt \
+    --vnc-tls-key=…/tls.key --port=5900 --shell=fullscreen-shell.so --no-config
+else
+  exec weston --backend=vnc-backend.so --disable-transport-layer-security \
+    --port=5901 --shell=fullscreen-shell.so --no-config
+fi
+```
+
+Both servers came up and both served real clients — 5900 offering
+`{19, 129, 5}` to TigerVNC, 5901 offering `{129, 5, 30}` and completing a full
+noVNC ARD handshake plus framebuffer.
+
+The costs: a second full nested compositor (its own encode pipeline and
+memory), a second `wl_seat`, and a load-order hack that weston does not
+document and could tighten at any time. Against that, the single-server setup
+already gives native clients RSA-AES-256. Not worth it.
+
+> One caveat on stability: my rig used the **headless** backend as the parent,
+> and there weston segfaults on VNC client disconnect
+> (`wl_registry#2: error 0: invalid global wl_seat`) — but it does so
+> **identically with a single share**, so it is an artifact of the headless
+> parent, not of running two. Stability of two shares on the real DRM parent is
+> untested from here.
 
 ## Security consequences — read before shipping
 
