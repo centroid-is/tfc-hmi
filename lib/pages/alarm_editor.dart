@@ -299,6 +299,15 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
 
     // Only the alarm the form was editing leaves the batch; anything else
     // still staged stays for the banner to accept.
+    //
+    // There is an id to mark accepted only for a proposal staged out of
+    // `proposalStateProvider`. One staged from the route carries none -- the
+    // chat batch card calls acceptAllOfType() before it beams here, so the
+    // proposal is already out of state and already marked. Nesting the batch
+    // pop below inside this block is what left an accepted routed proposal
+    // staged forever: the alarm was written, and the amber staged strip, the
+    // highlighted row and the "Accept Proposal" pane all stayed up over an
+    // alarm that was already saved.
     if (_proposalIds.isNotEmpty) {
       // Removed only AFTER the await returns. Dropping it first meant a
       // failed accept left the id out of _proposalIds while still in state,
@@ -306,11 +315,12 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
       final id = _proposalIds.first;
       await container.read(proposalStateProvider.notifier).acceptProposal(id);
       _proposalIds.removeAt(0);
-      // The flag leaves with the alarm it marks: dropping it earlier would
-      // leave a still-staged removal looking like an ordinary update.
-      if (_proposedAlarms.isNotEmpty) {
-        _proposedDeleteUids.remove(_proposedAlarms.removeAt(0).uid);
-      }
+    }
+    // The alarm leaves the batch however it was staged. The delete flag
+    // leaves with the alarm it marks: dropping it earlier would leave a
+    // still-staged removal looking like an ordinary update.
+    if (_proposedAlarms.isNotEmpty) {
+      _proposedDeleteUids.remove(_proposedAlarms.removeAt(0).uid);
     }
 
     // Told through the handle, not a fresh lookup: navigating away mid-accept
