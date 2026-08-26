@@ -882,12 +882,7 @@ class ClientWrapper {
     return DateTime.now().difference(tick).inMilliseconds / 1000.0;
   }
 
-  ClientWrapper(this.client, this.config, {this.resendOnRecovery = true}) {
-    // Staleness is a function of time, not of events — the frozen-session
-    // failure emits nothing at all, so only a clock can notice it.
-    _healthTimer = Timer.periodic(
-        const Duration(seconds: 2), (_) => _recomputeEffectiveStatus());
-  }
+  ClientWrapper(this.client, this.config, {this.resendOnRecovery = true});
 
   /// Current connection status (synchronous, always up-to-date).
   ConnectionStatus get connectionStatus => _connectionStatus;
@@ -910,15 +905,39 @@ class ClientWrapper {
 
   Timer? _healthTimer;
 
+  // Staleness is a function of time, not of events — the frozen-session
+  // failure emits nothing at all, so only a clock can notice it. The clock
+  // only runs while someone is watching: an always-on periodic timer leaks
+  // past every widget test that builds a StateMan without draining it
+  // ("A Timer is still pending…"), and an unobserved wrapper has nobody to
+  // tell anyway — the synchronous [effectiveStatus] getter re-derives on
+  // every read, so nothing goes stale while the timer is parked.
   late final BehaviorSubject<EffectiveDeviceStatus> _effectiveStatus$ =
-      BehaviorSubject<EffectiveDeviceStatus>.seeded(_deriveEffectiveStatus());
+      BehaviorSubject<EffectiveDeviceStatus>.seeded(
+    _deriveEffectiveStatus(),
+    onListen: _startHealthTimer,
+    onCancel: _stopHealthTimer,
+  );
+
+  void _startHealthTimer() {
+    // The replayed seed may predate this listener — refresh it first.
+    _recomputeEffectiveStatus();
+    _healthTimer ??= Timer.periodic(
+        const Duration(seconds: 2), (_) => _recomputeEffectiveStatus());
+  }
+
+  void _stopHealthTimer() {
+    _healthTimer?.cancel();
+    _healthTimer = null;
+  }
 
   /// Combined link + data-plane health (analog of the Modbus adapter's
   /// TD-004 stream). Unlike [connectionStatus] this cannot go stale: it is
-  /// re-derived on a 2 s timer, so a client that dies without emitting a
-  /// single state event still drops out of `connected` within seconds.
-  EffectiveDeviceStatus get effectiveStatus =>
-      _effectiveStatus$.valueOrNull ?? _deriveEffectiveStatus();
+  /// derived from the heartbeat clock on every read, and pushed to
+  /// [effectiveStatusStream] on a 2 s timer while anyone listens, so a
+  /// client that dies without emitting a single state event still drops
+  /// out of `connected` within seconds.
+  EffectiveDeviceStatus get effectiveStatus => _deriveEffectiveStatus();
 
   Stream<EffectiveDeviceStatus> get effectiveStatusStream =>
       _effectiveStatus$.stream;
@@ -982,8 +1001,8 @@ class ClientWrapper {
     // shutdown would otherwise throw out of that listener.
     if (_connectionController.isClosed) return;
     _connectionController.add(next);
-    // The 2 s health timer would catch this anyway; recomputing here just
-    // makes the chip follow genuine transitions without the timer lag.
+    // Push genuine transitions immediately — the health timer only runs
+    // while the stream is listened to, and even then this skips its lag.
     _recomputeEffectiveStatus();
   }
 
@@ -1101,7 +1120,7 @@ class ClientWrapper {
 
   void dispose() {
     stopHeartbeat();
-    _healthTimer?.cancel();
+    _stopHealthTimer();
     _effectiveStatus$.close();
     _connectionController.close();
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:open62541/open62541.dart'
     show ClientApi, ClientState, SecureChannelState, SessionState;
@@ -102,6 +104,41 @@ void main() {
     wrapper.sessionLost = false; // what the resubscribe path does
     wrapper.debugSetLastHeartbeatTick(DateTime.now());
     expect(wrapper.effectiveStatus, EffectiveDeviceStatus.connected);
+  });
+
+  test('health timer only runs while the stream has listeners', () async {
+    // Regression: an always-on periodic timer in the constructor failed
+    // every widget test that builds a StateMan and never drains it —
+    // flutter_test's "A Timer is still pending" invariant. The clock must
+    // start with the first stream listener and stop with the last; an
+    // unobserved wrapper stays timer-free because the synchronous getter
+    // re-derives on every read.
+    final timers = <Timer>[];
+    await runZoned(() async {
+      final w =
+          ClientWrapper(FakeClientApi(), OpcUAConfig()..serverAlias = 'plc');
+      w.updateConnectionStatus(activated());
+      expect(w.effectiveStatus, EffectiveDeviceStatus.connecting);
+      expect(timers, isEmpty,
+          reason: 'no listener → no clock, however much the wrapper is used');
+
+      final sub = w.effectiveStatusStream.listen((_) {});
+      expect(timers, hasLength(1), reason: 'first listener starts the clock');
+
+      await sub.cancel();
+      expect(timers.single.isActive, isFalse,
+          reason: 'last listener leaving must stop the clock');
+
+      w.dispose();
+      expect(timers.where((t) => t.isActive), isEmpty);
+    },
+        zoneSpecification: ZoneSpecification(
+      createPeriodicTimer: (self, parent, zone, period, f) {
+        final timer = parent.createPeriodicTimer(zone, period, f);
+        timers.add(timer);
+        return timer;
+      },
+    ));
   });
 
   test('stream emits transitions exactly once per change', () async {
