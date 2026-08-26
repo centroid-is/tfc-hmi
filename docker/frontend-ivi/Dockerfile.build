@@ -21,7 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ARG IVI_HOMESCREEN_REF=3b56061
+# af71d2d carries the multi-seat touch fix (centroid-is/ivi-homescreen#2):
+# without it, weston's screen-share VNC seat releases the touchscreen's
+# wl_touch handle and all touch input dies.
+ARG IVI_HOMESCREEN_REF=af71d2d
 RUN git clone --recurse-submodules -j8 \
     https://github.com/centroid-is/ivi-homescreen.git \
     /src/ivi-homescreen \
