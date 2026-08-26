@@ -1059,6 +1059,56 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     return channelName;
   }
 
+  /// Like [enableNotificationChannel], but the payload carries only the value
+  /// of [keyColumn] instead of the whole row.
+  ///
+  /// `pg_notify` payloads are capped at 8000 bytes, and the cap is enforced by
+  /// *erroring the statement that fired the trigger*. A row-payload trigger on
+  /// a table with large values — `flutter_preferences` holds the entire
+  /// `key_mappings` JSON in one row — would therefore make every save of that
+  /// row fail outright. This payload stays a few dozen bytes regardless of row
+  /// size: `{"action": TG_OP, "key": <keyColumn>}`.
+  Future<String> enableKeyedNotificationChannel(
+      String tableName, String keyColumn) async {
+    final channelName = 'table_${tableName}_key_changes';
+
+    await customStatement('''
+    CREATE OR REPLACE FUNCTION "notify_${tableName}_key_change"()
+    RETURNS TRIGGER AS \$\$
+    BEGIN
+      PERFORM pg_notify(
+        '$channelName',
+        json_build_object(
+          'action', TG_OP,
+          'key', CASE WHEN TG_OP = 'DELETE' THEN OLD."$keyColumn" ELSE NEW."$keyColumn" END
+        )::text
+      );
+      RETURN COALESCE(NEW, OLD);
+    END;
+    \$\$ LANGUAGE plpgsql;
+  ''');
+
+    await customStatement('''
+  DROP TRIGGER IF EXISTS "${tableName}_key_notify" ON "$tableName";
+  ''');
+
+    try {
+      await customStatement('''
+  CREATE TRIGGER "${tableName}_key_notify"
+  AFTER INSERT OR UPDATE OR DELETE ON "$tableName"
+  FOR EACH ROW
+  EXECUTE FUNCTION "notify_${tableName}_key_change"();
+  ''');
+    } catch (e) {
+      // Two processes racing DROP+CREATE: losing the race is fine.
+      if (e.toString().contains('already exists')) {
+        return channelName;
+      }
+      rethrow;
+    }
+    return channelName;
+  }
+
   static Duration? parsePostgresInterval(String? interval) {
     if (interval == null) return null;
 

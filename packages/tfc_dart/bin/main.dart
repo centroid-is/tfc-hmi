@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/preferences_watch.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/alarm.dart';
 
@@ -49,12 +50,15 @@ void main() async {
   );
 
   // Setup alarm monitoring with database persistence
-  // ignore: unused_local_variable
   final alarmHandler = await AlarmMan.create(
     prefs,
     stateMan,
     historyToDb: true,
   );
+  // AlarmMan only wires its evaluators up when someone listens to the active
+  // stream. Nothing else in this process does, so without this subscription
+  // no alarm was ever evaluated and historyToDb never wrote a row.
+  alarmHandler.activeAlarms().listen((_) {});
 
   // Disabled servers are skipped entirely — no isolate, no connect loop.
   final opcuaServersToSpawn = smConfig.enabledOpcua;
@@ -132,6 +136,33 @@ void main() async {
   }
 
   logger.i('All isolates spawned, main thread waiting...');
+
+  // Key mappings and alarm definitions were loaded above and then baked into
+  // the spawned isolates; an HMI station editing them would otherwise need a
+  // manual backend restart to take effect. Watch the two preference rows
+  // (LISTEN/NOTIFY, with a slow digest poll as safety net) and restart the
+  // whole process on a real change — the container runs with
+  // `restart: unless-stopped`, so exiting cleanly relaunches with the fresh
+  // config. Idle cost: one tiny server-side md5 query per poll interval.
+  final pollSeconds = int.tryParse(
+          Platform.environment['CENTROID_CONFIG_POLL_SECONDS'] ?? '') ??
+      300;
+  final configWatcher = PreferencesWatcher.forDatabase(
+    db,
+    keys: const {'key_mappings', 'alarm_man_config'},
+    pollInterval: Duration(seconds: pollSeconds),
+  );
+  await configWatcher.start();
+  // Quiet period so a burst of saves (an operator editing several things in a
+  // row) causes one restart, not one per save. Each further change re-arms it.
+  const restartQuiet = Duration(seconds: 10);
+  Timer? restartTimer;
+  configWatcher.changes.listen((key) {
+    logger.w('Configuration "$key" changed in database; restarting backend '
+        'in ${restartQuiet.inSeconds}s to apply it');
+    restartTimer?.cancel();
+    restartTimer = Timer(restartQuiet, () => exit(0));
+  });
 
   // Keep main alive indefinitely
   await Completer<void>().future;
