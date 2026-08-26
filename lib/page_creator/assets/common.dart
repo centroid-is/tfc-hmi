@@ -116,6 +116,18 @@ abstract class Asset {
   /// floor still finds the tile.
   List<String> get searchKeywords;
 
+  /// Whether the page-wide mirror (`AssetStackConfig`) flips this asset's
+  /// glyph even when it is unrotated.
+  ///
+  /// `AssetStack` normally skips the mirror transform for a null angle so
+  /// text-bearing faces (buttons, analog boxes) stay readable on mirrored
+  /// stations — position mirrors, the glyph does not. That is wrong for a
+  /// chiral glyph: a conveyor's turn must bend the other way or the mirrored
+  /// page shows a belt that does not exist on the floor. Such assets return
+  /// true here and counter-mirror any text they paint themselves (see
+  /// [AssetMirrorScope]).
+  bool get mirrorsWithPage;
+
   Widget build(BuildContext context);
   Widget configure(BuildContext context);
   Map<String, dynamic> toJson();
@@ -146,6 +158,11 @@ abstract class BaseAsset implements Asset {
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   List<String> get searchKeywords => const [];
+
+  // Excluded for the same reason: behaviour, not page state.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  bool get mirrorsWithPage => false;
 
   static String _humanize(String typeName) {
     String name = typeName;
@@ -312,6 +329,38 @@ class AssetEditModeScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(AssetEditModeScope oldWidget) => false;
+}
+
+/// The page-wide mirror in effect for the assets below (`AssetStackConfig`,
+/// minus a page's `mirroringDisabled`).
+///
+/// `AssetStack` applies the mirror as a `Transform` around each asset's
+/// visual, which flips *everything* the asset paints — including text the
+/// asset draws on its own canvas. Assets that paint such text (the conveyor's
+/// frequency figure) read the flags here and counter-mirror those glyphs the
+/// same way they already counter-rotate them against `coordinates.angle`.
+///
+/// Lives here rather than in `page_view.dart` for the same import-cycle
+/// reason as [AssetEditModeScope].
+class AssetMirrorScope extends InheritedWidget {
+  final bool xMirror;
+  final bool yMirror;
+
+  const AssetMirrorScope({
+    super.key,
+    required this.xMirror,
+    required this.yMirror,
+    required super.child,
+  });
+
+  /// The scope above [context], or null outside an `AssetStack` (previews,
+  /// palettes) — treat null as no mirroring.
+  static AssetMirrorScope? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<AssetMirrorScope>();
+
+  @override
+  bool updateShouldNotify(AssetMirrorScope oldWidget) =>
+      xMirror != oldWidget.xMirror || yMirror != oldWidget.yMirror;
 }
 
 class KeyField extends ConsumerStatefulWidget {

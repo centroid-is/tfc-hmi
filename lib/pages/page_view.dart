@@ -435,7 +435,13 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                         height: assetH,
                         child: Transform(
                           alignment: Alignment.center,
-                          transform: asset.coordinates.angle != null
+                          // Unrotated assets skip the flip so their text
+                          // stays readable on mirrored stations; chiral
+                          // glyphs (conveyor turns) opt back in via
+                          // [Asset.mirrorsWithPage] and counter-mirror
+                          // their own text (see [AssetMirrorScope]).
+                          transform: asset.coordinates.angle != null ||
+                                  asset.mirrorsWithPage
                               ? _buildTransform(xMirror, yMirror)
                               : Matrix4.identity(),
                           child: widget.absorb
@@ -667,9 +673,15 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           // );
         }
 
-        return Stack(
-          fit: StackFit.expand,
-          children: positionedChildren,
+        // The scope carries the *effective* flags, so assets that paint
+        // their own text can counter-mirror it (see AssetMirrorScope).
+        return AssetMirrorScope(
+          xMirror: xMirror,
+          yMirror: yMirror,
+          child: Stack(
+            fit: StackFit.expand,
+            children: positionedChildren,
+          ),
         );
       },
     );
