@@ -458,11 +458,13 @@ void main() {
     // The strapping line's Status section off the `ST_StrappingLine_HMI`
     // struct, every diode state at once: the new frustration bit LIT red —
     // the line has run 15 s with a clear way out and a blocked infeed, the
-    // one state that says something is wrong — infeed-permitted OFF (white),
-    // and outfeed-permitted absent from the struct, rendered as the grey `!`
-    // rather than claiming "off". The labels are the `{m}` templates filled
-    // with "strapping machine", so this golden also pins the wording that
-    // names the strapper as the thing being waited ON.
+    // one state that says something is wrong — head 1 ready (green) beside
+    // head 2 not (white), pinning the 0-based-list-to-1-based-label mapping
+    // in pixels, infeed-permitted OFF (white), and outfeed-permitted absent
+    // from the struct, rendered as the grey `!` rather than claiming "off".
+    // The labels are the `{m}` templates filled with "strapping machine", so
+    // this golden also pins the wording that names the strapper as the thing
+    // being waited ON.
     testWidgets('strappingLine — status pane diodes', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1000);
@@ -471,6 +473,12 @@ void main() {
 
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         'p_stat_WaitingFrustration': true,
+        'p_stat_StrappingMachines': [
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': true})),
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': false})),
+        ],
         'p_stat_InfeedPermitted': false,
       }));
 
@@ -486,7 +494,7 @@ void main() {
                 child: Material(
                   child: SidePane(
                     title: 'STM-01',
-                    subtitle: 'Afak / Strapex strapping line',
+                    subtitle: 'Afak / StrapX strapping line',
                     icon: Icons.precision_manufacturing,
                     // The strapper's header still reads the run key — the
                     // struct override is SpeedBatcher-only (Cleaning).
