@@ -771,10 +771,14 @@ void main() {
     testWidgets('a leftover status key on another kind holds no subscription',
         (tester) async {
       // The editor hides the field for other kinds but the config keeps the
-      // string — a Multivac must not subscribe to a SpeedBatcher struct for
-      // a pane section it never shows.
+      // string — a prefix-backed kind must not subscribe to a SpeedBatcher
+      // struct for a pane section it never shows. The aligner stands in for
+      // that group: it reads its permits one key at a time off the prefix, so
+      // whatever the leftover string names, no struct stream may be hoisted.
+      // (This used to be the Multivac, until #368 moved it to
+      // [kStructStatusBits] and made it struct-backed like the SpeedBatcher.)
       final config = ThirdPartyEquipmentConfig(
-        kind: ThirdPartyEquipmentKind.multivac,
+        kind: ThirdPartyEquipmentKind.fishAligner,
         statusKey: 'SB1',
       );
       await tester.pumpWidget(wrap(SizedBox(
