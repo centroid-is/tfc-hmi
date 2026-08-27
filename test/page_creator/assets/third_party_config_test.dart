@@ -1004,6 +1004,66 @@ void main() {
     });
   });
 
+  group('fish aligner status bits', () {
+    test('the members are the ones SP_Packing_HMI publishes, in order', () {
+      // Read off the live SPB0n.packing.hmi struct (an SP_Packing_HMI, the
+      // same FB the Multivac reads). A member the struct does not carry
+      // renders as the grey `!` forever rather than failing, so the names are
+      // pinned here. Ordered like the strapper/multivac: the red stopping-line
+      // bit first, then ready -> waiting -> done.
+      expect(fishAlignerStatusBits.map((b) => b.member), [
+        'p_stat_WaitingFrustration',
+        'p_stat_DropOk',
+        'p_stat_DropRequestFeedback',
+        'p_stat_DropFinished',
+      ]);
+    });
+
+    test('the stopping-line row is first, red, and names the batch aligner', () {
+      // Option A: the same member the strapper/multivac uses, relabelled to
+      // name the aligner itself as the holdup rather than blaming the upstream
+      // release.
+      final first = fishAlignerStatusBits.first;
+      expect(first.member, 'p_stat_WaitingFrustration');
+      expect(first.onRole, HmiColorRole.red,
+          reason: 'it is the one bit that says something is wrong');
+      expect(
+          first.labelFor(
+              equipmentShortName(ThirdPartyEquipmentKind.fishAligner)),
+          'Batch aligner is stopping the line');
+    });
+
+    test('the remaining rows keep their prefix-era colours and wording', () {
+      final byMember = {for (final b in fishAlignerStatusBits) b.member: b};
+      expect(byMember['p_stat_DropOk']!.onRole, HmiColorRole.green);
+      expect(byMember['p_stat_DropOk']!.labelFor('batch aligner'),
+          'Batch aligner is ready for fish');
+      expect(byMember['p_stat_DropRequestFeedback']!.onRole,
+          HmiColorRole.yellow);
+      expect(byMember['p_stat_DropRequestFeedback']!.labelFor('batch aligner'),
+          'Fish waiting to drop to batch aligner');
+      expect(byMember['p_stat_DropFinished']!.onRole, HmiColorRole.blue);
+      expect(byMember['p_stat_DropFinished']!.labelFor('batch aligner'),
+          'Drop to batch aligner is complete');
+    });
+
+    test('the fish aligner reads the same struct shape as the multivac', () {
+      // Both read SPB0n.packing.hmi (an SP_Packing_HMI); the diode lists are
+      // intentionally identical member-for-member and colour-for-colour.
+      expect(fishAlignerStatusBits.map((b) => b.member),
+          multivacStatusBits.map((b) => b.member));
+      expect(fishAlignerStatusBits.map((b) => b.onRole),
+          multivacStatusBits.map((b) => b.onRole));
+    });
+
+    test('the fish aligner is struct-backed, not prefix-backed', () {
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.fishAligner],
+          same(fishAlignerStatusBits));
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.fishAligner], isNull,
+          reason: 'both maps would render two Status sections');
+    });
+  });
+
   group('box erector status bits', () {
     test('the red frustration bit is first and names the box erector', () {
       // Mirrors the strapper/multivac ordering: the one bit that says

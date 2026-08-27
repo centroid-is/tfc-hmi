@@ -770,11 +770,13 @@ void main() {
 
     testWidgets('a leftover status key on another kind holds no subscription',
         (tester) async {
-      // The editor hides the field for other kinds but the config keeps the
-      // string — a Multivac must not subscribe to a SpeedBatcher struct for
-      // a pane section it never shows.
+      // A prefix-backed kind reads its diodes as per-bit subscriptions, never
+      // as one struct stream, so even a leftover struct-style key must not
+      // hoist the struct stream. The box erector is the remaining prefix-backed
+      // kind (the Multivac and the fish aligner both moved to the struct
+      // system), so it is the one that proves the point.
       final config = ThirdPartyEquipmentConfig(
-        kind: ThirdPartyEquipmentKind.multivac,
+        kind: ThirdPartyEquipmentKind.boxErector,
         statusKey: 'SB1',
       );
       await tester.pumpWidget(wrap(SizedBox(
@@ -904,8 +906,11 @@ void main() {
 
     testWidgets('the prefix help text spells out the suffixes the pane appends',
         (tester) async {
+      // The box erector is the remaining prefix-backed kind (the fish aligner
+      // moved to the struct system alongside the Multivac), so it is the one
+      // whose editor still shows the appended-suffix help text.
       final config = ThirdPartyEquipmentConfig(
-        kind: ThirdPartyEquipmentKind.fishAligner,
+        kind: ThirdPartyEquipmentKind.boxErector,
       );
       await tester.pumpWidget(wrap(
         Builder(builder: (context) => config.configure(context)),
@@ -913,7 +918,7 @@ void main() {
       await tester.pumpAndSettle();
 
       for (final bit
-          in kEquipmentStatusBits[ThirdPartyEquipmentKind.fishAligner]!) {
+          in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!) {
         expect(find.textContaining('.${bit.suffix}'), findsOneWidget,
             reason: 'The operator types a prefix; the help text is the only '
                 'place that says what gets appended to it.');
