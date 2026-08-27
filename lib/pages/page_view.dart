@@ -306,9 +306,11 @@ class _AssetStackState extends ConsumerState<AssetStack> {
       if (widget is AssetHitShape) {
         // The published path is in the coordinates of the widget it wraps,
         // and that widget's box is the first render object below here.
+        // Resolved here and nowhere else: this runs when a pane opens, and
+        // the asset is rebuilt far more often than that.
         final ro = element.findRenderObject();
         if (ro is RenderBox && ro.hasSize && ro.attached) {
-          found = (path: widget.path, box: ro);
+          found = (path: widget.shape(), box: ro);
         }
         return;
       }

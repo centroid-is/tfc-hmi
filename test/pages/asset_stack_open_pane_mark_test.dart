@@ -314,7 +314,7 @@ class _DiscAsset extends BaseAsset {
             // The same path the painter hit-tests against, handed over as-is
             // — the contract [AssetHitShape] is for.
             child: AssetHitShape(
-              path: painter.shape,
+              shape: () => painter.shape,
               child: CustomPaint(key: discKey, painter: painter),
             ),
           );

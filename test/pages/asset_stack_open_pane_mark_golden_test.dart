@@ -216,7 +216,14 @@ void main() {
       );
     });
 
-    testWidgets('a gate: the glyph in its square', (tester) async {
+    testWidgets('a diverter gate: its box, which the arm overhangs',
+        (tester) async {
+      // The gate takes taps on its whole box, so the box is what is marked.
+      // Two things about the glyph are worth seeing here and neither is the
+      // mark's doing: the pivot hub is drawn centred on the box's left edge,
+      // so half of it is painted outside the box and is not tappable; and the
+      // arm is anchored at that edge rather than centred, so a box taller
+      // than the arm is mostly empty below it.
       await pump(
         tester,
         [
@@ -228,6 +235,44 @@ void main() {
       );
       await tapGlyph(tester, find.byType(ConveyorGate));
       await expectCanvas(tester, 'hit_boundary_gate');
+    });
+
+    testWidgets('a diverter gate in a box shaped like the arm',
+        (tester) async {
+      // The same gate in a box the shape the arm actually is — wide and
+      // short, the way one sits across a belt. The overhanging hub is still
+      // there; the empty space is not.
+      await pump(
+        tester,
+        [
+          (_gate('CN-05', x: 0.5)
+            ..coordinates = Coordinates(x: 0.5, y: 0.45)
+            ..size = const RelativeSize(width: 0.42, height: 0.22)),
+        ],
+        surface: const Size(600, 400),
+      );
+      await tapGlyph(tester, find.byType(ConveyorGate));
+      await expectCanvas(tester, 'hit_boundary_gate_wide');
+    });
+
+    testWidgets('a pusher gate: the blade and its actuator', (tester) async {
+      await pump(
+        tester,
+        [
+          (ConveyorGateConfig(
+            gateVariant: GateVariant.pusher,
+            stateKey: 'gate/state',
+            forceOpenKey: 'gate/force_open',
+          )
+            ..text = 'PU-02'
+            ..textPos = TextPos.below
+            ..coordinates = Coordinates(x: 0.5, y: 0.45)
+            ..size = const RelativeSize(width: 0.34, height: 0.3)),
+        ],
+        surface: const Size(600, 400),
+      );
+      await tapGlyph(tester, find.byType(ConveyorGate));
+      await expectCanvas(tester, 'hit_boundary_gate_pusher');
     });
 
     testWidgets('a straight belt: the band, not the box', (tester) async {

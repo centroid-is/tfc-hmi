@@ -2213,14 +2213,16 @@ class _ConveyorState extends ConsumerState<Conveyor>
     // The belt's own outline, published for the mark the plant view draws
     // while this conveyor's pane is open. Not a shape built to be drawn
     // around the belt — the very path `hitTest` answers from, so what is
-    // outlined and what takes the tap cannot come apart. Null where the belt
-    // has no closed outline (it fills its box, or is a fat stroke of the
-    // centreline), and then the box is what gets marked.
-    final hitShape = painter.hitShape();
+    // outlined and what takes the tap cannot come apart. Resolved only if
+    // something asks; `hasHitShape` answers whether there is one to ask for
+    // without building it, and is exactly the condition under which
+    // `hitShape()` is non-null. Belts with no closed outline — filling their
+    // box, or painted as a fat stroke of the centreline — publish nothing and
+    // are marked by their box.
     final Widget conveyorPaint = CustomPaint(size: paintSize, painter: painter);
-    final belt = hitShape == null
-        ? conveyorPaint
-        : AssetHitShape(path: hitShape, child: conveyorPaint);
+    final belt = painter.hasHitShape
+        ? AssetHitShape(shape: () => painter.hitShape()!, child: conveyorPaint)
+        : conveyorPaint;
 
     final gateEntries = widget.config.gates;
 
@@ -3016,6 +3018,15 @@ class ConveyorPainter extends CustomPainter {
   /// belt with no configured width, which fills its box (the box is the
   /// belt), and a belt so wide for its bends that it is painted as a fat
   /// stroke of the centreline rather than as a band.
+  /// Whether [hitShape] has a path to give, answered from the fields rather
+  /// than by building one.
+  ///
+  /// The widget asks this on every build and builds the path on none of them:
+  /// resolving a turned belt's outline costs about as much again as the
+  /// geometry it comes from, and a page of belts rebuilds on every drag tick.
+  bool get hasHitShape =>
+      geometry != null || (straightBeltWidth != null && paintSize != null);
+
   Path? hitShape() {
     if (!_hitOutlineResolved) {
       _hitOutlineResolved = true;

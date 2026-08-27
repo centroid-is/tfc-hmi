@@ -18,17 +18,20 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart'
-    show DynamicValue, EnumField, LocalizedText;
+    show DynamicValue, EnumField, LocalizedText, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
+import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/widgets/hit_boundary.dart';
 import 'package:tfc_dart/core/state_man.dart';
+
+import '../../helpers/hit_probe.dart';
 
 void main() {
   setUp(() {
@@ -67,21 +70,6 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // The box whose hit test is the operator's experience: everything below
-    // it is the asset deciding for itself.
-    RenderBox? box;
-    void findBox(Element element) {
-      if (box != null) return;
-      final ro = element.renderObject;
-      if (ro is RenderBox &&
-          ro.hasSize &&
-          ro.runtimeType.toString().contains('HitPermissive')) {
-        box = ro;
-        return;
-      }
-      element.visitChildElements(findBox);
-    }
-
     ({Path path, RenderBox box})? published;
     void findShape(Element element) {
       if (published != null) return;
@@ -89,7 +77,7 @@ void main() {
       if (widget is AssetHitShape) {
         final ro = element.findRenderObject();
         if (ro is RenderBox && ro.hasSize) {
-          published = (path: widget.path, box: ro);
+          published = (path: widget.shape(), box: ro);
         }
         return;
       }
@@ -97,7 +85,7 @@ void main() {
     }
 
     final stack = tester.element(find.byType(AssetStack));
-    stack.visitChildElements(findBox);
+    final box = assetHitBox(stack);
     stack.visitChildElements(findShape);
 
     expect(box, isNotNull, reason: 'the asset has a hit box');
@@ -121,7 +109,6 @@ void main() {
     ({RenderBox box, Path shape}) asset, {
     double edge = 1.5,
   }) {
-    final size = asset.box.size;
     final rings = flattenPath(asset.shape, step: 1);
     double distanceToOutline(Offset point) {
       var nearest = double.infinity;
@@ -134,16 +121,18 @@ void main() {
       return nearest;
     }
 
+    final sweep = sweepHitTest(asset.box);
     final disagreements = <String>[];
     var sampled = 0;
-    for (var y = -8.0; y <= size.height + 8; y += 3) {
-      for (var x = -8.0; x <= size.width + 8; x += 3) {
-        final point = Offset(x, y);
+    for (final (points, reachable) in [
+      (sweep.hits, true),
+      (sweep.misses, false),
+    ]) {
+      for (final point in points) {
         if (distanceToOutline(point) <= edge) continue;
         sampled++;
-        final reachable = pointerReaches(asset.box, point);
-        final claimed = asset.shape.contains(point);
-        if (reachable != claimed && disagreements.length < 12) {
+        if (asset.shape.contains(point) == reachable) continue;
+        if (disagreements.length < 12) {
           disagreements.add(reachable
               ? '$point takes a tap the published shape excludes'
               : '$point is inside the published shape but takes no tap');
@@ -194,6 +183,57 @@ void main() {
       ..size = const RelativeSize(width: 0.5, height: 0.35);
 
     expectShapeMatchesHitTest(await pumpAsset(tester, asset));
+  });
+
+  testWidgets('an asset that publishes nothing takes taps on its whole face',
+      (tester) async {
+    // The other half of the promise. The mark draws the face of an asset that
+    // publishes no shape, so that face had better be what answers a pointer —
+    // an asset whose real hit area were smaller (an inset, a shrunken InkWell)
+    // would be marked as claiming more than it takes.
+    final gate = ConveyorGateConfig(
+      gateVariant: GateVariant.pneumatic,
+      stateKey: 'gate/state',
+      forceOpenKey: 'gate/force_open',
+    )
+      ..coordinates = Coordinates(x: 0.5, y: 0.5)
+      ..size = const RelativeSize(width: 0.2, height: 0.3);
+
+    await tester.binding.setSurfaceSize(const Size(900, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fake = _FakeStateMan()..push('gate/state', _bool(true));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [stateManProvider.overrideWith((_) async => fake)],
+      child: MaterialApp(
+        home: Scaffold(
+          body: LayoutBuilder(
+            builder: (context, constraints) => AssetStack(
+              assets: [gate],
+              constraints: constraints,
+              selectedAssets: const {},
+              mirroringDisabled: true,
+              absorb: false,
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AssetHitShape), findsNothing,
+        reason: 'a gate takes taps on its box, so it publishes no shape');
+
+    final box = assetHitBox(tester.element(find.byType(AssetStack)))!;
+    final sweep = sweepHitTest(box, margin: 6);
+    final face = Offset.zero & box.size;
+    for (final point in sweep.hits) {
+      expect(face.inflate(1).contains(point), isTrue,
+          reason: '$point takes a tap from outside the face that is marked');
+    }
+    for (final point in sweep.misses) {
+      expect(face.deflate(1).contains(point), isFalse,
+          reason: '$point is inside the marked face but takes no tap');
+    }
   });
 
   testWidgets('a belt that fills its box publishes nothing', (tester) async {
@@ -255,6 +295,9 @@ DynamicValue _runningDrive() {
   drive['p_cfg_CleaningFreq'] = 20.0;
   return drive;
 }
+
+DynamicValue _bool(bool value) =>
+    DynamicValue(value: value, typeId: NodeId.boolean);
 
 class _FakeStateMan implements StateMan {
   final Map<String, BehaviorSubject<DynamicValue>> _streams = {};
