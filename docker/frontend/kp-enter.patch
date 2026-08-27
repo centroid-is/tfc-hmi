@@ -1,0 +1,17 @@
+diff --git a/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc b/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc
+index 8eee76e..0c6fd11 100644
+--- a/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc
++++ b/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc
+@@ -81,6 +81,12 @@ void TextInputPlugin::OnKeyPressed(uint32_t keycode, uint32_t code_point) {
+       changed = active_model_->Delete();
+       break;
+     case KEY_ENTER:
++    // The keypad's Enter is a separate evdev code, and xkb resolves KP_Enter
++    // to code point 0x0d -- so without this case it falls through to the
++    // default branch and a bare CR is inserted into the field instead of the
++    // input action firing. NumLock has no bearing on this key, which is why
++    // forcing NumLock leaves it dead while the rest of the keypad works.
++    case KEY_KPENTER:
+       EnterPressed(active_model_.get());
+       break;
+     default:

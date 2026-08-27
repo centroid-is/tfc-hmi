@@ -26,8 +26,9 @@ ARG EMBEDDER_REF=5f77625673
 RUN git clone https://github.com/flutter-elinux/flutter-embedded-linux.git /embedder \
     && git -C /embedder checkout ${EMBEDDER_REF}
 
-COPY force-numlock.patch /tmp/force-numlock.patch
-RUN git -C /embedder apply --stat --apply /tmp/force-numlock.patch
+COPY force-numlock.patch kp-enter.patch /tmp/embedder-patches/
+RUN git -C /embedder apply --stat --apply /tmp/embedder-patches/force-numlock.patch \
+      /tmp/embedder-patches/kp-enter.patch
 
 # The embedder links against the engine at build/libflutter_engine.so
 # (hardcoded in its cmake). Use the one from the app bundle so the .so is
@@ -92,8 +93,8 @@ ENV BUNDLE=${APP_BUNDLE}
 
 COPY ${APP_BUNDLE} $APP_DIR/
 
-# Swap in the numlock-patched Wayland embedder built above (see the
-# embedder-builder stage and force-numlock.patch).
+# Swap in the keypad-patched Wayland embedder built above (see the
+# embedder-builder stage and the patches it applies).
 COPY --from=embedder-builder /embedder/build/libflutter_elinux_wayland.so $APP_DIR/lib/
 
 # Download libpdfium.so (flutter-elinux skips the CMake FFI plugin pipeline)
