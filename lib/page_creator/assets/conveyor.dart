@@ -14,6 +14,7 @@ import 'package:logger/logger.dart';
 import '../../providers/state_man.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import '../../widgets/graph.dart';
+import '../../widgets/hit_boundary.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import '../../widgets/state_value_builder.dart';
@@ -2194,30 +2195,40 @@ class _ConveyorState extends ConsumerState<Conveyor>
     );
 
     final mirror = AssetMirrorScope.of(context);
-    final conveyorPaint = CustomPaint(
-      size: paintSize,
-      painter: ConveyorPainter(
-        color: color,
-        showExclamation: showExclamation ?? false,
-        bidirectional: widget.config.bidirectional ?? false,
-        reverseDirection: widget.config.reverseDirection ?? false,
-        showFrequency: widget.config.showFrequency ?? false,
-        frequency: frequency,
-        batches: _batches,
-        angle: widget.config.coordinates.angle ?? 0.0,
-        geometry: geometry,
-        mirrorX: mirror?.xMirror ?? false,
-        mirrorY: mirror?.yMirror ?? false,
-        straightBeltWidth: beltWidth,
-        paintSize: paintSize,
-      ),
+    final painter = ConveyorPainter(
+      color: color,
+      showExclamation: showExclamation ?? false,
+      bidirectional: widget.config.bidirectional ?? false,
+      reverseDirection: widget.config.reverseDirection ?? false,
+      showFrequency: widget.config.showFrequency ?? false,
+      frequency: frequency,
+      batches: _batches,
+      angle: widget.config.coordinates.angle ?? 0.0,
+      geometry: geometry,
+      mirrorX: mirror?.xMirror ?? false,
+      mirrorY: mirror?.yMirror ?? false,
+      straightBeltWidth: beltWidth,
+      paintSize: paintSize,
     );
+    // The belt's own outline, published for the mark the plant view draws
+    // while this conveyor's pane is open. Not a shape built to be drawn
+    // around the belt — the very path `hitTest` answers from, so what is
+    // outlined and what takes the tap cannot come apart. Resolved only if
+    // something asks; `hasHitShape` answers whether there is one to ask for
+    // without building it, and is exactly the condition under which
+    // `hitShape()` is non-null. Belts with no closed outline — filling their
+    // box, or painted as a fat stroke of the centreline — publish nothing and
+    // are marked by their box.
+    final Widget conveyorPaint = CustomPaint(size: paintSize, painter: painter);
+    final belt = painter.hasHitShape
+        ? AssetHitShape(shape: () => painter.hitShape()!, child: conveyorPaint)
+        : conveyorPaint;
 
     final gateEntries = widget.config.gates;
 
     final Widget content;
     if (gateEntries.isEmpty) {
-      content = conveyorPaint;
+      content = belt;
     } else {
       content = SizedBox(
         width: paintSize.width,
@@ -2225,7 +2236,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            conveyorPaint,
+            belt,
             for (final entry in gateEntries)
               _positionedChildGate(entry, paintSize, geometry,
                   straightBeltWidth: beltWidth),
@@ -2996,6 +3007,52 @@ class ConveyorPainter extends CustomPainter {
   Path? _hitOutline;
   bool _hitOutlineResolved = false;
 
+  /// The belt itself, as a path, or null where it has no closed one.
+  ///
+  /// Two callers, one derivation: [hitTest] answers from this, and the plant
+  /// view outlines it while the belt's pane is open (see [AssetHitShape]).
+  /// The mark and the tap target are the same object rather than two
+  /// descriptions of the same intention, so they cannot come apart.
+  ///
+  /// Null in the two cases with no closed belt outline to give: a straight
+  /// belt with no configured width, which fills its box (the box is the
+  /// belt), and a belt so wide for its bends that it is painted as a fat
+  /// stroke of the centreline rather than as a band.
+  /// Whether [hitShape] has a path to give, answered from the fields rather
+  /// than by building one.
+  ///
+  /// The widget asks this on every build and builds the path on none of them:
+  /// resolving a turned belt's outline costs about as much again as the
+  /// geometry it comes from, and a page of belts rebuilds on every drag tick.
+  bool get hasHitShape =>
+      geometry != null || (straightBeltWidth != null && paintSize != null);
+
+  Path? hitShape() {
+    if (!_hitOutlineResolved) {
+      _hitOutlineResolved = true;
+      _hitOutline = _buildHitOutline();
+    }
+    return _hitOutline;
+  }
+
+  Path? _buildHitOutline() {
+    final g = geometry;
+    if (g == null) {
+      final band = straightBeltWidth;
+      final size = paintSize;
+      if (band == null || size == null) return null;
+      final rect =
+          Rect.fromLTWH(0, (size.height - band) / 2, size.width, band);
+      return Path()
+        ..addRRect(RRect.fromRectAndRadius(
+          rect,
+          Radius.circular(rect.shortestSide * _endRadiusFactor),
+        ));
+    }
+    return g.bandOutline(0, 1,
+        width: g.beltWidth, radius: g.beltWidth * _endRadiusFactor);
+  }
+
   /// Claim only the painted belt, not the whole box.
   ///
   /// A turned belt occupies a fraction of its bounding box, and a straight
@@ -3005,26 +3062,11 @@ class ConveyorPainter extends CustomPainter {
   /// reachable.
   @override
   bool hitTest(Offset position) {
+    final shape = hitShape();
+    if (shape != null) return shape.contains(position);
     final g = geometry;
-    if (g == null) {
-      final band = straightBeltWidth;
-      final size = paintSize;
-      // No explicit band: the belt fills the box, so the box is the belt.
-      if (band == null || size == null) return true;
-      final rect =
-          Rect.fromLTWH(0, (size.height - band) / 2, size.width, band);
-      return RRect.fromRectAndRadius(
-        rect,
-        Radius.circular(rect.shortestSide * _endRadiusFactor),
-      ).contains(position);
-    }
-    if (!_hitOutlineResolved) {
-      _hitOutlineResolved = true;
-      _hitOutline = g.bandOutline(0, 1,
-          width: g.beltWidth, radius: g.beltWidth * _endRadiusFactor);
-    }
-    final outline = _hitOutline;
-    if (outline != null) return outline.contains(position);
+    // No explicit band: the belt fills the box, so the box is the belt.
+    if (g == null) return true;
     // Over-wide belt: painted as a fat stroke of the centerline, so accept
     // anything within half the belt width (plus border) of it.
     const samples = 64;

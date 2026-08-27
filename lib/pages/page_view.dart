@@ -20,6 +20,7 @@ import '../providers/state_man.dart';
 import '../theme.dart' show HmiStateColors;
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
 import '../widgets/base_scaffold.dart';
+import '../widgets/hit_boundary.dart';
 import '../widgets/panes/side_pane.dart';
 import '../widgets/zoomable_canvas.dart';
 
@@ -273,6 +274,53 @@ class _AssetStackState extends ConsumerState<AssetStack> {
   /// serves every following tick.
   final Map<(String, TextStyle), Size> _labelSizeCache = {};
 
+  /// The shape [asset] takes taps on, in that shape's own coordinates, with
+  /// the box it was measured in — or null when the asset publishes none.
+  ///
+  /// Walks the canvas subtree for the [ObjectKey] this stack hangs on each
+  /// asset's `Positioned` — the same route the page editor takes to measure
+  /// an asset — and then down for an [AssetHitShape]. Only assets whose hit
+  /// test is a path publish one; the rest take taps on their whole face, and
+  /// [_OpenPaneMark] draws that face.
+  ({Path path, RenderBox box})? _hitShapeOf(Object asset) {
+    if (!mounted) return null;
+    final key = ObjectKey(asset);
+    Element? positioned;
+    void findPositioned(Element element) {
+      if (positioned != null) return;
+      if (element.widget.key == key) {
+        positioned = element;
+        return;
+      }
+      element.visitChildElements(findPositioned);
+    }
+
+    context.visitChildElements(findPositioned);
+    final root = positioned;
+    if (root == null) return null;
+
+    ({Path path, RenderBox box})? found;
+    void findShape(Element element) {
+      if (found != null) return;
+      final widget = element.widget;
+      if (widget is AssetHitShape) {
+        // The published path is in the coordinates of the widget it wraps,
+        // and that widget's box is the first render object below here.
+        // Resolved here and nowhere else: this runs when a pane opens, and
+        // the asset is rebuilt far more often than that.
+        final ro = element.findRenderObject();
+        if (ro is RenderBox && ro.hasSize && ro.attached) {
+          found = (path: widget.shape(), box: ro);
+        }
+        return;
+      }
+      element.visitChildElements(findShape);
+    }
+
+    root.visitChildElements(findShape);
+    return found;
+  }
+
   Size _measureLabel(String text, TextStyle style) {
     if (_labelSizeCache.length > 512) _labelSizeCache.clear();
     return _labelSizeCache.putIfAbsent((text, style), () {
@@ -306,6 +354,12 @@ class _AssetStackState extends ConsumerState<AssetStack> {
 
         // We'll accumulate all Positioned children here
         final positionedChildren = <Widget>[];
+
+        // Where each asset ended up, for the mark that says which one the
+        // open side pane is about. Built here rather than measured later
+        // because this loop already has the geometry, and identity-keyed
+        // because two assets of a type are equal only by identity.
+        final frames = Map<Object, _AssetFrame>.identity();
 
         for (final asset in widget.assets) {
           // 1) normalized coords with optional mirroring
@@ -381,6 +435,13 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           final aabbH = assetW * sinA + assetH * cosA;
           final halfAabbW = aabbW / 2;
           final halfAabbH = aabbH / 2;
+
+          frames[asset] = _AssetFrame(
+            center: center,
+            size: assetSize,
+            aabb: Size(aabbW, aabbH),
+            angle: angleRadians,
+          );
 
           positionedChildren.add(
             Positioned(
@@ -459,7 +520,28 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                               ? IgnorePointer(
                                   child: AssetEditModeScope(
                                       child: asset.build(context)))
-                              : asset.build(context),
+                              // Everything the asset builds sits under the
+                              // scope, so when it opens its pane from its
+                              // own build context the pane host learns
+                              // which asset that pane is about — and
+                              // [_OpenPaneMark] can say so on the mimic
+                              // without a single asset opting in. Runtime
+                              // only: in the editor the asset's gestures
+                              // are ignored anyway, and the config pane is
+                              // opened by the editor, over an asset it
+                              // already draws a selection border around.
+                              : SidePaneSubject(
+                                  subject: asset,
+                                  // Through a Builder so the context the
+                                  // asset builds with is itself inside the
+                                  // scope. An asset that opens its pane with
+                                  // the context handed to `build` — rather
+                                  // than one from a widget of its own — is
+                                  // then marked like any other, and
+                                  // `showSidePane` measures that asset's box
+                                  // for `avoidRect` instead of the whole
+                                  // canvas's.
+                                  child: Builder(builder: asset.build)),
                         ),
                       ),
                     ),
@@ -673,6 +755,13 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           // );
         }
 
+        // One mark, added last so it draws over the assets and their labels
+        // — only one pane is open at a time, and a mark per asset would put
+        // an animated overlay on every device on the page.
+        positionedChildren.add(
+          _OpenPaneMark(frames: frames, hitShapeOf: _hitShapeOf),
+        );
+
         // The scope carries the *effective* flags, so assets that paint
         // their own text can counter-mirror it (see AssetMirrorScope).
         return AssetMirrorScope(
@@ -687,6 +776,270 @@ class _AssetStackState extends ConsumerState<AssetStack> {
     );
   }
 }
+
+/// Where one asset ended up on the canvas, in canvas pixels.
+///
+/// [size] is the asset's own, unrotated box — what the asset paints into and
+/// what the editor's selection border is drawn around — while [aabb] is the
+/// axis-aligned box that box needs once it is turned by [angle].
+@immutable
+class _AssetFrame {
+  final Offset center;
+  final Size size;
+  final Size aabb;
+  final double angle;
+
+  const _AssetFrame({
+    required this.center,
+    required this.size,
+    required this.aabb,
+    required this.angle,
+  });
+
+  // By value: the stack builds a fresh frame on every rebuild, and the mark
+  // re-probes the asset's hit test whenever the frame it is drawn from
+  // changes. Identity would make that every rebuild.
+  @override
+  bool operator ==(Object other) =>
+      other is _AssetFrame &&
+      other.center == center &&
+      other.size == size &&
+      other.aabb == aabb &&
+      other.angle == angle;
+
+  @override
+  int get hashCode => Object.hash(center, size, aabb, angle);
+}
+
+/// Marks the asset the open side pane belongs to.
+///
+/// A pane is a strip against the right edge, well away from the machine it is
+/// about, and on a mimic with four identical conveyors in a row the header
+/// alone does not settle which one an operator is jogging. So while a pane is
+/// open, its asset is outlined.
+///
+/// The outline is the asset's own, where it has one. A conveyor turn is an
+/// arc across a box it barely fills and `ConveyorPainter.hitTest` claims only
+/// the painted belt, so a rectangle would mark a great deal of page the
+/// operator cannot touch; the belt publishes the very path its hit test
+/// answers from ([AssetHitShape]) and that is what gets drawn. The mark and
+/// the tap target are then the same object, not two descriptions of it.
+///
+/// Assets that publish nothing take taps on their whole face, and their face
+/// is what gets marked. `hit_boundary_drift_test` holds both kinds against
+/// the hit test they actually have, so a published shape cannot quietly stop
+/// being true.
+///
+/// Deliberately quiet: a fine line in the same ink the labels use, fading in,
+/// standing just off the asset and never filling it. Equipment state on this
+/// page is carried by what an asset is filled with ([HmiStateColors]) — a
+/// mark that tinted the asset would read as one more state, which is the one
+/// thing it must not do.
+class _OpenPaneMark extends StatefulWidget {
+  /// Every asset on the canvas, by identity — the pane names its asset, not
+  /// its position, so the geometry is looked up here.
+  final Map<Object, _AssetFrame> frames;
+
+  /// The shape an asset publishes for what it takes taps on, or null when it
+  /// publishes none.
+  final ({Path path, RenderBox box})? Function(Object asset) hitShapeOf;
+
+  const _OpenPaneMark({required this.frames, required this.hitShapeOf});
+
+  @override
+  State<_OpenPaneMark> createState() => _OpenPaneMarkState();
+}
+
+class _OpenPaneMarkState extends State<_OpenPaneMark> {
+  /// How far off the asset the outline stands, in logical pixels. Enough to
+  /// read as a mark around the thing rather than a line drawn on it.
+  static const double _standoff = 4;
+
+  /// The asset being marked, and where it sits. Both kept after the pane
+  /// closes so the mark has something to fade OUT of — dropping them would
+  /// snap it away while the pane it belongs to is still gliding off screen.
+  Object? _target;
+  _AssetFrame? _frame;
+  bool _shown = false;
+
+  /// The outline, in this widget's coordinates — which are the canvas's,
+  /// since the mark fills the stack.
+  ///
+  /// Null means there is no published shape to draw: either it has not been
+  /// looked for yet ([_answered] false), or it has and the asset publishes
+  /// none ([_answered] true), in which case its face is drawn instead.
+  List<List<Offset>>? _outline;
+  bool _answered = false;
+  bool _lookupScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    SidePaneHost.subject.addListener(_onSubjectChanged);
+    _sync(notify: false);
+  }
+
+  @override
+  void didUpdateWidget(_OpenPaneMark oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A rebuild is already under way (the canvas resized, an asset moved), so
+    // take the new geometry without asking for another one.
+    _sync(notify: false);
+  }
+
+  @override
+  void dispose() {
+    SidePaneHost.subject.removeListener(_onSubjectChanged);
+    super.dispose();
+  }
+
+  void _onSubjectChanged() {
+    if (mounted) _sync();
+  }
+
+  void _sync({bool notify = true}) {
+    final subject = SidePaneHost.subject.value;
+    // An unknown subject — the page editor's config pane, the database stats
+    // pane, anything opened from outside an asset — leaves the page unmarked.
+    final live = subject == null ? null : widget.frames[subject];
+    final shown = live != null;
+    // By value, not identity: every rebuild mints a new frame, and only a
+    // frame that says something different is worth re-tracing for.
+    final moved = shown && (!identical(subject, _target) || live != _frame);
+    if (shown == _shown && !moved) return;
+
+    void apply() {
+      _shown = shown;
+      if (live != null) {
+        _target = subject;
+        _frame = live;
+      }
+      if (moved) {
+        _outline = null;
+        _answered = false;
+      }
+    }
+
+    if (notify) {
+      setState(apply);
+    } else {
+      apply();
+    }
+    if (shown && !_answered) _scheduleLookup();
+  }
+
+  /// Looks the asset's shape up after the frame it was laid out in.
+  ///
+  /// Post-frame because the asset may have only just been built — a pane
+  /// opened from a tap on an asset that moved in the same frame, say — and a
+  /// widget that is not laid out has no box to map its shape out of.
+  void _scheduleLookup() {
+    if (_lookupScheduled) return;
+    _lookupScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _lookupScheduled = false;
+      if (mounted) _lookUp();
+    });
+  }
+
+  void _lookUp() {
+    final target = _target;
+    final frame = _frame;
+    if (target == null || frame == null || !_shown) return;
+
+    final outline = _outlineFor(target, frame);
+    if (_answered && outline == _outline) return;
+    setState(() {
+      _outline = outline;
+      _answered = true;
+    });
+  }
+
+  /// What to outline, in canvas coordinates, stood off from the asset.
+  ///
+  /// The asset's published shape where it has one, and its face where it does
+  /// not — an asset that takes taps on an opaque box is honestly a box. Null
+  /// only while there is nothing laid out to measure against.
+  List<List<Offset>>? _outlineFor(Object target, _AssetFrame frame) {
+    final self = context.findRenderObject();
+    if (self is! RenderBox || !self.attached || !self.hasSize) return null;
+
+    final shape = widget.hitShapeOf(target);
+    // Into the canvas's coordinates first, so the standoff is a distance on
+    // screen rather than one in the asset's own scale — and so the rotation
+    // and mirroring the asset already went through come along rather than
+    // being re-derived here.
+    final path = shape != null
+        ? shape.path.transform(shape.box.getTransformTo(self).storage)
+        : _facePath(frame);
+
+    return [
+      for (final ring in flattenPath(path))
+        offsetContour(ring, _standoff, inside: path.contains),
+    ];
+  }
+
+  /// The asset's own rectangle, turned with it — the shape of an asset that
+  /// answers a pointer anywhere on its face.
+  ///
+  /// Corners rounded by a hair. Square ones read as a crop mark over a plant
+  /// view; the editor's selection border is deliberately hard-edged because
+  /// it is about the box, and this is about the machine.
+  Path _facePath(_AssetFrame frame) {
+    final rect = Rect.fromCenter(
+      center: Offset.zero,
+      width: frame.size.width,
+      height: frame.size.height,
+    );
+    final corner = math.min(6.0, rect.shortestSide / 4);
+    final turned = Matrix4.identity()
+      ..translateByDouble(frame.center.dx, frame.center.dy, 0, 1)
+      ..rotateZ(frame.angle);
+    // `transform` returns a new path rather than turning this one, so it
+    // cannot be the last step of a cascade — the cascade would hand back the
+    // untransformed path, and the mark would be drawn at the canvas origin.
+    final face = Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(corner)));
+    return face.transform(turned.storage);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final frame = _frame;
+    // Nothing has been marked on this page yet: no outline, and no box in the
+    // stack that could take a tap meant for an asset.
+    if (frame == null) return const SizedBox.shrink();
+
+    final outline = _outline;
+
+    return Positioned.fill(
+      // Filling the stack rather than the asset: the outline is traced in the
+      // asset's coordinates and mapped into the canvas's, so it is painted in
+      // the canvas's too — no second copy of the rotation and mirroring the
+      // asset already went through.
+      child: IgnorePointer(
+        child: AnimatedOpacity(
+          // Held at nothing until the probe answers, so the fallback never
+          // flashes up in the frame before the traced outline replaces it.
+          opacity: _shown && _answered ? 1 : 0,
+          // Just under the pane's own 220ms glide: the mark should be there
+          // by the time the operator's eye arrives at the pane, and gone
+          // before the pane has finished leaving.
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          child: CustomPaint(
+            key: openPaneMarkKey,
+            painter: HitBoundaryPainter(contours: outline ?? const []),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Marks the outline drawn around the asset whose side pane is open. At most
+/// one per page, and only while a pane opened from an asset is showing.
+const Key openPaneMarkKey = ValueKey('open-pane-mark');
 
 class AssetView extends StatelessWidget {
   final String pageName;

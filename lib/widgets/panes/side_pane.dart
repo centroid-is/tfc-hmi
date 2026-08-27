@@ -117,6 +117,40 @@ class SidePane extends StatelessWidget {
   }
 }
 
+/// Names the equipment that a pane opened from this subtree is about.
+///
+/// A pane is a strip on the far right of a screen full of machinery, and on a
+/// busy mimic it is not always obvious which of the four conveyors in a row it
+/// belongs to. [AssetStack] wraps every asset in one of these, so a pane
+/// opened from an asset's own build context — which is how every asset opens
+/// its pane already, for [showSidePane]'s `avoidRect` — records the asset it
+/// came from without any call site having to say so. The plant view reads it
+/// back off [SidePaneHost.subject] and marks that one asset.
+///
+/// [subject] is compared by identity, so it wants to be the long-lived object
+/// the asset is drawn from (its `Asset`/config), not a value rebuilt per frame.
+class SidePaneSubject extends InheritedWidget {
+  final Object subject;
+
+  const SidePaneSubject({
+    super.key,
+    required this.subject,
+    required super.child,
+  });
+
+  /// The subject [context] sits inside, or null when nothing named one.
+  ///
+  /// Deliberately not `dependOnInheritedWidgetOfExactType`: this is read once
+  /// inside a tap handler to record who is opening the pane, and taking a
+  /// dependency there would rebuild the asset every time the value changed.
+  static Object? of(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<SidePaneSubject>()?.subject;
+
+  @override
+  bool updateShouldNotify(SidePaneSubject oldWidget) =>
+      !identical(oldWidget.subject, subject);
+}
+
 /// Closes [paneId] when its subtree leaves the tree.
 ///
 /// A docked pane lives in the root overlay, so nothing tears it down when the
@@ -420,6 +454,37 @@ abstract final class SidePaneHost {
   static ValueListenable<double> get occupiedWidth => _occupied;
   static final ValueNotifier<double> _occupied = ValueNotifier<double>(0);
 
+  /// The [SidePaneSubject] the open pane was opened from, or null — either no
+  /// pane is showing, or the one that is came from somewhere that names no
+  /// subject (the page editor opens its config pane from the page's own
+  /// context, and marks the asset itself). The plant view watches this to
+  /// mark the asset the operator is looking at; nothing about the pane
+  /// depends on it, so a pane whose subject is null works exactly as before.
+  static ValueListenable<Object?> get subject => _subject;
+  static final ValueNotifier<Object?> _subject = ValueNotifier<Object?>(null);
+
+  static void _setSubject(Object? value) {
+    if (identical(_subject.value, value)) return;
+    _publish(() => _subject.value = value);
+  }
+
+  /// Runs [apply] where it is safe to notify listeners.
+  ///
+  /// Panes are closed from `dispose()` as well as from taps, and a dispose
+  /// runs inside the frame's build phase — notifying from there is a
+  /// "setState during build" against whatever is listening (the page's inset,
+  /// the plant view's selection mark), and the listener may be half torn down
+  /// itself. Every other caller (animation ticks, drag updates) is outside
+  /// the build phase and applies straight away.
+  static void _publish(VoidCallback apply) {
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) => apply());
+      return;
+    }
+    apply();
+  }
+
   /// The on-screen rect the pane must not cover, in un-inset coordinates —
   /// measured before the page moves. Null means "assume covered".
   static Rect? _avoidRect;
@@ -435,16 +500,8 @@ abstract final class SidePaneHost {
   static void _setOccupied(double value) {
     if (_occupied.value == value) return;
     // A shell can go away mid-build — the whole overlay torn down by a route
-    // change or a test's next pumpWidget. Notifying listeners from inside
-    // that build would trip "setState during build", so defer to the frame's
-    // end; every other caller (animation ticks, drag updates) is outside it.
-    if (SchedulerBinding.instance.schedulerPhase ==
-        SchedulerPhase.persistentCallbacks) {
-      SchedulerBinding.instance
-          .addPostFrameCallback((_) => _setOccupied(value));
-      return;
-    }
-    _occupied.value = value;
+    // change or a test's next pumpWidget — so this goes through [_publish].
+    _publish(() => _occupied.value = value);
   }
 
   /// Width of the pane currently showing. Set per open, so a wide pane (the
@@ -478,6 +535,7 @@ abstract final class SidePaneHost {
       _openId = id;
       _onClosed = onClosed;
       _avoidRect = avoidRect;
+      _setSubject(SidePaneSubject.of(context));
       _width = width ?? SidePaneDefaults.width;
       // The chrome travels with the pane, not with the sheet: the overlay
       // entry was built for whichever pane opened first and is not rebuilt
@@ -500,6 +558,7 @@ abstract final class SidePaneHost {
     _shellKey = key;
     _openId = id;
     _onClosed = onClosed;
+    _setSubject(SidePaneSubject.of(context));
     _entry = OverlayEntry(
       builder: (context) => _SidePaneShell(
         key: key,
@@ -523,6 +582,9 @@ abstract final class SidePaneHost {
     // Mark closed straight away so a tap during the exit animation opens a
     // fresh pane instead of toggling against a pane that is on its way out.
     _openId = null;
+    // The mark on the asset goes with it: it says "this is what the pane is
+    // about", and the pane is on its way out.
+    _setSubject(null);
     // That fresh pane takes over the statics -- _entry, _shellKey, _onClosed
     // -- while this one is still sliding out. So when the slide finishes,
     // remove THIS entry, not whichever one the host holds by then: removing
@@ -549,6 +611,7 @@ abstract final class SidePaneHost {
     _entry = null;
     _shellKey = null;
     _openId = null;
+    _setSubject(null);
     if (!keepInset) {
       _insetEngaged = false;
       _avoidRect = null;
@@ -568,6 +631,7 @@ abstract final class SidePaneHost {
     _entry = null;
     _shellKey = null;
     _openId = null;
+    _setSubject(null);
     _insetEngaged = false;
     _avoidRect = null;
     _setOccupied(0);

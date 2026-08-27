@@ -1438,6 +1438,36 @@ class _RenderLayoutRotatedBox extends RenderProxyBox {
     );
   }
 
+  /// Reports the rotation to everything that asks where the child ended up.
+  ///
+  /// [paint] pushes a transform and [hitTest] inverts the same one, but
+  /// neither is what `getTransformTo`, `localToGlobal` or
+  /// `WidgetTester.getRect` consult — those walk `applyPaintTransform`, and
+  /// without this one the chain crossed a rotated asset as if it were not
+  /// rotated. Everything measuring a rotated asset from the outside was off
+  /// by the rotation: the rect `showSidePane` keeps clear of a tapped device,
+  /// the page editor's measurement of an asset it is opening a pane for, and
+  /// the shape an asset publishes for the mark on the plant view — which is
+  /// what noticed (`hit_boundary_drift_test`).
+  ///
+  /// Deliberately the same matrix [paint] builds, minus the paint offset,
+  /// which this method excludes by contract.
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) {
+    if (_angle == 0.0 || child != this.child) {
+      super.applyPaintTransform(child, transform);
+      return;
+    }
+    final childOffset = _childOffset();
+    final halfWidth = child.size.width / 2;
+    final halfHeight = child.size.height / 2;
+    transform
+      ..translateByDouble(
+          childOffset.dx + halfWidth, childOffset.dy + halfHeight, 0, 1)
+      ..rotateZ(_angle)
+      ..translateByDouble(-halfWidth, -halfHeight, 0, 1);
+  }
+
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
     if (child == null) return false;
