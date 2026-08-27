@@ -16,24 +16,54 @@ abstract final class LeaveGuard {
 
   static Future<bool> Function()? _guard;
 
-  /// Bumps on every [then] request. A guard answers asynchronously (its answer
-  /// comes from a dialog the operator taps, and saving first can await a disk
-  /// write); by the time it lands the operator may have asked to leave a second
-  /// time, or the page that installed it may be gone. Only the newest request
-  /// is allowed to run its [go] -- see [then].
-  static int _generation = 0;
+  /// The guard currently being asked, or null when no question is open.
+  ///
+  /// Identity, not a flag: it is what tells an answer landing later whether
+  /// the page that asked is still the page installed. A guard replaced or
+  /// removed while its answer was in flight leaves this null (or holding
+  /// someone else's guard), and the stale answer is dropped.
+  static Future<bool> Function()? _asking;
+
+  /// The newest [go] waiting on [_asking]. Replaced rather than queued: when
+  /// the operator asks twice, only the destination they asked for last should
+  /// be navigated to.
+  static void Function()? _pendingGo;
 
   /// Install [guard]; it answers true to allow leaving. One at a time: the
   /// page on screen owns it.
-  static void set(Future<bool> Function() guard) => _guard = guard;
+  static void set(Future<bool> Function() guard) {
+    // A new page owns the question now. Whatever the outgoing page was still
+    // being asked, its answer is about to be meaningless -- see [_abandon].
+    _abandon();
+    _guard = guard;
+  }
 
   /// Remove [guard] if it is still the installed one (a page that was
   /// replaced must not clear its successor's).
   static void clear(Future<bool> Function() guard) {
-    if (identical(_guard, guard)) _guard = null;
+    if (identical(_guard, guard)) {
+      _abandon();
+      _guard = null;
+    }
+  }
+
+  /// Forget any question still in flight.
+  ///
+  /// Its answer belongs to a page that has since been replaced or disposed,
+  /// and running its [go] would beam on top of whatever took over -- or, when
+  /// the next request took the synchronous no-guard path below, beam a second
+  /// time on top of a beam that already happened.
+  static void _abandon() {
+    _asking = null;
+    _pendingGo = null;
   }
 
   /// True when nothing objects to leaving the current page.
+  ///
+  /// The raw ask, with none of [then]'s supersession or error handling: the
+  /// answer is the installed guard's, whoever asked and whatever else is in
+  /// flight. Navigation must go through [then] instead; this is for callers
+  /// that only want to know, and it is what the guard tests probe.
   static Future<bool> mayLeave() async =>
       await (_guard?.call() ?? Future.value(true));
 
@@ -49,37 +79,71 @@ abstract final class LeaveGuard {
   static void then(void Function() go) {
     final guard = _guard;
     if (guard == null) {
+      // Nothing in flight may beam behind this one. set() and clear() are the
+      // only ways to get here with a question still open and both already
+      // abandon it, so this is belt and braces -- but a stale answer landing
+      // after a beam has happened is exactly the double-navigation this class
+      // exists to prevent, so do not rely on that staying true.
+      _abandon();
       go();
       return;
     }
+
     // A guard is installed, so the answer arrives a microtask (a clean editor)
-    // or a dialog tap and a save (a dirty one) later. Three ways that await
-    // used to lose the operator's tap into a wedged, unresponsive screen, all
-    // fixed here:
+    // or a dialog tap and a save (a dirty one) later. The operator can act
+    // again inside that window, and both halves of that need handling: the
+    // request that arrives, and the answer that eventually lands.
+    _pendingGo = go;
+
+    // The arriving request. Asking a second time is not harmless -- the page
+    // editor's guard shows a modal and then awaits _saveToPrefs(), which does
+    // not mark the page clean until it has finished writing. A tap during that
+    // window would put a second "Unsaved changes" dialog on screen and, if
+    // answered, start a second concurrent save of the same page. So one
+    // question at a time: a request landing on a guard already being asked
+    // just replaces the destination and rides the answer already coming.
     //
-    //  * The future was chained with a bare `.then` and no error handler. A
-    //    guard that threw -- `showStandardDialog` on an unmounted context, a
-    //    save that failed -- became an *unhandled* async error, and [go] never
-    //    ran: the pane and dialogs stayed, the beam never fired, and the tap
-    //    was silently swallowed. `onError` below catches it, reports it, and
-    //    stays put, which is always the safe answer -- refusing to leave keeps
-    //    the operator's edits; losing the tap into a freeze does not.
-    //
-    //  * Nothing stopped a slow guard from beaming after the operator had
-    //    already moved on. Two overlapping asks (the nav bar, then a
-    //    programmatic beam; or a guard still saving when the next tap lands)
-    //    could each fire [go], beaming twice or beaming on top of a page that
-    //    had since taken over. The generation check lets only the newest
-    //    request through.
-    //
-    //  * The chain is never awaited by the caller and carries no lock, so a
-    //    guard that never completes at all costs one dropped tap, not a
-    //    permanent block: the next tap starts a fresh request with a higher
-    //    generation and proceeds on its own.
-    final generation = ++_generation;
-    guard().then((ok) {
-      if (ok && generation == _generation) go();
-    }).catchError((Object error, StackTrace stack) {
+    // The cost is that a guard which never answers at all now holds navigation
+    // until its page is replaced, where before every tap asked again. That is
+    // the trade we want: an unanswered guard means the page never said whether
+    // its edits are safe to discard, and navigating anyway loses them. Asking
+    // again would not have produced an answer either -- it would only have
+    // stacked a second dialog on the first.
+    if (identical(_asking, guard)) return;
+    _asking = guard;
+
+    guard().then((bool ok) {
+      // The answering half. Between the ask and here the page may have been
+      // disposed or replaced, which _abandon() records by dropping [_asking].
+      if (!identical(_asking, guard)) {
+        // Logged, not silent. Dropping a navigation the operator asked for and
+        // the page allowed is exactly the kind of quiet early return that makes
+        // a stuck screen impossible to read from the logs afterwards.
+        _logger.d('Leave request superseded before its guard answered; '
+            'not navigating');
+        return;
+      }
+      final pending = _pendingGo;
+      _abandon();
+      if (!ok || pending == null) return;
+      try {
+        pending();
+      } catch (error, stack) {
+        // Separate from the guard's own failure below, and deliberately worded
+        // differently: by the time [go] runs it has already closed the side
+        // pane and the floating dialogs, so a throw here does NOT leave the
+        // operator where they were. Reporting it as the guard failing would
+        // point at the wrong half of the path.
+        _logger.e('Navigation failed after the leave guard allowed it',
+            error: error, stackTrace: stack);
+      }
+    }, onError: (Object error, StackTrace stack) {
+      // `onError` on the ask, not `catchError` on the chain: this must catch
+      // the guard failing -- showStandardDialog on an unmounted context, a save
+      // that threw -- and nothing else. Without it the failure became an
+      // unhandled async error and [go] never ran, so the tap was swallowed with
+      // no trace. Staying put is the safe answer; it keeps the edits.
+      if (identical(_asking, guard)) _abandon();
       _logger.e('Leave guard failed; staying on the current page',
           error: error, stackTrace: stack);
     });
