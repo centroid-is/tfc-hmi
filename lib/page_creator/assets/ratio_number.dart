@@ -354,7 +354,40 @@ String _formatIntervalMinutes(int minutes) {
   return '${minutes ~/ 1440}d';
 }
 
-String _formatInterval(Duration d) => _formatIntervalMinutes(d.inMinutes);
+/// The interval chips the accept/reject chart's control bar is built from.
+///
+/// Returned as a list rather than wrapped in a container of their own so a
+/// caller can splice them into its layout: the chart's control bar flows them
+/// through the same `Wrap` as its chart/table toggle, and a `Wrap` nested in a
+/// `Wrap` is handed an unbounded width and cannot reflow. The 3rd-party side
+/// pane wraps them itself.
+///
+/// Shared so the two surfaces cannot drift apart — the pane's picker and the
+/// chart it opens must offer the same windows, spelled the same way.
+/// [dense] shrinks them for a side pane, where the ladder shares a narrow
+/// column with the machine's status diodes and a chip at dialog size pushes
+/// those off the bottom of a short screen. Same chips, same wording — only
+/// the padding differs.
+List<Widget> ratioIntervalChips({
+  required List<int> options,
+  required int selectedMinutes,
+  required ValueChanged<int> onSelected,
+  bool dense = false,
+}) {
+  return [
+    for (final minutes in options)
+      ChoiceChip(
+        label: Text(_formatIntervalMinutes(minutes)),
+        selected: minutes == selectedMinutes,
+        onSelected: (_) => onSelected(minutes),
+        visualDensity: dense ? VisualDensity.compact : null,
+        materialTapTargetSize:
+            dense ? MaterialTapTargetSize.shrinkWrap : null,
+        labelPadding:
+            dense ? const EdgeInsets.symmetric(horizontal: 2) : null,
+      ),
+  ];
+}
 
 /// Returns the end of the current clock-aligned bucket.
 /// E.g., with a 1-hour interval at 10:35, returns 11:00.
@@ -368,7 +401,33 @@ DateTime _clockAlignedEnd(DateTime time, Duration interval) {
 
 class RatioNumberWidget extends ConsumerStatefulWidget {
   final RatioNumberConfig config;
-  const RatioNumberWidget({super.key, required this.config});
+
+  /// Counting window imposed from outside the config — the 3rd-party side
+  /// pane's window picker.
+  ///
+  /// Wins over both [RatioNumberConfig.sinceMinutes] and any interval
+  /// variable, and is not written back: the config is shared with the readout
+  /// painted on the mimic, and an operator widening the pane's view of the
+  /// accept rate must not re-scale everyone else's. Null leaves the widget on
+  /// its configured window, which is what every other caller gets.
+  final Duration? intervalOverride;
+
+  /// Every window [intervalOverride] may be switched to while this widget is
+  /// mounted.
+  ///
+  /// Folded into the mixin's max window so the one historical fetch at init
+  /// covers the LARGEST offered window and cache pruning never trims below
+  /// it. Without this, picking a window wider than the configured one would
+  /// count over a cache that was only ever filled to the narrow one, and the
+  /// figure would silently be an average of less than it claims.
+  final List<int> intervalOptions;
+
+  const RatioNumberWidget({
+    super.key,
+    required this.config,
+    this.intervalOverride,
+    this.intervalOptions = const [],
+  });
 
   @override
   ConsumerState<RatioNumberWidget> createState() => _RatioNumberWidgetState();
@@ -392,10 +451,14 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
   int get tsMaxWindowMinutes => [
         _activeSinceMinutes.inMinutes,
         ...widget.config.intervalPresets,
+        ...widget.intervalOptions,
       ].reduce(math.max);
 
   @override
   void tsOnIntervalChanged(int minutes) {
+    // An externally imposed window outranks the interval variable: the pane
+    // picker is the operator asking for THIS window, now.
+    if (widget.intervalOverride != null) return;
     final d = Duration(minutes: minutes);
     if (d != _activeSinceMinutes) {
       _activeSinceMinutes = d;
@@ -421,8 +484,19 @@ class _RatioNumberWidgetState extends ConsumerState<RatioNumberWidget>
   @override
   void initState() {
     super.initState();
-    _activeSinceMinutes = widget.config.sinceMinutes;
+    _activeSinceMinutes = widget.intervalOverride ?? widget.config.sinceMinutes;
     tsInit();
+  }
+
+  @override
+  void didUpdateWidget(RatioNumberWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final override = widget.intervalOverride;
+    if (override == null || override == oldWidget.intervalOverride) return;
+    // Cache-only: the mixin already holds every event back to the widest
+    // offered window, so a switch is a recount, not a refetch.
+    _activeSinceMinutes = override;
+    tsUpdateDisplay();
   }
 
   @override
@@ -667,11 +741,27 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
 
     return Column(
       children: [
-        // Control bar: interval toggles | chart/table toggle (centered) | refresh
-        Stack(
-          alignment: Alignment.center,
+        // Control bar. A single flowing row rather than the centred Stack
+        // this used to be: the chart/table toggle was painted ON TOP of the
+        // interval row, so shrinking the window slid it straight over the
+        // interval picker. A Wrap reflows onto a second line instead, and
+        // every control here is narrower than the 320px the floating dialog
+        // can be dragged down to, so nothing can overflow its own line.
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            // Chart/Table toggle (true center)
+            // Chips, not a ToggleButtons: six intervals in one indivisible
+            // widget is wider than a shrunk dialog, and chips wrap. Same
+            // idiom as the config editor's interval ladder, and the same
+            // chips the 3rd-party side pane offers.
+            if (presets.length > 1)
+              ...ratioIntervalChips(
+                options: widget.config.intervalPresets,
+                selectedMinutes: _selectedInterval.inMinutes,
+                onSelected: (m) => _changeInterval(Duration(minutes: m)),
+              ),
             ToggleButtons(
               isSelected: [_showChart, !_showChart],
               onPressed: (index) {
@@ -704,39 +794,15 @@ class _RatioAnalysisViewState extends ConsumerState<RatioAnalysisView> {
                 ),
               ],
             ),
-            // Interval toggles (left) + refresh (right)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                if (presets.length > 1)
-                  ToggleButtons(
-                    isSelected:
-                        presets.map((p) => p == _selectedInterval).toList(),
-                    onPressed: (i) => _changeInterval(presets[i]),
-                    borderRadius: BorderRadius.circular(8),
-                    constraints:
-                        const BoxConstraints(minHeight: 36, minWidth: 48),
-                    children: presets
-                        .map((d) => Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 6),
-                              child: Text(_formatInterval(d)),
-                            ))
-                        .toList(),
-                  )
-                else
-                  const SizedBox.shrink(),
-                IconButton(
-                  icon: _isLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.refresh),
-                  onPressed: _isLoading ? null : _fetchData,
-                  tooltip: 'Refresh',
-                ),
-              ],
+            IconButton(
+              icon: _isLoading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh),
+              onPressed: _isLoading ? null : _fetchData,
+              tooltip: 'Refresh',
             ),
           ],
         ),

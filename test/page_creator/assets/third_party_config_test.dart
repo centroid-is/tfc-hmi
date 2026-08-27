@@ -411,6 +411,129 @@ void main() {
       expect(ratioFor(15).sinceMinutes, const Duration(minutes: 15));
     });
 
+    test('the chart can be switched to the window the figure is quoted over',
+        () {
+      // The readout opens its chart on `sinceMinutes`. With the RatioNumber
+      // default presets ([1, 5, 10, 60, 240]) a 30-minute station opened on a
+      // window none of the toggles could show: nothing lit up, and once
+      // another was pressed there was no way back to 30.
+      RatioNumberConfig ratioFor(int minutes) =>
+          buildSpeedBatcherStationChildren(acceptWindowMinutes: minutes)
+              .map((e) => e.child)
+              .whereType<RatioNumberConfig>()
+              .first;
+
+      expect(ratioFor(30).intervalPresets, contains(30));
+      expect(ratioFor(45).intervalPresets, contains(45),
+            reason: 'A non-standard window is folded in too.');
+      expect(ratioFor(30).intervalPresets, orderedEquals([1, 5, 10, 30, 60, 240]),
+          reason: 'Sorted and de-duplicated — 30 is not appended twice.');
+    });
+
+    test('accept bars are clock-aligned and counted in whole packs', () {
+      final ratio = buildSpeedBatcherStationChildren()
+          .map((e) => e.child)
+          .whereType<RatioNumberConfig>()
+          .first;
+
+      // Clock-aligned: a 10-minute interval buckets at :00, :10, :20, so two
+      // operators a minute apart read the same bars.
+      expect(ratio.barsClockAligned, isTrue);
+      // The bars count packs. Half a pack is not a tick.
+      expect(ratio.integersOnly, isTrue);
+    });
+
+    test('the station pushes its accept settings onto stations saved earlier',
+        () {
+      // Pages placed before this were persisted with the RatioNumber
+      // defaults. Repaired on load rather than by a migration: the parent
+      // owns these children.
+      final stale = RatioNumberConfig(key1: 'a', key2: 'b')
+        ..intervalPresets = [1, 5, 10, 60, 240]
+        ..barsClockAligned = false
+        ..integersOnly = false;
+      final json = jsonDecode(jsonEncode(ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.speedBatcher,
+        acceptWindowMinutes: 30,
+        children: [ThirdPartyChildEntry(child: stale)],
+      ).toJson())) as Map<String, dynamic>;
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(json);
+      final ratio =
+          restored.children.single.child as RatioNumberConfig;
+      expect(ratio.intervalPresets, contains(30));
+      expect(ratio.barsClockAligned, isTrue);
+      expect(ratio.integersOnly, isTrue);
+    });
+
+    test('turning clock alignment off on the station reaches both readouts',
+        () {
+      final config = ThirdPartyEquipmentConfig.speedBatcherStation();
+      final ratios = config.children
+          .map((e) => e.child)
+          .whereType<RatioNumberConfig>()
+          .toList();
+      expect(ratios, hasLength(2));
+
+      config.acceptBarsClockAligned = false;
+      config.applyAcceptReadoutSettings();
+      expect(ratios.every((r) => !r.barsClockAligned), isTrue);
+
+      // ... and survives the round-trip, rather than snapping back to the
+      // default on the next page load.
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>);
+      expect(restored.acceptBarsClockAligned, isFalse);
+      expect(
+          restored.children
+              .map((e) => e.child)
+              .whereType<RatioNumberConfig>()
+              .every((r) => !r.barsClockAligned),
+          isTrue);
+    });
+
+    test('a station saved before the alignment field defaults to aligned', () {
+      final json = jsonDecode(jsonEncode(
+              ThirdPartyEquipmentConfig.speedBatcherStation().toJson()))
+          as Map<String, dynamic>;
+      json.remove('acceptBarsClockAligned');
+
+      expect(ThirdPartyEquipmentConfig.fromJson(json).acceptBarsClockAligned,
+          isTrue);
+    });
+
+    test('the pane offers the configured window plus the chart presets', () {
+      final config = ThirdPartyEquipmentConfig.speedBatcherStation(
+          acceptWindowMinutes: 45);
+      final ratios = config.children
+          .map((e) => e.child)
+          .whereType<RatioNumberConfig>()
+          .toList();
+
+      final options = thirdPartyAcceptWindowOptions(ratios,
+          acceptWindowMinutes: config.acceptWindowMinutes);
+      expect(options, orderedEquals([1, 5, 10, 30, 45, 60, 240]),
+          reason: 'Sorted, de-duplicated, and the same ladder the chart '
+              'toggles use — the picker and the chart must not disagree.');
+      expect(options, contains(45),
+          reason: 'The pane must open on a window it can offer.');
+
+      // A station whose readouts were never scaffolded still offers its own
+      // window rather than an empty list.
+      expect(
+          thirdPartyAcceptWindowOptions(const [], acceptWindowMinutes: 20),
+          orderedEquals([20]));
+    });
+
+    test('the window reads as an operator would say it', () {
+      expect(formatAcceptWindow(30), '30\u{00A0}min');
+      expect(formatAcceptWindow(60), '1\u{00A0}h');
+      expect(formatAcceptWindow(240), '4\u{00A0}h');
+      expect(formatAcceptWindow(1440), '1\u{00A0}d');
+      // Not a whole number of hours — minutes beat a rounded lie.
+      expect(formatAcceptWindow(90), '90\u{00A0}min');
+    });
+
     test('load cells sit clear of the belt centre', () {
       // The live Conveyor draws its run-direction arrow in the middle of the
       // belt; a painted block there sits right under it.
