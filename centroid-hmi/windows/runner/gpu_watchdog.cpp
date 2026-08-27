@@ -46,6 +46,32 @@ GpuWatchdog::Action GpuWatchdog::OnTick() {
   if (probe_outstanding_) {
     missed_probes_++;
     if (missed_probes_ >= config_.missed_probes_before_recovery) {
+      // The renderer is dead. Say why, once per episode: repeating the report
+      // every tick would recreate the very flood of noise it exists to
+      // replace. reported_loss_ clears when a frame is presented again.
+      if (!reported_loss_) {
+        reported_loss_ = true;
+        action.report_loss = true;
+      }
+
+      if (config_.on_loss == LossAction::kExitProcess) {
+        // Nothing further to decide: the host writes the report and ends the
+        // process. Disabling first means a tick that races the shutdown
+        // cannot ask for a second exit.
+        disabled_ = true;
+        action.exit_process = true;
+        return action;
+      }
+
+      if (config_.on_loss == LossAction::kLogOnly) {
+        // Keep watching so the report's "frames resumed" counterpart can
+        // still fire, but do not touch the engine. missed_probes_ is left
+        // alone deliberately -- it is the stall length the report quotes.
+        probe_outstanding_ = true;
+        action.start_probe = true;
+        return action;
+      }
+
       recovery_attempts_++;
       missed_probes_ = 0;
       if (config_.max_recovery_attempts > 0 &&
@@ -80,6 +106,8 @@ GpuWatchdog::Action GpuWatchdog::OnFramePresented() {
   }
   probe_outstanding_ = false;
   missed_probes_ = 0;
+  // A presented frame ends the episode, so the next loss reports again.
+  reported_loss_ = false;
 
   if (recovery_attempts_ > 0) {
     // The engine we restarted is drawing again: drop the backoff.

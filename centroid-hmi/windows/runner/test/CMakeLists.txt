@@ -41,14 +41,20 @@ add_executable(crash_record_test
 target_include_directories(crash_record_test PRIVATE "..")
 target_link_libraries(crash_record_test PRIVATE Threads::Threads)
 
+add_executable(gpu_diagnosis_test
+  "gpu_diagnosis_test.cpp"
+  "../gpu_diagnosis.cpp"
+)
+target_include_directories(gpu_diagnosis_test PRIVATE "..")
+
 add_executable(path_utils_test
   "path_utils_test.cpp"
   "../path_utils.cpp"
 )
 target_include_directories(path_utils_test PRIVATE "..")
 
-foreach(target gpu_watchdog_test log_rotation_test output_target_test
-               crash_record_test path_utils_test)
+foreach(target gpu_watchdog_test gpu_diagnosis_test log_rotation_test
+               output_target_test crash_record_test path_utils_test)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()
@@ -61,3 +67,4 @@ add_test(NAME log_rotation COMMAND log_rotation_test)
 add_test(NAME output_target COMMAND output_target_test)
 add_test(NAME crash_record COMMAND crash_record_test)
 add_test(NAME path_utils COMMAND path_utils_test)
+add_test(NAME gpu_diagnosis COMMAND gpu_diagnosis_test)

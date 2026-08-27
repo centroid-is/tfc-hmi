@@ -10,6 +10,8 @@ add_executable(${BINARY_NAME} WIN32
   "crash_handler.cpp"
   "crash_record.cpp"
   "flutter_window.cpp"
+  "gpu_device_probe.cpp"
+  "gpu_diagnosis.cpp"
   "gpu_watchdog.cpp"
   "log_rotation.cpp"
   "main.cpp"
@@ -46,6 +48,9 @@ target_link_libraries(${BINARY_NAME} PRIVATE "wtsapi32.lib")
 # MiniDumpWriteDump — linked rather than LoadLibrary'd, so the crash handler
 # needs no loader activity at the moment it runs.
 target_link_libraries(${BINARY_NAME} PRIVATE "dbghelp.lib")
+# D3D11CreateDevice / IDXGIAdapter::GetDesc — the sentinel device the GPU
+# loss report asks GetDeviceRemovedReason(). See gpu_device_probe.h.
+target_link_libraries(${BINARY_NAME} PRIVATE "d3d11.lib" "dxgi.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
