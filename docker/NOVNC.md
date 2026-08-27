@@ -342,6 +342,90 @@ noVNC rather than replacing it. If server-enforced read-only matters *now*, skip
 noVNC and go straight to Guacamole; that is the one requirement noVNC cannot
 meet.
 
+## Is Apple DH actually secure?
+
+No. It is password obfuscation against a passive sniffer, and nothing more.
+From `src/auth/apple-dh.c` in neatvnc:
+
+- Fresh **2048-bit DH per connection** (`APPLE_DH_SERVER_KEY_LENGTH 256`, g=2).
+  The size is fine — much better than Apple's original ARD, which used a
+  512-bit prime.
+- **MD5** of the shared secret as the KDF, then **AES-128-ECB** over a 128-byte
+  blob (64 bytes username, 64 password). Neither is directly breakable here,
+  but neither would pass review today.
+- **No server authentication whatsoever.** The client cannot verify the
+  server's DH public key, so anyone who can intercept the connection
+  substitutes their own key, reads the credentials, and relays. Textbook MITM
+  against unauthenticated DH.
+- **Nothing after the handshake is encrypted** — framebuffer and input are
+  plaintext.
+
+For comparison, RSA-AES-256 (what TigerVNC picks) encrypts the session *and*
+pins the server's RSA key fingerprint on first use. And today's VeNCrypt X509
+is TLS, but with a self-signed cert that TigerVNC reports as untrusted with a
+name mismatch — if operators click through that every time, it is not buying
+MITM protection either.
+
+**So Apple DH is acceptable only as the inner hop of a tunnel that provides the
+real security.** In the recommended design the browser gets `wss://` with a
+verified certificate and the ARD hop never leaves the compose network, where
+Apple DH is doing nothing and that is fine. Two consequences are therefore hard
+requirements, not preferences:
+
+1. **Never publish the ARD-capable port.** On the plant network, the shared
+   `centroid` password is harvestable by anyone on-path.
+2. **Use a real certificate on websockify** (or terminate at an nginx that has
+   one). A self-signed cert there just moves the click-through to the browser.
+
+### Does a newer neatvnc help? No.
+
+neatvnc `master` adds exactly one security type over 0.9.1 — VNC Auth (2),
+which noVNC does support — but it is gated behind
+`NVNC_AUTH_ALLOW_BROKEN_CRYPTO` and a no-username mode, and the name is
+deserved: DES challenge-response with an 8-character truncation. Weston never
+sets that flag (`main`'s `vnc.c` passes `REQUIRE_AUTH` ± `REQUIRE_ENCRYPTION`
+and nothing else), and weston authenticates a *user* through PAM. The full
+enum in master is still `NONE 1, VNC_AUTH 2, RSA_AES 5, TIGHT 16, VENCRYPT 19,
+APPLE_DH 30, RSA_AES256 129` — no RA2ne — and VeNCrypt still hard-rejects
+anything but `X509_PLAIN`.
+
+The gap is a deliberate design split, not a version lag: neatvnc implements
+only the *encrypting* RSA-AES variants, noVNC only the non-encrypting one
+(RA2ne), because AES over every framebuffer byte in JS is expensive and it
+assumes `wss://` underneath. It will not converge on its own.
+
+### The patch that would make this proper
+
+Add RA2ne (type 6) to neatvnc. It is the same handshake as RSA-AES, which
+neatvnc already implements — it just stops encrypting afterwards:
+
+- `include/rfb-proto.h` — `RFB_SECURITY_TYPE_RSA_AES_NE = 6` (and `_NE_256 = 130`)
+- `src/server.c` — offer them under the same `!REQUIRE_ENCRYPTION` guard as
+  Apple DH; map 6 → SHA1/AES_EAX and 130 → SHA256/AES256_EAX in the
+  `security_handshake()` switch, with a "session stays plaintext" flag
+- `src/auth/rsa-aes.c` — downgrade the stream to plaintext after credentials
+  are accepted, before SecurityResult
+- `src/stream/rsa-aes.c` — the inverse of `stream_upgrade_to_rsa_eas()`. The
+  switch point is clean: the client is blocked on SecurityResult, so nothing
+  is buffered.
+
+~60–100 lines, nearly all reusing existing reviewed code. It would give noVNC
+real server authentication: noVNC's `ra2.js` fires a `serververification` event
+carrying the server's public key, exposes `approveServer()`, and rejects keys
+outside 1024–8192 bits — SSH-style TOFU, which Apple DH lacks entirely.
+
+**File it upstream rather than carrying it.** Shipping a forked crypto library
+on production line-control stations, to close a MITM hole on a hop that never
+leaves the host, is a bad trade. Upstream it (published spec, TigerVNC already
+implements the family) and it arrives via Debian with nothing to maintain. It
+only becomes worth carrying locally if the VNC hop starts crossing the plant
+network — and even then, transport (WireGuard, stunnel, a management VLAN)
+beats a fork.
+
+Meanwhile the cheaper and bigger win is `centroid:foo`: Apple DH's weakness
+only bites on an untrusted path, but a shared weak password in a committed
+compose file bites everywhere.
+
 ## Footnote: `--no-config` on the nested compositor
 
 The nested VNC weston is started with `--no-config`, so it ignores
