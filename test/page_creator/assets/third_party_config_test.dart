@@ -954,6 +954,56 @@ void main() {
     });
   });
 
+  group('multivac status bits', () {
+    test('the members are the ones SP_Packing_HMI publishes, in order', () {
+      // Read off the live SPB0n.multivac.hmi struct (an SP_Packing_HMI). A
+      // member the struct does not carry renders as the grey `!` forever
+      // rather than failing, so the names are pinned here. Ordered like the
+      // strapper: the red stopping-line bit first, then ready -> waiting ->
+      // done.
+      expect(multivacStatusBits.map((b) => b.member), [
+        'p_stat_WaitingFrustration',
+        'p_stat_DropOk',
+        'p_stat_DropRequestFeedback',
+        'p_stat_DropFinished',
+      ]);
+    });
+
+    test('the stopping-line row is first, red, and names the Multivac', () {
+      // Option A: the same member the strapper uses, relabelled to name the
+      // Multivac itself as the holdup rather than blaming the upstream release.
+      final first = multivacStatusBits.first;
+      expect(first.member, 'p_stat_WaitingFrustration');
+      expect(first.onRole, HmiColorRole.red,
+          reason: 'it is the one bit that says something is wrong');
+      expect(
+          first.labelFor(
+              equipmentShortName(ThirdPartyEquipmentKind.multivac)),
+          'Multivac is stopping the line');
+    });
+
+    test('the remaining rows keep their prefix-era colours and wording', () {
+      final byMember = {for (final b in multivacStatusBits) b.member: b};
+      expect(byMember['p_stat_DropOk']!.onRole, HmiColorRole.green);
+      expect(byMember['p_stat_DropOk']!.labelFor('Multivac'),
+          'Multivac is ready for fish');
+      expect(byMember['p_stat_DropRequestFeedback']!.onRole,
+          HmiColorRole.yellow);
+      expect(byMember['p_stat_DropRequestFeedback']!.labelFor('Multivac'),
+          'Fish waiting to drop to Multivac');
+      expect(byMember['p_stat_DropFinished']!.onRole, HmiColorRole.blue);
+      expect(byMember['p_stat_DropFinished']!.labelFor('Multivac'),
+          'Drop to Multivac is complete');
+    });
+
+    test('the multivac is struct-backed, not prefix-backed', () {
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.multivac],
+          same(multivacStatusBits));
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.multivac], isNull,
+          reason: 'both maps would render two Status sections');
+    });
+  });
+
   group('SpeedBatcher pane badge', () {
     DynamicValue struct(Map<String, dynamic> members) =>
         DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(members));
