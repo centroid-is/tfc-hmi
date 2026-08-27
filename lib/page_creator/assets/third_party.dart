@@ -593,11 +593,16 @@ const List<StructStatusBit> speedBatcherStatusBits = [
 /// infeed for 15 s. Red and first -- it is the one bit that says something is
 /// wrong rather than reporting where in the cycle the machine sits.
 ///
-/// Its label names the STRAPPER as the thing being waited ON, not a place
-/// product is being released TO. The two readings invert who is at fault, and
-/// this one is the operator's: the line is ready and the machine has not taken
-/// the box. The Multivac's identically-shaped bit still reads the other way
-/// round, which is why the wording here is deliberately not shared with it.
+/// Its label names the STRAPPER as the cause, not a place product is being
+/// released TO. The two readings invert who is at fault, and this one is the
+/// operator's: everything upstream is ready and the machine is what is holding
+/// the line up. The Multivac's identically-shaped bit still reads the other way
+/// round ("Waiting too long to release to Multivac"), which is why the wording
+/// here is deliberately not shared with it.
+///
+/// Short on purpose. It sits above four rows that each name the machine and a
+/// condition, and a red row that has to be read to the end before it says
+/// anything is wrong is a red row doing half its job.
 ///
 /// The two heads come out of the same subscription: `p_stat_StrappingMachines`
 /// is an `ARRAY [1..2] OF ST_StrapX`, and the path syntax indexes into it. The
@@ -613,8 +618,8 @@ const List<StructStatusBit> speedBatcherStatusBits = [
 /// The struct carries more still -- the last sensor's full `FB_Sensor` and a
 /// TIME since infeed was last permitted -- likewise free to add.
 const List<StructStatusBit> strappingLineStatusBits = [
-  StructStatusBit('p_stat_WaitingFrustration',
-      'Waiting for {m} to take the next box', HmiColorRole.red),
+  StructStatusBit('p_stat_WaitingFrustration', '{m} is stopping the line',
+      HmiColorRole.red),
   StructStatusBit('p_stat_StrappingMachines[0].p_stat_Rdy', 'StrapX 1 ready',
       HmiColorRole.green),
   StructStatusBit('p_stat_StrappingMachines[1].p_stat_Rdy', 'StrapX 2 ready',

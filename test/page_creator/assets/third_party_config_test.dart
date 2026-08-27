@@ -926,14 +926,15 @@ void main() {
       expect(structStatusBitOf(status, 'p_stat_Missing[0].p_stat_Rdy'), isNull);
     });
 
-    test('the frustration row names the strapper as what is waited ON', () {
-      // The bit means the line is ready and the machine has not taken the box
-      // -- not that product is being released TO somewhere. The two readings
-      // invert who is at fault, and an operator acts on the difference.
+    test('the frustration row names the strapper as the cause', () {
+      // The bit means everything upstream is ready and the machine has not
+      // taken the box -- not that product is being released TO somewhere. The
+      // two readings invert who is at fault, and an operator acts on the
+      // difference.
       final frustration = strappingLineStatusBits
           .firstWhere((b) => b.member == 'p_stat_WaitingFrustration');
       expect(frustration.labelFor('strapping machine'),
-          'Waiting for strapping machine to take the next box');
+          'Strapping machine is stopping the line');
       expect(frustration.onRole, HmiColorRole.red,
           reason: 'it is the one bit that says something is wrong');
     });
