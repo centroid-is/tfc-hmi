@@ -409,10 +409,42 @@ neatvnc already implements — it just stops encrypting afterwards:
   switch point is clean: the client is blocked on SecurityResult, so nothing
   is buffered.
 
-~60–100 lines, nearly all reusing existing reviewed code. It would give noVNC
-real server authentication: noVNC's `ra2.js` fires a `serververification` event
-carrying the server's public key, exposes `approveServer()`, and rejects keys
-outside 1024–8192 bits — SSH-style TOFU, which Apple DH lacks entirely.
+~60–100 lines, nearly all reusing existing reviewed code. It gives noVNC
+something to verify: `ra2.js` fires a `serververification` event carrying the
+server's public key, exposes `approveServer()`, and rejects keys outside
+1024–8192 bits. Apple DH offers nothing to verify at all.
+
+It is **not** SSH-style TOFU on its own, though — that needs a second, weston
+patch. neatvnc generates the RSA key in memory on first use and persists it
+only if the application calls `nvnc_set_rsa_creds()`, which weston never does:
+not in 14.0.2, and not in `main` (16.x), whose `vnc.c` does not contain the
+string "rsa" at all. Measured on the real image:
+
+```
+run 1:                      89-4d-a6-13-04-f1-99-30
+run 1 again (same process): 89-4d-a6-13-04-f1-99-30
+run 2 (after restart):      c2-2c-da-81-c6-ab-b4-91
+```
+
+So the fingerprint rotates every restart, and "check the fingerprint" decays
+into "click approve" — the same click-through training the self-signed cert
+already produces. The library has exposed the setter for years; weston just
+needs a `--vnc-rsa-key=FILE` option to call it.
+
+### `wss://` is load-bearing, not merely advisable
+
+Browsers expose `window.crypto.subtle` only in a secure context. noVNC's RA2ne
+path uses it, so on a plain `http://` origin the client dies outright:
+
+```
+TypeError: Cannot read properties of undefined (reading 'digest')
+    at RFB.serverVerify (app/ui.js)
+    at RSAAESAuthenticationState.negotiateRA2neAuthAsync (core/ra2.js)
+```
+
+That is a good property: the insecure deployment refuses to run rather than
+quietly falling back to something weaker. (Apple DH would have worked over
+plain http, since that path uses noVNC's own crypto shims.)
 
 **File it upstream rather than carrying it.** Shipping a forked crypto library
 on production line-control stations, to close a MITM hole on a hop that never
@@ -425,6 +457,14 @@ beats a fork.
 Meanwhile the cheaper and bigger win is `centroid:foo`: Apple DH's weakness
 only bites on an untrusted path, but a shared weak password in a committed
 compose file bites everywhere.
+
+### Status
+
+The patch exists and runs: `centroid-is/dockers` PR #3 builds neatvnc with
+types 6 and 130 and ships it in the weston image. It has been exercised on the
+`housecontrol-hmi` rig against the real DRM + `screen-share` configuration,
+with a browser reaching the live HMI over `wss://` through noVNC. It is
+deliberately **not** upstreamed pending review.
 
 ## Footnote: `--no-config` on the nested compositor
 
