@@ -63,6 +63,19 @@ services:
     labels:
       - hmi-update.watch=true
 
+  # Operators type a bare address, which means http. Send them to https —
+  # it cannot be a fallback, since noVNC's RA2ne handshake needs
+  # window.crypto.subtle and browsers withhold that on an insecure origin.
+  novnc-http:
+    image: ghcr.io/centroid-is/novnc:latest
+    container_name: novnc-http
+    entrypoint: ["python3", "/usr/local/bin/redirect.py"]
+    ports:
+      - 80:80
+    restart: unless-stopped
+    labels:
+      - hmi-update.watch=true
+
 
   create-local-share:
     image: alpine:latest
