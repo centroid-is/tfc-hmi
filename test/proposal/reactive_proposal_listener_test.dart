@@ -257,10 +257,15 @@ void main() {
       // A `page` proposal replaces or creates a whole page, so folding a run
       // of them together has no defined result. `asset` appends, which does,
       // so it moved to the batch -- it is the else branch that is left.
+      //
+      // `.first` is taken off the page-only list, not off the whole matching
+      // run: once asset proposals are partitioned by page an off-page asset
+      // can outlive the batch and sit at the head of the run, and applying
+      // its json as a whole-page replacement would wipe the open page.
       final listener = pageFilter();
-      expect(listener, contains('pageProposals.first.proposalJson'));
+      expect(listener, contains('pageOnly.first.proposalJson'));
       expect(listener.indexOf('_applyAssetBatch(assetProposals)'),
-          lessThan(listener.indexOf('pageProposals.first.proposalJson')));
+          lessThan(listener.indexOf('pageOnly.first.proposalJson')));
     });
   });
 
