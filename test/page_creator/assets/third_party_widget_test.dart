@@ -11,6 +11,8 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
+import 'package:tfc/theme.dart'
+    show AppColorScheme, HmiColorRole, MutedColors, themesForScheme;
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/providers/database.dart' show databaseProvider;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -172,7 +174,7 @@ void main() {
         strapMachines: 2,
         runKey: 'ST301.PK01.STRAP01.Running',
         tag: 'STRAP-01',
-        notes: 'Two Strapex heads in series.',
+        notes: 'Two StrapX heads in series.',
       );
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
@@ -196,7 +198,7 @@ void main() {
           reason: 'AssetStack must see no label while showTag is off.');
       expect(find.text('STRAP-01'), findsOneWidget);
       expect(
-          find.textContaining('2 x Strapex'), findsWidgets,
+          find.textContaining('2 x StrapX'), findsWidgets,
           reason: 'Strapper count must reach the pane title.');
       expect(find.text('NOTES'), findsOneWidget);
 
@@ -450,30 +452,102 @@ void main() {
       });
     }
 
-    testWidgets('the SpeedBatcher keeps its own diodes, not the generic ones',
+    testWidgets('a lit diode follows the active colour scheme',
         (tester) async {
-      // It is absent from kEquipmentStatusBits because its handshake is a
-      // struct (`p_stat_*`) rather than per-line permit globals, so it draws
-      // SpeedBatcherStatusDiodes instead. The two must never both appear:
-      // that would be one machine showing its handshake twice, in two
-      // vocabularies.
+      // The complaint this pins: a hardcoded Colors.green (#4CAF50) ignores
+      // the operator's scheme choice and paints Material's saturated green
+      // beside a muted, gray-first UI. Under AppColorScheme.muted every lit
+      // diode must resolve to MutedColors.runningGreen.
+      final (lightMuted, _) = themesForScheme(AppColorScheme.muted);
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_InfeedPermitted': true,
+      }));
+
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          theme: lightMuted,
+          home: Scaffold(
+            body: StructStatusDiodes(
+              status: status,
+              bits: const [
+                StructStatusBit('p_stat_InfeedPermitted', 'Ready',
+                    HmiColorRole.green),
+              ],
+              machine: 'strapping machine',
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      final lit = tester
+          .widgetList<CustomPaint>(find.byType(CustomPaint))
+          .map((c) => c.painter)
+          .whereType<LEDPainter>()
+          .where((p) => p.color != null)
+          .toList();
+      expect(lit, hasLength(1));
+      expect(lit.single.color!.toARGB32(),
+          MutedColors.runningGreen.toARGB32(),
+          reason: 'a lit diode must come from HmiStateColors, not Colors.green');
+    });
+
+    test('no kind reads its status both ways', () {
+      // The two maps are the whole switch between "one subscription for the
+      // struct" and "one per bit". A kind in both would render two Status
+      // sections and hold both sets of subscriptions open -- the machine
+      // showing its handshake twice, in two vocabularies.
+      for (final kind in kStructStatusBits.keys) {
+        expect(kEquipmentStatusBits[kind], isNull,
+            reason: '${kind.name} is struct-backed; it must not also have a '
+                'suffix list');
+      }
+    });
+
+    // Driven off the map rather than a hardcoded list of kinds, so adding a
+    // struct-backed machine cannot leave this test describing the old world.
+    for (final entry in kStructStatusBits.entries) {
+      testWidgets('${entry.key.name} draws struct diodes, not prefix ones',
+          (tester) async {
+        final config = ThirdPartyEquipmentConfig(runKey: '')
+          ..kind = entry.key
+          ..statusKey = 'STRUCT';
+        await tester.pumpWidget(wrap(SizedBox(
+          width: 300,
+          height: 160,
+          child: ThirdPartyEquipment(config: config),
+        )));
+
+        await tester.tap(find.byType(ThirdPartyEquipment));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(StructStatusDiodes), findsOneWidget);
+        expect(find.byType(EquipmentStatusDiodes), findsNothing,
+            reason: '${entry.key.name} would be showing its handshake twice');
+      });
+    }
+
+    testWidgets('a struct kind hoists the struct key, not per-bit keys',
+        (tester) async {
+      // The point of the struct path: the strapper costs ONE subscription for
+      // every diode. Before this it appended .PermitInfeed/.PermitOutfeed to
+      // the prefix, which was both three keys and the wrong member names --
+      // FB_StrappingLine spells them p_stat_InfeedPermitted/OutfeedPermitted.
       final config = ThirdPartyEquipmentConfig(runKey: '')
-        ..kind = ThirdPartyEquipmentKind.speedBatcher
-        ..statusKey = 'SPB01.SP_HMI';
+        ..kind = ThirdPartyEquipmentKind.strappingLine
+        ..statusKey = 'STM01';
       await tester.pumpWidget(wrap(SizedBox(
         width: 300,
         height: 160,
         child: ThirdPartyEquipment(config: config),
       )));
-
-      await tester.tap(find.byType(ThirdPartyEquipment));
       await tester.pumpAndSettle();
 
-      expect(find.byType(SpeedBatcherStatusDiodes), findsOneWidget);
-      expect(find.byType(EquipmentStatusDiodes), findsNothing,
-          reason: 'the SpeedBatcher would be showing its handshake twice');
-      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.speedBatcher], isNull,
-          reason: 'if it were added to the map both sections would render');
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugStatusStream, isNotNull,
+          reason: 'the struct key must be hoisted');
+      expect(state.debugStatusBitKeys, isEmpty,
+          reason: 'a struct kind must open no per-bit subscriptions');
     });
 
     testWidgets('the pane does not outlive the asset that opened it',
@@ -626,13 +700,19 @@ void main() {
       }));
       await tester.pumpWidget(wrap(SizedBox(
         width: 320,
-        child: SpeedBatcherStatusDiodes(status: status),
+        child: StructStatusDiodes(status: status, bits: speedBatcherStatusBits, machine: 'SpeedBatcher'),
       )));
 
       final painters = diodePaintersOf(tester);
       expect(painters, hasLength(speedBatcherStatusBits.length));
-      // Column order == speedBatcherStatusBits order.
-      expect(painters[0].color, Colors.green, reason: 'Running is true');
+      // Column order == speedBatcherStatusBits order. The lit colour comes
+      // from the scheme now, so it is compared against the same role the bit
+      // declares rather than a hardcoded Colors.green -- `wrap` supplies no
+      // HmiStateColors, so this resolves through theme.dart's Solarized
+      // fallback.
+      final ctx = tester.element(find.byType(StructStatusDiodes));
+      expect(painters[0].color, HmiColorRole.green.resolve(ctx),
+          reason: 'Running is true');
       expect(painters[1].color, Colors.white, reason: 'Cleaning is false');
       for (var i = 2; i < painters.length; i++) {
         expect(painters[i].color, isNull,
@@ -648,10 +728,11 @@ void main() {
       }));
       await tester.pumpWidget(wrap(SizedBox(
         width: 320,
-        child: SpeedBatcherStatusDiodes(status: status),
+        child: StructStatusDiodes(status: status, bits: speedBatcherStatusBits, machine: 'SpeedBatcher'),
       )));
 
-      expect(diodePaintersOf(tester)[1].color, Colors.blue);
+      final ctx = tester.element(find.byType(StructStatusDiodes));
+      expect(diodePaintersOf(tester)[1].color, HmiColorRole.blue.resolve(ctx));
     });
   });
 
@@ -801,9 +882,9 @@ void main() {
         ));
         await tester.pumpAndSettle();
 
-        // The SpeedBatcher reads members of one struct; the rest read
-        // separate bools under a prefix, and the label says which it is.
-        final label = kind == ThirdPartyEquipmentKind.speedBatcher
+        // A struct kind reads members of one node; the rest read separate
+        // bools under a prefix, and the label says which it is.
+        final label = kStructStatusBits.containsKey(kind)
             ? 'Status Struct Key'
             : 'Status Key Prefix';
         final field = find.widgetWithText(TextField, label);

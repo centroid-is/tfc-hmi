@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/converter/color_converter.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 
 import '../../providers/state_man.dart';
 import '../../widgets/panes/color_picker_dialog.dart';
@@ -68,7 +69,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
       case ThirdPartyEquipmentKind.boxErector:
         return 'Box erector';
       case ThirdPartyEquipmentKind.strappingLine:
-        return 'Afak / Strapex strapping line';
+        return 'Afak / StrapX strapping line';
       case ThirdPartyEquipmentKind.fishAligner:
         return 'Batch aligner';
     }
@@ -78,7 +79,7 @@ extension ThirdPartyEquipmentKindInfo on ThirdPartyEquipmentKind {
   /// model number. Used for the side-pane title.
   String labelFor({int strapMachines = 3}) =>
       this == ThirdPartyEquipmentKind.strappingLine
-          ? 'Strapping line — ${strapMachines.clamp(1, 3)} x Strapex'
+          ? 'Strapping line — ${strapMachines.clamp(1, 3)} x StrapX'
           : label;
 
   /// Real machine footprint, shown in the side pane. See the source notes at
@@ -284,29 +285,38 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// equipment that hands us a "stopped" contact rather than a "running" one.
   bool invertRunPolarity;
 
-  /// Struct node carrying the SpeedBatcher's `p_stat_*` handshake bits
-  /// (e.g. `SB1` mapping to `SPB01.speedBatcher.hmi`). Drives the diodes in
-  /// the side pane's Status section.
+  /// For a kind in [kStructStatusBits], the struct node carrying that
+  /// machine's `p_stat_*` handshake bits — `SB1` mapping to
+  /// `SPB01.speedBatcher.hmi`, `STM01` to `STM01.STM01.hmi`. One subscription
+  /// feeds every diode in the side pane's Status section.
   ///
-  /// For every other kind this is a key PREFIX rather than a struct node:
-  /// `BER02`, `STM02`, `SPB02.multivac`, `SPB02.Aligner`. The pane appends the
-  /// suffixes in [kEquipmentStatusBits] to it.
+  /// For the remaining kinds this is a key PREFIX rather than a struct node:
+  /// `BER02`, `SPB02.multivac`, `SPB02.Aligner`. The pane appends the
+  /// suffixes in [kEquipmentStatusBits] to it, one subscription each.
+  ///
   /// A bit the PLC does not expose renders as the unknown LED rather than
   /// claiming "off".
   String statusKey;
 
   /// LED colour while the machine is running.
-  @ColorConverter()
-  Color runningColor;
+  ///
+  /// An [AssetColor] rather than a bare [Color] so it can hold a scheme ROLE.
+  /// A literal is frozen at the moment the picker was used and ignores a later
+  /// scheme switch -- every one of these assets was storing Material's
+  /// `#4CAF50`, which is why the running LED stayed a saturated green while
+  /// the muted scheme drew everything around it in `#8DA28A`. Literals still
+  /// load: [AssetColorConverter] reads both shapes.
+  @AssetColorConverter()
+  AssetColor runningColor;
 
   /// LED colour while the machine is stopped.
-  @ColorConverter()
-  Color stoppedColor;
+  @AssetColorConverter()
+  AssetColor stoppedColor;
 
   /// Outline colour of the machine drawing. The dotted boundary uses the same
   /// colour at reduced opacity.
-  @ColorConverter()
-  Color outlineColor;
+  @AssetColorConverter()
+  AssetColor outlineColor;
 
   /// Outline stroke width in logical pixels.
   double strokeWidth;
@@ -327,7 +337,7 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// position, interlock quirks, whatever the operator needs at 03:00.
   String? notes;
 
-  /// Strapex arches on the strapping line — the `-N` in SL-15-N. Ignored by
+  /// StrapX arches on the strapping line — the `-N` in SL-15-N. Ignored by
   /// the other kinds.
   int strapMachines;
 
@@ -392,9 +402,9 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.runKey = '',
     this.invertRunPolarity = false,
     this.statusKey = '',
-    Color? runningColor,
-    Color? stoppedColor,
-    Color? outlineColor,
+    AssetColor? runningColor,
+    AssetColor? stoppedColor,
+    AssetColor? outlineColor,
     this.strokeWidth = 2.0,
     this.tag,
     this.showTag = false,
@@ -406,12 +416,12 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     List<ThirdPartyChildEntry>? children,
   })  : children =
             children != null ? List<ThirdPartyChildEntry>.of(children) : [],
-        runningColor = runningColor ?? Colors.green,
+        runningColor = runningColor ?? AssetColor.green,
         // Grey, not red: stopped is a normal state on this line, and red is
         // reserved for something actually being wrong. The unknown state stays
         // tellable from stopped by the `!` glyph LEDPainter adds.
-        stoppedColor = stoppedColor ?? Colors.grey,
-        outlineColor = outlineColor ?? Colors.blueGrey {
+        stoppedColor = stoppedColor ?? AssetColor.grey,
+        outlineColor = outlineColor ?? AssetColor.secondary {
     textPos = TextPos.below;
     // These machines are wide; the BaseAsset 3%×3% default would squash the
     // top view into an unreadable stamp. `fromJson` assigns `..size` after the
@@ -513,22 +523,46 @@ bool thirdPartyIsRunning({
 }
 
 // ---------------------------------------------------------------------------
-// SpeedBatcher status diodes
+// Struct-backed status diodes
 // ---------------------------------------------------------------------------
 
-/// One diode of the SpeedBatcher handshake: which struct member feeds it and
-/// how it is presented.
-class SpeedBatcherStatusBit {
+/// One diode of a machine whose handshake arrives as a single published
+/// struct: which member feeds it and how it is presented.
+///
+/// The counterpart to [EquipmentStatusBit], which addresses a bit by appending
+/// a suffix to a key PREFIX. Which of the two a kind uses is decided by
+/// [kStructStatusBits] and is a property of the PLC, not of the HMI: a machine
+/// wrapped in a function block with an `hmi` struct member publishes one node
+/// carrying every bit, while a machine whose permits are plain globals needs
+/// one key each.
+class StructStatusBit {
   /// Member name inside the [ThirdPartyEquipmentConfig.statusKey] struct.
   final String member;
 
-  /// Operator-facing label beside the diode.
+  /// Label template beside the diode. `{m}` is replaced with the machine's
+  /// name, exactly as in [EquipmentStatusBit.label], so the two kinds of bit
+  /// read identically down a pane.
   final String label;
 
-  /// Diode colour when the bit is true. Off is white, unknown is the grey `!`.
-  final Color onColor;
+  /// Diode colour when the bit is true, as a SCHEME ROLE rather than a literal.
+  ///
+  /// The app ships two colour schemes and `AppColorScheme.muted` follows
+  /// ISA-101's gray-first guidance; a hardcoded `Colors.green` ignores the
+  /// operator's choice and paints a saturated Material green next to muted
+  /// everything-else. Resolved per build through [HmiColorRole.resolve], the
+  /// same way `sensor.dart` resolves its active/inactive colours.
+  final HmiColorRole onRole;
 
-  const SpeedBatcherStatusBit(this.member, this.label, this.onColor);
+  const StructStatusBit(this.member, this.label, this.onRole);
+
+  /// [label] with the machine name filled in, sentence-cased. Same rule as
+  /// [EquipmentStatusBit.labelFor]; a template with no `{m}` is returned as
+  /// written, which is why the SpeedBatcher's labels are unaffected.
+  String labelFor(String machine) {
+    final filled = label.replaceAll('{m}', machine);
+    if (filled.isEmpty) return filled;
+    return filled[0].toUpperCase() + filled.substring(1);
+  }
 }
 
 /// The five handshake bits, in display order. Same members and colours as the
@@ -537,19 +571,88 @@ class SpeedBatcherStatusBit {
 /// engineer's phrase for the same bit the Multivac pane calls "ready for
 /// fish", and "Dropped Batch" sat beside "Batch ready" as a dangling fragment.
 /// Blue for Cleaning, green for the rest.
-const List<SpeedBatcherStatusBit> speedBatcherStatusBits = [
-  SpeedBatcherStatusBit('p_stat_Running', 'Running', Colors.green),
-  SpeedBatcherStatusBit('p_stat_Cleaning', 'Cleaning', Colors.blue),
-  SpeedBatcherStatusBit('p_stat_BatchReady', 'Batch ready', Colors.green),
-  SpeedBatcherStatusBit('p_stat_DropOk', 'Conveyor may drop', Colors.green),
-  SpeedBatcherStatusBit('p_stat_Dropped', 'Batch dropped', Colors.green),
+const List<StructStatusBit> speedBatcherStatusBits = [
+  StructStatusBit('p_stat_Running', 'Running', HmiColorRole.green),
+  StructStatusBit('p_stat_Cleaning', 'Cleaning', HmiColorRole.blue),
+  StructStatusBit('p_stat_BatchReady', 'Batch ready', HmiColorRole.green),
+  StructStatusBit('p_stat_DropOk', 'Conveyor may drop', HmiColorRole.green),
+  StructStatusBit('p_stat_Dropped', 'Batch dropped', HmiColorRole.green),
 ];
+
+/// The strapping line's handshake, as published by `FB_StrappingLine` in
+/// `ST_StrappingLine_HMI` (PLC commit "Strapping lina kominn inn").
+///
+/// Member names are the struct's, not the old `PermitInfeed`/`PermitOutfeed`
+/// suffixes this kind used while its permits were plain globals -- the FB
+/// spells them `p_stat_InfeedPermitted`/`p_stat_OutfeedPermitted`. The
+/// vocabulary and colours are deliberately unchanged from that suffix list, so
+/// a strapper pane reads the same as before against the new source.
+///
+/// `p_stat_WaitingFrustration` is new and has no prefix-era equivalent: the FB
+/// raises it once the line has been running with a clear way out but a blocked
+/// infeed for 15 s. Red and first -- it is the one bit that says something is
+/// wrong rather than reporting where in the cycle the machine sits.
+///
+/// Its label names the STRAPPER as the cause, not a place product is being
+/// released TO. The two readings invert who is at fault, and this one is the
+/// operator's: everything upstream is ready and the machine is what is holding
+/// the line up. The Multivac's identically-shaped bit still reads the other way
+/// round ("Waiting too long to release to Multivac"), which is why the wording
+/// here is deliberately not shared with it.
+///
+/// Short on purpose. It sits above four rows that each name the machine and a
+/// condition, and a red row that has to be read to the end before it says
+/// anything is wrong is a red row doing half its job.
+///
+/// The two heads come out of the same subscription: `p_stat_StrappingMachines`
+/// is an `ARRAY [1..2] OF ST_StrapX`, and the path syntax indexes into it. The
+/// labels count from 1 for the operator even though the Dart list is 0-based --
+/// see [structMemberPath].
+///
+/// Each head also carries `p_stat_Err`, which is the same signal latched after
+/// 15 s not-ready. It is deliberately NOT drawn: four rows saying almost the
+/// same thing is the redundancy this pane just lost, and the ready bit already
+/// tells the operator which head is holding the line. Adding it later is one
+/// line, with no new key.
+///
+/// The struct carries more still -- the last sensor's full `FB_Sensor` and a
+/// TIME since infeed was last permitted -- likewise free to add.
+const List<StructStatusBit> strappingLineStatusBits = [
+  StructStatusBit('p_stat_WaitingFrustration', '{m} is stopping the line',
+      HmiColorRole.red),
+  StructStatusBit('p_stat_StrappingMachines[0].p_stat_Rdy', 'StrapX 1 ready',
+      HmiColorRole.green),
+  StructStatusBit('p_stat_StrappingMachines[1].p_stat_Rdy', 'StrapX 2 ready',
+      HmiColorRole.green),
+  StructStatusBit(
+      'p_stat_InfeedPermitted', '{m} is ready for box', HmiColorRole.green),
+  // Not "way out is clear": that reads as an observation about physical
+  // clearance, and the bit is a PERMISSION -- and one travelling the opposite
+  // way to the row above it. Infeed is the machine telling us it can take a
+  // box; outfeed is us telling the machine it may pass one on, wired straight
+  // out to ECT.ST101_RM01.O2. Naming both after the machine keeps the pair
+  // readable as the two questions an operator actually has: can it take one,
+  // can it pass one on.
+  StructStatusBit(
+      'p_stat_OutfeedPermitted', '{m} may send boxes on', HmiColorRole.green),
+];
+
+/// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
+/// rather than a key prefix, and the members each draws.
+///
+/// A kind belongs in exactly one of this map and [kEquipmentStatusBits];
+/// membership here means one subscription for the whole handshake instead of
+/// one per bit.
+const Map<ThirdPartyEquipmentKind, List<StructStatusBit>> kStructStatusBits = {
+  ThirdPartyEquipmentKind.speedBatcher: speedBatcherStatusBits,
+  ThirdPartyEquipmentKind.strappingLine: strappingLineStatusBits,
+};
 
 /// The machine's name as it reads inside a diode label.
 ///
 /// Shorter than [ThirdPartyEquipmentKindInfo.label], which carries the make
-/// ("Afak / Strapex strapping line") -- a row saying "Fish waiting to drop to
-/// Afak / Strapex strapping line" is worse than useless.
+/// ("Afak / StrapX strapping line") -- a row saying "Fish waiting to drop to
+/// Afak / StrapX strapping line" is worse than useless.
 String equipmentShortName(ThirdPartyEquipmentKind kind) => switch (kind) {
       ThirdPartyEquipmentKind.multivac => 'Multivac',
       ThirdPartyEquipmentKind.speedBatcher => 'SpeedBatcher',
@@ -561,11 +664,14 @@ String equipmentShortName(ThirdPartyEquipmentKind kind) => switch (kind) {
 /// One diode in a non-SpeedBatcher machine's Status section.
 ///
 /// [suffix] is appended to the asset's [ThirdPartyEquipmentConfig.statusKey],
-/// which for these kinds holds a key PREFIX rather than a struct node. The
-/// SpeedBatcher can read members out of one struct because its handshake is a
-/// published `SP_HMI`; the other machines expose their permits as separate
-/// global bools (`BER02.PermitOutfeed`, `STM02.PermitInfeed`), so the prefix
-/// plus a fixed suffix list is the closest equivalent.
+/// which for these kinds holds a key PREFIX rather than a struct node. A kind
+/// can read members out of one struct only once the PLC wraps it in a function
+/// block with an `hmi` member — the SpeedBatcher's `SP_HMI`, the strapper's
+/// `ST_StrappingLine_HMI`. The machines still here expose their permits as
+/// separate global bools (`BER02.PermitOutfeed`), so the prefix plus a fixed
+/// suffix list is the closest equivalent, at one subscription per bit. Moving
+/// one of them across is a PLC change first, then a line in
+/// [kStructStatusBits].
 class EquipmentStatusBit {
   final String suffix;
 
@@ -575,8 +681,10 @@ class EquipmentStatusBit {
   /// operator working out which machine it belongs to.
   final String label;
 
-  final Color onColor;
-  const EquipmentStatusBit(this.suffix, this.label, this.onColor);
+  /// Diode colour when the bit is true, as a scheme role. See
+  /// [StructStatusBit.onRole] for why this is not a literal.
+  final HmiColorRole onRole;
+  const EquipmentStatusBit(this.suffix, this.label, this.onRole);
 
   /// [label] with the machine name filled in, sentence-cased.
   ///
@@ -627,33 +735,32 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
   //
   // Green means "yes, now", amber something in progress, blue the outfeed side,
   // so a glance down the column reads the same on every machine.
-  ThirdPartyEquipmentKind.strappingLine: [
-    EquipmentStatusBit('PermitInfeed', '{m} is ready for box', Colors.green),
-    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', Colors.blue),
-  ],
+  // The strapping line is NOT here: `FB_StrappingLine` publishes its whole
+  // handshake as one `ST_StrappingLine_HMI` struct, so it lives in
+  // [kStructStatusBits] and costs one subscription rather than one per permit.
   ThirdPartyEquipmentKind.boxErector: [
-    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', Colors.green),
-    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', Colors.green),
-    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', Colors.blue),
+    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', HmiColorRole.green),
+    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
+    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', HmiColorRole.blue),
   ],
   ThirdPartyEquipmentKind.multivac: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', Colors.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', Colors.amber),
-    EquipmentStatusBit('DropOk', '{m} is ready for fish', Colors.green),
-    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', Colors.blue),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', HmiColorRole.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', HmiColorRole.yellow),
+    EquipmentStatusBit('DropOk', '{m} is ready for fish', HmiColorRole.green),
+    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
   ],
   ThirdPartyEquipmentKind.fishAligner: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', Colors.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', Colors.amber),
-    EquipmentStatusBit('DropOk', '{m} is ready for fish', Colors.green),
-    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', Colors.blue),
+    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', HmiColorRole.red),
+    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', HmiColorRole.yellow),
+    EquipmentStatusBit('DropOk', '{m} is ready for fish', HmiColorRole.green),
+    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
   ],
 };
 
 /// The Status section body for the non-SpeedBatcher kinds.
 ///
 /// A plain [StatelessWidget] fed a value per bit, exactly like
-/// [SpeedBatcherStatusDiodes] -- NOT a ConsumerWidget reading
+/// [StructStatusDiodes] -- NOT a ConsumerWidget reading
 /// `keyStreamProvider` itself. The side pane is built into an overlay through
 /// `showSidePane`, and a widget that reaches for `ref` from there is not on
 /// the page's tree; the subscriptions belong to the parent state, which
@@ -704,7 +811,7 @@ class EquipmentStatusDiodes extends StatelessWidget {
                 painter: LEDPainter(
                   color: switch (values[bit.suffix]) {
                     null => null,
-                    true => bit.onColor,
+                    true => bit.onRole.resolve(context),
                     false => Colors.white,
                   },
                   ledType: LEDType.circle,
@@ -726,10 +833,44 @@ class EquipmentStatusDiodes extends StatelessWidget {
 /// on a missing member, and three of the five bits have never been confirmed
 /// against the live PLC — a missing bit must render as the grey `!`, not take
 /// the pane down.
-bool? speedBatcherStatusBitOf(DynamicValue? status, String member) {
-  if (status == null || !status.isObject) return null;
-  if (!status.contains(member)) return null;
-  return status[member].asBool;
+bool? structStatusBitOf(DynamicValue? status, String member) {
+  var cur = status;
+  for (final segment in structMemberPath(member)) {
+    // `contains` is the guard for both kinds of segment: false for a missing
+    // object key, for an out-of-range index, and for an index into something
+    // that is not an array. `operator[]` THROWS on every one of those, and a
+    // bit the struct does not carry must render as the grey `!` rather than
+    // taking the pane down.
+    if (cur == null || !cur.contains(segment)) return null;
+    cur = cur[segment];
+  }
+  return cur?.asBool;
+}
+
+/// Splits a member path into object keys and array indices.
+///
+/// `'p_stat_StrappingMachines[0].p_stat_Rdy'` becomes
+/// `['p_stat_StrappingMachines', 0, 'p_stat_Rdy']`. The syntax mirrors an OPC
+/// UA node id so a path can be checked against `browse_nodes` output by eye.
+///
+/// **The indices are 0-based, and the PLC's are not.** `ST_StrappingLine_HMI`
+/// declares `ARRAY [1..2] OF ST_StrapX`, and the server's browse names keep
+/// that: `p_stat_StrappingMachines[1]` is the FIRST head. Reading the struct
+/// hands us a plain Dart list, so here the first head is index 0. The labels
+/// are written for the operator and count from 1.
+@visibleForTesting
+Iterable<Object> structMemberPath(String member) sync* {
+  for (final part in member.split('.')) {
+    final open = part.indexOf('[');
+    if (open < 0) {
+      yield part;
+      continue;
+    }
+    if (open > 0) yield part.substring(0, open);
+    for (final m in RegExp(r'\[(\d+)\]').allMatches(part.substring(open))) {
+      yield int.parse(m.group(1)!);
+    }
+  }
 }
 
 /// Resolves the pane's header badge from the handshake struct.
@@ -741,7 +882,7 @@ bool? speedBatcherStatusBitOf(DynamicValue? status, String member) {
 /// once mid-cycle. When neither bit is readable — no struct yet, no status
 /// key — the caller's runKey-derived [fallback] stands.
 PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
-  if (speedBatcherStatusBitOf(status, 'p_stat_Cleaning') == true) {
+  if (structStatusBitOf(status, 'p_stat_Cleaning') == true) {
     // Blue to match the Cleaning diode below it.
     return const PaneStatus(
       label: 'Cleaning',
@@ -749,7 +890,7 @@ PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
       icon: Icons.cleaning_services,
     );
   }
-  switch (speedBatcherStatusBitOf(status, 'p_stat_Running')) {
+  switch (structStatusBitOf(status, 'p_stat_Running')) {
     case true:
       return const PaneStatus.running();
     case false:
@@ -764,23 +905,31 @@ PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
 /// Split out as its own widget — same seam as [ThirdPartyEquipmentBody] — so
 /// tests and goldens can render every diode state from a hand-built
 /// [DynamicValue] without a `StateMan`.
-class SpeedBatcherStatusDiodes extends StatelessWidget {
-  const SpeedBatcherStatusDiodes({
+class StructStatusDiodes extends StatelessWidget {
+  const StructStatusDiodes({
     super.key,
     required this.status,
+    required this.bits,
+    required this.machine,
   });
 
   /// Latest struct off the wire; `null` renders every diode unknown.
   final DynamicValue? status;
 
+  /// The members to draw, in display order — [kStructStatusBits] for the kind.
+  final List<StructStatusBit> bits;
+
+  /// Machine name substituted into each label's `{m}`.
+  final String machine;
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        for (final bit in speedBatcherStatusBits)
+        for (final bit in bits)
           PaneDetailRow(
             crossAxisAlignment: CrossAxisAlignment.center,
-            label: bit.label,
+            label: bit.labelFor(machine),
             // 22 px, not smaller: the unknown state is a grey fill with a
             // white `!`, and below this size the glyph blurs out and unknown
             // becomes indistinguishable from off — the exact confusion the
@@ -790,9 +939,9 @@ class SpeedBatcherStatusDiodes extends StatelessWidget {
               height: 22,
               child: CustomPaint(
                 painter: LEDPainter(
-                  color: switch (speedBatcherStatusBitOf(status, bit.member)) {
+                  color: switch (structStatusBitOf(status, bit.member)) {
                     null => null,
-                    true => bit.onColor,
+                    true => bit.onRole.resolve(context),
                     false => Colors.white,
                   },
                   ledType: LEDType.circle,
@@ -1106,12 +1255,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// so a kind change away from SpeedBatcher drops the subscription too.
   String? _hoistedStatusKey;
 
-  /// The status key this config actually wants a subscription for. Empty for
-  /// every kind but the SpeedBatcher — a leftover [ThirdPartyEquipmentConfig.statusKey]
+  /// The status key this config actually wants a struct subscription for.
+  ///
+  /// Empty for the prefix kinds — a leftover [ThirdPartyEquipmentConfig.statusKey]
   /// on a config switched to another kind must not hold a PLC subscription
   /// open for a section the pane no longer shows.
   String get _wantedStatusKey =>
-      widget.config.kind == ThirdPartyEquipmentKind.speedBatcher
+      kStructStatusBits.containsKey(widget.config.kind)
           ? widget.config.statusKey
           : '';
 
@@ -1138,7 +1288,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// edit in the page editor moves the diodes onto the new keys without a
   /// restart, and a kind switch releases the old machine's subscriptions.
   void _hoistStatusBits() {
-    final bits = kEquipmentStatusBits[widget.config.kind];
+    // A struct kind reads every bit out of the one node [_hoistStatusStream]
+    // holds, so it must open no per-bit subscriptions at all -- otherwise a
+    // strapper would cost three keys instead of the struct's one, and the two
+    // sections would both try to render.
+    final bits = kStructStatusBits.containsKey(widget.config.kind)
+        ? null
+        : kEquipmentStatusBits[widget.config.kind];
     final prefix = widget.config.statusKey;
     final wanted = <String, String>{
       if (bits != null && prefix.isNotEmpty)
@@ -1245,6 +1401,12 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// Test-only window onto the hoisted status stream, as [debugRunStream].
   @visibleForTesting
   Stream<DynamicValue>? get debugStatusStream => _statusStream;
+
+  /// Test-only window onto which per-bit keys are subscribed. Empty for a
+  /// struct kind — that is the whole point of [kStructStatusBits], and it is
+  /// not observable from the rendered tree.
+  @visibleForTesting
+  Iterable<String> get debugStatusBitKeys => _bitSubs.keys;
 
   @override
   void dispose() {
@@ -1402,11 +1564,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
                   value:
                       config.kind.labelFor(strapMachines: config.strapMachines),
                 ),
-                if (config.kind.hasStrapMachines)
-                  PaneDetailRow(
-                    label: 'Strappers on the line',
-                    value: '${config.strapMachines}',
-                  ),
+                // No separate head-count row: the Machine line above already
+                // ends in "N x StrapX", and the pane read the same number
+                // twice. The count is still editable in the config editor.
                 // Live figures, not key names or static wording — the pane
                 // is for reading the machine, not its wiring. Charts stay
                 // behind a tap so the pane itself does not crowd: the accept
@@ -1513,17 +1673,19 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               ],
             ),
           ),
-          if (config.kind == ThirdPartyEquipmentKind.speedBatcher)
-            // Always present for a SpeedBatcher, key configured or not: five
-            // grey `!` diodes tell the operator the section exists and is
-            // unconfigured, which a silently absent section would not.
+          if (kStructStatusBits[config.kind] case final structBits?)
+            // Always present for a struct kind, key configured or not: grey `!`
+            // diodes tell the operator the section exists and is unconfigured,
+            // which a silently absent section would not.
             PaneSection(
               title: 'Status',
-              child: SpeedBatcherStatusDiodes(
+              child: StructStatusDiodes(
                 status: _statusRaw.value,
+                bits: structBits,
+                machine: equipmentShortName(config.kind),
               ),
             ),
-          if (config.kind != ThirdPartyEquipmentKind.speedBatcher &&
+          if (!kStructStatusBits.containsKey(config.kind) &&
               kEquipmentStatusBits[config.kind] != null)
             PaneSection(
               title: 'Status',
@@ -1553,7 +1715,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     final config = widget.config;
     final ledColor = isRunning == null
         ? null
-        : (isRunning ? config.runningColor : config.stoppedColor);
+        : (isRunning ? config.runningColor : config.stoppedColor)
+            .resolve(context);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -1572,7 +1735,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
             return ThirdPartyEquipmentBody(
               painter: thirdPartyPainterFor(
                 config.kind,
-                color: config.outlineColor,
+                color: config.outlineColor.resolve(context),
                 strokeWidth: config.strokeWidth,
                 strapMachines: config.strapMachines,
               ),
@@ -1764,10 +1927,6 @@ class _ThirdPartyEquipmentConfigEditorState
     super.dispose();
   }
 
-  Widget _colorRow(String label, Color color, ValueChanged<Color> onChanged) {
-    return ColorPickerRow(label: label, color: color, onChanged: onChanged);
-  }
-
   @override
   Widget build(BuildContext context) {
     final config = widget.config;
@@ -1791,14 +1950,14 @@ class _ThirdPartyEquipmentConfigEditorState
               child: ThirdPartyEquipmentBody(
                 painter: thirdPartyPainterFor(
                   config.kind,
-                  color: config.outlineColor,
+                  color: config.outlineColor.resolve(context),
                   strokeWidth: config.strokeWidth,
                   strapMachines: config.strapMachines,
                 ),
                 paintSize: previewSize,
                 // Preview always shows the running colour — the operator is
                 // picking colours here, not reading live state.
-                ledColor: config.runningColor,
+                ledColor: config.runningColor.resolve(context),
                 // Children are deliberately NOT rendered in the preview: they
                 // subscribe to real keys, and the editor should not open live
                 // subscriptions just to draw a thumbnail.
@@ -1879,11 +2038,11 @@ class _ThirdPartyEquipmentConfigEditorState
             // -- Status key --
             // Every kind's pane has a Status section, so every kind gets the
             // field — without it the diodes can never leave the unknown
-            // state. The SpeedBatcher reads members of one struct; the other
-            // machines read separate bools, so their key is a prefix and the
-            // help text spells out the suffixes the pane appends.
+            // state. A struct kind reads members of one node; the prefix kinds
+            // read separate bools, so their key is a prefix and the help text
+            // spells out the suffixes the pane appends.
             KeyField(
-              label: config.kind == ThirdPartyEquipmentKind.speedBatcher
+              label: kStructStatusBits.containsKey(config.kind)
                   ? 'Status Struct Key'
                   : 'Status Key Prefix',
               initialValue: config.statusKey,
@@ -1891,9 +2050,11 @@ class _ThirdPartyEquipmentConfigEditorState
             ),
             const SizedBox(height: 4),
             Text(
-              config.kind == ThirdPartyEquipmentKind.speedBatcher
-                  ? 'Struct with the p_stat_* handshake bits — feeds the '
-                      'diodes in the side pane\'s Status section.'
+              kStructStatusBits.containsKey(config.kind)
+                  ? 'Struct with the '
+                      '${kStructStatusBits[config.kind]!.map((b) => b.member).join(', ')} '
+                      'members — one subscription feeds every diode in the side '
+                      'pane\'s Status section.'
                   : 'Feeds the diodes in the side pane\'s Status section: '
                       '${(kEquipmentStatusBits[config.kind] ?? const []).map((b) => '.${b.suffix}').join(', ')} '
                       'are appended to this prefix.',
@@ -1902,14 +2063,20 @@ class _ThirdPartyEquipmentConfigEditorState
             const SizedBox(height: 16),
 
             // -- Colours --
-            _colorRow('Running Color', config.runningColor,
-                (c) => setState(() => config.runningColor = c)),
+            AssetColorPickerRow(
+                label: 'Running Color',
+                color: config.runningColor,
+                onChanged: (c) => setState(() => config.runningColor = c)),
             const SizedBox(height: 8),
-            _colorRow('Stopped Color', config.stoppedColor,
-                (c) => setState(() => config.stoppedColor = c)),
+            AssetColorPickerRow(
+                label: 'Stopped Color',
+                color: config.stoppedColor,
+                onChanged: (c) => setState(() => config.stoppedColor = c)),
             const SizedBox(height: 8),
-            _colorRow('Outline Color', config.outlineColor,
-                (c) => setState(() => config.outlineColor = c)),
+            AssetColorPickerRow(
+                label: 'Outline Color',
+                color: config.outlineColor,
+                onChanged: (c) => setState(() => config.outlineColor = c)),
             const SizedBox(height: 16),
 
             // -- Stroke width --

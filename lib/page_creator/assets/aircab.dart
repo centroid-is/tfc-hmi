@@ -159,7 +159,9 @@ class AirCab extends StatelessWidget {
 
     if (config.buttonFeedbackKey != null) {
       buttonConfig.feedback = FeedbackConfig()
-        ..color = Colors.green
+        // The scheme's green, not Material's: this face lights on a muted,
+        // gray-first page and a raw #4CAF50 shouted next to it.
+        ..color = AssetColor.green
         ..key = config.buttonFeedbackKey!;
     }
 

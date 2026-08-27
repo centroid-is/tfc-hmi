@@ -21,7 +21,7 @@ import 'package:flutter/material.dart';
 //   Box erector   generic RSC erector (Eastey ERX-15 class) — 2395 x 2083 mm,
 //                 side-loading blank magazine, 8-cup vacuum pick, flap
 //                 folders, bottom centre-seal tape head, side-belt discharge.
-//   Strapping     Afak SL-15-3 with Strapex heads — 2665 x 1815 mm, three
+//   Strapping     Afak SL-15-3 with StrapX heads — 2665 x 1815 mm, three
 //                 arches in series over one belt, three coil dispensers on a
 //                 rear gantry, ~530 mm boxes at 15/min.
 //
@@ -824,13 +824,13 @@ class BoxErectorPainter extends ThirdPartyMachinePainter {
 }
 
 // ---------------------------------------------------------------------------
-// Afak SL-15-3 strapping line (Strapex heads)
+// Afak SL-15-3 strapping line (StrapX heads)
 // ---------------------------------------------------------------------------
 
 /// Plan view of the strapping line, boxes flowing left to right.
 ///
 /// This is a LINE, not a single machine: one conveyor runs the whole length
-/// and [machines] discrete Strapex strappers stand on it, each strapping the
+/// and [machines] discrete StrapX strappers stand on it, each strapping the
 /// box once as it indexes through. Each strapper is its own unit — own frame,
 /// own feet, own coil dispenser on its own bracket, own cabinet — which is
 /// what the site CAD shows and what tells this apart from one machine with
@@ -855,7 +855,7 @@ class StrappingLinePainter extends ThirdPartyMachinePainter {
   /// Most strappers the line is built for.
   static const int maxMachines = 3;
 
-  /// Strapex machines standing on the line.
+  /// StrapX machines standing on the line.
   final int machines;
 
   /// Belt band, front to back. The line runs the full width of the drawing.
@@ -923,7 +923,7 @@ class StrappingLinePainter extends ThirdPartyMachinePainter {
     canvas.drawCircle(u.p(0.945, 0.76), u.rad(0.032), detail);
   }
 
-  /// One Strapex strapper standing on the line.
+  /// One StrapX strapper standing on the line.
   ///
   /// Frame around the whole unit with a foot at each corner, the arch
   /// straddling the belt, the coil dispenser on its bracket behind, and the
@@ -951,7 +951,7 @@ class StrappingLinePainter extends ThirdPartyMachinePainter {
       }
     }
 
-    // Strapex arch straddling the belt: the crossbar spans the depth, with a
+    // StrapX arch straddling the belt: the crossbar spans the depth, with a
     // heavier footprint where each upright lands either side of the belt.
     final aw = half * 0.42;
     canvas.drawRect(u.r(cx - aw, 0.25, cx + aw, 0.85), stroke);

@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
@@ -13,6 +14,7 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus;
 
@@ -33,8 +35,11 @@ void main() {
 
     test('stopped defaults to grey — red is reserved for faults', () {
       final config = ThirdPartyEquipmentConfig();
-      expect(config.stoppedColor.toARGB32(), Colors.grey.toARGB32());
-      expect(config.runningColor.toARGB32(), Colors.green.toARGB32());
+      // Roles, not literals: a literal is frozen at pick time and ignores a
+      // later scheme switch, which is what left the running LED a saturated
+      // Material green under the muted scheme.
+      expect(config.stoppedColor, AssetColor.grey);
+      expect(config.runningColor, AssetColor.green);
     });
 
     test('displayName and category place it in its own palette group', () {
@@ -50,13 +55,13 @@ void main() {
         kind: ThirdPartyEquipmentKind.strappingLine,
         runKey: 'ST301.PK01.STRAP01.Running',
         invertRunPolarity: true,
-        runningColor: Colors.lime,
-        stoppedColor: Colors.orange,
-        outlineColor: Colors.indigo,
+        runningColor: const AssetColor.literal(Colors.lime),
+        stoppedColor: const AssetColor.literal(Colors.orange),
+        outlineColor: const AssetColor.literal(Colors.indigo),
         strokeWidth: 3.5,
         tag: 'STRAP-01',
         showTag: true,
-        notes: 'Afak SL-15-3, three Strapex heads.',
+        notes: 'Afak SL-15-3, three StrapX heads.',
       )
         ..coordinates = Coordinates(x: 0.25, y: 0.5, angle: 90)
         ..size = const RelativeSize(width: 0.2, height: 0.14);
@@ -67,13 +72,23 @@ void main() {
       expect(restored.kind, ThirdPartyEquipmentKind.strappingLine);
       expect(restored.runKey, 'ST301.PK01.STRAP01.Running');
       expect(restored.invertRunPolarity, isTrue);
-      expect(restored.runningColor.toARGB32(), Colors.lime.toARGB32());
-      expect(restored.stoppedColor.toARGB32(), Colors.orange.toARGB32());
-      expect(restored.outlineColor.toARGB32(), Colors.indigo.toARGB32());
+      // A literal must survive as a literal -- pages saved before the role
+      // system existed hold these, and they must not be reinterpreted as a
+      // role. Compared by value, not by object: a MaterialColor narrows to a
+      // plain Color through the JSON map, which is the same colour but not
+      // the same instance.
+      for (final (actual, expected) in [
+        (restored.runningColor, Colors.lime),
+        (restored.stoppedColor, Colors.orange),
+        (restored.outlineColor, Colors.indigo),
+      ]) {
+        expect(actual.isRole, isFalse);
+        expect(actual.literal!.toARGB32(), expected.toARGB32());
+      }
       expect(restored.strokeWidth, 3.5);
       expect(restored.tag, 'STRAP-01');
       expect(restored.showTag, isTrue);
-      expect(restored.notes, 'Afak SL-15-3, three Strapex heads.');
+      expect(restored.notes, 'Afak SL-15-3, three StrapX heads.');
       expect(restored.coordinates.x, 0.25);
       expect(restored.coordinates.angle, 90);
       expect(restored.size.width, 0.2);
@@ -629,8 +644,8 @@ void main() {
 
     test('label and footprint follow the strapper count', () {
       const kind = ThirdPartyEquipmentKind.strappingLine;
-      expect(kind.labelFor(strapMachines: 1), contains('1 x Strapex'));
-      expect(kind.labelFor(strapMachines: 3), contains('3 x Strapex'));
+      expect(kind.labelFor(strapMachines: 1), contains('1 x StrapX'));
+      expect(kind.labelFor(strapMachines: 3), contains('3 x StrapX'));
       // Only the 3-strapper length is published; the others must say so.
       expect(kind.footprint(strapMachines: 3), isNot(contains('estimated')));
       expect(kind.footprint(strapMachines: 2), contains('estimated'));
@@ -819,9 +834,11 @@ void main() {
         'p_stat_Dropped',
       ]);
       for (final bit in speedBatcherStatusBits) {
-        expect(bit.onColor.toARGB32(),
-            (bit.member == 'p_stat_Cleaning' ? Colors.blue : Colors.green)
-                .toARGB32());
+        expect(
+            bit.onRole,
+            bit.member == 'p_stat_Cleaning'
+                ? HmiColorRole.blue
+                : HmiColorRole.green);
       }
     });
 
@@ -830,8 +847,8 @@ void main() {
         'p_stat_Running': true,
         'p_stat_Cleaning': false,
       }));
-      expect(speedBatcherStatusBitOf(status, 'p_stat_Running'), isTrue);
-      expect(speedBatcherStatusBitOf(status, 'p_stat_Cleaning'), isFalse);
+      expect(structStatusBitOf(status, 'p_stat_Running'), isTrue);
+      expect(structStatusBitOf(status, 'p_stat_Cleaning'), isFalse);
     });
 
     test('a missing member degrades to unknown instead of throwing', () {
@@ -842,15 +859,98 @@ void main() {
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         'p_stat_Running': true,
       }));
-      expect(speedBatcherStatusBitOf(status, 'p_stat_BatchReady'), isNull);
+      expect(structStatusBitOf(status, 'p_stat_BatchReady'), isNull);
     });
 
     test('no struct at all — or a non-struct value — is unknown', () {
-      expect(speedBatcherStatusBitOf(null, 'p_stat_Running'), isNull);
+      expect(structStatusBitOf(null, 'p_stat_Running'), isNull);
       expect(
-          speedBatcherStatusBitOf(
+          structStatusBitOf(
               DynamicValue(value: true), 'p_stat_Running'),
           isNull);
+    });
+  });
+
+  group('strapping line status bits', () {
+    test('the members are the ones ST_StrappingLine_HMI publishes', () {
+      // Read off the live st101 address space at
+      // ns=4;s=STM01.STM01.hmi. Getting these wrong is silent: a member the
+      // struct does not carry renders as the grey `!` forever rather than
+      // failing, so the names are pinned here.
+      expect(strappingLineStatusBits.map((b) => b.member), [
+        'p_stat_WaitingFrustration',
+        'p_stat_StrappingMachines[0].p_stat_Rdy',
+        'p_stat_StrappingMachines[1].p_stat_Rdy',
+        'p_stat_InfeedPermitted',
+        'p_stat_OutfeedPermitted',
+      ]);
+    });
+
+    test('a head path resolves through the array', () {
+      // ST_StrappingLine_HMI declares ARRAY [1..2], and the server's browse
+      // names keep that 1-based -- but reading the struct hands us a Dart
+      // list, so head 1 is index 0. Getting this backwards would silently
+      // swap the two heads' diodes, which no type error would catch.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_StrappingMachines': [
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': true})),
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': false})),
+        ],
+      }));
+
+      expect(structMemberPath('p_stat_StrappingMachines[0].p_stat_Rdy'),
+          ['p_stat_StrappingMachines', 0, 'p_stat_Rdy']);
+      expect(
+          structStatusBitOf(status, 'p_stat_StrappingMachines[0].p_stat_Rdy'),
+          isTrue);
+      expect(
+          structStatusBitOf(status, 'p_stat_StrappingMachines[1].p_stat_Rdy'),
+          isFalse);
+    });
+
+    test('an out-of-range head is unknown, not a crash', () {
+      // DynamicValue.operator[] throws on a bad index; a strapper wired for
+      // one head must give the grey `!` rather than taking the pane down.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_StrappingMachines': [
+          DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'p_stat_Rdy': true})),
+        ],
+      }));
+
+      expect(
+          structStatusBitOf(status, 'p_stat_StrappingMachines[1].p_stat_Rdy'),
+          isNull);
+      expect(structStatusBitOf(status, 'p_stat_Missing[0].p_stat_Rdy'), isNull);
+    });
+
+    test('the frustration row names the strapper as the cause', () {
+      // The bit means everything upstream is ready and the machine has not
+      // taken the box -- not that product is being released TO somewhere. The
+      // two readings invert who is at fault, and an operator acts on the
+      // difference.
+      final frustration = strappingLineStatusBits
+          .firstWhere((b) => b.member == 'p_stat_WaitingFrustration');
+      expect(frustration.labelFor('strapping machine'),
+          'Strapping machine is stopping the line');
+      expect(frustration.onRole, HmiColorRole.red,
+          reason: 'it is the one bit that says something is wrong');
+    });
+
+    test('a label with no {m} is left alone', () {
+      // The SpeedBatcher's labels predate templating and carry no placeholder.
+      for (final bit in speedBatcherStatusBits) {
+        expect(bit.labelFor('SpeedBatcher'), bit.label);
+      }
+    });
+
+    test('the strapper is struct-backed, not prefix-backed', () {
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.strappingLine],
+          same(strappingLineStatusBits));
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.strappingLine], isNull,
+          reason: 'both maps would render two Status sections');
     });
   });
 

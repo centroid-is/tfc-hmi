@@ -9,13 +9,13 @@ part of 'button.dart';
 FeedbackConfig _$FeedbackConfigFromJson(Map<String, dynamic> json) =>
     FeedbackConfig()
       ..key = json['key'] as String
-      ..color = const ColorConverter()
+      ..color = const AssetColorConverter()
           .fromJson(json['color'] as Map<String, dynamic>);
 
 Map<String, dynamic> _$FeedbackConfigToJson(FeedbackConfig instance) =>
     <String, dynamic>{
       'key': instance.key,
-      'color': const ColorConverter().toJson(instance.color),
+      'color': const AssetColorConverter().toJson(instance.color),
     };
 
 ButtonConfig _$ButtonConfigFromJson(Map<String, dynamic> json) => ButtonConfig(
