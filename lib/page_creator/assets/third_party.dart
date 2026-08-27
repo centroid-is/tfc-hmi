@@ -1773,10 +1773,22 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
 
   /// Machine drawing + dotted boundary + run LED, wrapped in the tap target.
   ///
-  /// The `GestureDetector` sits OUTSIDE `LayoutRotatedBox` because
-  /// `_RenderLayoutRotatedBox.hitTest` (in `common.dart`) does not forward hits
-  /// to its child — same arrangement as `Sensor._buildPaint` and
-  /// `_buildGate` in `conveyor_gate.dart`.
+  /// The `GestureDetector` sits INSIDE `LayoutRotatedBox`, wrapping the
+  /// full-size [ThirdPartyEquipmentBody]. `_RenderLayoutRotatedBox.hitTest`
+  /// (in `common.dart`) forwards a tap into the child's un-rotated frame and
+  /// adopts the child's verdict, so an opaque detector on the whole body makes
+  /// the ENTIRE placed box tappable at any rotation. This matches the fixed
+  /// arrangement in `Sensor._buildPaint` — see
+  /// `test/page_creator/assets/sensor_rotated_hittest_test.dart`.
+  ///
+  /// It USED to sit OUTSIDE the rotated box. There the detector's own render
+  /// box kept the asset's UN-rotated `w x h` size, so once the box was rotated
+  /// its opaque hit area (the un-rotated rect) and the visible glyph (the
+  /// rotated rect) only overlapped in a central `min(w,h) x min(w,h)` square —
+  /// which on a wide box rotated 90 degrees (the multivac) collapsed the live
+  /// area to a thin central band, the reported dead top/bottom. The box's
+  /// intrinsic `aspectRatio()` never entered into it: the dead margin is purely
+  /// the placed box's own `w:h` swapped by the rotation.
   Widget _buildBody(bool? isRunning) {
     final config = widget.config;
     final ledColor = isRunning == null
@@ -1784,21 +1796,21 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         : (isRunning ? config.runningColor : config.stoppedColor)
             .resolve(context);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _showPane(context),
-      child: LayoutRotatedBox(
-        angle: (config.coordinates.angle ?? 0.0) * pi / 180,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Prefer the bounded asset rect; fall back to the configured size
-            // resolved against the screen for the standalone/preview path.
-            final Size paintSize =
-                constraints.hasBoundedWidth && constraints.hasBoundedHeight
-                    ? Size(constraints.maxWidth, constraints.maxHeight)
-                    : config.size.toSize(MediaQuery.of(context).size);
+    return LayoutRotatedBox(
+      angle: (config.coordinates.angle ?? 0.0) * pi / 180,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Prefer the bounded asset rect; fall back to the configured size
+          // resolved against the screen for the standalone/preview path.
+          final Size paintSize =
+              constraints.hasBoundedWidth && constraints.hasBoundedHeight
+                  ? Size(constraints.maxWidth, constraints.maxHeight)
+                  : config.size.toSize(MediaQuery.of(context).size);
 
-            return ThirdPartyEquipmentBody(
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _showPane(context),
+            child: ThirdPartyEquipmentBody(
               painter: thirdPartyPainterFor(
                 config.kind,
                 color: config.outlineColor.resolve(context),
@@ -1810,9 +1822,9 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               children: config.children,
               parentAngleDegrees: config.coordinates.angle ?? 0.0,
               childTextAngle: config.childTextAngle,
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
     );
   }
