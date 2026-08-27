@@ -768,26 +768,60 @@ void main() {
       expect(state.debugStatusStream, isNull);
     });
 
-    testWidgets('a leftover status key on another kind holds no subscription',
-        (tester) async {
-      // A prefix-backed kind reads its diodes as per-bit subscriptions, never
-      // as one struct stream, so even a leftover struct-style key must not
-      // hoist the struct stream. The box erector is the remaining prefix-backed
-      // kind (the Multivac and the fish aligner both moved to the struct
-      // system), so it is the one that proves the point.
-      final config = ThirdPartyEquipmentConfig(
-        kind: ThirdPartyEquipmentKind.boxErector,
-        statusKey: 'SB1',
-      );
-      await tester.pumpWidget(wrap(SizedBox(
-        width: 300,
-        height: 160,
-        child: ThirdPartyEquipment(config: config),
-      )));
+    // Driven off the map rather than naming one kind, because the naming is
+    // what rotted: this read `multivac` until [kStructStatusBits] took the
+    // Multivac in, and then asserted the opposite of the truth. Three kinds
+    // have migrated in three PRs, so a kind now moves itself between this loop
+    // and the struct one below instead of waiting on someone to retype a name.
+    for (final kind in ThirdPartyEquipmentKind.values
+        .where((k) => !kStructStatusBits.containsKey(k))) {
+      testWidgets(
+          'a leftover status key on ${kind.name} holds no struct subscription',
+          (tester) async {
+        // The config keeps the string when the kind changes under it — a
+        // prefix kind must not subscribe to a struct for a pane section it
+        // never shows. Its diodes come from per-bit keys instead.
+        final config = ThirdPartyEquipmentConfig(
+          kind: kind,
+          statusKey: 'SB1',
+        );
+        await tester.pumpWidget(wrap(SizedBox(
+          width: 300,
+          height: 160,
+          child: ThirdPartyEquipment(config: config),
+        )));
 
-      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
-      expect(state.debugStatusStream, isNull);
-    });
+        final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+        expect(state.debugStatusStream, isNull);
+      });
+    }
+
+    // The other half of the same invariant, and the half that had no test at
+    // all: [kStructStatusBits] exists to buy one subscription instead of one
+    // per diode, so a struct kind must hoist the struct AND open no per-bit
+    // keys. Both the strapper (#356) and the Multivac (#368) crossed over
+    // with nothing asserting they landed.
+    for (final kind in kStructStatusBits.keys) {
+      testWidgets('${kind.name} hoists the struct and no per-bit keys',
+          (tester) async {
+        final config = ThirdPartyEquipmentConfig(
+          kind: kind,
+          statusKey: 'SB1',
+        );
+        await tester.pumpWidget(wrap(SizedBox(
+          width: 300,
+          height: 500,
+          child: ThirdPartyEquipment(config: config),
+        )));
+
+        final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+        expect(state.debugStatusStream, isNotNull,
+            reason: '${kind.name}: the struct stream is the subscription.');
+        expect(state.debugStatusBitKeys, isEmpty,
+            reason: '${kind.name}: a struct kind must not also open one '
+                'subscription per diode.');
+      });
+    }
 
     testWidgets('changing the status key re-hoists; clearing it drops it',
         (tester) async {
