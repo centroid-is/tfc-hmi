@@ -920,13 +920,23 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         // one and stranded six.
         var batched = 0;
         try {
-          final pending = ref
-              .read(proposalStateProvider)
-              .proposals
-              .where((p) =>
-                  p.proposalType == 'asset' || p.proposalType == 'asset_update')
-              .toList();
-          if (pending.isNotEmpty) batched = _applyAssetBatch(pending);
+          final pending = ref.read(proposalStateProvider).proposals.toList();
+          // Open on the page the review is about. A banner hands us one
+          // proposal; land on its page so its batch is the one that stages,
+          // rather than on whatever page sorts first -- otherwise the
+          // proposal that opened the editor is the one left off it.
+          _currentPage = _focusPageForProposals(pending) ?? _currentPage;
+          // Stage only the proposals for the open page. Feeding the whole
+          // queue to _applyAssetBatch regardless of page patched pages the
+          // operator could not see and, worse, left the off-page ones neither
+          // applied nor rejected -- pending forever from that view. The
+          // off-page ones stay genuinely pending (not consumed) so they stage
+          // when their own page is opened.
+          final split = _partitionAssetProposals(pending, _currentPage);
+          if (split.onPage.isNotEmpty) {
+            batched = _applyAssetBatch(split.onPage);
+            if (batched > 0) _noteOffPageProposals(split.elsewhere.length);
+          }
         } catch (_) {
           // Provider unavailable in tests -- fall through to the single path.
         }
@@ -937,6 +947,60 @@ class _PageEditorState extends ConsumerState<PageEditor> {
             _isProposal ? '' : _currentJson; // Mark unsaved if proposal
       });
     });
+  }
+
+  /// Re-entered while already open: a "Review all" or "Open in Editor" tap on
+  /// a banner beams `/advanced/page-editor` again with fresh proposalData.
+  ///
+  /// The BeamPage key is a constant, so beamer reuses this mounted element
+  /// rather than building a new one -- [initState] does NOT run a second time,
+  /// only [widget]`.proposalData` changes. Without reacting here, a proposal
+  /// that targets a page other than the open one never loads: the operator is
+  /// sent to review it and lands on the page they were already on, with
+  /// nothing staged. Route to the proposal's own page and stage its batch, the
+  /// same thing a cold open does through initState.
+  @override
+  void didUpdateWidget(PageEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final data = widget.proposalData;
+    // Only a genuine change of proposal is a re-entry to act on; an unrelated
+    // rebuild carries the same proposalData and must do nothing.
+    if (data == null || data == oldWidget.proposalData) return;
+    List<PendingProposal> pending = const [];
+    try {
+      pending = ref.read(proposalStateProvider).proposals.toList();
+    } catch (_) {
+      // Provider unavailable in tests -- fall through to the single path.
+    }
+    // Land on the page the review is about: the new proposalData's page_key
+    // wins, so "Review all" from a /boxes banner switches to /boxes even when
+    // another page is open.
+    final previousPage = _currentPage;
+    final focus = _focusPageForProposals(pending);
+    if (focus != null) _currentPage = focus;
+    // Stage only that page's pending asset proposals; the off-page ones stay
+    // pending for when their own page is opened. Idempotent -- ids already in
+    // an open batch are skipped -- so re-entering does not double-stage.
+    final split = _partitionAssetProposals(pending, _currentPage);
+    var batched = 0;
+    if (split.onPage.isNotEmpty) {
+      batched = _applyAssetBatch(split.onPage);
+      if (batched > 0) _noteOffPageProposals(split.elsewhere.length);
+    }
+    // A `page` proposal is not part of the asset batch; apply it directly, but
+    // only when nothing is already staged -- _applyProposalData re-snapshots
+    // the reject/revert baseline, which would clobber an open batch's.
+    if (batched == 0 && !_isProposal) _applyProposalData(data);
+    if (batched > 0 || _isProposal) {
+      _updateCurrentJson();
+      _savedJson = ''; // Mark unsaved for the staged proposal.
+    } else if (_currentPage == previousPage) {
+      // Nothing staged and nothing moved. Leave [_savedJson] alone: rewriting
+      // it to the current json would mark the operator's own unsaved edits
+      // saved, and the leave guard would then let them walk away silently.
+      return;
+    }
+    if (mounted) setState(() {});
   }
 
   /// Asked by the back arrow and the navigation bar before they leave.
@@ -1094,6 +1158,116 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset proposals';
     }
     return applied;
+  }
+
+  /// The `page_key` a proposal targets, or null when it names none.
+  ///
+  /// A null follows the open page -- the same `?? _currentPage` fallback the
+  /// apply methods use -- so a proposal without a page_key always belongs to
+  /// whatever page is showing.
+  String? _proposalPageKey(PendingProposal p) {
+    try {
+      final decoded = jsonDecode(p.proposalJson);
+      if (decoded is Map<String, dynamic>) {
+        return decoded['page_key'] as String?;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Splits pending `asset`/`asset_update` proposals into the ones that belong
+  /// on [page] and the ones that target another page.
+  ///
+  /// Staging is per page: an editor open on page A must not fold in a proposal
+  /// for page B. Doing so patches a page the operator cannot see, and when the
+  /// patch resolves against nothing on the open page it stages neither here
+  /// nor there and stays pending with no way to act on it. The [elsewhere]
+  /// ones are left pending so opening their page stages them there.
+  ///
+  /// "Another page" means a page that *exists*. An `asset` proposal naming a
+  /// page_key no page has invents that page (see [_applyAssetProposal]), and
+  /// deferring it to "when its page is opened" would defer it forever -- there
+  /// is no such page to open. Those stage here, where the create can make one.
+  ({List<PendingProposal> onPage, List<PendingProposal> elsewhere})
+      _partitionAssetProposals(List<PendingProposal> all, String? page) {
+    final onPage = <PendingProposal>[];
+    final elsewhere = <PendingProposal>[];
+    for (final p in all) {
+      if (p.proposalType != 'asset' && p.proposalType != 'asset_update') {
+        continue;
+      }
+      final key = _proposalPageKey(p);
+      if (key == null || key == page || !_temporaryPages.containsKey(key)) {
+        onPage.add(p);
+      } else {
+        elsewhere.add(p);
+      }
+    }
+    return (onPage: onPage, elsewhere: elsewhere);
+  }
+
+  /// The page the editor should open on when launched with proposals pending:
+  /// the one the operator is being asked to review.
+  ///
+  /// The banner passes the proposal it was raised for as [widget.proposalData];
+  /// its `page_key` wins, so opening from a `/boxes` banner lands on `/boxes`
+  /// even when another page sorts ahead of it. Failing that, the first pending
+  /// asset proposal's page. Null leaves the caller's default (the first page).
+  String? _focusPageForProposals(List<PendingProposal> pending) {
+    final data = widget.proposalData;
+    if (data != null) {
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map<String, dynamic>) {
+          final key = decoded['page_key'] as String?;
+          if (key != null && _temporaryPages.containsKey(key)) return key;
+        }
+      } catch (_) {}
+    }
+    for (final p in pending) {
+      if (p.proposalType != 'asset' && p.proposalType != 'asset_update') {
+        continue;
+      }
+      final key = _proposalPageKey(p);
+      if (key != null && _temporaryPages.containsKey(key)) return key;
+    }
+    return null;
+  }
+
+  /// Appends a hint to the staged-batch title when proposals for other pages
+  /// are still pending, so an operator who staged three of seven knows the
+  /// other four are waiting on their own pages rather than lost.
+  void _noteOffPageProposals(int count) {
+    if (count <= 0) return;
+    // Strip any note this already carries before adding one. A batch staged
+    // one at a time leaves _proposalTitle untouched (see [_applyAssetBatch]),
+    // so without this a second staging round would append a second suffix.
+    final title = (_proposalTitle ?? 'AI Proposal')
+        .replaceAll(RegExp(r' \(\+\d+ on other pages\)$'), '');
+    _proposalTitle = '$title (+$count on other pages)';
+  }
+
+  /// Stages the pending asset proposals that belong to the open page.
+  ///
+  /// Called when the operator navigates to a page: any proposals waiting on it
+  /// stage now, so switching pages is how the off-page proposals left pending
+  /// at open get their turn. Idempotent -- [_applyAssetBatch] skips ids it has
+  /// already staged -- so returning to a page is a no-op.
+  void _stagePendingForCurrentPage() {
+    final List<PendingProposal> pending;
+    try {
+      pending = ref.read(proposalStateProvider).proposals.toList();
+    } catch (_) {
+      return; // Provider unavailable in tests.
+    }
+    final split = _partitionAssetProposals(pending, _currentPage);
+    if (split.onPage.isEmpty) return;
+    final applied = _applyAssetBatch(split.onPage);
+    if (applied == 0) return;
+    _noteOffPageProposals(split.elsewhere.length);
+    _updateCurrentJson();
+    _savedJson = ''; // Mark unsaved for the staged proposal.
+    if (mounted) setState(() {});
   }
 
   void _applyProposalData(String? proposalJson) {
@@ -2427,9 +2601,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           // up, so the operator sees nothing to save.
           p.proposalType == 'asset_update');
       if (pageProposals.isEmpty) return;
-      final assetProposals = pageProposals
-          .where((p) =>
-              p.proposalType == 'asset' || p.proposalType == 'asset_update')
+      // Stage only what belongs on the open page. A proposal for another page
+      // stays pending and stages when that page is opened, rather than being
+      // folded invisibly into a page the operator cannot see -- which is how a
+      // cross-page batch stranded the off-page proposals with nothing to act
+      // on. The off-page count still shows in the title, below.
+      final split = _partitionAssetProposals(pageProposals.toList(),
+          _currentPage);
+      final assetProposals = split.onPage;
+      final pageOnly = pageProposals
+          .where((p) => p.proposalType == 'page')
           .toList();
       if (assetProposals.isNotEmpty) {
         // Whole queue at once -- one review, one save. Safe to re-enter while
@@ -2446,13 +2627,20 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         // reasoning asset_update already carried: the banner's Accept
         // commits whatever this editor staged, so a proposal left unstaged
         // is a row the operator can see and cannot act on.
-        _applyAssetBatch(assetProposals);
-      } else {
+        if (_applyAssetBatch(assetProposals) > 0) {
+          _noteOffPageProposals(split.elsewhere.length);
+        }
+      } else if (pageOnly.isNotEmpty) {
         // Only `page` reaches this. It replaces or creates a whole page, so
         // folding a run of them together has no defined result; a run of
         // assets appended to a page does.
         if (_isProposal) return; // Already showing a proposal.
-        _applyProposalData(pageProposals.first.proposalJson);
+        _applyProposalData(pageOnly.first.proposalJson);
+      } else {
+        // Every asset proposal that arrived targets another page. Leave them
+        // pending -- do not stage them into the open page -- so they surface
+        // when their own page is opened.
+        return;
       }
       if (_isProposal) {
         _updateCurrentJson();
@@ -3840,6 +4028,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           : () {
               setState(() => _currentPage = pageName);
               Navigator.pop(dialogContext);
+              // Opening a page is what stages the proposals left pending for
+              // it when the editor was launched on another page.
+              _stagePendingForCurrentPage();
             },
     );
 
@@ -3983,6 +4174,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         onTap: () {
           setState(() => _currentPage = mapKey);
           Navigator.pop(dialogContext);
+          // Opening a page is what stages the proposals left pending for it
+          // when the editor was launched on another page.
+          _stagePendingForCurrentPage();
         },
       ),
     );

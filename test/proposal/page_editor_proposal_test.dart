@@ -570,19 +570,21 @@ void main() {
       final listener = source.substring(
           source.indexOf('ref.listen<ProposalState>'),
           source.indexOf('return Focus('));
-      final single = listener.indexOf('pageProposals.first.proposalJson');
+      final single = listener.indexOf('pageOnly.first.proposalJson');
       final guard = listener.indexOf('if (_isProposal) return');
       expect(single, greaterThan(-1));
       expect(guard, lessThan(single),
           reason: 'the single-apply path is the else branch, page only');
     });
 
-    test('initState stages the same set the listener does', () {
-      // Opening the editor from the banner has to stage the whole queue too,
-      // or the first thing the operator sees is one of seven.
+    test('initState stages the page-A proposals the listener would', () {
+      // Opening the editor from the banner has to stage the same set the
+      // listener stages -- the proposals for the open page -- so the first
+      // thing the operator sees is not one of seven, nor a page they are not
+      // on. Both routes go through the same page partition.
       final init = bodyOf('void initState() {');
-      expect(init, contains("p.proposalType == 'asset' ||"));
-      expect(init, contains('_applyAssetBatch(pending)'));
+      expect(init, contains('_partitionAssetProposals(pending, _currentPage)'));
+      expect(init, contains('_applyAssetBatch(split.onPage)'));
     });
 
     test('the batch dispatches both asset kinds', () {
@@ -719,6 +721,139 @@ void main() {
             reason: 'auto-scroll has nothing to do with proposals');
         expect(body, isNot(contains('proposalDiscardProvider')));
       }
+    });
+  });
+
+  // A cross-page batch used to strand its off-page proposals. All pending
+  // asset proposals -- for every page -- were fed to _applyAssetBatch, which
+  // patched pages the operator could not see. Worse, a proposal for a page
+  // other than the open one applied to no visible asset, so it staged neither
+  // there nor here and stayed pending with nothing to accept it. The staging
+  // is now filtered to the open page; the rest stay genuinely pending and
+  // stage when their own page is opened.
+  group('a batch spanning pages stages only the open page', () {
+    test('proposals are partitioned by the page they target', () {
+      // page_key is the field the apply methods already resolve against; the
+      // partition reads the same one so what stages is exactly what the open
+      // page would show.
+      expect(source, contains('_partitionAssetProposals('));
+      expect(source, contains("decoded['page_key'] as String?"));
+      final partition = bodyOf(
+          '_partitionAssetProposals(List<PendingProposal> all, String? page)');
+      expect(partition, contains('onPage'));
+      expect(partition, contains('elsewhere'));
+      // A missing page_key follows the open page, matching the `?? _currentPage`
+      // fallback the apply methods use.
+      expect(partition, contains('key == null || key == page'));
+    });
+
+    test('a proposal that invents its own page is not deferred forever', () {
+      // An `asset` proposal naming a page_key no page has creates that page
+      // (_applyAssetProposal's else branch). Filing it under "stages when its
+      // page is opened" strands it: there is no such page to open, so it would
+      // sit pending with nothing able to reach it. Only an *existing* other
+      // page defers.
+      final partition = bodyOf(
+          '_partitionAssetProposals(List<PendingProposal> all, String? page)');
+      expect(partition, contains('!_temporaryPages.containsKey(key)'));
+    });
+
+    test('both staging routes filter to the current page', () {
+      final init = bodyOf('void initState() {');
+      expect(init, contains('_partitionAssetProposals(pending, _currentPage)'));
+      expect(init, contains('_applyAssetBatch(split.onPage)'));
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      expect(listener,
+          contains('_partitionAssetProposals(pageProposals.toList()'));
+      expect(listener, contains('final assetProposals = split.onPage;'));
+    });
+
+    test('off-page proposals are left pending, not staged into the open page',
+        () {
+      // The listener's else-of-else returns without touching the open page
+      // when every asset proposal that arrived targets elsewhere.
+      final listener = source.substring(
+          source.indexOf('ref.listen<ProposalState>'),
+          source.indexOf('return Focus('));
+      expect(listener, contains('} else if (pageOnly.isNotEmpty) {'));
+      expect(listener, contains('Leave them'));
+    });
+
+    test('opening a page stages the proposals left pending for it', () {
+      // Both page-switch onTaps call the stager after moving _currentPage, so
+      // navigating to a page is how its pending proposals get their turn.
+      expect(source, contains('void _stagePendingForCurrentPage()'));
+      final stager = bodyOf('void _stagePendingForCurrentPage()');
+      expect(stager, contains('_partitionAssetProposals(pending, _currentPage)'));
+      expect(stager, contains('_applyAssetBatch(split.onPage)'));
+      // Idempotent: _applyAssetBatch skips ids already staged, so returning to
+      // a page does nothing.
+      expect(
+          '_stagePendingForCurrentPage();'.allMatches(source).length,
+          greaterThanOrEqualTo(2),
+          reason: 'both page-switch handlers must re-stage');
+    });
+
+    test('the editor opens on the page the review is about', () {
+      // A banner hands one proposal; its page_key wins so the editor lands on
+      // it rather than on whatever page sorts first, and that proposal is in
+      // the staged batch rather than left off it.
+      final init = bodyOf('void initState() {');
+      expect(init,
+          contains('_currentPage = _focusPageForProposals(pending) ?? _currentPage'));
+      final focus = bodyOf(
+          'String? _focusPageForProposals(List<PendingProposal> pending)');
+      expect(focus, contains('widget.proposalData'));
+      expect(focus, contains('_temporaryPages.containsKey(key)'));
+    });
+
+    test('the operator is told about proposals waiting on other pages', () {
+      expect(source, contains('void _noteOffPageProposals(int count)'));
+      expect(source, contains('_noteOffPageProposals(split.elsewhere.length)'));
+      final note = bodyOf('void _noteOffPageProposals(int count)');
+      expect(note, contains('on other pages'));
+    });
+
+    test('Review all while already open switches to the proposal page', () {
+      // The BeamPage key is constant, so beaming the same route again reuses
+      // the mounted editor -- initState does not run twice. didUpdateWidget is
+      // the only hook that sees the new proposalData; without it a "Review all"
+      // for another page lands the operator on the page they were already on.
+      expect(source, contains('void didUpdateWidget(PageEditor oldWidget)'));
+      final upd = bodyOf('void didUpdateWidget(PageEditor oldWidget) {');
+      // Only a genuine change of proposal re-routes; an unrelated rebuild with
+      // the same proposalData must do nothing.
+      expect(upd, contains('data == oldWidget.proposalData'));
+      // Lands on the proposal's own page, then stages that page's batch --
+      // reusing the same page-filtering the cold open uses.
+      expect(upd, contains('_focusPageForProposals(pending)'));
+      expect(upd, contains('_currentPage = focus'));
+      expect(upd, contains('_partitionAssetProposals(pending, _currentPage)'));
+      expect(upd, contains('_applyAssetBatch(split.onPage)'));
+    });
+
+    test('a re-entry that stages nothing leaves unsaved edits unsaved', () {
+      // didUpdateWidget must not rewrite _savedJson to the current json on the
+      // way out. An operator with unsaved edits who is beamed back in by a
+      // proposal that turns out to stage nothing would have those edits marked
+      // saved, and the leave guard would then let them walk away silently.
+      final upd = bodyOf('void didUpdateWidget(PageEditor oldWidget) {');
+      expect(upd, isNot(contains("_savedJson = _isProposal ? '' : _currentJson")),
+          reason: 'the not-a-proposal arm of that ternary clears the '
+              'unsaved-edits flag for edits nobody saved');
+      expect(upd, contains('if (batched > 0 || _isProposal) {'));
+      expect(upd, contains("_savedJson = '';"));
+    });
+
+    test('the off-page note does not stack on repeated staging', () {
+      // _applyAssetBatch leaves _proposalTitle untouched when a single
+      // proposal is staged, so a title that already carries the note would
+      // grow a second one: "(+3 on other pages) (+2 on other pages)".
+      final note = bodyOf('void _noteOffPageProposals(int count)');
+      expect(note, contains('replaceAll('));
+      expect(note, contains('on other pages'));
     });
   });
 }
