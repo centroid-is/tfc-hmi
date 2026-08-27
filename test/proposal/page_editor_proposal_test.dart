@@ -747,6 +747,17 @@ void main() {
       expect(partition, contains('key == null || key == page'));
     });
 
+    test('a proposal that invents its own page is not deferred forever', () {
+      // An `asset` proposal naming a page_key no page has creates that page
+      // (_applyAssetProposal's else branch). Filing it under "stages when its
+      // page is opened" strands it: there is no such page to open, so it would
+      // sit pending with nothing able to reach it. Only an *existing* other
+      // page defers.
+      final partition = bodyOf(
+          '_partitionAssetProposals(List<PendingProposal> all, String? page)');
+      expect(partition, contains('!_temporaryPages.containsKey(key)'));
+    });
+
     test('both staging routes filter to the current page', () {
       final init = bodyOf('void initState() {');
       expect(init, contains('_partitionAssetProposals(pending, _currentPage)'));

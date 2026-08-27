@@ -1183,6 +1183,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// patch resolves against nothing on the open page it stages neither here
   /// nor there and stays pending with no way to act on it. The [elsewhere]
   /// ones are left pending so opening their page stages them there.
+  ///
+  /// "Another page" means a page that *exists*. An `asset` proposal naming a
+  /// page_key no page has invents that page (see [_applyAssetProposal]), and
+  /// deferring it to "when its page is opened" would defer it forever -- there
+  /// is no such page to open. Those stage here, where the create can make one.
   ({List<PendingProposal> onPage, List<PendingProposal> elsewhere})
       _partitionAssetProposals(List<PendingProposal> all, String? page) {
     final onPage = <PendingProposal>[];
@@ -1192,7 +1197,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         continue;
       }
       final key = _proposalPageKey(p);
-      if (key == null || key == page) {
+      if (key == null || key == page || !_temporaryPages.containsKey(key)) {
         onPage.add(p);
       } else {
         elsewhere.add(p);
