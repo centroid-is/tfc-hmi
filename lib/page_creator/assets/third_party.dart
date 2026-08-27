@@ -740,8 +740,9 @@ class EquipmentStatusBit {
 /// The diodes each kind shows, in display order.
 ///
 /// Hardcoded, like [speedBatcherStatusBits]: every box erector on the site
-/// exposes the same three permits, every strapper the same two. What differs
-/// per machine is only which line it is on, and that is the prefix.
+/// exposes the same three permits plus the red frustration bit, every strapper
+/// the same two. What differs per machine is only which line it is on, and that
+/// is the prefix.
 const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
     kEquipmentStatusBits = {
   // One vocabulary across every machine, in the order product moves through it.
@@ -776,6 +777,7 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
   // / `SP_Packing_HMI`), so both live in [kStructStatusBits] and cost one
   // subscription rather than one per permit.
   ThirdPartyEquipmentKind.boxErector: [
+    EquipmentStatusBit('WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
     EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', HmiColorRole.green),
     EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
     EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', HmiColorRole.blue),
