@@ -822,5 +822,27 @@ void main() {
       expect(upd, contains('_partitionAssetProposals(pending, _currentPage)'));
       expect(upd, contains('_applyAssetBatch(split.onPage)'));
     });
+
+    test('a re-entry that stages nothing leaves unsaved edits unsaved', () {
+      // didUpdateWidget must not rewrite _savedJson to the current json on the
+      // way out. An operator with unsaved edits who is beamed back in by a
+      // proposal that turns out to stage nothing would have those edits marked
+      // saved, and the leave guard would then let them walk away silently.
+      final upd = bodyOf('void didUpdateWidget(PageEditor oldWidget) {');
+      expect(upd, isNot(contains("_savedJson = _isProposal ? '' : _currentJson")),
+          reason: 'the not-a-proposal arm of that ternary clears the '
+              'unsaved-edits flag for edits nobody saved');
+      expect(upd, contains('if (batched > 0 || _isProposal) {'));
+      expect(upd, contains("_savedJson = '';"));
+    });
+
+    test('the off-page note does not stack on repeated staging', () {
+      // _applyAssetBatch leaves _proposalTitle untouched when a single
+      // proposal is staged, so a title that already carries the note would
+      // grow a second one: "(+3 on other pages) (+2 on other pages)".
+      final note = bodyOf('void _noteOffPageProposals(int count)');
+      expect(note, contains('replaceAll('));
+      expect(note, contains('on other pages'));
+    });
   });
 }

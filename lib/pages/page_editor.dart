@@ -975,6 +975,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // Land on the page the review is about: the new proposalData's page_key
     // wins, so "Review all" from a /boxes banner switches to /boxes even when
     // another page is open.
+    final previousPage = _currentPage;
     final focus = _focusPageForProposals(pending);
     if (focus != null) _currentPage = focus;
     // Stage only that page's pending asset proposals; the off-page ones stay
@@ -990,8 +991,15 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // only when nothing is already staged -- _applyProposalData re-snapshots
     // the reject/revert baseline, which would clobber an open batch's.
     if (batched == 0 && !_isProposal) _applyProposalData(data);
-    _updateCurrentJson();
-    _savedJson = _isProposal ? '' : _currentJson;
+    if (batched > 0 || _isProposal) {
+      _updateCurrentJson();
+      _savedJson = ''; // Mark unsaved for the staged proposal.
+    } else if (_currentPage == previousPage) {
+      // Nothing staged and nothing moved. Leave [_savedJson] alone: rewriting
+      // it to the current json would mark the operator's own unsaved edits
+      // saved, and the leave guard would then let them walk away silently.
+      return;
+    }
     if (mounted) setState(() {});
   }
 
@@ -1099,6 +1107,59 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// bookkeeping around them does not: snapshot the pages once, skip ids
   /// already staged or resolved, count what actually landed. `asset` used to
   /// have no batch at all, which is the whole of the bug below.
+  int _applyAssetBatch(List<PendingProposal> proposals) {
+    // An MCP client fires update_asset one call at a time, so a second wave
+    // lands while the first is still staged. Extend the open batch instead of
+    // restarting it: clearing _proposedAssets left only the newest asset
+    // outlined -- eight bindings arrived, one yellow box showed -- and
+    // re-snapshotting _preProposalPages over already-patched pages left
+    // reject-all with no way back to the original.
+    final extending = _preProposalPages != null;
+    if (!extending) {
+      _preProposalPages = PageManager.copyPages(_temporaryPages);
+      _proposedAssets = {};
+    }
+    var applied = 0;
+    for (final p in proposals) {
+      if (_proposalIds.contains(p.id)) continue; // already staged
+      if (_consumedProposalIds.contains(p.id)) continue; // already resolved
+      try {
+        final decoded = jsonDecode(p.proposalJson);
+        if (decoded is! Map<String, dynamic>) continue;
+        final type = decoded['_proposal_type'];
+        final before = _proposedAssets.length;
+        if (type == 'asset') {
+          _applyAssetProposal(decoded);
+        } else if (type == 'asset_update') {
+          _applyUpdateProposal(decoded);
+        } else {
+          continue;
+        }
+        // Counted by what actually reached the canvas, not by what was
+        // attempted: a proposal the registry could not build leaves its id
+        // out of the batch and stays pending, rather than being marked
+        // accepted against nothing.
+        if (_proposedAssets.length > before) {
+          _proposalIds.add(p.id);
+          applied++;
+        }
+      } catch (e) {
+        // A malformed proposal must not take the rest of the batch with it.
+        // Inside the loop for that reason, and reported rather than
+        // swallowed: a run of proposals missing required fields is how a
+        // queue goes quiet with nothing to explain it.
+        debugPrint('asset proposal ${p.id} could not be staged: $e');
+      }
+    }
+    if (applied > 0) {
+      _isProposal = true;
+      _publishProposalCallbacks();
+      final staged = _proposalIds.length;
+      _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset proposals';
+    }
+    return applied;
+  }
+
   /// The `page_key` a proposal targets, or null when it names none.
   ///
   /// A null follows the open page -- the same `?? _currentPage` fallback the
@@ -1173,7 +1234,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// other four are waiting on their own pages rather than lost.
   void _noteOffPageProposals(int count) {
     if (count <= 0) return;
-    final title = _proposalTitle ?? 'AI Proposal';
+    // Strip any note this already carries before adding one. A batch staged
+    // one at a time leaves _proposalTitle untouched (see [_applyAssetBatch]),
+    // so without this a second staging round would append a second suffix.
+    final title = (_proposalTitle ?? 'AI Proposal')
+        .replaceAll(RegExp(r' \(\+\d+ on other pages\)$'), '');
     _proposalTitle = '$title (+$count on other pages)';
   }
 
@@ -1198,59 +1263,6 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _updateCurrentJson();
     _savedJson = ''; // Mark unsaved for the staged proposal.
     if (mounted) setState(() {});
-  }
-
-  int _applyAssetBatch(List<PendingProposal> proposals) {
-    // An MCP client fires update_asset one call at a time, so a second wave
-    // lands while the first is still staged. Extend the open batch instead of
-    // restarting it: clearing _proposedAssets left only the newest asset
-    // outlined -- eight bindings arrived, one yellow box showed -- and
-    // re-snapshotting _preProposalPages over already-patched pages left
-    // reject-all with no way back to the original.
-    final extending = _preProposalPages != null;
-    if (!extending) {
-      _preProposalPages = PageManager.copyPages(_temporaryPages);
-      _proposedAssets = {};
-    }
-    var applied = 0;
-    for (final p in proposals) {
-      if (_proposalIds.contains(p.id)) continue; // already staged
-      if (_consumedProposalIds.contains(p.id)) continue; // already resolved
-      try {
-        final decoded = jsonDecode(p.proposalJson);
-        if (decoded is! Map<String, dynamic>) continue;
-        final type = decoded['_proposal_type'];
-        final before = _proposedAssets.length;
-        if (type == 'asset') {
-          _applyAssetProposal(decoded);
-        } else if (type == 'asset_update') {
-          _applyUpdateProposal(decoded);
-        } else {
-          continue;
-        }
-        // Counted by what actually reached the canvas, not by what was
-        // attempted: a proposal the registry could not build leaves its id
-        // out of the batch and stays pending, rather than being marked
-        // accepted against nothing.
-        if (_proposedAssets.length > before) {
-          _proposalIds.add(p.id);
-          applied++;
-        }
-      } catch (e) {
-        // A malformed proposal must not take the rest of the batch with it.
-        // Inside the loop for that reason, and reported rather than
-        // swallowed: a run of proposals missing required fields is how a
-        // queue goes quiet with nothing to explain it.
-        debugPrint('asset proposal ${p.id} could not be staged: $e');
-      }
-    }
-    if (applied > 0) {
-      _isProposal = true;
-      _publishProposalCallbacks();
-      final staged = _proposalIds.length;
-      _proposalTitle = staged == 1 ? _proposalTitle : '$staged asset proposals';
-    }
-    return applied;
   }
 
   void _applyProposalData(String? proposalJson) {
