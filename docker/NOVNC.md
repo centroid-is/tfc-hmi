@@ -278,6 +278,70 @@ Today that is protected by TLS-with-a-self-signed-cert; after this change it is
 protected by the noVNC hop and the plant network only. Worth changing at the
 same time.
 
+## What about Apache Guacamole?
+
+Guacamole looked like it might avoid the weston change entirely: `guacd` drives
+VNC through libvncclient, which *does* implement VeNCrypt X509. It does not.
+
+Driving `guacamole/guacd:1.6.0` directly over the Guacamole protocol (no Tomcat
+needed for the test), against our **current, unmodified** TLS config:
+
+```
+guacd[15]: ERROR:  Unsupported credential type requested.
+```
+
+libvncclient asks guacd for X509 credentials to verify the server, and guacd
+implements only username/password. Against the **no-TLS** server it connects
+immediately and streams the screen (`img`, `blob`, `rect`, `copy`, `sync`).
+
+So **Guacamole needs exactly the same weston change as noVNC** — it is a
+heavier front-end for the same server config, not a way around it. And it lands
+on the same security type: a sniffing relay in front of the server shows
+
+```
+server offered: 129 (RSA-AES-256), 5 (RSA-AES-128), 30 (ARD)
+guacd     chose: 30  ARD          <- framebuffer plaintext, needs edge TLS
+TigerVNC  chose: 129 RSA-AES-256  <- fully encrypted
+```
+
+### Where Guacamole does win
+
+Four things it has that noVNC structurally cannot:
+
+- **Server-side read-only.** guacd's `read-only` parameter is enforced in the
+  proxy. noVNC's `view_only` is a URL parameter the viewer can simply delete.
+  For a browser link onto a live processing line, that difference is a safety
+  property, not a preference.
+- **Per-user accounts, LDAP, TOTP.** Today every VNC user shares `centroid`.
+- **Session recording** (`recording-path`) — who connected and what they did.
+- **One gateway for every station** instead of one noVNC per station.
+
+Costs: guacd + a Tomcat webapp + an auth config, against noVNC's single small
+container; and an extra re-encode hop (browser → Tomcat → guacd → libvncclient
+→ RFB) where noVNC gets neatvnc's Tight frames straight through.
+
+## Recommendation
+
+**Do the weston change and start with noVNC.** The blocking change is identical
+for both front-ends, so nothing is wasted by starting small:
+
+1. `--disable-transport-layer-security` on the `[screen-share] command=` line.
+2. Unpublish `5900:5900`.
+3. One noVNC/websockify container serving `wss://`.
+4. Change `centroid:foo` while you are in there — it is the only thing standing
+   between the plant network and the HMI, and after this change it is no longer
+   behind a certificate.
+
+Native clients come out *better* than today (RSA-AES-256, no cert warning), and
+browser access arrives for the cost of one small container.
+
+**Add a central Guacamole later if — and only if — you want read-only viewers,
+per-user accounts, or session recording.** It talks to the same servers, and
+multiple clients coexist fine (verified), so it can run alongside the per-station
+noVNC rather than replacing it. If server-enforced read-only matters *now*, skip
+noVNC and go straight to Guacamole; that is the one requirement noVNC cannot
+meet.
+
 ## Footnote: `--no-config` on the nested compositor
 
 The nested VNC weston is started with `--no-config`, so it ignores
