@@ -1004,6 +1004,50 @@ void main() {
     });
   });
 
+  group('box erector status bits', () {
+    test('the red frustration bit is first and names the box erector', () {
+      // Mirrors the strapper/multivac ordering: the one bit that says
+      // something is wrong (the machine is holding up the line) leads, red,
+      // before the green/blue permits that only describe the cycle. The box
+      // erector stays prefix-backed -- it has no `hmi` struct -- so the suffix
+      // appends to the asset's statusKey (e.g. BER02.WaitingFrustration).
+      final bits = kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!;
+      final first = bits.first;
+      expect(first.suffix, 'WaitingFrustration');
+      expect(first.onRole, HmiColorRole.red,
+          reason: 'it is the one bit that says something is wrong');
+      expect(
+          first.labelFor(
+              equipmentShortName(ThirdPartyEquipmentKind.boxErector)),
+          'Box erector is stopping the line');
+    });
+
+    test('the three permits still follow, in order', () {
+      final bits = kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!;
+      expect(bits.map((b) => b.suffix), [
+        'WaitingFrustration',
+        'PermitBottomInfeed',
+        'PermitBlockInfeed',
+        'PermitOutfeed',
+      ]);
+      final bySuffix = {for (final b in bits) b.suffix: b};
+      expect(bySuffix['PermitBottomInfeed']!.onRole, HmiColorRole.green);
+      expect(bySuffix['PermitBottomInfeed']!.labelFor('box erector'),
+          'Box erector is ready for box bottom');
+      expect(bySuffix['PermitBlockInfeed']!.onRole, HmiColorRole.green);
+      expect(bySuffix['PermitBlockInfeed']!.labelFor('box erector'),
+          'Box erector is ready for block');
+      expect(bySuffix['PermitOutfeed']!.onRole, HmiColorRole.blue);
+      expect(bySuffix['PermitOutfeed']!.labelFor('box erector'),
+          'Way out of box erector is clear');
+    });
+
+    test('the box erector is prefix-backed, not struct-backed', () {
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector], isNull,
+          reason: 'it has no hmi struct; both maps would render two sections');
+    });
+  });
+
   group('SpeedBatcher pane badge', () {
     DynamicValue struct(Map<String, dynamic> members) =>
         DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(members));
