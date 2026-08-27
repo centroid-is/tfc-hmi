@@ -226,3 +226,100 @@ Map<String, Map<String, DBusValue>> bondMemberSettings({
     },
   };
 }
+
+/// Unwraps a `v` that D-Bus nested inside a container, so callers can treat
+/// `GetSettings` output uniformly regardless of nesting depth.
+DBusValue? _unwrapVariant(DBusValue? value) =>
+    value is DBusVariant ? value.value : value;
+
+String _asString(DBusValue? value) {
+  final unwrapped = _unwrapVariant(value);
+  return unwrapped is DBusString ? unwrapped.value : '';
+}
+
+int? _asInt(DBusValue? value) {
+  final unwrapped = _unwrapVariant(value);
+  if (unwrapped is DBusUint32) return unwrapped.value;
+  if (unwrapped is DBusInt32) return unwrapped.value;
+  return null;
+}
+
+/// The IPv4 addressing a saved NetworkManager profile carries, in the shape
+/// the form fields take it.
+///
+/// This is the *configured* addressing, which is what an operator edits — as
+/// opposed to the live `Ip4Config`, which on a DHCP profile is the lease.
+class Ipv4Prefill {
+  final bool isDhcp;
+  final String address;
+  final String netmask;
+  final String gateway;
+  final String dns;
+
+  const Ipv4Prefill({
+    this.isDhcp = true,
+    this.address = '',
+    this.netmask = '',
+    this.gateway = '',
+    this.dns = '',
+  });
+
+  /// True when the profile carries a static address worth prefilling.
+  bool get hasAddress => address.isNotEmpty;
+
+  /// One-line summary for the saved-connection list, e.g. `10.50.10.11/24`.
+  String get summary {
+    if (isDhcp) return 'DHCP';
+    if (!hasAddress) return 'Static';
+    final prefix = netmaskToPrefix(netmask);
+    return prefix == null ? address : '$address/$prefix';
+  }
+}
+
+/// Reads the `ipv4` section of a profile returned by `GetSettings`.
+Ipv4Prefill ipv4PrefillFromSettings(
+    Map<String, Map<String, DBusValue>> settings) {
+  final ipv4 = settings['ipv4'] ?? const <String, DBusValue>{};
+  // 'auto' is NetworkManager's default when the key is absent.
+  final method = _asString(ipv4['method']);
+  final isDhcp = method.isEmpty || method == 'auto';
+
+  var address = '';
+  var netmask = '';
+  final addressData = _unwrapVariant(ipv4['address-data']);
+  if (addressData is DBusArray && addressData.children.isNotEmpty) {
+    final first = _unwrapVariant(addressData.children.first);
+    if (first is DBusDict) {
+      address = _asString(first.children[const DBusString('address')]);
+      final prefix = _asInt(first.children[const DBusString('prefix')]);
+      if (prefix != null) netmask = prefixToNetmask(prefix);
+    }
+  }
+
+  final dnsData = _unwrapVariant(ipv4['dns-data']);
+  final dns = dnsData is DBusArray
+      ? dnsData.children.map(_asString).where((s) => s.isNotEmpty).join(', ')
+      : '';
+
+  return Ipv4Prefill(
+    isDhcp: isDhcp,
+    address: address,
+    netmask: netmask,
+    gateway: _asString(ipv4['gateway']),
+    dns: dns,
+  );
+}
+
+/// Reads a field out of the `connection` section of a profile.
+String connectionField(
+        Map<String, Map<String, DBusValue>> settings, String field) =>
+    _asString(settings['connection']?[field]);
+
+/// Connection types the IP settings page knows how to show and edit. Anything
+/// else (loopback, docker/podman bridges, tunnels) is NetworkManager's
+/// business, not the operator's.
+const editableConnectionTypes = {
+  '802-3-ethernet',
+  '802-11-wireless',
+  'bond',
+};

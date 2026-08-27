@@ -4,7 +4,10 @@
 /// Frames: the device overview (ethernet static, wifi DHCP, a dead port,
 /// RX/TX rates, healthy probe chips), the failing-probes header, a bond
 /// with its member ports, the interface dialog prefilled with a static
-/// config, its inline validation error, and the create-bond dialog.
+/// config, its inline validation error, and the create-bond dialog. Plus the
+/// unmanaged-port/saved-profile page, an empty static form (the examples must
+/// read as examples, not as a configured address), the saved-profile dialog
+/// and a bond dialog that cannot take one of the ports.
 ///
 /// To update: flutter test test/pages/ip_settings_golden_test.dart --update-goldens --run-skipped
 @Tags(['golden'])
@@ -183,6 +186,75 @@ FakeNetworkManagerClient _bondClient() {
   ]);
 }
 
+Map<String, Map<String, DBusValue>> _profile({
+  required String id,
+  required String interfaceName,
+  String method = 'auto',
+  String address = '',
+  int prefix = 24,
+}) =>
+    {
+      'connection': {
+        'id': DBusString(id),
+        'uuid': DBusString('uuid-$id'),
+        'type': const DBusString('802-3-ethernet'),
+        'interface-name': DBusString(interfaceName),
+      },
+      'ipv4': {
+        'method': DBusString(method),
+        if (address.isNotEmpty)
+          'address-data': DBusArray(DBusSignature('a{sv}'), [
+            DBusDict(DBusSignature('s'), DBusSignature('v'), {
+              const DBusString('address'): DBusVariant(DBusString(address)),
+              const DBusString('prefix'): DBusVariant(DBusUint32(prefix)),
+            })
+          ]),
+      },
+    };
+
+/// A station with a port NetworkManager does not own and a saved profile that
+/// is not running — the two states the page used to have no answer for.
+FakeNetworkManagerClient _unmanagedClient() => FakeNetworkManagerClient(
+      devices: [
+        _staticEthernet(),
+        FakeNetworkManagerDevice(
+          interface: 'eno1',
+          hwAddress: '00:0A:95:9D:68:18',
+          managed: false,
+          state: NetworkManagerDeviceState.unmanaged,
+          wired: FakeDeviceWired(),
+        ),
+      ],
+      settings: FakeNetworkManagerSettings(connections: [
+        FakeSettingsConnection(
+          id: 'Wired connection 1',
+          settings: _profile(
+              id: 'Wired connection 1',
+              interfaceName: 'eno1',
+              method: 'manual',
+              address: '10.50.10.11'),
+        ),
+      ]),
+    );
+
+/// Two ports the bond can take plus one it cannot.
+FakeNetworkManagerClient _bondableClient() => FakeNetworkManagerClient(
+      devices: [
+        _staticEthernet(),
+        FakeNetworkManagerDevice(
+            interface: 'eth1',
+            hwAddress: '00:0A:95:9D:68:17',
+            state: NetworkManagerDeviceState.disconnected,
+            wired: FakeDeviceWired()),
+        FakeNetworkManagerDevice(
+          interface: 'eno1',
+          hwAddress: '00:0A:95:9D:68:18',
+          managed: false,
+          state: NetworkManagerDeviceState.unmanaged,
+        ),
+      ],
+    );
+
 // ---------------------------------------------------------------------------
 // Fonts — see server_config_reorder_golden_test.dart for the why.
 // ---------------------------------------------------------------------------
@@ -300,5 +372,45 @@ void main() {
     await settle(tester);
 
     await _expectGolden(tester, 'ip_settings_bond_dialog.png');
+  });
+
+  testWidgets('unmanaged port and a saved profile that is not running',
+      (tester) async {
+    await _pumpPage(tester, _unmanagedClient());
+    await _expectGolden(tester, 'ip_settings_unmanaged.png');
+  });
+
+  testWidgets('interface actions — taking ownership of an unmanaged port',
+      (tester) async {
+    await _pumpPage(tester, _unmanagedClient());
+    // eno1 sorts first, so its menu is the first one.
+    await tester.tap(find.byIcon(Icons.more_vert).first);
+    await settle(tester);
+    await _expectGolden(tester, 'ip_settings_manage_menu.png');
+  });
+
+  testWidgets('interface dialog — empty static form reads as empty',
+      (tester) async {
+    await _pumpPage(tester, _overviewClient());
+    await tester.tap(find.text('eth1'));
+    await settle(tester);
+    await tester.tap(find.byType(SwitchListTile));
+    await settle(tester);
+    await _expectGolden(tester, 'ip_settings_dialog_empty.png');
+  });
+
+  testWidgets('interface dialog — editing a saved, inactive profile',
+      (tester) async {
+    await _pumpPage(tester, _unmanagedClient());
+    await tester.tap(find.text('Wired connection 1'));
+    await settle(tester);
+    await _expectGolden(tester, 'ip_settings_dialog_saved.png');
+  });
+
+  testWidgets('create-bond dialog — a port it cannot enslave', (tester) async {
+    await _pumpPage(tester, _bondableClient());
+    await tester.tap(find.text('Create bond'));
+    await settle(tester);
+    await _expectGolden(tester, 'ip_settings_bond_dialog_unmanaged.png');
   });
 }
