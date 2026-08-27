@@ -288,12 +288,12 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   /// For a kind in [kStructStatusBits], the struct node carrying that
   /// machine's `p_stat_*` handshake bits — `SB1` mapping to
   /// `SPB01.speedBatcher.hmi`, `STM01` to `STM01.STM01.hmi`, `SPB01.Multivac`
-  /// to `SPB01.multivac.hmi`. One subscription feeds every diode in the side
-  /// pane's Status section.
+  /// to `SPB01.multivac.hmi`, `SPB01.Aligner` to `SPB01.packing.hmi`. One
+  /// subscription feeds every diode in the side pane's Status section.
   ///
   /// For the remaining kinds this is a key PREFIX rather than a struct node:
-  /// `BER02`, `SPB02.Aligner`. The pane appends the suffixes in
-  /// [kEquipmentStatusBits] to it, one subscription each.
+  /// `BER02`. The pane appends the suffixes in [kEquipmentStatusBits] to it,
+  /// one subscription each.
   ///
   /// A bit the PLC does not expose renders as the unknown LED rather than
   /// claiming "off".
@@ -672,6 +672,39 @@ const List<StructStatusBit> multivacStatusBits = [
       'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
 ];
 
+/// The batch aligner's (vodlari) handshake, published exactly like the
+/// Multivac's: the PLC exposes it as an `hmi` member — `SPB0n.packing.hmi`, an
+/// `SP_Packing_HMI` struct (the same FB the packing station and the Multivac
+/// use), carrying `p_stat_Run`, `p_stat_DropRequest`,
+/// `p_stat_DropRequestFeedback`, `p_stat_DropOk`, `p_stat_DropFinished` and
+/// `p_stat_WaitingFrustration`. So the aligner makes the SAME move the Multivac
+/// and the strapping line made: the permits that used to be separate globals
+/// (read via the prefix-plus-suffix list this kind carried in
+/// [kEquipmentStatusBits]) now arrive as one struct node, at one subscription.
+///
+/// Identical in shape/order to [multivacStatusBits] — the two read the same
+/// `SP_Packing_HMI` struct — with the red "stopping the line" bit first, then
+/// ready -> in-progress -> done. Only four of the six members are drawn:
+/// `p_stat_Run` feeds the run LED/badge, and `p_stat_DropRequest` is the raw
+/// upstream ask whose acknowledged form (`p_stat_DropRequestFeedback`) is the
+/// one worth a diode.
+///
+/// `p_stat_WaitingFrustration` is deliberately REUSED for the stopping-line row
+/// (Option A): its old prefix-era label blamed the upstream release ("Waiting
+/// too long to release to batch aligner"); it is relabelled here to name the
+/// aligner itself as the holdup, matching the strapper and the Multivac. The
+/// PLC is being updated so the bit is raised on that new meaning -- see the
+/// note on [strappingLineStatusBits].
+const List<StructStatusBit> fishAlignerStatusBits = [
+  StructStatusBit(
+      'p_stat_WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
+  StructStatusBit('p_stat_DropOk', '{m} is ready for fish', HmiColorRole.green),
+  StructStatusBit('p_stat_DropRequestFeedback', 'Fish waiting to drop to {m}',
+      HmiColorRole.yellow),
+  StructStatusBit(
+      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
+];
+
 /// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
 /// rather than a key prefix, and the members each draws.
 ///
@@ -682,6 +715,7 @@ const Map<ThirdPartyEquipmentKind, List<StructStatusBit>> kStructStatusBits = {
   ThirdPartyEquipmentKind.multivac: multivacStatusBits,
   ThirdPartyEquipmentKind.speedBatcher: speedBatcherStatusBits,
   ThirdPartyEquipmentKind.strappingLine: strappingLineStatusBits,
+  ThirdPartyEquipmentKind.fishAligner: fishAlignerStatusBits,
 };
 
 /// The machine's name as it reads inside a diode label.
@@ -782,16 +816,11 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
     EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
     EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', HmiColorRole.blue),
   ],
-  // The Multivac is NOT here: the PLC now wraps it in an `hmi` member
-  // (`SPB0n.multivac.hmi`, an `SP_Packing_HMI` struct), so its handshake lives
-  // in [kStructStatusBits] as [multivacStatusBits] at one subscription rather
-  // than one per permit -- the same move the strapping line made.
-  ThirdPartyEquipmentKind.fishAligner: [
-    EquipmentStatusBit('WaitingFrustration', 'Waiting too long to release to {m}', HmiColorRole.red),
-    EquipmentStatusBit('DropRequestFeedback', 'Fish waiting to drop to {m}', HmiColorRole.yellow),
-    EquipmentStatusBit('DropOk', '{m} is ready for fish', HmiColorRole.green),
-    EquipmentStatusBit('DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
-  ],
+  // The Multivac and the batch aligner are NOT here: the PLC wraps each in an
+  // `hmi` member (`SPB0n.multivac.hmi` and `SPB0n.packing.hmi`, both
+  // `SP_Packing_HMI` structs), so their handshakes live in [kStructStatusBits]
+  // as [multivacStatusBits] / [fishAlignerStatusBits] at one subscription each
+  // rather than one per permit -- the same move the strapping line made.
 };
 
 /// The Status section body for the non-SpeedBatcher kinds.

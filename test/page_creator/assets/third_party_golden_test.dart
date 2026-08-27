@@ -522,12 +522,13 @@ void main() {
       );
     });
 
-    // The batch aligner's Status section, one diode per state: Waiting too
-    // long OFF (white), Fish waiting to drop LIT amber, ready-for-fish LIT
-    // green, and Drop complete absent from the map — a key the PLC does not
-    // serve — as the grey `!` unknown. The generic per-bit pane the
-    // non-SpeedBatcher kinds share; this is the golden to judge it by.
-    testWidgets('fishAligner — status pane diodes', (tester) async {
+    // The box erector's Status section, one diode per state: stopping-the-line
+    // OFF (white), box-bottom ready LIT green, way-out clear LIT blue, and the
+    // block-ready permit absent from the map — a key the PLC does not serve —
+    // as the grey `!` unknown. The box erector is now the sole prefix-backed
+    // kind (the fish aligner moved to the struct system with the Multivac), so
+    // it is the generic per-bit pane to judge [EquipmentStatusDiodes] by.
+    testWidgets('boxErector — status pane diodes', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
@@ -544,22 +545,22 @@ void main() {
                 height: 560,
                 child: Material(
                   child: SidePane(
-                    title: 'BA-01',
-                    subtitle: 'Batch aligner',
+                    title: 'BER-02',
+                    subtitle: 'Box erector',
                     icon: Icons.precision_manufacturing,
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
                       child: EquipmentStatusDiodes(
                         bits: kEquipmentStatusBits[
-                            ThirdPartyEquipmentKind.fishAligner]!,
+                            ThirdPartyEquipmentKind.boxErector]!,
                         values: const {
                           'WaitingFrustration': false,
-                          'DropRequestFeedback': true,
-                          'DropOk': true,
+                          'PermitBottomInfeed': true,
+                          'PermitOutfeed': true,
                         },
                         machine: equipmentShortName(
-                            ThirdPartyEquipmentKind.fishAligner),
+                            ThirdPartyEquipmentKind.boxErector),
                       ),
                     ),
                   ),
@@ -571,22 +572,22 @@ void main() {
       ));
       await expectLater(
         find.byKey(_key),
-        matchesGoldenFile('goldens/third_party_fishAligner_status_pane.png'),
+        matchesGoldenFile('goldens/third_party_boxErector_status_pane.png'),
       );
     });
 
-    // The editor with the batch aligner selected: the Status Key Prefix field
+    // The editor with the box erector selected: the Status Key Prefix field
     // and its suffix-listing help text, which no kind but the SpeedBatcher
     // had before — without it these diodes could never be pointed at keys.
-    testWidgets('fishAligner — editor status key field', (tester) async {
+    testWidgets('boxErector — editor status key field', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(600, 1100);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
       final config = ThirdPartyEquipmentConfig(
-        kind: ThirdPartyEquipmentKind.fishAligner,
-        statusKey: 'CN22.Aligner',
+        kind: ThirdPartyEquipmentKind.boxErector,
+        statusKey: 'BER02',
       );
       await tester.pumpWidget(ProviderScope(
         child: MaterialApp(
@@ -613,7 +614,7 @@ void main() {
       await expectLater(
         find.byKey(_key),
         matchesGoldenFile(
-            'goldens/third_party_fishAligner_editor_status_key.png'),
+            'goldens/third_party_boxErector_editor_status_key.png'),
       );
     });
   });
