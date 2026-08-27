@@ -140,31 +140,45 @@ void main() {
   });
 
   group('painter', () {
-    test('repaints when the outline or the ink changes', () {
+    test('repaints when the outline or either tone changes', () {
       final contours = <List<Offset>>[
         [Offset.zero, const Offset(1, 1), const Offset(0, 1)]
       ];
-      const ink = Color(0xFF102030);
-      final painter = HitBoundaryPainter(contours: contours, color: ink);
+      final painter = HitBoundaryPainter(contours: contours);
 
       expect(
-        painter.shouldRepaint(
-            HitBoundaryPainter(contours: contours, color: ink)),
+        painter.shouldRepaint(HitBoundaryPainter(contours: contours)),
         isFalse,
       );
       expect(
         painter.shouldRepaint(HitBoundaryPainter(
-            contours: contours, color: const Color(0xFF405060))),
+            contours: contours, ink: const Color(0xFF405060))),
         isTrue,
       );
       expect(
         painter.shouldRepaint(HitBoundaryPainter(
-            contours: [
-              [Offset.zero, const Offset(2, 2), const Offset(0, 2)]
-            ],
-            color: ink)),
+            contours: contours, halo: const Color(0xFF405060))),
         isTrue,
       );
+      expect(
+        painter.shouldRepaint(HitBoundaryPainter(contours: [
+          [Offset.zero, const Offset(2, 2), const Offset(0, 2)]
+        ])),
+        isTrue,
+      );
+    });
+
+    test('the two tones are far enough apart to carry any background', () {
+      // W3C technique C40: two colours at least 9:1 apart guarantee that one
+      // of them clears 3:1 against whatever solid colour they land on. This
+      // ring lands on state fills as often as on the page, so the guarantee
+      // is the point of there being two.
+      double luminance(Color c) => c.withValues(alpha: 1).computeLuminance();
+      final ink = luminance(HitBoundaryPainter.defaultInk);
+      final halo = luminance(HitBoundaryPainter.defaultHalo);
+      final contrast =
+          (math.max(ink, halo) + 0.05) / (math.min(ink, halo) + 0.05);
+      expect(contrast, greaterThan(9));
     });
   });
 }

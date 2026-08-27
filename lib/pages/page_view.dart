@@ -1011,7 +1011,6 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
     if (frame == null) return const SizedBox.shrink();
 
     final outline = _outline;
-    final ink = Theme.of(context).colorScheme.onSurface;
 
     return Positioned.fill(
       // Filling the stack rather than the asset: the outline is traced in the
@@ -1030,10 +1029,7 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
           curve: Curves.easeOut,
           child: CustomPaint(
             key: openPaneMarkKey,
-            painter: HitBoundaryPainter(
-              contours: outline ?? const [],
-              color: ink,
-            ),
+            painter: HitBoundaryPainter(contours: outline ?? const []),
           ),
         ),
       ),

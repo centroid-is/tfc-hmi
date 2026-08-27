@@ -127,21 +127,56 @@ List<List<Offset>> flattenPath(Path path, {double step = 2}) {
   return rings;
 }
 
-/// Draws [contours] as a quiet ring: a blurred stroke with a fine line on it.
+/// Draws [contours] as a quiet ring: a fine dark line on a light band.
+///
+/// Two tones, not one, and neither of them a hue. Every colour on a plant
+/// page is spoken for — green running, yellow manual, blue cleaning, grey
+/// stopped, red faulted, violet unreadable, orange forced — and ISA-101
+/// practice is to spend colour on abnormal conditions and nothing else, so a
+/// mark in any of them would read as a seventh state. Cyan is the one hue
+/// left in the palette, and at glyph size it is a coin-flip against cleaning
+/// blue.
+///
+/// So the ring says "selected" by shape and tone instead. The pair is the
+/// one image editors and CAD marquees have used forever, and for the reason
+/// W3C technique C40 gives: two colours far enough apart in luminance
+/// (~17:1 here) guarantee that at least one of them clears 3:1 against
+/// whatever solid colour it lands on. That matters because this ring is
+/// drawn half over the page and half over an asset whose fill is a state
+/// colour — a single ink has no such guarantee, and the theme's own
+/// `onSurface` cannot provide one either: Solarized keeps it deliberately
+/// close to the background (2.79:1 on dark), where it would all but
+/// disappear over a dark belt.
+///
+/// Not strictly C40, which wants each band at least 2px: that would be a 6px
+/// ring, far too loud for a mimic an operator watches all shift. The bands
+/// here are 1.6px and a ~0.9px fringe either side of it, which is the
+/// quietest arrangement that still puts a light tone and a dark tone across
+/// every edge.
 ///
 /// Deliberately two strokes rather than a [BoxDecoration] with a `boxShadow`
 /// — that shadow is a filled, blurred copy of the shape, and with nothing
-/// filling the shape on top of it the asset ends up under a grey wash. The
-/// blur here is on the stroke, so the middle is left alone: an asset's colour
-/// is its equipment state and has to come through untouched.
+/// filling the shape on top of it the asset ends up under a grey wash. These
+/// are strokes, so the middle is left alone: an asset's colour is its
+/// equipment state and has to come through untouched.
 class HitBoundaryPainter extends CustomPainter {
+  /// The fine line.
+  static const Color defaultInk = Color(0xD11A1D1F);
+
+  /// The band it sits on.
+  static const Color defaultHalo = Color(0xD1F2F4F5);
+
   /// The rings, already in this painter's coordinates.
   final List<List<Offset>> contours;
 
-  /// The ink to draw them in. Alpha comes from here, not from the caller.
-  final Color color;
+  final Color ink;
+  final Color halo;
 
-  const HitBoundaryPainter({required this.contours, required this.color});
+  const HitBoundaryPainter({
+    required this.contours,
+    this.ink = defaultInk,
+    this.halo = defaultHalo,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -155,27 +190,22 @@ class HitBoundaryPainter extends CustomPainter {
       }
       path.close();
     }
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..strokeJoin = StrokeJoin.round
-        ..color = color.withValues(alpha: 0.18)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
-    );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4
-        ..strokeJoin = StrokeJoin.round
-        ..color = color.withValues(alpha: 0.5),
-    );
+
+    Paint stroke(Color color, double width) => Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = width
+      ..strokeJoin = StrokeJoin.round
+      ..color = color;
+
+    // Widest first: the light band, then the line on top of it, leaving the
+    // band showing as a fringe either side.
+    canvas.drawPath(path, stroke(halo, 3.4));
+    canvas.drawPath(path, stroke(ink, 1.6));
   }
 
   @override
   bool shouldRepaint(HitBoundaryPainter oldDelegate) =>
-      oldDelegate.color != color ||
+      oldDelegate.ink != ink ||
+      oldDelegate.halo != halo ||
       !identical(oldDelegate.contours, contours);
 }
