@@ -26,6 +26,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_async_p
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
+import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/widgets/hit_boundary.dart';
@@ -51,7 +52,9 @@ void main() {
     await tester.binding.setSurfaceSize(surface);
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    final fake = _FakeStateMan()..push('cn/drive', _runningDrive());
+    final fake = _FakeStateMan()
+      ..push('cn/drive', _runningDrive())
+      ..push('gate/state', _bool(true));
     await tester.pumpWidget(ProviderScope(
       overrides: [stateManProvider.overrideWith((_) async => fake)],
       child: MaterialApp(
@@ -185,12 +188,9 @@ void main() {
     expectShapeMatchesHitTest(await pumpAsset(tester, asset));
   });
 
-  testWidgets('an asset that publishes nothing takes taps on its whole face',
+  testWidgets('a diverter gate publishes the arm it takes taps on',
       (tester) async {
-    // The other half of the promise. The mark draws the face of an asset that
-    // publishes no shape, so that face had better be what answers a pointer —
-    // an asset whose real hit area were smaller (an inset, a shrunken InkWell)
-    // would be marked as claiming more than it takes.
+    // The arm as drawn at rest, hub included — not the box it is laid out in.
     final gate = ConveyorGateConfig(
       gateVariant: GateVariant.pneumatic,
       stateKey: 'gate/state',
@@ -199,16 +199,43 @@ void main() {
       ..coordinates = Coordinates(x: 0.5, y: 0.5)
       ..size = const RelativeSize(width: 0.2, height: 0.3);
 
+    final asset = await pumpAsset(tester, gate);
+    expectShapeMatchesHitTest(asset);
+
+    // And it is narrower than the box, which is the whole point: the empty
+    // half of a portrait box no longer takes taps.
+    final face = Offset.zero & asset.box.size;
+    final target = asset.shape.getBounds();
+    expect(target.height, lessThan(face.height * 0.75),
+        reason: 'the arm does not fill the height of its box');
+    expect(target.left, greaterThanOrEqualTo(0),
+        reason: 'the hub painted outside the box cannot answer a tap, so the '
+            'gate does not claim it');
+  });
+
+  testWidgets('an asset that publishes nothing takes taps on its whole face',
+      (tester) async {
+    // The other half of the promise. The mark draws the face of an asset that
+    // publishes no shape, so that face had better be what answers a pointer —
+    // an asset whose real hit area were smaller (an inset, a shrunken InkWell)
+    // would be marked as claiming more than it takes.
+    final sensor = SensorConfig(
+      kind: SensorKind.opticField,
+      detectionKey: 'sensor/det',
+    )
+      ..coordinates = Coordinates(x: 0.5, y: 0.5)
+      ..size = const RelativeSize(width: 0.2, height: 0.3);
+
     await tester.binding.setSurfaceSize(const Size(900, 500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final fake = _FakeStateMan()..push('gate/state', _bool(true));
+    final fake = _FakeStateMan()..push('sensor/det', _bool(false));
     await tester.pumpWidget(ProviderScope(
       overrides: [stateManProvider.overrideWith((_) async => fake)],
       child: MaterialApp(
         home: Scaffold(
           body: LayoutBuilder(
             builder: (context, constraints) => AssetStack(
-              assets: [gate],
+              assets: [sensor],
               constraints: constraints,
               selectedAssets: const {},
               mirroringDisabled: true,
@@ -221,7 +248,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(AssetHitShape), findsNothing,
-        reason: 'a gate takes taps on its box, so it publishes no shape');
+        reason: 'a sensor takes taps on its box, so it publishes no shape');
 
     final box = assetHitBox(tester.element(find.byType(AssetStack)))!;
     final sweep = sweepHitTest(box, margin: 6);

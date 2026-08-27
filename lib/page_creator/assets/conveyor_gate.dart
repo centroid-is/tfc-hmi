@@ -11,6 +11,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import '../../theme.dart';
+import '../../widgets/hit_boundary.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 
@@ -247,7 +248,11 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
   }
 
   /// Selects the correct painter based on [ConveyorGateConfig.gateVariant].
-  CustomPainter _createPainter(Color stateColor) {
+  ///
+  /// [paintSize] is the box the gate is drawn in. The diverter needs it to
+  /// answer where its arm is: `CustomPainter.hitTest` is not given a size, so
+  /// a painter that claims only its own ink has to be told one.
+  CustomPainter _createPainter(Color stateColor, Size paintSize) {
     switch (widget.config.gateVariant) {
       case GateVariant.pneumatic:
         return PneumaticDiverterPainter(
@@ -255,6 +260,7 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
           stateColor: stateColor,
           openAngleDegrees: widget.config.openAngleDegrees,
           side: widget.config.side,
+          paintSize: paintSize,
         );
       case GateVariant.slider:
         return SliderGatePainter(
@@ -295,10 +301,18 @@ class _ConveyorGateState extends ConsumerState<ConveyorGate>
         } else {
           paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
         }
-        return CustomPaint(
-          size: paintSize,
-          painter: _createPainter(stateColor),
-        );
+        final painter = _createPainter(stateColor, paintSize);
+        final Widget face = CustomPaint(size: paintSize, painter: painter);
+        // A diverter takes taps on the arm as drawn, not on the box it is laid
+        // out in, so it publishes that rectangle for the mark the plant view
+        // draws while its pane is open — the same one `hitTest` answers from.
+        // The other variants fill their box and publish nothing.
+        return painter is PneumaticDiverterPainter
+            ? AssetHitShape(
+                shape: () => Path()..addRect(painter.tapTarget(paintSize)),
+                child: face,
+              )
+            : face;
       },
     );
     if (interactive) {

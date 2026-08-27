@@ -118,15 +118,31 @@ class PneumaticDiverterPainter extends CustomPainter {
   final double openAngleDegrees;
   final GateSide side;
 
+  /// The box the arm is drawn in, when the painter is told one.
+  ///
+  /// Null in the asset palette's preview, which never hit-tests. Without it
+  /// [hitTest] has no opinion and the whole box answers, which is what a
+  /// `CustomPainter` does by default anyway.
+  final Size? paintSize;
+
   PneumaticDiverterPainter({
     required this.progress,
     required this.stateColor,
     required this.openAngleDegrees,
     required this.side,
+    this.paintSize,
   }) : super(repaint: progress);
 
-  @override
-  void paint(Canvas canvas, Size size) {
+  /// Half the border stroke, so the ink the border adds is accounted for.
+  static const _borderReach = 0.5;
+
+  /// The arm's outline, in the frame it is drawn in — hinge at the origin,
+  /// before the animation angle is applied.
+  ///
+  /// Pulled out of [paint] so the arm is described once. [idleInk] turns the
+  /// same outline into the rectangle the gate takes taps on, so what is drawn
+  /// and what answers a pointer cannot drift apart.
+  Path armOutline(Size size) {
     final w = size.width;
     final h = size.height;
 
@@ -136,19 +152,6 @@ class PneumaticDiverterPainter extends CustomPainter {
     final pivotRadius = h * 0.12; // large circle at hinge
     final tipWidth = h * 0.025; // narrow tip
     final armLength = w; // spans full belt width
-
-    // Hinge point: the edge where the arm pivots, centered vertically
-    final hingeX = side == GateSide.left ? 0.0 : w;
-    final hingeY = h * 0.5;
-
-    // Animation angle (includes small visual correction for asymmetric arm shape)
-    final angle = openAngleDegrees * (pi / 180) * progress.value;
-    final correction = 5.0 * (pi / 180);
-    final signedAngle = -angle + correction;
-
-    canvas.save();
-    canvas.translate(hingeX, hingeY);
-    canvas.rotate(signedAngle);
 
     // Direction: left hinge draws arm to the right, right hinge to the left
     final dir = side == GateSide.left ? 1.0 : -1.0;
@@ -202,6 +205,95 @@ class PneumaticDiverterPainter extends CustomPainter {
     );
 
     path.close();
+    return path;
+  }
+
+  /// Every place the arm's ink can be, as one rectangle in the painter's
+  /// coordinates — including the parts outside the box.
+  ///
+  /// Swept from shut to open rather than taken at rest. At rest alone the
+  /// rectangle sits where the arm *would* be if the gate were shut, and an
+  /// open gate then draws its arm almost entirely outside it: the operator
+  /// sees the arm up and to the right and taps a rectangle lying flat where
+  /// nothing is. Swept, the target covers the arm wherever the animation has
+  /// left it, and — being the same rectangle whatever the gate is doing — it
+  /// never moves out from under a gloved finger.
+  ///
+  /// It claims the space the arm passes through, which is the one thing it is
+  /// allowed to claim: the arm is there some of the time, and nowhere in this
+  /// rectangle is a place the arm can never be.
+  Rect sweptInk(Size size) {
+    final hinge = Matrix4.identity()
+      ..translateByDouble(
+          side == GateSide.left ? 0.0 : size.width, size.height * 0.5, 0, 1);
+    final outline = armOutline(size);
+
+    // The arm is rigid and turns about the hinge, so the sweep is its outline
+    // at a spread of angles between shut and fully open. Sixteen steps puts
+    // the corners of the union within a fraction of a pixel of the true
+    // extremes — the tip traces a circle, and at this spacing the chord sags
+    // by about a twentieth of a pixel.
+    const steps = 16;
+    final open = -openAngleDegrees * (pi / 180) + _restAngle;
+    Rect? swept;
+    for (var i = 0; i <= steps; i++) {
+      final angle = _restAngle + (open - _restAngle) * (i / steps);
+      final at = hinge.clone()..rotateZ(angle);
+      final bounds = outline.transform(at.storage).getBounds();
+      swept = swept == null ? bounds : swept.expandToInclude(bounds);
+    }
+    return swept!.inflate(_borderReach);
+  }
+
+  /// The rest angle: the small correction [paint] applies for the arm's
+  /// asymmetric profile, with no animation on top of it.
+  static final double _restAngle = 5.0 * (pi / 180);
+
+  /// What the gate can actually answer a tap on: [sweptInk], clipped to the
+  /// box it is drawn in.
+  ///
+  /// The arm is the target, not the box the asset was laid out in — an arm in
+  /// a box twice its height left the empty half taking taps for a machine
+  /// nobody can see there. But it cannot be quite the whole arm either: the
+  /// pivot hub is centred *on* the hinge and the hinge is on the box's edge,
+  /// so half the hub is painted outside, and `RenderBox.hitTest` gates on
+  /// `size.contains(position)` before it ever asks a painter. Ink outside the
+  /// box is unreachable whatever this returns, and claiming it would put the
+  /// mark back to drawing a boundary the asset cannot honour.
+  ///
+  /// The arm reaching past its own box is worth fixing where it is caused —
+  /// in the geometry above, by insetting the hinge and shortening the arm to
+  /// match — rather than papered over here.
+  Rect tapTarget(Size size) {
+    final box = Offset.zero & size;
+    final ink = sweptInk(size);
+    return ink.overlaps(box) ? ink.intersect(box) : Rect.zero;
+  }
+
+  @override
+  bool? hitTest(Offset position) {
+    final size = paintSize;
+    if (size == null) return null;
+    return tapTarget(size).contains(position);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final h = size.height;
+    final pivotRadius = h * 0.12;
+
+    final hingeX = side == GateSide.left ? 0.0 : size.width;
+    final hingeY = h * 0.5;
+
+    // Animation angle (includes small visual correction for asymmetric arm shape)
+    final angle = openAngleDegrees * (pi / 180) * progress.value;
+    final signedAngle = -angle + _restAngle;
+
+    canvas.save();
+    canvas.translate(hingeX, hingeY);
+    canvas.rotate(signedAngle);
+
+    final path = armOutline(size);
 
     // Fill
     canvas.drawPath(path, Paint()..color = stateColor);
@@ -251,7 +343,8 @@ class PneumaticDiverterPainter extends CustomPainter {
   bool shouldRepaint(PneumaticDiverterPainter oldDelegate) =>
       stateColor != oldDelegate.stateColor ||
       openAngleDegrees != oldDelegate.openAngleDegrees ||
-      side != oldDelegate.side;
+      side != oldDelegate.side ||
+      paintSize != oldDelegate.paintSize;
 }
 
 // ---------------------------------------------------------------------------
