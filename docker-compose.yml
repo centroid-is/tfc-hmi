@@ -38,6 +38,45 @@ services:
         ' centroid
       "
 
+  # Browser access to the mirrored HMI. websockify bridges wss:// to weston's
+  # screen-share VNC on 5900, which stays published above for native clients.
+  #
+  # Only reachable if weston runs *without* --vnc-tls-cert: noVNC cannot speak
+  # VeNCrypt/X509, so it needs RA2ne (see centroid-is/dockers, weston/neatvnc).
+  #
+  # HTTPS is not optional. Browsers expose window.crypto.subtle only in a
+  # secure context, and noVNC's RA2ne path needs it — over plain http it dies
+  # with "Cannot read properties of undefined (reading 'digest')".
+    labels:
+      - hmi-update.watch=true
+
+  novnc:
+    image: ghcr.io/centroid-is/novnc:latest
+    container_name: novnc
+    ports:
+      - 443:6080
+    volumes:
+      - ./novnc_certs:/certs
+    depends_on:
+      - weston
+    restart: unless-stopped
+    labels:
+      - hmi-update.watch=true
+
+  # Operators type a bare address, which means http. Send them to https —
+  # it cannot be a fallback, since noVNC's RA2ne handshake needs
+  # window.crypto.subtle and browsers withhold that on an insecure origin.
+  novnc-http:
+    image: ghcr.io/centroid-is/novnc:latest
+    container_name: novnc-http
+    entrypoint: ["python3", "/usr/local/bin/redirect.py"]
+    ports:
+      - 80:80
+    restart: unless-stopped
+    labels:
+      - hmi-update.watch=true
+
+
   create-local-share:
     image: alpine:latest
     container_name: create-local-share
@@ -78,13 +117,56 @@ services:
           memory: 1G
     restart: unless-stopped
 
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
+  # hmi-update — single Go binary with embedded Svelte UI, per-container
+  # Update/Rollback/Force-pull buttons, on :8080. Replaces watchtower, which
+  # pulled :latest blindly with no rollback and no record of what changed.
+  #
+  # Only services labelled hmi-update.watch=true are considered.
+  docker-update:
+    image: ghcr.io/centroid-is/docker-update:latest
+    container_name: docker-update
+    restart: unless-stopped
+    # 65532 = distroless nonroot UID. The GID must be the *host's* docker
+    # group — check with `getent group docker` on each station; it is not
+    # the same everywhere.
+    user: "65532:1001"
+    ports:
+      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 60
+      # Read the live compose so Update/Rollback can drive
+      # `docker compose -f <path> up -d --force-recreate <svc>`. Read-only —
+      # hmi-update never writes the compose file itself.
+      - /home/centroid/docker-compose.yml:/etc/docker-update/docker-compose.yml:ro
+      - /home/centroid/docker-update:/state
+    environment:
+      DOCKER_UPDATE_CRON: "0 * * * *"
+      DOCKER_UPDATE_COMPOSE_PATH: /etc/docker-update/docker-compose.yml
+      DOCKER_UPDATE_STATE_PATH: /state/docker_update_state.json
+      DOCKER_UPDATE_LOG_LEVEL: info
+      DOCKER_UPDATE_SELF_SERVICE: docker-update
+      COMPOSE_PROJECT_NAME: centroid
+    labels:
+      hmi-update.watch: "false"
+
+  centroidx-backend:
+    image: ghcr.io/centroid-is/centroid-backend:latest
+    container_name: centroidx-backend
     restart: unless-stopped
+    environment:
+      CENTROID_PGHOST: timescaledb
+      CENTROID_PGPORT: 5432
+      CENTROID_PGDATABASE: hmi
+      CENTROID_PGUSER: centroid
+      CENTROID_PGPASSWORD: FooBarHelloWorld
+      CENTROID_PGSSLMODE: require
+      CENTROID_STATEMAN_FILE_PATH: /config/stateman.json
+    volumes:
+      - ./tfc_config:/config:rw # server can update config itself
+    ports:
+      - 4840:4840
+    labels:
+      - hmi-update.watch=true
 
   timescaledb:
     image: timescale/timescaledb:latest-pg17
