@@ -4,6 +4,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <cstdint>
 #include <string>
 
 // A D3D11 device the runner keeps purely so it can be asked why it died.
@@ -43,7 +44,10 @@ class GpuDeviceProbe {
   // S_OK while the device is alive, a DXGI_ERROR_DEVICE_* code once it is not.
   // Returns S_OK when unavailable, which is why callers must check
   // available() first -- see LossEvidence::sentinel_available.
-  long GetRemovedReason() const;
+  //
+  // The HRESULT is cast to a fixed-width unsigned value here rather than being
+  // passed on as `long`: see the note on DxgiReason in gpu_diagnosis.h.
+  std::uint32_t GetRemovedReason() const;
 
   const std::string& adapter_description() const {
     return adapter_description_;

@@ -89,11 +89,11 @@ bool GpuDeviceProbe::Create() {
   return true;
 }
 
-long GpuDeviceProbe::GetRemovedReason() const {
+std::uint32_t GpuDeviceProbe::GetRemovedReason() const {
   if (!device_) {
-    return 0;  // S_OK
+    return 0u;  // S_OK
   }
-  return static_cast<long>(device_->GetDeviceRemovedReason());
+  return static_cast<std::uint32_t>(device_->GetDeviceRemovedReason());
 }
 
 void GpuDeviceProbe::Reset() {

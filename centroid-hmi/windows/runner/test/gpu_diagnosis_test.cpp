@@ -41,6 +41,22 @@ LossEvidence HungEvidence() {
 
 // --- Reason codes -----------------------------------------------------------
 
+// These constants were originally declared `enum DxgiReason : long`, which is
+// fine on Unix (64-bit long) and overflows on MSVC (32-bit long) -- so the
+// tests passed on macOS and the Windows build failed with C4369. The macOS
+// test run structurally cannot catch that, so pin the width and the values
+// here: a static_assert fires on whichever platform is wrong, at compile time,
+// including this one.
+static_assert(sizeof(tfc::DxgiReason) == 4,
+              "DXGI reason codes must stay a fixed 32 bits -- HRESULT is "
+              "32-bit on Windows regardless of what `long` is locally");
+static_assert(static_cast<unsigned long long>(tfc::kDxgiDeviceHung) ==
+                  0x887A0006ull,
+              "reason codes must survive their declared underlying type");
+static_assert(static_cast<unsigned long long>(tfc::kDxgiDriverInternalError) ==
+                  0x887A0020ull,
+              "reason codes must survive their declared underlying type");
+
 TEST(classifies_every_named_dxgi_reason) {
   CHECK(tfc::ClassifyRemovedReason(tfc::kDxgiOk) == AdapterVerdict::kHealthy);
   CHECK(tfc::ClassifyRemovedReason(tfc::kDxgiDeviceHung) ==
@@ -57,8 +73,10 @@ TEST(an_unrecognised_reason_is_unknown_not_healthy) {
   // Anything non-zero means the device is gone. Treating an unmapped code as
   // healthy would point the next reader at the session path for what is
   // actually an adapter failure.
-  CHECK(tfc::ClassifyRemovedReason(0x887A00FFL) == AdapterVerdict::kUnknown);
-  CHECK(tfc::ClassifyRemovedReason(-1L) == AdapterVerdict::kUnknown);
+  CHECK(tfc::ClassifyRemovedReason(0x887A00FFu) == AdapterVerdict::kUnknown);
+  // 0xFFFFFFFF is what a signed -1 HRESULT arrives as once GpuDeviceProbe has
+  // cast it; it must not fall through to "healthy" either.
+  CHECK(tfc::ClassifyRemovedReason(0xFFFFFFFFu) == AdapterVerdict::kUnknown);
 }
 
 TEST(named_reasons_print_their_name_and_hex) {
@@ -74,7 +92,7 @@ TEST(an_unnamed_reason_still_prints_its_code) {
   // unmapped code must still reach the log as a number.
   char buffer[64];
   const std::string described =
-      tfc::DescribeRemovedReason(0x887A00FFL, buffer, sizeof(buffer));
+      tfc::DescribeRemovedReason(0x887A00FFu, buffer, sizeof(buffer));
   CHECK(Contains(described, "887a00ff"));
 }
 

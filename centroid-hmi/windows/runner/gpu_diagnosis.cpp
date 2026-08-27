@@ -28,7 +28,7 @@ void AppendLine(std::ostringstream& out, const std::string& text) {
 
 }  // namespace
 
-AdapterVerdict ClassifyRemovedReason(long reason) {
+AdapterVerdict ClassifyRemovedReason(std::uint32_t reason) {
   switch (reason) {
     case kDxgiOk:
       return AdapterVerdict::kHealthy;
@@ -49,7 +49,8 @@ AdapterVerdict ClassifyRemovedReason(long reason) {
   }
 }
 
-const char* DescribeRemovedReason(long reason, char* out, size_t out_len) {
+const char* DescribeRemovedReason(std::uint32_t reason, char* out,
+                                  size_t out_len) {
   const char* name = nullptr;
   switch (reason) {
     case kDxgiOk:
@@ -78,13 +79,13 @@ const char* DescribeRemovedReason(long reason, char* out, size_t out_len) {
     return name != nullptr ? name : "";
   }
   if (name != nullptr) {
-    std::snprintf(out, out_len, "%s (0x%08lx)", name,
-                  static_cast<unsigned long>(reason));
+    std::snprintf(out, out_len, "%s (0x%08x)", name,
+                  static_cast<unsigned int>(reason));
   } else {
     // Unnamed, but the number is what gets looked up afterwards, so it must
     // survive into the log.
-    std::snprintf(out, out_len, "unrecognised reason (0x%08lx)",
-                  static_cast<unsigned long>(reason));
+    std::snprintf(out, out_len, "unrecognised reason (0x%08x)",
+                  static_cast<unsigned int>(reason));
   }
   return out;
 }

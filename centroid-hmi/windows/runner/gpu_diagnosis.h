@@ -2,6 +2,7 @@
 #define RUNNER_GPU_DIAGNOSIS_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 // Says *why* the renderer died, in the log, once.
@@ -44,13 +45,20 @@ namespace tfc {
 // DXGI reason codes, spelled out rather than included: this file is built by
 // the standalone test project on Linux and macOS, where dxgi.h does not exist.
 // Values are from winerror.h and are ABI-frozen.
-enum DxgiReason : long {
-  kDxgiOk = 0L,
-  kDxgiInvalidCall = 0x887A0001L,
-  kDxgiDeviceRemoved = 0x887A0005L,
-  kDxgiDeviceHung = 0x887A0006L,
-  kDxgiDeviceReset = 0x887A0007L,
-  kDxgiDriverInternalError = 0x887A0020L,
+//
+// uint32_t, not HRESULT's own `long`: `long` is 64-bit on Unix but 32-bit on
+// MSVC, where every one of these overflows it (they are negative as a signed
+// 32-bit HRESULT). Carrying them as a fixed-width unsigned quantity means the
+// same literal means the same thing on the machine that builds the tests and
+// the machine that builds the app. GpuDeviceProbe casts the HRESULT on the way
+// in; nothing here ever does arithmetic on it.
+enum DxgiReason : std::uint32_t {
+  kDxgiOk = 0u,
+  kDxgiInvalidCall = 0x887A0001u,
+  kDxgiDeviceRemoved = 0x887A0005u,
+  kDxgiDeviceHung = 0x887A0006u,
+  kDxgiDeviceReset = 0x887A0007u,
+  kDxgiDriverInternalError = 0x887A0020u,
 };
 
 // What the sentinel device's reason code says about the adapter.
@@ -71,11 +79,12 @@ enum class AdapterVerdict {
   kUnknown,
 };
 
-AdapterVerdict ClassifyRemovedReason(long reason);
+AdapterVerdict ClassifyRemovedReason(std::uint32_t reason);
 
 // "DXGI_ERROR_DEVICE_HUNG (0x887a0006)". Returns |out| for unnamed codes, so
 // |out| must outlive the returned pointer.
-const char* DescribeRemovedReason(long reason, char* out, size_t out_len);
+const char* DescribeRemovedReason(std::uint32_t reason, char* out,
+                                  size_t out_len);
 
 // The plain-English cause and, more usefully, what to go and look at next.
 const char* ExplainVerdict(AdapterVerdict verdict);
@@ -107,7 +116,7 @@ struct LossEvidence {
   // False when the sentinel device could not be created at startup, which
   // makes |device_removed_reason| meaningless rather than reassuring.
   bool sentinel_available = false;
-  long device_removed_reason = kDxgiOk;
+  std::uint32_t device_removed_reason = kDxgiOk;
 
   LossHint last_hint = LossHint::kNone;
   // Only meaningful when |last_hint| is not kNone.
