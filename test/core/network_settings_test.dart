@@ -195,4 +195,87 @@ void main() {
       expect(connection['slave-type'], const DBusString('bond'));
     });
   });
+
+  group('ipv4PrefillFromSettings', () {
+    test('reads a static profile the way NetworkManager returns it', () {
+      // GetSettings unwraps the outer variant but leaves the ones nested
+      // inside address-data, so both levels have to be handled.
+      final prefill = ipv4PrefillFromSettings({
+        'ipv4': {
+          'method': const DBusString('manual'),
+          'address-data': DBusArray(DBusSignature('a{sv}'), [
+            DBusDict(DBusSignature('s'), DBusSignature('v'), {
+              const DBusString('address'):
+                  const DBusVariant(DBusString('10.50.10.11')),
+              const DBusString('prefix'): const DBusVariant(DBusUint32(24)),
+            })
+          ]),
+          'gateway': const DBusString('10.50.10.1'),
+          'dns-data': DBusArray(DBusSignature('s'), [
+            const DBusString('10.50.10.1'),
+            const DBusString('1.1.1.1'),
+          ]),
+        },
+      });
+
+      expect(prefill.isDhcp, isFalse);
+      expect(prefill.address, '10.50.10.11');
+      expect(prefill.netmask, '255.255.255.0');
+      expect(prefill.gateway, '10.50.10.1');
+      expect(prefill.dns, '10.50.10.1, 1.1.1.1');
+      expect(prefill.hasAddress, isTrue);
+      expect(prefill.summary, '10.50.10.11/24');
+    });
+
+    test('treats a missing method as DHCP, like NetworkManager does', () {
+      final prefill = ipv4PrefillFromSettings({'ipv4': {}});
+      expect(prefill.isDhcp, isTrue);
+      expect(prefill.summary, 'DHCP');
+      expect(prefill.hasAddress, isFalse);
+    });
+
+    test('survives a profile with no ipv4 section at all', () {
+      final prefill = ipv4PrefillFromSettings({});
+      expect(prefill.isDhcp, isTrue);
+      expect(prefill.address, isEmpty);
+    });
+
+    test('a manual profile with no address still reads as static', () {
+      final prefill = ipv4PrefillFromSettings({
+        'ipv4': {'method': const DBusString('manual')},
+      });
+      expect(prefill.isDhcp, isFalse);
+      expect(prefill.summary, 'Static');
+    });
+
+    test('round-trips what ipv4ManualSection writes', () {
+      final section = ipv4ManualSection(
+        address: '10.104.29.71',
+        prefix: 16,
+        gateway: '10.104.1.1',
+        dnsServers: ['10.104.1.1'],
+      );
+      final prefill = ipv4PrefillFromSettings({'ipv4': section});
+
+      expect(prefill.address, '10.104.29.71');
+      expect(prefill.netmask, '255.255.0.0');
+      expect(prefill.gateway, '10.104.1.1');
+      expect(prefill.dns, '10.104.1.1');
+    });
+  });
+
+  group('connectionField', () {
+    test('reads the connection section, empty when absent', () {
+      final settings = {
+        'connection': {
+          'id': const DBusString('Wired connection 1'),
+          'interface-name': const DBusString('eno1'),
+        },
+      };
+      expect(connectionField(settings, 'id'), 'Wired connection 1');
+      expect(connectionField(settings, 'interface-name'), 'eno1');
+      expect(connectionField(settings, 'uuid'), isEmpty);
+      expect(connectionField(const {}, 'id'), isEmpty);
+    });
+  });
 }

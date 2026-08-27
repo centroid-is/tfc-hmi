@@ -34,9 +34,14 @@ class FakeNetworkManagerClient extends _Unstubbed
   /// Settings maps passed to [addAndActivateConnection].
   final List<Map<String, Map<String, DBusValue>>> addAndActivated = [];
 
+  /// When set, [activateConnection] records the call and then throws it —
+  /// NetworkManager accepted the activation, the client lost the reply.
+  final Object? activateError;
+
   FakeNetworkManagerClient({
     this.devices = const [],
     FakeNetworkManagerSettings? settings,
+    this.activateError,
   }) : fakeSettings = settings ?? FakeNetworkManagerSettings();
 
   @override
@@ -66,6 +71,8 @@ class FakeNetworkManagerClient extends _Unstubbed
       device.interface,
       connection is FakeSettingsConnection ? connection.id : null,
     ));
+    final error = activateError;
+    if (error != null) throw error;
     return FakeActiveConnection();
   }
 
@@ -93,14 +100,37 @@ class FakeNetworkManagerSettings extends _Unstubbed
   /// Settings maps passed to [addConnection], in call order.
   final List<Map<String, Map<String, DBusValue>>> addedConnections = [];
 
-  FakeNetworkManagerSettings({this.connections = const []});
+  /// When set, [addConnection] throws it instead of returning — the shape of
+  /// the `nm` cache race, which throws after NetworkManager committed.
+  Object? addConnectionError;
+
+  /// Whether a connection that [addConnection] threw on still lands in
+  /// [connections], as it does on a real bus.
+  bool commitOnError = true;
+
+  final _controller = StreamController<List<String>>.broadcast();
+
+  FakeNetworkManagerSettings({List<NetworkManagerSettingsConnection>? connections})
+      : connections = [...?connections];
+
+  @override
+  Stream<List<String>> get propertiesChanged => _controller.stream;
 
   @override
   Future<NetworkManagerSettingsConnection> addConnection(
       Map<String, Map<String, DBusValue>> connection) async {
     addedConnections.add(connection);
-    return FakeSettingsConnection(
-        id: connection['connection']?['id']?.asString() ?? '');
+    final added = FakeSettingsConnection(
+      id: connection['connection']?['id']?.asString() ?? '',
+      settings: connection,
+    );
+    final error = addConnectionError;
+    if (error != null) {
+      if (commitOnError) connections.add(added);
+      throw error;
+    }
+    connections.add(added);
+    return added;
   }
 }
 
@@ -109,15 +139,25 @@ class FakeSettingsConnection extends _Unstubbed
   final String id;
   Map<String, Map<String, DBusValue>> settings;
 
+  /// When set, [getSettings] throws it — a profile deleted mid-walk.
+  final Object? getSettingsError;
+
   /// Settings maps passed to [update], in call order.
   final List<Map<String, Map<String, DBusValue>>> updates = [];
   bool deleted = false;
 
-  FakeSettingsConnection({this.id = '', this.settings = const {}});
+  FakeSettingsConnection({
+    this.id = '',
+    this.settings = const {},
+    this.getSettingsError,
+  });
 
   @override
-  Future<Map<String, Map<String, DBusValue>>> getSettings() async =>
-      settings;
+  Future<Map<String, Map<String, DBusValue>>> getSettings() async {
+    final error = getSettingsError;
+    if (error != null) throw error;
+    return settings;
+  }
 
   @override
   Future<void> update(Map<String, Map<String, DBusValue>> properties) async {
@@ -261,6 +301,12 @@ class FakeNetworkManagerDevice extends _Unstubbed
   @override
   final NetworkManagerDeviceStatistics? statistics;
 
+  @override
+  final String driver;
+
+  @override
+  bool managed;
+
   FakeNetworkManagerDevice({
     this.deviceType = NetworkManagerDeviceType.ethernet,
     this.interface = 'eth0',
@@ -273,6 +319,8 @@ class FakeNetworkManagerDevice extends _Unstubbed
     this.wired,
     this.wireless,
     this.statistics,
+    this.driver = 'e1000e',
+    this.managed = true,
   });
 
   @override
@@ -284,5 +332,14 @@ class FakeNetworkManagerDevice extends _Unstubbed
   @override
   Future<void> disconnect() async {
     disconnectCalled = true;
+  }
+
+  /// Values passed to [setManaged].
+  final List<bool> managedCalls = [];
+
+  @override
+  Future<void> setManaged(bool value) async {
+    managedCalls.add(value);
+    managed = value;
   }
 }

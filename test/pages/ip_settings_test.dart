@@ -53,6 +53,46 @@ FakeNetworkManagerDevice _staticEthernet({
   );
 }
 
+Object? _nothing() => null;
+
+/// `nm` 0.5.0 force-unwraps the object path NetworkManager returns against a
+/// cache filled asynchronously, so a fast reply throws this *after* the change
+/// has been committed.
+Object get _nmCacheRace {
+  try {
+    return _nothing()!;
+  } catch (e) {
+    return e;
+  }
+}
+
+Map<String, Map<String, DBusValue>> _profile({
+  required String id,
+  String interfaceName = 'eth0',
+  String method = 'auto',
+  String address = '',
+  int prefix = 24,
+}) {
+  return {
+    'connection': {
+      'id': DBusString(id),
+      'uuid': DBusString('uuid-$id'),
+      'type': const DBusString('802-3-ethernet'),
+      'interface-name': DBusString(interfaceName),
+    },
+    'ipv4': {
+      'method': DBusString(method),
+      if (address.isNotEmpty)
+        'address-data': DBusArray(DBusSignature('a{sv}'), [
+          DBusDict(DBusSignature('s'), DBusSignature('v'), {
+            const DBusString('address'): DBusVariant(DBusString(address)),
+            const DBusString('prefix'): DBusVariant(DBusUint32(prefix)),
+          })
+        ]),
+    },
+  };
+}
+
 void main() {
   testWidgets('device card shows live addressing details', (tester) async {
     final client = FakeNetworkManagerClient(devices: [_staticEthernet()]);
@@ -393,5 +433,286 @@ void main() {
     expect(bondConnection.deleted, isTrue);
     expect(memberConnection.deleted, isTrue);
     expect(unrelatedConnection.deleted, isFalse);
+  });
+
+  testWidgets('container veth ports stay out of the interface list',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [
+      FakeNetworkManagerDevice(interface: 'enp2s0', driver: 'igc'),
+      FakeNetworkManagerDevice(
+          interface: 'veth21a0bd9', driver: 'veth', managed: false),
+    ]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    expect(find.text('enp2s0'), findsOneWidget);
+    expect(find.text('veth21a0bd9'), findsNothing,
+        reason: 'docker plumbing is not an operator concern');
+  });
+
+  testWidgets('an unmanaged port explains itself and can be taken over',
+      (tester) async {
+    final device = FakeNetworkManagerDevice(
+      interface: 'eno1',
+      managed: false,
+      state: NetworkManagerDeviceState.unmanaged,
+    );
+    final client = FakeNetworkManagerClient(devices: [device]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    expect(find.text('Unmanaged'), findsOneWidget);
+    expect(find.textContaining('NetworkManager is not controlling'),
+        findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await settle(tester);
+    await tester.tap(find.text('Manage with NetworkManager'));
+    await settle(tester);
+
+    expect(device.managedCalls, [true]);
+  });
+
+  testWidgets('an unmanaged port is never offered as unmanageable again',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [
+      FakeNetworkManagerDevice(interface: 'eth0'),
+    ]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await settle(tester);
+    expect(find.textContaining('Manage'), findsNothing,
+        reason: 'a managed port offers no ownership action at all');
+  });
+
+  testWidgets('an unmanaged port cannot be bonded', (tester) async {
+    final client = FakeNetworkManagerClient(devices: [
+      FakeNetworkManagerDevice(interface: 'eth0'),
+      FakeNetworkManagerDevice(interface: 'eno1', managed: false),
+    ]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Create bond'));
+    expect(button.onPressed, isNull,
+        reason: 'only one port NetworkManager actually owns');
+  });
+
+  testWidgets('the bond dialog greys out the ports it cannot enslave',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [
+      FakeNetworkManagerDevice(interface: 'eth0'),
+      FakeNetworkManagerDevice(interface: 'eth1'),
+      FakeNetworkManagerDevice(interface: 'eno1', managed: false),
+    ]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.text('Create bond'));
+    await settle(tester);
+
+    final unmanaged = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'eno1'));
+    expect(unmanaged.onChanged, isNull);
+    expect(find.textContaining('take ownership'), findsOneWidget);
+  });
+
+  testWidgets('inactive saved connections are listed with their address',
+      (tester) async {
+    final active = FakeSettingsConnection(
+        id: 'Wired connection 2', settings: _profile(id: 'Wired connection 2'));
+    final inactive = FakeSettingsConnection(
+      id: 'Wired connection 1',
+      settings: _profile(
+          id: 'Wired connection 1',
+          interfaceName: 'eno1',
+          method: 'manual',
+          address: '10.50.10.11'),
+    );
+    final client = FakeNetworkManagerClient(
+      devices: [
+        FakeNetworkManagerDevice(
+            interface: 'eth0',
+            activeConnection: FakeActiveConnection(connection: active)),
+      ],
+      settings: FakeNetworkManagerSettings(connections: [active, inactive]),
+    );
+    await pumpAndLoad(tester, _buildPage(client));
+
+    expect(find.text('Saved connections (not active)'), findsOneWidget);
+    expect(find.text('Wired connection 1'), findsOneWidget);
+    expect(find.text('ethernet · eno1 · 10.50.10.11/24'), findsOneWidget);
+    expect(find.text('Wired connection 2'), findsNothing,
+        reason: 'the active profile is already on its device card');
+  });
+
+  testWidgets('an inactive saved connection can be edited and activated',
+      (tester) async {
+    final inactive = FakeSettingsConnection(
+      id: 'Wired connection 1',
+      settings: _profile(
+          id: 'Wired connection 1',
+          interfaceName: 'eno1',
+          method: 'manual',
+          address: '10.50.10.11'),
+    );
+    final client = FakeNetworkManagerClient(
+      devices: [
+        FakeNetworkManagerDevice(
+            interface: 'eno1',
+            state: NetworkManagerDeviceState.unavailable),
+      ],
+      settings: FakeNetworkManagerSettings(connections: [inactive]),
+    );
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.text('Wired connection 1'));
+    await settle(tester);
+
+    expect(find.text('Settings — Wired connection 1'), findsOneWidget);
+    expect(find.widgetWithText(TextFormField, '10.50.10.11'), findsOneWidget,
+        reason: 'the profile address, not a live lease');
+    expect(find.textContaining('Editing the saved profile'), findsOneWidget);
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'IP Address'), '10.50.10.12');
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
+    await settle(tester);
+
+    final entry = (inactive.updates.single['ipv4']!['address-data']
+            as DBusArray)
+        .children
+        .single as DBusDict;
+    expect(entry.children[const DBusString('address')],
+        const DBusVariant(DBusString('10.50.10.12')));
+    expect(client.activations, isEmpty,
+        reason: 'nothing was active, so nothing gets bounced');
+
+    await tester.tap(find.text('Activate'));
+    await settle(tester);
+    expect(client.activations, [('eno1', 'Wired connection 1')]);
+  });
+
+  testWidgets('a down port edits its saved profile, not a second copy',
+      (tester) async {
+    final saved = FakeSettingsConnection(
+      id: 'Wired connection 1',
+      settings: _profile(
+          id: 'Wired connection 1',
+          interfaceName: 'eno1',
+          method: 'manual',
+          address: '10.50.10.11'),
+    );
+    final client = FakeNetworkManagerClient(
+      devices: [
+        FakeNetworkManagerDevice(
+            interface: 'eno1',
+            state: NetworkManagerDeviceState.disconnected),
+      ],
+      settings: FakeNetworkManagerSettings(connections: [saved]),
+    );
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.text('eno1'));
+    await settle(tester);
+
+    expect(find.textContaining('Editing the saved profile'), findsOneWidget);
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
+    await settle(tester);
+
+    expect(saved.updates, hasLength(1));
+    expect(client.addAndActivated, isEmpty,
+        reason: 'a duplicate profile per save was the old behaviour');
+  });
+
+  testWidgets('static fields show examples below, not as fake values',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [_staticEthernet()]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.text('eth0'));
+    await settle(tester);
+
+    for (final field in tester.widgetList<TextField>(find.byType(TextField))) {
+      expect(field.decoration?.hintText, isNull,
+          reason: 'a greyed address inside the box reads as a real value');
+    }
+    expect(find.text('Example: 192.0.2.10'), findsOneWidget);
+    expect(find.text('Example: 255.255.255.0 or /24'), findsOneWidget);
+  });
+
+  testWidgets('an empty address field says it is required', (tester) async {
+    final client = FakeNetworkManagerClient(devices: [_staticEthernet()]);
+    await pumpAndLoad(tester, _buildPage(client));
+
+    await tester.tap(find.text('eth0'));
+    await settle(tester);
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'IP Address'), '');
+    await tester.ensureVisible(find.text('Save'));
+    await tester.tap(find.text('Save'));
+    await settle(tester);
+
+    expect(find.text('Required'), findsOneWidget);
+  });
+
+  testWidgets('bond creation survives the nm object-cache race',
+      (tester) async {
+    final client = FakeNetworkManagerClient(devices: [
+      FakeNetworkManagerDevice(interface: 'eth0'),
+      FakeNetworkManagerDevice(interface: 'eth1'),
+    ]);
+    // Every add throws the way nm does once NetworkManager has already
+    // written the profile — the failure the operator saw on a bond that the
+    // journal showed as created.
+    client.fakeSettings.addConnectionError = _nmCacheRace;
+
+    await pumpAndLoad(tester, _buildPage(client));
+    await tester.tap(find.text('Create bond'));
+    await settle(tester);
+    await tester.ensureVisible(find.widgetWithText(CheckboxListTile, 'eth0'));
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'eth0'));
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'eth1'));
+    await settle(tester);
+    final createButton = find.widgetWithText(FilledButton, 'Create');
+    await tester.ensureVisible(createButton);
+    await tester.tap(createButton);
+    await settle(tester);
+
+    expect(find.textContaining('Failed to create bond'), findsNothing);
+    expect(find.text('Bond bond0 created'), findsOneWidget);
+    expect(client.fakeSettings.addedConnections, hasLength(3));
+    expect(client.activations,
+        [('eth0', 'bond0-eth0'), ('eth1', 'bond0-eth1')],
+        reason: 'the members must still be activated');
+  });
+
+  testWidgets('a member that will not come up does not fail the bond',
+      (tester) async {
+    final client = FakeNetworkManagerClient(
+      devices: [
+        FakeNetworkManagerDevice(interface: 'eth0'),
+        FakeNetworkManagerDevice(interface: 'eth1'),
+      ],
+      activateError: Exception('no carrier'),
+    );
+
+    await pumpAndLoad(tester, _buildPage(client));
+    await tester.tap(find.text('Create bond'));
+    await settle(tester);
+    await tester.ensureVisible(find.widgetWithText(CheckboxListTile, 'eth0'));
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'eth0'));
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'eth1'));
+    await settle(tester);
+    final createButton = find.widgetWithText(FilledButton, 'Create');
+    await tester.ensureVisible(createButton);
+    await tester.tap(createButton);
+    await settle(tester);
+
+    expect(find.text('Bond bond0 created; eth0, eth1 did not come up yet'),
+        findsOneWidget);
+    expect(client.fakeSettings.addedConnections, hasLength(3),
+        reason: 'the profiles stay, autoconnect picks them up on link');
   });
 }

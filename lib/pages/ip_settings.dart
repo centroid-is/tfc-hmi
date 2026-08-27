@@ -7,6 +7,7 @@ import 'package:dbus/dbus.dart';
 import 'package:flutter/material.dart';
 import 'package:nm/nm.dart';
 
+import '../core/network_manager_ops.dart';
 import '../core/network_settings.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/panes/pane_chrome.dart';
@@ -76,6 +77,11 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
   Timer? _probeTimer;
   bool _probing = false;
 
+  /// Saved profiles, refreshed whenever NetworkManager's connection list
+  /// changes. Reading them needs a D-Bus round trip each, so they are resolved
+  /// once here rather than in `build`.
+  List<SavedConnection> _savedConnections = [];
+
   @override
   void initState() {
     super.initState();
@@ -136,22 +142,34 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
     }
 
     for (final device in client.devices) {
-      if (_supportedDeviceType(device.deviceType)) {
+      if (_isCardWorthy(device)) {
         _enableTrafficCounters(device);
       }
     }
-    _subscriptions.add(client.deviceAdded
-        .where((device) => _supportedDeviceType(device.deviceType))
-        .listen((device) {
+    _subscriptions.add(client.deviceAdded.where(_isCardWorthy).listen((device) {
       _enableTrafficCounters(device);
       refresh(device);
     }));
-    _subscriptions.add(client.deviceRemoved
-        .where((device) => _supportedDeviceType(device.deviceType))
-        .listen(refresh));
+    _subscriptions.add(client.deviceRemoved.where(_isCardWorthy).listen(refresh));
     // Primary connection, connectivity, etc.
     _subscriptions.add(client.propertiesChanged.listen(refresh));
+    // The `Connections` property fires when a profile is added or deleted.
+    _subscriptions
+        .add(client.settings.propertiesChanged.listen((_) => _loadSaved()));
+    unawaited(_loadSaved());
     if (mounted) setState(() {});
+  }
+
+  Future<void> _loadSaved() async {
+    List<SavedConnection> saved;
+    try {
+      saved = await loadSavedConnections(client);
+    } catch (_) {
+      // Nothing to show; the device cards still work.
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _savedConnections = saved);
   }
 
   /// NM only ticks the RX/TX counters while a refresh rate is set.
@@ -179,6 +197,15 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
         type == NetworkManagerDeviceType.bond;
   }
 
+  /// Container plumbing (`veth…` pairs from docker/podman) reports as
+  /// ethernet, so a station running containers would otherwise bury its real
+  /// ports under a dozen cards nobody can act on.
+  static bool _isVirtualPort(NetworkManagerDevice device) =>
+      device.driver == 'veth';
+
+  static bool _isCardWorthy(NetworkManagerDevice device) =>
+      _supportedDeviceType(device.deviceType) && !_isVirtualPort(device);
+
   static int _typeOrder(NetworkManagerDeviceType type) {
     switch (type) {
       case NetworkManagerDeviceType.bond:
@@ -191,9 +218,7 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
   }
 
   List<NetworkManagerDevice> get _relevantDevices {
-    final devices = client.devices
-        .where((device) => _supportedDeviceType(device.deviceType))
-        .toList();
+    final devices = client.devices.where(_isCardWorthy).toList();
     devices.sort((a, b) {
       final order = _typeOrder(a.deviceType) - _typeOrder(b.deviceType);
       return order != 0 ? order : a.interface.compareTo(b.interface);
@@ -201,10 +226,29 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
     return devices;
   }
 
-  List<NetworkManagerDevice> get _ethernetDevices => client.devices
-      .where(
-          (device) => device.deviceType == NetworkManagerDeviceType.ethernet)
+  /// Ports a bond could actually take: real ethernet, managed by
+  /// NetworkManager. An unmanaged port cannot be enslaved, so counting it
+  /// would offer a bond that is guaranteed to fail.
+  List<NetworkManagerDevice> get _bondableDevices => client.devices
+      .where((device) =>
+          device.deviceType == NetworkManagerDeviceType.ethernet &&
+          !_isVirtualPort(device) &&
+          device.managed)
       .toList();
+
+  /// Saved profiles nothing is currently running — the ones nmtui shows and
+  /// this page used to hide, so a static address on a port with no carrier
+  /// could not be read back or corrected.
+  List<SavedConnection> get _inactiveSavedConnections {
+    final active = <NetworkManagerSettingsConnection>{};
+    for (final device in client.devices) {
+      final connection = device.activeConnection?.connection;
+      if (connection != null) active.add(connection);
+    }
+    return _savedConnections
+        .where((saved) => !active.contains(saved.connection))
+        .toList();
+  }
 
   PaneStatus _internetStatus() {
     switch (_internetReachable) {
@@ -228,12 +272,73 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
     }
   }
 
+  NetworkManagerDevice? _deviceFor(String interfaceName) {
+    if (interfaceName.isEmpty) return null;
+    for (final device in client.devices) {
+      if (device.interface == interfaceName) return device;
+    }
+    return null;
+  }
+
   Future<void> _openInterfaceSettings(NetworkManagerDevice device) async {
     await showDialog(
       context: context,
       builder: (context) =>
           InterfaceSettingsDialog(nmClient: client, device: device),
     );
+    if (!mounted) return;
+    setState(() {});
+    await _loadSaved();
+  }
+
+  Future<void> _openSavedConnection(SavedConnection saved) async {
+    await showDialog(
+      context: context,
+      builder: (context) => InterfaceSettingsDialog(
+        nmClient: client,
+        device: _deviceFor(saved.interfaceName),
+        connection: saved.connection,
+        titleOverride: saved.id,
+      ),
+    );
+    if (!mounted) return;
+    setState(() {});
+    await _loadSaved();
+  }
+
+  Future<void> _activateSaved(SavedConnection saved) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final device = _deviceFor(saved.interfaceName);
+    if (device == null) {
+      scaffoldMessenger.showSnackBar(SnackBar(
+          content: Text(
+              'No interface named ${saved.interfaceName} on this station')));
+      return;
+    }
+    try {
+      await activateConnectionResilient(client,
+          device: device, connection: saved.connection);
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to activate ${saved.id}: $e')),
+      );
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Hands an interface to NetworkManager. The reverse is deliberately not
+  /// offered: unmanaging a port from here would drop the station's own link
+  /// with no way back through this page.
+  Future<void> _manageDevice(NetworkManagerDevice device) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      await device.setManaged(true);
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+            content: Text('Failed to manage ${device.interface}: $e')),
+      );
+    }
     if (mounted) setState(() {});
   }
 
@@ -329,6 +434,7 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
             body = const Center(child: CircularProgressIndicator());
           } else {
             final devices = _relevantDevices;
+            final inactive = _inactiveSavedConnections;
             body = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -341,12 +447,13 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                       PaneStatusChip(status: _dnsStatus()),
                       const Spacer(),
                       Tooltip(
-                        message: _ethernetDevices.length >= 2
+                        message: _bondableDevices.length >= 2
                             ? 'Bond two ethernet ports for failover '
                                 '(active-backup)'
-                            : 'Needs at least two ethernet ports',
+                            : 'Needs at least two NetworkManager-managed '
+                                'ethernet ports',
                         child: FilledButton.tonalIcon(
-                          onPressed: _ethernetDevices.length >= 2
+                          onPressed: _bondableDevices.length >= 2
                               ? _openCreateBond
                               : null,
                           icon: const Icon(Icons.device_hub),
@@ -357,27 +464,50 @@ class IpSettingsBodyState extends State<IpSettingsBody> {
                   ),
                 ),
                 Expanded(
-                  child: devices.isEmpty
+                  child: devices.isEmpty && inactive.isEmpty
                       ? const Center(
                           child: Text('No relevant network devices found.'))
-                      : ListView.builder(
-                          itemCount: devices.length,
-                          itemBuilder: (context, index) {
-                            final device = devices[index];
-                            return DeviceCard(
-                              client: client,
-                              device: device,
-                              clock: widget.clock ?? DateTime.now,
-                              onConfigure: () =>
-                                  _openInterfaceSettings(device),
-                              onConnect: () => _connectDevice(device),
-                              onDisconnect: () => _disconnectDevice(device),
-                              onDeleteBond: device.deviceType ==
-                                      NetworkManagerDeviceType.bond
-                                  ? () => _deleteBond(device)
-                                  : null,
-                            );
-                          },
+                      : ListView(
+                          children: [
+                            for (final device in devices)
+                              DeviceCard(
+                                client: client,
+                                device: device,
+                                clock: widget.clock ?? DateTime.now,
+                                onConfigure: () =>
+                                    _openInterfaceSettings(device),
+                                onConnect: () => _connectDevice(device),
+                                onDisconnect: () => _disconnectDevice(device),
+                                onManage: device.managed
+                                    ? null
+                                    : () => _manageDevice(device),
+                                onDeleteBond: device.deviceType ==
+                                        NetworkManagerDeviceType.bond
+                                    ? () => _deleteBond(device)
+                                    : null,
+                              ),
+                            if (inactive.isNotEmpty) ...[
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                    20, 20, 20, 4),
+                                child: Text(
+                                  'Saved connections (not active)',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall,
+                                ),
+                              ),
+                              for (final saved in inactive)
+                                SavedConnectionTile(
+                                  saved: saved,
+                                  onEdit: () => _openSavedConnection(saved),
+                                  onActivate:
+                                      _deviceFor(saved.interfaceName) == null
+                                          ? null
+                                          : () => _activateSaved(saved),
+                                ),
+                            ],
+                          ],
                         ),
                 ),
               ],
@@ -401,6 +531,10 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback onConfigure;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
+
+  /// Non-null only while the port is unmanaged; taking ownership is offered,
+  /// giving it up is not.
+  final VoidCallback? onManage;
   final VoidCallback? onDeleteBond;
   final DateTime Function() clock;
 
@@ -411,6 +545,7 @@ class DeviceCard extends StatefulWidget {
     required this.onConfigure,
     required this.onConnect,
     required this.onDisconnect,
+    this.onManage,
     this.onDeleteBond,
     this.clock = DateTime.now,
   });
@@ -462,6 +597,9 @@ class _DeviceCardState extends State<DeviceCard> {
 
   List<PopupMenuItem<String>> _menuItems(NetworkManagerDevice device) {
     return [
+      if (widget.onManage != null)
+        const PopupMenuItem(
+            value: 'manage', child: Text('Manage with NetworkManager')),
       if (device.state == NetworkManagerDeviceState.activated)
         const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
       if (device.state == NetworkManagerDeviceState.disconnected)
@@ -634,6 +772,8 @@ class _DeviceCardState extends State<DeviceCard> {
                                   widget.onDisconnect();
                                 case 'connect':
                                   widget.onConnect();
+                                case 'manage':
+                                  widget.onManage?.call();
                                 case 'delete':
                                   onDeleteBond?.call();
                               }
@@ -642,6 +782,15 @@ class _DeviceCardState extends State<DeviceCard> {
                           ),
                       ],
                     ),
+                    if (!device.managed) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'NetworkManager is not controlling this port. Take '
+                        'ownership from the menu to configure it.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                    ],
                     if (_details().isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Wrap(
@@ -700,6 +849,14 @@ class Ipv4FormControllers {
     dns.dispose();
   }
 
+  /// Fills the fields from a saved profile's addressing.
+  void applyPrefill(Ipv4Prefill prefill) {
+    ip.text = prefill.address;
+    netmask.text = prefill.netmask;
+    gateway.text = prefill.gateway;
+    dns.text = prefill.dns;
+  }
+
   /// Builds the `ipv4` settings section from the current field state. Only
   /// valid after the enclosing [Form] validated.
   Map<String, DBusValue> toSection({required bool isDhcp}) {
@@ -727,11 +884,13 @@ class Ipv4MethodFields extends StatelessWidget {
 
   static String? _validateIp(String? value) {
     final text = value?.trim() ?? '';
+    if (text.isEmpty) return 'Required';
     if (!isValidIpv4(text)) return 'Enter a valid IPv4 address';
     return null;
   }
 
   static String? _validateNetmask(String? value) {
+    if ((value ?? '').trim().isEmpty) return 'Required';
     final prefix = parsePrefixOrNetmask(value ?? '');
     if (prefix == null || prefix < 1 || prefix > 32) {
       return 'Enter a netmask (255.255.0.0) or prefix (/16)';
@@ -765,11 +924,15 @@ class Ipv4MethodFields extends StatelessWidget {
           value: isDhcp,
           onChanged: onMethodChanged,
         ),
+        // The example addresses live in `helperText`, below the field, not in
+        // `hintText` inside it: a greyed-out 192.0.2.10 sitting where the
+        // value goes reads as a configured address, and an operator cannot
+        // tell an empty field from a filled one.
         if (!isDhcp) ...[
           TextFormField(
             decoration: const InputDecoration(
               labelText: 'IP Address',
-              hintText: '192.0.2.10',
+              helperText: 'Example: 192.0.2.10',
             ),
             controller: controllers.ip,
             validator: _validateIp,
@@ -779,7 +942,7 @@ class Ipv4MethodFields extends StatelessWidget {
           TextFormField(
             decoration: const InputDecoration(
               labelText: 'Netmask or prefix',
-              hintText: '255.255.255.0 or /24',
+              helperText: 'Example: 255.255.255.0 or /24',
             ),
             controller: controllers.netmask,
             validator: _validateNetmask,
@@ -789,7 +952,7 @@ class Ipv4MethodFields extends StatelessWidget {
           TextFormField(
             decoration: const InputDecoration(
               labelText: 'Gateway (optional)',
-              hintText: '192.0.2.1',
+              helperText: 'Example: 192.0.2.1 — leave empty for none',
             ),
             controller: controllers.gateway,
             validator: _validateGateway,
@@ -799,7 +962,7 @@ class Ipv4MethodFields extends StatelessWidget {
           TextFormField(
             decoration: const InputDecoration(
               labelText: 'DNS servers (comma separated)',
-              hintText: '192.0.2.53, 8.8.8.8',
+              helperText: 'Example: 192.0.2.53, 8.8.8.8',
             ),
             controller: controllers.dns,
             validator: _validateDns,
@@ -817,10 +980,27 @@ class Ipv4MethodFields extends StatelessWidget {
 
 class InterfaceSettingsDialog extends StatefulWidget {
   final NetworkManagerClient nmClient;
-  final NetworkManagerDevice device;
 
-  const InterfaceSettingsDialog(
-      {super.key, required this.nmClient, required this.device});
+  /// The interface being configured. Null when a saved profile is edited that
+  /// currently has no device on this station.
+  final NetworkManagerDevice? device;
+
+  /// The profile to edit. When null it is resolved from the device: its
+  /// active connection first, then a saved profile bound to the interface
+  /// name, and only then a new profile is created on save.
+  final NetworkManagerSettingsConnection? connection;
+
+  /// Heading for the dialog; defaults to the interface name.
+  final String? titleOverride;
+
+  const InterfaceSettingsDialog({
+    super.key,
+    required this.nmClient,
+    this.device,
+    this.connection,
+    this.titleOverride,
+  }) : assert(device != null || connection != null,
+            'Either a device or a connection is required');
 
   @override
   State<InterfaceSettingsDialog> createState() =>
@@ -832,6 +1012,15 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
   final _controllers = Ipv4FormControllers();
 
   NetworkManagerActiveConnection? _activeConnection;
+
+  /// The profile the form edits, once resolved. Null means "save creates one".
+  NetworkManagerSettingsConnection? _connection;
+
+  /// Set when the profile was found saved-but-inactive, so the dialog can say
+  /// the change lands on the next activation instead of pretending it is live.
+  bool _editingInactive = false;
+  String _connectionId = '';
+
   bool _isDhcp = true;
   bool _isLoading = true;
   bool _isSaving = false;
@@ -849,14 +1038,29 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
     super.dispose();
   }
 
+  String get _title =>
+      widget.titleOverride ?? widget.device?.interface ?? _connectionId;
+
   Future<void> _loadConnectionSettings() async {
     try {
-      _activeConnection = widget.device.activeConnection;
+      final device = widget.device;
+      _activeConnection = device?.activeConnection;
+      var connection = widget.connection ?? _activeConnection?.connection;
+      if (connection == null && device != null) {
+        // An inactive port usually still has its profile saved; editing that
+        // is what nmtui does, and it stops every save from adding one more
+        // duplicate profile for the same interface.
+        connection = await findConnectionForInterface(
+            widget.nmClient, device.interface);
+        _editingInactive = connection != null;
+      } else {
+        _editingInactive = _activeConnection == null && connection != null;
+      }
+      _connection = connection;
 
       // Prefill from the live lease/config so a DHCP → static switch starts
       // from the address the device already has.
-      final ip4Config =
-          _activeConnection?.ip4Config ?? widget.device.ip4Config;
+      final ip4Config = _activeConnection?.ip4Config ?? device?.ip4Config;
       if (ip4Config != null) {
         if (ip4Config.addressData.isNotEmpty) {
           final first = ip4Config.addressData.first;
@@ -873,13 +1077,17 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
       // of a DHCP lease is only a fallback (a static profile on a network
       // with a rogue DHCP server must still read as static).
       // A port without any connection yet starts from DHCP.
-      var isDhcp =
-          _activeConnection == null || widget.device.dhcp4Config != null;
-      final connection = _activeConnection?.connection;
+      var isDhcp = connection == null || device?.dhcp4Config != null;
       if (connection != null) {
         final settings = await connection.getSettings();
-        final method = settings['ipv4']?['method']?.asString();
-        if (method != null) isDhcp = method == 'auto';
+        _connectionId = connectionField(settings, 'id');
+        final prefill = ipv4PrefillFromSettings(settings);
+        isDhcp = prefill.isDhcp;
+        // The profile's own addressing wins over the live lease: it is what
+        // the operator set, and for an inactive profile there is no lease.
+        if (!prefill.isDhcp && prefill.hasAddress) {
+          _controllers.applyPrefill(prefill);
+        }
       }
 
       if (!mounted) return;
@@ -908,41 +1116,45 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
 
     try {
       final ipv4Section = _controllers.toSection(isDhcp: _isDhcp);
+      final device = widget.device;
       final activeConnection = _activeConnection;
-      final connection = activeConnection?.connection;
-      if (activeConnection != null && connection != null) {
+      final connection = _connection;
+      var message = 'Settings saved successfully';
+
+      if (connection != null) {
         final updatedSettings = await connection.getSettings();
         updatedSettings['ipv4'] = ipv4Section;
         await connection.update(updatedSettings);
 
-        // Bounce the connection so the new addressing takes effect.
-        await widget.nmClient.deactivateConnection(activeConnection);
-        await widget.nmClient.activateConnection(
-            device: widget.device, connection: connection);
-      } else if (widget.device.deviceType ==
-          NetworkManagerDeviceType.ethernet) {
+        if (activeConnection != null && device != null) {
+          // Bounce the connection so the new addressing takes effect.
+          await widget.nmClient.deactivateConnection(activeConnection);
+          await activateConnectionResilient(widget.nmClient,
+              device: device, connection: connection);
+        } else {
+          message = 'Saved — applies when this connection is activated';
+        }
+      } else if (device != null &&
+          device.deviceType == NetworkManagerDeviceType.ethernet) {
         // Port has no connection profile yet — create one.
         await widget.nmClient.addAndActivateConnection(
-          device: widget.device,
+          device: device,
           connection: {
             'connection': {
-              'id': DBusString(widget.device.interface),
+              'id': DBusString(device.interface),
               'uuid': DBusString(generateUuid()),
               'type': const DBusString('802-3-ethernet'),
-              'interface-name': DBusString(widget.device.interface),
+              'interface-name': DBusString(device.interface),
               'autoconnect': const DBusBoolean(true),
             },
             'ipv4': ipv4Section,
           },
         );
       } else {
-        throw Exception(
-            'No active connection on ${widget.device.interface}');
+        throw Exception('No connection profile for $_title');
       }
 
-      scaffoldMessenger.showSnackBar(
-        const SnackBar(content: Text('Settings saved successfully')),
-      );
+      scaffoldMessenger.showSnackBar(SnackBar(content: Text(message)));
       navigator.pop();
     } catch (e) {
       if (!mounted) return;
@@ -951,6 +1163,20 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
         _errorMessage = 'Failed to save settings: $e';
       });
     }
+  }
+
+  /// The note above the form explaining what saving will actually do.
+  String? get _notice {
+    if (_connection == null) {
+      return 'This interface has no active connection. Saving creates a new '
+          'connection profile.';
+    }
+    if (_editingInactive) {
+      final name = _connectionId.isEmpty ? 'this profile' : '"$_connectionId"';
+      return 'Editing the saved profile $name, which is not active. The '
+          'change applies the next time it is brought up.';
+    }
+    return null;
   }
 
   @override
@@ -963,7 +1189,7 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
         child: Center(child: CircularProgressIndicator()),
       );
     } else {
-      final creatingNew = _activeConnection == null;
+      final notice = _notice;
       content = SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16.0),
@@ -973,13 +1199,12 @@ class _InterfaceSettingsDialogState extends State<InterfaceSettingsDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Settings — ${widget.device.interface}',
+                Text('Settings — $_title',
                     style: theme.textTheme.titleLarge),
-                if (creatingNew) ...[
+                if (notice != null) ...[
                   const SizedBox(height: 12),
                   Text(
-                    'This interface has no active connection. Saving '
-                    'creates a new connection profile.',
+                    notice,
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
@@ -1070,9 +1295,14 @@ class _CreateBondDialogState extends State<CreateBondDialog> {
     super.dispose();
   }
 
+  /// Real ethernet ports, managed or not. Unmanaged ones are still listed so
+  /// the operator can see why the port they expected is missing, but they
+  /// cannot be ticked — NetworkManager refuses to enslave a port it does not
+  /// own, and the activation would fail after the bond was already created.
   List<NetworkManagerDevice> get _ethernetDevices => widget.nmClient.devices
-      .where(
-          (device) => device.deviceType == NetworkManagerDeviceType.ethernet)
+      .where((device) =>
+          device.deviceType == NetworkManagerDeviceType.ethernet &&
+          device.driver != 'veth')
       .toList()
     ..sort((a, b) => a.interface.compareTo(b.interface));
 
@@ -1104,30 +1334,46 @@ class _CreateBondDialogState extends State<CreateBondDialog> {
 
     final bondName = _nameController.text.trim();
     try {
-      await widget.nmClient.settings.addConnection(bondMasterSettings(
-        bondName: bondName,
-        uuid: generateUuid(),
-        primaryMember: _primaryMember,
-        ipv4Section: _controllers.toSection(isDhcp: _isDhcp),
-      ));
+      await addConnectionResilient(
+          widget.nmClient,
+          bondMasterSettings(
+            bondName: bondName,
+            uuid: generateUuid(),
+            primaryMember: _primaryMember,
+            ipv4Section: _controllers.toSection(isDhcp: _isDhcp),
+          ));
 
       // Activating a member pulls the bond master up with it, so no
       // device-less master activation (which D-Bus cannot express) needed.
       final members = _ethernetDevices
           .where((device) => _selectedMembers.contains(device.interface));
+      // A member that will not come up right now (no carrier, for instance)
+      // must not undo a bond that is otherwise built: its profile is saved
+      // and autoconnect brings it in when the link appears.
+      final notActivated = <String>[];
       for (final member in members) {
-        final memberConnection =
-            await widget.nmClient.settings.addConnection(bondMemberSettings(
-          memberInterface: member.interface,
-          bondName: bondName,
-          uuid: generateUuid(),
-        ));
-        await widget.nmClient.activateConnection(
-            device: member, connection: memberConnection);
+        final memberConnection = await addConnectionResilient(
+            widget.nmClient,
+            bondMemberSettings(
+              memberInterface: member.interface,
+              bondName: bondName,
+              uuid: generateUuid(),
+            ));
+        try {
+          await activateConnectionResilient(widget.nmClient,
+              device: member, connection: memberConnection);
+        } catch (_) {
+          notActivated.add(member.interface);
+        }
       }
 
       scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('Bond $bondName created')),
+        SnackBar(
+          content: Text(notActivated.isEmpty
+              ? 'Bond $bondName created'
+              : 'Bond $bondName created; '
+                  '${notActivated.join(', ')} did not come up yet'),
+        ),
       );
       navigator.pop(true);
     } catch (e) {
@@ -1178,20 +1424,25 @@ class _CreateBondDialogState extends State<CreateBondDialog> {
                     CheckboxListTile(
                       dense: true,
                       title: Text(device.interface),
-                      subtitle: Text(device.hwAddress),
+                      subtitle: Text(device.managed
+                          ? device.hwAddress
+                          : 'Unmanaged — take ownership from the interface '
+                              'menu first'),
                       value: _selectedMembers.contains(device.interface),
-                      onChanged: (checked) {
-                        setState(() {
-                          if (checked == true) {
-                            _selectedMembers.add(device.interface);
-                          } else {
-                            _selectedMembers.remove(device.interface);
-                            if (_primaryMember == device.interface) {
-                              _primaryMember = null;
+                      onChanged: device.managed
+                          ? (checked) {
+                              setState(() {
+                                if (checked == true) {
+                                  _selectedMembers.add(device.interface);
+                                } else {
+                                  _selectedMembers.remove(device.interface);
+                                  if (_primaryMember == device.interface) {
+                                    _primaryMember = null;
+                                  }
+                                }
+                              });
                             }
-                          }
-                        });
-                      },
+                          : null,
                     ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String?>(
@@ -1257,6 +1508,64 @@ class _CreateBondDialogState extends State<CreateBondDialog> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Saved connection tile
+// ---------------------------------------------------------------------------
+
+/// One saved-but-inactive profile: what it is called, which interface it is
+/// bound to and the address it will take when it comes up. Tapping edits it,
+/// which is the only way to correct a static address on a port that is down.
+class SavedConnectionTile extends StatelessWidget {
+  final SavedConnection saved;
+  final VoidCallback onEdit;
+
+  /// Null when no interface of that name exists on this station, so there is
+  /// nothing to activate it on.
+  final VoidCallback? onActivate;
+
+  const SavedConnectionTile({
+    super.key,
+    required this.saved,
+    required this.onEdit,
+    this.onActivate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final interfaceName =
+        saved.interfaceName.isEmpty ? 'any port' : saved.interfaceName;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+      child: ListTile(
+        leading: Icon(Icons.bookmark_border,
+            color: theme.colorScheme.onSurfaceVariant),
+        title: Text(saved.id),
+        subtitle: Text(
+          '${saved.typeLabel} · $interfaceName · ${saved.ipv4.summary}',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+        onTap: onEdit,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.settings),
+              tooltip: 'Configure IPv4',
+              onPressed: onEdit,
+            ),
+            TextButton(
+              onPressed: onActivate,
+              child: const Text('Activate'),
+            ),
+          ],
         ),
       ),
     );
