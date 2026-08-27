@@ -22,6 +22,12 @@ GpuWatchdog::Config TestConfig() {
   // Never give up, so tests about probing and backoff are not cut short by the
   // give-up budget. Tests that are about giving up set this themselves.
   config.max_recovery_attempts = 0;
+  // Everything below this line was written against the restart-in-place
+  // behaviour, which is no longer the default -- CENTROID_GPU_ON_LOSS now
+  // defaults to exiting so the loss report is the last thing in the log. Pin
+  // it here so these stay tests of the restart state machine; the exit and
+  // log-only paths have their own tests at the bottom of the file.
+  config.on_loss = tfc::LossAction::kRestartEngine;
   return config;
 }
 
@@ -364,6 +370,93 @@ TEST(giving_up_is_reported_as_disabled) {
 
   CHECK(watchdog.has_given_up());
   CHECK(!watchdog.OnTick().start_probe);
+}
+
+
+// --- What happens once the renderer is judged dead --------------------------
+
+TEST(a_loss_is_reported_exactly_once_per_episode) {
+  // The report replaces a flood of engine errors. Emitting it on every tick
+  // would rebuild the flood in a different colour.
+  GpuWatchdog::Config config = TestConfig();
+  config.on_loss = tfc::LossAction::kLogOnly;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+
+  CHECK(!watchdog.OnTick().report_loss);        // first missed probe
+  CHECK(watchdog.OnTick().report_loss);         // threshold reached
+  CHECK(!watchdog.OnTick().report_loss);        // still dead, already said so
+  CHECK(!watchdog.OnTick().report_loss);
+  CHECK(watchdog.has_reported_loss());
+}
+
+TEST(a_recovered_renderer_re_arms_the_report) {
+  // A second, later loss is a separate event and must be reported again --
+  // otherwise a flapping GPU produces one line for the whole shift.
+  GpuWatchdog::Config config = TestConfig();
+  config.on_loss = tfc::LossAction::kLogOnly;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+  watchdog.OnTick();
+  CHECK(watchdog.OnTick().report_loss);
+
+  watchdog.OnFramePresented();
+  CHECK(!watchdog.has_reported_loss());
+
+  // Three ticks, not two: OnFramePresented clears the outstanding probe, so
+  // the first tick only re-arms one and the miss count starts from there.
+  watchdog.OnTick();
+  watchdog.OnTick();
+  CHECK(watchdog.OnTick().report_loss);
+}
+
+TEST(exit_mode_reports_then_asks_for_exit_and_stops) {
+  GpuWatchdog::Config config = TestConfig();
+  config.on_loss = tfc::LossAction::kExitProcess;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+  watchdog.OnTick();
+
+  GpuWatchdog::Action action = watchdog.OnTick();
+  CHECK(action.report_loss);
+  CHECK(action.exit_process);
+  CHECK(!action.restart_engine);
+
+  // Disabled afterwards: a tick racing the shutdown must not ask twice.
+  CHECK(watchdog.has_given_up());
+  GpuWatchdog::Action after = watchdog.OnTick();
+  CHECK(!after.exit_process);
+  CHECK(!after.report_loss);
+}
+
+TEST(log_only_mode_never_touches_the_engine) {
+  GpuWatchdog::Config config = TestConfig();
+  config.on_loss = tfc::LossAction::kLogOnly;
+  GpuWatchdog watchdog(config);
+  watchdog.OnStarted();
+  watchdog.OnTick();
+
+  for (int i = 0; i < 5; i++) {
+    GpuWatchdog::Action action = watchdog.OnTick();
+    CHECK(!action.restart_engine);
+    CHECK(!action.exit_process);
+  }
+  CHECK_EQ(watchdog.recovery_attempts(), 0);
+  // Still watching, so the renderer coming back is still noticed.
+  CHECK(!watchdog.has_given_up());
+}
+
+TEST(restart_mode_still_reports_the_reason_before_restarting) {
+  // The report is the point of the change; restarting without one puts us back
+  // where we started, with a log that says only that it happened.
+  GpuWatchdog watchdog(TestConfig());  // TestConfig pins kRestartEngine
+  watchdog.OnStarted();
+  watchdog.OnTick();
+
+  GpuWatchdog::Action action = watchdog.OnTick();
+  CHECK(action.report_loss);
+  CHECK(action.restart_engine);
+  CHECK(!action.exit_process);
 }
 
 int main() {

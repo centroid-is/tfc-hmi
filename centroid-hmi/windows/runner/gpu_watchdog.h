@@ -1,6 +1,8 @@
 #ifndef RUNNER_GPU_WATCHDOG_H_
 #define RUNNER_GPU_WATCHDOG_H_
 
+#include "gpu_diagnosis.h"
+
 // GPU device-loss watchdog.
 //
 // The problem, as it appears in the logs:
@@ -52,6 +54,11 @@ class GpuWatchdog {
     // retried slowly instead of rebooting the engine every few seconds.
     unsigned int max_probe_interval_ms = 60000;
 
+    // What to do once the renderer is judged dead. The diagnosis in
+    // gpu_diagnosis.h is written either way; this is only about what happens
+    // after it. See CENTROID_GPU_ON_LOSS in flutter_window.cpp.
+    LossAction on_loss = LossAction::kExitProcess;
+
     // Consecutive failed recoveries before the watchdog gives up for good.
     // Restarting the engine restarts the Dart app with it, so a GPU that is
     // never coming back would otherwise wipe the operator's UI on every
@@ -63,6 +70,14 @@ class GpuWatchdog {
   struct Action {
     // Call ForceRedraw and re-arm the next-frame callback.
     bool start_probe = false;
+
+    // Gather the evidence and write the device-loss report. Set once per
+    // episode, not once per tick: the whole point is to replace a flood of
+    // engine errors with one block that says why.
+    bool report_loss = false;
+
+    // End the process, after the report has been written and flushed.
+    bool exit_process = false;
 
     // Destroy and recreate the FlutterViewController.
     bool restart_engine = false;
@@ -102,6 +117,14 @@ class GpuWatchdog {
   // exhausting max_recovery_attempts.
   bool has_given_up() const { return disabled_; }
 
+  // True once this loss episode has been reported, so kLogOnly does not write
+  // the same block on every tick. Cleared when a frame is presented again.
+  bool has_reported_loss() const { return reported_loss_; }
+
+  // The resolved CENTROID_GPU_ON_LOSS, so the host can name it in the log
+  // without re-reading the environment.
+  LossAction on_loss() const { return config_.on_loss; }
+
   int missed_probes() const { return missed_probes_; }
   int recovery_attempts() const { return recovery_attempts_; }
   bool probe_outstanding() const { return probe_outstanding_; }
@@ -113,6 +136,7 @@ class GpuWatchdog {
   Config config_;
   bool disabled_ = false;
   bool probe_outstanding_ = false;
+  bool reported_loss_ = false;
   int missed_probes_ = 0;
   int recovery_attempts_ = 0;
 };

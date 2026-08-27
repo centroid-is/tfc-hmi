@@ -135,5 +135,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
-  return EXIT_SUCCESS;
+  // Whatever PostQuitMessage carried, so a distinct exit reason survives to
+  // whatever supervises this process. A normal close posts 0; the GPU device
+  // loss path posts its own code so "the screen went black" and "the operator
+  // closed it" are not the same event in a service log.
+  return static_cast<int>(msg.wParam);
 }

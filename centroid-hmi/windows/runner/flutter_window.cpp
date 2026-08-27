@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <wtsapi32.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -18,6 +19,8 @@
 // Tunables, read once at startup:
 //   CENTROID_GPU_WATCHDOG=0               disable the watchdog entirely
 //   CENTROID_GPU_WATCHDOG_INTERVAL_MS=n   probe interval, default 5000
+//   CENTROID_GPU_ON_LOSS=exit|log|restart what to do once the renderer is
+//                                         judged dead, default exit
 
 namespace {
 
@@ -45,17 +48,25 @@ tfc::GpuWatchdog::Config WatchdogConfigFromEnvironment() {
   config.probe_interval_ms = tfc::ParseProbeIntervalMs(
       CStrOrNull(GetEnvVar("CENTROID_GPU_WATCHDOG_INTERVAL_MS")),
       config.probe_interval_ms);
+  config.on_loss = tfc::ParseLossAction(
+      CStrOrNull(GetEnvVar("CENTROID_GPU_ON_LOSS")), config.on_loss);
   return config;
 }
 
 bool WatchdogEnabledFromEnvironment() {
-  // Opt-in. The watchdog restarts the Flutter engine, and therefore the Dart
-  // app, on a judgement call about whether the renderer is alive. Until that
-  // judgement has been seen to be right on real hardware losing a real device,
-  // machines that have not asked for it should not get it.
+  // On by default now, which it was not when the only thing it could do was
+  // restart the engine on a judgement call. What it does by default today is
+  // *detect and explain*: probing costs one ForceRedraw every five seconds,
+  // and the payoff is that a device loss writes one report saying why instead
+  // of thousands of engine errors saying that it happened. CENTROID_GPU_ON_LOSS
+  // still governs whether anything is done about it.
   return tfc::ParseWatchdogEnabled(
-      CStrOrNull(GetEnvVar("CENTROID_GPU_WATCHDOG")), false);
+      CStrOrNull(GetEnvVar("CENTROID_GPU_WATCHDOG")), true);
 }
+
+// Distinct enough to be recognisable in a service manager's log next to a
+// normal shutdown (0) and a crash-handler exit.
+constexpr int kGpuLossExitCode = 109;
 
 void LogWatchdog(const std::string& message) {
   std::cerr << "[gpu-watchdog] " << message << std::endl;
@@ -115,10 +126,31 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
 
+  start_tick_ = ::GetTickCount64();
+  last_frame_tick_ = start_tick_;
+
   if (!watchdog_enabled_) {
     LogWatchdog("disabled via CENTROID_GPU_WATCHDOG");
     return true;
   }
+
+  // Created before anything can go wrong, because its whole job is to be an
+  // already-open channel to the driver at the moment one cannot be opened.
+  if (device_probe_.Create()) {
+    LogWatchdog("sentinel D3D11 device created on " +
+                (device_probe_.adapter_description().empty()
+                     ? std::string("an unnamed adapter")
+                     : device_probe_.adapter_description()));
+  } else {
+    // Not fatal. The loss is still detected and still reported; the report
+    // just cannot name the reason, and says so rather than implying health.
+    LogWatchdog(
+        "sentinel D3D11 device could NOT be created — a device loss will be "
+        "detected but its reason will be unavailable");
+  }
+
+  LogWatchdog(std::string("watching; on loss will ") +
+              tfc::DescribeLossAction(watchdog_.on_loss()));
 
   watchdog_hwnd_ = GetHandle();
 
@@ -197,6 +229,17 @@ void FlutterWindow::DisableWatchdog() {
 }
 
 void FlutterWindow::ApplyAction(const tfc::GpuWatchdog::Action& action) {
+  // Before anything else: the report is the reason this code exists, and a
+  // restart or an exit would otherwise destroy the evidence it reads.
+  if (action.report_loss) {
+    ReportDeviceLoss();
+  }
+
+  if (action.exit_process) {
+    ExitAfterDeviceLoss();
+    return;
+  }
+
   if (action.restart_engine) {
     LogWatchdog("renderer is not presenting frames (EGL context lost?) — "
                 "restarting the Flutter engine, attempt " +
@@ -225,6 +268,62 @@ void FlutterWindow::ApplyAction(const tfc::GpuWatchdog::Action& action) {
   }
 }
 
+void FlutterWindow::ReportDeviceLoss() {
+  const unsigned long long now = ::GetTickCount64();
+
+  tfc::LossEvidence evidence;
+  evidence.sentinel_available = device_probe_.available();
+  evidence.device_removed_reason = device_probe_.GetRemovedReason();
+  evidence.adapter_description = device_probe_.adapter_description();
+  evidence.adapter_vendor_id = device_probe_.vendor_id();
+  evidence.adapter_device_id = device_probe_.device_id();
+
+  evidence.last_hint = last_hint_;
+  evidence.session_change_code = session_change_code_;
+  evidence.ms_since_last_hint =
+      last_hint_tick_ == 0 ? 0ULL : now - last_hint_tick_;
+
+  evidence.ms_since_start = now - start_tick_;
+  evidence.ms_since_last_frame = now - last_frame_tick_;
+  evidence.missed_probes = watchdog_.missed_probes();
+
+  evidence.remote_session = ::GetSystemMetrics(SM_REMOTESESSION) != 0;
+
+  // Straight to stderr, which main.cpp has already pointed at the log file.
+  // Not through LogWatchdog: this is a block, and prefixing every line again
+  // would double the tag the report already carries.
+  std::cerr << tfc::FormatLossReport(evidence);
+  std::cerr.flush();
+}
+
+void FlutterWindow::ExitAfterDeviceLoss() {
+  LogWatchdog("ending the process so the report above is the last thing in "
+              "this log; exit code " +
+              std::to_string(kGpuLossExitCode) +
+              ". Set CENTROID_GPU_ON_LOSS=restart to rebuild the engine "
+              "instead, or =log to stay up.");
+
+  // Take the engine down first: that runs egl::Manager's destructor, which
+  // releases the dead D3D device, and it stops the raster thread producing
+  // more EGL errors after the report.
+  DestroyController();
+
+  std::cerr.flush();
+  std::fflush(nullptr);
+
+  // Through the message loop rather than ExitProcess: wWinMain returns
+  // normally, destructors run, and the log file is closed by the CRT instead
+  // of being left to the OS.
+  ::PostQuitMessage(kGpuLossExitCode);
+}
+
+void FlutterWindow::NoteLossHint(tfc::LossHint hint,
+                                 unsigned long session_code) {
+  last_hint_ = hint;
+  last_hint_tick_ = ::GetTickCount64();
+  session_change_code_ = session_code;
+}
+
 void FlutterWindow::StartProbe() {
   if (!flutter_controller_ || !flutter_controller_->engine()) {
     return;
@@ -236,6 +335,7 @@ void FlutterWindow::StartProbe() {
 }
 
 void FlutterWindow::OnFramePresented() {
+  last_frame_tick_ = ::GetTickCount64();
   int attempts_before = watchdog_.recovery_attempts();
   Dispatch(WatchdogEvent::kFramePresented);
   if (attempts_before > 0 && !watchdog_.has_given_up()) {
@@ -285,6 +385,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       if (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND) {
         if (watchdog_enabled_ && flutter_controller_) {
           LogWatchdog("probing after power resume");
+          NoteLossHint(tfc::LossHint::kPowerResume, 0);
           Dispatch(WatchdogEvent::kDeviceLossHint);
         }
       }
@@ -293,6 +394,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_DISPLAYCHANGE:
       if (watchdog_enabled_ && flutter_controller_) {
         LogWatchdog("probing after display change");
+        NoteLossHint(tfc::LossHint::kDisplayChange, 0);
         Dispatch(WatchdogEvent::kDeviceLossHint);
       }
       break;
@@ -307,7 +409,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         case WTS_REMOTE_DISCONNECT:
         case WTS_SESSION_UNLOCK:
           if (watchdog_enabled_ && flutter_controller_) {
-            LogWatchdog("probing after session change");
+            char named[64];
+            LogWatchdog(
+                std::string("probing after session change — ") +
+                tfc::DescribeSessionChange(static_cast<unsigned long>(wparam),
+                                           named, sizeof(named)));
+            NoteLossHint(tfc::LossHint::kSessionChange,
+                         static_cast<unsigned long>(wparam));
             Dispatch(WatchdogEvent::kDeviceLossHint);
           }
           break;

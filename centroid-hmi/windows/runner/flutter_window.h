@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "gpu_device_probe.h"
+#include "gpu_diagnosis.h"
 #include "gpu_watchdog.h"
 #include "win32_window.h"
 
@@ -63,6 +65,20 @@ class FlutterWindow : public Win32Window {
 
   void ApplyAction(const tfc::GpuWatchdog::Action& action);
 
+  // Gathers everything known about the loss and writes the report block. This
+  // is the diagnosis the log has been missing -- see gpu_diagnosis.h.
+  void ReportDeviceLoss();
+
+  // Writes the report's last line, flushes the log, and ends the process
+  // cleanly through the message loop so the report is the final thing in the
+  // file rather than something a killed process left half-written.
+  void ExitAfterDeviceLoss();
+
+  // Remembers a window message that commonly precedes device loss, so the
+  // report can say what came just before it. |session_code| is the WTS_* code
+  // for a session change and ignored otherwise.
+  void NoteLossHint(tfc::LossHint hint, unsigned long session_code);
+
   // Asks the engine for a frame and re-arms the next-frame callback.
   void StartProbe();
 
@@ -80,6 +96,19 @@ class FlutterWindow : public Win32Window {
   bool watchdog_enabled_ = true;
   bool first_frame_shown_ = false;
   bool session_notifications_registered_ = false;
+
+  // A D3D11 device of our own, never rendered with, kept alive only so that
+  // GetDeviceRemovedReason() can be asked why the renderer died. ANGLE's own
+  // device is unreachable inside flutter_windows.dll.
+  tfc::GpuDeviceProbe device_probe_;
+
+  // What preceded the loss, for the report. GetTickCount64 values; 0 means
+  // "never happened".
+  tfc::LossHint last_hint_ = tfc::LossHint::kNone;
+  unsigned long long last_hint_tick_ = 0;
+  unsigned long session_change_code_ = 0;
+  unsigned long long start_tick_ = 0;
+  unsigned long long last_frame_tick_ = 0;
 
   // Cached copy of the window handle for watchdog teardown. Win32Window clears
   // window_handle_ *before* dispatching WM_DESTROY to OnDestroy, so GetHandle()
