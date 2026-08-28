@@ -2448,83 +2448,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   onPressed: () => write('p_cmd_FaultReset', true),
                 ),
               ],
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // --- Jog -------------------------------------------------
-                  //
-                  // `p_stat_ManualStopOnRelease` decides the gesture: when
-                  // set, the belt runs only while the button is held (the
-                  // press/release callbacks write true/false); when clear, a
-                  // tap latches it. Both paths are unchanged from the dialog.
-                  PaneSection(
-                    title: 'Jog',
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _JogButton(
-                              icon: Icons.arrow_back,
-                              label: 'Reverse',
-                              active: jogBwd,
-                              stopOnRelease: stopOnRelease,
-                              onCommand: (v) => write('p_cmd_JogBwd', v),
-                            ),
-                            _JogButton(
-                              icon: Icons.arrow_forward,
-                              label: 'Forward',
-                              active: jogFwd,
-                              stopOnRelease: stopOnRelease,
-                              onCommand: (v) => write('p_cmd_JogFwd', v),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        // Compact row rather than a SwitchListTile: the pane
-                        // has one screen of height and this is a mode flag,
-                        // not a headline. On = a tap latches the belt and it
-                        // keeps running; off = it runs only while held —
-                        // so the switch reads as the opposite of the PLC's
-                        // stop-on-release flag.
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Jog continuous',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ),
-                            Switch(
-                              value: !stopOnRelease,
-                              onChanged: (_) =>
-                                  write('p_cmd_ManualStopOnRelease', true),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        // The speed those buttons jog at — full width, under
-                        // the controls it belongs to.
-                        SetpointField<double>(
-                            fieldKey: 'manual_freq_field',
-                            label: 'Manual frequency',
-                            text: dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2),
-                            current: dynValue['p_cfg_ManualFreq'].asDouble,
-                            parse: double.tryParse,
-                            suffix: 'Hz',
-                            onSubmitted: (v) => write('p_cfg_ManualFreq', v),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-
+              child: PaneBody(
+                sections: [
                   // --- Live numbers ----------------------------------------
-                  PaneSection(
-                    title: 'Status',
+                  PaneBodySection.status(
                     trailing: TextButton(
                       onPressed: () => write('p_cmd_ResetRunHours', true),
                       child: const Text('Reset hours'),
@@ -2600,14 +2527,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
                       ],
                     ),
                   ),
-                  const Divider(height: 1),
 
-                  // --- Trend ------------------------------------------------
+                  // --- Trend -----------------------------------------------
                   //
                   // A preview in the pane, the real chart in a floating
                   // dialog the operator can park next to the mimic.
-                  PaneSection(
-                    title: 'Trend',
+                  PaneBodySection.trend(
                     child: PaneGraphTile(
                       // Two traces on two axes, so they do have to be named —
                       // but up here, where naming them costs a text row
@@ -2631,21 +2556,87 @@ class _ConveyorState extends ConsumerState<Conveyor>
                       ),
                     ),
                   ),
-                  const Divider(height: 1),
 
-                  // --- Setpoints --------------------------------------------
+                  // --- Manual ----------------------------------------------
+                  //
+                  // `p_stat_ManualStopOnRelease` decides the gesture: when
+                  // set, the belt runs only while the button is held (the
+                  // press/release callbacks write true/false); when clear, a
+                  // tap latches it. Both paths are unchanged from the dialog.
+                  PaneBodySection.manual(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _JogButton(
+                              icon: Icons.arrow_back,
+                              label: 'Reverse',
+                              active: jogBwd,
+                              stopOnRelease: stopOnRelease,
+                              onCommand: (v) => write('p_cmd_JogBwd', v),
+                            ),
+                            _JogButton(
+                              icon: Icons.arrow_forward,
+                              label: 'Forward',
+                              active: jogFwd,
+                              stopOnRelease: stopOnRelease,
+                              onCommand: (v) => write('p_cmd_JogFwd', v),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        // Compact row rather than a SwitchListTile: the pane
+                        // has one screen of height and this is a mode flag,
+                        // not a headline. On = a tap latches the belt and it
+                        // keeps running; off = it runs only while held —
+                        // so the switch reads as the opposite of the PLC's
+                        // stop-on-release flag.
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Jog continuous',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                            Switch(
+                              value: !stopOnRelease,
+                              onChanged: (_) =>
+                                  write('p_cmd_ManualStopOnRelease', true),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        // The speed those buttons jog at — full width, under
+                        // the controls it belongs to.
+                        SetpointField<double>(
+                            fieldKey: 'manual_freq_field',
+                            label: 'Manual frequency',
+                            text: dynValue['p_cfg_ManualFreq'].asDouble.toStringAsFixed(2),
+                            current: dynValue['p_cfg_ManualFreq'].asDouble,
+                            parse: double.tryParse,
+                            suffix: 'Hz',
+                            onSubmitted: (v) => write('p_cfg_ManualFreq', v),
+                          ),
+                      ],
+                    ),
+                  ),
+
+                  // --- Setpoints -------------------------------------------
                   //
                   // Inline, not behind a dialog: there are only two of them
                   // and an operator changing a frequency wants to see the
                   // belt while doing it. Manual frequency is not here — it
-                  // belongs to jogging, so it sits beside the jog toggle.
+                  // belongs to hand control, so it sits beside the jog toggle.
                   //
                   // Committed on submit (Enter / focus-out), never per
                   // keystroke — a half-typed frequency must not reach the
                   // drive. Keys embed the current value so a field resets when
                   // the PLC reports a different one.
-                  PaneSection(
-                    title: 'Setpoints',
+                  PaneBodySection.setpoints(
                     // Side by side — two short numbers read better as a pair
                     // than as a stack, and it costs one row instead of two.
                     child: Row(

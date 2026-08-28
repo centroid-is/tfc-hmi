@@ -838,12 +838,10 @@ class AnalogBoxPane extends StatelessWidget {
           : value == null
               ? const PaneStatus.unknown('No data')
               : const PaneStatus.running('Live'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
+      child: PaneBody(
+        sections: [
           // --- Live value ------------------------------------------------
-          PaneSection(
+          PaneBodySection.status(
             title: 'Signal',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -875,20 +873,15 @@ class AnalogBoxPane extends StatelessWidget {
           //
           // A preview in the pane, the real chart in a floating dialog the
           // operator can park next to the mimic (conveyor/sensor shape).
-          if (trendTile != null) ...[
-            const Divider(height: 1),
-            PaneSection(title: 'Trend', child: trendTile!),
-          ],
+          if (trendTile != null) PaneBodySection.trend(child: trendTile!),
 
           // --- Setpoints -------------------------------------------------
           //
           // Inline, not behind a fold: adjusting a threshold is the routine
           // operator act on an analog box. Committed on submit (Enter /
           // focus-out) only — a half-typed value must not reach the PLC.
-          if (sp1Key != null || hystKey != null || sp2Key != null) ...[
-            const Divider(height: 1),
-            PaneSection(
-              title: 'Setpoints',
+          if (sp1Key != null || hystKey != null || sp2Key != null)
+            PaneBodySection.setpoints(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
@@ -933,7 +926,6 @@ class AnalogBoxPane extends StatelessWidget {
                 ],
               ),
             ),
-          ],
 
           // --- Sensor range ----------------------------------------------
           //
@@ -941,9 +933,8 @@ class AnalogBoxPane extends StatelessWidget {
           // live values up front; the editable fields sit folded behind
           // "Adjust" — re-ranging a transmitter is a rare, deliberate act
           // (same fold as the sensor pane's debounce).
-          if (rangeMinKey != null || rangeMaxKey != null) ...[
-            const Divider(height: 1),
-            PaneSection(
+          if (rangeMinKey != null || rangeMaxKey != null)
+            PaneBodySection.details(
               title: 'Sensor range',
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1012,7 +1003,6 @@ class AnalogBoxPane extends StatelessWidget {
                 ],
               ),
             ),
-          ],
         ],
       ),
     );

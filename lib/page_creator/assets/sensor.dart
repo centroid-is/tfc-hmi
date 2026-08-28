@@ -653,11 +653,9 @@ class _SensorState extends ConsumerState<Sensor> {
       subtitle: tagged ? '${config.kind.name} · sensor' : config.kind.name,
       icon: Icons.sensors,
       status: status,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          PaneSection(
+      child: PaneBody(
+        sections: [
+          PaneBodySection.status(
             title: 'Signal',
             child: PaneDetailRow(
               label: 'Detection state',
@@ -670,10 +668,7 @@ class _SensorState extends ConsumerState<Sensor> {
                           : 'false',
             ),
           ),
-          if (trendTile != null) ...[
-            const Divider(height: 1),
-            PaneSection(title: 'Trend', child: trendTile),
-          ],
+          if (trendTile != null) PaneBodySection.trend(child: trendTile),
         ],
       ),
     );
@@ -931,12 +926,10 @@ class SensorFbPane extends StatelessWidget {
           : state.output
               ? const PaneStatus.running('Blocked')
               : const PaneStatus.stopped('Clear'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
+      child: PaneBody(
+        sections: [
           // --- Live signal ---------------------------------------------
-          PaneSection(
+          PaneBodySection.status(
             title: 'Signal',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -987,7 +980,6 @@ class SensorFbPane extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(height: 1),
 
           // --- Trend -----------------------------------------------------
           //
@@ -995,10 +987,7 @@ class SensorFbPane extends StatelessWidget {
           // operator can park next to the mimic (same shape as the
           // conveyor's trend). Only present when the bound key's data
           // gathering makes the output chartable.
-          if (trendTile != null) ...[
-            PaneSection(title: 'Trend', child: trendTile!),
-            const Divider(height: 1),
-          ],
+          if (trendTile != null) PaneBodySection.trend(child: trendTile!),
 
           // --- Debounce --------------------------------------------------
           //
@@ -1012,7 +1001,7 @@ class SensorFbPane extends StatelessWidget {
           // Committed on submit (Enter / focus-out) only — a half-typed delay
           // must not reach the FB. The field keys embed the current value so
           // the box resets if the PLC reports a different one.
-          PaneSection(
+          PaneBodySection.setpoints(
             title: 'Signal delays',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

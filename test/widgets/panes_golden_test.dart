@@ -368,12 +368,12 @@ SidePane _conveyorPane(BuildContext context) {
         onPressed: () {},
       ),
     ],
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        PaneSection(
-          title: 'Jog',
+    child: PaneBody(
+      // Deliberately written out of order: the golden is what proves
+      // [PaneBody] sorts into Status → Trend → Manual → Setpoints rather
+      // than rendering whatever a pane author happened to type first.
+      sections: [
+        PaneBodySection.manual(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -403,9 +403,7 @@ SidePane _conveyorPane(BuildContext context) {
             ],
           ),
         ),
-        const Divider(height: 1),
-        PaneSection(
-          title: 'Status',
+        PaneBodySection.status(
           trailing:
               TextButton(onPressed: () {}, child: const Text('Reset hours')),
           child: Column(
@@ -435,9 +433,7 @@ SidePane _conveyorPane(BuildContext context) {
             ],
           ),
         ),
-        const Divider(height: 1),
-        PaneSection(
-          title: 'Trend',
+        PaneBodySection.trend(
           child: PaneGraphTile(
             legend: conveyorTrendColors,
             height: 100,
@@ -445,9 +441,7 @@ SidePane _conveyorPane(BuildContext context) {
             expandedBuilder: (_) => const _TrendChart(showButtons: true),
           ),
         ),
-        const Divider(height: 1),
-        PaneSection(
-          title: 'Setpoints',
+        PaneBodySection.setpoints(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
