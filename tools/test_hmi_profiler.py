@@ -525,6 +525,232 @@ class FoldCpuSamplesTest(unittest.TestCase):
         self.assertEqual(len(folded["self"]), 1)
 
 
+class CallTreeTest(unittest.TestCase):
+    def tree(self, stacks, functions=None):
+        return hp.build_call_tree(
+            functions if functions is not None else SAMPLE_FUNCTIONS,
+            [{"stack": stack} for stack in stacks],
+        )
+
+    def test_builds_root_first_from_a_leaf_first_stack(self):
+        # stack [0, 1] means 0 is the leaf and 1 called it.
+        tree = self.tree([[0, 1]])
+        caller = tree["children"]["RenderObject._paintWithContext [object.dart]"]
+        self.assertEqual(caller["total"], 1)
+        leaf = caller["children"]["ConveyorPainter.paint [conveyor.dart]"]
+        self.assertEqual(leaf["self"], 1)
+
+    def test_self_lands_on_the_leaf_only(self):
+        tree = self.tree([[0, 1], [1]])
+        caller = tree["children"]["RenderObject._paintWithContext [object.dart]"]
+        self.assertEqual(caller["total"], 2)
+        self.assertEqual(caller["self"], 1)  # the sample whose leaf IS the caller
+
+    def test_tid_filter(self):
+        samples = [{"stack": [0], "tid": 1}, {"stack": [1], "tid": 2}]
+        tree = hp.build_call_tree(SAMPLE_FUNCTIONS, samples, tid=2)
+        self.assertEqual(tree["total"], 1)
+        self.assertIn("RenderObject._paintWithContext [object.dart]", tree["children"])
+
+    def test_dominant_path_follows_the_heaviest_child(self):
+        tree = self.tree([[0, 1]] * 9 + [[2, 1]])
+        self.assertEqual(
+            hp.dominant_path(tree),
+            [
+                "RenderObject._paintWithContext [object.dart]",
+                "ConveyorPainter.paint [conveyor.dart]",
+            ],
+        )
+
+    def test_dominant_path_stops_at_the_threshold(self):
+        tree = self.tree([[0, 1]] + [[1]] * 99)
+        # The 1% branch is below the default 5% floor.
+        self.assertEqual(hp.dominant_path(tree), ["RenderObject._paintWithContext [object.dart]"])
+
+    def test_empty_tree_renders_a_message_not_a_crash(self):
+        self.assertIn("no samples", hp.render_call_tree(hp._tree_node("<all>")))
+
+    def test_render_prunes_below_the_threshold(self):
+        tree = self.tree([[0]] * 99 + [[1]])
+        rendered = hp.render_call_tree(tree, min_percent=5.0)
+        self.assertIn("ConveyorPainter.paint", rendered)
+        self.assertNotIn("RenderObject._paintWithContext", rendered)
+
+
+class RecursionCollapseTest(unittest.TestCase):
+    def test_compress_chain_squashes_consecutive_duplicates(self):
+        self.assertEqual(hp._compress_chain(["a", "fib", "fib", "fib", "b"]),
+                         ["a", "fib x3 deep", "b"])
+
+    def test_compress_chain_leaves_singles_alone(self):
+        self.assertEqual(hp._compress_chain(["a", "b", "a"]), ["a", "b", "a"])
+
+    def test_compress_chain_empty(self):
+        self.assertEqual(hp._compress_chain([]), [])
+
+    def test_fold_recursion_sums_self_across_the_run(self):
+        # fib -> fib -> fib, each with one self tick.
+        leaf = hp._tree_node("fib")
+        leaf["self"], leaf["total"] = 1, 1
+        mid = hp._tree_node("fib")
+        mid["self"], mid["total"], mid["children"] = 1, 2, {"fib": leaf}
+        top = hp._tree_node("fib")
+        top["self"], top["total"], top["children"] = 1, 3, {"fib": mid}
+        depth, self_ticks, deepest = hp._fold_recursion(top)
+        self.assertEqual((depth, self_ticks), (3, 3))
+        self.assertIs(deepest, leaf)
+
+    def test_fold_recursion_stops_at_a_different_name(self):
+        other = hp._tree_node("paint")
+        other["total"] = 1
+        top = hp._tree_node("fib")
+        top["total"], top["children"] = 1, {"paint": other}
+        depth, _, deepest = hp._fold_recursion(top)
+        self.assertEqual(depth, 1)
+        self.assertIs(deepest, top)
+
+    def test_a_deep_recursion_renders_as_one_row(self):
+        # 30 nested frames of the same function must not become 30 lines.
+        stack = [0] * 30
+        tree = hp.build_call_tree(SAMPLE_FUNCTIONS, [{"stack": stack}])
+        rendered = hp.render_call_tree(tree)
+        self.assertEqual(len(rendered.strip().splitlines()), 1)
+        self.assertIn("x30 deep", rendered)
+
+
+class TimelineBlocksTest(unittest.TestCase):
+    def test_keeps_each_block_window(self):
+        payload = {
+            "traceEvents": [
+                {"ph": "B", "name": "PAINT", "ts": 100, "pid": 1, "tid": 7},
+                {"ph": "E", "name": "PAINT", "ts": 400, "pid": 1, "tid": 7},
+                {"ph": "X", "name": "GC", "ts": 500, "dur": 50, "pid": 1, "tid": 7},
+            ]
+        }
+        blocks = hp.timeline_blocks(payload)
+        self.assertEqual(
+            sorted((b["name"], b["ts"], b["dur"]) for b in blocks),
+            [("GC", 500, 50), ("PAINT", 100, 300)],
+        )
+
+    def test_unmatched_end_is_ignored(self):
+        payload = {"traceEvents": [{"ph": "E", "name": "PAINT", "ts": 9, "pid": 1, "tid": 1}]}
+        self.assertEqual(hp.timeline_blocks(payload), [])
+
+
+class SlowBlockTest(unittest.TestCase):
+    def blocks(self, name, durations, tid=1):
+        return [
+            {"name": name, "tid": tid, "ts": i * 100_000, "dur": d}
+            for i, d in enumerate(durations)
+        ]
+
+    def test_flags_a_block_far_above_its_own_median(self):
+        blocks = self.blocks("RENDER", [1000] * 20 + [50_000])
+        slow = hp.find_slow_blocks(blocks)
+        self.assertEqual(len(slow), 1)
+        self.assertEqual(slow[0]["dur"], 50_000)
+        self.assertGreater(slow[0]["ratio"], 3)
+
+    def test_a_uniformly_slow_block_is_not_an_outlier(self):
+        # Everything takes 50 ms. That is a hot path, not an outlier, and the
+        # CPU section is where it belongs.
+        self.assertEqual(hp.find_slow_blocks(self.blocks("RENDER", [50_000] * 20)), [])
+
+    def test_the_floor_suppresses_tiny_blocks_with_huge_ratios(self):
+        # 200 us is 20x a 10 us median, and completely irrelevant.
+        blocks = self.blocks("TICK", [10] * 20 + [200])
+        self.assertEqual(hp.find_slow_blocks(blocks), [])
+
+    def test_a_rare_block_is_judged_against_the_floor_alone(self):
+        # Seen twice, so there is no meaningful median — but 300 ms is worth
+        # reporting on its own.
+        blocks = self.blocks("STARTUP", [1000, 300_000])
+        slow = hp.find_slow_blocks(blocks, min_count=5)
+        self.assertEqual([b["dur"] for b in slow], [300_000])
+
+    def test_names_are_compared_against_themselves_not_each_other(self):
+        blocks = self.blocks("FAST", [100] * 20) + self.blocks("SLOW", [40_000] * 20)
+        # SLOW is 400x FAST's median but perfectly consistent for itself.
+        self.assertEqual(hp.find_slow_blocks(blocks), [])
+
+    def test_keep_limits_and_orders_by_duration(self):
+        blocks = self.blocks("RENDER", [1000] * 20 + [30_000, 90_000, 60_000])
+        slow = hp.find_slow_blocks(blocks, keep=2)
+        self.assertEqual([b["dur"] for b in slow], [90_000, 60_000])
+
+
+class SamplesInWindowTest(unittest.TestCase):
+    SAMPLES = [
+        {"timestamp": 100, "tid": 1, "stack": [0]},
+        {"timestamp": 250, "tid": 1, "stack": [1]},
+        {"timestamp": 250, "tid": 2, "stack": [1]},
+        {"timestamp": 900, "tid": 1, "stack": [0]},
+    ]
+
+    def test_selects_by_time(self):
+        got = hp.samples_in_window(self.SAMPLES, 200, 300)
+        self.assertEqual(len(got), 2)
+
+    def test_selects_by_thread_too(self):
+        got = hp.samples_in_window(self.SAMPLES, 200, 300, tid=1)
+        self.assertEqual(len(got), 1)
+
+    def test_boundaries_are_inclusive(self):
+        self.assertEqual(len(hp.samples_in_window(self.SAMPLES, 100, 100)), 1)
+
+    def test_empty_window(self):
+        self.assertEqual(hp.samples_in_window(self.SAMPLES, 400, 500), [])
+
+
+class SlowRenderTest(unittest.TestCase):
+    def test_no_outliers_reads_as_a_good_result(self):
+        text = hp.render_slow_blocks([], SAMPLE_FUNCTIONS, [])
+        self.assertIn("good result", text)
+
+    def test_a_blocked_window_is_called_out_rather_than_left_blank(self):
+        # A block with no samples in it was waiting, not computing — that is a
+        # different bug and the report must not imply it was idle CPU.
+        slow = [{"name": "IO", "tid": 1, "ts": 0, "dur": 50_000, "median_us": 1000,
+                 "ratio": 50.0, "seen": 10}]
+        text = hp.render_slow_blocks(slow, SAMPLE_FUNCTIONS, [])
+        self.assertIn("blocked, not", text)
+
+    def test_includes_the_stack_from_the_window(self):
+        slow = [{"name": "PAINT", "tid": 1, "ts": 0, "dur": 50_000, "median_us": 1000,
+                 "ratio": 50.0, "seen": 10}]
+        samples = [{"timestamp": 100, "tid": 1, "stack": [0, 1]}]
+        text = hp.render_slow_blocks(slow, SAMPLE_FUNCTIONS, samples)
+        self.assertIn("ConveyorPainter.paint", text)
+        self.assertIn("50.0x", text)
+
+
+class ActionsTest(unittest.TestCase):
+    def base(self):
+        return {
+            "frames": hp.frame_stats([]),
+            "cpu": hp.fold_cpu_samples({}),
+            "hot_path": [],
+            "slow": [],
+        }
+
+    def test_says_so_when_nothing_stands_out(self):
+        self.assertIn("Nothing stands out", hp.render_actions(self.base()))
+
+    def test_names_the_bottleneck_thread(self):
+        data = self.base()
+        data["frames"] = hp.frame_stats(
+            [{"build": 1000, "raster": 40_000, "elapsed": 41_000}] * 10
+        )
+        self.assertIn("raster", hp.render_actions(data))
+
+    def test_compresses_a_recursive_dominant_chain(self):
+        data = self.base()
+        data["hot_path"] = ["main", "fib", "fib", "fib", "fib", "fib"]
+        text = hp.render_actions(data)
+        self.assertIn("fib x5 deep", text)
+
+
 class PercentileTest(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(hp.percentile([], 0.9), 0)

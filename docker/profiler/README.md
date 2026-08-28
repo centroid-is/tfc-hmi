@@ -55,8 +55,11 @@ docker compose logs -f profiler
 # one-shot, straight to your terminal
 docker compose run --rm profiler report --seconds 30
 
-# just the hot functions, JSON for something else to chew on
-docker compose run --rm profiler cpu --seconds 20 --json
+# just the hot functions and the call tree behind them
+docker compose run --rm profiler cpu --seconds 20
+
+# keep hunting for hiccups while somebody drives the screen
+docker compose run --rm profiler slow --seconds 20 --repeat
 
 # from a checkout, against anything reachable
 python3 tools/hmi_profiler.py report --url ws://10.50.10.11:8181/ws
@@ -67,6 +70,34 @@ Reports written by the `watch` command land in the `profiler-reports` volume:
 ```sh
 docker compose cp profiler:/reports ./profiler-reports
 ```
+
+## Finding the hiccup, not just the average
+
+Aggregates hide the thing you are looking for. A 40 ms stall once a second is
+invisible in a mean and obvious to an operator.
+
+`slow` looks for timeline blocks that took far longer than the **median for
+their own name** — 12 ms is catastrophic for a paint and unremarkable for a
+page load, so an absolute threshold alone is useless — and then dumps the call
+tree built only from samples taken inside that block's window:
+
+```
+**RENDER** — 16.6 ms, 163x its median of 0.1 ms (seen 634x)
+
+100.0%  ... -> Timeline.timeSync -> <closure> -> slowPath [app.dart] x15 deep (self 2%)
+   97.6%  fib [app.dart] x12 deep (self 98%)
+```
+
+That correlation works because the VM timeline and the CPU profiler share the
+same monotonic clock — verified against a live VM, where 7144 of 7302 samples
+fell inside the recorded timeline span.
+
+A window with **no** samples in it is reported explicitly rather than left
+blank: it means the thread was blocked, not computing — waiting on I/O, a
+lock, or the platform thread — which is a different bug with a different fix.
+
+Tuning: `--slow-factor` (default 3x the median), `--slow-floor-ms` (default 8,
+so a 0.2 ms block being 20x its median is ignored), `--keep`, `--repeat`.
 
 ## Reading the output
 

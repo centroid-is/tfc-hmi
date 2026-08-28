@@ -430,8 +430,8 @@ jobs:
         [ -f test-output.txt ] || { echo "::error::the test step produced no output"; exit 1; }
         ran=$(grep -c ' \.\.\. ok$' test-output.txt || true)
         echo "tools tests reported: $ran"
-        # 47 in tools/test_hmi_profiler.py as of this commit.
-        if [ "$ran" -lt 40 ]; then
-          echo "::error::tools ran only $ran tests, expected >=40 — check the discover pattern"
+        # 78 in tools/test_hmi_profiler.py as of this commit.
+        if [ "$ran" -lt 70 ]; then
+          echo "::error::tools ran only $ran tests, expected >=70 — check the discover pattern"
           exit 1
         fi

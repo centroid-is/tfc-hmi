@@ -143,12 +143,18 @@ flutter run -d macos
 The station image `ghcr.io/centroid-is/centroid-hmi:latest-profile` is a
 Flutter **profile** build — AOT-compiled like release, so its timings are the
 ones an operator feels, but with the Dart VM Service left in. `tools/hmi_profiler.py`
-turns that into a markdown report: frame build/raster percentiles, the hot
-functions behind them, timeline blocks and the largest classes on the heap.
+turns that into a markdown report: frame build/raster percentiles, the call
+tree behind them, timeline blocks and the largest classes on the heap — led by
+a "Where to look" summary.
+
+For the one-off stall rather than the average, `slow` finds blocks that ran far
+longer than the median for their own name and dumps the stack that was on the
+CPU during each.
 
 ```sh
 # a running station (port 8181 is on the compose network, not published)
 docker compose run --rm profiler report --seconds 30
+docker compose run --rm profiler slow --seconds 20 --repeat   # hunt for hiccups
 
 # a local profile run — paste the ws:// URI `flutter run` printed
 flutter run --profile -d macos

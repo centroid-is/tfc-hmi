@@ -10,13 +10,24 @@ the app is slow" — can read without opening DevTools.
 No third-party packages. The WebSocket client below is deliberately small so
 the script runs anywhere python3 does, including a stock `python:alpine`.
 
+Two questions, two mechanisms. "What is this app always doing?" is answered by
+folding CPU samples into a call tree. "What was that 80 ms hiccup?" is answered
+by finding timeline blocks that ran far longer than the median for their own
+name, then folding only the samples taken *inside that block's window*. The
+second is possible because the timeline and the CPU profiler share the VM's
+monotonic clock, so a block's [ts, ts+dur] selects the samples that were taken
+while it ran.
+
 Subcommands
     status     one-shot: version, isolates, heap, uptime.
     frames     collect `Flutter.Frame` events, report jank percentiles.
-    cpu        sample the CPU profiler, report hot functions (self/inclusive).
+    cpu        hot functions (self/inclusive) plus the call tree behind them.
+    slow       find blocks that ran unusually long and dump the stack that was
+               on the CPU during each. --repeat to keep hunting.
     timeline   aggregate VM timeline events by name (BUILD/LAYOUT/PAINT/GC...).
     memory     heap usage plus the largest classes by retained size.
-    report     all of the above, as one markdown document.
+    report     all of the above, as one markdown document, led by a
+               "Where to look" summary.
     watch      run `report` forever on an interval, writing files to --out-dir.
 
 Examples
@@ -29,6 +40,9 @@ Examples
 
     # inside the compose stack
     docker compose run --rm profiler report --seconds 60
+
+    # hunt for hiccups while an operator drives the screen
+    docker compose run --rm profiler slow --seconds 20 --repeat
 """
 
 from __future__ import annotations
@@ -444,6 +458,132 @@ def fold_cpu_samples(payload, top=25):
     }
 
 
+def _tree_node(name):
+    return {"name": name, "self": 0, "total": 0, "children": {}}
+
+
+def build_call_tree(functions, samples, tid=None):
+    """Fold samples into a root-first call tree.
+
+    A flat "top functions" list tells you *what* is hot; it cannot tell you
+    *how you got there*, which is the only thing you can act on. `stack` is
+    leaf-first, so the tree is built from the reversed stack.
+    """
+    root = _tree_node("<all>")
+    for sample in samples:
+        if tid is not None and sample.get("tid") != tid:
+            continue
+        stack = sample.get("stack") or []
+        if not stack:
+            continue
+        root["total"] += 1
+        node = root
+        for index in reversed(stack):
+            name = function_label(functions, index)
+            child = node["children"].get(name)
+            if child is None:
+                child = _tree_node(name)
+                node["children"][name] = child
+            child["total"] += 1
+            node = child
+        node["self"] += 1
+    return root
+
+
+def dominant_path(tree, min_percent=5.0):
+    """The heaviest root-to-leaf chain — where the time actually goes."""
+    path = []
+    node = tree
+    total = tree["total"] or 1
+    while node["children"]:
+        node = max(node["children"].values(), key=lambda child: child["total"])
+        if 100.0 * node["total"] / total < min_percent:
+            break
+        path.append(node["name"])
+    return path
+
+
+def _fold_recursion(node):
+    """Merge a run of same-named nested frames into one row.
+
+    Recursion turns a call tree into a ladder: `fib -> fib -> fib -> ...` for
+    twenty levels, each its own indented line, none of them telling you
+    anything the first one did not. Flutter does this constantly — the render
+    tree walk, `RenderObject.visitChildren`, the element tree — so without
+    this the interesting branch point is pushed off the bottom of the page.
+
+    Returns (depth, summed self ticks, deepest node in the run).
+    """
+    depth = 1
+    self_ticks = node["self"]
+    current = node
+    while len(current["children"]) == 1:
+        only = next(iter(current["children"].values()))
+        if only["name"] != node["name"]:
+            break
+        depth += 1
+        self_ticks += only["self"]
+        current = only
+    return depth, self_ticks, current
+
+
+def _compress_chain(names):
+    """`a -> fib -> fib -> fib -> b` becomes `a -> fib x3 deep -> b`.
+
+    The straight-line collapse walks single children regardless of name, so a
+    recursive run can still appear inside one chain. Squash it there too, or
+    the first line of every tree is a wall of one repeated frame.
+    """
+    out = []
+    for name in names:
+        if out and out[-1][0] == name:
+            out[-1][1] += 1
+        else:
+            out.append([name, 1])
+    return [name if count == 1 else f"{name} x{count} deep" for name, count in out]
+
+
+def render_call_tree(tree, min_percent=2.0, max_depth=40):
+    """Indented tree, pruned, with straight runs and recursion collapsed.
+
+    Flutter stacks are mostly linear — twenty frames of build/layout plumbing
+    that each carry the identical sample count. Printing one line each buries
+    the branch points, which are the only interesting rows.
+    """
+    total = tree["total"]
+    if not total:
+        return "_(no samples)_\n"
+    lines = []
+
+    def walk(node, depth):
+        if depth > max_depth:
+            return
+        children = sorted(node["children"].values(), key=lambda c: -c["total"])
+        children = [c for c in children if 100.0 * c["total"] / total >= min_percent]
+        for child in children:
+            recursion, self_ticks, walker = _fold_recursion(child)
+            chain = [child["name"]] * recursion
+            # Collapse a run of single children that all carry the same weight.
+            while (
+                len(walker["children"]) == 1
+                and walker["self"] == 0
+                and next(iter(walker["children"].values()))["total"] == walker["total"]
+            ):
+                walker = next(iter(walker["children"].values()))
+                chain.append(walker["name"])
+                self_ticks = walker["self"]
+            percent = 100.0 * child["total"] / total
+            self_percent = 100.0 * self_ticks / total
+            marker = f" (self {self_percent:.0f}%)" if self_ticks else ""
+            lines.append(
+                "  " * depth + f"{percent:5.1f}%  " + " -> ".join(_compress_chain(chain)) + marker
+            )
+            walk(walker, depth + 1)
+
+    walk(tree, 0)
+    return "\n".join(lines) + "\n" if lines else "_(nothing above the threshold)_\n"
+
+
 def frame_stats(frames):
     """Turn `Flutter.Frame` extensionData payloads into jank statistics."""
     builds = [f.get("build", 0) for f in frames]
@@ -541,6 +681,85 @@ def summarise_timeline(payload, top=25):
     ]
 
 
+def timeline_blocks(payload):
+    """Every completed timeline block as {name, tid, ts, dur}.
+
+    Same B/E pairing as summarise_timeline, but keeping each block's own
+    window instead of totalling them — that window is what lets us ask which
+    samples were taken *during* one specific slow block.
+    """
+    blocks = []
+    open_blocks = collections.defaultdict(list)
+    for event in payload.get("traceEvents", []) or []:
+        phase = event.get("ph")
+        key = (event.get("pid"), event.get("tid"))
+        if phase == "X":
+            blocks.append(
+                {
+                    "name": event.get("name") or "?",
+                    "tid": event.get("tid"),
+                    "ts": event.get("ts") or 0,
+                    "dur": event.get("dur") or 0,
+                }
+            )
+        elif phase == "B":
+            open_blocks[key].append((event.get("name") or "?", event.get("ts") or 0))
+        elif phase == "E":
+            if open_blocks[key]:
+                name, start = open_blocks[key].pop()
+                blocks.append(
+                    {
+                        "name": name,
+                        "tid": event.get("tid"),
+                        "ts": start,
+                        "dur": max((event.get("ts") or 0) - start, 0),
+                    }
+                )
+    return blocks
+
+
+def find_slow_blocks(blocks, factor=3.0, floor_us=8000, min_count=5, keep=5):
+    """Blocks that are slow *for their own name*.
+
+    An absolute threshold alone is useless across a mixed workload: 12 ms is
+    catastrophic for a paint and unremarkable for a page load. So compare each
+    block against the median of its own name, and require an absolute floor as
+    well so a 0.2 ms block being 5x its median does not get reported.
+
+    `min_count` keeps a name from being judged against a median drawn from two
+    samples. Names below it are still checked against the floor, since a block
+    that ran once for 300 ms is worth seeing regardless.
+    """
+    by_name = collections.defaultdict(list)
+    for block in blocks:
+        by_name[block["name"]].append(block)
+
+    found = []
+    for name, group in by_name.items():
+        durations = [b["dur"] for b in group]
+        median = percentile(durations, 0.5)
+        for block in group:
+            if block["dur"] < floor_us:
+                continue
+            ratio = block["dur"] / median if median else float("inf")
+            if len(group) >= min_count and ratio < factor:
+                continue
+            found.append({**block, "median_us": median, "ratio": ratio, "seen": len(group)})
+
+    found.sort(key=lambda b: -b["dur"])
+    return found[:keep]
+
+
+def samples_in_window(samples, start_us, end_us, tid=None):
+    """The samples taken while one block was on the stack."""
+    return [
+        sample
+        for sample in samples
+        if start_us <= (sample.get("timestamp") or 0) <= end_us
+        and (tid is None or sample.get("tid") == tid)
+    ]
+
+
 def summarise_allocations(payload, top=25):
     """Largest classes on the heap.
 
@@ -603,6 +822,39 @@ def collect_timeline(service, seconds):
     payload = service.try_call("getVMTimeline", timeout=180.0)
     service.try_call("setVMTimelineFlags", {"recordedStreams": []})
     return payload
+
+
+def collect_window(service, isolate, seconds, period_us=250):
+    """Record the timeline and the CPU profiler over the *same* window.
+
+    This is what makes "which call path was slow" answerable rather than just
+    "something was slow". Both clocks are the VM's monotonic microseconds —
+    verified against a live VM: of 7302 samples taken alongside a timeline
+    recording, 7144 fell inside the recorded span, and the two ranges
+    interleave. So a block's [ts, ts+dur] can be used to select the samples
+    taken while that block was running.
+
+    Recording the timeline does add overhead to the samples. That is the price
+    of correlating them at all, and it is the same overhead DevTools imposes.
+    """
+    streams = ["Dart", "Embedder", "GC"]
+    timeline_on = service.try_call("setVMTimelineFlags", {"recordedStreams": streams}) is not None
+    if timeline_on:
+        service.try_call("clearVMTimeline")
+    service.try_call("setFlag", {"name": "profile_period", "value": str(period_us)}, timeout=10.0)
+    service.call("clearCpuSamples", {"isolateId": isolate})
+
+    time.sleep(seconds)
+
+    cpu = service.call(
+        "getCpuSamples",
+        {"isolateId": isolate, "timeOriginMicros": 0, "timeExtentMicros": 10**15},
+        timeout=180.0,
+    )
+    timeline = service.try_call("getVMTimeline", timeout=180.0) if timeline_on else None
+    if timeline_on:
+        service.try_call("setVMTimelineFlags", {"recordedStreams": []})
+    return {"cpu": cpu, "timeline": timeline or {}}
 
 
 def collect_memory(service, isolate):
@@ -700,6 +952,91 @@ def render_cpu(folded):
     return "\n".join(lines)
 
 
+def render_hot_paths(folded, tree):
+    lines = ["### Hot paths\n"]
+    if not tree["total"]:
+        lines.append("_(no samples — the isolate was idle)_\n")
+        return "\n".join(lines)
+    path = dominant_path(tree)
+    if path:
+        lines.append("Heaviest chain:\n")
+        lines.append("```\n" + "\n  -> ".join(_compress_chain(path)) + "\n```\n")
+    lines.append("Full tree (>=2% of samples, straight runs collapsed):\n")
+    lines.append("```\n" + render_call_tree(tree) + "```\n")
+    return "\n".join(lines)
+
+
+def render_slow_blocks(slow, functions, samples, tree_min_percent=8.0):
+    """Each outlier with the stack that was on the CPU while it ran."""
+    lines = ["### Slow outliers\n"]
+    if not slow:
+        lines.append(
+            "_(no block ran unusually long for its own name — that is a good "
+            "result, not a missing one)_\n"
+        )
+        return "\n".join(lines)
+    lines.append(
+        "Blocks that took far longer than the median for their own name. "
+        "The tree under each is only the samples taken *during that block*.\n"
+    )
+    for block in slow:
+        ratio = "n/a" if block["ratio"] == float("inf") else f"{block['ratio']:.1f}x"
+        lines.append(
+            f"**{block['name']}** — {ms(block['dur'])} ms, {ratio} its median "
+            f"of {ms(block['median_us'])} ms (seen {block['seen']}x)\n"
+        )
+        window = samples_in_window(
+            samples, block["ts"], block["ts"] + block["dur"], block.get("tid")
+        )
+        if not window:
+            lines.append(
+                "_(no CPU samples landed in this window — it was blocked, not "
+                "computing: waiting on I/O, a lock, or the platform thread)_\n"
+            )
+            continue
+        subtree = build_call_tree(functions, window)
+        lines.append(f"```\n{render_call_tree(subtree, min_percent=tree_min_percent)}```\n")
+    return "\n".join(lines)
+
+
+def render_actions(data):
+    """The short answer, first, so nothing has to read the tables to start."""
+    actions = []
+    frames = data["frames"]
+    if frames["frames"] and frames["janky_percent"] > 5:
+        actions.append(
+            f"{frames['janky_percent']:.0f}% of frames missed 16.7 ms and the "
+            f"**{frames['bottleneck']}** thread is the slower one "
+            f"(p90 build {ms(frames['build_us']['p90'])} ms, "
+            f"raster {ms(frames['raster_us']['p90'])} ms)."
+        )
+    if data["cpu"]["self"]:
+        top = data["cpu"]["self"][0]
+        actions.append(f"Hottest single function: `{top['name']}` at {top['percent']:.0f}% of samples.")
+    packages = data["cpu"]["packages"]
+    if packages and packages[0]["percent"] > 30:
+        actions.append(
+            f"{packages[0]['percent']:.0f}% of CPU is inside `{packages[0]['name']}`."
+        )
+    if data.get("hot_path"):
+        # Compress first, then take the tail: the last four raw frames of a
+        # recursive path are four copies of the same name and say nothing.
+        tail = _compress_chain(data["hot_path"])[-4:]
+        actions.append("Dominant chain: " + " -> ".join(tail) + ".")
+    if data.get("slow"):
+        worst = data["slow"][0]
+        actions.append(
+            f"Worst outlier: `{worst['name']}` at {ms(worst['dur'])} ms — see "
+            "Slow outliers for the stack."
+        )
+    if not actions:
+        actions.append(
+            "Nothing stands out. If the app was idle during the window this "
+            "says nothing — drive the UI and run it again."
+        )
+    return "### Where to look\n\n" + "\n".join(f"- {a}" for a in actions) + "\n"
+
+
 def render_timeline(rows):
     lines = ["### Timeline\n"]
     if not rows:
@@ -744,7 +1081,15 @@ def render_report(data):
         f"`{data['url']}` · isolate `{data['isolate']}` · "
         f"{data['seconds']} s window · Dart VM {data.get('vm_version', '?')}",
         "",
+        render_actions(data),
         render_frames(data["frames"]),
+        # `.get` throughout: a report can also be rendered from a JSON dump
+        # written by an older version of this script, and a missing section
+        # should read as empty rather than crash the whole document.
+        render_slow_blocks(
+            data.get("slow", []), data.get("_functions", []), data.get("_samples", [])
+        ),
+        render_hot_paths(data["cpu"], data.get("tree") or _tree_node("<all>")),
         render_cpu(data["cpu"]),
         render_timeline(data["timeline"]),
         render_memory(data["memory_usage"], data["memory_classes"]),
@@ -761,7 +1106,16 @@ def render_report(data):
 # --------------------------------------------------------------------------
 
 
-def gather(service, seconds, top, want=("frames", "cpu", "timeline", "memory")):
+def gather(
+    service,
+    seconds,
+    top,
+    want=("frames", "cpu", "timeline", "memory"),
+    period=250,
+    slow_factor=3.0,
+    slow_floor_us=8000,
+    keep=5,
+):
     """Collect one window. Phases run in sequence so they do not perturb
     each other — a timeline recording distorts the CPU profile."""
     isolate = service.main_isolate()
@@ -776,6 +1130,11 @@ def gather(service, seconds, top, want=("frames", "cpu", "timeline", "memory")):
         "timeline": [],
         "memory_usage": {},
         "memory_classes": [],
+        "tree": _tree_node("<all>"),
+        "hot_path": [],
+        "slow": [],
+        "_functions": [],
+        "_samples": [],
         "problems": [],
     }
     problems = []
@@ -796,16 +1155,28 @@ def gather(service, seconds, top, want=("frames", "cpu", "timeline", "memory")):
             problems.append(f"{section}: {exc}")
 
     attempt("frames", lambda: data.update(frames=frame_stats(collect_frames(service, seconds))))
-    attempt(
-        "cpu",
-        lambda: data.update(cpu=fold_cpu_samples(collect_cpu(service, isolate, seconds), top)),
-    )
 
-    def do_timeline():
-        payload = collect_timeline(service, seconds)
-        data["timeline"] = summarise_timeline(payload, top) if payload else []
+    def do_window():
+        # Timeline and CPU in ONE window, not two: sliced against each other
+        # they answer "what was running during the slow block", which two
+        # windows recorded minutes apart cannot.
+        window = collect_window(service, isolate, seconds, period)
+        cpu = window["cpu"]
+        functions = cpu.get("functions", []) or []
+        samples = cpu.get("samples", []) or []
+        data["cpu"] = fold_cpu_samples(cpu, top)
+        tree = build_call_tree(functions, samples)
+        data["tree"] = tree
+        data["hot_path"] = dominant_path(tree)
+        data["timeline"] = summarise_timeline(window["timeline"], top)
+        blocks = timeline_blocks(window["timeline"])
+        data["slow"] = find_slow_blocks(
+            blocks, factor=slow_factor, floor_us=slow_floor_us, keep=keep
+        )
+        data["_functions"] = functions
+        data["_samples"] = samples
 
-    attempt("timeline", do_timeline)
+    attempt("cpu", do_window)
 
     def do_memory():
         usage, allocations = collect_memory(service, isolate)
@@ -817,9 +1188,17 @@ def gather(service, seconds, top, want=("frames", "cpu", "timeline", "memory")):
     return data
 
 
+def json_safe(data):
+    """Drop the raw sample arrays; they are megabytes and say nothing on
+    their own. The folded views above them carry the meaning."""
+    if not isinstance(data, dict):
+        return data
+    return {key: value for key, value in data.items() if not key.startswith("_")}
+
+
 def emit(args, data, body):
     if args.json:
-        text = json.dumps(data, indent=2, sort_keys=True)
+        text = json.dumps(json_safe(data), indent=2, sort_keys=True, default=str)
     else:
         text = body
     print(text)
@@ -860,8 +1239,57 @@ def cmd_frames(service, args):
 
 def cmd_cpu(service, args):
     isolate = service.main_isolate()
-    folded = fold_cpu_samples(collect_cpu(service, isolate, args.seconds, args.period), args.top)
-    emit(args, folded, render_cpu(folded))
+    payload = collect_cpu(service, isolate, args.seconds, args.period)
+    folded = fold_cpu_samples(payload, args.top)
+    tree = build_call_tree(payload.get("functions", []) or [], payload.get("samples", []) or [])
+    folded["hot_path"] = dominant_path(tree)
+    body = render_hot_paths(folded, tree) + "\n" + render_cpu(folded)
+    emit(args, folded, body)
+
+
+def cmd_slow(service, args):
+    """Long-running outlier hunt: keep recording windows, and every time a
+    block runs far longer than its own median, print it with the stack that
+    was on the CPU while it ran."""
+    isolate = service.main_isolate()
+    while True:
+        try:
+            window = collect_window(service, isolate, args.seconds, args.period)
+        except ConnectionClosed as exc:
+            print(f"[{time.strftime('%H:%M:%S')}] lost the VM service: {exc}", file=sys.stderr)
+            service.reconnect(args.url, wait=max(args.interval, 30.0))
+            isolate = service.main_isolate()
+            continue
+        cpu = window["cpu"]
+        functions = cpu.get("functions", []) or []
+        samples = cpu.get("samples", []) or []
+        blocks = timeline_blocks(window["timeline"])
+        slow = find_slow_blocks(
+            blocks,
+            factor=args.slow_factor,
+            floor_us=int(args.slow_floor_ms * 1000),
+            keep=args.keep,
+        )
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        data = {
+            "collected_at": stamp,
+            "url": args.url,
+            "seconds": args.seconds,
+            "blocks": len(blocks),
+            "samples": len(samples),
+            "slow": slow,
+        }
+        body = (
+            f"## {stamp} — {len(blocks)} blocks, {len(samples)} samples "
+            f"over {args.seconds:g} s\n\n"
+            + render_slow_blocks(slow, functions, samples)
+        )
+        emit(args, data, body)
+        if not args.repeat:
+            return
+        slack = args.interval - args.seconds
+        if slack > 0:
+            time.sleep(slack)
 
 
 def cmd_timeline(service, args):
@@ -877,7 +1305,15 @@ def cmd_memory(service, args):
 
 
 def cmd_report(service, args):
-    data = gather(service, args.seconds, args.top)
+    data = gather(
+        service,
+        args.seconds,
+        args.top,
+        period=args.period,
+        slow_factor=args.slow_factor,
+        slow_floor_us=int(args.slow_floor_ms * 1000),
+        keep=args.keep,
+    )
     data["url"] = args.url
     emit(args, data, render_report(data))
 
@@ -888,7 +1324,15 @@ def cmd_watch(service, args):
     while True:
         started = time.monotonic()
         try:
-            data = gather(service, args.seconds, args.top)
+            data = gather(
+                service,
+                args.seconds,
+                args.top,
+                period=args.period,
+                slow_factor=args.slow_factor,
+                slow_floor_us=int(args.slow_floor_ms * 1000),
+                keep=args.keep,
+            )
             data["url"] = args.url
             emit(args, data, render_report(data))
         except (ProfilerError, TimeoutError) as exc:
@@ -906,6 +1350,7 @@ COMMANDS = {
     "cpu": cmd_cpu,
     "timeline": cmd_timeline,
     "memory": cmd_memory,
+    "slow": cmd_slow,
     "report": cmd_report,
     "watch": cmd_watch,
 }
@@ -936,6 +1381,22 @@ def build_parser():
         type=float,
         default=0.0,
         help="keep retrying the connection for this many seconds",
+    )
+    parser.add_argument(
+        "--slow-factor",
+        type=float,
+        default=3.0,
+        help="a block is an outlier at this multiple of its own median (default 3)",
+    )
+    parser.add_argument(
+        "--slow-floor-ms",
+        type=float,
+        default=8.0,
+        help="never report a block shorter than this, whatever its ratio (default 8)",
+    )
+    parser.add_argument("--keep", type=int, default=5, help="outliers to report per window")
+    parser.add_argument(
+        "--repeat", action="store_true", help="slow: keep hunting instead of one window"
     )
     parser.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     parser.add_argument("--out-dir", default=None, help="also write each report into this directory")
