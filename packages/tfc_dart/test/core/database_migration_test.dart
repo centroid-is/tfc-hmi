@@ -25,9 +25,16 @@ const _mcpTables = [
   'plc_block_call',
 ];
 
+/// The access control tables added in the v5→v6 migration.
+const _accessTables = [
+  'app_role',
+  'app_user',
+  'audit_entry',
+];
+
 void main() {
   group('AppDatabase migration', () {
-    test('fresh install (v5) creates all MCP tables', () async {
+    test('fresh install (v6) creates all MCP tables', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
 
@@ -43,12 +50,19 @@ void main() {
       expect(tables, contains('alarm'));
       expect(tables, contains('alarm_history'));
       expect(tables, contains('flutter_preferences'));
+      // Access control tables, added in the v5→v6 migration. Covered in depth
+      // by access_schema_test.dart; asserted here so the two files agree on
+      // what a fresh install contains.
+      for (final table in _accessTables) {
+        expect(tables, contains(table),
+            reason: 'access table "$table" should exist on fresh install');
+      }
     });
 
-    test('schema version is 5', () async {
+    test('schema version is 6', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
-      expect(db.schemaVersion, 5);
+      expect(db.schemaVersion, 6);
     });
 
     test('MCP tables support basic CRUD operations', () async {

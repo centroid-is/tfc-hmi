@@ -415,6 +415,15 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     }
   }
 
+  /// Re-run [_seedAccessRoles] from a test.
+  ///
+  /// Exists so the idempotency the shared-Postgres deployment depends on is
+  /// actually asserted rather than assumed: a second station opening the same
+  /// database runs the seed against rows that already exist. Drop
+  /// `onConflict: DoNothing()` and this throws.
+  @visibleForTesting
+  Future<void> seedAccessRolesForTest() => _seedAccessRoles();
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
