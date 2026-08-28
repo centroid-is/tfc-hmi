@@ -20,30 +20,55 @@ performance numbers it reports are real, unlike a debug/JIT build — and pays
 for the instrumentation with a slightly larger binary and the sampling
 profiler's overhead while a profile is actually being taken.
 
-The engine then needs four switches. The flutter-elinux embedder reads them
+The engine then needs three switches. The flutter-elinux embedder reads them
 from the environment (`GetSwitchesFromEnvironment`), which is why they are
 plain compose `environment:` entries rather than command-line arguments:
 
 ```yaml
-FLUTTER_ENGINE_SWITCHES: 4
+FLUTTER_ENGINE_SWITCHES: 3
 FLUTTER_ENGINE_SWITCH_1: enable-dart-profiling      # without this getCpuSamples returns "Feature is disabled"
 FLUTTER_ENGINE_SWITCH_2: vm-service-port=8181       # otherwise a random port, printed once, to the log
-FLUTTER_ENGINE_SWITCH_3: vm-service-host=0.0.0.0    # otherwise 127.0.0.1, unreachable from another container
-FLUTTER_ENGINE_SWITCH_4: disable-service-auth-codes # otherwise the ws path contains a per-boot secret
+FLUTTER_ENGINE_SWITCH_3: disable-service-auth-codes # otherwise the ws path contains a per-boot secret
 ```
 
-## Security
+## Why a sidecar, and why it still is not exposed
 
 Anyone who can open that port can read the app's memory, evaluate Dart in its
-isolate and restart it. Port 8181 is therefore **not published to the host** in
-`docker-compose.yml` — it is reachable only from another container on the
-compose network. To use it from your laptop, tunnel:
+isolate and restart it. So it keeps the VM service's **default 127.0.0.1
+bind** — there is no `vm-service-host` switch and no `ports:` entry — and the
+profiler reaches it by sharing the flutter container's network namespace
+(`network_mode: "service:flutter"`). That container's `127.0.0.1` *is* the
+app's loopback.
 
-```sh
-ssh -L 8181:localhost:8181 centroid@<station>   # only if the host can route to the container
-```
+Measured, because it is the whole security argument:
 
-or, more reliably, run the collection on the station and copy the reports out.
+| from | result |
+|---|---|
+| sidecar with `network_mode: service:flutter` | connects |
+| sibling container on the compose network | `ECONNREFUSED` |
+| plant network | no published port |
+
+That gets the isolation of running the script inside the app container without
+any of its costs:
+
+- **The app has a 1 GB limit.** A CPU-sample response for a real window is tens
+  of megabytes of JSON. A diagnostic must never be the thing that OOM-kills the
+  HMI an operator is using — so the profiler carries its own 512 MB budget.
+- **Updating the profiler would otherwise mean republishing and restarting the
+  app image**, disturbing the thing being measured and blanking a screen on a
+  production line to change a tool.
+- **It reconnects across app restarts**, so the reports either side of a crash
+  survive. A process inside the container dies with it — losing exactly the
+  window you wanted.
+- The image also stays a generic tool you can point at a dev machine's
+  `flutter run --profile` or at a tunnel.
+
+The one cost: recreating `flutter` destroys the namespace the profiler is
+attached to, so recreate the profiler too. Rare, since it is normally not
+running.
+
+To profile from your laptop instead, tunnel to the station and run the script
+from a checkout, or run the collection on the station and copy the reports out.
 
 ## Using it
 

@@ -17,9 +17,9 @@ RUN chmod 0555 /usr/local/bin/hmi_profiler.py
 USER profiler
 WORKDIR /reports
 
-# Overridden by compose; the default is what you want when running the image
-# by hand against the compose network.
-ENV HMI_VM_SERVICE_URI=ws://flutter:8181/ws
+# The compose service shares the flutter container's network namespace, so the
+# app's VM service is on this container's own loopback.
+ENV HMI_VM_SERVICE_URI=ws://127.0.0.1:8181/ws
 ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["python3", "/usr/local/bin/hmi_profiler.py"]

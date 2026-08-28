@@ -124,20 +124,20 @@ services:
       #   1  the sampling profiler is off unless asked for — without it
       #      getCpuSamples answers "Feature is disabled"
       #   2  a fixed port; the default is random and printed once, to the log
-      #   3  the default 127.0.0.1 is unreachable from the profiler container
-      #   4  no per-boot secret in the websocket path, so tools need no
+      #   3  no per-boot secret in the websocket path, so tools need no
       #      log-scraping to find the URI
       #
-      # 8181 is deliberately NOT in a `ports:` block. Whoever reaches it can
-      # read this app's memory and evaluate code in its isolate, so it stays on
-      # the compose network. See docker/profiler/README.md.
-      FLUTTER_ENGINE_SWITCHES: 4
+      # There is deliberately no `vm-service-host` switch and no `ports:` entry.
+      # The service keeps its default 127.0.0.1 bind, so it is unreachable from
+      # the plant network AND from every other container in this file — whoever
+      # reaches it can read this app's memory and evaluate code in its isolate.
+      # The profiler below still gets to it by sharing this container's network
+      # namespace. Measured: a sidecar with `network_mode: service:flutter`
+      # connects, a sibling on the compose network gets ECONNREFUSED.
+      FLUTTER_ENGINE_SWITCHES: 3
       FLUTTER_ENGINE_SWITCH_1: enable-dart-profiling
       FLUTTER_ENGINE_SWITCH_2: vm-service-port=8181
-      FLUTTER_ENGINE_SWITCH_3: vm-service-host=0.0.0.0
-      FLUTTER_ENGINE_SWITCH_4: disable-service-auth-codes
-    expose:
-      - "8181" # Dart VM Service — compose network only, see above
+      FLUTTER_ENGINE_SWITCH_3: disable-service-auth-codes
     devices:
       - /dev/dri/renderD128
     depends_on:
@@ -156,14 +156,38 @@ services:
   #   docker compose --profile profiling up -d profiler   # continuous
   #   docker compose run --rm profiler report --seconds 30  # once, to stdout
   #
+  # A sidecar rather than a process inside the flutter container, for three
+  # reasons that all point the same way:
+  #
+  #   - `flutter` has a 1 GB limit. A CPU-sample response for a real window is
+  #     tens of megabytes of JSON, and a diagnostic must never be the thing
+  #     that OOM-kills the HMI an operator is using.
+  #   - Changing the profiler would otherwise mean republishing and restarting
+  #     the app image — disturbing the thing being measured, and blanking a
+  #     screen on a production line to update a tool.
+  #   - It reconnects across app restarts, so the reports either side of a
+  #     crash survive. A process inside the container dies with it.
+  #
+  # `network_mode` is what makes that free: sharing the flutter container's
+  # network namespace means this container's 127.0.0.1 IS the app's loopback,
+  # so the VM service never has to bind anywhere reachable. The cost is that
+  # recreating `flutter` destroys the namespace this attaches to — recreate the
+  # profiler too. Rare, since it is normally not running at all.
+  #
   # No container_name — `docker compose run` needs to be able to make its own.
   profiler:
     image: ghcr.io/centroid-is/hmi-profiler:latest
     profiles: ["profiling"]
+    network_mode: "service:flutter"
     depends_on:
       - flutter
+    # Its own budget, deliberately outside the app's 1 GB.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     environment:
-      HMI_VM_SERVICE_URI: ws://flutter:8181/ws
+      HMI_VM_SERVICE_URI: ws://127.0.0.1:8181/ws
     # A 20 s window every 15 minutes. Collecting is not free — the CPU profiler
     # samples at 250 µs and the timeline records — so this is a duty cycle a
     # station can carry, not a setting to turn up and forget.

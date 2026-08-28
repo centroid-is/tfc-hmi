@@ -61,7 +61,10 @@ import sys
 import time
 import urllib.parse
 
-DEFAULT_URL = os.environ.get("HMI_VM_SERVICE_URI", "ws://flutter:8181/ws")
+# Loopback, not a compose service name: the profiler container shares the app
+# container's network namespace, so the VM service never has to bind anywhere
+# another container could reach it.
+DEFAULT_URL = os.environ.get("HMI_VM_SERVICE_URI", "ws://127.0.0.1:8181/ws")
 
 # A frame is "janky" when it misses its budget. 60 Hz is the panel refresh on
 # every station we ship, so the budget is 16.67 ms; the engine reports build
