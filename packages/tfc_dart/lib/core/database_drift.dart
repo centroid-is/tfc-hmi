@@ -61,6 +61,120 @@ class FlutterPreferences extends Table {
   TextColumn get type => text()();
 }
 
+// ---------------------------------------------------------------------------
+// Access control tables (schema v6). See docs/access-control-spec.md §2.
+// ---------------------------------------------------------------------------
+
+/// A role: a name and the set of groups it grants.
+///
+/// [name] is the primary key rather than a surrogate integer **on purpose**:
+/// when OIDC lands, an incoming group claim of `"Shift Leader"` matches the
+/// role by name with no mapping table, exactly as Ignition and SIMATIC Logon
+/// do it. Do not replace it with an integer id.
+///
+/// The four rows written by the v6 seed migration are ordinary rows
+/// afterwards — editable and deletable — with `Operator` the sole exception,
+/// and that guard lives in the repository layer, not here.
+class AppRole extends Table {
+  @override
+  Set<Column> get primaryKey => {name};
+
+  TextColumn get name => text()();
+
+  /// JSON array of `AccessGroup` enum names, written by
+  /// `AccessRole.encodeGroups()` and read back by `AccessRole.decodeGroups()`.
+  ///
+  /// Keep it small: the backend config watcher fires on preference writes and
+  /// `pg_notify` has an 8000-byte cap, which errors the firing statement
+  /// rather than truncating it.
+  TextColumn get groups => text()();
+
+  /// True for the rows the v6 migration seeded. Informational only.
+  BoolColumn get seeded => boolean().withDefault(const Constant(false))();
+}
+
+/// A user: a name, a password hash, and exactly one role.
+///
+/// One role per user, not many — multi-role adds union semantics and an
+/// "effective permissions" inspector, and is not worth it at this size.
+class AppUser extends Table {
+  @override
+  Set<Column> get primaryKey => {username};
+
+  TextColumn get username => text()();
+
+  /// Matched to [AppRole.name] by name, never by id — see [AppRole].
+  TextColumn get roleName => text().references(AppRole, #name)();
+
+  /// PBKDF2 over the password with [salt], stored base64.
+  ///
+  /// This column and [salt] are the **only** place a credential is stored.
+  /// Never in `Preferences` or the `flutter_preferences` table: those are
+  /// synced between stations and read by the backend config watcher.
+  TextColumn get passwordHash => text()();
+
+  /// Per-user random salt, stored base64. See [passwordHash].
+  TextColumn get salt => text()();
+
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get lastLoginAt => dateTime().nullable()();
+}
+
+/// The human-action audit trail: append-only, never pruned.
+///
+/// **This is not [AuditLog].** `AuditLog` (`mcp_tables.dart`) records MCP tool
+/// invocations by the AI layer; `AuditEntry` records human writes and auth
+/// events. The two coexist and neither replaces the other.
+///
+/// Denials are recorded as well as successes ([allowed]) — a denied write is
+/// the more interesting audit line, and it is how a role configured too
+/// tightly gets found. One human action gets one [actionId] with N member rows
+/// beneath it, so a recipe apply reads as one action rather than N unrelated
+/// ones.
+class AuditEntry extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get at => dateTime()();
+
+  /// Username, or `'anonymous'`.
+  TextColumn get who => text()();
+
+  /// Hostname of the station the action was made from.
+  TextColumn get station => text()();
+
+  TextColumn get roleName => text()();
+
+  /// `'tag' | 'pref' | 'route' | 'auth'`.
+  TextColumn get surface => text()();
+
+  TextColumn get itemKey => text()();
+
+  /// Dotted path within a struct write, e.g. `p_cfg.Freq`. Null for scalars.
+  TextColumn get member => text().nullable()();
+
+  TextColumn get oldValue => text().nullable()();
+  TextColumn get newValue => text().nullable()();
+  TextColumn get groupRequired => text()();
+
+  /// False rows are denials, and they are kept.
+  BoolColumn get allowed => boolean()();
+
+  /// Defaults to hand-made **on purpose**.
+  ///
+  /// Today every external caller of `stateMan.write` is a widget, but that
+  /// holds by accident rather than by construction. Defaulting to `'operator'`
+  /// means an unmarked future machine caller lands *in* the trail loudly
+  /// rather than escaping it silently; an absent audit row is the one defect
+  /// nobody ever notices.
+  TextColumn get origin => text().withDefault(const Constant('operator'))();
+
+  /// Correlation id: one human action, N rows.
+  TextColumn get actionId => text()();
+
+  /// Free-text justification, prompted for on the `configure` and `administer`
+  /// surfaces only. The column exists for every row.
+  TextColumn get reason => text().nullable()();
+}
+
 /// Saved History Views (name + keys)
 class HistoryView extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -126,6 +240,10 @@ class HistoryViewPeriod extends Table {
   PlcVarRefTable,
   PlcFbInstanceTable,
   PlcBlockCallTable,
+  // Access control tables (schema v6):
+  AppRole,
+  AppUser,
+  AuditEntry,
 ])
 class AppDatabase extends _$AppDatabase implements McpDatabase {
   final DatabaseConfig config;

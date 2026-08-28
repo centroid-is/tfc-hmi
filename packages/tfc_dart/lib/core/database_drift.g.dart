@@ -6551,6 +6551,1330 @@ class PlcBlockCallTableCompanion
   }
 }
 
+class $AppRoleTable extends AppRole with TableInfo<$AppRoleTable, AppRoleData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AppRoleTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _groupsMeta = const VerificationMeta('groups');
+  @override
+  late final GeneratedColumn<String> groups = GeneratedColumn<String>(
+      'groups', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _seededMeta = const VerificationMeta('seeded');
+  @override
+  late final GeneratedColumn<bool> seeded = GeneratedColumn<bool>(
+      'seeded', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(false));
+  @override
+  List<GeneratedColumn> get $columns => [name, groups, seeded];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'app_role';
+  @override
+  VerificationContext validateIntegrity(Insertable<AppRoleData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('groups')) {
+      context.handle(_groupsMeta,
+          groups.isAcceptableOrUnknown(data['groups']!, _groupsMeta));
+    } else if (isInserting) {
+      context.missing(_groupsMeta);
+    }
+    if (data.containsKey('seeded')) {
+      context.handle(_seededMeta,
+          seeded.isAcceptableOrUnknown(data['seeded']!, _seededMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {name};
+  @override
+  AppRoleData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AppRoleData(
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      groups: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}groups'])!,
+      seeded: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}seeded'])!,
+    );
+  }
+
+  @override
+  $AppRoleTable createAlias(String alias) {
+    return $AppRoleTable(attachedDatabase, alias);
+  }
+}
+
+class AppRoleData extends DataClass implements Insertable<AppRoleData> {
+  final String name;
+
+  /// JSON array of `AccessGroup` enum names, written by
+  /// `AccessRole.encodeGroups()` and read back by `AccessRole.decodeGroups()`.
+  ///
+  /// Keep it small: the backend config watcher fires on preference writes and
+  /// `pg_notify` has an 8000-byte cap, which errors the firing statement
+  /// rather than truncating it.
+  final String groups;
+
+  /// True for the rows the v6 migration seeded. Informational only.
+  final bool seeded;
+  const AppRoleData(
+      {required this.name, required this.groups, required this.seeded});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['name'] = Variable<String>(name);
+    map['groups'] = Variable<String>(groups);
+    map['seeded'] = Variable<bool>(seeded);
+    return map;
+  }
+
+  AppRoleCompanion toCompanion(bool nullToAbsent) {
+    return AppRoleCompanion(
+      name: Value(name),
+      groups: Value(groups),
+      seeded: Value(seeded),
+    );
+  }
+
+  factory AppRoleData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AppRoleData(
+      name: serializer.fromJson<String>(json['name']),
+      groups: serializer.fromJson<String>(json['groups']),
+      seeded: serializer.fromJson<bool>(json['seeded']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'name': serializer.toJson<String>(name),
+      'groups': serializer.toJson<String>(groups),
+      'seeded': serializer.toJson<bool>(seeded),
+    };
+  }
+
+  AppRoleData copyWith({String? name, String? groups, bool? seeded}) =>
+      AppRoleData(
+        name: name ?? this.name,
+        groups: groups ?? this.groups,
+        seeded: seeded ?? this.seeded,
+      );
+  AppRoleData copyWithCompanion(AppRoleCompanion data) {
+    return AppRoleData(
+      name: data.name.present ? data.name.value : this.name,
+      groups: data.groups.present ? data.groups.value : this.groups,
+      seeded: data.seeded.present ? data.seeded.value : this.seeded,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AppRoleData(')
+          ..write('name: $name, ')
+          ..write('groups: $groups, ')
+          ..write('seeded: $seeded')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(name, groups, seeded);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AppRoleData &&
+          other.name == this.name &&
+          other.groups == this.groups &&
+          other.seeded == this.seeded);
+}
+
+class AppRoleCompanion extends UpdateCompanion<AppRoleData> {
+  final Value<String> name;
+  final Value<String> groups;
+  final Value<bool> seeded;
+  final Value<int> rowid;
+  const AppRoleCompanion({
+    this.name = const Value.absent(),
+    this.groups = const Value.absent(),
+    this.seeded = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AppRoleCompanion.insert({
+    required String name,
+    required String groups,
+    this.seeded = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : name = Value(name),
+        groups = Value(groups);
+  static Insertable<AppRoleData> custom({
+    Expression<String>? name,
+    Expression<String>? groups,
+    Expression<bool>? seeded,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (name != null) 'name': name,
+      if (groups != null) 'groups': groups,
+      if (seeded != null) 'seeded': seeded,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AppRoleCompanion copyWith(
+      {Value<String>? name,
+      Value<String>? groups,
+      Value<bool>? seeded,
+      Value<int>? rowid}) {
+    return AppRoleCompanion(
+      name: name ?? this.name,
+      groups: groups ?? this.groups,
+      seeded: seeded ?? this.seeded,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (groups.present) {
+      map['groups'] = Variable<String>(groups.value);
+    }
+    if (seeded.present) {
+      map['seeded'] = Variable<bool>(seeded.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AppRoleCompanion(')
+          ..write('name: $name, ')
+          ..write('groups: $groups, ')
+          ..write('seeded: $seeded, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AppUserTable extends AppUser with TableInfo<$AppUserTable, AppUserData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AppUserTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _usernameMeta =
+      const VerificationMeta('username');
+  @override
+  late final GeneratedColumn<String> username = GeneratedColumn<String>(
+      'username', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _roleNameMeta =
+      const VerificationMeta('roleName');
+  @override
+  late final GeneratedColumn<String> roleName = GeneratedColumn<String>(
+      'role_name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES app_role (name)'));
+  static const VerificationMeta _passwordHashMeta =
+      const VerificationMeta('passwordHash');
+  @override
+  late final GeneratedColumn<String> passwordHash = GeneratedColumn<String>(
+      'password_hash', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _saltMeta = const VerificationMeta('salt');
+  @override
+  late final GeneratedColumn<String> salt = GeneratedColumn<String>(
+      'salt', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _lastLoginAtMeta =
+      const VerificationMeta('lastLoginAt');
+  @override
+  late final GeneratedColumn<DateTime> lastLoginAt = GeneratedColumn<DateTime>(
+      'last_login_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [username, roleName, passwordHash, salt, createdAt, lastLoginAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'app_user';
+  @override
+  VerificationContext validateIntegrity(Insertable<AppUserData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('username')) {
+      context.handle(_usernameMeta,
+          username.isAcceptableOrUnknown(data['username']!, _usernameMeta));
+    } else if (isInserting) {
+      context.missing(_usernameMeta);
+    }
+    if (data.containsKey('role_name')) {
+      context.handle(_roleNameMeta,
+          roleName.isAcceptableOrUnknown(data['role_name']!, _roleNameMeta));
+    } else if (isInserting) {
+      context.missing(_roleNameMeta);
+    }
+    if (data.containsKey('password_hash')) {
+      context.handle(
+          _passwordHashMeta,
+          passwordHash.isAcceptableOrUnknown(
+              data['password_hash']!, _passwordHashMeta));
+    } else if (isInserting) {
+      context.missing(_passwordHashMeta);
+    }
+    if (data.containsKey('salt')) {
+      context.handle(
+          _saltMeta, salt.isAcceptableOrUnknown(data['salt']!, _saltMeta));
+    } else if (isInserting) {
+      context.missing(_saltMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('last_login_at')) {
+      context.handle(
+          _lastLoginAtMeta,
+          lastLoginAt.isAcceptableOrUnknown(
+              data['last_login_at']!, _lastLoginAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {username};
+  @override
+  AppUserData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AppUserData(
+      username: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}username'])!,
+      roleName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}role_name'])!,
+      passwordHash: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}password_hash'])!,
+      salt: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}salt'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      lastLoginAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}last_login_at']),
+    );
+  }
+
+  @override
+  $AppUserTable createAlias(String alias) {
+    return $AppUserTable(attachedDatabase, alias);
+  }
+}
+
+class AppUserData extends DataClass implements Insertable<AppUserData> {
+  final String username;
+
+  /// Matched to [AppRole.name] by name, never by id — see [AppRole].
+  final String roleName;
+
+  /// PBKDF2 over the password with [salt], stored base64.
+  ///
+  /// This column and [salt] are the **only** place a credential is stored.
+  /// Never in `Preferences` or the `flutter_preferences` table: those are
+  /// synced between stations and read by the backend config watcher.
+  final String passwordHash;
+
+  /// Per-user random salt, stored base64. See [passwordHash].
+  final String salt;
+  final DateTime createdAt;
+  final DateTime? lastLoginAt;
+  const AppUserData(
+      {required this.username,
+      required this.roleName,
+      required this.passwordHash,
+      required this.salt,
+      required this.createdAt,
+      this.lastLoginAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['username'] = Variable<String>(username);
+    map['role_name'] = Variable<String>(roleName);
+    map['password_hash'] = Variable<String>(passwordHash);
+    map['salt'] = Variable<String>(salt);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || lastLoginAt != null) {
+      map['last_login_at'] = Variable<DateTime>(lastLoginAt);
+    }
+    return map;
+  }
+
+  AppUserCompanion toCompanion(bool nullToAbsent) {
+    return AppUserCompanion(
+      username: Value(username),
+      roleName: Value(roleName),
+      passwordHash: Value(passwordHash),
+      salt: Value(salt),
+      createdAt: Value(createdAt),
+      lastLoginAt: lastLoginAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastLoginAt),
+    );
+  }
+
+  factory AppUserData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AppUserData(
+      username: serializer.fromJson<String>(json['username']),
+      roleName: serializer.fromJson<String>(json['roleName']),
+      passwordHash: serializer.fromJson<String>(json['passwordHash']),
+      salt: serializer.fromJson<String>(json['salt']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      lastLoginAt: serializer.fromJson<DateTime?>(json['lastLoginAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'username': serializer.toJson<String>(username),
+      'roleName': serializer.toJson<String>(roleName),
+      'passwordHash': serializer.toJson<String>(passwordHash),
+      'salt': serializer.toJson<String>(salt),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'lastLoginAt': serializer.toJson<DateTime?>(lastLoginAt),
+    };
+  }
+
+  AppUserData copyWith(
+          {String? username,
+          String? roleName,
+          String? passwordHash,
+          String? salt,
+          DateTime? createdAt,
+          Value<DateTime?> lastLoginAt = const Value.absent()}) =>
+      AppUserData(
+        username: username ?? this.username,
+        roleName: roleName ?? this.roleName,
+        passwordHash: passwordHash ?? this.passwordHash,
+        salt: salt ?? this.salt,
+        createdAt: createdAt ?? this.createdAt,
+        lastLoginAt: lastLoginAt.present ? lastLoginAt.value : this.lastLoginAt,
+      );
+  AppUserData copyWithCompanion(AppUserCompanion data) {
+    return AppUserData(
+      username: data.username.present ? data.username.value : this.username,
+      roleName: data.roleName.present ? data.roleName.value : this.roleName,
+      passwordHash: data.passwordHash.present
+          ? data.passwordHash.value
+          : this.passwordHash,
+      salt: data.salt.present ? data.salt.value : this.salt,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      lastLoginAt:
+          data.lastLoginAt.present ? data.lastLoginAt.value : this.lastLoginAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AppUserData(')
+          ..write('username: $username, ')
+          ..write('roleName: $roleName, ')
+          ..write('passwordHash: $passwordHash, ')
+          ..write('salt: $salt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('lastLoginAt: $lastLoginAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      username, roleName, passwordHash, salt, createdAt, lastLoginAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AppUserData &&
+          other.username == this.username &&
+          other.roleName == this.roleName &&
+          other.passwordHash == this.passwordHash &&
+          other.salt == this.salt &&
+          other.createdAt == this.createdAt &&
+          other.lastLoginAt == this.lastLoginAt);
+}
+
+class AppUserCompanion extends UpdateCompanion<AppUserData> {
+  final Value<String> username;
+  final Value<String> roleName;
+  final Value<String> passwordHash;
+  final Value<String> salt;
+  final Value<DateTime> createdAt;
+  final Value<DateTime?> lastLoginAt;
+  final Value<int> rowid;
+  const AppUserCompanion({
+    this.username = const Value.absent(),
+    this.roleName = const Value.absent(),
+    this.passwordHash = const Value.absent(),
+    this.salt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.lastLoginAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AppUserCompanion.insert({
+    required String username,
+    required String roleName,
+    required String passwordHash,
+    required String salt,
+    required DateTime createdAt,
+    this.lastLoginAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : username = Value(username),
+        roleName = Value(roleName),
+        passwordHash = Value(passwordHash),
+        salt = Value(salt),
+        createdAt = Value(createdAt);
+  static Insertable<AppUserData> custom({
+    Expression<String>? username,
+    Expression<String>? roleName,
+    Expression<String>? passwordHash,
+    Expression<String>? salt,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? lastLoginAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (username != null) 'username': username,
+      if (roleName != null) 'role_name': roleName,
+      if (passwordHash != null) 'password_hash': passwordHash,
+      if (salt != null) 'salt': salt,
+      if (createdAt != null) 'created_at': createdAt,
+      if (lastLoginAt != null) 'last_login_at': lastLoginAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AppUserCompanion copyWith(
+      {Value<String>? username,
+      Value<String>? roleName,
+      Value<String>? passwordHash,
+      Value<String>? salt,
+      Value<DateTime>? createdAt,
+      Value<DateTime?>? lastLoginAt,
+      Value<int>? rowid}) {
+    return AppUserCompanion(
+      username: username ?? this.username,
+      roleName: roleName ?? this.roleName,
+      passwordHash: passwordHash ?? this.passwordHash,
+      salt: salt ?? this.salt,
+      createdAt: createdAt ?? this.createdAt,
+      lastLoginAt: lastLoginAt ?? this.lastLoginAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (username.present) {
+      map['username'] = Variable<String>(username.value);
+    }
+    if (roleName.present) {
+      map['role_name'] = Variable<String>(roleName.value);
+    }
+    if (passwordHash.present) {
+      map['password_hash'] = Variable<String>(passwordHash.value);
+    }
+    if (salt.present) {
+      map['salt'] = Variable<String>(salt.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (lastLoginAt.present) {
+      map['last_login_at'] = Variable<DateTime>(lastLoginAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AppUserCompanion(')
+          ..write('username: $username, ')
+          ..write('roleName: $roleName, ')
+          ..write('passwordHash: $passwordHash, ')
+          ..write('salt: $salt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('lastLoginAt: $lastLoginAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AuditEntryTable extends AuditEntry
+    with TableInfo<$AuditEntryTable, AuditEntryData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AuditEntryTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      hasAutoIncrement: true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('PRIMARY KEY AUTOINCREMENT'));
+  static const VerificationMeta _atMeta = const VerificationMeta('at');
+  @override
+  late final GeneratedColumn<DateTime> at = GeneratedColumn<DateTime>(
+      'at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _whoMeta = const VerificationMeta('who');
+  @override
+  late final GeneratedColumn<String> who = GeneratedColumn<String>(
+      'who', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _stationMeta =
+      const VerificationMeta('station');
+  @override
+  late final GeneratedColumn<String> station = GeneratedColumn<String>(
+      'station', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _roleNameMeta =
+      const VerificationMeta('roleName');
+  @override
+  late final GeneratedColumn<String> roleName = GeneratedColumn<String>(
+      'role_name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _surfaceMeta =
+      const VerificationMeta('surface');
+  @override
+  late final GeneratedColumn<String> surface = GeneratedColumn<String>(
+      'surface', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _itemKeyMeta =
+      const VerificationMeta('itemKey');
+  @override
+  late final GeneratedColumn<String> itemKey = GeneratedColumn<String>(
+      'item_key', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _memberMeta = const VerificationMeta('member');
+  @override
+  late final GeneratedColumn<String> member = GeneratedColumn<String>(
+      'member', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _oldValueMeta =
+      const VerificationMeta('oldValue');
+  @override
+  late final GeneratedColumn<String> oldValue = GeneratedColumn<String>(
+      'old_value', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _newValueMeta =
+      const VerificationMeta('newValue');
+  @override
+  late final GeneratedColumn<String> newValue = GeneratedColumn<String>(
+      'new_value', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _groupRequiredMeta =
+      const VerificationMeta('groupRequired');
+  @override
+  late final GeneratedColumn<String> groupRequired = GeneratedColumn<String>(
+      'group_required', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _allowedMeta =
+      const VerificationMeta('allowed');
+  @override
+  late final GeneratedColumn<bool> allowed = GeneratedColumn<bool>(
+      'allowed', aliasedName, false,
+      type: DriftSqlType.bool, requiredDuringInsert: true);
+  static const VerificationMeta _originMeta = const VerificationMeta('origin');
+  @override
+  late final GeneratedColumn<String> origin = GeneratedColumn<String>(
+      'origin', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('operator'));
+  static const VerificationMeta _actionIdMeta =
+      const VerificationMeta('actionId');
+  @override
+  late final GeneratedColumn<String> actionId = GeneratedColumn<String>(
+      'action_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _reasonMeta = const VerificationMeta('reason');
+  @override
+  late final GeneratedColumn<String> reason = GeneratedColumn<String>(
+      'reason', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        at,
+        who,
+        station,
+        roleName,
+        surface,
+        itemKey,
+        member,
+        oldValue,
+        newValue,
+        groupRequired,
+        allowed,
+        origin,
+        actionId,
+        reason
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'audit_entry';
+  @override
+  VerificationContext validateIntegrity(Insertable<AuditEntryData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('at')) {
+      context.handle(_atMeta, at.isAcceptableOrUnknown(data['at']!, _atMeta));
+    } else if (isInserting) {
+      context.missing(_atMeta);
+    }
+    if (data.containsKey('who')) {
+      context.handle(
+          _whoMeta, who.isAcceptableOrUnknown(data['who']!, _whoMeta));
+    } else if (isInserting) {
+      context.missing(_whoMeta);
+    }
+    if (data.containsKey('station')) {
+      context.handle(_stationMeta,
+          station.isAcceptableOrUnknown(data['station']!, _stationMeta));
+    } else if (isInserting) {
+      context.missing(_stationMeta);
+    }
+    if (data.containsKey('role_name')) {
+      context.handle(_roleNameMeta,
+          roleName.isAcceptableOrUnknown(data['role_name']!, _roleNameMeta));
+    } else if (isInserting) {
+      context.missing(_roleNameMeta);
+    }
+    if (data.containsKey('surface')) {
+      context.handle(_surfaceMeta,
+          surface.isAcceptableOrUnknown(data['surface']!, _surfaceMeta));
+    } else if (isInserting) {
+      context.missing(_surfaceMeta);
+    }
+    if (data.containsKey('item_key')) {
+      context.handle(_itemKeyMeta,
+          itemKey.isAcceptableOrUnknown(data['item_key']!, _itemKeyMeta));
+    } else if (isInserting) {
+      context.missing(_itemKeyMeta);
+    }
+    if (data.containsKey('member')) {
+      context.handle(_memberMeta,
+          member.isAcceptableOrUnknown(data['member']!, _memberMeta));
+    }
+    if (data.containsKey('old_value')) {
+      context.handle(_oldValueMeta,
+          oldValue.isAcceptableOrUnknown(data['old_value']!, _oldValueMeta));
+    }
+    if (data.containsKey('new_value')) {
+      context.handle(_newValueMeta,
+          newValue.isAcceptableOrUnknown(data['new_value']!, _newValueMeta));
+    }
+    if (data.containsKey('group_required')) {
+      context.handle(
+          _groupRequiredMeta,
+          groupRequired.isAcceptableOrUnknown(
+              data['group_required']!, _groupRequiredMeta));
+    } else if (isInserting) {
+      context.missing(_groupRequiredMeta);
+    }
+    if (data.containsKey('allowed')) {
+      context.handle(_allowedMeta,
+          allowed.isAcceptableOrUnknown(data['allowed']!, _allowedMeta));
+    } else if (isInserting) {
+      context.missing(_allowedMeta);
+    }
+    if (data.containsKey('origin')) {
+      context.handle(_originMeta,
+          origin.isAcceptableOrUnknown(data['origin']!, _originMeta));
+    }
+    if (data.containsKey('action_id')) {
+      context.handle(_actionIdMeta,
+          actionId.isAcceptableOrUnknown(data['action_id']!, _actionIdMeta));
+    } else if (isInserting) {
+      context.missing(_actionIdMeta);
+    }
+    if (data.containsKey('reason')) {
+      context.handle(_reasonMeta,
+          reason.isAcceptableOrUnknown(data['reason']!, _reasonMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  AuditEntryData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AuditEntryData(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      at: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}at'])!,
+      who: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}who'])!,
+      station: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}station'])!,
+      roleName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}role_name'])!,
+      surface: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}surface'])!,
+      itemKey: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}item_key'])!,
+      member: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}member']),
+      oldValue: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}old_value']),
+      newValue: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}new_value']),
+      groupRequired: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}group_required'])!,
+      allowed: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}allowed'])!,
+      origin: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}origin'])!,
+      actionId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}action_id'])!,
+      reason: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}reason']),
+    );
+  }
+
+  @override
+  $AuditEntryTable createAlias(String alias) {
+    return $AuditEntryTable(attachedDatabase, alias);
+  }
+}
+
+class AuditEntryData extends DataClass implements Insertable<AuditEntryData> {
+  final int id;
+  final DateTime at;
+
+  /// Username, or `'anonymous'`.
+  final String who;
+
+  /// Hostname of the station the action was made from.
+  final String station;
+  final String roleName;
+
+  /// `'tag' | 'pref' | 'route' | 'auth'`.
+  final String surface;
+  final String itemKey;
+
+  /// Dotted path within a struct write, e.g. `p_cfg.Freq`. Null for scalars.
+  final String? member;
+  final String? oldValue;
+  final String? newValue;
+  final String groupRequired;
+
+  /// False rows are denials, and they are kept.
+  final bool allowed;
+
+  /// Defaults to hand-made **on purpose**.
+  ///
+  /// Today every external caller of `stateMan.write` is a widget, but that
+  /// holds by accident rather than by construction. Defaulting to `'operator'`
+  /// means an unmarked future machine caller lands *in* the trail loudly
+  /// rather than escaping it silently; an absent audit row is the one defect
+  /// nobody ever notices.
+  final String origin;
+
+  /// Correlation id: one human action, N rows.
+  final String actionId;
+
+  /// Free-text justification, prompted for on the `configure` and `administer`
+  /// surfaces only. The column exists for every row.
+  final String? reason;
+  const AuditEntryData(
+      {required this.id,
+      required this.at,
+      required this.who,
+      required this.station,
+      required this.roleName,
+      required this.surface,
+      required this.itemKey,
+      this.member,
+      this.oldValue,
+      this.newValue,
+      required this.groupRequired,
+      required this.allowed,
+      required this.origin,
+      required this.actionId,
+      this.reason});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['at'] = Variable<DateTime>(at);
+    map['who'] = Variable<String>(who);
+    map['station'] = Variable<String>(station);
+    map['role_name'] = Variable<String>(roleName);
+    map['surface'] = Variable<String>(surface);
+    map['item_key'] = Variable<String>(itemKey);
+    if (!nullToAbsent || member != null) {
+      map['member'] = Variable<String>(member);
+    }
+    if (!nullToAbsent || oldValue != null) {
+      map['old_value'] = Variable<String>(oldValue);
+    }
+    if (!nullToAbsent || newValue != null) {
+      map['new_value'] = Variable<String>(newValue);
+    }
+    map['group_required'] = Variable<String>(groupRequired);
+    map['allowed'] = Variable<bool>(allowed);
+    map['origin'] = Variable<String>(origin);
+    map['action_id'] = Variable<String>(actionId);
+    if (!nullToAbsent || reason != null) {
+      map['reason'] = Variable<String>(reason);
+    }
+    return map;
+  }
+
+  AuditEntryCompanion toCompanion(bool nullToAbsent) {
+    return AuditEntryCompanion(
+      id: Value(id),
+      at: Value(at),
+      who: Value(who),
+      station: Value(station),
+      roleName: Value(roleName),
+      surface: Value(surface),
+      itemKey: Value(itemKey),
+      member:
+          member == null && nullToAbsent ? const Value.absent() : Value(member),
+      oldValue: oldValue == null && nullToAbsent
+          ? const Value.absent()
+          : Value(oldValue),
+      newValue: newValue == null && nullToAbsent
+          ? const Value.absent()
+          : Value(newValue),
+      groupRequired: Value(groupRequired),
+      allowed: Value(allowed),
+      origin: Value(origin),
+      actionId: Value(actionId),
+      reason:
+          reason == null && nullToAbsent ? const Value.absent() : Value(reason),
+    );
+  }
+
+  factory AuditEntryData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AuditEntryData(
+      id: serializer.fromJson<int>(json['id']),
+      at: serializer.fromJson<DateTime>(json['at']),
+      who: serializer.fromJson<String>(json['who']),
+      station: serializer.fromJson<String>(json['station']),
+      roleName: serializer.fromJson<String>(json['roleName']),
+      surface: serializer.fromJson<String>(json['surface']),
+      itemKey: serializer.fromJson<String>(json['itemKey']),
+      member: serializer.fromJson<String?>(json['member']),
+      oldValue: serializer.fromJson<String?>(json['oldValue']),
+      newValue: serializer.fromJson<String?>(json['newValue']),
+      groupRequired: serializer.fromJson<String>(json['groupRequired']),
+      allowed: serializer.fromJson<bool>(json['allowed']),
+      origin: serializer.fromJson<String>(json['origin']),
+      actionId: serializer.fromJson<String>(json['actionId']),
+      reason: serializer.fromJson<String?>(json['reason']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'at': serializer.toJson<DateTime>(at),
+      'who': serializer.toJson<String>(who),
+      'station': serializer.toJson<String>(station),
+      'roleName': serializer.toJson<String>(roleName),
+      'surface': serializer.toJson<String>(surface),
+      'itemKey': serializer.toJson<String>(itemKey),
+      'member': serializer.toJson<String?>(member),
+      'oldValue': serializer.toJson<String?>(oldValue),
+      'newValue': serializer.toJson<String?>(newValue),
+      'groupRequired': serializer.toJson<String>(groupRequired),
+      'allowed': serializer.toJson<bool>(allowed),
+      'origin': serializer.toJson<String>(origin),
+      'actionId': serializer.toJson<String>(actionId),
+      'reason': serializer.toJson<String?>(reason),
+    };
+  }
+
+  AuditEntryData copyWith(
+          {int? id,
+          DateTime? at,
+          String? who,
+          String? station,
+          String? roleName,
+          String? surface,
+          String? itemKey,
+          Value<String?> member = const Value.absent(),
+          Value<String?> oldValue = const Value.absent(),
+          Value<String?> newValue = const Value.absent(),
+          String? groupRequired,
+          bool? allowed,
+          String? origin,
+          String? actionId,
+          Value<String?> reason = const Value.absent()}) =>
+      AuditEntryData(
+        id: id ?? this.id,
+        at: at ?? this.at,
+        who: who ?? this.who,
+        station: station ?? this.station,
+        roleName: roleName ?? this.roleName,
+        surface: surface ?? this.surface,
+        itemKey: itemKey ?? this.itemKey,
+        member: member.present ? member.value : this.member,
+        oldValue: oldValue.present ? oldValue.value : this.oldValue,
+        newValue: newValue.present ? newValue.value : this.newValue,
+        groupRequired: groupRequired ?? this.groupRequired,
+        allowed: allowed ?? this.allowed,
+        origin: origin ?? this.origin,
+        actionId: actionId ?? this.actionId,
+        reason: reason.present ? reason.value : this.reason,
+      );
+  AuditEntryData copyWithCompanion(AuditEntryCompanion data) {
+    return AuditEntryData(
+      id: data.id.present ? data.id.value : this.id,
+      at: data.at.present ? data.at.value : this.at,
+      who: data.who.present ? data.who.value : this.who,
+      station: data.station.present ? data.station.value : this.station,
+      roleName: data.roleName.present ? data.roleName.value : this.roleName,
+      surface: data.surface.present ? data.surface.value : this.surface,
+      itemKey: data.itemKey.present ? data.itemKey.value : this.itemKey,
+      member: data.member.present ? data.member.value : this.member,
+      oldValue: data.oldValue.present ? data.oldValue.value : this.oldValue,
+      newValue: data.newValue.present ? data.newValue.value : this.newValue,
+      groupRequired: data.groupRequired.present
+          ? data.groupRequired.value
+          : this.groupRequired,
+      allowed: data.allowed.present ? data.allowed.value : this.allowed,
+      origin: data.origin.present ? data.origin.value : this.origin,
+      actionId: data.actionId.present ? data.actionId.value : this.actionId,
+      reason: data.reason.present ? data.reason.value : this.reason,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AuditEntryData(')
+          ..write('id: $id, ')
+          ..write('at: $at, ')
+          ..write('who: $who, ')
+          ..write('station: $station, ')
+          ..write('roleName: $roleName, ')
+          ..write('surface: $surface, ')
+          ..write('itemKey: $itemKey, ')
+          ..write('member: $member, ')
+          ..write('oldValue: $oldValue, ')
+          ..write('newValue: $newValue, ')
+          ..write('groupRequired: $groupRequired, ')
+          ..write('allowed: $allowed, ')
+          ..write('origin: $origin, ')
+          ..write('actionId: $actionId, ')
+          ..write('reason: $reason')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id,
+      at,
+      who,
+      station,
+      roleName,
+      surface,
+      itemKey,
+      member,
+      oldValue,
+      newValue,
+      groupRequired,
+      allowed,
+      origin,
+      actionId,
+      reason);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AuditEntryData &&
+          other.id == this.id &&
+          other.at == this.at &&
+          other.who == this.who &&
+          other.station == this.station &&
+          other.roleName == this.roleName &&
+          other.surface == this.surface &&
+          other.itemKey == this.itemKey &&
+          other.member == this.member &&
+          other.oldValue == this.oldValue &&
+          other.newValue == this.newValue &&
+          other.groupRequired == this.groupRequired &&
+          other.allowed == this.allowed &&
+          other.origin == this.origin &&
+          other.actionId == this.actionId &&
+          other.reason == this.reason);
+}
+
+class AuditEntryCompanion extends UpdateCompanion<AuditEntryData> {
+  final Value<int> id;
+  final Value<DateTime> at;
+  final Value<String> who;
+  final Value<String> station;
+  final Value<String> roleName;
+  final Value<String> surface;
+  final Value<String> itemKey;
+  final Value<String?> member;
+  final Value<String?> oldValue;
+  final Value<String?> newValue;
+  final Value<String> groupRequired;
+  final Value<bool> allowed;
+  final Value<String> origin;
+  final Value<String> actionId;
+  final Value<String?> reason;
+  const AuditEntryCompanion({
+    this.id = const Value.absent(),
+    this.at = const Value.absent(),
+    this.who = const Value.absent(),
+    this.station = const Value.absent(),
+    this.roleName = const Value.absent(),
+    this.surface = const Value.absent(),
+    this.itemKey = const Value.absent(),
+    this.member = const Value.absent(),
+    this.oldValue = const Value.absent(),
+    this.newValue = const Value.absent(),
+    this.groupRequired = const Value.absent(),
+    this.allowed = const Value.absent(),
+    this.origin = const Value.absent(),
+    this.actionId = const Value.absent(),
+    this.reason = const Value.absent(),
+  });
+  AuditEntryCompanion.insert({
+    this.id = const Value.absent(),
+    required DateTime at,
+    required String who,
+    required String station,
+    required String roleName,
+    required String surface,
+    required String itemKey,
+    this.member = const Value.absent(),
+    this.oldValue = const Value.absent(),
+    this.newValue = const Value.absent(),
+    required String groupRequired,
+    required bool allowed,
+    this.origin = const Value.absent(),
+    required String actionId,
+    this.reason = const Value.absent(),
+  })  : at = Value(at),
+        who = Value(who),
+        station = Value(station),
+        roleName = Value(roleName),
+        surface = Value(surface),
+        itemKey = Value(itemKey),
+        groupRequired = Value(groupRequired),
+        allowed = Value(allowed),
+        actionId = Value(actionId);
+  static Insertable<AuditEntryData> custom({
+    Expression<int>? id,
+    Expression<DateTime>? at,
+    Expression<String>? who,
+    Expression<String>? station,
+    Expression<String>? roleName,
+    Expression<String>? surface,
+    Expression<String>? itemKey,
+    Expression<String>? member,
+    Expression<String>? oldValue,
+    Expression<String>? newValue,
+    Expression<String>? groupRequired,
+    Expression<bool>? allowed,
+    Expression<String>? origin,
+    Expression<String>? actionId,
+    Expression<String>? reason,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (at != null) 'at': at,
+      if (who != null) 'who': who,
+      if (station != null) 'station': station,
+      if (roleName != null) 'role_name': roleName,
+      if (surface != null) 'surface': surface,
+      if (itemKey != null) 'item_key': itemKey,
+      if (member != null) 'member': member,
+      if (oldValue != null) 'old_value': oldValue,
+      if (newValue != null) 'new_value': newValue,
+      if (groupRequired != null) 'group_required': groupRequired,
+      if (allowed != null) 'allowed': allowed,
+      if (origin != null) 'origin': origin,
+      if (actionId != null) 'action_id': actionId,
+      if (reason != null) 'reason': reason,
+    });
+  }
+
+  AuditEntryCompanion copyWith(
+      {Value<int>? id,
+      Value<DateTime>? at,
+      Value<String>? who,
+      Value<String>? station,
+      Value<String>? roleName,
+      Value<String>? surface,
+      Value<String>? itemKey,
+      Value<String?>? member,
+      Value<String?>? oldValue,
+      Value<String?>? newValue,
+      Value<String>? groupRequired,
+      Value<bool>? allowed,
+      Value<String>? origin,
+      Value<String>? actionId,
+      Value<String?>? reason}) {
+    return AuditEntryCompanion(
+      id: id ?? this.id,
+      at: at ?? this.at,
+      who: who ?? this.who,
+      station: station ?? this.station,
+      roleName: roleName ?? this.roleName,
+      surface: surface ?? this.surface,
+      itemKey: itemKey ?? this.itemKey,
+      member: member ?? this.member,
+      oldValue: oldValue ?? this.oldValue,
+      newValue: newValue ?? this.newValue,
+      groupRequired: groupRequired ?? this.groupRequired,
+      allowed: allowed ?? this.allowed,
+      origin: origin ?? this.origin,
+      actionId: actionId ?? this.actionId,
+      reason: reason ?? this.reason,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (at.present) {
+      map['at'] = Variable<DateTime>(at.value);
+    }
+    if (who.present) {
+      map['who'] = Variable<String>(who.value);
+    }
+    if (station.present) {
+      map['station'] = Variable<String>(station.value);
+    }
+    if (roleName.present) {
+      map['role_name'] = Variable<String>(roleName.value);
+    }
+    if (surface.present) {
+      map['surface'] = Variable<String>(surface.value);
+    }
+    if (itemKey.present) {
+      map['item_key'] = Variable<String>(itemKey.value);
+    }
+    if (member.present) {
+      map['member'] = Variable<String>(member.value);
+    }
+    if (oldValue.present) {
+      map['old_value'] = Variable<String>(oldValue.value);
+    }
+    if (newValue.present) {
+      map['new_value'] = Variable<String>(newValue.value);
+    }
+    if (groupRequired.present) {
+      map['group_required'] = Variable<String>(groupRequired.value);
+    }
+    if (allowed.present) {
+      map['allowed'] = Variable<bool>(allowed.value);
+    }
+    if (origin.present) {
+      map['origin'] = Variable<String>(origin.value);
+    }
+    if (actionId.present) {
+      map['action_id'] = Variable<String>(actionId.value);
+    }
+    if (reason.present) {
+      map['reason'] = Variable<String>(reason.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AuditEntryCompanion(')
+          ..write('id: $id, ')
+          ..write('at: $at, ')
+          ..write('who: $who, ')
+          ..write('station: $station, ')
+          ..write('roleName: $roleName, ')
+          ..write('surface: $surface, ')
+          ..write('itemKey: $itemKey, ')
+          ..write('member: $member, ')
+          ..write('oldValue: $oldValue, ')
+          ..write('newValue: $newValue, ')
+          ..write('groupRequired: $groupRequired, ')
+          ..write('allowed: $allowed, ')
+          ..write('origin: $origin, ')
+          ..write('actionId: $actionId, ')
+          ..write('reason: $reason')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -6582,6 +7906,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $PlcFbInstanceTableTable(this);
   late final $PlcBlockCallTableTable plcBlockCallTable =
       $PlcBlockCallTableTable(this);
+  late final $AppRoleTable appRole = $AppRoleTable(this);
+  late final $AppUserTable appUser = $AppUserTable(this);
+  late final $AuditEntryTable auditEntry = $AuditEntryTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -6604,7 +7931,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         mcpProposalTable,
         plcVarRefTable,
         plcFbInstanceTable,
-        plcBlockCallTable
+        plcBlockCallTable,
+        appRole,
+        appUser,
+        auditEntry
       ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
@@ -11924,6 +13254,827 @@ typedef $$PlcBlockCallTableTableProcessedTableManager = ProcessedTableManager<
     (PlcBlockCallTableData, $$PlcBlockCallTableTableReferences),
     PlcBlockCallTableData,
     PrefetchHooks Function({bool callerBlockId})>;
+typedef $$AppRoleTableCreateCompanionBuilder = AppRoleCompanion Function({
+  required String name,
+  required String groups,
+  Value<bool> seeded,
+  Value<int> rowid,
+});
+typedef $$AppRoleTableUpdateCompanionBuilder = AppRoleCompanion Function({
+  Value<String> name,
+  Value<String> groups,
+  Value<bool> seeded,
+  Value<int> rowid,
+});
+
+final class $$AppRoleTableReferences
+    extends BaseReferences<_$AppDatabase, $AppRoleTable, AppRoleData> {
+  $$AppRoleTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static MultiTypedResultKey<$AppUserTable, List<AppUserData>>
+      _appUserRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.appUser,
+              aliasName: 'app_role__name__app_user__role_name');
+
+  $$AppUserTableProcessedTableManager get appUserRefs {
+    final manager = $$AppUserTableTableManager($_db, $_db.appUser).filter(
+        (f) => f.roleName.name.sqlEquals($_itemColumn<String>('name')!));
+
+    final cache = $_typedResult.readTableOrNull(_appUserRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+}
+
+class $$AppRoleTableFilterComposer
+    extends Composer<_$AppDatabase, $AppRoleTable> {
+  $$AppRoleTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get groups => $composableBuilder(
+      column: $table.groups, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get seeded => $composableBuilder(
+      column: $table.seeded, builder: (column) => ColumnFilters(column));
+
+  Expression<bool> appUserRefs(
+      Expression<bool> Function($$AppUserTableFilterComposer f) f) {
+    final $$AppUserTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.name,
+        referencedTable: $db.appUser,
+        getReferencedColumn: (t) => t.roleName,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$AppUserTableFilterComposer(
+              $db: $db,
+              $table: $db.appUser,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$AppRoleTableOrderingComposer
+    extends Composer<_$AppDatabase, $AppRoleTable> {
+  $$AppRoleTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get groups => $composableBuilder(
+      column: $table.groups, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get seeded => $composableBuilder(
+      column: $table.seeded, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AppRoleTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AppRoleTable> {
+  $$AppRoleTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get groups =>
+      $composableBuilder(column: $table.groups, builder: (column) => column);
+
+  GeneratedColumn<bool> get seeded =>
+      $composableBuilder(column: $table.seeded, builder: (column) => column);
+
+  Expression<T> appUserRefs<T extends Object>(
+      Expression<T> Function($$AppUserTableAnnotationComposer a) f) {
+    final $$AppUserTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.name,
+        referencedTable: $db.appUser,
+        getReferencedColumn: (t) => t.roleName,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$AppUserTableAnnotationComposer(
+              $db: $db,
+              $table: $db.appUser,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$AppRoleTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AppRoleTable,
+    AppRoleData,
+    $$AppRoleTableFilterComposer,
+    $$AppRoleTableOrderingComposer,
+    $$AppRoleTableAnnotationComposer,
+    $$AppRoleTableCreateCompanionBuilder,
+    $$AppRoleTableUpdateCompanionBuilder,
+    (AppRoleData, $$AppRoleTableReferences),
+    AppRoleData,
+    PrefetchHooks Function({bool appUserRefs})> {
+  $$AppRoleTableTableManager(_$AppDatabase db, $AppRoleTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AppRoleTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AppRoleTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AppRoleTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> name = const Value.absent(),
+            Value<String> groups = const Value.absent(),
+            Value<bool> seeded = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AppRoleCompanion(
+            name: name,
+            groups: groups,
+            seeded: seeded,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String name,
+            required String groups,
+            Value<bool> seeded = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AppRoleCompanion.insert(
+            name: name,
+            groups: groups,
+            seeded: seeded,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) =>
+                  (e.readTable(table), $$AppRoleTableReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: ({appUserRefs = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [if (appUserRefs) db.appUser],
+              addJoins: null,
+              getPrefetchedDataCallback: (items) async {
+                return [
+                  if (appUserRefs)
+                    await $_getPrefetchedData<AppRoleData, $AppRoleTable,
+                            AppUserData>(
+                        currentTable: table,
+                        referencedTable:
+                            $$AppRoleTableReferences._appUserRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$AppRoleTableReferences(db, table, p0).appUserRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.roleName == item.name),
+                        typedResults: items)
+                ];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$AppRoleTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AppRoleTable,
+    AppRoleData,
+    $$AppRoleTableFilterComposer,
+    $$AppRoleTableOrderingComposer,
+    $$AppRoleTableAnnotationComposer,
+    $$AppRoleTableCreateCompanionBuilder,
+    $$AppRoleTableUpdateCompanionBuilder,
+    (AppRoleData, $$AppRoleTableReferences),
+    AppRoleData,
+    PrefetchHooks Function({bool appUserRefs})>;
+typedef $$AppUserTableCreateCompanionBuilder = AppUserCompanion Function({
+  required String username,
+  required String roleName,
+  required String passwordHash,
+  required String salt,
+  required DateTime createdAt,
+  Value<DateTime?> lastLoginAt,
+  Value<int> rowid,
+});
+typedef $$AppUserTableUpdateCompanionBuilder = AppUserCompanion Function({
+  Value<String> username,
+  Value<String> roleName,
+  Value<String> passwordHash,
+  Value<String> salt,
+  Value<DateTime> createdAt,
+  Value<DateTime?> lastLoginAt,
+  Value<int> rowid,
+});
+
+final class $$AppUserTableReferences
+    extends BaseReferences<_$AppDatabase, $AppUserTable, AppUserData> {
+  $$AppUserTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $AppRoleTable _roleNameTable(_$AppDatabase db) =>
+      db.appRole.createAlias('app_user__role_name__app_role__name');
+
+  $$AppRoleTableProcessedTableManager get roleName {
+    final $_column = $_itemColumn<String>('role_name')!;
+
+    final manager = $$AppRoleTableTableManager($_db, $_db.appRole)
+        .filter((f) => f.name.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_roleNameTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$AppUserTableFilterComposer
+    extends Composer<_$AppDatabase, $AppUserTable> {
+  $$AppUserTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get username => $composableBuilder(
+      column: $table.username, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get passwordHash => $composableBuilder(
+      column: $table.passwordHash, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get salt => $composableBuilder(
+      column: $table.salt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get lastLoginAt => $composableBuilder(
+      column: $table.lastLoginAt, builder: (column) => ColumnFilters(column));
+
+  $$AppRoleTableFilterComposer get roleName {
+    final $$AppRoleTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roleName,
+        referencedTable: $db.appRole,
+        getReferencedColumn: (t) => t.name,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$AppRoleTableFilterComposer(
+              $db: $db,
+              $table: $db.appRole,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$AppUserTableOrderingComposer
+    extends Composer<_$AppDatabase, $AppUserTable> {
+  $$AppUserTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get username => $composableBuilder(
+      column: $table.username, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get passwordHash => $composableBuilder(
+      column: $table.passwordHash,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get salt => $composableBuilder(
+      column: $table.salt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get lastLoginAt => $composableBuilder(
+      column: $table.lastLoginAt, builder: (column) => ColumnOrderings(column));
+
+  $$AppRoleTableOrderingComposer get roleName {
+    final $$AppRoleTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roleName,
+        referencedTable: $db.appRole,
+        getReferencedColumn: (t) => t.name,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$AppRoleTableOrderingComposer(
+              $db: $db,
+              $table: $db.appRole,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$AppUserTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AppUserTable> {
+  $$AppUserTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get username =>
+      $composableBuilder(column: $table.username, builder: (column) => column);
+
+  GeneratedColumn<String> get passwordHash => $composableBuilder(
+      column: $table.passwordHash, builder: (column) => column);
+
+  GeneratedColumn<String> get salt =>
+      $composableBuilder(column: $table.salt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get lastLoginAt => $composableBuilder(
+      column: $table.lastLoginAt, builder: (column) => column);
+
+  $$AppRoleTableAnnotationComposer get roleName {
+    final $$AppRoleTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roleName,
+        referencedTable: $db.appRole,
+        getReferencedColumn: (t) => t.name,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$AppRoleTableAnnotationComposer(
+              $db: $db,
+              $table: $db.appRole,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$AppUserTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AppUserTable,
+    AppUserData,
+    $$AppUserTableFilterComposer,
+    $$AppUserTableOrderingComposer,
+    $$AppUserTableAnnotationComposer,
+    $$AppUserTableCreateCompanionBuilder,
+    $$AppUserTableUpdateCompanionBuilder,
+    (AppUserData, $$AppUserTableReferences),
+    AppUserData,
+    PrefetchHooks Function({bool roleName})> {
+  $$AppUserTableTableManager(_$AppDatabase db, $AppUserTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AppUserTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AppUserTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AppUserTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> username = const Value.absent(),
+            Value<String> roleName = const Value.absent(),
+            Value<String> passwordHash = const Value.absent(),
+            Value<String> salt = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<DateTime?> lastLoginAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AppUserCompanion(
+            username: username,
+            roleName: roleName,
+            passwordHash: passwordHash,
+            salt: salt,
+            createdAt: createdAt,
+            lastLoginAt: lastLoginAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String username,
+            required String roleName,
+            required String passwordHash,
+            required String salt,
+            required DateTime createdAt,
+            Value<DateTime?> lastLoginAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AppUserCompanion.insert(
+            username: username,
+            roleName: roleName,
+            passwordHash: passwordHash,
+            salt: salt,
+            createdAt: createdAt,
+            lastLoginAt: lastLoginAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) =>
+                  (e.readTable(table), $$AppUserTableReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: ({roleName = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (roleName) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.roleName,
+                    referencedTable:
+                        $$AppUserTableReferences._roleNameTable(db),
+                    referencedColumn:
+                        $$AppUserTableReferences._roleNameTable(db).name,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$AppUserTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AppUserTable,
+    AppUserData,
+    $$AppUserTableFilterComposer,
+    $$AppUserTableOrderingComposer,
+    $$AppUserTableAnnotationComposer,
+    $$AppUserTableCreateCompanionBuilder,
+    $$AppUserTableUpdateCompanionBuilder,
+    (AppUserData, $$AppUserTableReferences),
+    AppUserData,
+    PrefetchHooks Function({bool roleName})>;
+typedef $$AuditEntryTableCreateCompanionBuilder = AuditEntryCompanion Function({
+  Value<int> id,
+  required DateTime at,
+  required String who,
+  required String station,
+  required String roleName,
+  required String surface,
+  required String itemKey,
+  Value<String?> member,
+  Value<String?> oldValue,
+  Value<String?> newValue,
+  required String groupRequired,
+  required bool allowed,
+  Value<String> origin,
+  required String actionId,
+  Value<String?> reason,
+});
+typedef $$AuditEntryTableUpdateCompanionBuilder = AuditEntryCompanion Function({
+  Value<int> id,
+  Value<DateTime> at,
+  Value<String> who,
+  Value<String> station,
+  Value<String> roleName,
+  Value<String> surface,
+  Value<String> itemKey,
+  Value<String?> member,
+  Value<String?> oldValue,
+  Value<String?> newValue,
+  Value<String> groupRequired,
+  Value<bool> allowed,
+  Value<String> origin,
+  Value<String> actionId,
+  Value<String?> reason,
+});
+
+class $$AuditEntryTableFilterComposer
+    extends Composer<_$AppDatabase, $AuditEntryTable> {
+  $$AuditEntryTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get at => $composableBuilder(
+      column: $table.at, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get who => $composableBuilder(
+      column: $table.who, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get station => $composableBuilder(
+      column: $table.station, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get roleName => $composableBuilder(
+      column: $table.roleName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get surface => $composableBuilder(
+      column: $table.surface, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get itemKey => $composableBuilder(
+      column: $table.itemKey, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get member => $composableBuilder(
+      column: $table.member, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get oldValue => $composableBuilder(
+      column: $table.oldValue, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get newValue => $composableBuilder(
+      column: $table.newValue, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get groupRequired => $composableBuilder(
+      column: $table.groupRequired, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get allowed => $composableBuilder(
+      column: $table.allowed, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get origin => $composableBuilder(
+      column: $table.origin, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get actionId => $composableBuilder(
+      column: $table.actionId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get reason => $composableBuilder(
+      column: $table.reason, builder: (column) => ColumnFilters(column));
+}
+
+class $$AuditEntryTableOrderingComposer
+    extends Composer<_$AppDatabase, $AuditEntryTable> {
+  $$AuditEntryTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get at => $composableBuilder(
+      column: $table.at, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get who => $composableBuilder(
+      column: $table.who, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get station => $composableBuilder(
+      column: $table.station, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get roleName => $composableBuilder(
+      column: $table.roleName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get surface => $composableBuilder(
+      column: $table.surface, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get itemKey => $composableBuilder(
+      column: $table.itemKey, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get member => $composableBuilder(
+      column: $table.member, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get oldValue => $composableBuilder(
+      column: $table.oldValue, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get newValue => $composableBuilder(
+      column: $table.newValue, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get groupRequired => $composableBuilder(
+      column: $table.groupRequired,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get allowed => $composableBuilder(
+      column: $table.allowed, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get origin => $composableBuilder(
+      column: $table.origin, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get actionId => $composableBuilder(
+      column: $table.actionId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get reason => $composableBuilder(
+      column: $table.reason, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AuditEntryTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AuditEntryTable> {
+  $$AuditEntryTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get at =>
+      $composableBuilder(column: $table.at, builder: (column) => column);
+
+  GeneratedColumn<String> get who =>
+      $composableBuilder(column: $table.who, builder: (column) => column);
+
+  GeneratedColumn<String> get station =>
+      $composableBuilder(column: $table.station, builder: (column) => column);
+
+  GeneratedColumn<String> get roleName =>
+      $composableBuilder(column: $table.roleName, builder: (column) => column);
+
+  GeneratedColumn<String> get surface =>
+      $composableBuilder(column: $table.surface, builder: (column) => column);
+
+  GeneratedColumn<String> get itemKey =>
+      $composableBuilder(column: $table.itemKey, builder: (column) => column);
+
+  GeneratedColumn<String> get member =>
+      $composableBuilder(column: $table.member, builder: (column) => column);
+
+  GeneratedColumn<String> get oldValue =>
+      $composableBuilder(column: $table.oldValue, builder: (column) => column);
+
+  GeneratedColumn<String> get newValue =>
+      $composableBuilder(column: $table.newValue, builder: (column) => column);
+
+  GeneratedColumn<String> get groupRequired => $composableBuilder(
+      column: $table.groupRequired, builder: (column) => column);
+
+  GeneratedColumn<bool> get allowed =>
+      $composableBuilder(column: $table.allowed, builder: (column) => column);
+
+  GeneratedColumn<String> get origin =>
+      $composableBuilder(column: $table.origin, builder: (column) => column);
+
+  GeneratedColumn<String> get actionId =>
+      $composableBuilder(column: $table.actionId, builder: (column) => column);
+
+  GeneratedColumn<String> get reason =>
+      $composableBuilder(column: $table.reason, builder: (column) => column);
+}
+
+class $$AuditEntryTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AuditEntryTable,
+    AuditEntryData,
+    $$AuditEntryTableFilterComposer,
+    $$AuditEntryTableOrderingComposer,
+    $$AuditEntryTableAnnotationComposer,
+    $$AuditEntryTableCreateCompanionBuilder,
+    $$AuditEntryTableUpdateCompanionBuilder,
+    (
+      AuditEntryData,
+      BaseReferences<_$AppDatabase, $AuditEntryTable, AuditEntryData>
+    ),
+    AuditEntryData,
+    PrefetchHooks Function()> {
+  $$AuditEntryTableTableManager(_$AppDatabase db, $AuditEntryTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AuditEntryTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AuditEntryTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AuditEntryTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<DateTime> at = const Value.absent(),
+            Value<String> who = const Value.absent(),
+            Value<String> station = const Value.absent(),
+            Value<String> roleName = const Value.absent(),
+            Value<String> surface = const Value.absent(),
+            Value<String> itemKey = const Value.absent(),
+            Value<String?> member = const Value.absent(),
+            Value<String?> oldValue = const Value.absent(),
+            Value<String?> newValue = const Value.absent(),
+            Value<String> groupRequired = const Value.absent(),
+            Value<bool> allowed = const Value.absent(),
+            Value<String> origin = const Value.absent(),
+            Value<String> actionId = const Value.absent(),
+            Value<String?> reason = const Value.absent(),
+          }) =>
+              AuditEntryCompanion(
+            id: id,
+            at: at,
+            who: who,
+            station: station,
+            roleName: roleName,
+            surface: surface,
+            itemKey: itemKey,
+            member: member,
+            oldValue: oldValue,
+            newValue: newValue,
+            groupRequired: groupRequired,
+            allowed: allowed,
+            origin: origin,
+            actionId: actionId,
+            reason: reason,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required DateTime at,
+            required String who,
+            required String station,
+            required String roleName,
+            required String surface,
+            required String itemKey,
+            Value<String?> member = const Value.absent(),
+            Value<String?> oldValue = const Value.absent(),
+            Value<String?> newValue = const Value.absent(),
+            required String groupRequired,
+            required bool allowed,
+            Value<String> origin = const Value.absent(),
+            required String actionId,
+            Value<String?> reason = const Value.absent(),
+          }) =>
+              AuditEntryCompanion.insert(
+            id: id,
+            at: at,
+            who: who,
+            station: station,
+            roleName: roleName,
+            surface: surface,
+            itemKey: itemKey,
+            member: member,
+            oldValue: oldValue,
+            newValue: newValue,
+            groupRequired: groupRequired,
+            allowed: allowed,
+            origin: origin,
+            actionId: actionId,
+            reason: reason,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AuditEntryTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AuditEntryTable,
+    AuditEntryData,
+    $$AuditEntryTableFilterComposer,
+    $$AuditEntryTableOrderingComposer,
+    $$AuditEntryTableAnnotationComposer,
+    $$AuditEntryTableCreateCompanionBuilder,
+    $$AuditEntryTableUpdateCompanionBuilder,
+    (
+      AuditEntryData,
+      BaseReferences<_$AppDatabase, $AuditEntryTable, AuditEntryData>
+    ),
+    AuditEntryData,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -11964,4 +14115,10 @@ class $AppDatabaseManager {
       $$PlcFbInstanceTableTableTableManager(_db, _db.plcFbInstanceTable);
   $$PlcBlockCallTableTableTableManager get plcBlockCallTable =>
       $$PlcBlockCallTableTableTableManager(_db, _db.plcBlockCallTable);
+  $$AppRoleTableTableManager get appRole =>
+      $$AppRoleTableTableManager(_db, _db.appRole);
+  $$AppUserTableTableManager get appUser =>
+      $$AppUserTableTableManager(_db, _db.appUser);
+  $$AuditEntryTableTableManager get auditEntry =>
+      $$AuditEntryTableTableManager(_db, _db.auditEntry);
 }
