@@ -938,11 +938,13 @@ void main() {
       }
     });
 
-    testWidgets('the prefix help text spells out the suffixes the pane appends',
+    testWidgets('a struct kind help text names the members one node feeds',
         (tester) async {
-      // The box erector is the remaining prefix-backed kind (the fish aligner
-      // moved to the struct system alongside the Multivac), so it is the one
-      // whose editor still shows the appended-suffix help text.
+      // The box erector was the last prefix-backed kind; the enhanced BER0n FB
+      // moved it onto the struct system, so every kind now reads one node and
+      // the editor help text names its members rather than listing appended
+      // suffixes. kEquipmentStatusBits is empty, so no kind exercises the old
+      // prefix help text any more — the struct branch is what all kinds show.
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.boxErector,
       );
@@ -951,12 +953,14 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      for (final bit
-          in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!) {
-        expect(find.textContaining('.${bit.suffix}'), findsOneWidget,
-            reason: 'The operator types a prefix; the help text is the only '
-                'place that says what gets appended to it.');
+      // One help text Text carries every struct member, comma-joined.
+      for (final bit in boxErectorStatusBits) {
+        expect(find.textContaining(bit.member), findsOneWidget,
+            reason: 'the struct help text must name every member the one '
+                'subscription feeds.');
       }
+      expect(find.textContaining('.WaitingFrustration'), findsNothing,
+          reason: 'the box erector no longer appends prefix suffixes.');
     });
   });
 

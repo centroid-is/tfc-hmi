@@ -522,17 +522,28 @@ void main() {
       );
     });
 
-    // The box erector's Status section, one diode per state: stopping-the-line
-    // OFF (white), box-bottom ready LIT green, way-out clear LIT blue, and the
-    // block-ready permit absent from the map — a key the PLC does not serve —
-    // as the grey `!` unknown. The box erector is now the sole prefix-backed
-    // kind (the fish aligner moved to the struct system with the Multivac), so
-    // it is the generic per-bit pane to judge [EquipmentStatusDiodes] by.
+    // The box erector's Status section off the enhanced `BER0n.BER0n` struct,
+    // a mix of diode states: a red fault LIT (a drive has faulted) while the
+    // stopping-line and estop rows are OFF (white), an amber waiting row LIT
+    // (waiting for carton bottoms), the green running row LIT, and several
+    // members absent from the struct — keys this pumped value does not carry —
+    // rendered as the grey `!` unknown rather than claiming "off". The box
+    // erector was the last prefix-backed kind; the enhanced FB moved it onto
+    // the struct system, so this is now a [StructStatusDiodes] pane like the
+    // strapper's, pinning the curated fault-first vocabulary in pixels.
     testWidgets('boxErector — status pane diodes', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_WaitingFrustration': false,
+        'p_stat_xEstopActive': false,
+        'p_stat_xDriveError': true,
+        'p_stat_xWaitingBottoms': true,
+        'p_stat_xRunning': true,
+      }));
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -545,20 +556,15 @@ void main() {
                 height: 560,
                 child: Material(
                   child: SidePane(
-                    title: 'BER-02',
+                    title: 'BER-01',
                     subtitle: 'Box erector',
                     icon: Icons.precision_manufacturing,
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: EquipmentStatusDiodes(
-                        bits: kEquipmentStatusBits[
-                            ThirdPartyEquipmentKind.boxErector]!,
-                        values: const {
-                          'WaitingFrustration': false,
-                          'PermitBottomInfeed': true,
-                          'PermitOutfeed': true,
-                        },
+                      child: StructStatusDiodes(
+                        status: status,
+                        bits: boxErectorStatusBits,
                         machine: equipmentShortName(
                             ThirdPartyEquipmentKind.boxErector),
                       ),
@@ -722,9 +728,10 @@ void main() {
       );
     });
 
-    // The editor with the box erector selected: the Status Key Prefix field
-    // and its suffix-listing help text, which no kind but the SpeedBatcher
-    // had before — without it these diodes could never be pointed at keys.
+    // The editor with the box erector selected: the Status Struct Key field and
+    // its member-listing help text. The box erector migrated to the struct
+    // system with the enhanced `BER0n.BER0n` FB, so its field now names the one
+    // node the diodes read rather than the suffixes a prefix appended.
     testWidgets('boxErector — editor status key field', (tester) async {
       await loadRealFont();
       // Taller than the field it is named for needs: #385 added the "Extra

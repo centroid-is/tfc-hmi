@@ -1159,15 +1159,37 @@ void main() {
   });
 
   group('box erector status bits', () {
-    test('the red frustration bit is first and names the box erector', () {
-      // Mirrors the strapper/multivac ordering: the one bit that says
-      // something is wrong (the machine is holding up the line) leads, red,
-      // before the green/blue permits that only describe the cycle. The box
-      // erector stays prefix-backed -- it has no `hmi` struct -- so the suffix
-      // appends to the asset's statusKey (e.g. BER02.WaitingFrustration).
-      final bits = kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!;
-      final first = bits.first;
-      expect(first.suffix, 'WaitingFrustration');
+    test('the members are the ones the enhanced BER0n FB publishes, in order',
+        () {
+      // Read off the live line-1 box-erector struct at ns=4;s=BER01.BER01.
+      // Unlike the strapper/Multivac the members sit DIRECTLY under the node as
+      // p_stat_* with no `.hmi` wrapper. Curated fault-first: three red rows
+      // that say something is WRONG, then the amber waiting-for-X cycle rows,
+      // then green ready/running, then the blue mode rows. A member the struct
+      // does not carry renders as the grey `!` forever, so the names are pinned
+      // here.
+      expect(boxErectorStatusBits.map((b) => b.member), [
+        'p_stat_WaitingFrustration',
+        'p_stat_xEstopActive',
+        'p_stat_xDriveError',
+        'p_stat_xWaitingBottoms',
+        'p_stat_xWaitingLids',
+        'p_stat_xWaitingProduct',
+        'p_stat_xOutputBlocked',
+        'p_stat_xExtNotReady',
+        'p_stat_xReadyToVacuum',
+        'p_stat_xRunning',
+        'p_stat_xModeManual',
+        'p_stat_xModeTransport',
+      ]);
+    });
+
+    test('the stopping-line row is first, red, and names the box erector', () {
+      // Mirrors the strapper/multivac ordering: the one bit that says something
+      // is wrong (the machine is holding up the line) leads, red, before the
+      // rows that only describe the cycle.
+      final first = boxErectorStatusBits.first;
+      expect(first.member, 'p_stat_WaitingFrustration');
       expect(first.onRole, HmiColorRole.red,
           reason: 'it is the one bit that says something is wrong');
       expect(
@@ -1176,31 +1198,48 @@ void main() {
           'Box erector is stopping the line');
     });
 
-    test('the three permits still follow, in order', () {
-      final bits = kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!;
-      expect(bits.map((b) => b.suffix), [
-        'WaitingFrustration',
-        'PermitBottomInfeed',
-        'PermitBlockInfeed',
-        'PermitOutfeed',
-      ]);
-      final bySuffix = {for (final b in bits) b.suffix: b};
-      expect(bySuffix['PermitBottomInfeed']!.onRole, HmiColorRole.green);
-      expect(bySuffix['PermitBottomInfeed']!.labelFor('box erector'),
-          'Box erector is ready for box bottom');
-      expect(bySuffix['PermitBlockInfeed']!.onRole, HmiColorRole.green);
-      expect(bySuffix['PermitBlockInfeed']!.labelFor('box erector'),
-          'Box erector is ready for block');
-      // Green like every other permit, and the SAME sentence the strapping
-      // line's `p_stat_OutfeedPermitted` uses -- one bit, one wording.
-      expect(bySuffix['PermitOutfeed']!.onRole, HmiColorRole.green);
-      expect(bySuffix['PermitOutfeed']!.labelFor('box erector'),
-          'Box erector may send boxes on');
+    test('the fault rows are red, the waiting rows amber, then green then blue',
+        () {
+      final byMember = {for (final b in boxErectorStatusBits) b.member: b};
+      // The three fault rows.
+      expect(byMember['p_stat_xEstopActive']!.onRole, HmiColorRole.red);
+      expect(byMember['p_stat_xEstopActive']!.labelFor('box erector'),
+          'Emergency stop is out');
+      expect(byMember['p_stat_xDriveError']!.onRole, HmiColorRole.red);
+      expect(byMember['p_stat_xDriveError']!.labelFor('box erector'),
+          'A drive has faulted');
+      // The amber waiting-for-X cycle rows.
+      expect(byMember['p_stat_xWaitingBottoms']!.onRole, HmiColorRole.yellow);
+      expect(byMember['p_stat_xWaitingBottoms']!.labelFor('box erector'),
+          'Waiting for carton bottoms');
+      expect(byMember['p_stat_xWaitingLids']!.onRole, HmiColorRole.yellow);
+      expect(byMember['p_stat_xWaitingProduct']!.onRole, HmiColorRole.yellow);
+      expect(byMember['p_stat_xOutputBlocked']!.onRole, HmiColorRole.yellow);
+      expect(byMember['p_stat_xOutputBlocked']!.labelFor('box erector'),
+          'Way out is blocked');
+      expect(byMember['p_stat_xExtNotReady']!.onRole, HmiColorRole.yellow);
+      // Green ready/running.
+      expect(byMember['p_stat_xReadyToVacuum']!.onRole, HmiColorRole.green);
+      expect(byMember['p_stat_xReadyToVacuum']!.labelFor('box erector'),
+          'Ready to vacuum');
+      expect(byMember['p_stat_xRunning']!.onRole, HmiColorRole.green);
+      expect(byMember['p_stat_xRunning']!.labelFor('box erector'), 'Running');
+      // Blue mode rows.
+      expect(byMember['p_stat_xModeManual']!.onRole, HmiColorRole.blue);
+      expect(byMember['p_stat_xModeManual']!.labelFor('box erector'),
+          'In manual mode');
+      expect(byMember['p_stat_xModeTransport']!.onRole, HmiColorRole.blue);
+      expect(byMember['p_stat_xModeTransport']!.labelFor('box erector'),
+          'In transport mode');
     });
 
-    test('the box erector is prefix-backed, not struct-backed', () {
-      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector], isNull,
-          reason: 'it has no hmi struct; both maps would render two sections');
+    test('the box erector is struct-backed, not prefix-backed', () {
+      // The enhanced FB retired the old flat BERnn.xPermit* globals; the kind
+      // moved from kEquipmentStatusBits to kStructStatusBits.
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector],
+          same(boxErectorStatusBits));
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector], isNull,
+          reason: 'both maps would render two Status sections');
     });
   });
 

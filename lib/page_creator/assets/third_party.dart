@@ -810,17 +810,89 @@ const List<StructStatusBit> fishAlignerStatusBits = [
       'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
 ];
 
+/// The box erector's handshake, as published by the line-1 box-erector FB the
+/// PLC now exposes at `ns=4;s=BER0n.BER0n`. The permits that used to be flat
+/// globals (`BERnn.xPermitBottomInfeed`/`xPermitBlockInfeed`/`xPermitOutfeed`
+/// plus `WaitingFrustration`, read via the prefix-plus-suffix list this kind
+/// carried in [kEquipmentStatusBits]) are gone: the FB was greatly enhanced and
+/// its whole rich status arrives as one struct node, at one subscription. Same
+/// move the strapping line and the Multivac made — see [strappingLineStatusBits]
+/// and [multivacStatusBits].
+///
+/// UNLIKE those two, the members sit DIRECTLY under the node as `p_stat_*` with
+/// NO `.hmi` wrapper (the strapper is `STM01.STM01.hmi`, this is `BER01.BER01`),
+/// so [ThirdPartyEquipmentConfig.statusKey] points straight at `BER0n.BER0n`.
+///
+/// The FB carries 59 members — per-drive run bits, raw `xAlm*` latches, waiting
+/// timers, an error count/id, and PX sensors. This is deliberately NOT all of
+/// them: it is a curated OPERATOR pane answering "why has product stopped
+/// moving", not a diagnostics dump. The per-drive running bits, the raw alarm
+/// bits, the timers/counters and the PX sensors are covered by the alarms and
+/// the error count elsewhere, and would only bury the rows that matter.
+///
+/// Ordered fault-first, exactly like [strappingLineStatusBits]: the three red
+/// rows that say something is WRONG lead — the machine is holding up the line,
+/// the estop is out, a drive has faulted — then the amber "waiting for X" cycle
+/// rows, then the green ready/running rows, then the blue mode rows. A glance
+/// down the column reads the same as every other machine's pane.
+///
+/// `p_stat_WaitingFrustration` keeps the strapper's exact "{m} is stopping the
+/// line" wording and red-first placement: everything upstream is ready and the
+/// erector is what is holding the line up.
+///
+/// BER02/BER03 are still the OLD flat FB today, so under struct mode their pane
+/// reads the grey `!` until the PLC rolls this FB onto those lines — the same
+/// pre-wire pattern used across this project when a kind migrates ahead of the
+/// PLC.
+const List<StructStatusBit> boxErectorStatusBits = [
+  StructStatusBit(
+      'p_stat_WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
+  StructStatusBit(
+      'p_stat_xEstopActive', 'Emergency stop is out', HmiColorRole.red),
+  StructStatusBit('p_stat_xDriveError', 'A drive has faulted', HmiColorRole.red),
+  StructStatusBit('p_stat_xWaitingBottoms', 'Waiting for carton bottoms',
+      HmiColorRole.yellow),
+  StructStatusBit(
+      'p_stat_xWaitingLids', 'Waiting for lids', HmiColorRole.yellow),
+  StructStatusBit(
+      'p_stat_xWaitingProduct', 'Waiting for product', HmiColorRole.yellow),
+  StructStatusBit(
+      'p_stat_xOutputBlocked', 'Way out is blocked', HmiColorRole.yellow),
+  StructStatusBit(
+      'p_stat_xExtNotReady', 'Downstream not ready', HmiColorRole.yellow),
+  StructStatusBit(
+      'p_stat_xReadyToVacuum', 'Ready to vacuum', HmiColorRole.green),
+  StructStatusBit('p_stat_xRunning', 'Running', HmiColorRole.green),
+  StructStatusBit('p_stat_xModeManual', 'In manual mode', HmiColorRole.blue),
+  StructStatusBit(
+      'p_stat_xModeTransport', 'In transport mode', HmiColorRole.blue),
+];
+
 /// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
 /// rather than a key prefix, and the members each draws.
 ///
 /// A kind belongs in exactly one of this map and [kEquipmentStatusBits];
 /// membership here means one subscription for the whole handshake instead of
 /// one per bit.
+/// One colour vocabulary across every machine, so a glance down any Status
+/// column means the same thing:
+///
+///   RED    -- something is wrong. Reserved for the frustration/fault rows.
+///   YELLOW -- waiting on something; the cycle is stalled but healthy.
+///   GREEN  -- yes, now. Every PERMIT is green, on every machine.
+///   BLUE   -- a mode or a completed hand-over, not a permission.
+///
+/// The green rule is the load-bearing one and was arrived at the hard way: the
+/// box erector's outfeed permit used to be blue, on a "blue the outfeed side"
+/// comment that the code never actually kept (the strapping line's
+/// `p_stat_OutfeedPermitted` was already green), so the column did NOT read the
+/// same across machines -- the only thing that rule was for. See #382.
 const Map<ThirdPartyEquipmentKind, List<StructStatusBit>> kStructStatusBits = {
   ThirdPartyEquipmentKind.multivac: multivacStatusBits,
   ThirdPartyEquipmentKind.speedBatcher: speedBatcherStatusBits,
   ThirdPartyEquipmentKind.strappingLine: strappingLineStatusBits,
   ThirdPartyEquipmentKind.fishAligner: fishAlignerStatusBits,
+  ThirdPartyEquipmentKind.boxErector: boxErectorStatusBits,
 };
 
 /// The machine's name as it reads inside a diode label.
@@ -866,65 +938,26 @@ class EquipmentStatusBit {
   String labelFor(String machine) => fillMachineLabel(label, machine);
 }
 
-/// The diodes each kind shows, in display order.
+/// The prefix-backed kinds and the diodes each shows, in display order.
 ///
-/// Hardcoded, like [speedBatcherStatusBits]: every box erector on the site
-/// exposes the same three permits plus the red frustration bit, every strapper
-/// the same two. What differs per machine is only which line it is on, and that
-/// is the prefix.
+/// Now EMPTY: every third-party machine on the site has been wrapped in a
+/// function block that publishes its whole handshake as one struct, so all of
+/// them read out of [kStructStatusBits] at one subscription each. The box
+/// erector was the last holdout — its permits used to be flat globals
+/// (`BERnn.xPermitBottomInfeed`/`xPermitBlockInfeed`/`xPermitOutfeed` plus
+/// `WaitingFrustration`) read via the prefix-plus-suffix vocabulary once kept
+/// here; the enhanced line-1 FB at `ns=4;s=BER0n.BER0n` retired those, and the
+/// kind moved to [boxErectorStatusBits] alongside the strapper, the Multivac
+/// and the batch aligner.
+///
+/// The map, the [EquipmentStatusBit] class and every routing site that keys off
+/// it are kept intact rather than deleted: this is the shape a kind falls back
+/// to whenever the PLC has NOT yet wrapped a machine in an `hmi`/struct FB, and
+/// a future prefix-only device would land here again with a single line. The
+/// routing already handles an empty map — a kind absent from both maps simply
+/// draws no Status section.
 const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
-    kEquipmentStatusBits = {
-  // One vocabulary across every machine, in the order product moves through it.
-  // "Permit infeed/outfeed" is the PLC's language, not the floor's: an operator
-  // asks whether a machine can take the next one and whether it can pass it on.
-  //
-  // Each machine is named for what it actually receives -- a box, a box bottom,
-  // fish -- because that is what the operator is looking at when they ask why
-  // it stopped.
-  //
-  //   Ready for <thing>     -- can accept another one now  (i_xDropOk / permit infeed)
-  //   Way out clear         -- allowed to send onward      (permit outfeed)
-  //   Fish waiting to drop  -- the conveyor before it is asking to drop  (i_xDropRequest)
-  //   Drop complete         -- that hand-over finished     (q_xDropFinished)
-  //   Waiting to release    -- a batch has been held at the door too long
-  //                            (TON_waitingFrustration)
-  //
-  // Waiting to release is first and red because it is the only one that says
-  // something is wrong rather than describing where in the cycle the machine
-  // is. Note the direction: the batch is upstream, ready, and NOT being taken
-  // -- the machine named on this pane is the one refusing it, not the one
-  // waiting. The three below explain why.
-  //
-  // The question an operator opens this pane to answer is "why has product
-  // stopped moving", and these say it directly: either it cannot take another
-  // one, or it cannot send the one it has.
-  //
-  // Green means "yes, now" for every permit on every machine -- both of the
-  // strapper's, both infeeds here and the outfeed below. Red is reserved for
-  // WaitingFrustration, the one bit that says something is wrong, and
-  // amber/blue mark the Multivac's handshake PROGRESSION (waiting to drop,
-  // drop complete) rather than permission.
-  //
-  // This outfeed used to be blue, on a "blue the outfeed side" rule that the
-  // code never actually kept: the strapping line's `p_stat_OutfeedPermitted`
-  // was green, so the column did NOT read the same across machines, which is
-  // the only thing the rule was for.
-  // The strapping line and the Multivac are NOT here: each is now wrapped in an
-  // FB that publishes its whole handshake as one struct (`ST_StrappingLine_HMI`
-  // / `SP_Packing_HMI`), so both live in [kStructStatusBits] and cost one
-  // subscription rather than one per permit.
-  ThirdPartyEquipmentKind.boxErector: [
-    EquipmentStatusBit('WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
-    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', HmiColorRole.green),
-    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
-    EquipmentStatusBit('PermitOutfeed', '{m} may send boxes on', HmiColorRole.green),
-  ],
-  // The Multivac and the batch aligner are NOT here: the PLC wraps each in an
-  // `hmi` member (`SPB0n.multivac.hmi` and `SPB0n.packing.hmi`, both
-  // `SP_Packing_HMI` structs), so their handshakes live in [kStructStatusBits]
-  // as [multivacStatusBits] / [fishAlignerStatusBits] at one subscription each
-  // rather than one per permit -- the same move the strapping line made.
-};
+    kEquipmentStatusBits = {};
 
 /// The Status section body for the non-SpeedBatcher kinds.
 ///
