@@ -241,8 +241,8 @@ void main() {
           InactivityMonitor(timeout: const Duration(milliseconds: 30));
       await monitor.dispose();
       expect(monitor.poke, returnsNormally);
-      expect(() => monitor.arm(const Duration(milliseconds: 5)),
-          returnsNormally);
+      expect(
+          () => monitor.arm(const Duration(milliseconds: 5)), returnsNormally);
       expect(monitor.isRunning, isFalse);
     });
 

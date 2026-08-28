@@ -12,4 +12,5 @@ export 'src/access_role.dart';
 export 'src/audit.dart';
 export 'src/auth_provider.dart';
 export 'src/authenticated_user.dart';
+export 'src/inactivity_monitor.dart';
 export 'src/password_hasher.dart';
