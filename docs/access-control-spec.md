@@ -34,6 +34,10 @@ minimal roles/users screen.
 - Per-user OPC UA sessions or PLC-side validation. See §8 — this spec ships a
   guardrail, not an enforcement boundary, and must say so in its own UI copy.
 - Plant-facing user self-service, password reset flows, password policy.
+- Anything to do with `lib/pages/dbus_login.dart`. That is a *connection*
+  login for D-Bus (system by default; SSH and user/password are rarely used),
+  not a person login, and it stays exactly as it is. Call the new one
+  **Sign in** so the two read differently in the UI.
 
 ---
 
@@ -74,6 +78,21 @@ needs to set it running properly, and sending them to find a shift leader to
 type a number is how workarounds get invented. Decided 2026-08-28 — and the
 decision cost one tick in a table rather than a schema change, which is the
 point of the group model.
+
+**The first user.** Roles are seeded; users are not, so without this the login
+screen ships with nobody able to pass it. **Creating a user is permitted only
+while the user table is empty.** The first person to open the app creates the
+first Engineering account and the door closes behind them — no default password
+to forget to change, no bootstrap flag to leave switched on.
+
+Do it at commissioning. The window stands open until that first account exists,
+so a freshly deployed station is claimable by whoever reaches it first.
+
+**Break-glass is documented, not built.** Engineering already holds the station's
+Postgres credential, so losing the only Engineering password means deleting a
+row, not reflashing a station. That is a direct consequence of this being a
+guardrail rather than a security boundary, and the recovery steps belong in the
+deployment doc.
 
 **Users** — a name, a password hash, and exactly one role. One role per user,
 not many; multi-role adds union semantics and an "effective permissions"
@@ -374,8 +393,7 @@ Each phase is a PR. Review between phases.
 ### Phase 1 — identity and audit
 Schema + migration to v6, `AuthProvider` / `LocalAuthProvider`, PBKDF2 helper
 extracted to `lib/core/`, `AccessSession`, login and logout UI, inactivity
-timeout, audit table and sink, seed migration for the four roles and the
-anonymous-role preference.
+timeout, audit table and sink, seed migration for the four roles.
 
 *Done when:* a user can log in and out, the session times out, and every login,
 logout and failed attempt lands in the audit table. Nothing is gated yet.
@@ -389,17 +407,33 @@ reroute the three bypasses, CI grep.
 tag; an Engineering session can; both outcomes appear in the audit table; the
 three bypasses go through `PreferencesApi`.
 
-### Phase 3 — administration and polish
+### Phase 3 — the audit trail page
+Read-only trail view: newest first, filters on who / key prefix / group /
+allowed, `operate` excluded from the default view, member rows grouped under
+their `actionId`.
+
+Gated on the **`users`** group — Engineering-only in the seed, which is the
+first-iteration scope. `users` rather than `administer` because reviewing what
+people did and governing what people may do are the same concern; `administer`
+is about machines and networks. If a shift leader ever needs read-only trail
+access, *that* is the moment to weigh an eighth group — not now.
+
+*Done when:* a signed-in Engineering user can read the trail and filter it, and
+`operate` writes are present but not in the way.
+
+### Phase 4 — administration and polish
 Roles screen (name + seven checkboxes), users screen (add/remove, set role,
 change password), goldens for the locked and elevated states, and the deployment
-doc for the INSERT-only Postgres role.
+doc for the INSERT-only Postgres role and break-glass recovery.
 
 *Done when:* roles and users are manageable from the UI and the goldens have
 been looked at.
 
-**If the schedule slips, Phase 3 is what goes.** Roles seeded by migration and
-edited through the existing config page is complete, just unpleasant. Losing
-Phase 2 instead would leave login that gates nothing.
+**If the schedule slips, Phase 4 is what goes.** Roles seeded by migration and
+edited through the existing config page is complete, just unpleasant, and
+engineering is the only audience for it. Phase 3 earns its place ahead of it: a
+demo of access control where you cannot see who did what undersells the work.
+Losing Phase 2 instead would leave login that gates nothing.
 
 ---
 
