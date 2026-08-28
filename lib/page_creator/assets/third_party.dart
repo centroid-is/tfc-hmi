@@ -347,6 +347,26 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   @JsonKey(fromJson: _childrenFromJson, toJson: _childrenToJson)
   List<ThirdPartyChildEntry> children;
 
+  /// Extra loose status diodes this instance declares, each reading its OWN
+  /// full HMI key, rendered after the kind's normal (struct or prefix) diodes
+  /// in the side pane's Status section.
+  ///
+  /// The escape hatch for a permit that is NOT a member of the kind's
+  /// handshake struct and NOT a suffix under [statusKey]. The Multivac is
+  /// struct-backed off `SPB0n.multivac.hmi` (an `SP_Packing_HMI`), but its
+  /// outfeed permit is a separate global — `MVC0n.PermitOutfeed`, mapped to
+  /// `ns=4;s=MVC0n.xPermitOutfeed`, a different namespace from the struct — so
+  /// there is otherwise no way to display it. Each entry names a COMPLETE key,
+  /// read directly rather than appended to anything.
+  ///
+  /// Per-asset, not per-kind: the operator points each Multivac instance at its
+  /// own line's `MVC01`/`MVC02`/`MVC03`. Empty — the default — renders exactly
+  /// as before. When the PLC folds `p_stat_OutfeedPermitted` into
+  /// `SP_Packing_HMI`, the struct path in [kStructStatusBits] is the tidier
+  /// home; this mechanism is for loose/separate-device permits.
+  @JsonKey(defaultValue: [])
+  List<ExtraStatusBit> extraBits;
+
   /// Extra rotation, in degrees, for every child marked
   /// [ThirdPartyChildEntry.keepUpright].
   ///
@@ -415,8 +435,11 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
     this.acceptWindowMinutes = 30,
     this.acceptBarsClockAligned = true,
     List<ThirdPartyChildEntry>? children,
+    List<ExtraStatusBit>? extraBits,
   })  : children =
             children != null ? List<ThirdPartyChildEntry>.of(children) : [],
+        extraBits =
+            extraBits != null ? List<ExtraStatusBit>.of(extraBits) : [],
         runningColor = runningColor ?? AssetColor.green,
         // Grey, not red: stopped is a normal state on this line, and red is
         // reserved for something actually being wrong. The unknown state stays
@@ -501,6 +524,10 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
         if (statusKey.isNotEmpty)
           for (final bit in kEquipmentStatusBits[kind] ?? const [])
             '$statusKey.${bit.suffix}',
+        // The extra loose diodes read complete keys of their own, so they are
+        // discoverable directly rather than through a prefix.
+        for (final bit in extraBits)
+          if (bit.key.isNotEmpty) bit.key,
         for (final key in children.expand((e) => e.child.allKeys)) key,
       }.toList();
 
@@ -564,6 +591,45 @@ class StructStatusBit {
     if (filled.isEmpty) return filled;
     return filled[0].toUpperCase() + filled.substring(1);
   }
+}
+
+/// An extra loose status diode an asset instance declares, read from a COMPLETE
+/// HMI key of its own rather than a struct member or a suffix under
+/// [ThirdPartyEquipmentConfig.statusKey].
+///
+/// Unlike [StructStatusBit] and [EquipmentStatusBit], this is per-asset config
+/// (it lives on the instance, not in a per-kind table) and its [key] is a whole
+/// key read directly — the Multivac's outfeed permit is `MVC0n.PermitOutfeed`,
+/// a different namespace from its struct `statusKey` (`SPB0n.multivac`), so it
+/// cannot be reached by appending a suffix. The [label] is the finished row
+/// text (no `{m}` templating — the operator writes exactly what it should say).
+@JsonSerializable()
+class ExtraStatusBit {
+  /// The full HMI key to read, e.g. `"MVC02.PermitOutfeed"`. A complete key,
+  /// NOT a suffix of [ThirdPartyEquipmentConfig.statusKey].
+  final String key;
+
+  /// The row label, exactly as it should read — e.g. "Way out of Multivac is
+  /// clear". No `{m}` substitution: these are hand-written per instance.
+  final String label;
+
+  /// Diode colour when the bit is true, as a scheme ROLE. See
+  /// [StructStatusBit.onRole] for why this is a role and not a literal. Blue by
+  /// default, matching the outfeed-permit vocabulary the box erector and
+  /// strapper use.
+  @JsonKey(unknownEnumValue: HmiColorRole.blue)
+  final HmiColorRole onRole;
+
+  const ExtraStatusBit({
+    required this.key,
+    required this.label,
+    this.onRole = HmiColorRole.blue,
+  });
+
+  factory ExtraStatusBit.fromJson(Map<String, dynamic> json) =>
+      _$ExtraStatusBitFromJson(json);
+
+  Map<String, dynamic> toJson() => _$ExtraStatusBitToJson(this);
 }
 
 /// The five handshake bits, in display order. Same members and colours as the
@@ -886,6 +952,58 @@ class EquipmentStatusDiodes extends StatelessWidget {
             ),
           ),
         ],
+      ],
+    );
+  }
+}
+
+/// The extra loose diodes an instance declares, rendered after the kind's
+/// normal Status diodes.
+///
+/// A plain [StatelessWidget] fed a value per key, exactly like
+/// [EquipmentStatusDiodes] and [StructStatusDiodes] — the subscriptions belong
+/// to the parent state, which outlives the overlay pane. One diode per
+/// [ExtraStatusBit], keyed by the bit's full key. Styled like
+/// [StructStatusDiodes] (plain rows) so it reads as one column with the struct
+/// diodes it sits beneath, which is the immediate use — the Multivac's outfeed.
+class ExtraStatusDiodes extends StatelessWidget {
+  const ExtraStatusDiodes({
+    super.key,
+    required this.bits,
+    required this.values,
+  });
+
+  final List<ExtraStatusBit> bits;
+
+  /// Latest value per bit key. A missing entry renders unknown — the same grey
+  /// `!` a missing struct member or an errored key gets.
+  final Map<String, bool?> values;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final bit in bits)
+          PaneDetailRow(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            label: bit.label,
+            child: SizedBox(
+              // 22 px for the same reason as the other diodes: below this the
+              // unknown state's `!` blurs into the off state.
+              width: 22,
+              height: 22,
+              child: CustomPaint(
+                painter: LEDPainter(
+                  color: switch (values[bit.key]) {
+                    null => null,
+                    true => bit.onRole.resolve(context),
+                    false => Colors.white,
+                  },
+                  ledType: LEDType.circle,
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1306,6 +1424,17 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// One subscription per bit, keyed by suffix.
   final Map<String, StreamSubscription<DynamicValue>> _bitSubs = {};
 
+  /// Latest value per extra-bit key. Held here rather than in the pane for the
+  /// same reason as [_statusBits]: the pane lives in an overlay that is rebuilt
+  /// every time it opens, but the subscriptions must not be.
+  final ValueNotifier<Map<String, bool?>> _extraStatusBits =
+      ValueNotifier<Map<String, bool?>>({});
+
+  /// One subscription per extra bit, keyed by the bit's full key. Independent
+  /// of [_bitSubs] because these are complete keys in their own namespace, not
+  /// suffixes appended to [ThirdPartyEquipmentConfig.statusKey].
+  final Map<String, StreamSubscription<DynamicValue>> _extraBitSubs = {};
+
   /// The averaging window the pane's accept-rate readouts are counting over.
   ///
   /// Pane-local and deliberately not written back to the config: widening the
@@ -1346,6 +1475,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     _hoistStream();
     _hoistStatusStream();
     _hoistStatusBits();
+    _hoistExtraBits();
   }
 
   /// Subscribe every bit this kind shows, dropping any that no longer apply.
@@ -1395,6 +1525,44 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     }
   }
 
+  /// Subscribe every extra loose key this instance declares, dropping any that
+  /// no longer apply.
+  ///
+  /// Re-entrant like [_hoistStatusBits], and independent of the kind: extra
+  /// bits ride alongside whichever main diode section the kind shows (struct or
+  /// prefix), or on their own. Each key is read straight through StateMan — NOT
+  /// through `keyStreamProvider`, for the same autoDispose reason spelled out
+  /// in [_hoistStatusBits].
+  void _hoistExtraBits() {
+    final wanted = <String>{
+      for (final bit in widget.config.extraBits)
+        if (bit.key.isNotEmpty) bit.key,
+    };
+    for (final key in _extraBitSubs.keys.toList()) {
+      if (!wanted.contains(key)) {
+        _extraBitSubs.remove(key)?.cancel();
+        _extraStatusBits.value = Map.of(_extraStatusBits.value)..remove(key);
+      }
+    }
+    for (final key in wanted) {
+      if (_extraBitSubs.containsKey(key)) continue;
+      _extraBitSubs[key] = ref
+          .read(stateManProvider.future)
+          .asStream()
+          .asyncExpand((sm) => sm.subscribe(key).asStream())
+          .asyncExpand((s) => s)
+          .listen((v) {
+        if (!mounted) return;
+        _extraStatusBits.value = Map.of(_extraStatusBits.value)
+          ..[key] = v.asBool;
+      }, onError: (_) {
+        if (!mounted) return;
+        // Unknown, not false: a key that errors has told us nothing.
+        _extraStatusBits.value = Map.of(_extraStatusBits.value)..[key] = null;
+      });
+    }
+  }
+
   @override
   void didUpdateWidget(covariant ThirdPartyEquipment oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -1408,6 +1576,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     // mutates the same config instance in place, so comparing against
     // oldWidget would miss it. _hoistStatusBits is re-entrant and diffs.
     _hoistStatusBits();
+    // Same re-entrant diff for the instance's extra loose keys.
+    _hoistExtraBits();
   }
 
   void _hoistStream() {
@@ -1474,6 +1644,10 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   @visibleForTesting
   Iterable<String> get debugStatusBitKeys => _bitSubs.keys;
 
+  /// Test-only window onto which extra loose keys are subscribed.
+  @visibleForTesting
+  Iterable<String> get debugExtraBitKeys => _extraBitSubs.keys;
+
   @override
   void dispose() {
     // A docked pane lives in the root overlay, so it would survive a page
@@ -1488,11 +1662,16 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       sub.cancel();
     }
     _bitSubs.clear();
+    for (final sub in _extraBitSubs.values) {
+      sub.cancel();
+    }
+    _extraBitSubs.clear();
     // Safe because the closeSidePane above is `immediate` -- the overlay entry
     // is gone in this frame, not gliding out over the next dozen. Without that
     // the pane would still be mounted and rebuilding against this notifier,
     // and disposing it here threw on the next rebuild.
     _statusBits.dispose();
+    _extraStatusBits.dispose();
     _acceptWindow.dispose();
     super.dispose();
   }
@@ -1549,8 +1728,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // Merged rather than nested: the status struct only feeds the pane, so
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
-        listenable:
-            Listenable.merge([_raw, _statusRaw, _statusBits, _acceptWindow]),
+        listenable: Listenable.merge(
+            [_raw, _statusRaw, _statusBits, _extraStatusBits, _acceptWindow]),
         builder: (context, _) => _paneFor(context, _isRunning, weights),
       ),
     );
@@ -1572,6 +1751,50 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints.tightFor(width: 26, height: 26),
       onPressed: onPressed,
+    );
+  }
+
+  /// The pane's Status section: the kind's own diodes (struct or prefix)
+  /// followed by any instance-level [ExtraStatusBit] diodes.
+  ///
+  /// Null when the kind has no diode table and the instance declares no extra
+  /// bits, so the section is omitted rather than drawn empty. A struct kind
+  /// always shows the section — key configured or not — because grey `!` diodes
+  /// tell the operator the section exists and is unconfigured, which a silently
+  /// absent section would not. Extra bits, being loose keys, only appear when
+  /// declared: an empty [ThirdPartyEquipmentConfig.extraBits] renders exactly
+  /// as before.
+  Widget? _statusSection(BuildContext context) {
+    final config = widget.config;
+    final rows = <Widget>[];
+    if (kStructStatusBits[config.kind] case final structBits?) {
+      rows.add(StructStatusDiodes(
+        status: _statusRaw.value,
+        bits: structBits,
+        machine: equipmentShortName(config.kind),
+      ));
+    } else if (kEquipmentStatusBits[config.kind] case final prefixBits?) {
+      rows.add(EquipmentStatusDiodes(
+        bits: prefixBits,
+        values: _statusBits.value,
+        machine: equipmentShortName(config.kind),
+      ));
+    }
+    if (config.extraBits.isNotEmpty) {
+      rows.add(ExtraStatusDiodes(
+        bits: config.extraBits,
+        values: _extraStatusBits.value,
+      ));
+    }
+    if (rows.isEmpty) return null;
+    return PaneSection(
+      title: 'Status',
+      child: rows.length == 1
+          ? rows.single
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: rows,
+            ),
     );
   }
 
@@ -1739,28 +1962,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               ],
             ),
           ),
-          if (kStructStatusBits[config.kind] case final structBits?)
-            // Always present for a struct kind, key configured or not: grey `!`
-            // diodes tell the operator the section exists and is unconfigured,
-            // which a silently absent section would not.
-            PaneSection(
-              title: 'Status',
-              child: StructStatusDiodes(
-                status: _statusRaw.value,
-                bits: structBits,
-                machine: equipmentShortName(config.kind),
-              ),
-            ),
-          if (!kStructStatusBits.containsKey(config.kind) &&
-              kEquipmentStatusBits[config.kind] != null)
-            PaneSection(
-              title: 'Status',
-              child: EquipmentStatusDiodes(
-                bits: kEquipmentStatusBits[config.kind]!,
-                values: _statusBits.value,
-                machine: equipmentShortName(config.kind),
-              ),
-            ),
+          if (_statusSection(context) case final section?) section,
           if (config.notes != null && config.notes!.isNotEmpty)
             PaneSection(
               title: 'Notes',
