@@ -480,52 +480,65 @@ The guards do depend on what they wrap, so `GuardedStateMan` and
 
 ## 9. Phases
 
-Each phase is a PR. Review between phases.
+Six phases, run on one branch with a single PR at the end. `.planning/ROADMAP.md`
+is authoritative; this is the summary.
 
-### Phase 1 — identity and audit
-Schema + migration to v6, `AuthProvider` / `LocalAuthProvider`, PBKDF2 helper
-extracted to `lib/core/`, `AccessSession`, login and logout UI, inactivity
-timeout, audit table and sink, seed migration for the four roles.
+Each is independently shippable because the defaults are today's behaviour: an
+unbound key is unrestricted and a route with no group is `operate`, which is
+what anonymous holds. Nothing needs a cutover.
 
-*Done when:* a user can log in and out, the session times out, and every login,
-logout and failed attempt lands in the audit table. Nothing is gated yet.
+1. **Identity and audit** — schema v6, `LocalAuthProvider`, PBKDF2 lifted into
+   `packages/tfc_access`, session with listener-gated timeout (persisted, and
+   restored only while unexpired), login/logout, four seed roles,
+   first-user-while-empty. *Gates nothing.*
+2. **Route gating** — `AccessGate`, an optional group on
+   `RouteRegistry.registerRoute()`, five config routes raised. No asset changes.
+   *Shippable alone.*
+3. **The guards** — `AccessPolicy` on `(surface, key, member)`,
+   `GuardedStateMan`, `GuardedPreferences`, the three bypasses rerouted, the
+   unmapped-surface test, the CI grep.
+4. **Access templates** — template table, `accessTemplate` on
+   `KeyMappingEntry`, synchronous resolution, `PaneStatus.locked()`, tap-time
+   elevation, the key-repository templates section and the MCP tools.
+5. **The audit trail page** — read-only, filterable, `operate` out of the
+   default view, member rows under `actionId`. Gated on `users`. Depends on
+   Phase 1, not Phase 4.
+6. **Administration and polish** — roles and users screens, deployment doc for
+   the INSERT-only audit role and break-glass recovery.
 
-### Phase 2 — the guards
-`AccessPolicy`, `GuardedStateMan`, `GuardedPreferences`, `requiredGroup` on the
-asset common config (+ `build_runner`), route-level group on `RouteRegistry`,
-reroute the three bypasses, CI grep.
-
-*Done when:* an anonymous session cannot open the page editor or write a raised
-tag; an Engineering session can; both outcomes appear in the audit table; the
-three bypasses go through `PreferencesApi`.
-
-### Phase 3 — the audit trail page
-Read-only trail view: newest first, filters on who / key prefix / group /
-allowed, `operate` excluded from the default view, member rows grouped under
-their `actionId`.
-
-Gated on the **`users`** group — Engineering-only in the seed, which is the
-first-iteration scope. `users` rather than `administer` because reviewing what
-people did and governing what people may do are the same concern; `administer`
-is about machines and networks. If a shift leader ever needs read-only trail
-access, *that* is the moment to weigh an eighth group — not now.
-
-*Done when:* a signed-in Engineering user can read the trail and filter it, and
-`operate` writes are present but not in the way.
-
-### Phase 4 — administration and polish
-Roles screen (name + seven checkboxes), users screen (add/remove, set role,
-change password), goldens for the locked and elevated states, and the deployment
-doc for the INSERT-only Postgres role and break-glass recovery.
-
-*Done when:* roles and users are manageable from the UI and the goldens have
-been looked at.
-
-**If the schedule slips, Phase 4 is what goes.** Roles seeded by migration and
+**If the schedule slips, Phase 6 is what goes.** Roles seeded by migration and
 edited through the existing config page is complete, just unpleasant, and
-engineering is the only audience for it. Phase 3 earns its place ahead of it: a
-demo of access control where you cannot see who did what undersells the work.
-Losing Phase 2 instead would leave login that gates nothing.
+engineering is the only audience. Phase 5 outranks it: a demo where you cannot
+see who did what undersells the work. Losing Phase 3 would leave login that
+gates nothing.
+
+---
+
+## 9b. The golden gate
+
+Every phase that changes anything visible ships a golden, and **the agent reads
+the PNG itself** before closing the phase. A passing golden is not review — a
+wrong image matches its own wrong baseline perfectly.
+
+Read each new or changed PNG and confirm:
+
+- It shows the state it claims. A locked row shows the value *and* the lock; an
+  elevated session shows who, in orange; a denied tap shows the prompt rather
+  than an error.
+- **No Ahem boxes.** Solid rectangles instead of glyphs mean a null
+  `fontFamily`; load the real font with `loadRealFont()` from
+  `test/page_creator/assets/third_party_golden_test.dart` instead of accepting
+  them.
+- **No violet or off-scheme colours**, which mean `HmiStateColors` fell back to
+  `solarizedLight` because the themed wrapper was missing.
+- Muted equipment-state colours throughout, only fault red saturated, orange
+  reserved for forced/override and elevation.
+
+Generate with `flutter test --update-goldens --run-skipped <file>`, confirm it
+then passes *without* `--update-goldens`, and never generate on an SDK that
+fails `./scripts/check-flutter-version.sh` — a golden made on the wrong SDK can
+land just inside tolerance and leave the next person an image already most of
+the way to failing.
 
 ---
 
