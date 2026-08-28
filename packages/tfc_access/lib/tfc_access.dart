@@ -1,8 +1,9 @@
 /// The fixed access vocabulary shared by the HMI and, later, the relay.
 ///
 /// Groups, roles, the authenticated user, the authentication interface, the
-/// audit contract, and the single PBKDF2 derivation the HMI uses for both
-/// password hashing and config-export envelopes. This library
+/// audit contract, the session and its listener-gated inactivity countdown,
+/// and the single PBKDF2 derivation the HMI uses for both password hashing and
+/// config-export envelopes. This library
 /// is pure Dart and must stay that way; see the README for the one-way
 /// dependency rule and `test/package_purity_test.dart` for its enforcement.
 library;
