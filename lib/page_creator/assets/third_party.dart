@@ -2237,17 +2237,38 @@ class _ThirdPartyEquipmentConfigEditorState
   late TextEditingController _tagController;
   late TextEditingController _notesController;
 
+  // One controller per extra-diode row, index-aligned with
+  // `config.extraBits`. Owned here rather than inside each row so they survive
+  // the setState rebuilds every edit triggers, and so removing a row shifts
+  // its controller out in lockstep with the bit it belongs to.
+  late List<TextEditingController> _extraKeyControllers;
+  late List<TextEditingController> _extraLabelControllers;
+
   @override
   void initState() {
     super.initState();
     _tagController = TextEditingController(text: widget.config.tag ?? '');
     _notesController = TextEditingController(text: widget.config.notes ?? '');
+    _extraKeyControllers = [
+      for (final bit in widget.config.extraBits)
+        TextEditingController(text: bit.key),
+    ];
+    _extraLabelControllers = [
+      for (final bit in widget.config.extraBits)
+        TextEditingController(text: bit.label),
+    ];
   }
 
   @override
   void dispose() {
     _tagController.dispose();
     _notesController.dispose();
+    for (final c in _extraKeyControllers) {
+      c.dispose();
+    }
+    for (final c in _extraLabelControllers) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -2383,6 +2404,98 @@ class _ThirdPartyEquipmentConfigEditorState
                       '${(kEquipmentStatusBits[config.kind] ?? const []).map((b) => '.${b.suffix}').join(', ')} '
                       'are appended to this prefix.',
               style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+
+            // -- Extra loose status diodes --
+            // Permits that are neither a member of the kind's handshake struct
+            // nor a suffix under the status key: each reads a COMPLETE key of
+            // its own (e.g. the Multivac outfeed permit MVC0n.PermitOutfeed, a
+            // different namespace from the struct). Rendered after the normal
+            // diodes in the side pane's Status section. Empty by default —
+            // just the add button shows.
+            Text('Extra status diodes',
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text(
+              'Loose permit diodes that read a complete key of their own — for '
+              'a permit that is not in the status struct, like the Multivac '
+              'outfeed permit, which lives on its own MVC0n key. Shown after '
+              'the normal diodes in the side pane\'s Status section.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            if (config.extraBits.isEmpty)
+              Text('No extra diodes',
+                  style: Theme.of(context).textTheme.bodyMedium)
+            else
+              for (int i = 0; i < config.extraBits.length; i++)
+                Card(
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextFormField(
+                          controller: _extraKeyControllers[i],
+                          decoration: const InputDecoration(
+                            labelText: 'Key',
+                            hintText: 'e.g. MVC02.PermitOutfeed',
+                            isDense: true,
+                          ),
+                          onChanged: (v) => _updateExtraBit(i, key: v),
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _extraLabelControllers[i],
+                          decoration: const InputDecoration(
+                            labelText: 'Label',
+                            hintText: 'Row text in the Status section',
+                            isDense: true,
+                          ),
+                          onChanged: (v) => _updateExtraBit(i, label: v),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButton<HmiColorRole>(
+                                value: config.extraBits[i].onRole,
+                                isExpanded: true,
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    _updateExtraBit(i, onRole: value);
+                                  }
+                                },
+                                items: HmiColorRole.values
+                                    .map((e) =>
+                                        DropdownMenuItem<HmiColorRole>(
+                                          value: e,
+                                          child: Text(e.displayName),
+                                        ))
+                                    .toList(),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Remove',
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              onPressed: () => _removeExtraBit(i),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                onPressed: _addExtraBit,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add diode'),
+              ),
             ),
             const SizedBox(height: 16),
 
@@ -2636,6 +2749,42 @@ class _ThirdPartyEquipmentConfigEditorState
     setState(() {
       widget.config.children
           .add(ThirdPartyChildEntry(child: child, keepUpright: keepUpright));
+    });
+  }
+
+  /// Appends an empty loose diode plus its two controllers, keeping the three
+  /// lists index-aligned. Blue by default — the outfeed-permit vocabulary the
+  /// box erector and strapper already use.
+  void _addExtraBit() {
+    setState(() {
+      widget.config.extraBits.add(
+        const ExtraStatusBit(key: '', label: '', onRole: HmiColorRole.blue),
+      );
+      _extraKeyControllers.add(TextEditingController());
+      _extraLabelControllers.add(TextEditingController());
+    });
+  }
+
+  /// Drops row [i] from the bits list and disposes its controllers, so the
+  /// three lists stay the same length and aligned.
+  void _removeExtraBit(int i) {
+    setState(() {
+      widget.config.extraBits.removeAt(i);
+      _extraKeyControllers.removeAt(i).dispose();
+      _extraLabelControllers.removeAt(i).dispose();
+    });
+  }
+
+  /// Replaces row [i] in place — [ExtraStatusBit] is immutable, so an edit
+  /// rebuilds the whole bit, carrying over the fields not being changed.
+  void _updateExtraBit(int i, {String? key, String? label, HmiColorRole? onRole}) {
+    final bit = widget.config.extraBits[i];
+    setState(() {
+      widget.config.extraBits[i] = ExtraStatusBit(
+        key: key ?? bit.key,
+        label: label ?? bit.label,
+        onRole: onRole ?? bit.onRole,
+      );
     });
   }
 
