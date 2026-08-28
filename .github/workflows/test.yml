@@ -238,6 +238,32 @@ jobs:
         dart pub get
         dart test
 
+  # packages/tfc_access holds the access vocabulary -- groups, roles, sessions
+  # and the audit contract. Pure Dart: no database, no Docker, no Flutter, so
+  # setup-dart, the same shape as tfc-mcp-server-test above.
+  #
+  # Added with the package rather than after it, because a new package without
+  # a job is a package nothing runs -- which is exactly how jbtm's 227 tests
+  # sat red on main for five months. Its purity suite is the load-bearing part:
+  # it is the only thing that fails the build when somebody gives tfc_access a
+  # dependency on tfc_dart and quietly drags open62541 into the relay server.
+  tfc-access-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dart-lang/setup-dart@v1
+
+    - name: Test tfc_access
+      working-directory: packages/tfc_access
+      run: |
+        dart pub get
+        dart analyze
+        dart test
+
   # The updater. Its tests existed but no workflow ran them, so the component
   # that installs every other fix was the one component with no CI at all.
   # Needs setup-flutter rather than setup-dart: the package depends on

@@ -1,0 +1,26 @@
+name: tfc_access
+description: The access vocabulary shared by the HMI and, later, the relay — groups, roles, sessions and the audit contract.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.1
+
+# This package is pure Dart on purpose, and the list below is the whole of the
+# rule. A dependency on tfc_dart would pull the open62541 FFI and its native
+# assets into every consumer, and the relay server — plus a later web client —
+# need neither. So the dependency runs one way only: tfc_dart depends on
+# tfc_access, never the reverse. For the same reason there is no `flutter:`
+# dependency, no open62541 and no cryptography_flutter here.
+# test/package_purity_test.dart enforces all of that, because the type system
+# will not object when somebody adds the import.
+dependencies:
+  collection: ^1.18.0
+  meta: ^1.15.0
+  clock: ^1.1.1
+  # PBKDF2 arrives in plan 01-03 and adds `cryptography: ^2.7.0` here. It is
+  # deliberately absent until then.
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.0.0
