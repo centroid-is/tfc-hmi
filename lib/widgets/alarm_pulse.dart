@@ -119,6 +119,16 @@ class AlarmPulsePainter extends CustomPainter {
 class AlarmIdlePainter extends CustomPainter {
   final Color color;
 
+  /// Outer ring radius as a fraction of the drawing's radius (`min(w,h)/2`).
+  ///
+  /// This is the marker's visible extent, so it also defines how big a tap
+  /// target the idle beacon offers: `AlarmVisibility` sizes its hit region
+  /// from the same factor (`maxRadius * outerRingFactor`) so the two never
+  /// drift apart. Keep them tied — a hit area larger than the drawing is an
+  /// invisible click target over empty space, which is exactly what this
+  /// factor is here to prevent.
+  static const double outerRingFactor = 0.4;
+
   AlarmIdlePainter({required this.color});
 
   @override
@@ -129,7 +139,7 @@ class AlarmIdlePainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
-    canvas.drawCircle(center, maxRadius * 0.4, paint);
+    canvas.drawCircle(center, maxRadius * outerRingFactor, paint);
     canvas.drawCircle(
       center,
       maxRadius * 0.12,

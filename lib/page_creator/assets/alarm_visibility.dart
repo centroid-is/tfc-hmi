@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -256,13 +257,61 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
   Widget _sizedPaint(CustomPainter painter) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final Size paintSize;
-        if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
-          paintSize = Size(constraints.maxWidth, constraints.maxHeight);
-        } else {
-          paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
-        }
-        return CustomPaint(size: paintSize, painter: painter);
+        return CustomPaint(size: _paintSize(context, constraints), painter: painter);
+      },
+    );
+  }
+
+  Size _paintSize(BuildContext context, BoxConstraints constraints) {
+    if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+      return Size(constraints.maxWidth, constraints.maxHeight);
+    }
+    return widget.config.size.toSize(MediaQuery.of(context).size);
+  }
+
+  /// Draws [painter] across the whole placed box (unchanged visual) but only
+  /// takes taps on a centred region about the size of the idle marker — so a
+  /// tap near the marker opens the pane while a tap in the empty space around
+  /// it falls through to whatever is beneath.
+  ///
+  /// The beacon's box is ~0.09×0.09 of the page, yet idle it draws only a
+  /// small dot/ring in the centre; an opaque full-box `GestureDetector` (the
+  /// old behaviour) made that whole box a large invisible click target that
+  /// swallowed taps over empty space on a dense mimic.
+  ///
+  /// The hit region's radius is derived from the SAME expression the idle
+  /// painter uses for its outer ring (`maxRadius * AlarmIdlePainter
+  /// .outerRingFactor`), so the target tracks the marker if that ever changes.
+  /// The active pulse's centre dot (`dotRadiusFactor` 0.22) is smaller than
+  /// this marker radius, so a marker-sized region covers the active look too —
+  /// the operator asked for "roughly the size of the idle marker", and the
+  /// transient expanding rings are not meant to be a tap surface.
+  ///
+  /// A non-hit falls through because the background `CustomPaint` never
+  /// absorbs pointers (its painter has no `hitTest`) and the surrounding
+  /// `Stack` does not hit-test itself — only the centred `GestureDetector`
+  /// does. A rotated placement rotates this whole subtree about its centre, so
+  /// the centred region stays over the (rotation-invariant) marker.
+  Widget _markerTappablePaint(CustomPainter painter, VoidCallback onTap) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final paintSize = _paintSize(context, constraints);
+        final maxRadius = min(paintSize.width, paintSize.height) / 2;
+        final hitDiameter = maxRadius * AlarmIdlePainter.outerRingFactor * 2;
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            CustomPaint(size: paintSize, painter: painter),
+            SizedBox(
+              width: hitDiameter,
+              height: hitDiameter,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+              ),
+            ),
+          ],
+        );
       },
     );
   }
@@ -287,18 +336,15 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
       // The linked alarm's own colours — the exact pair its card renders
       // with in the alarm list and app-bar banner.
       final (fill, ring) = _active.first.notification.getColors(context);
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => _showPane(context),
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, _) => _sizedPaint(
-            AlarmPulsePainter(
-              color: fill,
-              dotOutlineColor: ring,
-              progress: _controller.value,
-            ),
+      return AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) => _markerTappablePaint(
+          AlarmPulsePainter(
+            color: fill,
+            dotOutlineColor: ring,
+            progress: _controller.value,
           ),
+          () => _showPane(context),
         ),
       );
     }
@@ -311,14 +357,16 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
       return const SizedBox.shrink();
     }
     final outline = Theme.of(context).colorScheme.outline;
-    final marker = _sizedPaint(
-      AlarmIdlePainter(color: outline.withValues(alpha: editing ? 0.9 : 0.5)),
-    );
-    if (editing) return marker;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => _showPane(context),
-      child: marker,
+    if (editing) {
+      // Editor placeholder: no tap target (selection/drag is the page
+      // editor's own gesture layer).
+      return _sizedPaint(AlarmIdlePainter(color: outline.withValues(alpha: 0.9)));
+    }
+    // Page view, showWhenInactive: the marker is tappable, but only on the
+    // marker itself — not the empty box around it.
+    return _markerTappablePaint(
+      AlarmIdlePainter(color: outline.withValues(alpha: 0.5)),
+      () => _showPane(context),
     );
   }
 }
