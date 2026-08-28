@@ -383,7 +383,7 @@ void main() {
       // Deliberately NOT awaited: `BaseScaffold` wires poke() to pointer-down
       // from the first frame, which is before build() has resolved on a cold
       // start.
-      expect(h.container.read(accessSessionProvider), isA<AsyncLoading<void>>());
+      expect(h.container.read(accessSessionProvider), isA<AsyncLoading<AccessSession>>());
       expect(h.notifier.poke, returnsNormally);
 
       await h.settle();
@@ -406,7 +406,7 @@ void main() {
         container.read(accessSessionProvider.future),
         throwsA(isA<StateError>()),
       );
-      expect(container.read(accessSessionProvider), isA<AsyncError<void>>());
+      expect(container.read(accessSessionProvider), isA<AsyncError<AccessSession>>());
       expect(container.read(accessSessionProvider.notifier).poke,
           returnsNormally);
     });

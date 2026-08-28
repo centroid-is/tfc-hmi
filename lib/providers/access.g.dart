@@ -169,5 +169,52 @@ final firstUserWindowOpenProvider = FutureProvider<bool>.internal(
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
 typedef FirstUserWindowOpenRef = FutureProviderRef<bool>;
+String _$accessSessionControllerHash() =>
+    r'8e4e4f24b620e0c57005e0443d0e2b4cf5886457';
+
+/// Who is standing at this panel, and what they may do.
+///
+/// Holds the session, restores it across a restart while it is still valid,
+/// and drops back to anonymous on inactivity.
+///
+/// ## The countdown is listener-gated, the session is not
+///
+/// This provider is `keepAlive` so the *session* survives navigation — walking
+/// from the alarm page to a mimic must not sign anybody out. The *countdown* is
+/// a different thing: [InactivityMonitor] arms in its stream's `onListen` and
+/// disarms in `onCancel`, and this controller subscribes only while the session
+/// is elevated **and** something is listening to the provider.
+///
+/// That pairing is the whole reason plan 01-04 built the monitor the way it
+/// did. An always-on `Timer.periodic` in shared plumbing has failed unrelated
+/// widget tests in this repo before: a pending timer at the end of a
+/// `testWidgets` body fails the test even when the widget under test never
+/// touched the thing that armed it. A future refactor that subscribes
+/// unconditionally in [build] reintroduces exactly that, and
+/// `test/providers/access_session_test.dart` has tests whose only job is to
+/// fail if it does.
+///
+/// ## `expiresAt` is the authority, the timer is only a prompt
+///
+/// Pausing the countdown must not extend the session. Every re-attach compares
+/// `clock.now()` against `expiresAt` first and expires immediately if it has
+/// passed; otherwise it arms for the time *remaining* via
+/// [InactivityMonitor.arm]. Detaching and re-attaching therefore cannot buy an
+/// operator another fifteen minutes.
+///
+/// Copied from [AccessSessionController].
+@ProviderFor(AccessSessionController)
+final accessSessionControllerProvider =
+    AsyncNotifierProvider<AccessSessionController, AccessSession>.internal(
+  AccessSessionController.new,
+  name: r'accessSessionControllerProvider',
+  debugGetCreateSourceHash: const bool.fromEnvironment('dart.vm.product')
+      ? null
+      : _$accessSessionControllerHash,
+  dependencies: null,
+  allTransitiveDependencies: null,
+);
+
+typedef _$AccessSessionController = AsyncNotifier<AccessSession>;
 // ignore_for_file: type=lint
 // ignore_for_file: subtype_of_sealed_class, invalid_use_of_internal_member, invalid_use_of_visible_for_testing_member, deprecated_member_use_from_same_package

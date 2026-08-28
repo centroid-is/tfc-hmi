@@ -11,15 +11,20 @@
 /// path changes behaviour because of this file.
 library;
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:clock/clock.dart';
 import 'package:logger/logger.dart';
+import 'package:meta/meta.dart';
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 import 'package:tfc_dart/core/access/drift_audit_sink.dart';
 import 'package:tfc_dart/core/access/local_auth_provider.dart';
+import 'package:tfc_dart/core/preferences.dart';
 
 import 'database.dart';
 import 'preferences.dart';
@@ -191,3 +196,474 @@ Future<bool> firstUserWindowOpen(Ref ref) async {
     return false;
   }
 }
+
+/// What a sign-in attempt did.
+///
+/// [badCredentials] and [unavailable] are kept apart all the way from
+/// `LocalAuthProvider`'s null-versus-throw contract to the login form. A
+/// database blip is not somebody trying to get in, and the trail must not say
+/// it was — see [AccessSessionController.signIn].
+enum AccessSignInResult {
+  /// Signed in. The session is now elevated.
+  ok,
+
+  /// The username or password was not recognised.
+  badCredentials,
+
+  /// Authentication could not be attempted — no database, or it threw.
+  unavailable,
+}
+
+/// Who is standing at this panel, and what they may do.
+///
+/// Holds the session, restores it across a restart while it is still valid,
+/// and drops back to anonymous on inactivity.
+///
+/// ## The countdown is listener-gated, the session is not
+///
+/// This provider is `keepAlive` so the *session* survives navigation — walking
+/// from the alarm page to a mimic must not sign anybody out. The *countdown* is
+/// a different thing: [InactivityMonitor] arms in its stream's `onListen` and
+/// disarms in `onCancel`, and this controller subscribes only while the session
+/// is elevated **and** something is listening to the provider.
+///
+/// That pairing is the whole reason plan 01-04 built the monitor the way it
+/// did. An always-on `Timer.periodic` in shared plumbing has failed unrelated
+/// widget tests in this repo before: a pending timer at the end of a
+/// `testWidgets` body fails the test even when the widget under test never
+/// touched the thing that armed it. A future refactor that subscribes
+/// unconditionally in [build] reintroduces exactly that, and
+/// `test/providers/access_session_test.dart` has tests whose only job is to
+/// fail if it does.
+///
+/// ## `expiresAt` is the authority, the timer is only a prompt
+///
+/// Pausing the countdown must not extend the session. Every re-attach compares
+/// `clock.now()` against `expiresAt` first and expires immediately if it has
+/// passed; otherwise it arms for the time *remaining* via
+/// [InactivityMonitor.arm]. Detaching and re-attaching therefore cannot buy an
+/// operator another fifteen minutes.
+@Riverpod(keepAlive: true)
+class AccessSessionController extends _$AccessSessionController {
+  /// How many listeners the provider currently has.
+  ///
+  /// Riverpod's `onCancel`/`onResume` express "the last listener left" and "a
+  /// listener came back", which is the gating wanted — but `onResume` only
+  /// fires *after* a cancel, so it never fires for the very first listener. A
+  /// session restored from disk at boot, on a panel whose root scaffold listens
+  /// once and never stops, would then hold an elevated session with no
+  /// countdown attached and nothing to notice it had expired.
+  ///
+  /// Counting `onAddListener`/`onRemoveListener` gives the same 0↔1 edges plus
+  /// that first one, so the rule reads the same and covers the boot case:
+  /// **attach on 0→1 while elevated, detach on 1→0.**
+  int _listeners = 0;
+
+  /// The countdown, rebuilt whenever the configured timeout changes.
+  InactivityMonitor? _monitor;
+
+  /// Non-null exactly while the countdown is attached.
+  StreamSubscription<DateTime>? _expiry;
+
+  /// True between a dispose (or the start of a rebuild) and the next [build].
+  ///
+  /// A timer that fires in that window must not write to `state`.
+  bool _disposed = false;
+
+  Duration _timeout = kDefaultInactivityTimeout;
+
+  PreferencesApi? _local;
+
+  @override
+  Future<AccessSession> build() async {
+    // Registered synchronously, before the first await: Riverpod fires
+    // `onAddListener` as soon as the element is listened to, which for a
+    // `container.listen` happens right after the synchronous part of this
+    // build. Both callback lists are cleared on every rebuild, so
+    // re-registering here does not accumulate — but `_listeners` is notifier
+    // state and must NOT be reset, because the listeners themselves survive a
+    // rebuild.
+    _disposed = false;
+    ref.onAddListener(_onListenerAdded);
+    ref.onRemoveListener(_onListenerRemoved);
+    ref.onDispose(_disposeMonitor);
+
+    _local = ref.watch(localPreferencesProvider);
+    _timeout = await ref.watch(inactivityTimeoutProvider.future);
+    final repo = await ref.watch(accessRepositoryProvider.future);
+
+    // A fresh monitor per build, because `timeout` is final on it and the
+    // configured value may have changed. The previous one is already gone:
+    // Riverpod runs `onDispose` before a rebuild.
+    _monitor = InactivityMonitor(timeout: _timeout);
+
+    final session = await _restoreOrAnonymous(repo);
+
+    // The boot case the listener count exists for: if something is already
+    // listening and the restored session is elevated, arm now. `state` is not
+    // set until this future completes, so hand `_attach` the session directly.
+    if (_listeners > 0 && session.isElevated) _attach(session);
+    return session;
+  }
+
+  // -----------------------------------------------------------------------
+  // Restore
+  // -----------------------------------------------------------------------
+
+  /// Read the device-local payload and turn it into a live session, or
+  /// anonymous.
+  ///
+  /// The stored payload is unvalidated data from a file on a station anybody
+  /// can walk up to. It is checked for expiry and its **groups are re-resolved
+  /// from the role**, never read from the payload — `AccessSession.toJson`
+  /// deliberately does not serialise them, so a hand-edited file cannot grant a
+  /// group the role does not have.
+  Future<AccessSession> _restoreOrAnonymous(AccessRepository? repo) async {
+    final anonymous = AccessSession.anonymous(await _anonymousGroups(repo));
+
+    final raw = await _readStoredSession();
+    if (raw == null) return anonymous;
+
+    final stored = AccessSession.parse(raw);
+    if (stored == null) {
+      // A corrupt payload costs the operator a login prompt, never the app its
+      // boot.
+      Logger().w(
+        'The stored session in "$kAccessSessionPrefKey" could not be read — '
+        'clearing it and starting anonymous.',
+      );
+      await _clearStoredSession();
+      return anonymous;
+    }
+
+    if (stored.isExpiredAt(clock.now())) {
+      await _clearStoredSession();
+      await _onRestoredExpiry(stored);
+      return anonymous;
+    }
+
+    final role = repo == null ? null : await _roleOrNull(repo, stored.roleName);
+    if (role == null) {
+      // The role was renamed or deleted, or the database is unreachable. Either
+      // way there is no group set to restore against, and signing somebody in
+      // against an undefined one is worse than making them log in again.
+      Logger().w(
+        'The stored session names the role "${stored.roleName}", which cannot '
+        'be resolved — starting anonymous.',
+      );
+      await _clearStoredSession();
+      return anonymous;
+    }
+
+    return AccessSession(
+      user: AuthenticatedUser(
+        username: stored.username,
+        roleName: role.name,
+        displayName: stored.displayName,
+      ),
+      groups: role.groups,
+      expiresAt: stored.expiresAt,
+    );
+  }
+
+  Future<Set<AccessGroup>> _anonymousGroups(AccessRepository? repo) async {
+    if (repo == null) {
+      // No database. Fall back to the seeded Operator groups rather than
+      // throwing: a logged-out panel that cannot jog a conveyor because
+      // Postgres blinked is a stopped line. The seeded set is the narrowest
+      // Operator has ever been, so this is the conservative floor and not a
+      // guess.
+      return {
+        ...kSeedRoles.firstWhere((r) => r.name == kOperatorRoleName).groups,
+      };
+    }
+    return repo.anonymousGroups();
+  }
+
+  Future<AccessRole?> _roleOrNull(AccessRepository repo, String name) async {
+    try {
+      return await repo.role(name);
+    } on Object catch (e) {
+      Logger().w('Could not resolve the role "$name": $e');
+      return null;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Sign in / sign out
+  // -----------------------------------------------------------------------
+
+  /// Attempt a sign-in.
+  ///
+  /// Returns [AccessSignInResult.badCredentials] when the provider returns
+  /// null, and [AccessSignInResult.unavailable] when it throws. **The two are
+  /// not collapsed.** `LocalAuthProvider` distinguishes them precisely so a
+  /// database blip is not recorded as somebody trying to get in.
+  Future<AccessSignInResult> signIn(String username, String password) async {
+    final AuthProvider? auth;
+    final AccessRepository? repo;
+    try {
+      auth = await ref.read(authProviderProvider.future);
+      repo = await ref.read(accessRepositoryProvider.future);
+    } on Object {
+      return AccessSignInResult.unavailable;
+    }
+    if (auth == null || repo == null) return AccessSignInResult.unavailable;
+
+    final AuthenticatedUser? user;
+    try {
+      user = await auth.authenticate(username, password);
+    } on Object catch (e) {
+      // Infrastructure, not a credential. The message deliberately carries
+      // neither field.
+      Logger().w('Sign-in could not be attempted: $e');
+      await _onSignInUnavailable();
+      return AccessSignInResult.unavailable;
+    }
+
+    if (user == null) {
+      await _onSignInRefused(username);
+      return AccessSignInResult.badCredentials;
+    }
+
+    final role = await _roleOrNull(repo, user.roleName);
+    if (role == null) {
+      // `LocalAuthProvider` already refuses this, so reaching it means a second
+      // implementation behind the same seam. Refuse rather than elevate against
+      // an undefined group set.
+      Logger().w(
+        'Signed-in user "${user.username}" holds the unresolvable role '
+        '"${user.roleName}" — refusing the session.',
+      );
+      return AccessSignInResult.unavailable;
+    }
+
+    final session = AccessSession(
+      user: user,
+      groups: role.groups,
+      expiresAt: clock.now().add(_timeout),
+    );
+
+    await _onSignInAccepted(user, role);
+
+    state = AsyncData(session);
+    await _persist(session);
+    _attach(session);
+    return AccessSignInResult.ok;
+  }
+
+  /// Sign out deliberately.
+  ///
+  /// Always available, per spec §5 — there is no state in which an operator
+  /// cannot hand the panel back.
+  Future<void> signOut() async {
+    final current = state.valueOrNull;
+    _detach();
+
+    if (current != null && current.isElevated) {
+      await _onSignOut(current);
+    }
+
+    await _clearStoredSession();
+    await _toAnonymous();
+  }
+
+  /// Records activity. Cheap and safe to call on every pointer-down.
+  ///
+  /// `BaseScaffold` wires this to pointer-down from the first frame (plan
+  /// 01-08), which is *before* [build] has resolved on a cold start — and again
+  /// if the provider has errored. So the read is guarded: reading `state.value`
+  /// unguarded throws, and it would throw on the operator's first tap after a
+  /// restart, which is the worst possible moment.
+  void poke() {
+    final session = state.valueOrNull;
+    if (session == null) return;
+    if (!session.isElevated) return;
+
+    final extended = AccessSession(
+      user: session.user,
+      groups: session.groups,
+      expiresAt: clock.now().add(_timeout),
+    );
+    state = AsyncData(extended);
+    unawaited(_persist(extended));
+    _monitor?.poke();
+  }
+
+  /// True while the inactivity countdown is armed.
+  ///
+  /// Reads the monitor rather than the subscription, so it is false both when
+  /// nothing is listening and when nothing is elevated.
+  @visibleForTesting
+  // ignore: invalid_use_of_visible_for_testing_member
+  bool get timerIsRunning => _monitor?.isRunning ?? false;
+
+  // -----------------------------------------------------------------------
+  // Auth-event hooks
+  // -----------------------------------------------------------------------
+  //
+  // One per auth event, so the audit wiring has exactly one call site each and
+  // the "exactly one row" property is visible in the source rather than
+  // reconstructed from the control flow. `_onSignInUnavailable` exists to make
+  // the *absence* of a row on that path deliberate rather than an omission.
+
+  Future<void> _onSignInAccepted(AuthenticatedUser user, AccessRole role) async {}
+
+  Future<void> _onSignInRefused(String attemptedUsername) async {}
+
+  Future<void> _onSignInUnavailable() async {}
+
+  Future<void> _onSignOut(AccessSession departing) async {}
+
+  Future<void> _onTimeout(AccessSession expired) async {}
+
+  Future<void> _onRestoredExpiry(PersistedSession stored) async {}
+
+  // -----------------------------------------------------------------------
+  // The countdown
+  // -----------------------------------------------------------------------
+
+  void _onListenerAdded() {
+    _listeners++;
+    if (_listeners == 1) _attachIfElevated();
+  }
+
+  void _onListenerRemoved() {
+    _listeners--;
+    if (_listeners <= 0) {
+      _listeners = 0;
+      _detach();
+    }
+  }
+
+  void _attachIfElevated() {
+    final session = state.valueOrNull;
+    if (session == null) return;
+    _attach(session);
+  }
+
+  /// Subscribe to the countdown for the time [session] has left.
+  ///
+  /// A no-op unless the session is elevated and something is listening — the
+  /// two halves of the gating rule, checked in one place so no caller has to
+  /// remember both.
+  void _attach(AccessSession session) {
+    if (_disposed) return;
+    if (!session.isElevated) return;
+    if (_listeners <= 0) return;
+    if (_expiry != null) return;
+
+    final expiresAt = session.expiresAt;
+    final monitor = _monitor;
+    if (expiresAt == null || monitor == null) return;
+
+    final remaining = expiresAt.difference(clock.now());
+    if (remaining > Duration.zero) {
+      _expiry = monitor.expirations.listen((_) => unawaited(_expire()));
+      // The subscription's `onListen` armed for the *full* timeout. Narrow it
+      // to what is actually left, so a session sitting on a page nobody is
+      // watching does not gain the whole timeout back every time somebody
+      // navigates to it.
+      //
+      // `arm`, not a fresh `InactivityMonitor(timeout: remaining)`: a new
+      // monitor would arm correctly once and then make every subsequent
+      // `poke()` re-arm for that remainder instead of the full fifteen minutes,
+      // silently shortening every session after the first detach.
+      monitor.arm(remaining);
+      return;
+    }
+
+    // Already past `expiresAt`. Pausing the countdown must not extend the
+    // session, so re-attaching after a long gap ends it here rather than
+    // handing out a fresh window.
+    unawaited(_expire());
+  }
+
+  void _detach() {
+    final sub = _expiry;
+    _expiry = null;
+    if (sub != null) unawaited(sub.cancel());
+  }
+
+  /// The session ran out: back to anonymous.
+  Future<void> _expire() async {
+    final current = state.valueOrNull;
+    _detach();
+    if (current == null || !current.isElevated) return;
+
+    await _onTimeout(current);
+    await _clearStoredSession();
+    await _toAnonymous();
+  }
+
+  void _disposeMonitor() {
+    _disposed = true;
+    _detach();
+    final monitor = _monitor;
+    _monitor = null;
+    if (monitor != null) unawaited(monitor.dispose());
+  }
+
+  Future<void> _toAnonymous() async {
+    if (_disposed) return;
+    final repo = await ref.read(accessRepositoryProvider.future);
+    if (_disposed) return;
+    state = AsyncData(AccessSession.anonymous(await _anonymousGroups(repo)));
+  }
+
+  // -----------------------------------------------------------------------
+  // Device-local persistence
+  // -----------------------------------------------------------------------
+  //
+  // Through `localPreferencesProvider` and never `preferencesProvider`. A
+  // session is a property of the person standing at *this* panel; syncing it
+  // through the shared database would sign somebody in on eight screens at
+  // once, which is the exact failure that separation exists to prevent
+  // (spec §10).
+
+  Future<void> _persist(AccessSession session) async {
+    final local = _local;
+    if (local == null || !session.isElevated) return;
+    try {
+      await local.setString(
+        kAccessSessionPrefKey,
+        jsonEncode(session.toJson()),
+      );
+    } on Object catch (e) {
+      // A session that cannot be persisted is still a valid session; it just
+      // will not survive a restart.
+      Logger().w('Could not persist the session: $e');
+    }
+  }
+
+  Future<String?> _readStoredSession() async {
+    final local = _local;
+    if (local == null) return null;
+    try {
+      return await local.getString(kAccessSessionPrefKey);
+    } on Object catch (e) {
+      Logger().w('Could not read the stored session: $e');
+      return null;
+    }
+  }
+
+  Future<void> _clearStoredSession() async {
+    final local = _local;
+    if (local == null) return;
+    try {
+      await local.remove(kAccessSessionPrefKey);
+    } on Object catch (e) {
+      Logger().w('Could not clear the stored session: $e');
+    }
+  }
+}
+
+/// The session provider, under the name every consumer uses.
+///
+/// `riverpod_generator` names a notifier provider after its class, which would
+/// make this `accessSessionControllerProvider` — the controller is an
+/// implementation detail and the thing being read is the session. The alias is
+/// the public name: the app bar, `BaseScaffold` and the first-user screen all
+/// watch `accessSessionProvider`, and `.notifier`, `.future` and
+/// `overrideWith` all work through it unchanged.
+final accessSessionProvider = accessSessionControllerProvider;
