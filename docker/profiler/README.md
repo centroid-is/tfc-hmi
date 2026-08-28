@@ -14,7 +14,7 @@ The app must be a **profile** build. Release strips the VM Service, the CPU
 profiler and the `Flutter.Frame` events out of the engine entirely, so there
 is nothing to connect to.
 
-`ghcr.io/centroid-is/centroid-hmi:latest-release` is that profile build (see
+`ghcr.io/centroid-is/centroid-hmi:latest-profile` is that profile build (see
 `.github/workflows/centroid-hmi.yml`). It is AOT-compiled like release — the
 performance numbers it reports are real, unlike a debug/JIT build — and pays
 for the instrumentation with a slightly larger binary and the sampling

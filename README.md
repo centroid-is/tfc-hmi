@@ -140,7 +140,7 @@ flutter run -d macos
 
 ### Profiling
 
-The station image `ghcr.io/centroid-is/centroid-hmi:latest-release` is a
+The station image `ghcr.io/centroid-is/centroid-hmi:latest-profile` is a
 Flutter **profile** build — AOT-compiled like release, so its timings are the
 ones an operator feels, but with the Dart VM Service left in. `tools/hmi_profiler.py`
 turns that into a markdown report: frame build/raster percentiles, the hot

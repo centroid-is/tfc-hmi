@@ -93,13 +93,13 @@ services:
         chown 1000:1000 /home/centroid/.local/share
       '
 
-  # `latest-release` is the *profile* build: AOT-compiled exactly like release,
-  # so what you measure here is what the operator feels, but with the Dart VM
-  # Service, the sampling CPU profiler and the `Flutter.Frame` timing events
-  # still compiled in. `latest` is a debug/JIT build — fine for a desk, several
-  # times slower on a station, and its numbers mean nothing.
+  # `latest-profile` is AOT-compiled exactly like release, so what you measure
+  # here is what the operator feels, but with the Dart VM Service, the sampling
+  # CPU profiler and the `Flutter.Frame` timing events still compiled in.
+  # `latest` is a debug/JIT build — fine for a desk, several times slower on a
+  # station, and its numbers mean nothing.
   flutter:
-    image: ghcr.io/centroid-is/centroid-hmi:latest-release
+    image: ghcr.io/centroid-is/centroid-hmi:latest-profile
     container_name: flutter
     group_add:
       - 992

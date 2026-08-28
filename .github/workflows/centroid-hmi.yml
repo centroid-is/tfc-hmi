@@ -163,9 +163,9 @@ jobs:
 
   # `latest` is a debug build (the elinux-build above only builds release when
   # tag.yml calls this workflow, which tags `stable`). This pair rebuilds the
-  # same main commit so `latest-release` always tracks the tip of main as a
-  # production-mode image. Skipped on workflow_call with release=true — that
-  # run's own image is already a release build.
+  # same main commit so `latest-profile` always tracks the tip of main as an
+  # AOT image. Skipped on workflow_call with release=true — that run's own
+  # image is already an AOT build.
   #
   # It is built in **profile**, not release. Profile is AOT-compiled by the
   # same gen_snapshot with the same optimisations — a station running it feels
@@ -176,16 +176,19 @@ jobs:
   # docker/profiler does it from a terminal. The costs are a larger binary and
   # the profiler's overhead while a profile is being taken.
   #
-  # The tag is still `latest-release`: that is what the stations pull. The
-  # `-profile` aliases below are the honest name for the same digest, so a
-  # station can be moved over without a flag day.
+  # It publishes as `latest-profile`, not `latest-release`. A tag that says
+  # "release" for an image built in profile mode is a trap for whoever reads it
+  # next. The cost is explicit: `latest-release` is no longer produced by any
+  # job, so a station still pinned to it keeps running the last release image
+  # it pulled and silently stops receiving updates. Repoint those stations at
+  # `latest-profile` (the compose file in this repo already is).
   #
   # `workflow_dispatch` is in the condition so the profile build can be proven
   # on a branch before it is merged. Without it the first run of this job is
   # the one that lands on main, and a mode flag that does not work turns main
   # red rather than a PR. `gh workflow run centroid-hmi.yml --ref <branch>`;
   # docker-profile-build stays main-only, so a dispatched run builds and
-  # verifies without publishing `latest-release` from a branch.
+  # verifies without publishing `latest-profile` from a branch.
   elinux-profile-build:
     if: >-
       (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
@@ -299,8 +302,6 @@ jobs:
             APP_BIN=centroidx
             APP_BUNDLE=bundle
           tags: |
-            ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-profile-build.outputs.centroid_hmi_sha }}-release
-            ghcr.io/${{ github.repository_owner }}/centroid-hmi:latest-release
             ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-profile-build.outputs.centroid_hmi_sha }}-profile
             ghcr.io/${{ github.repository_owner }}/centroid-hmi:latest-profile
 
