@@ -270,9 +270,16 @@ class AccessSessionController extends _$AccessSessionController {
   /// A timer that fires in that window must not write to `state`.
   bool _disposed = false;
 
+  /// The hostname resolved at build, so the expiry handler can write its row
+  /// from a timer callback without reaching back into `ref`.
+  String _station = 'unknown';
+
   Duration _timeout = kDefaultInactivityTimeout;
 
   PreferencesApi? _local;
+
+  /// Where auth rows go. Resolved at build for the same reason as [_station].
+  AuditSink _sink = const NullAuditSink();
 
   @override
   Future<AccessSession> build() async {
@@ -288,8 +295,12 @@ class AccessSessionController extends _$AccessSessionController {
     ref.onRemoveListener(_onListenerRemoved);
     ref.onDispose(_disposeMonitor);
 
+    _station = ref.watch(stationNameProvider);
     _local = ref.watch(localPreferencesProvider);
     _timeout = await ref.watch(inactivityTimeoutProvider.future);
+    // Before `_restoreOrAnonymous`, which writes a row when the stored session
+    // turns out to have expired while the app was not running.
+    _sink = await ref.watch(auditSinkProvider.future);
     final repo = await ref.watch(accessRepositoryProvider.future);
 
     // A fresh monitor per build, because `timeout` is final on it and the
@@ -337,8 +348,20 @@ class AccessSessionController extends _$AccessSessionController {
     }
 
     if (stored.isExpiredAt(clock.now())) {
+      // The session ended while the station was off. It gets the same row a
+      // live timeout does — otherwise a panel switched off at the end of a
+      // shift shows an elevated session simply ceasing, with nothing in the
+      // trail saying when.
       await _clearStoredSession();
-      await _onRestoredExpiry(stored);
+      await _record(AuditRecord.sessionTimeout(
+        who: stored.username,
+        station: _station,
+        roleName: stored.roleName,
+        actionId: newActionId(),
+        at: clock.now(),
+        reason: 'The session expired at ${stored.expiresAt.toIso8601String()} '
+            'while the app was not running.',
+      ));
       return anonymous;
     }
 
@@ -416,13 +439,23 @@ class AccessSessionController extends _$AccessSessionController {
     } on Object catch (e) {
       // Infrastructure, not a credential. The message deliberately carries
       // neither field.
+      // No audit row on this path, deliberately. `LocalAuthProvider`
+      // distinguishes null from throw precisely so a database blip is not
+      // recorded as somebody trying to get in, and a trail full of phantom
+      // failed attempts during an outage is a trail nobody reads.
       Logger().w('Sign-in could not be attempted: $e');
-      await _onSignInUnavailable();
       return AccessSignInResult.unavailable;
     }
 
     if (user == null) {
-      await _onSignInRefused(username);
+      await _record(AuditRecord.loginFailed(
+        // Untrusted input straight off the login form; `AuditRecord` truncates
+        // it. The password is not passed anywhere near this record.
+        who: username,
+        station: _station,
+        actionId: newActionId(),
+        at: clock.now(),
+      ));
       return AccessSignInResult.badCredentials;
     }
 
@@ -444,7 +477,13 @@ class AccessSessionController extends _$AccessSessionController {
       expiresAt: clock.now().add(_timeout),
     );
 
-    await _onSignInAccepted(user, role);
+    await _record(AuditRecord.login(
+      who: user.username,
+      station: _station,
+      roleName: role.name,
+      actionId: newActionId(),
+      at: clock.now(),
+    ));
 
     state = AsyncData(session);
     await _persist(session);
@@ -461,7 +500,13 @@ class AccessSessionController extends _$AccessSessionController {
     _detach();
 
     if (current != null && current.isElevated) {
-      await _onSignOut(current);
+      await _record(AuditRecord.logout(
+        who: current.user!.username,
+        station: _station,
+        roleName: current.roleName,
+        actionId: newActionId(),
+        at: clock.now(),
+      ));
     }
 
     await _clearStoredSession();
@@ -499,25 +544,39 @@ class AccessSessionController extends _$AccessSessionController {
   bool get timerIsRunning => _monitor?.isRunning ?? false;
 
   // -----------------------------------------------------------------------
-  // Auth-event hooks
+  // The audit trail
   // -----------------------------------------------------------------------
-  //
-  // One per auth event, so the audit wiring has exactly one call site each and
-  // the "exactly one row" property is visible in the source rather than
-  // reconstructed from the control flow. `_onSignInUnavailable` exists to make
-  // the *absence* of a row on that path deliberate rather than an omission.
 
-  Future<void> _onSignInAccepted(AuthenticatedUser user, AccessRole role) async {}
-
-  Future<void> _onSignInRefused(String attemptedUsername) async {}
-
-  Future<void> _onSignInUnavailable() async {}
-
-  Future<void> _onSignOut(AccessSession departing) async {}
-
-  Future<void> _onTimeout(AccessSession expired) async {}
-
-  Future<void> _onRestoredExpiry(PersistedSession stored) async {}
+  /// Append one row.
+  ///
+  /// There are exactly four call sites — login, login.failed, logout and the
+  /// two timeout paths — and each writes one row. There is deliberately a fifth
+  /// branch that writes none: `signIn`'s `unavailable` path, commented where it
+  /// happens.
+  ///
+  /// **No `reason` is prompted for on any auth event.** The free-text reason
+  /// prompt belongs to `configure` and `administer` *writes* and arrives in
+  /// Phase 3; the only `reason` values written here are the two timeout
+  /// strings, and the controller supplies them, not a person. Phase 3 should
+  /// not assume the prompt already exists.
+  ///
+  /// [DriftAuditSink] already swallows and logs its own failures (plan 01-05),
+  /// so this catch is for a *different* sink. Refusing to sign somebody in
+  /// because the audit database blinked is worse than a gap in the trail, and
+  /// that has to stay true whoever implements the interface.
+  Future<void> _record(AuditRecord entry) async {
+    try {
+      await _sink.record(entry);
+    } on Object catch (e, s) {
+      Logger().e(
+        'AUDIT ROW LOST: ${entry.itemKey} for ${entry.who}@${entry.station}, '
+        'actionId=${entry.actionId}. The action itself was not affected — '
+        'only its record.',
+        error: e,
+        stackTrace: s,
+      );
+    }
+  }
 
   // -----------------------------------------------------------------------
   // The countdown
@@ -591,7 +650,14 @@ class AccessSessionController extends _$AccessSessionController {
     _detach();
     if (current == null || !current.isElevated) return;
 
-    await _onTimeout(current);
+    await _record(AuditRecord.sessionTimeout(
+      who: current.user!.username,
+      station: _station,
+      roleName: current.roleName,
+      actionId: newActionId(),
+      at: clock.now(),
+      reason: 'No activity for ${_timeout.inMinutes} minute(s).',
+    ));
     await _clearStoredSession();
     await _toAnonymous();
   }
