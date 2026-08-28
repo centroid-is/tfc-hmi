@@ -1,15 +1,22 @@
-// AccessRepository — roles, the Operator guard and anonymous group resolution.
+// AccessRepository — roles, the Operator guard, anonymous group resolution and
+// the first-user window.
 //
-// SQLite only, against a real in-memory `AppDatabase`. The rule this file
-// exists to pin down is the one that is easy to write down and easy to get
-// wrong: the `Operator` row cannot be deleted or renamed, enforced in code
-// rather than documented in a comment somewhere.
+// SQLite only, against a real in-memory `AppDatabase`. The two rules this file
+// exists to pin down are the ones that are easy to write down and easy to get
+// wrong:
+//
+//  * the `Operator` row cannot be deleted or renamed, enforced in code rather
+//    than documented in a comment somewhere;
+//  * a user can be created only while `app_user` is empty, and the check that
+//    makes that true lives *inside* the transaction.
 //
 // `PRAGMA foreign_keys = ON` is issued per database opened here rather than in
 // `AppDatabase` itself. The pragma is per-connection and off by default in
 // SQLite, so without it the referential test below would pass vacuously.
 // Turning it on globally would change the behaviour of every other tfc_dart
 // test that writes rows, so it is enabled in this file only.
+
+import 'dart:convert';
 
 // `isNull` / `isNotNull` are matchers here, not drift's SQL expressions of the
 // same names.
@@ -78,11 +85,16 @@ void main() {
   late AccessRepository repo;
 
   setUp(() async {
+    // 10 iterations, not 200000. A real derivation measures ~660 ms in the test
+    // VM and the first-user group below performs a dozen of them; without this
+    // hook the file becomes unrunnable rather than merely slow.
+    Pbkdf2Kdf.iterationsForTest = 10;
     db = await _openDb();
     repo = AccessRepository(db);
   });
 
   tearDown(() async {
+    Pbkdf2Kdf.iterationsForTest = null;
     await db.close();
   });
 
@@ -353,6 +365,230 @@ void main() {
       expect(await _rawUserCount(db), 1,
           reason: 'the user must not be orphaned by a refused delete');
       expect(await _rawRoleNames(db), contains('Engineering'));
+    });
+  });
+
+  group('first user window', () {
+    test('isUserTableEmpty is true on a fresh database', () async {
+      expect(await repo.isUserTableEmpty, isTrue);
+      expect(await repo.userCount(), 0);
+    });
+
+    test('isUserTableEmpty is false once a user exists', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      expect(await repo.isUserTableEmpty, isFalse);
+      expect(await repo.userCount(), 1);
+    });
+
+    test('createFirstUser on an empty table inserts exactly one row', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      expect(await _rawUserCount(db), 1);
+      expect((await repo.user('jon'))!.username, 'jon');
+    });
+
+    test('the first account is forced to Engineering', () async {
+      // There is no role parameter to pass, which is the point: the first
+      // account cannot ask to be something narrower or something else.
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      expect((await repo.user('jon'))!.roleName, 'Engineering');
+    });
+
+    test('the stored row holds a hash and a salt, not the password', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      final row = (await repo.user('jon'))!;
+      expect(row.passwordHash, isNot(contains('hunter2')));
+      expect(row.salt, isNotEmpty);
+      expect(row.passwordHash, startsWith('pbkdf2-sha256\$'));
+      expect(row.createdAt, isNotNull);
+    });
+
+    test('the stored hash verifies against the password it was made from',
+        () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      final row = (await repo.user('jon'))!;
+      final decoded = decodeStoredHash(row.passwordHash, saltB64: row.salt)!;
+
+      expect(
+        await PasswordHasher.verify(
+          password: 'hunter2',
+          hashB64: decoded.hashB64,
+          saltB64: decoded.saltB64,
+          iterations: decoded.iterations,
+        ),
+        isTrue,
+      );
+      expect(
+        await PasswordHasher.verify(
+          password: 'wrong',
+          hashB64: decoded.hashB64,
+          saltB64: decoded.saltB64,
+          iterations: decoded.iterations,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a second createFirstUser throws and inserts nothing', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      await expectLater(
+        () => repo.createFirstUser(username: 'eve', password: 'letmein'),
+        throwsA(isA<FirstUserWindowClosedError>()),
+      );
+
+      expect(await _rawUserCount(db), 1);
+      expect(await repo.user('eve'), isNull);
+    });
+
+    test('two concurrent createFirstUser calls leave exactly one row',
+        () async {
+      // Both futures are created before either is awaited — that is what makes
+      // this a race rather than two sequential calls. If the emptiness check
+      // sat outside the transaction, both would see an empty table and both
+      // would insert.
+      final a = repo.createFirstUser(username: 'jon', password: 'hunter2');
+      final b = repo.createFirstUser(username: 'eve', password: 'letmein');
+
+      final outcomes = await Future.wait<Object?>([
+        a.then<Object?>((_) => null, onError: (Object e) => e),
+        b.then<Object?>((_) => null, onError: (Object e) => e),
+      ]);
+
+      expect(outcomes.whereType<FirstUserWindowClosedError>(), hasLength(1),
+          reason: 'exactly one of the two must be refused');
+      expect(outcomes.where((o) => o == null), hasLength(1),
+          reason: 'exactly one of the two must succeed');
+      expect(await _rawUserCount(db), 1);
+    });
+
+    test('an empty username throws ArgumentError and inserts nothing',
+        () async {
+      await expectLater(
+        () => repo.createFirstUser(username: '  ', password: 'hunter2'),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      expect(await _rawUserCount(db), 0);
+    });
+
+    test('an empty password throws ArgumentError and inserts nothing',
+        () async {
+      await expectLater(
+        () => repo.createFirstUser(username: 'jon', password: ''),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      expect(await _rawUserCount(db), 0);
+    });
+
+    test('the empty-password error does not quote the password', () async {
+      // `ArgumentError.value(password, ...)` would put the credential in the
+      // message and from there into whatever logs it.
+      try {
+        await repo.createFirstUser(username: 'jon', password: '');
+        fail('expected an ArgumentError');
+      } on ArgumentError catch (e) {
+        expect(e.toString(), isNot(contains('hunter2')));
+        expect(e.invalidValue, isNull);
+      }
+    });
+
+    test('a missing Engineering role is named, not reported as a foreign key',
+        () async {
+      await repo.deleteRole('Engineering');
+
+      await expectLater(
+        () => repo.createFirstUser(username: 'jon', password: 'hunter2'),
+        throwsA(isA<MissingRoleError>()
+            .having((e) => e.toString(), 'message', contains('Engineering'))),
+      );
+
+      expect(await _rawUserCount(db), 0);
+    });
+
+    test('usernames are case-sensitive, matching the primary key', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      expect(await repo.user('jon'), isNotNull);
+      expect(await repo.user('JON'), isNull,
+          reason: 'a decision, not an accident: the PK is case-sensitive TEXT');
+    });
+
+    test('touchLastLogin writes the timestamp', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+      expect((await repo.user('jon'))!.lastLoginAt, isNull);
+
+      final at = DateTime.utc(2026, 8, 28, 9, 30);
+      await repo.touchLastLogin('jon', at);
+
+      expect((await repo.user('jon'))!.lastLoginAt!.toUtc(), at);
+    });
+
+    test('no password, hash or salt reaches flutter_preferences', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+      final row = (await repo.user('jon'))!;
+
+      final prefs = await db
+          .customSelect('SELECT key, value FROM flutter_preferences')
+          .get();
+      for (final pref in prefs) {
+        final value = pref.read<String?>('value') ?? '';
+        for (final secret in ['hunter2', row.passwordHash, row.salt]) {
+          expect(value, isNot(contains(secret)),
+              reason: 'flutter_preferences is synced between stations and read '
+                  'by the backend config watcher; credentials live in app_user '
+                  'and nowhere else (key "${pref.read<String>('key')}")');
+        }
+      }
+    });
+  });
+
+  group('stored hash encoding', () {
+    test('round-trips through encodeStoredHash / decodeStoredHash', () async {
+      final hash = await PasswordHasher.hash('hunter2');
+
+      final decoded =
+          decodeStoredHash(encodeStoredHash(hash), saltB64: hash.saltB64);
+
+      expect(decoded, hash);
+      expect(decoded!.iterations, 10, reason: 'the test hook value travels');
+    });
+
+    test('the encoded form carries the iteration count it was made with',
+        () async {
+      final hash = await PasswordHasher.hash('hunter2');
+      final stored = encodeStoredHash(hash);
+
+      expect(stored, 'pbkdf2-sha256\$10\$${hash.hashB64}');
+
+      // Raising the ambient default must not change how an existing row reads.
+      // That is the whole reason the count is stored rather than assumed.
+      Pbkdf2Kdf.iterationsForTest = 99;
+      expect(decodeStoredHash(stored, saltB64: hash.saltB64)!.iterations, 10);
+      Pbkdf2Kdf.iterationsForTest = 10;
+    });
+
+    test('a legacy bare-base64 value decodes at the default count', () {
+      final legacy = base64Encode(List<int>.filled(32, 7));
+
+      final decoded = decodeStoredHash(legacy, saltB64: 'c2FsdA==');
+
+      expect(decoded, isNotNull);
+      expect(decoded!.hashB64, legacy);
+      expect(decoded.iterations, Pbkdf2Kdf.iterations);
+    });
+
+    test('a mangled value decodes to null rather than throwing', () {
+      expect(decodeStoredHash(r'scrypt$1$abc', saltB64: 'c2FsdA=='), isNull);
+      expect(
+        decodeStoredHash(r'pbkdf2-sha256$notanumber$abc', saltB64: 'c2FsdA=='),
+        isNull,
+      );
     });
   });
 }
