@@ -50,6 +50,10 @@ ThirdPartyEquipmentConfig _$ThirdPartyEquipmentConfigFromJson(
       acceptWindowMinutes: (json['acceptWindowMinutes'] as num?)?.toInt() ?? 30,
       acceptBarsClockAligned: json['acceptBarsClockAligned'] as bool? ?? true,
       children: _childrenFromJson(json['children'] as List?),
+      extraBits: (json['extraBits'] as List<dynamic>?)
+              ?.map((e) => ExtraStatusBit.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -82,6 +86,7 @@ Map<String, dynamic> _$ThirdPartyEquipmentConfigToJson(
       'notes': instance.notes,
       'strapMachines': instance.strapMachines,
       'children': _childrenToJson(instance.children),
+      'extraBits': instance.extraBits.map((e) => e.toJson()).toList(),
       'childTextAngle': instance.childTextAngle,
       'acceptWindowMinutes': instance.acceptWindowMinutes,
       'acceptBarsClockAligned': instance.acceptBarsClockAligned,
@@ -108,4 +113,35 @@ const _$TextPosEnumMap = {
   TextPos.left: 'left',
   TextPos.right: 'right',
   TextPos.inside: 'inside',
+};
+
+ExtraStatusBit _$ExtraStatusBitFromJson(Map<String, dynamic> json) =>
+    ExtraStatusBit(
+      key: json['key'] as String,
+      label: json['label'] as String,
+      onRole: $enumDecodeNullable(_$HmiColorRoleEnumMap, json['onRole'],
+              unknownValue: HmiColorRole.blue) ??
+          HmiColorRole.blue,
+    );
+
+Map<String, dynamic> _$ExtraStatusBitToJson(ExtraStatusBit instance) =>
+    <String, dynamic>{
+      'key': instance.key,
+      'label': instance.label,
+      'onRole': _$HmiColorRoleEnumMap[instance.onRole]!,
+    };
+
+const _$HmiColorRoleEnumMap = {
+  HmiColorRole.green: 'green',
+  HmiColorRole.yellow: 'yellow',
+  HmiColorRole.blue: 'blue',
+  HmiColorRole.grey: 'grey',
+  HmiColorRole.red: 'red',
+  HmiColorRole.violet: 'violet',
+  HmiColorRole.primary: 'primary',
+  HmiColorRole.secondary: 'secondary',
+  HmiColorRole.tertiary: 'tertiary',
+  HmiColorRole.error: 'error',
+  HmiColorRole.surface: 'surface',
+  HmiColorRole.onSurface: 'onSurface',
 };

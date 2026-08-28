@@ -187,6 +187,97 @@ void main() {
     });
   });
 
+  group('Extra loose status bits', () {
+    test('an extra bit round-trips with its key, label and colour', () {
+      // The immediate use: a Multivac struct-backed off SPB0n.multivac, with
+      // its outfeed permit declared as a loose bit reading a key in a
+      // different namespace (MVC0n.PermitOutfeed).
+      final original = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+        statusKey: 'SPB02.Multivac',
+        extraBits: const [
+          ExtraStatusBit(
+            key: 'MVC02.PermitOutfeed',
+            label: 'Way out of Multivac is clear',
+            onRole: HmiColorRole.blue,
+          ),
+        ],
+      );
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>);
+
+      expect(restored.extraBits, hasLength(1));
+      final bit = restored.extraBits.single;
+      expect(bit.key, 'MVC02.PermitOutfeed');
+      expect(bit.label, 'Way out of Multivac is clear');
+      expect(bit.onRole, HmiColorRole.blue);
+    });
+
+    test('the extra key is discoverable through allKeys, undecorated', () {
+      // A complete key, not a suffix — it must surface verbatim so key
+      // discovery offers it exactly as it will be read.
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+        statusKey: 'SPB01.Multivac',
+        extraBits: const [
+          ExtraStatusBit(
+              key: 'MVC01.PermitOutfeed', label: 'Way out is clear'),
+        ],
+      );
+      expect(config.allKeys, contains('MVC01.PermitOutfeed'));
+      // Not appended to statusKey the way a prefix suffix would be.
+      expect(config.allKeys,
+          isNot(contains('SPB01.Multivac.MVC01.PermitOutfeed')));
+    });
+
+    test('an empty-key extra bit is skipped by key discovery', () {
+      final config = ThirdPartyEquipmentConfig(
+        extraBits: const [ExtraStatusBit(key: '', label: 'unset')],
+      );
+      expect(config.allKeys, isNot(contains('')));
+    });
+
+    test('extraBits default to empty, not null, on legacy JSON', () {
+      final json = ThirdPartyEquipmentConfig.preview().toJson();
+      json.remove('extraBits');
+      expect(ThirdPartyEquipmentConfig.fromJson(json).extraBits, isEmpty);
+    });
+
+    test('the default colour is blue, matching the outfeed-permit vocabulary',
+        () {
+      const bit = ExtraStatusBit(key: 'k', label: 'l');
+      expect(bit.onRole, HmiColorRole.blue);
+    });
+
+    test('an unknown onRole in newer JSON falls back to blue, not a throw', () {
+      // A config written by a newer build must not take the pane down.
+      final json = jsonDecode(jsonEncode(ThirdPartyEquipmentConfig(
+        extraBits: const [ExtraStatusBit(key: 'k', label: 'l')],
+      ).toJson())) as Map<String, dynamic>;
+      (json['extraBits'] as List).first['onRole'] = 'someFutureColour';
+
+      final restored = ThirdPartyEquipmentConfig.fromJson(json);
+      expect(restored.extraBits.single.onRole, HmiColorRole.blue);
+    });
+
+    test('several extra bits keep their order and each own key', () {
+      final config = ThirdPartyEquipmentConfig(
+        extraBits: const [
+          ExtraStatusBit(key: 'MVC03.PermitOutfeed', label: 'out'),
+          ExtraStatusBit(
+              key: 'MVC03.PermitInfeed', label: 'in', onRole: HmiColorRole.green),
+        ],
+      );
+      final restored = ThirdPartyEquipmentConfig.fromJson(
+          jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>);
+      expect(restored.extraBits.map((b) => b.key),
+          ['MVC03.PermitOutfeed', 'MVC03.PermitInfeed']);
+      expect(restored.extraBits.map((b) => b.onRole),
+          [HmiColorRole.blue, HmiColorRole.green]);
+    });
+  });
+
   group('Children inside the box', () {
     test('a conveyor child survives the round-trip with its position', () {
       final original = ThirdPartyEquipmentConfig(

@@ -1015,6 +1015,151 @@ void main() {
       });
     }
   });
+
+  group('Extra loose status diodes', () {
+    tearDown(closeSidePane);
+
+    testWidgets(
+        'a declared extra bit renders after the struct diodes and tracks its '
+        'own key', (tester) async {
+      // The immediate use: a struct-backed Multivac whose outfeed permit is a
+      // separate global in a different namespace (MVC0n.PermitOutfeed), not a
+      // member of SP_Packing_HMI. It reaches the pane only through extraBits.
+      final stateMan = _RecordingStateMan();
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+        runKey: '',
+        statusKey: 'SPB02.Multivac',
+        extraBits: const [
+          ExtraStatusBit(
+            key: 'MVC02.PermitOutfeed',
+            label: 'Way out of Multivac is clear',
+            onRole: HmiColorRole.blue,
+          ),
+        ],
+      );
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          stateManProvider.overrideWith((ref) async => stateMan),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 300,
+                height: 400,
+                child: ThirdPartyEquipment(config: config),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // The full key is subscribed directly, not appended to statusKey.
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugExtraBitKeys, {'MVC02.PermitOutfeed'});
+
+      // The subscription is alive: a value pushed now reaches the diode.
+      stateMan.controllers['MVC02.PermitOutfeed']!
+          .add(DynamicValue(value: true));
+      await tester.pump();
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      // The kind's own struct diodes still show, and the extra diode is drawn
+      // AFTER them, with its exact label and its live value.
+      expect(find.byType(StructStatusDiodes), findsOneWidget);
+      expect(find.byType(ExtraStatusDiodes), findsOneWidget);
+      final diodes =
+          tester.widget<ExtraStatusDiodes>(find.byType(ExtraStatusDiodes));
+      expect(diodes.values['MVC02.PermitOutfeed'], isTrue,
+          reason: 'the value off the wire must light the extra diode');
+      expect(find.text('Way out of Multivac is clear'), findsOneWidget);
+    });
+
+    testWidgets('an empty extraBits renders exactly as before — no extra diodes',
+        (tester) async {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+        runKey: '',
+        statusKey: '',
+      );
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 300,
+        height: 400,
+        child: ThirdPartyEquipment(config: config),
+      )));
+
+      await tester.tap(find.byType(ThirdPartyEquipment));
+      await tester.pumpAndSettle();
+
+      // The struct Status section is unchanged; no extra diode section appears.
+      expect(find.byType(StructStatusDiodes), findsOneWidget);
+      expect(find.byType(ExtraStatusDiodes), findsNothing);
+
+      final dynamic state = tester.state(find.byType(ThirdPartyEquipment));
+      expect(state.debugExtraBitKeys, isEmpty,
+          reason: 'no extra bits declared means no extra subscriptions');
+    });
+
+    testWidgets('the lit extra diode resolves its role colour, not a literal',
+        (tester) async {
+      // Rendered directly, like the StructStatusDiodes scheme test, so the
+      // colour mapping is covered without a StateMan.
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 320,
+        child: ExtraStatusDiodes(
+          bits: const [
+            ExtraStatusBit(
+              key: 'MVC02.PermitOutfeed',
+              label: 'Way out of Multivac is clear',
+              onRole: HmiColorRole.blue,
+            ),
+          ],
+          values: const {'MVC02.PermitOutfeed': true},
+        ),
+      )));
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(ExtraStatusDiodes));
+      final lit = tester
+          .widgetList<CustomPaint>(find.byType(CustomPaint))
+          .map((c) => c.painter)
+          .whereType<LEDPainter>()
+          .where((p) => p.color != null)
+          .toList();
+      expect(lit, hasLength(1));
+      expect(lit.single.color, HmiColorRole.blue.resolve(ctx),
+          reason: 'a lit extra diode must resolve its scheme role');
+    });
+
+    testWidgets('a missing value renders the unknown diode, an off value white',
+        (tester) async {
+      await tester.pumpWidget(wrap(SizedBox(
+        width: 320,
+        child: ExtraStatusDiodes(
+          bits: const [
+            ExtraStatusBit(key: 'a.Off', label: 'Off row'),
+            ExtraStatusBit(key: 'b.Unknown', label: 'Unknown row'),
+          ],
+          values: const {'a.Off': false},
+        ),
+      )));
+      await tester.pumpAndSettle();
+
+      final painters = tester
+          .widgetList<CustomPaint>(find.byType(CustomPaint))
+          .map((c) => c.painter)
+          .whereType<LEDPainter>()
+          .toList();
+      expect(painters, hasLength(2));
+      expect(painters[0].color, Colors.white, reason: 'false is off (white)');
+      expect(painters[1].color, isNull,
+          reason: 'a key with no value is the grey `!`, not off');
+    });
+  });
 }
 
 /// Hands out one controllable stream per subscribed key, so tests can both
