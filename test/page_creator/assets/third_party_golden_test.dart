@@ -15,6 +15,7 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/providers/database.dart';
 import 'package:tfc_dart/core/database.dart' show Database;
+import 'package:tfc/theme.dart' show HmiColorRole;
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 
@@ -573,6 +574,164 @@ void main() {
       await expectLater(
         find.byKey(_key),
         matchesGoldenFile('goldens/third_party_boxErector_status_pane.png'),
+      );
+    });
+
+
+    // The Multivac's Status section as an operator on line 2 actually sees it:
+    // the four struct diodes off `SP_Packing_HMI`, and BENEATH them the one
+    // loose diode the instance declares — `MVC02.PermitOutfeed`, the outfeed
+    // permit that is not a member of the handshake struct and had no way to be
+    // shown before #381. This is the golden to judge the extra-bit treatment
+    // by: the extra row must read as part of the same column as the struct
+    // rows (same label column, same 22 px diode, no divider, no second
+    // heading), because the operator is not meant to care that one of these
+    // bits arrives on a different subscription in a different namespace.
+    //
+    // The struct is mixed on purpose — ready for fish (green) with a drop
+    // waiting (yellow), the drop not finished, and frustration false — so the
+    // blue extra diode below sits against a live-looking section rather than a
+    // column of identical dots.
+    testWidgets('multivac — status pane with extra outfeed diode',
+        (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_WaitingFrustration': false,
+        'p_stat_DropOk': true,
+        'p_stat_DropRequestFeedback': true,
+        'p_stat_DropFinished': false,
+      }));
+
+      const extra = ExtraStatusBit(
+        key: 'MVC02.PermitOutfeed',
+        label: 'Way out of Multivac is clear',
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 560,
+                child: Material(
+                  child: SidePane(
+                    title: 'MVC-02',
+                    subtitle: 'Multivac',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          StructStatusDiodes(
+                            status: status,
+                            bits: multivacStatusBits,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.multivac),
+                          ),
+                          const ExtraStatusDiodes(
+                            bits: [extra],
+                            values: {'MVC02.PermitOutfeed': true},
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_multivac_status_pane.png'),
+      );
+    });
+
+    // The three states one extra diode can be in, stacked so they can be told
+    // apart by eye: LIT in its declared role (blue for a permit, green where
+    // an instance asks for it), OFF as a white fill, and — the state that
+    // matters — a key that has served nothing yet as the GREY fill, NOT as a
+    // confident "off". An extra bit is a loose key on a separate subscription,
+    // so it is the diode most likely to be pointed at a key that does not
+    // exist; a typo in `extraBits` must look like a typo.
+    //
+    // What this golden pins for the unknown state is the grey FILL, not the
+    // `!` glyph on top of it. [LEDPainter] paints that `!` through a
+    // `TextPainter` with no `fontFamily`, so under the test harness it falls
+    // back to the Ahem font and draws as a filled white box — the white blob
+    // in the middle of the third diode here is that box, not a rendering bug,
+    // and the same artifact is already visible in
+    // `third_party_boxErector_status_pane.png`. Live, it is a real `!`. So
+    // judge this golden on off-is-white vs unknown-is-grey, which is the part
+    // that is honest in pixels.
+    testWidgets('extra status diodes — lit, off and unknown', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 360,
+                child: Material(
+                  child: SidePane(
+                    title: 'MVC-02',
+                    subtitle: 'Multivac',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: ExtraStatusDiodes(
+                        bits: const [
+                          ExtraStatusBit(
+                            key: 'MVC02.PermitOutfeed',
+                            label: 'Way out of Multivac is clear',
+                          ),
+                          ExtraStatusBit(
+                            key: 'MVC02.PermitInfeed',
+                            label: 'Way in to Multivac is clear',
+                          ),
+                          ExtraStatusBit(
+                            key: 'MVC02.Typo',
+                            label: 'Key the PLC does not serve',
+                            onRole: HmiColorRole.green,
+                          ),
+                        ],
+                        // The third key is absent from the map on purpose —
+                        // that is what a never-answered subscription looks
+                        // like, and it must draw the grey `!`.
+                        values: const {
+                          'MVC02.PermitOutfeed': true,
+                          'MVC02.PermitInfeed': false,
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_extra_status_diodes.png'),
       );
     });
 
