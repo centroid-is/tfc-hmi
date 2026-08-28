@@ -126,10 +126,16 @@ services:
     image: ghcr.io/centroid-is/docker-update:latest
     container_name: docker-update
     restart: unless-stopped
-    # 65532 = distroless nonroot UID. The GID must be the *host's* docker
-    # group — check with `getent group docker` on each station; it is not
-    # the same everywhere.
-    user: "65532:1001"
+    # 65532 = distroless nonroot UID. The GID must match the host's docker
+    # group, which is NOT the same on every station. Override per station in
+    # a .env beside this file:
+    #
+    #   echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> .env
+    #
+    # docker-update-state checks this at boot and fails loudly with that
+    # exact command if it is wrong, rather than leaving a container that
+    # cannot reach the daemon.
+    user: "65532:${DOCKER_GID:-1001}"
     ports:
       # 8443 serves the UI over TLS; 8080 answers 301s to it so the old
       # bookmark still works.
@@ -161,6 +167,8 @@ services:
     depends_on:
       docker-update-certs:
         condition: service_completed_successfully
+      docker-update-state:
+        condition: service_completed_successfully
     labels:
       hmi-update.watch: "false"
 
@@ -187,6 +195,39 @@ services:
         chmod 600 /out/docker-update.key
         chmod 644 /out/docker-update.crt
         echo "Certs written to /out as uid 65532"
+      '
+
+
+  # Same shape as create-local-share: a root one-shot that prepares a bind
+  # mount the real service cannot prepare for itself. docker-update runs as
+  # uid 65532 and Docker creates missing bind sources as root:root, so
+  # without this the updater cannot write its state file.
+  #
+  # It also verifies the docker GID, because that is the other half of the
+  # per-station setup and the failure is otherwise silent — a container that
+  # starts, then cannot reach the daemon.
+  docker-update-state:
+    image: alpine:latest
+    container_name: docker-update-state
+    restart: "no"
+    volumes:
+      - /home/centroid/docker-update:/state
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: |
+      sh -euc '
+        chown 65532:65532 /state
+        chmod 700 /state
+        echo "state dir ready, owned by 65532"
+
+        want=$$(stat -c %g /var/run/docker.sock)
+        have="${DOCKER_GID:-1001}"
+        if [ "$$want" != "$$have" ]; then
+          echo "docker-update is configured with GID $$have but this host'"'"'s" >&2
+          echo "docker socket is group $$want. It will not reach the daemon." >&2
+          echo "Fix with:  echo DOCKER_GID=$$want >> .env && docker compose up -d" >&2
+          exit 1
+        fi
+        echo "docker GID $$have matches the socket"
       '
 
 
