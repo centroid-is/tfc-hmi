@@ -123,10 +123,10 @@ class AlarmIdlePainter extends CustomPainter {
   ///
   /// This is the marker's visible extent, so it also defines how big a tap
   /// target the idle beacon offers: `AlarmVisibility` sizes its hit region
-  /// from the same factor (`maxRadius * outerRingFactor`) so the two never
-  /// drift apart. Keep them tied — a hit area larger than the drawing is an
-  /// invisible click target over empty space, which is exactly what this
-  /// factor is here to prevent.
+  /// from the same factor (`maxRadius * outerRingFactor`, floored at a
+  /// finger-sized minimum) so the two never drift apart. Keep them tied — a
+  /// hit area much larger than the drawing is an invisible click target over
+  /// empty space, which is exactly what this factor is here to prevent.
   static const double outerRingFactor = 0.4;
 
   AlarmIdlePainter({required this.color});
