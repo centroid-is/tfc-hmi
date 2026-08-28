@@ -9,10 +9,14 @@ library;
 
 import 'dart:async';
 
+import 'package:beamer/beamer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/providers/access.dart';
+import 'package:tfc/route_registry.dart';
+import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc/theme.dart';
 import 'package:tfc/widgets/access_sign_in_dialog.dart';
 import 'package:tfc/widgets/access_status_action.dart';
@@ -30,6 +34,7 @@ class _FakeSessionController extends AccessSessionController {
   final bool fail;
 
   int signOutCalls = 0;
+  int pokeCalls = 0;
 
   @override
   Future<AccessSession> build() {
@@ -42,6 +47,40 @@ class _FakeSessionController extends AccessSessionController {
   Future<void> signOut() async {
     signOutCalls++;
   }
+
+  @override
+  void poke() {
+    pokeCalls++;
+  }
+}
+
+/// A one-route Beamer shell around `BaseScaffold`, the same shape
+/// `base_scaffold_backarrow_test.dart` uses -- `BaseScaffold` reads
+/// `context.currentBeamLocation`, so it needs a router above it.
+Widget _scaffoldShell({
+  required _FakeSessionController controller,
+  required Widget body,
+}) {
+  final delegate = BeamerDelegate(
+    locationBuilder: RoutesLocationBuilder(routes: {
+      '/': (context, state, data) => BeamPage(
+            key: const ValueKey('/'),
+            title: 'Home',
+            child: BaseScaffold(title: 'Home', body: body),
+          ),
+    }).call,
+  );
+
+  return ProviderScope(
+    overrides: [accessSessionProvider.overrideWith(() => controller)],
+    child: BeamerProvider(
+      routerDelegate: delegate,
+      child: MaterialApp.router(
+        routerDelegate: delegate,
+        routeInformationParser: BeamerParser(),
+      ),
+    ),
+  );
 }
 
 AccessSession _elevated({
@@ -347,6 +386,78 @@ void main() {
     test('the default opener is the real sign-in dialog', () {
       expect(const AccessStatusAction().openSignIn,
           same(showAccessSignInDialog));
+    });
+  });
+
+  group('BaseScaffold access wiring', () {
+    setUp(() {
+      // Two, not one: Material's NavigationBar asserts on fewer than two
+      // destinations, and BaseScaffold always builds one.
+      RouteRegistry().menuItems.clear();
+      RouteRegistry().addMenuItem(
+          const MenuItem(label: 'Home', path: '/', icon: Icons.home));
+      RouteRegistry().addMenuItem(const MenuItem(
+          label: 'Alarm View', path: '/alarm-view', icon: Icons.alarm));
+    });
+    tearDown(() => RouteRegistry().menuItems.clear());
+
+    testWidgets('renders the access affordance in the app bar',
+        (tester) async {
+      await tester.pumpWidget(_scaffoldShell(
+        controller: _FakeSessionController(session: _anonymous),
+        body: const Text('page-body'),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessStatusAction), findsOneWidget);
+      expect(find.byTooltip('Sign in'), findsOneWidget);
+    });
+
+    testWidgets('shows who is signed in while elevated', (tester) async {
+      await tester.pumpWidget(_scaffoldShell(
+        controller: _FakeSessionController(session: _elevated()),
+        body: const Text('page-body'),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('anna'), findsOneWidget);
+      expect(find.byTooltip('Sign out'), findsOneWidget);
+    });
+
+    testWidgets('a pointer-down on the body pokes the session',
+        (tester) async {
+      final controller = _FakeSessionController(session: _elevated());
+      await tester.pumpWidget(_scaffoldShell(
+        controller: controller,
+        body: const Text('page-body'),
+      ));
+      await tester.pumpAndSettle();
+      expect(controller.pokeCalls, 0);
+
+      await tester.tap(find.text('page-body'));
+      await tester.pumpAndSettle();
+
+      expect(controller.pokeCalls, 1);
+    });
+
+    testWidgets('the poke listener does not swallow the page\'s own taps',
+        (tester) async {
+      final controller = _FakeSessionController(session: _elevated());
+      var pageTaps = 0;
+      await tester.pumpWidget(_scaffoldShell(
+        controller: controller,
+        body: GestureDetector(
+          onTap: () => pageTaps++,
+          child: const Text('page-body'),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('page-body'));
+      await tester.pumpAndSettle();
+
+      expect(pageTaps, 1);
+      expect(controller.pokeCalls, 1);
     });
   });
 }
