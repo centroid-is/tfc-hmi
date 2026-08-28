@@ -1179,4 +1179,86 @@ void main() {
       }
     });
   });
+
+  group('PaneBody section order', () {
+    /// The pane body's whole job: an operator who has learned one pane has
+    /// learned them all, so the four standard sections always land in the
+    /// same places no matter what order a pane author wrote them in.
+    Future<List<String>> headings(
+      WidgetTester tester,
+      List<PaneBodySection?> sections,
+    ) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: PaneBody(sections: sections)),
+      ));
+      // PaneSection upper-cases its heading, and the bodies below are plain
+      // text, so the headings are exactly the shouted strings on screen.
+      return tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '')
+          .where((t) => t == t.toUpperCase() && t.isNotEmpty)
+          .toList();
+    }
+
+    testWidgets('sorts scrambled sections into the house order',
+        (tester) async {
+      expect(
+        await headings(tester, const [
+          PaneBodySection.setpoints(child: Text('sp')),
+          PaneBodySection.manual(child: Text('man')),
+          PaneBodySection.trend(child: Text('tr')),
+          PaneBodySection.status(child: Text('st')),
+        ]),
+        ['STATUS', 'TREND', 'MANUAL', 'SETPOINTS'],
+      );
+    });
+
+    testWidgets('details sections come last, in the order given',
+        (tester) async {
+      expect(
+        await headings(tester, const [
+          PaneBodySection.details(title: 'Notes', child: Text('n')),
+          PaneBodySection.details(title: 'Channels', child: Text('c')),
+          PaneBodySection.status(child: Text('st')),
+        ]),
+        ['STATUS', 'NOTES', 'CHANNELS'],
+      );
+    });
+
+    testWidgets('a device may rename a slot without moving it', (tester) async {
+      expect(
+        await headings(tester, const [
+          PaneBodySection.manual(title: 'Force', child: Text('f')),
+          PaneBodySection.status(title: 'Signal', child: Text('s')),
+        ]),
+        ['SIGNAL', 'FORCE'],
+      );
+    });
+
+    testWidgets('null entries drop out, and dividers only sit between',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+          body: PaneBody(sections: [
+            PaneBodySection.status(child: Text('st')),
+            null,
+            PaneBodySection.trend(child: Text('tr')),
+          ]),
+        ),
+      ));
+      expect(find.byType(PaneSection), findsNWidgets(2));
+      expect(find.byType(Divider), findsOneWidget);
+    });
+
+    testWidgets('a single section gets no divider', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+          body: PaneBody(sections: [
+            PaneBodySection.status(child: Text('st')),
+          ]),
+        ),
+      ));
+      expect(find.byType(Divider), findsNothing);
+    });
+  });
 }

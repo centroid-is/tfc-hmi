@@ -13,6 +13,17 @@ import 'standard_dialog.dart';
 /// screen"**: whatever an operator needs at a glance fits without scrolling.
 /// Detail that does not fit belongs behind a [PaneGraphTile] or a
 /// [PaneExpandTile], which open a free-floating [StandardDialog] on tap.
+///
+/// The second house rule is the **order** of that body, top to bottom:
+///
+/// > **Status → Trend → Manual → Setpoints**, then anything device-specific.
+///
+/// Reading down a pane goes from what the equipment is doing now, to what it
+/// has been doing, to taking hold of it, to the numbers that are set once and
+/// left — and it goes that way in every pane, so an operator who has learned
+/// one has learned them all. Build the body with [PaneBody] and tag each
+/// block with its [PaneSectionSlot]; the order is then the widget's job, not
+/// the pane author's, and cannot drift as a pane grows a section.
 
 // ---------------------------------------------------------------------------
 // Status
@@ -419,6 +430,173 @@ class PaneActionBar extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Body building blocks
 // ---------------------------------------------------------------------------
+
+/// Where a standard section sits in a pane body, top to bottom.
+///
+/// The order of the enumerators **is** the on-screen order, and it is the
+/// house layout for every equipment pane:
+///
+/// 1. [status] — what the equipment is doing right now. The reason the
+///    operator opened the pane, so it is never below the fold.
+/// 2. [trend] — the same numbers over time. It reads as history of the
+///    block above it, so it belongs directly under it.
+/// 3. [manual] — hand control: jog, force, push. Below the readings that
+///    tell an operator whether to touch anything, and far enough down the
+///    pane that it is not the first thing a sleeve brushes.
+/// 4. [setpoints] — configuration that is changed rarely and then left
+///    alone. Last of the standard four.
+/// 5. [details] — anything device-specific that is none of the above
+///    (ranges, notes, channel lists). Appended in the order given.
+///
+/// Panes name their sections with a device's own vocabulary — a sensor's
+/// live block is `Signal`, a gate's hand control is `Force` — but they all
+/// occupy the same slot and therefore the same place on screen, so an
+/// operator who has learned one pane has learned them all. Use [PaneBody]
+/// rather than ordering sections by hand.
+enum PaneSectionSlot {
+  status('Status'),
+  trend('Trend'),
+  manual('Manual'),
+  setpoints('Setpoints'),
+  details(null);
+
+  const PaneSectionSlot(this.defaultTitle);
+
+  /// Section heading used when a pane does not override it.
+  final String? defaultTitle;
+}
+
+/// One section of a [PaneBody], tagged with the slot it belongs to.
+///
+/// Build these with the named constructors — [PaneBodySection.status] and
+/// friends — so the slot and the default heading come as a pair.
+class PaneBodySection {
+  /// Decides where this section renders, regardless of where it was written.
+  final PaneSectionSlot slot;
+
+  /// Heading, defaulting to [PaneSectionSlot.defaultTitle]. Override it when
+  /// the device has its own word for the slot (`Signal`, `Force`).
+  final String? title;
+
+  /// Small control on the heading row — a reset button, a unit toggle.
+  final Widget? trailing;
+
+  final Widget child;
+
+  const PaneBodySection({
+    required this.slot,
+    required this.child,
+    this.title,
+    this.trailing,
+  });
+
+  /// Live values: what the equipment is doing now.
+  const PaneBodySection.status({
+    required Widget child,
+    String? title,
+    Widget? trailing,
+  }) : this(
+          slot: PaneSectionSlot.status,
+          child: child,
+          title: title,
+          trailing: trailing,
+        );
+
+  /// Those values over time — normally a [PaneGraphTile].
+  const PaneBodySection.trend({
+    required Widget child,
+    String? title,
+    Widget? trailing,
+  }) : this(
+          slot: PaneSectionSlot.trend,
+          child: child,
+          title: title,
+          trailing: trailing,
+        );
+
+  /// Hand control: jog, force, push.
+  const PaneBodySection.manual({
+    required Widget child,
+    String? title,
+    Widget? trailing,
+  }) : this(
+          slot: PaneSectionSlot.manual,
+          child: child,
+          title: title,
+          trailing: trailing,
+        );
+
+  /// Values the operator sets and leaves.
+  const PaneBodySection.setpoints({
+    required Widget child,
+    String? title,
+    Widget? trailing,
+  }) : this(
+          slot: PaneSectionSlot.setpoints,
+          child: child,
+          title: title,
+          trailing: trailing,
+        );
+
+  /// Device-specific material that is none of the four standard slots.
+  /// Requires an explicit [title] — there is no house word for it.
+  const PaneBodySection.details({
+    required Widget child,
+    required String title,
+    Widget? trailing,
+  }) : this(
+          slot: PaneSectionSlot.details,
+          child: child,
+          title: title,
+          trailing: trailing,
+        );
+
+  /// This section rendered as the block a pane body actually shows.
+  PaneSection build() => PaneSection(
+        title: title ?? slot.defaultTitle,
+        trailing: trailing,
+        child: child,
+      );
+}
+
+/// The body of an equipment pane: sections rendered in [PaneSectionSlot]
+/// order with hairline dividers between them.
+///
+/// Sections may be listed in any order — the body sorts them, so the layout
+/// an operator sees is the same in every pane and cannot drift as a pane
+/// grows a section. Sections sharing a slot keep the order they were given.
+/// Null entries are allowed and dropped, so a pane can write
+/// `hasTrend ? PaneBodySection.trend(...) : null` inline.
+class PaneBody extends StatelessWidget {
+  final List<PaneBodySection?> sections;
+
+  const PaneBody({super.key, required this.sections});
+
+  @override
+  Widget build(BuildContext context) {
+    final present = sections.whereType<PaneBodySection>().toList();
+    // List.sort is not stable, so carry the position each section was
+    // written at and break slot ties on it.
+    final withOrder = List.generate(
+      present.length,
+      (i) => (section: present[i], order: i),
+    )..sort((a, b) {
+        final bySlot = a.section.slot.index.compareTo(b.section.slot.index);
+        return bySlot != 0 ? bySlot : a.order.compareTo(b.order);
+      });
+
+    final children = <Widget>[];
+    for (final entry in withOrder) {
+      if (children.isNotEmpty) children.add(const Divider(height: 1));
+      children.add(entry.section.build());
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: children,
+    );
+  }
+}
 
 /// A titled block inside a pane/dialog body.
 class PaneSection extends StatelessWidget {
