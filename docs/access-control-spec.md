@@ -347,6 +347,26 @@ logins" and deprioritising network segmentation.
 
 ---
 
+## 8b. Where the code lives
+
+`packages/tfc_access` — a new package in the existing monorepo `packages/`
+folder, alongside `tfc_dart`, `tfc_mcp_server`, `jbtm` and the rest. The relay
+branch carries `packages/` as a clean superset (the same six plus its own four),
+so a new directory merges without conflict when that branch rebases, and
+`tfc_relay_server` can then depend on it.
+
+**It must be pure Dart.** It holds `AccessGroup`, roles, `AccessSession`,
+`AccessPolicy` and the `AuditSink` interface — enums, strings and interfaces,
+nothing more. **Do not let it depend on `tfc_dart`**: that pulls the open62541
+FFI and native assets into everything importing it, and the relay was built
+specifically so its server (and a later web client) need neither.
+
+The guards do depend on what they wrap, so `GuardedStateMan` and
+`GuardedPreferences` live with `StateMan` / `PreferencesApi` and depend on
+`tfc_access`. The dependency runs one way only.
+
+---
+
 ## 9. Phases
 
 Each phase is a PR. Review between phases.
