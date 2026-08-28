@@ -18,8 +18,13 @@ dependencies:
   collection: ^1.18.0
   meta: ^1.15.0
   clock: ^1.1.1
-  # PBKDF2 arrives in plan 01-03 and adds `cryptography: ^2.7.0` here. It is
-  # deliberately absent until then.
+  # PBKDF2, for src/password_hasher.dart. Pure Dart, and already the root
+  # package's constraint, so nothing new entered the workspace graph.
+  # The *accelerated* backend lives in the Flutter app, which installs
+  # FlutterCryptography.defaultInstance into the process-global
+  # Cryptography.instance; this package picks that up without depending on the
+  # plugin. Adding the plugin here is what the purity test forbids.
+  cryptography: ^2.7.0
 
 dev_dependencies:
   test: ^1.25.0
