@@ -12,8 +12,10 @@ import 'package:beamer/beamer.dart';
 import 'package:logger/logger.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'nav_dropdown.dart';
+import 'access_status_action.dart';
 import '../models/menu_item.dart';
 import '../route_registry.dart';
+import '../providers/access.dart';
 import '../providers/theme.dart';
 import '../providers/alarm.dart';
 import '../providers/nav_alarm.dart';
@@ -294,6 +296,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
         ref.watch(navigationAlarmsProvider).valueOrNull ?? const {};
     final navCurrentPath = currentBeamPath(context);
 
+    // How much of the bar the right-hand cluster needs — see the centre
+    // region's margin comment below. Read off the session rather than fixed,
+    // so an anonymous panel keeps the centre width it had before the sign-in
+    // affordance existed. A loading or errored session reads as anonymous,
+    // the same degradation AccessStatusAction itself applies.
+    final accessElevated =
+        ref.watch(accessSessionProvider).valueOrNull?.isElevated ?? false;
+    final appBarRightMargin =
+        280.0 + (accessElevated ? kAccessStatusActionMaxWidth : 48.0);
+
     return Scaffold(
       appBar: _isFullscreen
           ? null
@@ -312,9 +324,15 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                     // Use 280 for a small safety buffer.
                     // Left margin: ~48px back-arrow IconButton plus the clock,
                     // which is [_clockWidth] wide.
+                    //
+                    // The access status action sits inboard of the right-hand
+                    // logo and theme toggle and is added on top of that 280:
+                    // ~48px for the sign-in icon button while anonymous, and up
+                    // to kAccessStatusActionMaxWidth once somebody is signed
+                    // in. See appBarRightMargin above.
                     Positioned.fill(
                       left: 48 + _clockWidth,
-                      right: 280,
+                      right: appBarRightMargin,
                       child: Align(
                         alignment: Alignment.center,
                         child: _buildAlarmBanner(context, ref),
@@ -371,12 +389,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                         ],
                       ),
                     ),
-                    // RIGHT SIDE: Theme toggle and SVG icon.
+                    // RIGHT SIDE: access status, SVG icon and theme toggle.
                     Align(
                       alignment: Alignment.centerRight,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          // Sign in when nobody is; who is signed in, in
+                          // orange, when somebody is. First child so it sits
+                          // inboard of the logo and the theme toggle.
+                          const AccessStatusAction(),
                           // Only show SVG if not in mobile portrait mode
                           if (!(MediaQuery.of(context).orientation ==
                                   Orientation.portrait &&
@@ -430,7 +452,18 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                 ),
               ),
             ),
-      body: widget.body,
+      // Pointer-down feeds the inactivity monitor: touching the panel keeps an
+      // elevated session alive. Translucent so the listener observes without
+      // consuming — a Listener that swallowed pointers would break every asset
+      // on the page. `poke()` is a no-op while anonymous and is guarded
+      // against a pointer arriving before the session has resolved, so an
+      // unauthenticated panel and a cold start both pay nothing.
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) =>
+            ref.read(accessSessionProvider.notifier).poke(),
+        child: widget.body,
+      ),
       floatingActionButton: _isFullscreen
           ? FloatingActionButton(
               mini: true,
