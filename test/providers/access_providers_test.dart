@@ -12,7 +12,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/access/drift_audit_sink.dart';
 import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart' show AppDatabase;
 
 import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/database.dart';
@@ -158,6 +160,32 @@ void main() {
         await container.read(inactivityTimeoutProvider.future),
         const Duration(minutes: 3),
       );
+    });
+  });
+
+  // The other half of the audit chain. `access_audit_test.dart` proves the
+  // controller hands a record to whatever `auditSinkProvider` returns, and
+  // `drift_audit_sink_test.dart` proves a `DriftAuditSink` turns a record into
+  // a row. Neither says the provider hands back a *DriftAuditSink* when a
+  // database is actually present — so both halves could pass on a station that
+  // silently audits into a `NullAuditSink` and writes nothing at all.
+  group('with a database', () {
+    test('auditSinkProvider is a DriftAuditSink, not a NullAuditSink',
+        () async {
+      final appDb = AppDatabase.inMemoryForTest();
+      final db = Database(appDb);
+      addTearDown(() async => appDb.close());
+
+      final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWith((ref) async => db)],
+      );
+      addTearDown(container.dispose);
+
+      final sink = await container.read(auditSinkProvider.future);
+      expect(sink, isA<DriftAuditSink>());
+      expect(sink, isNot(isA<NullAuditSink>()));
+
+      await db.dispose();
     });
   });
 
