@@ -28,7 +28,8 @@ void main() {
       expect(session.can(AccessGroup.users), isFalse);
     });
 
-    test('uses the Operator role as it currently stands, without second-guessing'
+    test(
+        'uses the Operator role as it currently stands, without second-guessing'
         ' it', () {
       // Somebody ticked `setpoints` on the Operator role. That silently grants
       // it to every panel on the floor with nobody signed in — the one footgun
@@ -204,7 +205,8 @@ void main() {
   });
 
   group('PersistedSession', () {
-    test('an expiresAt in the past is expired — this is what makes a stored '
+    test(
+        'an expiresAt in the past is expired — this is what makes a stored '
         'session restore as anonymous', () {
       final stored = PersistedSession(
         username: 'gudrun',
@@ -236,14 +238,11 @@ void main() {
     test('value equality', () {
       final at = DateTime.utc(2026, 8, 28, 12);
       expect(
-        PersistedSession(
-            username: 'a', roleName: 'Operator', expiresAt: at),
-        PersistedSession(
-            username: 'a', roleName: 'Operator', expiresAt: at),
+        PersistedSession(username: 'a', roleName: 'Operator', expiresAt: at),
+        PersistedSession(username: 'a', roleName: 'Operator', expiresAt: at),
       );
       expect(
-        PersistedSession(
-            username: 'a', roleName: 'Operator', expiresAt: at),
+        PersistedSession(username: 'a', roleName: 'Operator', expiresAt: at),
         isNot(PersistedSession(
             username: 'b', roleName: 'Operator', expiresAt: at)),
       );
