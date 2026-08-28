@@ -14,9 +14,6 @@
 
 import 'dart:io';
 
-// `isNull` / `isNotNull` are matchers here, not drift's SQL expressions of the
-// same names.
-import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:logger/logger.dart';
 import 'package:test/test.dart';
 import 'package:tfc_access/tfc_access.dart';
