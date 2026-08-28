@@ -34,10 +34,16 @@ minimal roles/users screen.
 - Per-user OPC UA sessions or PLC-side validation. See §8 — this spec ships a
   guardrail, not an enforcement boundary, and must say so in its own UI copy.
 - Plant-facing user self-service, password reset flows, password policy.
-- Anything to do with `lib/pages/dbus_login.dart`. That is a *connection*
-  login for D-Bus (system by default; SSH and user/password are rarely used),
-  not a person login, and it stays exactly as it is. Call the new one
-  **Sign in** so the two read differently in the UI.
+- Changing `lib/pages/dbus_login.dart`. Not because it is unrelated — it is the
+  mechanism *underneath* `administer`. D-Bus is how the app makes system-level
+  changes (IP settings and the like), and its credential is a **station
+  credential**, the same kind of thing as the OPC UA session and the Postgres
+  password: it authenticates the station to the system bus, never a person to
+  the HMI. So `administer` is the human gate, the D-Bus credential is the
+  plumbing beneath it, and the audit records the person while D-Bus merely
+  applies the change. Configure it once at commissioning — it already persists
+  to secure storage — so the operator meets one prompt (elevation), not two.
+  Call the new one **Sign in** so the two still read differently in the UI.
 
 ---
 
