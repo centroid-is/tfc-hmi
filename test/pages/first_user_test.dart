@@ -174,7 +174,10 @@ void main() {
       // choice that does not exist.
       expect(find.byType(DropdownButton<String>), findsNothing);
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
-      expect(_textContaining('Role'), findsNothing);
+      // A field labelled exactly 'Role'. Not textContaining: the intro copy
+      // legitimately says "Roles are seeded; users are not".
+      expect(find.text('Role'), findsNothing);
+      expect(find.text('Role:'), findsNothing);
     });
 
     testWidgets('offers no skip or later affordance', (tester) async {
