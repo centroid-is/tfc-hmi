@@ -79,9 +79,16 @@ point of the group model.
 not many; multi-role adds union semantics and an "effective permissions"
 inspector, and is not worth it at this size.
 
-**The anonymous role.** A single preference names which role applies with no
-session. Seeded to Operator. This is how "anonymous is operator" is expressed
-without special-casing it through the codebase.
+**Anonymous is the Operator role.** Not a configurable pointer — a session with
+no user resolves to the role named `Operator`, full stop. That removes a knob
+nobody needs and keeps "anonymous is operator" true by construction.
+
+Two consequences to build in. The `Operator` row **cannot be deleted or
+renamed**; enforce it, do not merely document it, or a logged-out panel loses
+its identity. And editing that row changes what an *unauthenticated* panel may
+do — ticking `setpoints` on Operator silently grants it to every panel on the
+floor with nobody signed in. The roles screen must say so plainly at the point
+of edit; it is the one footgun this simplification creates.
 
 ---
 
