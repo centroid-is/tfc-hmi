@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:test/test.dart';
 
-AccessRole _seed(String name) =>
-    kSeedRoles.firstWhere((r) => r.name == name, orElse: () => fail('no seed role named "$name"'));
+AccessRole _seed(String name) => kSeedRoles.firstWhere((r) => r.name == name,
+    orElse: () => fail('no seed role named "$name"'));
 
 void main() {
   group('kSeedRoles', () {
@@ -100,8 +100,8 @@ void main() {
     });
 
     test('decodeGroups ignores non-string array entries', () {
-      expect(AccessRole.decodeGroups('["operate",7,null]'),
-          {AccessGroup.operate});
+      expect(
+          AccessRole.decodeGroups('["operate",7,null]'), {AccessGroup.operate});
     });
 
     test('fromDb rebuilds a role from its stored columns', () {
