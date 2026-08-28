@@ -10,6 +10,8 @@ import 'package:beamer/beamer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/pages/first_user.dart';
+import 'package:tfc/routes.dart';
 import 'package:tfc/widgets/route_redirect.dart';
 
 import 'package:centroidx/main.dart';
@@ -23,6 +25,17 @@ MenuItem? _byPath(List<MenuItem> items, String path) {
   }
   return null;
 }
+
+/// Every path in the tree, sections and leaves alike.
+///
+/// [_byPath] only looks one level down; a route that must not appear *anywhere*
+/// in the menu needs the whole tree walked.
+List<String> _allPaths(List<MenuItem> items) => [
+      for (final item in items) ...[
+        if (item.path != null) item.path!,
+        ..._allPaths(item.children),
+      ],
+    ];
 
 void main() {
   group('buildTopLevelMenuItems', () {
@@ -214,6 +227,29 @@ void main() {
       final lb = createLocationBuilder([_page('Home', '/')]);
       expect(lb.routes.containsKey('/history-view'), isTrue);
       expect(lb.routes.containsKey('/advanced/history-view'), isTrue);
+    });
+
+    testWidgets('the first-user page is routable by path', (tester) async {
+      // Always registered, never conditional: the window check lives in the
+      // page body, so the address resolves even before the database is up.
+      final lb = createLocationBuilder([_page('Home', '/')]);
+      final page = await buildRoute(tester, lb, AppRoutes.firstUser);
+      expect(page.child, isA<FirstUserPage>());
+    });
+
+    testWidgets('the first-user page is registered even with no pages at all', (tester) async {
+      // The commissioning case: a station whose page manager knows nothing yet.
+      final lb = createLocationBuilder(const []);
+      expect(lb.routes.containsKey(AppRoutes.firstUser), isTrue);
+    });
+
+    test('the first-user page has no menu entry, in god mode or out', () {
+      // A permanent entry advertising the commissioning window would be dead
+      // on every station but a fresh one, and misleading on all of them.
+      for (final god in [false, true]) {
+        final items = buildTopLevelMenuItems(god: god, isLinux: false, pageMenuItems: [_page('Home', '/')]);
+        expect(_allPaths(items), isNot(contains(AppRoutes.firstUser)), reason: 'god: $god');
+      }
     });
 
     testWidgets('no reachable pages at all leaves no bogus redirect', (tester) async {

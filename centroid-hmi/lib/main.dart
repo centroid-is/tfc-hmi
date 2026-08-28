@@ -32,6 +32,7 @@ import 'package:tfc/pages/server_config.dart';
 import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
+import 'package:tfc/pages/first_user.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/feature_flags.dart';
@@ -494,6 +495,12 @@ RoutesLocationBuilder createLocationBuilder(
         child: KeyRepositoryPage(proposalData: args is String ? args : null)),
     AppRoutes.alarmView: (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
+    // Registered unconditionally. The page itself decides whether the window
+    // is open (firstUserWindowOpenProvider); gating the *route* on a database
+    // read would 404 the address while the connection was still coming up,
+    // which is exactly when somebody is commissioning the station.
+    AppRoutes.firstUser: (context, state, args) =>
+        BeamPage(key: const ValueKey(AppRoutes.firstUser), title: 'First account', child: const FirstUserPage()),
   };
 
   // Statement-level const guard rather than a collection-if inside the map
