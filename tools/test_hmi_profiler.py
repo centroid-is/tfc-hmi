@@ -13,8 +13,10 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import socket
 import struct
+import tempfile
 import sys
 import threading
 import unittest
@@ -749,6 +751,263 @@ class ActionsTest(unittest.TestCase):
         data["hot_path"] = ["main", "fib", "fib", "fib", "fib", "fib"]
         text = hp.render_actions(data)
         self.assertIn("fib x5 deep", text)
+
+
+# --------------------------------------------------------------------------
+# The view from outside the VM
+# --------------------------------------------------------------------------
+
+
+def docker_stats(usage=200, pre_usage=100, system=10000, pre_system=5000, cpus=4,
+                 mem_usage=500_000_000, mem_limit=1_000_000_000, cache=0, pids=42):
+    return {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": usage},
+            "system_cpu_usage": system,
+            "online_cpus": cpus,
+        },
+        "precpu_stats": {
+            "cpu_usage": {"total_usage": pre_usage},
+            "system_cpu_usage": pre_system,
+        },
+        "memory_stats": {
+            "usage": mem_usage,
+            "limit": mem_limit,
+            "stats": {"inactive_file": cache},
+        },
+        "pids_stats": {"current": pids},
+    }
+
+
+class ContainerStatsTest(unittest.TestCase):
+    def test_cpu_percent_uses_dockers_own_formula(self):
+        # 100/5000 of total system time, across 4 cpus -> 8%.
+        self.assertAlmostEqual(hp.container_cpu_percent(docker_stats()), 8.0)
+
+    def test_cpu_percent_falls_back_to_percpu_length(self):
+        stats = docker_stats(cpus=None)
+        stats["cpu_stats"]["cpu_usage"]["percpu_usage"] = [1, 2]
+        self.assertAlmostEqual(hp.container_cpu_percent(stats), 4.0)
+
+    def test_cpu_percent_survives_a_missing_precpu_sample(self):
+        stats = docker_stats()
+        stats["precpu_stats"] = {}
+        self.assertIsNone(hp.container_cpu_percent(stats))
+
+    def test_cpu_percent_of_a_stopped_container_is_zero_not_negative(self):
+        self.assertEqual(hp.container_cpu_percent(docker_stats(system=5000, pre_system=5000)), 0.0)
+
+    def test_memory_excludes_page_cache(self):
+        used, limit = hp.container_memory(docker_stats(mem_usage=600, mem_limit=1000, cache=100))
+        self.assertEqual((used, limit), (500, 1000))
+
+    def test_memory_accepts_the_cgroup_v1_field_name(self):
+        stats = docker_stats(mem_usage=600, mem_limit=1000)
+        stats["memory_stats"]["stats"] = {"total_inactive_file": 100}
+        self.assertEqual(hp.container_memory(stats), (500, 1000))
+
+    def test_memory_of_a_container_with_no_stats(self):
+        self.assertEqual(hp.container_memory({"memory_stats": {}}), (None, None))
+
+    def test_summarise_computes_percent_of_limit(self):
+        row = hp.summarise_container("flutter", docker_stats(mem_usage=900_000_000))
+        self.assertEqual(row["name"], "flutter")
+        self.assertAlmostEqual(row["memory_percent"], 90.0)
+        self.assertEqual(row["pids"], 42)
+
+    def test_render_warns_when_close_to_the_limit(self):
+        rows = [hp.summarise_container("flutter", docker_stats(mem_usage=950_000_000))]
+        text = hp.render_containers(rows)
+        self.assertIn("OOM kill", text)
+
+    def test_render_without_the_socket_explains_itself(self):
+        self.assertIn("Docker socket", hp.render_containers([]))
+
+
+class FakeProcTest(unittest.TestCase):
+    """/proc parsing, against a directory tree shaped like the real thing."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def write(self, path, text):
+        full = os.path.join(self.root, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as handle:
+            handle.write(text)
+
+    def make_process(self, pid, comm, rss_kb, threads, cmdline=None):
+        self.write(f"{pid}/comm", comm + "\n")
+        self.write(f"{pid}/cmdline", (cmdline or comm) + "\0")
+        self.write(
+            f"{pid}/status",
+            f"Name:\t{comm}\nVmRSS:\t{rss_kb} kB\nVmSize:\t{rss_kb * 3} kB\n"
+            f"Threads:\t{len(threads)}\n",
+        )
+        for tid, (name, utime, stime) in threads.items():
+            self.write(f"{pid}/task/{tid}/comm", name + "\n")
+            self.write(
+                f"{pid}/task/{tid}/stat",
+                f"{tid} ({name}) S 0 1 1 0 -1 4194304 100 0 0 0 {utime} {stime} 0 0 20 0 4 0\n",
+            )
+
+    def test_finds_the_app_by_comm(self):
+        self.make_process(1, "sh", 100, {1: ("sh", 0, 0)}, cmdline="/bin/sh -c ./centroidx")
+        self.make_process(9, "centroidx", 950_000, {9: ("centroidx", 5, 1)})
+        # The shell's cmdline mentions centroidx too; comm must win.
+        self.assertEqual(hp.find_process(self.root, ("centroidx",)), 9)
+
+    def test_returns_none_without_a_shared_pid_namespace(self):
+        self.make_process(1, "python3", 100, {1: ("python3", 0, 0)})
+        self.assertIsNone(hp.find_process(self.root, ("centroidx",)))
+
+    def test_missing_proc_root_does_not_raise(self):
+        self.assertIsNone(hp.find_process(os.path.join(self.root, "nope"), ("x",)))
+
+    def test_snapshot_reads_rss_and_threads(self):
+        self.make_process(
+            9, "centroidx", 950_000,
+            {9: ("centroidx", 10, 2), 11: ("io.flutter.ui", 400, 20),
+             12: ("io.flutter.raster", 30, 3)},
+        )
+        snapshot = hp.process_snapshot(9, self.root)
+        self.assertEqual(snapshot["rss_kb"], 950_000)
+        self.assertEqual(snapshot["threads"], 3)
+        self.assertEqual(snapshot["thread_detail"]["11"]["name"], "io.flutter.ui")
+        self.assertEqual(snapshot["thread_detail"]["11"]["ticks"], 420)
+
+    def test_snapshot_of_a_dead_process(self):
+        self.assertIsNone(hp.process_snapshot(999, self.root))
+
+    def test_a_thread_name_with_a_space_does_not_break_stat_parsing(self):
+        # comm sits in parens precisely because it can contain spaces; a naive
+        # whitespace split of the whole line shifts every field after it.
+        self.make_process(9, "centroidx", 100, {9: ("my thread", 77, 3)})
+        snapshot = hp.process_snapshot(9, self.root)
+        self.assertEqual(snapshot["thread_detail"]["9"]["ticks"], 80)
+
+
+class ThreadCpuTest(unittest.TestCase):
+    def snap(self, threads):
+        return {"thread_detail": {tid: {"name": n, "ticks": t} for tid, (n, t) in threads.items()}}
+
+    def test_percent_of_a_core_over_the_window(self):
+        before = self.snap({"1": ("io.flutter.ui", 0)})
+        after = self.snap({"1": ("io.flutter.ui", 500)})   # 500 ticks = 5 s of cpu
+        rows = hp.thread_cpu(before, after, seconds=10.0)
+        self.assertAlmostEqual(rows[0]["percent"], 50.0)
+
+    def test_orders_busiest_first(self):
+        before = self.snap({"1": ("ui", 0), "2": ("raster", 0)})
+        after = self.snap({"1": ("ui", 10), "2": ("raster", 900)})
+        self.assertEqual([r["name"] for r in hp.thread_cpu(before, after, 10.0)], ["raster", "ui"])
+
+    def test_a_thread_that_appeared_mid_window_counts_from_zero(self):
+        before = self.snap({"1": ("ui", 0)})
+        after = self.snap({"1": ("ui", 0), "2": ("worker", 100)})
+        rows = {r["name"]: r["percent"] for r in hp.thread_cpu(before, after, 10.0)}
+        self.assertAlmostEqual(rows["worker"], 10.0)
+
+    def test_a_recycled_tid_with_a_lower_count_is_skipped_not_negative(self):
+        before = self.snap({"1": ("ui", 900)})
+        after = self.snap({"1": ("something-else", 5)})
+        self.assertEqual(hp.thread_cpu(before, after, 10.0), [])
+
+    def test_the_divisor_is_the_measured_window_not_the_requested_one(self):
+        # Collecting container stats takes seconds of its own, so the elapsed
+        # time is longer than the requested sleep. Dividing by the request
+        # reported one busy thread at 352% of a core against a live container.
+        before = self.snap({"1": ("raster", 0)})
+        after = self.snap({"1": ("raster", 1400)})       # 14 s of cpu
+        self.assertAlmostEqual(hp.thread_cpu(before, after, 4.0)[0]["percent"], 350.0)
+        self.assertAlmostEqual(hp.thread_cpu(before, after, 14.0)[0]["percent"], 100.0)
+
+    def test_missing_snapshots(self):
+        self.assertEqual(hp.thread_cpu(None, self.snap({}), 10.0), [])
+        self.assertEqual(hp.thread_cpu(self.snap({}), self.snap({}), 0), [])
+
+    def test_render_explains_a_missing_pid_namespace(self):
+        self.assertIn("PID namespace", hp.render_threads(None, []))
+
+    def test_render_splits_dart_heap_from_native(self):
+        snapshot = {"pid": 9, "name": "centroidx", "rss_kb": 900_000, "threads": 20,
+                    "thread_detail": {}}
+        text = hp.render_threads(snapshot, [], dart_heap_bytes=80_000_000)
+        self.assertIn("native", text)
+        self.assertIn("842 MB", text)  # 900000 kB = 921.6 MB RSS, less the 80 MB heap
+
+
+class PgUrlTest(unittest.TestCase):
+    def test_builds_from_the_backend_environment(self):
+        url = hp.pg_url_from_env({
+            "CENTROID_PGHOST": "timescaledb", "CENTROID_PGUSER": "centroid",
+            "CENTROID_PGPASSWORD": "FooBarHelloWorld", "CENTROID_PGDATABASE": "hmi",
+            "CENTROID_PGSSLMODE": "require",
+        })
+        self.assertEqual(
+            url, "postgresql://centroid:FooBarHelloWorld@timescaledb:5432/hmi?sslmode=require"
+        )
+
+    def test_percent_encodes_a_password_with_url_characters(self):
+        url = hp.pg_url_from_env({"CENTROID_PGHOST": "db", "CENTROID_PGUSER": "u",
+                                  "CENTROID_PGPASSWORD": "p@ss/word"})
+        self.assertIn("p%40ss%2Fword", url)
+
+    def test_explicit_url_wins(self):
+        self.assertEqual(
+            hp.pg_url_from_env({"HMI_PG_URL": "postgresql://x/y", "CENTROID_PGHOST": "db"}),
+            "postgresql://x/y",
+        )
+
+    def test_no_host_means_no_database(self):
+        self.assertIsNone(hp.pg_url_from_env({}))
+
+
+class PgRenderTest(unittest.TestCase):
+    def test_a_missing_extension_does_not_hide_the_other_sections(self):
+        sections = {
+            "database": {"title": "Database", "headers": ["m", "v"], "rows": [["cache hit %", "99"]]},
+            "statements": {"title": "Slowest", "headers": ["a"],
+                           "error": 'relation "pg_stat_statements" does not exist'},
+        }
+        text = hp.render_postgres(sections)
+        self.assertIn("cache hit %", text)
+        self.assertIn("pg_stat_statements", text)
+
+    def test_no_database_configured(self):
+        self.assertIn("no database configured", hp.render_postgres(None))
+
+    def test_psql_missing(self):
+        self.assertIn("psql", hp.render_postgres({"error": "psql is not installed in this image"}))
+
+
+class SystemActionsTest(unittest.TestCase):
+    def base(self):
+        return {"frames": hp.frame_stats([]), "cpu": hp.fold_cpu_samples({}),
+                "hot_path": [], "slow": []}
+
+    def test_flags_a_container_near_its_memory_limit(self):
+        data = self.base()
+        data["containers"] = [hp.summarise_container("flutter", docker_stats(mem_usage=950_000_000))]
+        self.assertIn("OOM kill", hp.render_actions(data))
+
+    def test_flags_native_memory_dwarfing_the_dart_heap(self):
+        data = self.base()
+        data["process"] = {"rss_kb": 900_000, "pid": 1, "name": "c", "threads": 1,
+                           "thread_detail": {}}
+        data["memory_usage"] = {"heapUsage": 50_000_000}
+        self.assertIn("outside the Dart heap", hp.render_actions(data))
+
+    def test_flags_a_long_running_query(self):
+        data = self.base()
+        data["postgres"] = {"activity": {"rows": [["active", "-", "4.2", "SELECT ..."]]}}
+        self.assertIn("longer than a second", hp.render_actions(data))
+
+    def test_as_float_is_forgiving(self):
+        self.assertEqual(hp._as_float("x"), 0.0)
+        self.assertEqual(hp._as_float(None), 0.0)
+        self.assertEqual(hp._as_float("2.5"), 2.5)
 
 
 class PercentileTest(unittest.TestCase):

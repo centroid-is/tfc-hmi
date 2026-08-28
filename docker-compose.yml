@@ -179,6 +179,18 @@ services:
     image: ghcr.io/centroid-is/hmi-profiler:latest
     profiles: ["profiling"]
     network_mode: "service:flutter"
+    # Sharing the PID namespace too is what turns "the container is using 180%
+    # CPU" into "io.flutter.raster is using 180% CPU while io.flutter.ui idles"
+    # — the difference between a widget problem and a paint problem. It also
+    # exposes RSS, which the Dart heap figure does not: the engine, Skia,
+    # pdfium and open62541 all allocate outside it.
+    pid: "service:flutter"
+    # The host's docker group, needed to read the socket mounted below. As with
+    # docker-update above, this GID is station-specific — check it with
+    # `getent group docker` on the machine. Wrong value costs you the
+    # Containers section and nothing else; the report says so when it happens.
+    group_add:
+      - "1001"
     depends_on:
       - flutter
     # Its own budget, deliberately outside the app's 1 GB.
@@ -186,8 +198,25 @@ services:
       resources:
         limits:
           memory: 512M
+    volumes:
+      - profiler-reports:/reports
+      # Read-only, and still a real grant: the Docker API is root on the host
+      # however it is mounted. It buys the only uniform view of CPU, memory
+      # against limit and task count across *every* service — flutter,
+      # centroidx-backend, timescaledb, weston — which is the thing no
+      # in-process profiler can see. Drop this line and pass --no-docker if
+      # that trade is not worth it here; everything else still works.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       HMI_VM_SERVICE_URI: ws://127.0.0.1:8181/ws
+      # Same credentials the backend uses; the database section is read-only
+      # (pg_stat_* views only).
+      CENTROID_PGHOST: timescaledb
+      CENTROID_PGPORT: 5432
+      CENTROID_PGDATABASE: hmi
+      CENTROID_PGUSER: centroid
+      CENTROID_PGPASSWORD: FooBarHelloWorld
+      CENTROID_PGSSLMODE: require
     # A 20 s window every 15 minutes. Collecting is not free — the CPU profiler
     # samples at 250 µs and the timeline records — so this is a duty cycle a
     # station can carry, not a setting to turn up and forget.
@@ -197,8 +226,6 @@ services:
       - --interval=900
       - --wait=120 # the app takes a while to come up after a station reboot
       - --out-dir=/reports
-    volumes:
-      - profiler-reports:/reports
     restart: unless-stopped
     labels:
       - hmi-update.watch=true

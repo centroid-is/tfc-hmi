@@ -10,7 +10,13 @@ the app is slow" — can read without opening DevTools.
 No third-party packages. The WebSocket client below is deliberately small so
 the script runs anywhere python3 does, including a stock `python:alpine`.
 
-Two questions, two mechanisms. "What is this app always doing?" is answered by
+Three layers, because a slow HMI is not always a slow *Dart* HMI: the Dart VM
+Service (call trees, frames, heap), the OS (per-thread CPU, RSS — the engine,
+Skia, pdfium and open62541 all allocate outside the Dart heap), and the rest of
+the stack (every container against its memory limit, and what the database is
+doing). `report` puts all of them in one document over one wall-clock window.
+
+Within the Dart layer, two questions, two mechanisms. "What is this app always doing?" is answered by
 folding CPU samples into a call tree. "What was that 80 ms hiccup?" is answered
 by finding timeline blocks that ran far longer than the median for their own
 name, then folding only the samples taken *inside that block's window*. The
@@ -24,6 +30,10 @@ Subcommands
     cpu        hot functions (self/inclusive) plus the call tree behind them.
     slow       find blocks that ran unusually long and dump the stack that was
                on the CPU during each. --repeat to keep hunting.
+    system     the view from outside the VM: every container's CPU and memory
+               against its limit, the app's per-thread CPU and RSS, and the
+               database's live queries and scan counts. Needs no VM service,
+               so it still answers when the app is wedged.
     timeline   aggregate VM timeline events by name (BUILD/LAYOUT/PAINT/GC...).
     memory     heap usage plus the largest classes by retained size.
     report     all of the above, as one markdown document, led by a
@@ -52,11 +62,14 @@ import base64
 import collections
 import errno
 import hashlib
+import http.client
 import json
 import os
 import socket
 import ssl
+import shutil
 import struct
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -371,6 +384,384 @@ class VmService:
 
     def close(self):
         self._ws.close()
+
+
+# --------------------------------------------------------------------------
+# The view from outside the VM: the container and the OS.
+#
+# The Dart heap is not the memory that gets a container OOM-killed. The engine,
+# Skia, pdfium and open62541 all allocate outside it, so `getMemoryUsage` can
+# report a healthy 80 MB while RSS sits at 950 MB of a 1 GB limit. And no VM
+# Service RPC can tell you the raster thread is pegged while the UI thread
+# idles. Both need looking at from outside.
+# --------------------------------------------------------------------------
+
+
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    """http.client over an AF_UNIX socket — the Docker API, without docker-py."""
+
+    def __init__(self, socket_path, timeout=10.0):
+        super().__init__("localhost", timeout=timeout)
+        self._socket_path = socket_path
+
+    def connect(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        sock.connect(self._socket_path)
+        self.sock = sock
+
+
+class DockerClient:
+    """Just enough of the Docker API to list containers and read their stats."""
+
+    def __init__(self, socket_path="/var/run/docker.sock", timeout=30.0):
+        self.socket_path = socket_path
+        self.timeout = timeout
+
+    def available(self):
+        return os.path.exists(self.socket_path)
+
+    def get(self, path):
+        conn = _UnixHTTPConnection(self.socket_path, timeout=self.timeout)
+        try:
+            conn.request("GET", path, headers={"Host": "localhost"})
+            response = conn.getresponse()
+            body = response.read()
+            if response.status != 200:
+                raise ProfilerError(f"docker API {path} -> {response.status}: {body[:200]!r}")
+            return json.loads(body)
+        except OSError as exc:
+            raise ProfilerError(f"docker API {path}: {exc}") from exc
+        finally:
+            conn.close()
+
+    def containers(self):
+        return self.get("/containers/json")
+
+    def stats(self, container_id):
+        # stream=false makes the daemon sample twice about a second apart and
+        # return both, which is what the CPU percentage needs.
+        return self.get(f"/containers/{container_id}/stats?stream=false")
+
+
+def container_cpu_percent(stats):
+    """Docker's own CPU formula, over the two samples `stream=false` returns."""
+    cpu = stats.get("cpu_stats") or {}
+    pre = stats.get("precpu_stats") or {}
+    usage = (cpu.get("cpu_usage") or {}).get("total_usage")
+    pre_usage = (pre.get("cpu_usage") or {}).get("total_usage")
+    system = cpu.get("system_cpu_usage")
+    pre_system = pre.get("system_cpu_usage")
+    if None in (usage, pre_usage, system, pre_system):
+        return None
+    cpu_delta = usage - pre_usage
+    system_delta = system - pre_system
+    if system_delta <= 0 or cpu_delta < 0:
+        return 0.0
+    cpus = cpu.get("online_cpus") or len((cpu.get("cpu_usage") or {}).get("percpu_usage") or []) or 1
+    return 100.0 * cpu_delta / system_delta * cpus
+
+
+def container_memory(stats):
+    """Usage minus page cache, which is what the OOM killer actually counts."""
+    memory = stats.get("memory_stats") or {}
+    usage = memory.get("usage")
+    if usage is None:
+        return None, memory.get("limit")
+    detail = memory.get("stats") or {}
+    # cgroup v2 calls it inactive_file; v1 called it total_inactive_file.
+    cache = detail.get("inactive_file", detail.get("total_inactive_file", 0)) or 0
+    return max(usage - cache, 0), memory.get("limit")
+
+
+def summarise_container(name, stats):
+    used, limit = container_memory(stats)
+    percent_of_limit = 100.0 * used / limit if used is not None and limit else None
+    return {
+        "name": name,
+        "cpu_percent": container_cpu_percent(stats),
+        "memory_bytes": used,
+        "memory_limit": limit,
+        "memory_percent": percent_of_limit,
+        "pids": (stats.get("pids_stats") or {}).get("current"),
+    }
+
+
+def collect_containers(client, names=None):
+    """One row per running container, or per named container if given.
+
+    A socket we cannot read is reported as a row, not raised: the container
+    view is the least important of the three and must never take the thread
+    and database sections down with it.
+    """
+    rows = []
+    try:
+        listing = client.containers()
+    except ProfilerError as exc:
+        return [{"name": "(docker)", "error": str(exc)}]
+    for container in listing:
+        name = (container.get("Names") or ["/?"])[0].lstrip("/")
+        if names and name not in names:
+            continue
+        try:
+            rows.append(summarise_container(name, client.stats(container["Id"])))
+        except ProfilerError as exc:
+            rows.append({"name": name, "error": str(exc)})
+    rows.sort(key=lambda row: -(row.get("cpu_percent") or 0))
+    return rows
+
+
+# ------------------------------------------------------------------ /proc
+
+def _clock_ticks():
+    try:
+        return os.sysconf("SC_CLK_TCK") or 100
+    except (ValueError, OSError, AttributeError):
+        return 100
+
+
+CLOCK_TICKS = _clock_ticks()  # 100 on every Linux we ship to, but ask anyway.
+
+
+def _read(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def find_process(root="/proc", match=("centroidx",)):
+    """The pid whose comm or cmdline mentions one of `match`.
+
+    Only meaningful when this container shares the target's PID namespace
+    (`pid: "service:flutter"` in compose); otherwise /proc shows us only
+    ourselves and this finds nothing, which is reported rather than guessed at.
+    """
+    best = None
+    for entry in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        if not entry.isdigit():
+            continue
+        comm = (_read(f"{root}/{entry}/comm") or "").strip()
+        cmdline = (_read(f"{root}/{entry}/cmdline") or "").replace("\0", " ")
+        for needle in match:
+            if needle in comm or needle in cmdline:
+                # Prefer an exact comm match over a cmdline mention, which
+                # would otherwise match the shell that launched it.
+                if needle in comm:
+                    return int(entry)
+                best = best or int(entry)
+    return best
+
+
+def _stat_times(text):
+    """utime, stime from a /proc/<pid>/stat line.
+
+    Split after the last ')' — a comm containing spaces or parens (and
+    "io.flutter.raster" is close enough to that class of name) breaks naive
+    whitespace splitting of the whole line.
+    """
+    if not text or ") " not in text:
+        return 0, 0
+    fields = text.rsplit(") ", 1)[1].split()
+    if len(fields) < 13:
+        return 0, 0
+    return int(fields[11]), int(fields[12])
+
+
+def process_snapshot(pid, root="/proc"):
+    """RSS, thread count and per-thread CPU counters for one process."""
+    status = _read(f"{root}/{pid}/status")
+    if status is None:
+        return None
+    fields = {}
+    for line in status.splitlines():
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+
+    def kb(name):
+        raw = fields.get(name, "").split()
+        return int(raw[0]) if raw and raw[0].isdigit() else 0
+
+    threads = {}
+    task_dir = f"{root}/{pid}/task"
+    for tid in sorted(os.listdir(task_dir)) if os.path.isdir(task_dir) else []:
+        utime, stime = _stat_times(_read(f"{task_dir}/{tid}/stat"))
+        threads[tid] = {
+            "name": (_read(f"{task_dir}/{tid}/comm") or "?").strip(),
+            "ticks": utime + stime,
+        }
+    return {
+        "pid": pid,
+        "name": fields.get("Name", "?"),
+        "rss_kb": kb("VmRSS"),
+        "vm_kb": kb("VmSize"),
+        "threads": int(fields.get("Threads", "0") or 0),
+        "thread_detail": threads,
+    }
+
+
+def thread_cpu(before, after, seconds, ticks_per_second=CLOCK_TICKS):
+    """Per-thread CPU percent between two snapshots, busiest first.
+
+    A thread that appeared or vanished between snapshots is reported from
+    whatever it did while it existed rather than dropped — a thread that
+    spawned, burned a core and exited is exactly the thing worth seeing.
+    """
+    if not before or not after or seconds <= 0:
+        return []
+    rows = []
+    for tid, end in after["thread_detail"].items():
+        start = before["thread_detail"].get(tid, {"ticks": 0})
+        delta = end["ticks"] - start.get("ticks", 0)
+        if delta < 0:
+            continue
+        rows.append(
+            {
+                "tid": tid,
+                "name": end["name"],
+                "percent": 100.0 * (delta / ticks_per_second) / seconds,
+            }
+        )
+    rows.sort(key=lambda row: -row["percent"])
+    return rows
+
+
+# --------------------------------------------------------------------------
+# TimescaleDB. Shelling out to psql rather than taking a driver dependency:
+# it keeps this file importable anywhere python3 is, and psql is 2 MB in the
+# image against ~15 for a wheel that has to match the interpreter.
+# --------------------------------------------------------------------------
+
+PG_QUERIES = {
+    "activity": (
+        "Live queries",
+        ["state", "waiting on", "seconds", "query"],
+        """
+        SELECT state,
+               coalesce(wait_event_type || ':' || wait_event, '-'),
+               round(extract(epoch from (now() - query_start))::numeric, 1),
+               left(regexp_replace(query, '\\s+', ' ', 'g'), 120)
+          FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid <> pg_backend_pid()
+           AND state <> 'idle'
+         ORDER BY query_start
+         LIMIT 15
+        """,
+    ),
+    "database": (
+        "Database",
+        ["metric", "value"],
+        """
+        SELECT * FROM (
+          SELECT 'cache hit %',
+                 round(100.0 * blks_hit / nullif(blks_hit + blks_read, 0), 2)::text
+            FROM pg_stat_database WHERE datname = current_database()
+          UNION ALL
+          SELECT 'commits', xact_commit::text
+            FROM pg_stat_database WHERE datname = current_database()
+          UNION ALL
+          SELECT 'rollbacks', xact_rollback::text
+            FROM pg_stat_database WHERE datname = current_database()
+          UNION ALL
+          SELECT 'deadlocks', deadlocks::text
+            FROM pg_stat_database WHERE datname = current_database()
+          UNION ALL
+          SELECT 'temp files written', temp_files::text
+            FROM pg_stat_database WHERE datname = current_database()
+          UNION ALL
+          SELECT 'connections', count(*)::text FROM pg_stat_activity
+        ) t
+        """,
+    ),
+    "scans": (
+        "Sequential scans (a missing index looks like this)",
+        ["table", "seq scans", "rows read per scan", "index scans"],
+        """
+        SELECT relname,
+               seq_scan,
+               CASE WHEN seq_scan = 0 THEN 0 ELSE seq_tup_read / seq_scan END,
+               coalesce(idx_scan, 0)
+          FROM pg_stat_user_tables
+         WHERE seq_scan > 0
+         ORDER BY seq_tup_read DESC
+         LIMIT 10
+        """,
+    ),
+    "sizes": (
+        "Largest tables",
+        ["table", "size"],
+        """
+        SELECT relname, pg_size_pretty(pg_total_relation_size(relid))
+          FROM pg_stat_user_tables
+         ORDER BY pg_total_relation_size(relid) DESC
+         LIMIT 10
+        """,
+    ),
+    # Only works when pg_stat_statements is in shared_preload_libraries. The
+    # timescaledb image does not preload it by default, so this is expected to
+    # be absent and is reported as such rather than as an error.
+    "statements": (
+        "Slowest statements (needs pg_stat_statements)",
+        ["total ms", "calls", "mean ms", "query"],
+        """
+        SELECT round(total_exec_time::numeric, 1),
+               calls,
+               round(mean_exec_time::numeric, 2),
+               left(regexp_replace(query, '\\s+', ' ', 'g'), 120)
+          FROM pg_stat_statements
+         ORDER BY total_exec_time DESC
+         LIMIT 10
+        """,
+    ),
+}
+
+
+def pg_url_from_env(env=None):
+    """Build a libpq URL from the same variables the backend service uses."""
+    env = os.environ if env is None else env
+    if env.get("HMI_PG_URL"):
+        return env["HMI_PG_URL"]
+    host = env.get("CENTROID_PGHOST") or env.get("PGHOST")
+    if not host:
+        return None
+    user = env.get("CENTROID_PGUSER") or env.get("PGUSER") or "postgres"
+    password = env.get("CENTROID_PGPASSWORD") or env.get("PGPASSWORD") or ""
+    port = env.get("CENTROID_PGPORT") or env.get("PGPORT") or "5432"
+    database = env.get("CENTROID_PGDATABASE") or env.get("PGDATABASE") or "postgres"
+    sslmode = env.get("CENTROID_PGSSLMODE") or env.get("PGSSLMODE") or "prefer"
+    auth = urllib.parse.quote(user, safe="")
+    if password:
+        auth += ":" + urllib.parse.quote(password, safe="")
+    return f"postgresql://{auth}@{host}:{port}/{database}?sslmode={sslmode}"
+
+
+def run_psql(url, sql, timeout=30.0):
+    """Rows as lists of strings. Raises ProfilerError with psql's own message."""
+    result = subprocess.run(
+        ["psql", url, "-X", "-q", "-A", "-t", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", sql],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise ProfilerError((result.stderr or "psql failed").strip().splitlines()[-1])
+    return [line.split("\t") for line in result.stdout.splitlines() if line.strip()]
+
+
+def collect_postgres(url, timeout=30.0):
+    """Every query, each failing independently — pg_stat_statements is
+    routinely absent and must not take the other four sections with it."""
+    if not shutil.which("psql"):
+        return {"error": "psql is not installed in this image"}
+    sections = {}
+    for key, (title, headers, sql) in PG_QUERIES.items():
+        try:
+            sections[key] = {"title": title, "headers": headers, "rows": run_psql(url, sql, timeout)}
+        except (ProfilerError, subprocess.SubprocessError, OSError) as exc:
+            sections[key] = {"title": title, "headers": headers, "error": str(exc)}
+    return sections
 
 
 # --------------------------------------------------------------------------
@@ -1002,6 +1393,13 @@ def render_slow_blocks(slow, functions, samples, tree_min_percent=8.0):
     return "\n".join(lines)
 
 
+def _as_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def render_actions(data):
     """The short answer, first, so nothing has to read the tables to start."""
     actions = []
@@ -1031,6 +1429,36 @@ def render_actions(data):
         actions.append(
             f"Worst outlier: `{worst['name']}` at {ms(worst['dur'])} ms — see "
             "Slow outliers for the stack."
+        )
+    for row in data.get("containers", []):
+        if (row.get("memory_percent") or 0) > 85:
+            actions.append(
+                f"`{row['name']}` is at {row['memory_percent']:.0f}% of its "
+                "memory limit — an OOM kill is a restart, not a slow frame."
+            )
+        if (row.get("cpu_percent") or 0) > 150:
+            actions.append(
+                f"`{row['name']}` is using {row['cpu_percent']:.0f}% CPU "
+                "(more than one core)."
+            )
+    process = data.get("process")
+    heap = (data.get("memory_usage") or {}).get("heapUsage")
+    if process and heap:
+        native = process["rss_kb"] * 1024 - heap
+        if native > 4 * heap and native > 200e6:
+            actions.append(
+                f"{native / 1e6:.0f} MB of RSS is outside the Dart heap "
+                f"({heap / 1e6:.0f} MB) — look at native allocations, not Dart."
+            )
+    for row in (data.get("thread_cpu") or [])[:1]:
+        if row["percent"] > 60:
+            actions.append(f"Busiest thread is `{row['name']}` at {row['percent']:.0f}% of a core.")
+    activity = ((data.get("postgres") or {}).get("activity") or {}).get("rows") or []
+    slow_queries = [r for r in activity if len(r) > 2 and _as_float(r[2]) > 1.0]
+    if slow_queries:
+        actions.append(
+            f"{len(slow_queries)} database quer{'y' if len(slow_queries) == 1 else 'ies'} "
+            f"running longer than a second — slowest {slow_queries[-1][2]}s."
         )
     if not actions:
         actions.append(
@@ -1077,6 +1505,114 @@ def render_memory(usage, classes):
     return "\n".join(lines)
 
 
+def render_containers(rows):
+    lines = ["### Containers\n"]
+    if not rows:
+        lines.append(
+            "_(no container stats — the Docker socket is not mounted into this "
+            "container, so only the app it is attached to can be seen)_\n"
+        )
+        return "\n".join(lines)
+    table = []
+    for row in rows:
+        if row.get("error"):
+            table.append([row["name"], "-", "-", "-", row["error"][:40]])
+            continue
+        limit = row["memory_limit"]
+        if row["memory_bytes"] is None:
+            memory = "-"
+        elif limit:
+            memory = (
+                f"{row['memory_bytes'] / 1e6:.0f} / {limit / 1e6:.0f} MB "
+                f"({row['memory_percent']:.0f}%)"
+            )
+        else:
+            memory = f"{row['memory_bytes'] / 1e6:.0f} MB"
+        table.append(
+            [
+                row["name"],
+                f"{row['cpu_percent']:.1f}" if row["cpu_percent"] is not None else "-",
+                memory,
+                row["pids"] if row["pids"] is not None else "-",
+                "",
+            ]
+        )
+    lines.append(render_table(["container", "CPU %", "memory", "tasks", "note"], table))
+    if any("Permission denied" in (r.get("error") or "") for r in rows):
+        lines.append(
+            "The Docker socket is not readable by this container's user. Add "
+            "the host's docker group to the profiler service — "
+            "`group_add: [\"<gid>\"]`, where the gid comes from "
+            "`getent group docker` **on that station**; it is not the same "
+            "everywhere. Everything outside this section works without it.\n"
+        )
+    hot = [r for r in rows if (r.get("memory_percent") or 0) > 85]
+    if hot:
+        lines.append(
+            "**"
+            + ", ".join(r["name"] for r in hot)
+            + "** is within 15% of its memory limit — the next allocation spike "
+            "is an OOM kill, not a slowdown.\n"
+        )
+    return "\n".join(lines)
+
+
+def render_threads(snapshot, cpu_rows, dart_heap_bytes=None):
+    lines = ["### Process and threads\n"]
+    if not snapshot:
+        lines.append(
+            "_(no process found in /proc — this container does not share the "
+            "app's PID namespace. Add `pid: \"service:flutter\"` to see "
+            "threads.)_\n"
+        )
+        return "\n".join(lines)
+    rss = snapshot["rss_kb"] * 1024
+    line = f"`{snapshot['name']}` pid {snapshot['pid']}: RSS {rss / 1e6:.0f} MB, {snapshot['threads']} threads."
+    if dart_heap_bytes:
+        native = rss - dart_heap_bytes
+        line += (
+            f" Dart heap is {dart_heap_bytes / 1e6:.0f} MB of that, so "
+            f"**{native / 1e6:.0f} MB is native** — engine, Skia, pdfium, "
+            "open62541. A leak there is invisible to the Memory section below."
+        )
+    lines.append(line + "\n")
+    if cpu_rows:
+        lines.append(
+            render_table(
+                ["thread", "CPU %", "tid"],
+                [[r["name"], f"{r['percent']:.1f}", r["tid"]] for r in cpu_rows[:15]],
+            )
+        )
+        lines.append(
+            "`io.flutter.ui` is the Dart/build thread and `io.flutter.raster` "
+            "the GPU one (the kernel truncates thread names at 15 characters, "
+            "so it appears as `io.flutter.rast`). Which of the two is busy "
+            "decides whether the fix is in your widgets or in what you are "
+            "asking Skia to draw.\n"
+        )
+    return "\n".join(lines)
+
+
+def render_postgres(sections):
+    lines = ["### Database\n"]
+    if not sections:
+        lines.append("_(no database configured — set CENTROID_PGHOST or --pg-url)_\n")
+        return "\n".join(lines)
+    if sections.get("error"):
+        lines.append(f"_({sections['error']})_\n")
+        return "\n".join(lines)
+    for key in ("database", "activity", "scans", "sizes", "statements"):
+        section = sections.get(key)
+        if not section:
+            continue
+        lines.append(f"**{section['title']}**\n")
+        if section.get("error"):
+            lines.append(f"_({section['error']})_\n")
+            continue
+        lines.append(render_table(section["headers"], section["rows"]))
+    return "\n".join(lines)
+
+
 def render_report(data):
     lines = [
         f"# CentroidX profile — {data['collected_at']}",
@@ -1095,7 +1631,14 @@ def render_report(data):
         render_hot_paths(data["cpu"], data.get("tree") or _tree_node("<all>")),
         render_cpu(data["cpu"]),
         render_timeline(data["timeline"]),
+        render_threads(
+            data.get("process"),
+            data.get("thread_cpu", []),
+            (data.get("memory_usage") or {}).get("heapUsage"),
+        ),
         render_memory(data["memory_usage"], data["memory_classes"]),
+        render_containers(data.get("containers", [])),
+        render_postgres(data.get("postgres")),
     ]
     if data.get("problems"):
         lines.append("### Not collected\n")
@@ -1118,11 +1661,19 @@ def gather(
     slow_factor=3.0,
     slow_floor_us=8000,
     keep=5,
+    proc_root="/proc",
+    proc_match=("centroidx",),
+    docker_client=None,
+    pg_url=None,
 ):
     """Collect one window. Phases run in sequence so they do not perturb
     each other — a timeline recording distorts the CPU profile."""
     isolate = service.main_isolate()
     version = service.try_call("getVersion") or {}
+    # Taken before the window so the thread CPU deltas cover it.
+    proc_pid = find_process(proc_root, proc_match)
+    proc_before = process_snapshot(proc_pid, proc_root) if proc_pid else None
+    proc_before_at = time.monotonic()
     data = {
         "collected_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
         "seconds": seconds,
@@ -1138,6 +1689,10 @@ def gather(
         "slow": [],
         "_functions": [],
         "_samples": [],
+        "process": None,
+        "thread_cpu": [],
+        "containers": [],
+        "postgres": None,
         "problems": [],
     }
     problems = []
@@ -1187,6 +1742,31 @@ def gather(
         data["memory_classes"] = summarise_allocations(allocations, top)
 
     attempt("memory", do_memory)
+
+    def do_system():
+        # /proc is sampled either side of everything above, so the thread
+        # percentages cover the same wall clock as the call trees. The divisor
+        # is the MEASURED elapsed time, not `seconds`: the phases above take
+        # longer than one window, and dividing by the requested sleep reported
+        # a single busy thread at 352% of a core.
+        after = process_snapshot(proc_pid, proc_root) if proc_pid else None
+        data["process"] = after
+        data["thread_cpu"] = thread_cpu(
+            proc_before, after, time.monotonic() - proc_before_at
+        )
+
+    if proc_pid:
+        attempt("threads", do_system)
+
+    def do_containers():
+        data["containers"] = collect_containers(docker_client)
+
+    if docker_client is not None and docker_client.available():
+        attempt("containers", do_containers)
+
+    if pg_url:
+        attempt("database", lambda: data.update(postgres=collect_postgres(pg_url)))
+
     data["problems"] = problems
     return data
 
@@ -1307,6 +1887,47 @@ def cmd_memory(service, args):
     emit(args, {"usage": usage, "classes": classes}, render_memory(usage, classes))
 
 
+def cmd_system(service, args):
+    """Containers, threads and the database — the view from outside the VM.
+
+    Useful on its own: when the app is wedged and the VM service will not
+    answer, this still says whether it is pegged, swapping, or waiting on a
+    query.
+    """
+    pid = find_process(args.proc_root, tuple(args.proc_match.split(",")))
+    before = process_snapshot(pid, args.proc_root) if pid else None
+    started = time.monotonic()
+    client = None if args.no_docker else DockerClient(args.docker_socket)
+    # Collecting container stats is not instant — the daemon samples each
+    # container twice, about a second apart — so it counts towards the window
+    # rather than being ignored.
+    containers = collect_containers(client) if client and client.available() else []
+    remaining = args.seconds - (time.monotonic() - started)
+    if remaining > 0:
+        time.sleep(remaining)
+    after = process_snapshot(pid, args.proc_root) if pid else None
+    elapsed = time.monotonic() - started
+    pg_url = None if args.no_database else (args.pg_url or pg_url_from_env())
+    postgres = collect_postgres(pg_url) if pg_url else None
+    data = {
+        "collected_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
+        "process": after,
+        "thread_cpu": thread_cpu(before, after, elapsed),
+        "containers": containers,
+        "postgres": postgres,
+    }
+    body = "\n".join(
+        [
+            f"# System — {data['collected_at']}",
+            "",
+            render_containers(containers),
+            render_threads(after, data["thread_cpu"]),
+            render_postgres(postgres),
+        ]
+    )
+    emit(args, data, body)
+
+
 def cmd_report(service, args):
     data = gather(
         service,
@@ -1316,6 +1937,9 @@ def cmd_report(service, args):
         slow_factor=args.slow_factor,
         slow_floor_us=int(args.slow_floor_ms * 1000),
         keep=args.keep,
+        proc_match=tuple(args.proc_match.split(",")),
+        docker_client=None if args.no_docker else DockerClient(args.docker_socket),
+        pg_url=None if args.no_database else (args.pg_url or pg_url_from_env()),
     )
     data["url"] = args.url
     emit(args, data, render_report(data))
@@ -1335,6 +1959,9 @@ def cmd_watch(service, args):
                 slow_factor=args.slow_factor,
                 slow_floor_us=int(args.slow_floor_ms * 1000),
                 keep=args.keep,
+                proc_match=tuple(args.proc_match.split(",")),
+                docker_client=None if args.no_docker else DockerClient(args.docker_socket),
+                pg_url=None if args.no_database else (args.pg_url or pg_url_from_env()),
             )
             data["url"] = args.url
             emit(args, data, render_report(data))
@@ -1354,6 +1981,7 @@ COMMANDS = {
     "timeline": cmd_timeline,
     "memory": cmd_memory,
     "slow": cmd_slow,
+    "system": cmd_system,
     "report": cmd_report,
     "watch": cmd_watch,
 }
@@ -1401,18 +2029,41 @@ def build_parser():
     parser.add_argument(
         "--repeat", action="store_true", help="slow: keep hunting instead of one window"
     )
+    parser.add_argument(
+        "--proc-root", default="/proc", help="where to look for the app's process"
+    )
+    parser.add_argument(
+        "--proc-match",
+        default="centroidx",
+        help="comma-separated names to find the app process by (needs a shared PID namespace)",
+    )
+    parser.add_argument(
+        "--docker-socket", default="/var/run/docker.sock", help="Docker API socket"
+    )
+    parser.add_argument("--no-docker", action="store_true", help="skip container stats")
+    parser.add_argument(
+        "--pg-url", default=None, help="libpq URL; defaults to the CENTROID_PG* environment"
+    )
+    parser.add_argument("--no-database", action="store_true", help="skip database stats")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     parser.add_argument("--out-dir", default=None, help="also write each report into this directory")
     return parser
 
 
+#: These need no Dart VM at all, and must still work when the app is wedged
+#: and the service will not answer — which is exactly when they matter most.
+NO_VM_COMMANDS = {"system"}
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    try:
-        service = VmService.connect(args.url, wait=args.wait)
-    except ProfilerError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+    service = None
+    if args.command not in NO_VM_COMMANDS:
+        try:
+            service = VmService.connect(args.url, wait=args.wait)
+        except ProfilerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     try:
         COMMANDS[args.command](service, args)
     except KeyboardInterrupt:
@@ -1421,7 +2072,8 @@ def main(argv=None):
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:
-        service.close()
+        if service is not None:
+            service.close()
     return 0
 
 

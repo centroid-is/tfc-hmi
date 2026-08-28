@@ -151,10 +151,16 @@ For the one-off stall rather than the average, `slow` finds blocks that ran far
 longer than the median for their own name and dumps the stack that was on the
 CPU during each.
 
+It also reads the layers the VM cannot see: per-thread CPU (is the raster
+thread pegged while the UI thread idles?), RSS against the Dart heap (the
+engine, Skia, pdfium and open62541 allocate outside it), every container
+against its memory limit, and the database's live queries and scan counts.
+
 ```sh
 # a running station (port 8181 is on the compose network, not published)
 docker compose run --rm profiler report --seconds 30
 docker compose run --rm profiler slow --seconds 20 --repeat   # hunt for hiccups
+docker compose run --rm profiler system --seconds 10          # containers, threads, database
 
 # a local profile run — paste the ws:// URI `flutter run` printed
 flutter run --profile -d macos

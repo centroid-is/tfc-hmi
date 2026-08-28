@@ -7,6 +7,12 @@
 # base image plus one file, and it builds in seconds.
 FROM python:3.13-alpine
 
+# psql is the only thing added beyond the interpreter. The database section
+# shells out to it rather than taking a driver dependency: ~2 MB here against a
+# wheel that has to match the interpreter, and it keeps hmi_profiler.py
+# importable from a plain checkout with no install step.
+RUN apk add --no-cache postgresql17-client
+
 RUN adduser -D -u 1000 profiler \
     && mkdir -p /reports \
     && chown profiler:profiler /reports

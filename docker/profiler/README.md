@@ -86,6 +86,9 @@ docker compose run --rm profiler cpu --seconds 20
 # keep hunting for hiccups while somebody drives the screen
 docker compose run --rm profiler slow --seconds 20 --repeat
 
+# containers, threads and the database — works even if the app is wedged
+docker compose run --rm profiler system --seconds 10
+
 # from a checkout, against anything reachable
 python3 tools/hmi_profiler.py report --url ws://10.50.10.11:8181/ws
 ```
@@ -123,6 +126,50 @@ lock, or the platform thread — which is a different bug with a different fix.
 
 Tuning: `--slow-factor` (default 3x the median), `--slow-floor-ms` (default 8,
 so a 0.2 ms block being 20x its median is ignored), `--keep`, `--repeat`.
+
+## Three layers, one document
+
+A slow HMI is not always a slow *Dart* HMI, and the Dart VM Service can only
+see one of the three places the problem might be.
+
+| layer | what it answers | how |
+|---|---|---|
+| Dart VM Service | which code is hot, which frames dropped, what the heap holds | websocket to the app |
+| OS | is the **raster** thread pegged while the UI thread idles; how much RSS is *outside* the Dart heap | `/proc`, via a shared PID namespace |
+| Stack | is any container near its memory limit; is the database the one that is slow | Docker API + `psql` |
+
+The middle row matters more than it looks. `getMemoryUsage` reports the Dart
+heap; the engine, Skia, pdfium and open62541 all allocate outside it. An app
+can show an 80 MB heap while RSS sits at 950 MB of a 1 GB limit, and the report
+calls that out explicitly rather than leaving you to notice.
+
+`report` collects all three over one wall-clock window. `system` collects the
+bottom two and **needs no VM service**, so it still answers when the app is
+wedged and the service will not respond — which is when you most want it.
+
+### What it needs
+
+- **Threads**: `pid: "service:flutter"` on the profiler service. Without it,
+  `/proc` shows only the profiler itself and the section says so.
+- **Containers**: the Docker socket, plus `group_add` with the host's docker
+  GID. That GID is station-specific (`getent group docker`) — get it wrong and
+  you lose this one section, with the report telling you why. Mounting the
+  socket is a real grant: the Docker API is root on the host however it is
+  mounted. `--no-docker` opts out.
+- **Database**: `CENTROID_PG*`, the same credentials the backend uses. Only
+  `pg_stat_*` views are read. `pg_stat_statements` is not preloaded by the
+  timescaledb image, so that one table is normally absent and reported as such;
+  the other four work regardless.
+
+### What is not covered
+
+`centroidx-backend` gets container and (with a second profiler instance
+pointed at it) thread-level figures, but **no call trees**. It is built with
+`dart build cli`, which produces product-mode AOT with the service protocol
+compiled out — confirmed: the executable ignores `--enable-vm-service`
+entirely. Dart-level profiling of the backend needs a JIT-runtime image
+variant, and that variant would be *slower* than the AOT one, so it is a
+diagnostic to swap in temporarily rather than something to run permanently.
 
 ## Reading the output
 
