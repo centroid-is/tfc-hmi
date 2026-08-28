@@ -8,10 +8,12 @@
 
 import 'dart:io';
 
+import 'package:drift/native.dart';
 import 'package:logger/logger.dart';
 import 'package:test/test.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/drift_audit_sink.dart';
+import 'package:tfc_dart/core/database.dart' show DatabaseConfig;
 import 'package:tfc_dart/core/database_drift.dart' show AppDatabase;
 
 /// Captures what a [Logger] emitted, with its level, instead of printing it.
@@ -219,21 +221,32 @@ void main() {
   });
 
   group('record() cannot take the caller down', () {
-    // How the database is broken here: it is closed before the call.
+    // How the database is broken here: `AppDatabase.forTest`, per its own doc
+    // comment, with a `NativeDatabase` whose file cannot be opened — the path
+    // is a directory. sqlite fails at `ensureOpen`, so every statement throws,
+    // which is a real backend failure produced by real drift and sqlite code
+    // rather than by a stub. A `QueryExecutor` stub would have been the other
+    // option and it is worse: a wide surface, every member of it a lie except
+    // the one that throws.
     //
-    // `AppDatabase.forTest(config, executor)` exists for injecting a failing
-    // executor, but a QueryExecutor stub has a wide surface and every member
-    // of it would be a lie except the one that throws. A closed database is a
-    // real drift failure mode produced by real drift code, and it is what the
-    // sink meets when the app is shutting down while a logout is still being
-    // written — exactly the moment an audit row matters most and is most
-    // likely to be lost.
+    // Closing an in-memory database first looked like the simpler answer and
+    // is NOT one: drift reopens a closed `NativeDatabase.memory()` on the next
+    // statement, and because the backing database is per-open, the insert then
+    // *succeeds* against a fresh empty database. The test passed for the wrong
+    // reason — no throw, therefore no log — which is worth writing down,
+    // because it is exactly how a "broken database" fixture ends up proving
+    // nothing.
     Future<(DriftAuditSink, _CapturingOutput)> brokenSink() async {
-      final broken = AppDatabase.inMemoryForTest();
+      final dir = Directory.systemTemp.createTempSync('tfc_audit_sink_broken');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final broken = AppDatabase.forTest(
+        DatabaseConfig(),
+        NativeDatabase(File(dir.path), logStatements: false),
+      );
       final brokenOut = _CapturingOutput();
-      final s = DriftAuditSink(broken, logger: _capturing(brokenOut));
-      await broken.close();
-      return (s, brokenOut);
+      return (DriftAuditSink(broken, logger: _capturing(brokenOut)), brokenOut);
     }
 
     test('a broken database does not propagate an exception out of record()',
