@@ -326,14 +326,100 @@ system will not object. A grep in the existing workflow is enough.
 
 | Surface | Declared | Default |
 |---|---|---|
-| Process tags | Nullable `requiredGroup` on the asset `*Config`, one dropdown in `configure()`, serialised into the page JSON | `operate` |
+| Process tags | **Access templates** bound per key — see §7b. No asset config change at all. | unrestricted |
 | Config keys | Pattern match on the preference key in `AccessPolicy` — `page.*`, `alarm.*`, `keymap.*` → `configure`; server/db/network → `administer` | `administer` |
 | Routes | Optional `AccessGroup` on `RouteRegistry.registerRoute()` | `operate` |
 
-Tags fail **open** (default `operate`, so nothing existing breaks); config keys
-fail **closed** (anything unrecognised needs `administer`). That asymmetry is
-intentional: a wrongly-open setpoint is a nuisance, a wrongly-open config write
-is a broken plant.
+Tags fail **open** (an unbound key is unrestricted); config keys fail **closed**
+(anything unrecognised needs `administer`). That asymmetry is intentional: a
+wrongly-open setpoint is a nuisance, a wrongly-open config write is a broken
+plant.
+
+### 7b. Access templates — how tag writes are gated
+
+**There is no `requiredGroup` on the asset config.** Tag authorization is
+defined entirely by templates bound to keys, so it is configuration rather than
+code: no codegen change, no new control in `configure()`, and Phase 4 stops
+being a code phase for the assets themselves.
+
+A **template** is a user-defined, named set of rules in a database table,
+mapping a struct member (or the whole key) to an `AccessGroup`:
+
+```
+template "conveyor"
+  p_cmd_JogFwd      -> operate
+  p_cmd_JogBwd      -> operate
+  p_cmd_FaultReset  -> operate
+  p_cfg_ManualFreq  -> setpoints
+  p_cfg_AutoFreq    -> setpoints
+```
+
+This exists because one conveyor key carries both `p_cmd_JogFwd` and
+`p_cfg_ManualFreq` through a single `stateMan.write(key, wholeStruct)`. A group
+per *asset* cannot separate jogging from changing drive frequency; a group per
+*member* can.
+
+**Templates are not defined in code.** Ship none. The user creates them. Only
+four assets write structs — `conveyor`, `schneider`, `sensor`, `recipes` — so
+the realistic count is small.
+
+**Binding is explicit, per key, always.** No inference from asset type, no
+pattern matching on key names. `KeyMappingEntry` (`state_man.dart:490`) gains
+`accessTemplate: String?`. It is already loaded as `keyMappings.nodes[key]`,
+which is what lets the UI resolve a group **synchronously at tap time** —
+required, because the prompt appears when the control is tapped, not when a
+write fails.
+
+**No template means no restriction.** An unbound key is unrestricted, and so is
+a member no bound template mentions. The system therefore ships gating nothing
+and becomes stricter only as keys are bound.
+
+Because that is fail-open, enforcement is replaced by **visibility**: the key
+repository shows whether each key is bound and to what, and makes unbound keys
+findable at a glance. A key that should have been restricted must not stay open
+with no signal that someone forgot.
+
+### 7c. Templates are managed over MCP
+
+The point of explicit per-key binding is that an agent does it, not a person
+clicking forty times. Follow the existing pattern in
+`packages/tfc_mcp_server/lib/src/tools/` — `alarm_write_tools.dart` already
+does create/update/delete this way:
+
+- `list_access_templates`, `create_access_template`, `update_access_template`,
+  `delete_access_template`
+- `bind_key_access_template` — key to template, or null to unbind
+- `list_unbound_keys` — the visibility mechanism above, and exactly what an
+  agent needs to sweep a plant in one pass
+
+Write tools emit a **proposal** that a human approves
+(`mcp_bridge_notifier.dart:104`), which is the right posture for something that
+changes who may do what: an agent proposes the bindings, a person approves them
+in bulk.
+
+Gate these tools on **`users`** — they change authorization, which is the same
+concern as roles and the trail, not machine configuration. Audit them with
+`origin = 'mcp'` and `who` = the approving user, never the agent.
+
+### 7d. The key repository manages templates too
+
+MCP is for sweeps; the UI is for understanding and for the one-off change. Both
+are first-class, and they edit the same table.
+
+The key repository gains an **access templates** section:
+
+- List, create, rename and delete templates.
+- Edit a template's rules: rows of member name to `AccessGroup`, with the whole
+  key as a special row for scalar keys. Adding a row offers the members already
+  seen on keys bound to that template, so it is picking from a list rather than
+  typing PLC identifiers from memory.
+- Assign a template to a key, and clear it.
+- Show which keys are bound to a template before deleting it, and block the
+  delete rather than silently unbinding them.
+- Surface unbound keys, so the fail-open gap stays visible.
+
+Deleting or re-scoping a template changes who may write what, so both are
+`users`-gated and audited like any other authorization change.
 
 Raised routes stay **visible but locked** in the menu, not hidden. A locked
 entry tells a technician the page exists and to find someone; a hidden one looks
