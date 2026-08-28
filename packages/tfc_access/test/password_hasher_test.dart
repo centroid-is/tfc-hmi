@@ -86,7 +86,8 @@ void main() {
         salt: salt,
         iterations: 11,
       );
-      expect(await ambient.extractBytes(), isNot(await explicit.extractBytes()));
+      expect(
+          await ambient.extractBytes(), isNot(await explicit.extractBytes()));
 
       final sameAsAmbient = await Pbkdf2Kdf.deriveKey(
         passphrase: 'hunter2',
@@ -284,8 +285,10 @@ void main() {
     });
 
     test('is false for different-length inputs', () {
-      expect(PasswordHasher.constantTimeEquals([1, 2, 3], [1, 2, 3, 4]), isFalse);
-      expect(PasswordHasher.constantTimeEquals([1, 2, 3, 4], [1, 2, 3]), isFalse);
+      expect(
+          PasswordHasher.constantTimeEquals([1, 2, 3], [1, 2, 3, 4]), isFalse);
+      expect(
+          PasswordHasher.constantTimeEquals([1, 2, 3, 4], [1, 2, 3]), isFalse);
     });
 
     test('is true for two empty lists', () {
@@ -309,8 +312,7 @@ void main() {
 
     test('round-trips through encode/decode', () async {
       final h = await PasswordHasher.hash('hunter2');
-      final decoded =
-          PasswordHash.decode(h.encode(), saltB64: h.saltB64);
+      final decoded = PasswordHash.decode(h.encode(), saltB64: h.saltB64);
       expect(decoded.hashB64, h.hashB64);
       expect(decoded.saltB64, h.saltB64);
       expect(decoded.iterations, h.iterations);
@@ -356,7 +358,8 @@ void main() {
 
     test('decode throws FormatException on an unknown algorithm', () {
       expect(
-        () => PasswordHash.decode('argon2id\$10\$aGFzaA==', saltB64: 'c2FsdA=='),
+        () =>
+            PasswordHash.decode('argon2id\$10\$aGFzaA==', saltB64: 'c2FsdA=='),
         throwsFormatException,
       );
     });
