@@ -55,6 +55,12 @@ services:
     container_name: novnc
     ports:
       - 443:6080
+    environment:
+      # Names the station in the browser tab: "CentroidX - Frystar".
+      # Set it per HMI in a .env beside this file — one image serves them
+      # all, so this is the only thing that distinguishes them. Leave it
+      # unset and the tab just reads "CentroidX".
+      NOVNC_STATION_NAME: ${NOVNC_STATION_NAME:-}
     volumes:
       - ./novnc_certs:/certs
     depends_on:
