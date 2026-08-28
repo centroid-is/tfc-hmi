@@ -251,6 +251,108 @@ class AccessRepository {
     });
   }
 
+  // ---------------------------------------------------------------------
+  // Users
+  // ---------------------------------------------------------------------
+
+  /// Whether the first-user window is still open.
+  ///
+  /// A convenience for the login surface, and **not** the guard. The real check
+  /// is the one inside [createFirstUser]'s transaction; this one is what the UI
+  /// asks in order to decide which screen to show.
+  Future<bool> get isUserTableEmpty async => await userCount() == 0;
+
+  /// The number of rows in `app_user`.
+  Future<int> userCount() async {
+    final count = db.appUser.username.count();
+    final row = await (db.selectOnly(db.appUser)..addColumns([count]))
+        .getSingle();
+    return row.read(count) ?? 0;
+  }
+
+  /// The row for [username], or null.
+  ///
+  /// Case-sensitive, because `app_user.username` is a case-sensitive TEXT
+  /// primary key. `user('JON')` does not find `jon`. That is a decision rather
+  /// than an accident: case-folding usernames means picking a locale to fold
+  /// in, and `İ` in Turkish is exactly the sort of thing that turns a login
+  /// screen into a support call.
+  Future<AppUserData?> user(String username) => (db.select(db.appUser)
+        ..where((t) => t.username.equals(username)))
+      .getSingleOrNull();
+
+  /// Record that [username] signed in at [at].
+  Future<void> touchLastLogin(String username, DateTime at) async {
+    await (db.update(db.appUser)..where((t) => t.username.equals(username)))
+        .write(AppUserCompanion(lastLoginAt: Value(at)));
+  }
+
+  /// Create the first account, but only while `app_user` is empty.
+  ///
+  /// Roles are seeded, users are not, so without this the login screen would
+  /// ship with nobody able to pass it. The first person to open a freshly
+  /// commissioned station creates the first account and **the door closes
+  /// behind them** — no default password to forget to change, no bootstrap flag
+  /// to leave switched on.
+  ///
+  /// There is deliberately **no role parameter**. The first account is
+  /// Engineering ([kFirstUserRoleName]); a caller cannot ask for something
+  /// else, so there is no way to commission a station whose only account cannot
+  /// create the next one.
+  ///
+  /// The emptiness check runs **inside** the transaction, immediately before
+  /// the insert. Checking beforehand is a check-then-act race, and while two
+  /// people commissioning the same station in the same instant is unlikely,
+  /// this is the one window in the design that must not have a hole in it —
+  /// "the door closes behind them" is the whole rule, and a rule with a race in
+  /// it is a rule that occasionally does not apply.
+  ///
+  /// The hash is derived before the transaction opens. PBKDF2 at production
+  /// iteration counts takes the better part of a second, and holding a write
+  /// transaction open across it would block every other writer on the shared
+  /// Postgres server for that whole time. Nothing is decided by the derivation,
+  /// so nothing is lost by doing it early — the loser of a race simply throws
+  /// away a hash it computed.
+  Future<void> createFirstUser({
+    required String username,
+    required String password,
+  }) async {
+    final name = username.trim();
+    if (name.isEmpty) {
+      throw ArgumentError.value(username, 'username', 'must not be blank');
+    }
+    if (password.isEmpty) {
+      // Deliberately not `ArgumentError.value(password, ...)`: that puts the
+      // credential into the message, and from there into whatever logs it.
+      throw ArgumentError('password must not be empty');
+    }
+
+    final hash = await PasswordHasher.hash(password);
+
+    await db.transaction(() async {
+      final existing = await userCount();
+      if (existing != 0) throw FirstUserWindowClosedError();
+
+      final role = await (db.select(db.appRole)
+            ..where((t) => t.name.equals(kFirstUserRoleName)))
+          .getSingleOrNull();
+      if (role == null) throw MissingRoleError(kFirstUserRoleName);
+
+      await db.into(db.appUser).insert(
+            AppUserCompanion.insert(
+              username: name,
+              roleName: kFirstUserRoleName,
+              passwordHash: encodeStoredHash(hash),
+              salt: hash.saltB64,
+              createdAt: DateTime.now().toUtc(),
+            ),
+          );
+    });
+
+    _logger.i('First user "$name" created as $kFirstUserRoleName — the '
+        'first-user window is now closed.');
+  }
+
   AccessRole _toRole(AppRoleData row) => AccessRole.fromDb(
         name: row.name,
         groupsJson: row.groups,
