@@ -131,6 +131,9 @@ services:
     # the same everywhere.
     user: "65532:1001"
     ports:
+      # 8443 serves the UI over TLS; 8080 answers 301s to it so the old
+      # bookmark still works.
+      - "8443:8443"
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -139,6 +142,7 @@ services:
       # hmi-update never writes the compose file itself.
       - /home/centroid/docker-compose.yml:/etc/docker-update/docker-compose.yml:ro
       - /home/centroid/docker-update:/state
+      - ./docker_update_certs:/certs:ro
     environment:
       DOCKER_UPDATE_CRON: "0 * * * *"
       DOCKER_UPDATE_COMPOSE_PATH: /etc/docker-update/docker-compose.yml
@@ -146,8 +150,45 @@ services:
       DOCKER_UPDATE_LOG_LEVEL: info
       DOCKER_UPDATE_SELF_SERVICE: docker-update
       COMPOSE_PROJECT_NAME: centroid
+      DOCKER_UPDATE_TLS_CERT: /certs/docker-update.crt
+      DOCKER_UPDATE_TLS_KEY: /certs/docker-update.key
+      DOCKER_UPDATE_TLS_ADDR: ":8443"
+      # PLACEHOLDERS. Override per station via a .env file next to this
+      # compose — do not commit real credentials here. Basic auth guards
+      # every route except /healthz, which stays open for probes.
+      DOCKER_UPDATE_BASIC_AUTH_USER: ${DOCKER_UPDATE_BASIC_AUTH_USER:-centroid}
+      DOCKER_UPDATE_BASIC_AUTH_PASS: ${DOCKER_UPDATE_BASIC_AUTH_PASS:-change-me}
+    depends_on:
+      docker-update-certs:
+        condition: service_completed_successfully
     labels:
       hmi-update.watch: "false"
+
+
+  # Same one-shot pattern as pg-certs. docker-update runs as uid 65532 and
+  # cannot mint its own certificate, so one is generated here and chowned
+  # to it.
+  docker-update-certs:
+    image: alpine:latest
+    container_name: docker-update-certs
+    restart: "no"
+    volumes:
+      - ./docker_update_certs:/out
+    command: |
+      sh -euxc '
+        apk add --no-cache openssl
+        [ -f /out/docker-update.crt ] && [ -f /out/docker-update.key ] && { echo "TLS certs exist, skipping"; exit 0; }
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365000 \
+          -subj "/C=IS/ST=Hofudborgarsvaedid/L=Hafnarfjordur/O=Centroid/CN=${DOCKER_UPDATE_CERT_CN:-centroidx-hmi}" \
+          -addext "subjectAltName=DNS:${DOCKER_UPDATE_CERT_CN:-centroidx-hmi},DNS:localhost,IP:127.0.0.1" \
+          -keyout /out/docker-update.key \
+          -out /out/docker-update.crt
+        chown 65532:65532 /out/docker-update.key /out/docker-update.crt
+        chmod 600 /out/docker-update.key
+        chmod 644 /out/docker-update.crt
+        echo "Certs written to /out as uid 65532"
+      '
+
 
   centroidx-backend:
     image: ghcr.io/centroid-is/centroid-backend:latest
