@@ -312,6 +312,26 @@ void main() {
 
       expect((await repo.role('Line Lead'))!.seeded, isFalse);
     });
+
+    test('a blank role name is refused', () async {
+      // A row whose primary key is whitespace is unselectable from any screen
+      // that trims its input, and there is no legitimate way to reach it.
+      await expectLater(
+        () => repo.upsertRole(const AccessRole(name: '  ', groups: {})),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      expect(await _rawRoleNames(db), hasLength(4));
+    });
+
+    test('renaming to a blank name is refused', () async {
+      await expectLater(
+        () => repo.renameRole('Shift Leader', '   '),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      expect(await _rawRoleNames(db), contains('Shift Leader'));
+    });
   });
 
   group('referential integrity', () {
