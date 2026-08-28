@@ -179,8 +179,17 @@ jobs:
   # The tag is still `latest-release`: that is what the stations pull. The
   # `-profile` aliases below are the honest name for the same digest, so a
   # station can be moved over without a flag day.
+  #
+  # `workflow_dispatch` is in the condition so the profile build can be proven
+  # on a branch before it is merged. Without it the first run of this job is
+  # the one that lands on main, and a mode flag that does not work turns main
+  # red rather than a PR. `gh workflow run centroid-hmi.yml --ref <branch>`;
+  # docker-profile-build stays main-only, so a dispatched run builds and
+  # verifies without publishing `latest-release` from a branch.
   elinux-profile-build:
-    if: github.ref == 'refs/heads/main' && !inputs.release
+    if: >-
+      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+      && !inputs.release
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/centroid-is/tfc-toolchain:latest
@@ -261,6 +270,7 @@ jobs:
 
   docker-profile-build:
     needs: elinux-profile-build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
