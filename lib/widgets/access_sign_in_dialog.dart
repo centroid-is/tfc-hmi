@@ -32,6 +32,10 @@ const Key kAccessSignInSubmitKey = Key('access-sign-in-submit');
 const Key kAccessSignInCancelKey = Key('access-sign-in-cancel');
 const Key kAccessSignInFirstUserKey = Key('access-sign-in-first-user');
 
+/// The honesty line's own key, so a test can assert the widget carrying it is
+/// not the single-line ellipsising kind. See [kAccessSignInHonestyNote].
+const Key kAccessSignInHonestyKey = Key('access-sign-in-honesty');
+
 /// What a rejected credential says.
 ///
 /// One message for a wrong username and for a wrong password, deliberately:
@@ -144,7 +148,15 @@ class _AccessSignInDialogState extends ConsumerState<AccessSignInDialog> {
 
     return StandardDialogFrame(
       title: 'Sign in',
-      subtitle: kAccessSignInHonestyNote,
+      // The honesty line is NOT the header subtitle. `PaneHeader` renders its
+      // subtitle on one line with `TextOverflow.ellipsis` — it is built for
+      // short fixed wording like "Conveyor" — and at the dialog's 520px width
+      // this sentence came out as "…It is not a security bo…" on screen. A
+      // `find.text` assertion still passed, because the `Text` widget carries
+      // the whole string whether or not any of it is legible; the golden in
+      // `test/widgets/access_golden_test.dart` is what showed it. Spec §8
+      // requires the operator to be able to *read* it, so it lives in the
+      // body below, where it wraps.
       icon: Icons.lock_open_outlined,
       showClose: false,
       actions: [
@@ -163,6 +175,16 @@ class _AccessSignInDialogState extends ConsumerState<AccessSignInDialog> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Above the fields, not below the buttons: what signing in does and
+          // does not do has to be read before the credential is typed, not
+          // after.
+          Text(
+            kAccessSignInHonestyNote,
+            key: kAccessSignInHonestyKey,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
           TextField(
             key: kAccessSignInUsernameKey,
             controller: _username,

@@ -8,7 +8,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/providers/access.dart';
@@ -137,6 +137,34 @@ void main() {
 
       expect(find.text(kAccessSignInHonestyNote), findsOneWidget);
       expect(kAccessSignInHonestyNote, contains('not a security boundary'));
+    });
+
+    testWidgets('the honesty line wraps rather than ellipsising',
+        (tester) async {
+      await tester.pumpWidget(_host(controller: _FakeSessionController()));
+      await _open(tester);
+
+      // `find.text` above passes whether or not a single character of the
+      // sentence is legible: a `Text` widget carries its full `data` even when
+      // the painter clips it to "…not a security bo…". That is exactly what
+      // the header subtitle did — `PaneHeader` renders one line with
+      // `TextOverflow.ellipsis` — and only the golden showed it. Spec §8's
+      // honesty requirement is about what the operator can read, so pin the
+      // properties that decide it.
+      final note = tester.widget<Text>(find.byKey(kAccessSignInHonestyKey));
+      expect(note.data, kAccessSignInHonestyNote);
+      expect(note.maxLines, isNull);
+      expect(note.overflow, isNot(TextOverflow.ellipsis));
+
+      // And it is genuinely painted on more than one line at the dialog's real
+      // width, which is the observation the golden makes.
+      final rendered = tester.renderObject<RenderParagraph>(
+        find.descendant(
+          of: find.byKey(kAccessSignInHonestyKey),
+          matching: find.byType(RichText),
+        ),
+      );
+      expect(rendered.size.height, greaterThan(rendered.preferredLineHeight));
     });
 
     testWidgets('valid credentials close the dialog', (tester) async {
