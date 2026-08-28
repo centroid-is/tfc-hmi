@@ -126,11 +126,20 @@ services:
     image: ghcr.io/centroid-is/docker-update:latest
     container_name: docker-update
     restart: unless-stopped
-    # 65532 = distroless nonroot UID. The GID must be the *host's* docker
-    # group — check with `getent group docker` on each station; it is not
-    # the same everywhere.
-    user: "65532:1001"
+    # 65532 = distroless nonroot UID. The GID must match the host's docker
+    # group, which is NOT the same on every station. Override per station in
+    # a .env beside this file:
+    #
+    #   echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> .env
+    #
+    # docker-update-state checks this at boot and fails loudly with that
+    # exact command if it is wrong, rather than leaving a container that
+    # cannot reach the daemon.
+    user: "65532:${DOCKER_GID:-1001}"
     ports:
+      # 8443 serves the UI over TLS; 8080 answers 301s to it so the old
+      # bookmark still works.
+      - "8443:8443"
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -139,6 +148,7 @@ services:
       # hmi-update never writes the compose file itself.
       - /home/centroid/docker-compose.yml:/etc/docker-update/docker-compose.yml:ro
       - /home/centroid/docker-update:/state
+      - ./docker_update_certs:/certs:ro
     environment:
       DOCKER_UPDATE_CRON: "0 * * * *"
       DOCKER_UPDATE_COMPOSE_PATH: /etc/docker-update/docker-compose.yml
@@ -146,8 +156,80 @@ services:
       DOCKER_UPDATE_LOG_LEVEL: info
       DOCKER_UPDATE_SELF_SERVICE: docker-update
       COMPOSE_PROJECT_NAME: centroid
+      DOCKER_UPDATE_TLS_CERT: /certs/docker-update.crt
+      DOCKER_UPDATE_TLS_KEY: /certs/docker-update.key
+      DOCKER_UPDATE_TLS_ADDR: ":8443"
+      # PLACEHOLDERS. Override per station via a .env file next to this
+      # compose — do not commit real credentials here. Basic auth guards
+      # every route except /healthz, which stays open for probes.
+      DOCKER_UPDATE_BASIC_AUTH_USER: ${DOCKER_UPDATE_BASIC_AUTH_USER:-centroid}
+      DOCKER_UPDATE_BASIC_AUTH_PASS: ${DOCKER_UPDATE_BASIC_AUTH_PASS:-change-me}
+    depends_on:
+      docker-update-certs:
+        condition: service_completed_successfully
+      docker-update-state:
+        condition: service_completed_successfully
     labels:
       hmi-update.watch: "false"
+
+
+  # Same one-shot pattern as pg-certs. docker-update runs as uid 65532 and
+  # cannot mint its own certificate, so one is generated here and chowned
+  # to it.
+  docker-update-certs:
+    image: alpine:latest
+    container_name: docker-update-certs
+    restart: "no"
+    volumes:
+      - ./docker_update_certs:/out
+    command: |
+      sh -euxc '
+        apk add --no-cache openssl
+        [ -f /out/docker-update.crt ] && [ -f /out/docker-update.key ] && { echo "TLS certs exist, skipping"; exit 0; }
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365000 \
+          -subj "/C=IS/ST=Hofudborgarsvaedid/L=Hafnarfjordur/O=Centroid/CN=${DOCKER_UPDATE_CERT_CN:-centroidx-hmi}" \
+          -addext "subjectAltName=DNS:${DOCKER_UPDATE_CERT_CN:-centroidx-hmi},DNS:localhost,IP:127.0.0.1" \
+          -keyout /out/docker-update.key \
+          -out /out/docker-update.crt
+        chown 65532:65532 /out/docker-update.key /out/docker-update.crt
+        chmod 600 /out/docker-update.key
+        chmod 644 /out/docker-update.crt
+        echo "Certs written to /out as uid 65532"
+      '
+
+
+  # Same shape as create-local-share: a root one-shot that prepares a bind
+  # mount the real service cannot prepare for itself. docker-update runs as
+  # uid 65532 and Docker creates missing bind sources as root:root, so
+  # without this the updater cannot write its state file.
+  #
+  # It also verifies the docker GID, because that is the other half of the
+  # per-station setup and the failure is otherwise silent — a container that
+  # starts, then cannot reach the daemon.
+  docker-update-state:
+    image: alpine:latest
+    container_name: docker-update-state
+    restart: "no"
+    volumes:
+      - /home/centroid/docker-update:/state
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: |
+      sh -euc '
+        chown 65532:65532 /state
+        chmod 700 /state
+        echo "state dir ready, owned by 65532"
+
+        want=$$(stat -c %g /var/run/docker.sock)
+        have="${DOCKER_GID:-1001}"
+        if [ "$$want" != "$$have" ]; then
+          echo "docker-update is configured with GID $$have but this host'"'"'s" >&2
+          echo "docker socket is group $$want. It will not reach the daemon." >&2
+          echo "Fix with:  echo DOCKER_GID=$$want >> .env && docker compose up -d" >&2
+          exit 1
+        fi
+        echo "docker GID $$have matches the socket"
+      '
+
 
   centroidx-backend:
     image: ghcr.io/centroid-is/centroid-backend:latest
