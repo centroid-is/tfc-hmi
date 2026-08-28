@@ -137,3 +137,23 @@ flutter pub run build_runner build
 cd centroid-hmi
 flutter run -d macos
 ```
+
+### Profiling
+
+The station image `ghcr.io/centroid-is/centroid-hmi:latest-release` is a
+Flutter **profile** build — AOT-compiled like release, so its timings are the
+ones an operator feels, but with the Dart VM Service left in. `tools/hmi_profiler.py`
+turns that into a markdown report: frame build/raster percentiles, the hot
+functions behind them, timeline blocks and the largest classes on the heap.
+
+```sh
+# a running station (port 8181 is on the compose network, not published)
+docker compose run --rm profiler report --seconds 30
+
+# a local profile run — paste the ws:// URI `flutter run` printed
+flutter run --profile -d macos
+python3 tools/hmi_profiler.py report --url ws://127.0.0.1:PORT/AUTHCODE=/ws
+```
+
+See [`docker/profiler/README.md`](docker/profiler/README.md) for the engine
+switches this needs, how to read the output, and why the port is not exposed.

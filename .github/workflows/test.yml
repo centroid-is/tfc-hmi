@@ -391,3 +391,47 @@ jobs:
     - name: Test
       working-directory: centroid-hmi/windows/runner/test
       run: ctest --test-dir build --build-config Debug --output-on-failure
+
+  # tools/ is python and had no CI job, so tools/hmi_profiler.py — the thing we
+  # point at a station when someone says the HMI feels sluggish — would rot the
+  # first time nobody ran it. Stdlib only, so this needs no install step and
+  # finishes in seconds.
+  #
+  # Linux and macOS: the profiler's websocket client talks to a real loopback
+  # server in the tests, and socket timeout behaviour is where a hand-rolled
+  # client breaks differently per platform. Windows is left out only because
+  # nothing runs these tools there.
+  tools-python-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    # `shell: bash` is not decoration: the default shell has no pipefail, so
+    # `unittest ... | tee` would report tee's exit status and a red suite would
+    # come out green.
+    - name: Run tools tests
+      shell: bash
+      run: python3 -m unittest discover -s tools -p 'test_*.py' -v 2>&1 | tee test-output.txt
+
+    # Same reasoning as jbtm-test: a discover pattern that stops matching
+    # produces a green job that ran nothing. Assert a floor.
+    - name: Verify the suite actually ran
+      if: always()
+      shell: bash
+      run: |
+        [ -f test-output.txt ] || { echo "::error::the test step produced no output"; exit 1; }
+        ran=$(grep -c ' \.\.\. ok$' test-output.txt || true)
+        echo "tools tests reported: $ran"
+        # 47 in tools/test_hmi_profiler.py as of this commit.
+        if [ "$ran" -lt 40 ]; then
+          echo "::error::tools ran only $ran tests, expected >=40 — check the discover pattern"
+          exit 1
+        fi

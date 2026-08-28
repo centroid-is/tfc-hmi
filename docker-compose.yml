@@ -93,8 +93,13 @@ services:
         chown 1000:1000 /home/centroid/.local/share
       '
 
+  # `latest-release` is the *profile* build: AOT-compiled exactly like release,
+  # so what you measure here is what the operator feels, but with the Dart VM
+  # Service, the sampling CPU profiler and the `Flutter.Frame` timing events
+  # still compiled in. `latest` is a debug/JIT build — fine for a desk, several
+  # times slower on a station, and its numbers mean nothing.
   flutter:
-    image: ghcr.io/centroid-is/centroid-hmi:latest
+    image: ghcr.io/centroid-is/centroid-hmi:latest-release
     container_name: flutter
     group_add:
       - 992
@@ -111,6 +116,28 @@ services:
       SECRET_BACKEND: file
       SECRET_FILE_TEST_PATH: /home/centroid/.local/share/keyrings/flutter.keyring
       SECRET_FILE_TEST_PASSWORD: TODOSetThisStrongPassword # openssl rand -base64 32
+      # Engine switches. The flutter-elinux embedder reads these from the
+      # environment rather than argv (GetSwitchesFromEnvironment), and ignores
+      # them entirely in a release build. Miscount FLUTTER_ENGINE_SWITCHES and
+      # the embedder complains on stderr about the missing key.
+      #
+      #   1  the sampling profiler is off unless asked for — without it
+      #      getCpuSamples answers "Feature is disabled"
+      #   2  a fixed port; the default is random and printed once, to the log
+      #   3  the default 127.0.0.1 is unreachable from the profiler container
+      #   4  no per-boot secret in the websocket path, so tools need no
+      #      log-scraping to find the URI
+      #
+      # 8181 is deliberately NOT in a `ports:` block. Whoever reaches it can
+      # read this app's memory and evaluate code in its isolate, so it stays on
+      # the compose network. See docker/profiler/README.md.
+      FLUTTER_ENGINE_SWITCHES: 4
+      FLUTTER_ENGINE_SWITCH_1: enable-dart-profiling
+      FLUTTER_ENGINE_SWITCH_2: vm-service-port=8181
+      FLUTTER_ENGINE_SWITCH_3: vm-service-host=0.0.0.0
+      FLUTTER_ENGINE_SWITCH_4: disable-service-auth-codes
+    expose:
+      - "8181" # Dart VM Service — compose network only, see above
     devices:
       - /dev/dri/renderD128
     depends_on:
@@ -122,6 +149,35 @@ services:
         limits:
           memory: 1G
     restart: unless-stopped
+
+  # Reads the VM Service above and writes performance reports. Opt-in: it sits
+  # behind a compose profile, so `docker compose up -d` never starts it.
+  #
+  #   docker compose --profile profiling up -d profiler   # continuous
+  #   docker compose run --rm profiler report --seconds 30  # once, to stdout
+  #
+  # No container_name — `docker compose run` needs to be able to make its own.
+  profiler:
+    image: ghcr.io/centroid-is/hmi-profiler:latest
+    profiles: ["profiling"]
+    depends_on:
+      - flutter
+    environment:
+      HMI_VM_SERVICE_URI: ws://flutter:8181/ws
+    # A 20 s window every 15 minutes. Collecting is not free — the CPU profiler
+    # samples at 250 µs and the timeline records — so this is a duty cycle a
+    # station can carry, not a setting to turn up and forget.
+    command:
+      - watch
+      - --seconds=20
+      - --interval=900
+      - --wait=120 # the app takes a while to come up after a station reboot
+      - --out-dir=/reports
+    volumes:
+      - profiler-reports:/reports
+    restart: unless-stopped
+    labels:
+      - hmi-update.watch=true
 
   # hmi-update — single Go binary with embedded Svelte UI, per-container
   # Update/Rollback/Force-pull buttons, on :8080. Replaces watchtower, which
@@ -298,3 +354,7 @@ services:
         chmod 644 /out/server.crt
         echo "Certs written to /out as uid:gid 70:70"
       '
+
+volumes:
+  # `docker compose cp profiler:/reports ./profiler-reports` to collect them.
+  profiler-reports:
