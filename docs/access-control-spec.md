@@ -66,11 +66,14 @@ are ordinary rows and may be edited or deleted:
 |---|---|
 | Operator | `operate` |
 | Shift Leader | `operate`, `setpoints` |
-| Maintenance | `operate`, `device`, `force` |
+| Maintenance | `operate`, `setpoints`, `device`, `force` |
 | Engineering | all seven |
 
-Whether Maintenance also gets `setpoints` is a checkbox, not a code change.
-This is the point of the group model — there is no ladder to decide on.
+Maintenance **does** get `setpoints`: somebody who has just swapped a motor
+needs to set it running properly, and sending them to find a shift leader to
+type a number is how workarounds get invented. Decided 2026-08-28 — and the
+decision cost one tick in a table rather than a schema change, which is the
+point of the group model.
 
 **Users** — a name, a password hash, and exactly one role. One role per user,
 not many; multi-role adds union semantics and an "effective permissions"
@@ -114,10 +117,14 @@ class AuditEntry extends Table {
   TextColumn get roleName => text()();
   TextColumn get surface => text()();                 // 'tag' | 'pref' | 'route'
   TextColumn get itemKey => text()();
+  TextColumn get member => text().nullable()();       // dotted path in a struct
   TextColumn get oldValue => text().nullable()();
   TextColumn get newValue => text().nullable()();
   TextColumn get groupRequired => text()();
   BoolColumn get allowed => boolean()();              // record denials too
+  TextColumn get origin =>
+      text().withDefault(const Constant('operator'))();  // see below
+  TextColumn get actionId => text()();                // one action, N rows
   TextColumn get reason => text().nullable()();
 }
 ```
@@ -127,8 +134,47 @@ OIDC lands, an incoming group claim of `"Shift Leader"` matches the role by name
 with no mapping table, exactly as Ignition and SIMATIC Logon do it. Do not
 replace it with an integer id.
 
+### Struct writes must be diffed to members
+
+Several assets are copy-on-write: clone the struct, set one field, write the
+whole struct back (`conveyor.dart:2383`, `sensor.dart:778`, `recipes.dart:454`).
+At the StateMan boundary that is a whole-struct write, so the audit must deduce
+which members actually changed or the trail is unfilterable blobs.
+
+`DynamicValue` (published `open62541` package) already has what is needed:
+`entries` returns `Iterable<MapEntry<String, DynamicValue>>`, guarded by
+`isObject` / `isArray`. **No pub release required.**
+
+**The trap:** `DynamicValue` defines no `operator ==` — only its `LocalizedText`
+helper does. Two distinct instances are never equal, so `oldMember != newMember`
+is always true and a naive diff reports every member as changed on every write.
+Recurse to the scalar leaves and compare `.value`, not the wrappers.
+
+Rules: no cached baseline emits one marked "no baseline" row rather than N false
+changes; arrays stay opaque (the indexed-key read-modify-write at
+`state_man.dart:1956` already presents them whole); nested members use dotted
+paths (`p_cfg.Freq`).
+
+Give every human action a **correlation id** so one recipe apply is one action
+with N member rows beneath it, not N unrelated rows.
+
 Record denials as well as successes. A denied write is the more interesting
 audit line, and it is how you find a role that is configured too tightly.
+
+**`origin` defaults to hand-made on purpose.** Today every external caller of
+`stateMan.write` is a widget — no heartbeat, watchdog or keepalive writes exist,
+and every `Timer.periodic` in the tree polls rather than writes. That holds by
+accident, not by construction, and relay Phase 5 breaks it deliberately with a
+hold-to-run deadman and `holdTick`. Defaulting to `operator` means an unmarked
+future machine caller lands *in* the trail loudly rather than escaping it
+silently; an absent audit row is the one defect nobody ever notices.
+
+**Every hand-made write is recorded, at every level including `operate`.** The
+viewer filters, and excludes `operate` from its default view, so the trail stays
+readable while nothing is discarded. Index `(at DESC)`, `(itemKey, at DESC)` and
+`(who, at DESC)`; the `AREAnn.DEVnn.SUBnn` convention makes a prefix filter give
+"everything on CN04" for free. Suppress no-op writes where new equals cached
+old. Do not build pulse collapsing.
 
 **Both backends must work.** `AppDatabase` runs on SQLite (`native == true`) and
 Postgres. The migration already branches on `native`; follow that. Drift's
