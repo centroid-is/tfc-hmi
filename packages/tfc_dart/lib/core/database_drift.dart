@@ -15,6 +15,9 @@ import 'package:drift_postgres/drift_postgres.dart';
 import 'package:path/path.dart' as p;
 import 'package:postgres/postgres.dart' as pg;
 import 'package:logger/logger.dart';
+// kSeedRoles is the single source of the seeded role names and group sets;
+// tfc_dart -> tfc_access, never the reverse.
+import 'package:tfc_access/tfc_access.dart' show kSeedRoles;
 
 import 'alarm.dart';
 import 'database.dart';
@@ -350,12 +353,74 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
+
+  /// The `audit_entry` indexes, created outside Drift because Drift's
+  /// `@TableIndex` cannot express `DESC` and every one of these is a
+  /// newest-first read.
+  ///
+  /// `IF NOT EXISTS` on both backends (SQLite 3.8+, Postgres 9.5+) for the
+  /// same reason the Postgres table DDL uses it: several SVN stations share
+  /// one database and each of them opens it.
+  ///
+  /// The `(item_key, at DESC)` index is the one that pays for itself: the
+  /// `AREAnn.DEVnn.SUBnn` key convention means a prefix filter on `item_key`
+  /// gives "everything on CN04" for free. Without these three the Phase 5
+  /// trail viewer degrades to a table scan, and a trail nobody can read is a
+  /// trail nobody reads.
+  static const List<String> _auditIndexStatements = [
+    'CREATE INDEX IF NOT EXISTS idx_audit_entry_at ON audit_entry (at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_entry_item_key_at '
+        'ON audit_entry (item_key, at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_entry_who_at '
+        'ON audit_entry (who, at DESC)',
+  ];
+
+  /// Create the [_auditIndexStatements] indexes.
+  ///
+  /// Called from both `onCreate` and the `from < 6` upgrade branch, and from
+  /// both the SQLite and the Postgres path of that branch — the statements are
+  /// identical on both backends, so they live in one place rather than being
+  /// copied into each arm.
+  Future<void> _createAuditIndexes(Migrator m) async {
+    for (final stmt in _auditIndexStatements) {
+      await m.database.customStatement(stmt);
+    }
+  }
+
+  /// Write the four roles from `kSeedRoles` into `app_role`.
+  ///
+  /// `onConflict: DoNothing()` emits `ON CONFLICT DO NOTHING`, which both
+  /// SQLite and Postgres accept — that is what makes a second station opening
+  /// the same database harmless, and what stops a re-run resetting an edited
+  /// `Operator` row back to `{operate}`. Deliberately not
+  /// `InsertMode.insertOrIgnore`, which is SQLite-only.
+  ///
+  /// These are ordinary rows once written: editable and deletable like any
+  /// other. `Operator` is the one exception, and its immutability is enforced
+  /// in the repository layer, not here — Postgres is reachable with `psql`, so
+  /// a database-level guard would be a guarantee this deployment cannot
+  /// actually make. It is an operational guard and it lives where operations
+  /// go through.
+  Future<void> _seedAccessRoles() async {
+    for (final role in kSeedRoles) {
+      await into(appRole).insert(
+        AppRoleCompanion.insert(
+          name: role.name,
+          groups: role.encodeGroups(),
+          seeded: const Value(true),
+        ),
+        onConflict: DoNothing(),
+      );
+    }
+  }
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
+          await _createAuditIndexes(m);
+          await _seedAccessRoles();
         },
         onUpgrade: (m, from, to) async {
           logger.i('Database onUpgrade: $from -> $to');
@@ -438,6 +503,35 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               await m.database.customStatement(
                   'CREATE TABLE IF NOT EXISTS plc_block_call (id SERIAL PRIMARY KEY, caller_block_id INTEGER NOT NULL REFERENCES plc_code_block(id), callee_block_name TEXT NOT NULL, line_number INTEGER)');
             }
+          }
+          // Schema v6: access control — roles, users and the audit trail.
+          if (from < 6) {
+            if (native) {
+              await m.createTable(appRole);
+              await m.createTable(appUser);
+              await m.createTable(auditEntry);
+            } else {
+              // PostgreSQL: raw `IF NOT EXISTS` DDL rather than
+              // `m.createTable`, following the v5 branch immediately above and
+              // not the spec's simplification that `m.createTable` covers both
+              // backends. Several SVN stations share one Postgres database and
+              // every one of them runs this branch when it opens, so it has to
+              // be safe to run twice — otherwise the second station aborts the
+              // migration and leaves the database half-upgraded.
+              //
+              // Datetimes are TEXT on both backends: this database sets
+              // `DriftDatabaseOptions(storeDateTimeAsText: true)` (see the
+              // `options` override) and the root `build.yaml` sets
+              // `store_date_time_values_as_text: true`.
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS app_role (name TEXT PRIMARY KEY, groups TEXT NOT NULL, seeded BOOLEAN NOT NULL DEFAULT FALSE)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS app_user (username TEXT PRIMARY KEY, role_name TEXT NOT NULL REFERENCES app_role(name), password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL, last_login_at TEXT)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS audit_entry (id SERIAL PRIMARY KEY, at TEXT NOT NULL, who TEXT NOT NULL, station TEXT NOT NULL, role_name TEXT NOT NULL, surface TEXT NOT NULL, item_key TEXT NOT NULL, member TEXT, old_value TEXT, new_value TEXT, group_required TEXT NOT NULL, allowed BOOLEAN NOT NULL, origin TEXT NOT NULL DEFAULT \'operator\', action_id TEXT NOT NULL, reason TEXT)');
+            }
+            await _createAuditIndexes(m);
+            await _seedAccessRoles();
           }
         },
       );
