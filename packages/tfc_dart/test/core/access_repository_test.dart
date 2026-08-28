@@ -43,12 +43,10 @@ Future<AppDatabase> _openDb() async {
 /// repository's own read of the row it just wrote can pass while the row is
 /// wrong.
 Future<Set<AccessGroup>?> _rawGroups(AppDatabase db, String name) async {
-  final rows = await db
-      .customSelect(
-        'SELECT groups FROM app_role WHERE name = ?',
-        variables: [Variable<String>(name)],
-      )
-      .get();
+  final rows = await db.customSelect(
+    'SELECT groups FROM app_role WHERE name = ?',
+    variables: [Variable<String>(name)],
+  ).get();
   if (rows.isEmpty) return null;
   return AccessRole.decodeGroups(rows.first.read<String>('groups'));
 }

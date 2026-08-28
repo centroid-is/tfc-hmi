@@ -117,8 +117,7 @@ class AccessRepository {
 
   /// The role named [name], or null when there is no such row.
   Future<AccessRole?> role(String name) async {
-    final row = await (db.select(db.appRole)
-          ..where((t) => t.name.equals(name)))
+    final row = await (db.select(db.appRole)..where((t) => t.name.equals(name)))
         .getSingleOrNull();
     return row == null ? null : _toRole(row);
   }
@@ -265,8 +264,8 @@ class AccessRepository {
   /// The number of rows in `app_user`.
   Future<int> userCount() async {
     final count = db.appUser.username.count();
-    final row = await (db.selectOnly(db.appUser)..addColumns([count]))
-        .getSingle();
+    final row =
+        await (db.selectOnly(db.appUser)..addColumns([count])).getSingle();
     return row.read(count) ?? 0;
   }
 
@@ -277,9 +276,9 @@ class AccessRepository {
   /// than an accident: case-folding usernames means picking a locale to fold
   /// in, and `İ` in Turkish is exactly the sort of thing that turns a login
   /// screen into a support call.
-  Future<AppUserData?> user(String username) => (db.select(db.appUser)
-        ..where((t) => t.username.equals(username)))
-      .getSingleOrNull();
+  Future<AppUserData?> user(String username) =>
+      (db.select(db.appUser)..where((t) => t.username.equals(username)))
+          .getSingleOrNull();
 
   /// Record that [username] signed in at [at].
   Future<void> touchLastLogin(String username, DateTime at) async {
