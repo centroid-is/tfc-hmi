@@ -1,12 +1,19 @@
 # =============================================================================
-# Stage: rebuild the Wayland embedder with force-numlock.patch
+# Stage: rebuild the Wayland embedder with the keyboard patches
 #
-# The bundle ships a prebuilt libflutter_elinux_wayland.so whose xkb state is
-# driven solely by the compositor's wl_keyboard.modifiers events. Weston's VNC
-# seat never latches NumLock, so keypad keys resolve to navigation keysyms and
-# produce no characters — a dead numpad over the VNC mirror. Rebuild the .so
-# from the exact source tag matching the bundled engine, with the patch keeping
-# NumLock always latched, and swap it into the bundle below.
+# The bundle ships a prebuilt libflutter_elinux_wayland.so that is wrong for
+# this station in three ways, so rebuild it from the exact source tag matching
+# the bundled engine and swap it into the bundle below:
+#
+#   force-numlock  its xkb state is driven solely by the compositor's
+#                  wl_keyboard.modifiers events, and weston's VNC seat never
+#                  latches NumLock, so keypad keys resolve to navigation
+#                  keysyms and produce no characters — a dead numpad over the
+#                  VNC mirror.
+#   kp-enter       the keypad's Enter is a separate evdev code that inserted a
+#                  bare CR instead of firing the input action.
+#   nav-keys       Home/End were dropped in the text-input keysym switch, and
+#                  Up/Down arrived but had no handler.
 # =============================================================================
 FROM debian:trixie-slim AS embedder-builder
 
@@ -26,9 +33,12 @@ ARG EMBEDDER_REF=5f77625673
 RUN git clone https://github.com/flutter-elinux/flutter-embedded-linux.git /embedder \
     && git -C /embedder checkout ${EMBEDDER_REF}
 
-COPY force-numlock.patch kp-enter.patch /tmp/embedder-patches/
+# nav-keys.patch is cut against the tree with the other two already applied,
+# so keep this order.
+COPY force-numlock.patch kp-enter.patch nav-keys.patch /tmp/embedder-patches/
 RUN git -C /embedder apply --stat --apply /tmp/embedder-patches/force-numlock.patch \
-      /tmp/embedder-patches/kp-enter.patch
+      /tmp/embedder-patches/kp-enter.patch \
+      /tmp/embedder-patches/nav-keys.patch
 
 # The embedder links against the engine at build/libflutter_engine.so
 # (hardcoded in its cmake). Use the one from the app bundle so the .so is

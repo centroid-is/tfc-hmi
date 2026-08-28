@@ -1,0 +1,122 @@
+diff --git a/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc b/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc
+index 0c6fd11..5ca6d67 100644
+--- a/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc
++++ b/src/flutter/shell/platform/linux_embedded/plugins/text_input_plugin.cc
+@@ -6,7 +6,11 @@
+ 
+ #include <linux/input-event-codes.h>
+ 
++#include <algorithm>
++#include <codecvt>
+ #include <iostream>
++#include <locale>
++#include <string>
+ 
+ #include "flutter/shell/platform/common/json_method_codec.h"
+ 
+@@ -53,6 +57,63 @@ constexpr char kTextKey[] = "text";
+ 
+ constexpr char kBadArgumentError[] = "Bad Arguments";
+ constexpr char kInternalConsistencyError[] = "Internal Consistency Error";
++
++std::u16string Utf8ToUtf16(const std::string& utf8) {
++  std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> converter;
++  return converter.from_bytes(utf8);
++}
++
++// Moves the cursor one line up or down, holding the column where the target
++// line is long enough. Returns false when there is no line to move to, which
++// is every keypress in a single-line field, leaving the model untouched.
++//
++// TextInputModel has no line-aware movement of its own, and its two offset
++// units disagree: GetCursorOffset() counts UTF-8 bytes while SetSelection()
++// indexes UTF-16 code units. Everything here is therefore done in UTF-16,
++// with the cursor converted up front. Newline is ASCII, so the line splitting
++// itself is safe in either encoding.
++bool MoveCursorByLine(TextInputModel* model, bool up) {
++  const std::string text8 = model->GetText();
++  const std::u16string text = Utf8ToUtf16(text8);
++  const size_t cursor =
++      Utf8ToUtf16(text8.substr(0, model->GetCursorOffset())).size();
++
++  // Start of the line the cursor is on.
++  size_t line_start = 0;
++  if (cursor > 0) {
++    const size_t nl = text.rfind(u'\n', cursor - 1);
++    line_start = (nl == std::u16string::npos) ? 0 : nl + 1;
++  }
++  const size_t column = cursor - line_start;
++
++  size_t target_start;
++  size_t target_length;
++
++  if (up) {
++    if (line_start == 0) {
++      return false;
++    }
++    // text[line_start - 1] is the newline ending the previous line.
++    const size_t nl = (line_start >= 2)
++                          ? text.rfind(u'\n', line_start - 2)
++                          : std::u16string::npos;
++    target_start = (nl == std::u16string::npos) ? 0 : nl + 1;
++    target_length = (line_start - 1) - target_start;
++  } else {
++    const size_t line_end = text.find(u'\n', line_start);
++    if (line_end == std::u16string::npos) {
++      return false;
++    }
++    target_start = line_end + 1;
++    const size_t next_end = text.find(u'\n', target_start);
++    target_length =
++        (next_end == std::u16string::npos ? text.size() : next_end) -
++        target_start;
++  }
++
++  return model->SetSelection(
++      TextRange(target_start + std::min(column, target_length)));
++}
+ }  // namespace
+ 
+ void TextInputPlugin::OnKeyPressed(uint32_t keycode, uint32_t code_point) {
+@@ -68,6 +129,12 @@ void TextInputPlugin::OnKeyPressed(uint32_t keycode, uint32_t code_point) {
+     case KEY_RIGHT:
+       changed = active_model_->MoveCursorForward();
+       break;
++    case KEY_UP:
++      changed = MoveCursorByLine(active_model_.get(), true);
++      break;
++    case KEY_DOWN:
++      changed = MoveCursorByLine(active_model_.get(), false);
++      break;
+     case KEY_END:
+       changed = active_model_->MoveCursorToEnd();
+       break;
+diff --git a/src/flutter/shell/platform/linux_embedded/window/elinux_window_wayland.cc b/src/flutter/shell/platform/linux_embedded/window/elinux_window_wayland.cc
+index 6c1df9d..56f6eed 100644
+--- a/src/flutter/shell/platform/linux_embedded/window/elinux_window_wayland.cc
++++ b/src/flutter/shell/platform/linux_embedded/window/elinux_window_wayland.cc
+@@ -879,6 +879,24 @@ const zwp_text_input_v1_listener ELinuxWindowWayland::kZwpTextInputV1Listener =
+               case XKB_KEY_Down:
+                 self->binding_handler_delegate_->OnVirtualSpecialKey(KEY_DOWN);
+                 break;
++              // Sent by keyboards that tap a keysym rather than issuing
++              // zwp_input_method_context_v1.delete_surrounding_text, which is
++              // the only backspace route .delete_surrounding_text above
++              // covers.
++              case XKB_KEY_BackSpace:
++                self->binding_handler_delegate_->OnVirtualSpecialKey(
++                    KEY_BACKSPACE);
++                break;
++              case XKB_KEY_Delete:
++                self->binding_handler_delegate_->OnVirtualSpecialKey(
++                    KEY_DELETE);
++                break;
++              case XKB_KEY_Home:
++                self->binding_handler_delegate_->OnVirtualSpecialKey(KEY_HOME);
++                break;
++              case XKB_KEY_End:
++                self->binding_handler_delegate_->OnVirtualSpecialKey(KEY_END);
++                break;
+               case XKB_KEY_Tab:
+                 self->binding_handler_delegate_->OnVirtualSpecialKey(KEY_TAB);
+                 break;
