@@ -12,6 +12,7 @@ import 'package:tfc_dart/core/access/access_repository.dart';
 
 import '../providers/access.dart';
 import 'access_sign_in_dialog.dart';
+import 'base_scaffold.dart';
 
 /// What the gate does with a route: show it, lock it, or show neither yet.
 enum AccessGateState {
@@ -286,5 +287,96 @@ class AccessLockedBody extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+/// The waiting indicator, so a test can tell "not decided yet" from a blank
+/// page and from the lock.
+const Key kAccessGateWaitingKey = Key('access-gate-waiting');
+
+/// Stands in front of a route and decides whether to show it.
+///
+/// **At the route, not inside the page.** A page that has to remember to ask is
+/// a page that can forget, and a forgotten ask is a hole with no symptom. The
+/// route is the one place a menu tap, a deep link and a stored startup path all
+/// pass through, so gating there means every way in meets the same decision.
+///
+/// The gate knows nothing about paths, `kRaisedRoutes` or `RouteRegistry`:
+/// [group] and [allowWhenRepositoryUnavailable] are handed in at the route
+/// table, where the path is already spelled out. That is what lets this widget
+/// land beside the route declarations without touching them, and it means the
+/// gate has no way to fail open through a lookup miss.
+///
+/// There is no `fallback` and no `onDenied`. One behaviour, everywhere.
+class AccessGate extends ConsumerWidget {
+  const AccessGate({
+    super.key,
+    required this.group,
+    required this.title,
+    required this.child,
+    this.allowWhenRepositoryUnavailable = false,
+    this.openSignIn = showAccessSignInDialog,
+  });
+
+  /// The permission this route needs. Required with no default: a gate that
+  /// could be built without one would fail open by omission.
+  final AccessGroup group;
+
+  /// The app-bar title of the locked and waiting pages. The child brings its
+  /// own scaffold, so this is used only when the child is not shown.
+  final String title;
+
+  /// The page behind the gate. Not built at all while denied — a page must not
+  /// run its `initState`, its queries or its subscriptions behind a lock.
+  final Widget child;
+
+  /// Whether an unavailable access repository opens this route. Defaults to
+  /// false, so a caller that forgets it gets the strict behaviour; see
+  /// [resolveAccessGate] for why exactly one route passes it true.
+  final bool allowWhenRepositoryUnavailable;
+
+  /// How the locked page opens the sign-in prompt. Injectable for the same
+  /// reason `AccessStatusAction` makes it injectable.
+  final AccessSignInOpener openSignIn;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = resolveAccessGate(
+      group: group,
+      repository: ref.watch(accessRepositoryProvider),
+      session: ref.watch(accessSessionProvider),
+      allowWhenRepositoryUnavailable: allowWhenRepositoryUnavailable,
+    );
+
+    switch (state) {
+      case AccessGateState.allowed:
+        // Nothing wraps the child — the pages already bring their own
+        // `BaseScaffold`, and a second one would double the app bar.
+        //
+        // This is also where signing in "re-opens the affordance without
+        // replaying the original action": the session changes, `build` runs
+        // again and the child appears. Nothing is pushed, popped or
+        // re-navigated, so the operator is exactly where they already were,
+        // and whatever they were about to do still needs doing.
+        return child;
+      case AccessGateState.denied:
+        // A scaffold of the gate's own, so the app bar (with its sign-in
+        // affordance) and the navigation bar are present: a locked page the
+        // operator cannot leave would be worse than no lock.
+        return BaseScaffold(
+          title: title,
+          body: AccessLockedBody(group: group, openSignIn: openSignIn),
+        );
+      case AccessGateState.waiting:
+        // Not a blank page: this route was reached deliberately and an empty
+        // one reads as broken. Not the child either — waiting must never be
+        // mistaken for allowed.
+        return BaseScaffold(
+          title: title,
+          body: const Center(
+            child: CircularProgressIndicator(key: kAccessGateWaitingKey),
+          ),
+        );
+    }
   }
 }

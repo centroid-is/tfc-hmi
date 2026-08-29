@@ -746,15 +746,15 @@ void main() {
 
     testWidgets(
         'allowWhenRepositoryUnavailable: true renders the child with no '
-        'repository, and the lock once one exists', (tester) async {
-      final permissive = buildAccessGateRouter(const AccessGate(
+        'repository', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
         group: AccessGroup.administer,
         title: 'Server Config',
         allowWhenRepositoryUnavailable: true,
         child: _GatedPage(),
       ));
       await tester.pumpWidget(buildAccessGateShell(
-        router: permissive,
+        router: router,
         session: _FixedSession(
             AccessSession.anonymous(const {AccessGroup.operate})),
         repository: _absentRepository,
@@ -763,16 +763,22 @@ void main() {
 
       expect(find.text(_kGatedChildText), findsOneWidget);
       expect(find.byType(AccessLockedBody), findsNothing);
+    });
 
-      // The exemption is inert the moment a repository answers.
-      final withRepository = buildAccessGateRouter(const AccessGate(
+    testWidgets(
+        'allowWhenRepositoryUnavailable: true renders the lock once a '
+        'repository exists', (tester) async {
+      // The exemption is inert the moment a repository answers — a second
+      // `pumpWidget` in the test above would tear the Beamer delegate down
+      // mid-flight, so this is its own case.
+      final router = buildAccessGateRouter(const AccessGate(
         group: AccessGroup.administer,
         title: 'Server Config',
         allowWhenRepositoryUnavailable: true,
         child: _GatedPage(),
       ));
       await tester.pumpWidget(buildAccessGateShell(
-        router: withRepository,
+        router: router,
         session: _FixedSession(
             AccessSession.anonymous(const {AccessGroup.operate})),
         repository: _presentRepository,
@@ -781,6 +787,7 @@ void main() {
 
       expect(find.byType(AccessLockedBody), findsOneWidget);
       expect(find.text(_kGatedChildText), findsNothing);
+      expect(_childInits, 0);
     });
   });
 }
