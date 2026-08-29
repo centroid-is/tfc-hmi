@@ -24,9 +24,9 @@
 /// `AccessPolicy` ships with no tag bindings — Phase 4's access templates
 /// supply them — so `groupForWireSurface('tag', …)` answers null for every key
 /// today and every write is permitted. What ships now is the **recording**:
-/// every jog, setpoint and force in the trail. The deny path arrives with the
-/// next task, tested against an injected binding, so Phase 4 turns it on by
-/// supplying templates rather than by writing new code.
+/// every jog, setpoint and force in the trail. The deny path below is fully
+/// built and fully tested against an injected binding, so Phase 4 turns it on
+/// by supplying templates rather than by writing new code.
 library;
 
 import 'dart:async';
@@ -57,6 +57,16 @@ class GuardedStateMan implements StateMan {
   /// unmapped-surface branch sits on the production write path rather than in
   /// a wrapper nothing calls. A guard constructed with a surface the policy
   /// does not know fails closed on `administer`.
+  ///
+  /// [readBaseline] answers the value a key held before the write, so a
+  /// whole-struct write can be reduced to the members that actually moved. It
+  /// is optional: without it every write is one row marked as having no
+  /// baseline, which is a readable trail rather than a wrong one.
+  ///
+  /// [onDenied] fires before the [AccessDenied] is thrown, so a screen can
+  /// present a refusal as a locked affordance even at the call sites that do
+  /// not catch the exception. Plan 03-07 owns the prompt; this owns firing
+  /// the event.
   GuardedStateMan({
     required StateMan inner,
     required AccessPolicy policy,
@@ -64,6 +74,8 @@ class GuardedStateMan implements StateMan {
     required AuditSink audit,
     required String station,
     String surface = 'tag',
+    Future<DynamicValue?> Function(String key)? readBaseline,
+    void Function(AccessDenied denial)? onDenied,
     Logger? logger,
   })  : _inner = inner,
         _policy = policy,
@@ -71,6 +83,8 @@ class GuardedStateMan implements StateMan {
         _audit = audit,
         _station = station,
         _surface = surface,
+        _readBaseline = readBaseline,
+        _onDenied = onDenied,
         _logger = logger ?? Logger();
 
   final StateMan _inner;
@@ -79,11 +93,27 @@ class GuardedStateMan implements StateMan {
   final AuditSink _audit;
   final String _station;
   final String _surface;
+  final Future<DynamicValue?> Function(String key)? _readBaseline;
+  final void Function(AccessDenied denial)? _onDenied;
 
   /// The guard's own diagnostic logger, used for the audit-sink failures it
   /// swallows. Distinct from [logger], which forwards the inner `StateMan`'s
   /// so that a caller typed as `StateMan` sees exactly what it saw before.
   final Logger _logger;
+
+  /// How long the guard will wait for the baseline read before treating the
+  /// write as having none.
+  ///
+  /// The baseline exists to make the trail *readable* - one row per member
+  /// instead of one blob. Making a jog wait on a PLC round trip that is not
+  /// answering would trade a usability feature for an outage, so the wait is
+  /// short and its expiry is not an error: it is "no baseline", the same
+  /// answer as not supplying a reader at all.
+  ///
+  /// This timeout is on the **write** path only. Spec section 10 and the
+  /// repo's own history say not to put a `.timeout` on anything that runs
+  /// during dispose, and nothing here does.
+  static const Duration baselineTimeout = Duration(milliseconds: 250);
 
   /// The `who` recorded when nobody is signed in.
   static const String _anonymousWho = 'anonymous';
@@ -103,6 +133,12 @@ class GuardedStateMan implements StateMan {
   /// authorized attempt because the network blinked is the worse failure.
   /// Spec §2's own reasoning is that an absent audit row is the one defect
   /// nobody ever notices.
+  ///
+  /// On the deny path the rows come before the throw for the same reason,
+  /// sharpened: the row is the only evidence the guard fired, and it must
+  /// exist even if nobody catches the exception. [onDenied] fires before the
+  /// throw too, so the operator sees a lock even at the call sites where the
+  /// exception escapes.
   ///
   /// ## The key
   ///
@@ -132,7 +168,14 @@ class GuardedStateMan implements StateMan {
     final group = _policy.groupForWireSurface(_surface, resolvedKey);
     final session = _session();
 
-    final changes = diffDynamicValue(null, value);
+    // Null means unrestricted. Tags fail **open** - deliberately, and opposite
+    // to `GuardedPreferences`: binding is explicit per key (spec §7b), so a
+    // key nobody has bound has no group by construction rather than by
+    // omission, and a strict default would lock every control on the plant on
+    // the day the guards merge. Do not "fix" this into a fail-closed default.
+    final permitted = group == null || session.can(group);
+
+    final changes = diffDynamicValue(await _baselineOrNull(resolvedKey), value);
 
     // One id per write, so every member row of one action correlates and two
     // actions never collide.
@@ -140,7 +183,42 @@ class GuardedStateMan implements StateMan {
     final at = DateTime.now();
     final who = session.user?.username ?? _anonymousWho;
 
+    if (!permitted) {
+      await _recordAll(auditRecordsForChanges(
+        // No suppression on this path, ever. See [_denialChanges].
+        changes: _denialChanges(changes, value),
+        at: at,
+        who: who,
+        station: _station,
+        roleName: session.roleName,
+        surface: _surface,
+        itemKey: resolvedKey,
+        // Non-null here: `permitted` is true whenever `group` is null, so
+        // reaching this branch already means a group was bound.
+        groupRequired: group.name,
+        allowed: false,
+        actionId: actionId,
+      ));
+
+      final denial = AccessDenied(resolvedKey, group);
+      try {
+        _onDenied?.call(denial);
+      } on Object catch (error, stack) {
+        // A listener's bug must not change what the caller sees. The refusal
+        // is the guard's answer; a broken prompt is a cosmetic failure beside
+        // it.
+        _logger.e('onDenied listener threw for "$resolvedKey"',
+            error: error, stackTrace: stack);
+      }
+      throw denial;
+    }
+
     await _recordAll(auditRecordsForChanges(
+      // Empty here means the write changed nothing, and spec §2's no-op
+      // suppression is exactly that: no rows. The **write itself still goes
+      // through** - a re-issued command after a comms blip is a real action
+      // with a real effect at the PLC, and a guard that silently swallowed it
+      // would be changing plant behaviour to tidy a log.
       changes: changes,
       at: at,
       who: who,
@@ -158,6 +236,52 @@ class GuardedStateMan implements StateMan {
     return _inner.write(key, value);
   }
 
+  /// The change list a **refusal** records, which is never empty.
+  ///
+  /// Spec §2's no-op suppression was written about writes that changed nothing
+  /// and therefore recorded nothing worth reading. A refusal is not that. Its
+  /// row is the evidence the guard fired, it is what the phase requirement
+  /// means by "including denials", and this class's own contract is that the
+  /// evidence exists even if nobody catches the exception. Re-pressing Start
+  /// on a machine that is already started, against a bound key, is a denial
+  /// with nothing to diff - and deleting its only row would make the guard
+  /// invisible in exactly the case an operator is most likely to repeat.
+  ///
+  /// An operator jabbing a locked Start button therefore produces a run of
+  /// identical denial rows. That is a signal, not noise, and the Phase 5
+  /// viewer is where it gets collapsed for reading.
+  ///
+  /// The synthesised row is a whole-value row: a null member, and the value
+  /// that was attempted. [renderDynamicValue] rather than a second renderer,
+  /// so the deny path and the diff cannot disagree about how a value looks or
+  /// about the difference between null and the empty string.
+  List<MemberChange> _denialChanges(
+    List<MemberChange> changes,
+    DynamicValue attempted,
+  ) =>
+      changes.isNotEmpty
+          ? changes
+          : [MemberChange(newValue: renderDynamicValue(attempted))];
+
+  /// The value [key] held before this write, or null when there is no usable
+  /// baseline.
+  ///
+  /// Null for three reasons that all mean the same thing to the diff: no
+  /// reader was supplied, the read threw, or it did not answer within
+  /// [baselineTimeout]. A failed baseline read costs the trail its member
+  /// breakdown for one row. Letting it cost the operator their jog would be
+  /// the guard causing the outage it exists to prevent.
+  Future<DynamicValue?> _baselineOrNull(String key) async {
+    final read = _readBaseline;
+    if (read == null) return null;
+    try {
+      return await read(key).timeout(baselineTimeout);
+    } on Object catch (error) {
+      _logger.w('audit baseline unavailable for "$key": $error');
+      return null;
+    }
+  }
+
   /// Appends [rows], swallowing and logging a sink that throws.
   ///
   /// `DriftAuditSink.record` already swallows its own failures, so this is
@@ -165,7 +289,11 @@ class GuardedStateMan implements StateMan {
   /// contract lives in a doc comment and nothing enforces it, and the
   /// consequences of trusting it differ by path. On the permitted path an
   /// escaping sink exception would fail a write the session was allowed to
-  /// make, which is not acceptable.
+  /// make. On the deny path it would replace [AccessDenied] with something no
+  /// caller catches, skip the denial callback, and leave the operator with no
+  /// prompt and no explanation for a control that did nothing. Neither is
+  /// acceptable, and the same rule is written into plans 03-05 and 03-10 in
+  /// the same words.
   ///
   /// The price is that a lost row is only a log line, so the line names the
   /// record it lost.
