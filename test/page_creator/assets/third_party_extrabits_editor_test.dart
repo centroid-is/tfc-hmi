@@ -53,7 +53,7 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Add diode'), findsOneWidget);
     });
 
-    testWidgets('tapping add appends one empty blue diode row', (tester) async {
+    testWidgets('tapping add appends one empty GREEN diode row', (tester) async {
       final config =
           ThirdPartyEquipmentConfig(kind: ThirdPartyEquipmentKind.multivac);
 
@@ -66,7 +66,10 @@ void main() {
       final bit = config.extraBits.single;
       expect(bit.key, isEmpty);
       expect(bit.label, isEmpty);
-      expect(bit.onRole, HmiColorRole.blue);
+      // Green, not blue: a permit is green on every machine in this file, and
+      // the editor takes the default from ExtraStatusBit rather than its own
+      // literal, so this also pins the two together.
+      expect(bit.onRole, HmiColorRole.green);
       // The placeholder row text is gone once a real row exists.
       expect(find.text('No extra diodes'), findsNothing);
     });
@@ -84,13 +87,13 @@ void main() {
       await enterVisible(tester, find.widgetWithText(TextFormField, 'Key'),
           'MVC02.PermitOutfeed');
       await enterVisible(tester, find.widgetWithText(TextFormField, 'Label'),
-          'Way out of Multivac is clear');
+          '{m} may send boxes on');
 
       final bit = config.extraBits.single;
       expect(bit.key, 'MVC02.PermitOutfeed');
-      expect(bit.label, 'Way out of Multivac is clear');
+      expect(bit.label, '{m} may send boxes on');
       // The other field is preserved across each in-place rebuild.
-      expect(bit.onRole, HmiColorRole.blue);
+      expect(bit.onRole, HmiColorRole.green);
     });
 
     testWidgets('selecting a colour role updates the bit, keeping key/label',
@@ -98,8 +101,13 @@ void main() {
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.multivac,
         extraBits: const [
+          // Explicitly blue, NOT the default — otherwise "select green" would
+          // pick the value the row already had and pass without changing
+          // anything.
           ExtraStatusBit(
-              key: 'MVC01.PermitOutfeed', label: 'Way out is clear'),
+              key: 'MVC01.PermitOutfeed',
+              label: '{m} may send boxes on',
+              onRole: HmiColorRole.blue),
         ],
       );
 
@@ -123,7 +131,7 @@ void main() {
       // selected label, plus an offstage copy it sizes the menu against).
       expect(find.text('Green'), findsWidgets);
       expect(bit.key, 'MVC01.PermitOutfeed');
-      expect(bit.label, 'Way out is clear');
+      expect(bit.label, '{m} may send boxes on');
     });
 
     testWidgets('the remove button drops the row', (tester) async {

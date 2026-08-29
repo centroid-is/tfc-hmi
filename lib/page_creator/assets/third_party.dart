@@ -2421,7 +2421,10 @@ class _ThirdPartyEquipmentConfigEditorState
               'Loose permit diodes that read a complete key of their own — for '
               'a permit that is not in the status struct, like the Multivac '
               'outfeed permit, which lives on its own MVC0n key. Shown after '
-              'the normal diodes in the side pane\'s Status section.',
+              'the normal diodes in the side pane\'s Status section.\n'
+              'Write the label as a template: {m} becomes the machine name, so '
+              'reuse the wording the same bit already has elsewhere — an '
+              'outfeed permit is "{m} may send boxes on".',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -2451,7 +2454,12 @@ class _ThirdPartyEquipmentConfigEditorState
                           controller: _extraLabelControllers[i],
                           decoration: const InputDecoration(
                             labelText: 'Label',
-                            hintText: 'Row text in the Status section',
+                            // A TEMPLATE, not the finished sentence: `{m}`
+                            // becomes the machine's name, so one line reads
+                            // right on every instance and matches the wording
+                            // the kind's own diodes use.
+                            hintText: 'e.g. {m} may send boxes on',
+                            helperText: '{m} becomes the machine name',
                             isDense: true,
                           ),
                           onChanged: (v) => _updateExtraBit(i, label: v),
@@ -2753,13 +2761,14 @@ class _ThirdPartyEquipmentConfigEditorState
   }
 
   /// Appends an empty loose diode plus its two controllers, keeping the three
-  /// lists index-aligned. Blue by default — the outfeed-permit vocabulary the
-  /// box erector and strapper already use.
+  /// lists index-aligned.
+  ///
+  /// The colour is left to [ExtraStatusBit]'s own default rather than restated
+  /// here — green, what a permit is on every machine in this file — so the
+  /// editor cannot drift from the type the way a second literal would.
   void _addExtraBit() {
     setState(() {
-      widget.config.extraBits.add(
-        const ExtraStatusBit(key: '', label: '', onRole: HmiColorRole.blue),
-      );
+      widget.config.extraBits.add(const ExtraStatusBit(key: '', label: ''));
       _extraKeyControllers.add(TextEditingController());
       _extraLabelControllers.add(TextEditingController());
     });
