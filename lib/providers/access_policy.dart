@@ -21,6 +21,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:tfc_access/tfc_access.dart';
 
 import '../access_routes.dart';
+import 'access.dart';
 
 part 'access_policy.g.dart';
 
@@ -90,4 +91,66 @@ void reportAccessDenial(Ref ref, AccessDenied denial) {
   }
   if (controller.isClosed) return;
   controller.add(denial);
+}
+
+/// The session a guard resolves on while [accessSessionProvider] is still
+/// loading, or has errored.
+///
+/// Anonymous holding the **seeded Operator groups**, mirroring
+/// `AccessSessionController._anonymousGroups`. The boot window is real — the
+/// session resolves through the database and the guards are built before it
+/// answers — and the alternative, an empty group set, would refuse a jog on a
+/// panel that is merely still starting. It is the conservative floor rather
+/// than a guess: the seeded Operator set is the narrowest Operator has ever
+/// been, so it is still the strict answer for `configure` and `administer`.
+final AccessSession kSessionWhileLoading = AccessSession.anonymous({
+  ...kSeedRoles.firstWhere((r) => r.name == kOperatorRoleName).groups,
+});
+
+/// The session in force **at this instant**, for a guard's `session` callback.
+///
+/// `ref.read`, never `ref.watch`. A watch would make the reading provider
+/// rebuild on every sign-in, sign-out and inactivity timeout; for
+/// `stateManProvider` that means dropping every OPC UA connection and every
+/// subscription on the panel each time somebody signs in. That is what the
+/// callback parameter on both guards exists for, and
+/// `guard_wiring_test.dart`'s "the session is a callback, not a watch" group
+/// is what keeps it that way.
+///
+/// A disposed container answers [kSessionWhileLoading] rather than throwing:
+/// a write already in flight during shutdown should be refused or permitted on
+/// the strict floor, not crash.
+AccessSession sessionInForce(Ref ref) {
+  try {
+    return ref.read(accessSessionProvider).valueOrNull ?? kSessionWhileLoading;
+  } on Object {
+    return kSessionWhileLoading;
+  }
+}
+
+/// The audit sink **as it is now**, resolved once per row.
+///
+/// Both guards are built once and outlive several `auditSinkProvider` values:
+/// a station boots with no database, answers [NullAuditSink], and gets a
+/// [DriftAuditSink] when Postgres opens. Awaiting the sink at construction
+/// instead would capture whichever one existed at boot, and a `ref.watch` of
+/// it would rebuild the guard — and, for `stateManProvider`, the plant
+/// connection — on every database reconnect, which is precisely what
+/// `state_man.dart`'s `ref.read` on preferences exists to prevent.
+///
+/// So the resolution moves to the row. `record` is already `async` and both
+/// guards already wrap every `record` call in a `try`/`catch` that logs and
+/// swallows, so a throw here — a disposed container, a sink that never
+/// resolves — can neither fail a permitted write nor replace an
+/// `AccessDenied`.
+class RefAuditSink implements AuditSink {
+  const RefAuditSink(this._ref);
+
+  final Ref _ref;
+
+  @override
+  Future<void> record(AuditRecord entry) async {
+    final sink = await _ref.read(auditSinkProvider.future);
+    await sink.record(entry);
+  }
 }

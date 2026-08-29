@@ -10,13 +10,37 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/access/access_repository.dart';
+import 'package:tfc_dart/core/access/guarded_preferences.dart';
+import 'package:tfc_dart/core/access/guarded_state_man.dart';
+import 'package:tfc_dart/core/database.dart';
+import 'package:tfc_dart/core/database_drift.dart';
+import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/state_man.dart';
 
 import 'package:tfc/access_routes.dart';
 import 'package:tfc/route_registry.dart';
+import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/access_policy.dart';
+import 'package:tfc/providers/collector.dart';
+import 'package:tfc/providers/database.dart';
+import 'package:tfc/providers/preferences.dart';
+import 'package:tfc/providers/state_man.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    SharedPreferencesAsyncPlatform.instance =
+        InMemorySharedPreferencesAsync.empty();
+    DatabaseConfig.clearPrefsCache();
+    Preferences.clearSecretCache();
+  });
+
   group('accessPolicyProvider', () {
     test('answers the same group for every route as accessGroupForRoute does',
         () async {
@@ -73,27 +97,39 @@ void main() {
     });
 
     test('the source reaches no provider that could cascade into it', () {
-      // The policy is a pure value. A `databaseProvider`, `preferencesProvider`
-      // or `accessSessionProvider` read at a provider's build here would make
-      // rebuilding the policy cascade — and the session one would rebuild
-      // StateMan on every sign-in. Comment lines are stripped so that the
-      // comment naming the rule cannot satisfy the test enforcing it.
+      // The policy is a pure value and this file is the leaf both guards hang
+      // off. `databaseProvider` and `preferencesProvider` must not appear at
+      // all; `accessSessionProvider` appears exactly once, inside the write-time
+      // `sessionInForce` callback, and every occurrence of it must be a
+      // `ref.read` — a watch there rebuilds StateMan on every sign-in and drops
+      // every OPC UA connection on the panel.
+      //
+      // Comment lines are stripped so that the comment naming the rule cannot
+      // satisfy the test enforcing it.
       final source = File('lib/providers/access_policy.dart').readAsLinesSync();
       final code =
           source.where((l) => !l.trimLeft().startsWith('//')).join('\n');
 
       for (final forbidden in const [
         'databaseProvider',
-        'preferencesProvider',
-        'accessSessionProvider',
+        'preferencesProvider'
       ]) {
         expect(code.contains(forbidden), isFalse,
             reason: 'lib/providers/access_policy.dart must not reach '
                 '$forbidden — it is the leaf both guards depend on');
       }
-      // Non-vacuous: the file really was read, and the stripping did not eat
-      // the code along with the comments.
-      expect(code, contains('AccessPolicy accessPolicy(Ref ref)'));
+
+      final sessionUses = 'accessSessionProvider'.allMatches(code).length;
+      final sessionReads =
+          'ref.read(accessSessionProvider'.allMatches(code).length;
+      expect(sessionUses, greaterThan(0));
+      expect(sessionReads, sessionUses,
+          reason: 'every use of accessSessionProvider here must be a '
+              'ref.read at write time, never a watch at a provider build');
+
+      // And the policy provider itself depends on nothing at all.
+      expect(code, contains('AccessPolicy accessPolicy(Ref ref) =>'));
+      expect(code, contains('const AccessPolicy(routes: kRaisedRoutes)'));
       expect(code, contains('accessDenialsProvider'));
     });
   });
@@ -165,6 +201,184 @@ void main() {
           () => reportAccessDenial(ref, _denial('anything')), returnsNormally);
     });
   });
+
+  group('the wrapping', () {
+    test('preferencesProvider answers a GuardedPreferences', () async {
+      final w = await _wiring();
+      expect(await w.prefs, isA<GuardedPreferences>());
+    });
+
+    test('stateManProvider answers a GuardedStateMan around the built inner',
+        () async {
+      final w = await _wiring();
+      final sm = await w.stateMan;
+
+      expect(sm, isA<GuardedStateMan>());
+      // The decorator, not the inner: a caller that got the inner back would be
+      // unguarded and nothing would say so.
+      expect(identical(sm, w.inner), isFalse);
+    });
+
+    test('both providers build on a station with no database at all', () async {
+      // `auditSinkProvider` answers `NullAuditSink` there, which plan 01-07
+      // established as a station that keeps working with no trail.
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWith((ref) async => null),
+        stationNameProvider.overrideWithValue(_kStation),
+        collectorProvider.overrideWith((ref) async => null),
+        stateManFactoryProvider.overrideWithValue(({
+          required StateManConfig config,
+          required KeyMappings keyMappings,
+          List<DeviceClient> deviceClients = const [],
+        }) async =>
+            _FakeStateMan()),
+      ]);
+      addTearDown(container.dispose);
+
+      expect(
+          await container.read(auditSinkProvider.future), isA<NullAuditSink>());
+      expect(await container.read(preferencesProvider.future),
+          isA<GuardedPreferences>());
+      expect(await container.read(stateManProvider.future),
+          isA<GuardedStateMan>());
+    });
+
+    test('a refused write publishes on accessDenialsProvider', () async {
+      final w = await _wiring();
+      final prefs = await w.prefs;
+
+      await expectLater(
+        prefs.setString('server_config_envelope', 'nope'),
+        throwsA(isA<AccessDenied>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(w.denials, hasLength(1));
+      expect(w.denials.single.itemKey, 'server_config_envelope');
+    });
+
+    test('the audit rows carry this station', () async {
+      final w = await _wiring();
+      final prefs = await w.prefs;
+
+      await prefs.setString('theme_mode', 'dark');
+      expect(w.sink.rows.where((r) => r.itemKey == 'theme_mode'), isNotEmpty);
+      expect(w.sink.rows.first.station, _kStation);
+    });
+
+    test('GuardedStateMan reads its baseline through the inner StateMan',
+        () async {
+      final w = await _wiring();
+      final sm = await w.stateMan;
+
+      await sm.write('Line1.p_cmd_JogFwd', DynamicValue(value: true));
+
+      // Without `readBaseline` wired to the inner `read`, a struct write is one
+      // blob rather than one row per member that moved.
+      expect(w.inner.reads, contains('Line1.p_cmd_JogFwd'));
+      expect(w.inner.writes, hasLength(1));
+    });
+  });
+
+  group('the session is a callback, not a watch', () {
+    test('signing in and out does not rebuild stateManProvider', () async {
+      final w = await _wiring(withDatabase: true);
+      final before = await w.stateMan;
+      await w.container.read(accessSessionProvider.future);
+
+      final result = await w.session.signIn('jon', 'correct horse');
+      expect(result, AccessSignInResult.ok);
+      expect(w.container.read(accessSessionProvider).value!.isElevated, isTrue);
+      await w.session.signOut();
+      expect(
+          w.container.read(accessSessionProvider).value!.isElevated, isFalse);
+
+      final after = await w.stateMan;
+      // The whole point: a rebuild here drops every OPC UA connection and every
+      // subscription on the panel, every time somebody signs in.
+      expect(identical(before, after), isTrue);
+      expect(w.inner.closeCalls, 0);
+    });
+
+    test('signing in and out does not rebuild preferencesProvider', () async {
+      final w = await _wiring(withDatabase: true);
+      final before = await w.prefs;
+      await w.container.read(accessSessionProvider.future);
+
+      await w.session.signIn('jon', 'correct horse');
+      await w.session.signOut();
+
+      expect(identical(before, await w.prefs), isTrue);
+    });
+
+    test(
+        'a write refused before sign-in is permitted after it, on the same '
+        'guard instance', () async {
+      final w = await _wiring(withDatabase: true);
+      final prefs = await w.prefs;
+      await w.container.read(accessSessionProvider.future);
+
+      await expectLater(
+          prefs.setString('key_mappings', '{}'), throwsA(isA<AccessDenied>()));
+
+      await w.session.signIn('jon', 'correct horse');
+
+      // Same object, opposite answer. That is only possible if the guard reads
+      // the session at write time rather than holding the one it was built
+      // with — and it is the behaviour a `ref.watch` would fake by rebuilding.
+      expect(identical(prefs, await w.prefs), isTrue);
+      await prefs.setString('key_mappings', '{}');
+    });
+
+    test('a write permitted while elevated is refused after signing out',
+        () async {
+      final w = await _wiring(withDatabase: true);
+      final prefs = await w.prefs;
+      await w.container.read(accessSessionProvider.future);
+      await w.session.signIn('jon', 'correct horse');
+      await prefs.setString('key_mappings', '{}');
+
+      await w.session.signOut();
+
+      // The elevation window this milestone exists to close: a captured session
+      // would keep granting `configure` long after the operator signed out.
+      await expectLater(prefs.setString('key_mappings', '{"a":1}'),
+          throwsA(isA<AccessDenied>()));
+    });
+
+    test('neither provider watches the session', () {
+      // The behavioural tests above are the real gate; this one names the
+      // regression so a reader who adds the watch is told why not. Comment
+      // lines are stripped, so the comment explaining the rule cannot satisfy
+      // the test enforcing it.
+      for (final path in const [
+        'lib/providers/state_man.dart',
+        'lib/providers/preferences.dart',
+      ]) {
+        final code = File(path)
+            .readAsLinesSync()
+            .where((l) => !l.trimLeft().startsWith('//'))
+            .join('\n');
+        expect(code.contains('ref.watch(accessSessionProvider'), isFalse,
+            reason: '$path must reach the session through the guard\'s '
+                'callback, never a watch');
+        expect(code, isNotEmpty);
+      }
+    });
+  });
+
+  group('disposal', () {
+    test('closes the inner StateMan exactly once, and not the decorator too',
+        () async {
+      final w = await _wiring();
+      await w.stateMan;
+
+      w.container.dispose();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(w.inner.closeCalls, 1);
+    });
+  });
 }
 
 AccessDenied _denial(String key) => AccessDenied(key, AccessGroup.configure);
@@ -176,3 +390,142 @@ AccessDenied _denial(String key) => AccessDenied(key, AccessGroup.configure);
 /// borrows one here rather than the entry point growing a second signature for
 /// the benefit of tests.
 final _refProbe = Provider<Ref>((ref) => ref);
+
+// ---------------------------------------------------------------------------
+// Task 2 — the wrapping, and the property that keeps the plant connected.
+// ---------------------------------------------------------------------------
+
+/// A `StateMan` that records what reached it and opens no connection.
+///
+/// `noSuchMethod` here is a *test* fake, not a decorator: an unimplemented
+/// member throwing in a test is a red test, where the same hook in
+/// `GuardedStateMan` would be a hole that only shows up on a plant. That is why
+/// `guarded_state_man_test.dart` forbids it there and this file uses it.
+class _FakeStateMan implements StateMan {
+  int closeCalls = 0;
+  final List<String> reads = [];
+  final List<(String, DynamicValue)> writes = [];
+  final Map<String, DynamicValue> values = {};
+
+  @override
+  Future<void> close() async => closeCalls++;
+
+  @override
+  String resolveKey(String key) => key;
+
+  @override
+  Future<DynamicValue> read(String key) async {
+    reads.add(key);
+    return values[key] ?? DynamicValue(value: null);
+  }
+
+  @override
+  Future<void> write(String key, DynamicValue value) async {
+    writes.add((key, value));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Signs `jon` in as Engineering and refuses everything else.
+///
+/// A fake rather than `LocalAuthProvider` because the seeded database has the
+/// four roles but no users, and this file is about the guards, not about
+/// account creation.
+class _FakeAuthProvider implements AuthProvider {
+  @override
+  Future<AuthenticatedUser?> authenticate(
+      String username, String password) async {
+    if (username == 'jon' && password == 'correct horse') {
+      return const AuthenticatedUser(username: 'jon', roleName: 'Engineering');
+    }
+    return null;
+  }
+}
+
+class _RecordingSink implements AuditSink {
+  final List<AuditRecord> rows = [];
+
+  @override
+  Future<void> record(AuditRecord entry) async => rows.add(entry);
+}
+
+const String _kStation = 'test-panel';
+
+class _Wiring {
+  _Wiring({
+    required this.container,
+    required this.sink,
+    required this.inner,
+    required this.denials,
+  });
+
+  final ProviderContainer container;
+  final _RecordingSink sink;
+  final _FakeStateMan inner;
+  final List<AccessDenied> denials;
+
+  AccessSessionController get session =>
+      container.read(accessSessionProvider.notifier);
+
+  Future<Preferences> get prefs => container.read(preferencesProvider.future);
+  Future<StateMan> get stateMan => container.read(stateManProvider.future);
+}
+
+/// A container with the real `preferencesProvider` and `stateManProvider`,
+/// their inner construction faked, and nothing pointed at a real database or a
+/// real PLC.
+Future<_Wiring> _wiring({bool withDatabase = false}) async {
+  AccessRepository? repository;
+  if (withDatabase) {
+    final db = AppDatabase.inMemoryForTest();
+    addTearDown(db.close);
+    // Force the migration, so the four seeded roles exist.
+    await db.customSelect('SELECT 1').getSingle();
+    repository = AccessRepository(db);
+  }
+
+  final sink = _RecordingSink();
+  final inner = _FakeStateMan();
+  final denials = <AccessDenied>[];
+
+  final container = ProviderContainer(
+    overrides: [
+      // No Postgres: `Preferences` falls back to its in-memory cache and the
+      // local SharedPreferences, which is what a station with no database is.
+      databaseProvider.overrideWith((ref) async => null),
+      accessRepositoryProvider.overrideWith((ref) async => repository),
+      authProviderProvider.overrideWith(
+          (ref) async => repository == null ? null : _FakeAuthProvider()),
+      auditSinkProvider.overrideWith((ref) async => sink),
+      stationNameProvider.overrideWithValue(_kStation),
+      inactivityTimeoutProvider
+          .overrideWith((ref) async => const Duration(minutes: 15)),
+      // The seam, and the only reason it exists: proving a session transition
+      // does not rebuild this provider must not open an OPC UA connection.
+      stateManFactoryProvider.overrideWithValue(
+        ({
+          required StateManConfig config,
+          required KeyMappings keyMappings,
+          List<DeviceClient> deviceClients = const [],
+        }) async =>
+            inner,
+      ),
+      // `collectorProvider` watches `stateManProvider`, so leaving it real
+      // would have this test reaching for a database it does not have.
+      collectorProvider.overrideWith((ref) async => null),
+    ],
+  );
+  addTearDown(container.dispose);
+
+  final sub = container.read(accessDenialsProvider).listen(denials.add);
+  addTearDown(sub.cancel);
+
+  return _Wiring(
+    container: container,
+    sink: sink,
+    inner: inner,
+    denials: denials,
+  );
+}
