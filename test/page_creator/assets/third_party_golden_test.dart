@@ -853,7 +853,7 @@ void main() {
       // status diodes" section below, and at the old 1100 the frame cut
       // through the middle of the Running Color row, which reads as a
       // rendering fault rather than a crop.
-      tester.view.physicalSize = const Size(600, 1500);
+      tester.view.physicalSize = const Size(600, 1600);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
@@ -871,7 +871,7 @@ void main() {
                 key: _key,
                 child: SizedBox(
                   width: 400,
-                  height: 1420,
+                  height: 1500,
                   child: Material(
                     child: Builder(
                         builder: (context) => config.configure(context)),
