@@ -2334,6 +2334,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   late TextEditingController _usernameController;
   late TextEditingController _passwordController;
   late TextEditingController _serverAliasController;
+  late TextEditingController _publishingIntervalController;
+  late TextEditingController _secureChannelLifetimeController;
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _stateSubscription;
   EffectiveDeviceStatus? _effectiveStatus;
@@ -2354,6 +2356,10 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     _passwordController = TextEditingController();
     _serverAliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
+    _publishingIntervalController = TextEditingController(
+        text: widget.server.publishingIntervalMs.toString());
+    _secureChannelLifetimeController = TextEditingController(
+        text: _msToSecondsText(widget.server.secureChannelLifetimeMs));
     _connectionStatus = widget.connectionStatus;
     _effectiveStatus = widget.effectiveStatus;
     _listenToState();
@@ -2389,7 +2395,19 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     _usernameController.dispose();
     _passwordController.dispose();
     _serverAliasController.dispose();
+    _publishingIntervalController.dispose();
+    _secureChannelLifetimeController.dispose();
     super.dispose();
+  }
+
+  /// Lifetime is stored in ms but shown in seconds — a minute of channel
+  /// life reads as `60`, not `60000`. Whole seconds drop the decimal so the
+  /// common values look like the round numbers they are.
+  static String _msToSecondsText(int ms) {
+    final seconds = ms / 1000;
+    return seconds == seconds.roundToDouble()
+        ? seconds.round().toString()
+        : seconds.toString();
   }
 
   void _updateServer({bool? enabled}) {
@@ -2405,10 +2423,33 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
           : _serverAliasController.text
       ..sslCert = widget.server.sslCert
       ..sslKey = widget.server.sslKey
-      ..enabled = enabled ?? widget.server.enabled;
+      ..enabled = enabled ?? widget.server.enabled
+      // A half-typed field must not clobber the stored value: an empty box
+      // (or "12" mid-way to "120") parses to null/out-of-range and keeps
+      // what is already saved, exactly like the password field does.
+      ..publishingIntervalMs = _clampedOrKept(
+        int.tryParse(_publishingIntervalController.text.trim()),
+        widget.server.publishingIntervalMs,
+        OpcUAConfig.publishingIntervalMinMs,
+        OpcUAConfig.publishingIntervalMaxMs,
+      )
+      ..secureChannelLifetimeMs = _clampedOrKept(
+        _secondsTextToMs(_secureChannelLifetimeController.text),
+        widget.server.secureChannelLifetimeMs,
+        OpcUAConfig.secureChannelLifetimeMinMs,
+        OpcUAConfig.secureChannelLifetimeMaxMs,
+      );
 
     widget.onUpdate(updatedServer);
   }
+
+  static int? _secondsTextToMs(String text) {
+    final seconds = double.tryParse(text.trim());
+    return seconds == null ? null : (seconds * 1000).round();
+  }
+
+  static int _clampedOrKept(int? parsed, int fallback, int min, int max) =>
+      parsed == null ? fallback : parsed.clamp(min, max);
 
   Future<void> _selectCertificate() async {
     try {
@@ -2537,6 +2578,78 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
       onChanged: (_) {
         if (!_passwordEdited) setState(() => _passwordEdited = true);
         _updateServer();
+      },
+    );
+  }
+
+  /// Publishing interval and SecureChannel lifetime.
+  ///
+  /// Both are shown with their effect spelled out rather than their protocol
+  /// name — an operator setting these is deciding how fast the screen
+  /// updates and how often the session is renewed, not filling in an OPC-UA
+  /// service parameter.
+  Widget _timingCard(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 400;
+        final intervalField = TextField(
+          controller: _publishingIntervalController,
+          decoration: InputDecoration(
+            labelText: 'Update interval (ms)',
+            helperText: '${OpcUAConfig.publishingIntervalMinMs}–'
+                '${OpcUAConfig.publishingIntervalMaxMs} ms · higher = less PLC load',
+            helperMaxLines: 2,
+            prefixIcon: const FaIcon(FontAwesomeIcons.gaugeHigh, size: 16),
+          ),
+          keyboardType: TextInputType.number,
+          onChanged: (_) => _updateServer(),
+        );
+        final lifetimeField = TextField(
+          controller: _secureChannelLifetimeController,
+          decoration: InputDecoration(
+            labelText: 'Secure channel lifetime (s)',
+            helperText: '${OpcUAConfig.secureChannelLifetimeMinMs ~/ 1000}–'
+                '${OpcUAConfig.secureChannelLifetimeMaxMs ~/ 1000} s · renewed at 75% of this',
+            helperMaxLines: 2,
+            prefixIcon: const FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: (_) => _updateServer(),
+        );
+        return Card(
+          child: Padding(
+            padding: EdgeInsets.all(isNarrow ? 12.0 : 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const FaIcon(FontAwesomeIcons.stopwatch, size: 16),
+                    const SizedBox(width: 8),
+                    Text('Timing',
+                        style: Theme.of(context).textTheme.titleSmall),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (isNarrow)
+                  Column(children: [
+                    intervalField,
+                    const SizedBox(height: 12),
+                    lifetimeField,
+                  ])
+                else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: intervalField),
+                      const SizedBox(width: 12),
+                      Expanded(child: lifetimeField),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        );
       },
     );
   }
@@ -2670,6 +2783,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                     );
                   },
                 ),
+                const SizedBox(height: 16),
+                _timingCard(context),
                 const SizedBox(height: 16),
                 LayoutBuilder(
                   builder: (context, constraints) {
