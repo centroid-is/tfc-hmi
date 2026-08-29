@@ -8,10 +8,19 @@ library;
 
 import 'package:beamer/beamer.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Consumer;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/access_routes.dart';
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/pages/alarm_editor.dart';
 import 'package:tfc/pages/first_user.dart';
+import 'package:tfc/pages/key_repository.dart';
+import 'package:tfc/pages/page_editor.dart';
+import 'package:tfc/pages/preferences.dart';
+import 'package:tfc/pages/server_config.dart';
+import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
+import 'package:tfc/widgets/access_gate.dart';
 import 'package:tfc/widgets/route_redirect.dart';
 
 import 'package:centroidx/main.dart';
@@ -258,6 +267,150 @@ void main() {
       final lb = createLocationBuilder(const [], pagePaths: const ['/draft']);
       expect(lb.routes.containsKey('/'), isFalse);
       expect(lb.routes.containsKey('/draft'), isFalse);
+    });
+
+    /// The six raised routes, proven one at a time.
+    ///
+    /// These are the tests that keep `kRaisedRoutes` and the route table
+    /// spelling the same six strings: a path mistyped in either place is a
+    /// route that silently stays open, and nothing else in the repo would
+    /// notice. Each group is asserted by its literal path rather than in a
+    /// loop over the map, because a loop passes just as happily when the map
+    /// itself is wrong.
+    ///
+    /// The group is compared by `.name`, not by the enum: `centroid-hmi` does
+    /// not depend on `tfc_access` and must not start to — `kRaisedRoutes[path]!`
+    /// is a value, not a type, so the app package never names `AccessGroup`.
+    ///
+    /// Nothing here pumps a route child. `buildRoute` gets a `BuildContext`
+    /// from a `SizedBox.shrink()` and calls the builder; pumping `PageEditor`
+    /// or `ServerConfigPage` would drag in the database, the OPC UA client and
+    /// `BaseScaffold`'s session watch.
+    group('raised routes', () {
+      // RouteRegistry is process-wide and outlives a test file, so the
+      // "menu and route table agree" assertion below could otherwise pass on
+      // declarations some earlier suite left behind.
+      setUp(() => RouteRegistry().clearRouteGroups());
+      tearDown(() => RouteRegistry().clearRouteGroups());
+
+      Future<AccessGate> buildGate(WidgetTester tester, RoutesLocationBuilder lb, String path) async {
+        final page = await buildRoute(tester, lb, path);
+        expect(page.child, isA<AccessGate>(), reason: '$path must be gated');
+        final gate = page.child as AccessGate;
+        // The gate renders the app bar while the page behind it is locked, so
+        // a locked Page Editor must still say "Page Editor".
+        expect(gate.title, page.title, reason: '$path gate title must match the BeamPage title');
+        return gate;
+      }
+
+      testWidgets('the page editor needs configure', (tester) async {
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/page-editor');
+        expect(gate.group.name, 'configure');
+        expect(gate.child, isA<PageEditor>());
+      });
+
+      testWidgets('the alarm editor needs configure', (tester) async {
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/alarm-editor');
+        expect(gate.group.name, 'configure');
+        expect(gate.child, isA<AlarmEditorPage>());
+      });
+
+      testWidgets('the key repository needs configure', (tester) async {
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/key-repository');
+        expect(gate.group.name, 'configure');
+        expect(gate.child, isA<KeyRepositoryPage>());
+      });
+
+      testWidgets('server config needs administer', (tester) async {
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/server-config');
+        expect(gate.group.name, 'administer');
+        expect(gate.child, isA<ServerConfigPage>());
+      });
+
+      testWidgets('IP settings needs administer, and the D-Bus login behind it is untouched', (tester) async {
+        // The gate wraps the existing Consumer from the outside. Inside it,
+        // the FutureBuilder still shows LoginForm until the D-Bus client
+        // arrives — this phase gates the route, not the station credential.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/ip-settings');
+        expect(gate.group.name, 'administer');
+        expect(gate.child, isA<Consumer>());
+      });
+
+      testWidgets('preferences needs administer', (tester) async {
+        // The 2026-08-29 amendment. PreferencesPage renders DatabaseConfigWidget
+        // and a raw list/edit/delete editor over every preference key — the data
+        // behind all three configure routes — so an ungated Preferences would
+        // make the page editor's and alarm editor's gates decorative.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/preferences');
+        expect(gate.group.name, 'administer');
+        expect(gate.child, isA<PreferencesPage>());
+      });
+
+      testWidgets('server config is the only route open while the repository is unavailable', (tester) async {
+        // Catches the helper being changed to a per-call-site boolean: the flag
+        // is read off every built gate, not off the declaration it came from.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final exempt = <String>[];
+        for (final path in kRaisedRoutes.keys) {
+          final gate = await buildGate(tester, lb, path);
+          if (gate.allowWhenRepositoryUnavailable) exempt.add(path);
+        }
+        expect(exempt, ['/advanced/server-config']);
+      });
+
+      testWidgets('every declared path is a real route', (tester) async {
+        // Iterates the map rather than repeating the six, so a typo in
+        // kRaisedRoutes fails here instead of leaving a route quietly open.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        for (final path in kRaisedRoutes.keys) {
+          expect(lb.routes.containsKey(path), isTrue, reason: 'kRaisedRoutes declares $path, which is not a route');
+        }
+      });
+
+      testWidgets('the menu and the route table agree about every raised route', (tester) async {
+        // installRaisedRoutes() runs as createLocationBuilder's first statement;
+        // dropped or moved below the map, the menu badge would go blank while
+        // the routes stayed locked. The registry is cleared in setUp, so this
+        // can only pass because createLocationBuilder declared them.
+        expect(accessGroupForRoute('/advanced/page-editor').name, 'operate', reason: 'registry must start clear');
+        final lb = createLocationBuilder([_page('Chiller', '/chiller')], pagePaths: const ['/chiller']);
+        expect(lb.routes.containsKey('/chiller'), isTrue);
+        expect(accessGroupForRoute('/advanced/page-editor').name, 'configure');
+        expect(accessGroupForRoute('/advanced/alarm-editor').name, 'configure');
+        expect(accessGroupForRoute('/advanced/key-repository').name, 'configure');
+        expect(accessGroupForRoute('/advanced/server-config').name, 'administer');
+        expect(accessGroupForRoute('/advanced/ip-settings').name, 'administer');
+        expect(accessGroupForRoute('/advanced/preferences').name, 'administer');
+        // A page-manager page is the plant's own page: operate, like everything
+        // else on the floor.
+        expect(accessGroupForRoute('/chiller').name, 'operate');
+      });
+
+      testWidgets('about-linux, alarm view, history view and the first-user page are not gates', (tester) async {
+        // Reading and commissioning. About Linux changes nothing; the two views
+        // read rather than configure, and read permissions are out of scope;
+        // gating the first account on a station with no users is an unopenable
+        // door.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        for (final path in ['/advanced/about-linux', AppRoutes.alarmView, AppRoutes.historyView, AppRoutes.firstUser]) {
+          final page = await buildRoute(tester, lb, path);
+          expect(page.child, isNot(isA<AccessGate>()), reason: '$path must stay open');
+        }
+      });
+
+      testWidgets('a page-manager page is not a gate', (tester) async {
+        // "Nothing on the floor changes" is the phase boundary, and this is the
+        // assertion that carries it.
+        final lb = createLocationBuilder([_page('Chiller', '/chiller')], pagePaths: const ['/chiller']);
+        final page = await buildRoute(tester, lb, '/chiller');
+        expect(page.child, isNot(isA<AccessGate>()));
+      });
     });
   });
 }
