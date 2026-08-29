@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:tfc_access/tfc_access.dart';
@@ -725,4 +726,159 @@ void main() {
       expect(inner.calls, contains('loadFromPostgres()'));
     });
   });
+
+  group('systemWrites — the one unchecked path', () {
+    test('is a Preferences, and a distinct object rather than the guard', () {
+      final f = _Fixture();
+      expect(f.guard.systemWrites, isA<Preferences>());
+      expect(identical(f.guard.systemWrites, f.guard), isFalse,
+          reason: 'the checked and unchecked paths must be two objects, not '
+              'two moods of one');
+      expect(identical(f.guard.systemWrites, f.guard.systemWrites), isTrue,
+          reason: 'the getter answers one stable object');
+    });
+
+    test('the same key is refused ordinarily and permitted through systemWrites',
+        () async {
+      // One test on purpose: two separate tests could both be satisfied by a
+      // single wrong implementation that checks nothing anywhere.
+      final f = _Fixture();
+      await expectLater(
+        f.guard.setString(_administerKey, 'boot-default'),
+        throwsA(isA<AccessDenied>()),
+      );
+      expect(f.inner.store, isEmpty);
+
+      await f.guard.systemWrites.setString(_administerKey, 'boot-default');
+      expect(f.inner.store[_administerKey], 'boot-default');
+      expect(f.sink.rows.map((r) => '${r.allowed}/${r.origin}').toList(),
+          ['false/operator', 'true/system']);
+    });
+
+    test('writes one row with origin system and the group it would have needed',
+        () async {
+      final f = _Fixture();
+      await f.guard.systemWrites.setString(_administerKey, 'boot-default');
+      final row = f.sink.rows.single;
+      expect(row.origin, 'system');
+      expect(row.allowed, isTrue);
+      expect(row.groupRequired, isNotEmpty);
+      expect(row.groupRequired, AccessGroup.administer.name,
+          reason: 'the trail shows what authority was skipped, not none');
+      expect(row.surface, 'pref');
+      expect(row.itemKey, _administerKey);
+      expect(row.newValue, 'boot-default');
+      expect(row.station, _station);
+    });
+
+    test('every write member is audited and reaches inner', () async {
+      final members =
+          <String, Future<void> Function(Preferences p)>{
+        'setBool': (p) => p.setBool(_administerKey, true),
+        'setInt': (p) => p.setInt(_administerKey, 1),
+        'setDouble': (p) => p.setDouble(_administerKey, 1.5),
+        'setString': (p) => p.setString(_administerKey, 'v'),
+        'setStringList': (p) => p.setStringList(_administerKey, ['v']),
+        'remove': (p) => p.remove(_administerKey),
+        'clear': (p) => p.clear(),
+      };
+      for (final entry in members.entries) {
+        final f = _Fixture();
+        await entry.value(f.guard.systemWrites);
+        expect(f.inner.writes, hasLength(1),
+            reason: '${entry.key} must reach inner exactly once');
+        expect(f.sink.rows.single.origin, 'system',
+            reason: '${entry.key} must still land in the trail');
+      }
+    });
+
+    test('a secret write through it still withholds the value', () async {
+      final f = _Fixture();
+      await f.guard.systemWrites
+          .setString(_administerKey, 'boot-secret', secret: true);
+      expect(f.inner.secrets[_administerKey], 'boot-secret');
+      expect(f.sink.rows.single.oldValue, isNull);
+      expect(f.sink.rows.single.newValue, isNull);
+      expect(f.inner.calls.where((c) => c.startsWith('get')), isEmpty);
+    });
+
+    test('its reads forward to the same store and are indistinguishable',
+        () async {
+      final f = _Fixture(initial: {_administerKey: 'config', 'i': 7});
+      expect(await f.guard.systemWrites.getString(_administerKey), 'config');
+      expect(await f.guard.systemWrites.getInt('i'), 7);
+      expect(await f.guard.systemWrites.getKeys(), {_administerKey, 'i'});
+      expect(await f.guard.systemWrites.containsKey('i'), isTrue);
+      expect(f.sink.rows, isEmpty, reason: 'reads are not audited anywhere');
+    });
+
+    test('its non-write members forward to the same inner store', () async {
+      final f = _Fixture(initial: {'a': 1});
+      final system = f.guard.systemWrites;
+      expect(identical(system.keyCache, f.inner.keyCache), isTrue);
+      expect(identical(system.secureStorage, f.inner.secureStorage), isTrue);
+      expect(system.database, same(f.inner.database));
+      expect(system.localCache, same(f.inner.localCache));
+      expect(await system.isKeyInDatabase('a'), isTrue);
+    });
+  });
+
+  group('the escape is a named object, asserted on the source text', () {
+    late String source;
+
+    setUpAll(() {
+      source = _guardSourceWithoutComments();
+    });
+
+    test('no ordinary write member takes a parameter that bypasses the check',
+        () {
+      // A flag would be one keystroke from being copied into an operator path.
+      expect(source, isNot(contains('bool system')));
+      expect(source, isNot(contains('system:')));
+      expect(source, isNot(contains('unchecked:')));
+    });
+
+    test('systemWrites is a getter returning a Preferences', () {
+      expect(source, contains('Preferences get systemWrites'));
+    });
+
+    test('the class doc names every boot-time call site by file and line', () {
+      // The list is plan 03-06's, which owns it and has already grown once.
+      // A doc that names them is what makes a seventh caller obviously wrong.
+      final raw = _guardSource();
+      for (final site in const [
+        'lib/providers/state_man.dart:26',
+        'packages/tfc_dart/lib/core/state_man.dart:443',
+        'lib/page_creator/page.dart:247',
+        'packages/tfc_dart/lib/core/alarm.dart:220',
+        'lib/providers/collector.dart:27',
+        'lib/providers/mcp_bridge.dart:112',
+      ]) {
+        expect(raw, contains(site), reason: '$site is not named in the doc');
+      }
+    });
+  });
+}
+
+/// The guard's own source.
+String _guardSource() {
+  final file = File('lib/core/access/guarded_preferences.dart');
+  expect(file.existsSync(), isTrue,
+      reason: 'Run this suite from packages/tfc_dart. Without the file these '
+          'source assertions would pass vacuously.');
+  return file.readAsStringSync();
+}
+
+/// The guard's own source with comments removed, so the doc explaining why
+/// there is no bypass flag does not itself fail the test that enforces it.
+String _guardSourceWithoutComments() {
+  final withoutBlockComments =
+      _guardSource().replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '');
+  return withoutBlockComments
+      .split('\n')
+      .map((line) {
+        final idx = line.indexOf('//');
+        return idx == -1 ? line : line.substring(0, idx);
+      })
+      .join('\n');
 }
