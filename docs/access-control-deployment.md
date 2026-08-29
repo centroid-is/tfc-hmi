@@ -211,6 +211,32 @@ This is not a defect to fix. It is the same fact as section 1: anyone with
 `psql` is outside everything this design can see. Record the break-glass in
 whatever the site uses for change control, because the HMI cannot.
 
+### The database-outage rule, and the cost it accepts
+
+Route gating (Phase 2) raises six routes above `operate`. One of them behaves
+differently while the database is down, and a deployer has to know it in both
+directions — it is invisible until the day it matters.
+
+> Whenever this station has no usable access repository — never configured, or
+> configured and unreachable — `/advanced/server-config` opens without a
+> sign-in. The other five raised routes stay locked in both cases. The reason
+> is that with no repository no sign-in can succeed, so denying Server Config
+> would turn a mistyped Postgres IP into an on-site recovery.
+>
+> The accepted cost: while the database is unreachable, anyone standing at the
+> panel can reach Server Config, repoint the station at a Postgres they control
+> holding a known Engineering account, and sign in. That requires physical
+> access to the panel plus a prepared server — and physical access already
+> defeats this milestone by design, since anyone with UaExpert or `psql` walks
+> around every guard in it. Bricking a plant's station over a typo is the
+> likelier and worse failure, so this is the trade that was chosen.
+
+The two causes are deliberately not distinguished anywhere in the code:
+`lib/providers/database.dart` catches a failed connection, schedules a retry
+and returns `null`, which is the same resolved value as "no Postgres
+configured". A station still connecting (`AsyncLoading`) is neither — it
+waits, and never opens.
+
 ---
 
 ## 5. What must not be changed
