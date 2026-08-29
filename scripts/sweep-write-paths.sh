@@ -130,7 +130,9 @@ report() {
 
 # Show the command a reader would run to reproduce the section.
 cmd() {
-  printf "\$ grep -rnE --include='*.dart' %s %s\n" "$(printf '%q' "$1")" "${ROOTS[*]}"
+  # The patterns below contain no single quotes, so quoting them this way is
+  # exact: the printed line is runnable as written.
+  printf "\$ grep -rnE --include='*.dart' '%s' %s\n" "$1" "${ROOTS[*]}"
 }
 
 # Section 9's `set*` calls are frequently split across lines, and the key
