@@ -219,6 +219,10 @@ class PaneAction {
                 child: label,
               )
             : TextButton.icon(
+                // Was dropped here alone: every other branch passes the key
+                // through, so a destructive action WITH an icon was the one
+                // shape that could not be addressed by tests or automation.
+                key: buttonKey,
                 onPressed: onPressed,
                 style: style,
                 autofocus: autofocus,

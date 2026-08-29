@@ -15,6 +15,7 @@ import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import 'el9222.dart';
 import 'io_pane.dart';
 import '../page.dart';
 import '../../page_creator/assets/graph.dart';
@@ -948,10 +949,19 @@ class BeckhoffEL9222Config extends BaseAsset {
   String get category => 'Beckhoff Devices';
 
   String nameOrId;
+
+  /// Key of the terminal's `ST_EL9222_5500` struct. Without it the module is
+  /// a picture: the face has nothing to light and the pane has nothing to
+  /// reset.
+  String? stateKey;
+
+  /// Optional array of what each channel feeds, one entry per channel. The
+  /// pane names the load instead of leaving the operator to count terminals.
   String? descriptionsKey;
 
   BeckhoffEL9222Config({
     required this.nameOrId,
+    this.stateKey,
     this.descriptionsKey,
   });
 
@@ -994,6 +1004,7 @@ class BeckhoffEL9222Config extends BaseAsset {
 
   BeckhoffEL9222Config.preview()
       : nameOrId = "1",
+        stateKey = null,
         descriptionsKey = null,
         super();
 
@@ -1040,6 +1051,12 @@ class _EL9222ConfigContentState extends State<_EL9222ConfigContent> {
         ),
         const SizedBox(height: 16),
         KeyField(
+          initialValue: widget.config.stateKey,
+          onChanged: (value) => widget.config.stateKey = value,
+          label: 'State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
           initialValue: widget.config.descriptionsKey,
           onChanged: (value) => widget.config.descriptionsKey = value,
           label: 'Descriptions Key',
@@ -1049,31 +1066,187 @@ class _EL9222ConfigContentState extends State<_EL9222ConfigContent> {
   }
 }
 
-class _BeckhoffEL9222 extends StatelessWidget {
+/// The overcurrent protection terminal, live.
+///
+/// Until this read its struct it was a drawing: six lamps hardcoded to
+/// `IOState.low`, no subscription, no tap target. A tripped breaker looked
+/// exactly like a healthy one, and the only way to put a channel back on was
+/// to walk to the cabinet and press the button on the terminal.
+///
+/// The face now says which channel is out ([el9222FaceLeds]) and a tap opens
+/// the pane that resets it. See `el9222.dart` for the decode and the
+/// operator surface.
+class _BeckhoffEL9222 extends ConsumerWidget {
   static const String name = 'EL9222';
   final BeckhoffEL9222Config config;
 
   const _BeckhoffEL9222({required this.config});
 
-  @override
-  Widget build(BuildContext context) {
-    final leds = List.filled(6, IOState.low);
+  /// Identity of this module's docked pane — tapping it again toggles it.
+  String get _paneId => 'el9222:${identityHashCode(config)}';
 
-    return IO8Widget(
-      ledStates: leds,
-      name: name,
-      animation: const AlwaysStoppedAnimation(0),
-      ioLabels: const ['I1', 'O1', '+', '+', '-', '-', 'I2', 'O2'],
-      ioLabelColors: const [
-        ioLabelColor,
-        ioLabelColor,
-        Colors.red,
-        Colors.red,
-        Colors.blue,
-        Colors.blue,
-        ioLabelColor,
-        ioLabelColor,
+  /// The keys behind both the face and the pane: the struct, plus the
+  /// optional per-channel load names.
+  LinkedHashMap<String, String?> get _keys => LinkedHashMap.fromEntries([
+        MapEntry("state", config.stateKey),
+        MapEntry("descriptions", config.descriptionsKey),
+      ]);
+
+  /// The face's stream, off the shared providers.
+  Stream<({List<El9222ChannelStatus> channels, List<String> loads})> _faceStream(
+          WidgetRef ref) =>
+      _combinedStream(_keys, ref).map(_decode);
+
+  /// The pane's own stream.
+  ///
+  /// Deliberately NOT the face's: a `CombineLatestStream` takes one listener,
+  /// and the pane needs a subscription with the pane's lifetime anyway — it
+  /// is built into the root overlay and must release what it opened when it
+  /// closes. Going through [StateMan] rather than `ref` also keeps the tap
+  /// handler out of the provider container it is no longer building in.
+  Stream<({List<El9222ChannelStatus> channels, List<String> loads})> _paneStream(
+          StateMan stateMan) =>
+      _combinedStreamVia(_keys, stateMan).map(_decode);
+
+  static ({List<El9222ChannelStatus> channels, List<String> loads}) _decode(
+      Map<String, DynamicValue> data) {
+    final struct = data["state"];
+    final descriptions = data["descriptions"];
+    return (
+      channels: [
+        El9222ChannelStatus.read(struct, 1),
+        El9222ChannelStatus.read(struct, 2),
       ],
+      loads: (descriptions != null && descriptions.isArray)
+          ? descriptions.asArray.map((d) => d.asString).toList()
+          : const <String>[],
+    );
+  }
+
+  /// Pulses `p_cmd_Reset` for [channel].
+  ///
+  /// The terminal acknowledges a trip on a RISING EDGE and no PLC code ever
+  /// clears the bit, so both halves of the edge are ours. Each write clones
+  /// the value as it stands at that moment rather than one captured up
+  /// front, so resetting one channel cannot undo a reset the operator
+  /// started on the other in between.
+  ///
+  /// The falling edge runs in a `finally`: a `p_cmd_Reset` left high is a
+  /// latched switch where the terminal expects an edge, and the next trip
+  /// would never be acknowledged. A clear that fails is reported rather than
+  /// swallowed for the same reason — it is a real maintenance condition, not
+  /// a cosmetic one.
+  Future<void> _reset(
+    BuildContext context,
+    StateMan stateMan,
+    int channel,
+  ) async {
+    final key = config.stateKey;
+    if (key == null) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final member = el9222ResetMember(channel);
+
+    // Bounded so a server that stops answering cannot leave the button
+    // saying 'Resetting…' forever. The same length `key_repository` reads
+    // with.
+    const readTimeout = Duration(seconds: 5);
+
+    Future<void> set(bool level) async {
+      final latest = await stateMan.read(key).timeout(readTimeout);
+      final next = DynamicValue.from(latest);
+      next[member] = level;
+      await stateMan.write(key, next);
+    }
+
+    try {
+      await set(true);
+      await Future<void>.delayed(kEl9222ResetPulse);
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Reset of channel $channel failed: $e')),
+      );
+    } finally {
+      try {
+        await set(false);
+      } catch (e) {
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Channel $channel reset is stuck on — clear it before the next '
+              'trip: $e',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snap) {
+        final stateMan = snap.data;
+        // Resolved in build, not in the tap handler: `ref.watch` belongs to a
+        // build, and the pane needs the same stream the face is already on.
+        final stream = (stateMan == null || config.stateKey == null)
+            ? null
+            : _faceStream(ref);
+
+        return MemoStreamBuilder<
+            ({List<El9222ChannelStatus> channels, List<String> loads})>(
+          keys: [stateMan, config],
+          stream: stream ?? const Stream.empty(),
+          builder: (context, s) {
+            final data = (s.hasData && !s.hasError) ? s.data : null;
+            final channels = data?.channels ??
+                [
+                  El9222ChannelStatus.read(null, 1),
+                  El9222ChannelStatus.read(null, 2),
+                ];
+
+            // The pane lives in the root overlay, so it must be closed when
+            // this module leaves the page — see [SidePaneOwner].
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null || config.stateKey == null) return;
+                  showEl9222Pane(
+                    context: context,
+                    id: _paneId,
+                    title: config.nameOrId,
+                    stream: _paneStream(stateMan),
+                    onReset: (channel) => _reset(context, stateMan, channel),
+                  );
+                },
+                child: IO8Widget(
+                  ledStates: el9222FaceLeds(channels[0], channels[1]),
+                  name: name,
+                  // The `!` on the face is the honest answer to "is this
+                  // terminal telling me anything?" — six dark lamps are not,
+                  // since dark is also what a healthy switched-off channel
+                  // looks like.
+                  disconnected: data == null,
+                  animation: const AlwaysStoppedAnimation(0),
+                  ioLabels: const ['I1', 'O1', '+', '+', '-', '-', 'I2', 'O2'],
+                  ioLabelColors: const [
+                    ioLabelColor,
+                    ioLabelColor,
+                    Colors.red,
+                    Colors.red,
+                    Colors.blue,
+                    Colors.blue,
+                    ioLabelColor,
+                    ioLabelColor,
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
