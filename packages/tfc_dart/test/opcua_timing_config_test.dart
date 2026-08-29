@@ -8,10 +8,13 @@ import 'package:tfc_dart/core/state_man.dart';
 /// from reproducing the frozen-session bug.
 void main() {
   group('OpcUAConfig timing defaults', () {
-    test('a fresh config keeps the values that used to be hardcoded', () {
+    test('a fresh config publishes at 100 ms and renews every 10 minutes', () {
       final config = OpcUAConfig();
+      // The interval keeps the value that was already in force. The lifetime
+      // deliberately does not: 60 s was bench scaffolding, and the default
+      // is open62541's own.
       expect(config.publishingIntervalMs, 100);
-      expect(config.secureChannelLifetimeMs, 60000);
+      expect(config.secureChannelLifetimeMs, 600000);
     });
 
     test('the Duration getters convert from the stored milliseconds', () {
@@ -59,9 +62,8 @@ void main() {
 
     test('a config saved before these fields existed still loads', () {
       // Every station in the field has a stored config shaped like this. It
-      // must come back with the old hardcoded behaviour, not with zeroes —
-      // a 0 ms publishing interval would ask the PLC to publish as fast as
-      // it can answer.
+      // must come back with sane values, not zeroes — a 0 ms publishing
+      // interval would ask the PLC to publish as fast as it can answer.
       final legacy = <String, dynamic>{
         'endpoint': 'opc.tcp://10.104.28.11:4840',
         'server_alias': 'st101',
@@ -70,7 +72,10 @@ void main() {
 
       final restored = OpcUAConfig.fromJson(legacy);
       expect(restored.publishingIntervalMs, 100);
-      expect(restored.secureChannelLifetimeMs, 60000);
+      // Note this is a behaviour CHANGE for the stations, and an intended
+      // one: they have been renewing every 45 s off the old hardcoded 60 s,
+      // and loading this config moves them to open62541's 10 minutes.
+      expect(restored.secureChannelLifetimeMs, 600000);
     });
 
     test('the values survive a StateManConfig round-trip', () {

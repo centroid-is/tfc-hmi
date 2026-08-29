@@ -33,7 +33,7 @@ StateManConfig _oneServer({int? intervalMs, int? lifetimeMs}) => StateManConfig(
           ..endpoint = 'opc.tcp://10.104.28.11:4840'
           ..serverAlias = 'st101'
           ..publishingIntervalMs = intervalMs ?? 100
-          ..secureChannelLifetimeMs = lifetimeMs ?? 60000,
+          ..secureChannelLifetimeMs = lifetimeMs ?? 600000,
       ],
     );
 
@@ -87,7 +87,8 @@ void main() {
         (tester) async {
       await pumpExpandedCard(tester);
 
-      expect(_textOf(tester, _lifetimeField()), '60');
+      // The 600000 ms default reads as 600, not 600.0.
+      expect(_textOf(tester, _lifetimeField()), '600');
     });
 
     testWidgets('a typed interval reaches the saved config', (tester) async {

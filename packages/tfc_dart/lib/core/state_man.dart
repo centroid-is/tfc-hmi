@@ -155,13 +155,22 @@ class OpcUAConfig implements ServerConfigEntry {
   /// milliseconds.
   ///
   /// open62541 renews the channel at 75% of whatever the server grants, so
-  /// this is really "how often do we exercise the renew path". A short
-  /// lifetime is how the frozen-session bug was reproduced on the bench; a
-  /// long one keeps renewal traffic off a link that is known good. Defaults
-  /// to 60 s, the value that used to be hardcoded in [StateMan.create], so
-  /// configs written before this field keep the behaviour they had.
-  @JsonKey(name: 'secure_channel_lifetime_ms', defaultValue: 60000)
-  int secureChannelLifetimeMs = 60000;
+  /// this is really "how often do we exercise the renew path", and each
+  /// renewal rotates the channel's symmetric keys.
+  ///
+  /// Defaults to open62541's own default of 10 minutes — deliberately NOT
+  /// the 60 s that used to be hardcoded in [StateMan.create]. That minute
+  /// existed to reproduce the frozen-session bug on the bench and made every
+  /// station renew 80 times an hour; 10 minutes drops that to 8, which is
+  /// already nothing beside a subscription publishing ten times a second.
+  /// Going longer still buys no measurable relief and only ages the
+  /// symmetric keys on the SIGNANDENCRYPT links.
+  ///
+  /// This is a *requested* lifetime. The server answers with what it granted
+  /// and may cap it well below this; the binding does not surface that
+  /// figure, so a long value here is a ceiling, not a promise.
+  @JsonKey(name: 'secure_channel_lifetime_ms', defaultValue: 600000)
+  int secureChannelLifetimeMs = 600000;
 
   /// How often the server is asked to publish subscription notifications,
   /// in milliseconds — the rate at which values reach the HMI.
@@ -1521,6 +1530,9 @@ class StateMan {
       // Per-server now, not a hardcoded minute: the short lifetime was here
       // to reproduce the frozen-session bug, and a station that is not
       // hunting that bug should not be renewing its channel every minute.
+      // Recovery from a bad renewal does not depend on this being short —
+      // see [ClientWrapper.isSubscriptionDead] and the heartbeat-derived
+      // effective status.
       final channelLifetime = opcuaConfig.secureChannelLifetime;
       clients.add(ClientWrapper(
         useIsolate

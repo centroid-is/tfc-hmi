@@ -15,7 +15,7 @@ OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
   ..serverAlias = json['server_alias'] as String?
   ..enabled = json['enabled'] as bool? ?? true
   ..secureChannelLifetimeMs =
-      (json['secure_channel_lifetime_ms'] as num?)?.toInt() ?? 60000
+      (json['secure_channel_lifetime_ms'] as num?)?.toInt() ?? 600000
   ..publishingIntervalMs =
       (json['publishing_interval_ms'] as num?)?.toInt() ?? 100;
 
