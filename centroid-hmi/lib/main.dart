@@ -466,9 +466,20 @@ RoutesLocationBuilder createLocationBuilder(
   //
   //  - '/advanced/about-linux' reads system information and changes nothing.
   //  - '/advanced/knowledge-base', '/advanced/history-view',
-  //    AppRoutes.historyView and AppRoutes.alarmView read rather than
-  //    configure. Read permissions are explicitly out of scope
+  //    AppRoutes.historyView and AppRoutes.alarmView are read surfaces, and
+  //    read permissions are explicitly out of scope
   //    (docs/access-control-spec.md §Scope, §11).
+  //
+  //    One caveat, so this comment is not read as a clean bill of health:
+  //    the history view is not purely a read surface. It deletes saved views
+  //    and periods directly through Drift — lib/pages/history_view.dart:1108
+  //    `adb.deleteHistoryView(v.id)`, with buttons at :722 and :1074 — so an
+  //    anonymous session can delete one. Phase 3 will not catch it either:
+  //    that phase wraps StateMan.write and PreferencesApi.set*, and this is
+  //    neither. Gating the *route* is the wrong fix, because it would block
+  //    reading history, which is operate-level work. The fix belongs at the
+  //    controls. Recorded in
+  //    .planning/phases/02-route-gating/deferred-items.md §1; undecided.
   //  - AppRoutes.firstUser. Gating commissioning behind a sign-in on a station
   //    that has no users yet is the deadlock the first-user design exists to
   //    avoid.
