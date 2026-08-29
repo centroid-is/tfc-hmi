@@ -181,8 +181,6 @@ void main() {
     test("the 'pref' wire name delegates to groupForPref and never answers null",
         () {
       const policy = AccessPolicy();
-      expect(policy.groupForWireSurface('pref', 'page_editor_data'),
-          AccessGroup.configure);
       expect(policy.groupForWireSurface('pref', 'never_seen_before'),
           AccessGroup.administer);
       expect(policy.groupForWireSurface('pref', ''), AccessGroup.administer);

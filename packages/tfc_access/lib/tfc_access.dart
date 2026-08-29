@@ -9,6 +9,7 @@
 library;
 
 export 'src/access_group.dart';
+export 'src/access_policy.dart';
 export 'src/access_role.dart';
 export 'src/access_session.dart';
 export 'src/audit.dart';
