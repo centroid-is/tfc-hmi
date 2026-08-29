@@ -348,13 +348,49 @@ system will not object. A grep in the existing workflow is enough.
 | Surface | Declared | Default |
 |---|---|---|
 | Process tags | **Access templates** bound per key — see §7b. No asset config change at all. | unrestricted |
-| Config keys | Pattern match on the preference key in `AccessPolicy` — `page.*`, `alarm.*`, `keymap.*` → `configure`; server/db/network → `administer` | `administer` |
+| Config keys | Pattern match on the preference key in `AccessPolicy` — see the corrected table below | `administer` |
 | Routes | Optional `AccessGroup` on `RouteRegistry.registerRoute()` | `operate` |
 
 Tags fail **open** (an unbound key is unrestricted); config keys fail **closed**
 (anything unrecognised needs `administer`). That asymmetry is intentional: a
 wrongly-open setpoint is a nuisance, a wrongly-open config write is a broken
 plant.
+
+**Corrected key table (amended 2026-08-29).** The patterns originally written
+here — `page.*`, `alarm.*`, `keymap.*` — were invented rather than read out of
+the tree, and **`page.` with a dot matches none of the real page-editor keys**,
+which use underscores. Under the original table every one of them fell through
+to the `administer` default. Two consequences, both found in Phase 3 plan
+review, neither visible on any screen:
+
+- `lib/page_creator/page.dart:247` writes `page_editor_data` **at boot with
+  nobody signed in** (via `lib/providers/page_manager.dart:29` →
+  `PageManager.load()`). Denied → `pageManagerProvider` errors → **a fresh
+  station shows no pages at all.**
+- `lib/page_creator/assets/recipes.dart:280` writes `'${bucket}.recipes'`, and
+  `:266` writes a default on the **read** path — so merely viewing a recipes
+  asset as an anonymous operator would have been denied. A Shift Leader
+  (`{operate, setpoints}`) could not save a recipe, contradicting the user
+  story in REQUIREMENTS.md that names recipes alongside setpoints.
+
+The rules, keyed on names that exist in the tree:
+
+| Key | Group | Why |
+|---|---|---|
+| `page_editor_data` | `configure` | `page.dart:90`. Matches the route — `/page-editor` is `configure`-gated, so the page that edits and the key it saves need the same group, or a Phase 6 role holding `configure` without `administer` could open the editor and not save. |
+| `page_editor_top_level_order` | `configure` | `page.dart:91`, same reasoning. |
+| `page_editor_image:*` | `configure` | `image_store.dart:78,96`, prefix. |
+| `*.recipes` | `setpoints` | `recipes.dart:266,280`, suffix. The row above for "targets, limits, recipes" is `setpoints`; the requirement names them in one breath. |
+| `alarm*`, `keymap*` | `configure` | Verify the real names before trusting these two — they were written by the same guess that got `page.` wrong. |
+| server / db / network | `administer` | unchanged |
+| anything else | `administer` | the fail-closed default |
+
+**Derive the rules from the keys that exist, not from this table.** It has now
+been wrong twice. Key *expressions* must be resolved to their constants —
+`storageKey`, `orderStorageKey`, `'$keyPrefix$id'` and `'${bucket}.recipes'`
+are all invisible to a grep for string literals, which is how the original
+error survived. A test asserting such a key resolves to `administer` *passes*
+while the station is broken.
 
 ### 7b. Access templates — how tag writes are gated
 
