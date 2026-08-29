@@ -61,7 +61,7 @@
 /// and History View read rather than configure. The first-account route stays
 /// open because gating it is the deadlock the whole design exists to avoid.
 ///
-/// **The `addRoute` edge.** `centroid-hmi/lib/main.dart:527-545` runs after
+/// **The `addRoute` edge.** `centroid-hmi/lib/main.dart:588-604` runs after
 /// the literal route map and assigns `routes[menuItem.path!]`, so it
 /// overwrites by path: a page-manager page slugged to `/advanced/server-config`
 /// would replace the gated route with an ungated `AssetView`. No privilege is

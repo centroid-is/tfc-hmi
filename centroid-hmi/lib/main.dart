@@ -471,15 +471,19 @@ RoutesLocationBuilder createLocationBuilder(
   //    (docs/access-control-spec.md §Scope, §11).
   //
   //    One caveat, so this comment is not read as a clean bill of health:
-  //    the history view is not purely a read surface. It deletes saved views
-  //    and periods directly through Drift — lib/pages/history_view.dart:1108
-  //    `adb.deleteHistoryView(v.id)`, with buttons at :722 and :1074 — so an
-  //    anonymous session can delete one. Phase 3 will not catch it either:
-  //    that phase wraps StateMan.write and PreferencesApi.set*, and this is
-  //    neither. Gating the *route* is the wrong fix, because it would block
-  //    reading history, which is operate-level work. The fix belongs at the
-  //    controls. Recorded in
-  //    .planning/phases/02-route-gating/deferred-items.md §1; undecided.
+  //    the history view is not purely a read surface. It deletes directly
+  //    through Drift, in two places with two different accessors —
+  //    lib/pages/history_view.dart:1108 `adb.deleteHistoryView(v.id)` from the
+  //    button at :722, and :1165 `dbWrap.db.deleteHistoryViewPeriod(p.id)`
+  //    from the button at :1074 — so an anonymous session can delete a saved
+  //    view or a period. Grepping for one does not find the other.
+  //
+  //    Phase 3 will not catch them: it wraps StateMan.write and
+  //    PreferencesApi.set*, and these are neither. They are now the fourth
+  //    entry in docs/access-control-spec.md §6's bypass list, which said
+  //    three until 2026-08-29. Gating the *route* is the wrong fix — it would
+  //    block reading history, which is operate-level work; the fix belongs at
+  //    the controls. Undecided.
   //  - AppRoutes.firstUser. Gating commissioning behind a sign-in on a station
   //    that has no users yet is the deadlock the first-user design exists to
   //    avoid.

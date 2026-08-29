@@ -302,7 +302,7 @@ class GuardedStateMan implements StateMan {
 `GuardedPreferences` wraps `setBool` / `setInt` / `setDouble` / `setString` /
 `setStringList` / `remove` / `clear` the same way. Reads pass straight through.
 
-### The three bypasses must be rerouted
+### The four bypasses must be rerouted
 
 These reach their store without passing either interface. A guard that does not
 cover them is decorative:
@@ -314,6 +314,27 @@ cover them is decorative:
    `PreferencesApi` instead.
 3. IP settings / D-Bus network and hostname calls — gate at the route level
    (§7); the D-Bus call itself stays as is.
+4. **The history view's two deletes** — `lib/pages/history_view.dart:1108`
+   `adb.deleteHistoryView(v.id)` and `:1165`
+   `dbWrap.db.deleteHistoryViewPeriod(p.id)`, from the buttons at `:722` and
+   `:1074`. Both write Drift directly. *Added 2026-08-29, found during Phase 2.*
+
+   Note the two use different accessors (`adb`, `dbWrap.db`), so a grep for one
+   does not find the other.
+
+   **Do not fix this by gating the route.** `/advanced/history-view` is a read
+   surface an operator needs, and §11 defers read permissions deliberately. The
+   defect is a destructive control on a page that should stay readable, so the
+   fix belongs at the controls — gate them on `configure` in place, leaving the
+   page open. Undecided; see
+   `.planning/phases/02-route-gating/deferred-items.md` §4.
+
+**Why this list grew.** It was written as three, and a fourth of exactly the
+same shape was sitting in the tree the whole time. Assume there is a fifth.
+Before Phase 3 closes, sweep for *any* direct Drift write reachable from a
+widget — not just the ones named here — because this list is evidently a
+sample rather than an enumeration, and a guard beside an unenumerated hole is
+the "decorative" outcome this section exists to prevent.
 
 **Add a CI check** asserting that nothing outside `lib/providers/` constructs
 `SharedPreferencesAsync()`. This is the invariant that will rot silently — every
