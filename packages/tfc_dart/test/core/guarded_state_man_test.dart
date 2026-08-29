@@ -234,6 +234,8 @@ void main() {
   GuardedStateMan build({
     AccessPolicy? withPolicy,
     String surface = 'tag',
+    Future<DynamicValue?> Function(String key)? readBaseline,
+    void Function(AccessDenied denial)? onDenied,
   }) =>
       GuardedStateMan(
         inner: inner,
@@ -242,6 +244,8 @@ void main() {
         audit: audit,
         station: 'SVN-NES-OT-CL02',
         surface: surface,
+        readBaseline: readBaseline,
+        onDenied: onDenied,
         logger: Logger(level: Level.off),
       );
 
@@ -461,6 +465,316 @@ void main() {
     });
   });
 
+  group('the deny path', () {
+    // The binding is injected. Phase 4's access templates are what turn this
+    // on for real; until then this is how the path is exercised at all.
+    late _RecordingPolicy bound;
+
+    setUp(() {
+      bound = _RecordingPolicy(
+        tagBindings: _bind('CN04.MOT01.HMI.p_cmd_Start', AccessGroup.configure),
+      );
+    });
+
+    test('a bound key the session cannot write never reaches inner.write',
+        () async {
+      final guard = build(withPolicy: bound);
+
+      await expectLater(
+        guard.write('CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)),
+        throwsA(isA<AccessDenied>()),
+      );
+
+      expect(journal.writes, isEmpty);
+    });
+
+    test('the refusal is recorded with allowed false and the group name',
+        () async {
+      final guard = build(withPolicy: bound);
+
+      await expectLater(
+        guard.write('CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)),
+        throwsA(isA<AccessDenied>()),
+      );
+
+      final row = journal.rows.single;
+      expect(row.allowed, isFalse);
+      expect(row.groupRequired, AccessGroup.configure.name);
+      expect(row.itemKey, 'CN04.MOT01.HMI.p_cmd_Start');
+      expect(row.who, 'anonymous');
+    });
+
+    test('the rows are written before the exception is raised, and survive it',
+        () async {
+      final guard = build(withPolicy: bound);
+      Object? raised;
+
+      try {
+        await guard.write(
+            'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true));
+      } on Object catch (e) {
+        raised = e;
+      }
+
+      // Both, in that order - not one or the other. A denial that leaves no
+      // row is the repudiation this path exists to close.
+      expect(journal.rows, isNotEmpty,
+          reason: 'the row is the only evidence the guard fired');
+      expect(raised, isA<AccessDenied>());
+      expect(journal.indexWhere((e) => e is AuditRecord), isNonNegative);
+    });
+
+    test('the exception carries the resolved key and the required group',
+        () async {
+      inner.resolutions['{station}.MOT01.HMI.p_cmd_Start'] =
+          'CN04.MOT01.HMI.p_cmd_Start';
+      final guard = build(withPolicy: bound);
+
+      final denial = await _denialFrom(guard.write(
+          '{station}.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)));
+
+      expect(denial.itemKey, 'CN04.MOT01.HMI.p_cmd_Start');
+      expect(denial.required, AccessGroup.configure);
+    });
+
+    test('onDenied fires exactly once, with the same denial, before the throw',
+        () async {
+      final seen = <AccessDenied>[];
+      final guard = build(
+        withPolicy: bound,
+        onDenied: (d) {
+          seen.add(d);
+          journal.entries.add(_DeniedEvent(d));
+        },
+      );
+
+      final denial = await _denialFrom(guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)));
+
+      expect(seen, hasLength(1));
+      expect(identical(seen.single, denial), isTrue);
+      expect(journal.indexWhere((e) => e is _DeniedEvent), isNonNegative,
+          reason: 'plan 03-07 owns the prompt; this owns firing the event, '
+              'and it must fire even where the exception escapes uncaught');
+    });
+
+    test('a null onDenied changes nothing else', () async {
+      final guard = build(withPolicy: bound);
+
+      await expectLater(
+        guard.write('CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)),
+        throwsA(isA<AccessDenied>()),
+      );
+
+      expect(journal.rows, hasLength(1));
+      expect(journal.writes, isEmpty);
+    });
+
+    test('an onDenied that throws does not replace the AccessDenied', () async {
+      final guard = build(
+        withPolicy: bound,
+        onDenied: (_) => throw StateError('a listener bug'),
+      );
+
+      final raised = await _raisedFrom(guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)));
+
+      expect(raised, isA<AccessDenied>(),
+          reason: "a listener's bug must not change what the caller sees");
+      expect(journal.writes, isEmpty);
+    });
+
+    test(
+        'an audit sink that throws on the deny path still denies, and still '
+        'fires onDenied', () async {
+      audit.failWith = StateError('the audit database blinked');
+      var fired = 0;
+      final guard = build(withPolicy: bound, onDenied: (_) => fired += 1);
+
+      final raised = await _raisedFrom(guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)));
+
+      expect(raised, isA<AccessDenied>(),
+          reason: 'a sink exception must not replace the refusal, or the '
+              'operator gets no prompt and no explanation for a control that '
+              'did nothing');
+      expect(fired, 1);
+      expect(journal.writes, isEmpty);
+    });
+
+    test(
+        'a bound key the session can write proceeds as an unbound one, with '
+        'the group name recorded', () async {
+      final operateBound = _RecordingPolicy(
+        tagBindings: _bind('CN04.MOT01.HMI.p_cmd_Start', AccessGroup.operate),
+      );
+      final guard = build(withPolicy: operateBound);
+
+      await guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true));
+
+      expect(journal.writes, hasLength(1));
+      expect(journal.rows.single.allowed, isTrue);
+      expect(journal.rows.single.groupRequired, AccessGroup.operate.name);
+    });
+
+    test(
+        're-pressing Start on an already-started machine: a denied write '
+        'whose diff is empty still produces exactly one row', () async {
+      final guard = build(
+        withPolicy: bound,
+        readBaseline: (_) async => DynamicValue(value: true),
+      );
+
+      final raised = await _raisedFrom(guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)));
+
+      expect(raised, isA<AccessDenied>());
+      expect(journal.rows, hasLength(1),
+          reason: 'no-op suppression is the permitted path only; deleting '
+              'this row would make the guard invisible in exactly the case an '
+              'operator is most likely to repeat');
+      expect(journal.rows.single.member, isNull);
+      expect(journal.rows.single.allowed, isFalse);
+      expect(journal.rows.single.newValue, 'true');
+      expect(journal.writes, isEmpty);
+    });
+
+    test(
+        'a refused write with no baseline produces exactly one row, flagged '
+        'as having none', () async {
+      final guard = build(withPolicy: bound);
+
+      final raised = await _raisedFrom(guard.write('CN04.MOT01.HMI.p_cmd_Start',
+          _struct({'p_cmd_Start': true, 'p_cfg_Freq': 42.5})));
+
+      expect(raised, isA<AccessDenied>());
+      expect(journal.rows, hasLength(1));
+      // At the row level a missing baseline is a whole-value row: no member
+      // path and no old side. That is the same shape a synthesised denial row
+      // takes, deliberately - both say "the whole value, nothing to compare".
+      expect(journal.rows.single.member, isNull);
+      expect(journal.rows.single.oldValue, isNull);
+      expect(journal.rows.single.newValue, isNotNull);
+    });
+
+    test('a refused struct write still produces its member rows', () async {
+      final guard = build(
+        withPolicy: bound,
+        readBaseline: (_) async =>
+            _struct({'p_cmd_Start': false, 'p_cfg_Freq': 25.0}),
+      );
+
+      final raised = await _raisedFrom(guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start',
+          _struct({'p_cmd_Start': true, 'p_cfg_Freq': 42.5})));
+
+      expect(raised, isA<AccessDenied>());
+      expect(journal.rows.map((r) => r.member),
+          containsAll(<String>['p_cmd_Start', 'p_cfg_Freq']),
+          reason: 'a denied recipe apply must show what would have changed');
+      expect(journal.rows.every((r) => r.allowed == false), isTrue);
+      expect(journal.writes, isEmpty);
+    });
+
+    test('a surface the policy does not know fails closed on administer',
+        () async {
+      final guard = build(surface: 'gizmo');
+
+      final denial = await _denialFrom(guard.write(
+          'CN04.MOT01.HMI.p_cmd_Start', DynamicValue(value: true)));
+
+      expect(denial.required, AccessGroup.administer);
+      expect(journal.rows.single.surface, 'gizmo',
+          reason:
+              'the surface checked and the surface recorded are one string');
+      expect(journal.rows.single.groupRequired, AccessGroup.administer.name);
+    });
+  });
+
+  group('struct writes', () {
+    test(
+        'a permitted struct write is one row per changed member, with dotted '
+        'paths, sharing one action id', () async {
+      final guard = build(
+        readBaseline: (_) async => _struct({
+          'p_cmd_JogFwd': false,
+          'p_cfg': _struct({'Freq': 25.0, 'Ramp': 3.0}),
+        }),
+      );
+
+      await guard.write(
+          'CN04.MOT01.HMI',
+          _struct({
+            'p_cmd_JogFwd': true,
+            'p_cfg': _struct({'Freq': 42.5, 'Ramp': 3.0}),
+          }));
+
+      expect(journal.rows, hasLength(2));
+      expect(journal.rows.map((r) => r.member), ['p_cmd_JogFwd', 'p_cfg.Freq']);
+      expect(journal.rows[0].oldValue, 'false');
+      expect(journal.rows[0].newValue, 'true');
+      expect(journal.rows[1].oldValue, '25.0');
+      expect(journal.rows[1].newValue, '42.5');
+      expect(journal.rows[0].actionId, journal.rows[1].actionId,
+          reason: 'one human action is one correlation id with N rows beneath');
+      expect(journal.writes, hasLength(1));
+    });
+
+    test(
+        'a permitted write whose value equals the baseline writes no rows and '
+        'still reaches inner.write', () async {
+      final guard = build(
+        readBaseline: (_) async =>
+            _struct({'p_cmd_Start': true, 'p_cfg_Freq': 42.5}),
+      );
+
+      await guard.write('CN04.MOT01.HMI',
+          _struct({'p_cmd_Start': true, 'p_cfg_Freq': 42.5}));
+
+      expect(journal.rows, isEmpty,
+          reason: "spec section 2's no-op suppression suppresses the rows");
+      expect(journal.writes, hasLength(1),
+          reason: 'and not the write: a re-issued command after a comms blip '
+              'is a real action with a real effect at the PLC');
+    });
+
+    test(
+        'a readBaseline that throws is treated as no baseline and the write '
+        'is unaffected', () async {
+      final guard = build(
+        readBaseline: (_) async => throw StateError('the server went away'),
+      );
+
+      await guard.write('CN04.MOT01.HMI',
+          _struct({'p_cmd_Start': true, 'p_cfg_Freq': 42.5}));
+
+      expect(journal.rows, hasLength(1));
+      expect(journal.rows.single.member, isNull);
+      expect(journal.rows.single.oldValue, isNull);
+      expect(journal.writes, hasLength(1));
+    });
+
+    test(
+        'a readBaseline that never answers times out and is treated as no '
+        'baseline', () async {
+      final stuck = Completer<DynamicValue?>();
+      addTearDown(() {
+        if (!stuck.isCompleted) stuck.complete(null);
+      });
+      final guard = build(readBaseline: (_) => stuck.future);
+
+      await guard.write('CN04.MOT01.HMI',
+          _struct({'p_cmd_Start': true, 'p_cfg_Freq': 42.5}));
+
+      expect(journal.rows, hasLength(1));
+      expect(journal.rows.single.oldValue, isNull);
+      expect(journal.writes, hasLength(1),
+          reason: 'making a jog wait on a PLC round trip that is not '
+              'answering would trade a usability feature for an outage');
+    });
+  });
+
   group('the source', () {
     test('carries no noSuchMethod', () {
       expect(_guardSourceWithoutComments(), isNot(contains('noSuchMethod')),
@@ -468,6 +782,33 @@ void main() {
               'throwing at runtime, on a plant');
     });
   });
+}
+
+/// An `onDenied` firing, journalled so its position relative to the rows and
+/// the throw is assertable.
+class _DeniedEvent {
+  _DeniedEvent(this.denial);
+  final AccessDenied denial;
+  @override
+  String toString() => '_DeniedEvent(${denial.itemKey})';
+}
+
+/// The [AccessDenied] [future] threw, failing the test if it threw something
+/// else or nothing at all.
+Future<AccessDenied> _denialFrom(Future<void> future) async {
+  final raised = await _raisedFrom(future);
+  expect(raised, isA<AccessDenied>());
+  return raised as AccessDenied;
+}
+
+/// Whatever [future] threw, failing the test if it completed.
+Future<Object> _raisedFrom(Future<void> future) async {
+  try {
+    await future;
+  } on Object catch (e) {
+    return e;
+  }
+  fail('expected the write to throw, and it completed');
 }
 
 /// The guard's own source, with comment lines removed.
