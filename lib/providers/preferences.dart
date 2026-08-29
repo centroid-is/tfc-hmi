@@ -27,11 +27,11 @@ Future<Preferences> preferences(Ref ref) async {
   final guarded = GuardedPreferences(
     inner: inner,
     policy: ref.watch(accessPolicyProvider),
-    // A callback, never `ref.watch(accessSessionProvider)`: a watch would
+    // A callback, and never a watch on the session provider: a watch would
     // rebuild this provider — and every provider downstream of it, including
     // the plant connection — on every sign-in, sign-out and inactivity
     // timeout. Pinned by `guard_wiring_test.dart`'s "the session is a
-    // callback, not a watch" group.
+    // callback, not a watch" group, which greps this file for that mistake.
     session: () => sessionInForce(ref),
     audit: RefAuditSink(ref),
     station: ref.watch(stationNameProvider),

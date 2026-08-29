@@ -133,12 +133,12 @@ Future<StateMan> stateMan(Ref ref) async {
     return GuardedStateMan(
       inner: stateMan,
       policy: ref.read(accessPolicyProvider),
-      // A callback, never `ref.watch(accessSessionProvider)`. This provider is
-      // `keepAlive` and holds every OPC UA connection on the panel; a watch
+      // A callback, and never a watch on the session provider. This provider
+      // is `keepAlive` and holds every OPC UA connection on the panel; a watch
       // would rebuild it — and drop every connection and every subscription —
       // on each sign-in, sign-out and inactivity timeout. Pinned by
       // `guard_wiring_test.dart`'s "signing in and out does not rebuild
-      // stateManProvider".
+      // stateManProvider", which also greps this file for that mistake.
       session: () => sessionInForce(ref),
       audit: RefAuditSink(ref),
       station: ref.read(stationNameProvider),
