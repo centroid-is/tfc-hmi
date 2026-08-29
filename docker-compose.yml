@@ -93,13 +93,19 @@ services:
         chown 1000:1000 /home/centroid/.local/share
       '
 
-  # `latest-profile` is AOT-compiled exactly like release, so what you measure
-  # here is what the operator feels, but with the Dart VM Service, the sampling
-  # CPU profiler and the `Flutter.Frame` timing events still compiled in.
-  # `latest` is a debug/JIT build — fine for a desk, several times slower on a
-  # station, and its numbers mean nothing.
+  # Tag unchanged. To profile a station, switch this to `latest-profile` and
+  # recreate the service:
+  #
+  #   ghcr.io/centroid-is/centroid-hmi:latest-profile
+  #
+  # That image is AOT-compiled exactly like release — what you measure is what
+  # the operator feels — but keeps the Dart VM Service, the sampling CPU
+  # profiler and the `Flutter.Frame` timing events. `latest` is debug/JIT: it
+  # does expose a VM service, so the switches below work, but its timings are
+  # a JIT build's and mean little about production. `latest-release` exposes
+  # nothing at all; the switches are ignored there.
   flutter:
-    image: ghcr.io/centroid-is/centroid-hmi:latest-profile
+    image: ghcr.io/centroid-is/centroid-hmi:latest
     container_name: flutter
     group_add:
       - 992
@@ -117,9 +123,12 @@ services:
       SECRET_FILE_TEST_PATH: /home/centroid/.local/share/keyrings/flutter.keyring
       SECRET_FILE_TEST_PASSWORD: TODOSetThisStrongPassword # openssl rand -base64 32
       # Engine switches. The flutter-elinux embedder reads these from the
-      # environment rather than argv (GetSwitchesFromEnvironment), and ignores
-      # them entirely in a release build. Miscount FLUTTER_ENGINE_SWITCHES and
-      # the embedder complains on stderr about the missing key.
+      # environment rather than argv (GetSwitchesFromEnvironment). The lookup
+      # is compiled out of a release build, so these are inert on
+      # `latest-release` and live on both `latest` and `latest-profile` —
+      # harmless to leave set whichever of the three is deployed. Miscount
+      # FLUTTER_ENGINE_SWITCHES and the embedder complains on stderr about the
+      # missing key.
       #
       #   1  the sampling profiler is off unless asked for — without it
       #      getCpuSamples answers "Feature is disabled"
@@ -185,12 +194,15 @@ services:
     # exposes RSS, which the Dart heap figure does not: the engine, Skia,
     # pdfium and open62541 all allocate outside it.
     pid: "service:flutter"
-    # The host's docker group, needed to read the socket mounted below. As with
-    # docker-update above, this GID is station-specific — check it with
-    # `getent group docker` on the machine. Wrong value costs you the
-    # Containers section and nothing else; the report says so when it happens.
+    # The host's docker group, needed to read the socket mounted below. Same
+    # station-specific GID docker-update uses, from the same .env:
+    #
+    #   echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> .env
+    #
+    # Wrong value costs you the Containers section and nothing else — the
+    # report says so, and names this fix, when it happens.
     group_add:
-      - "1001"
+      - "${DOCKER_GID:-1001}"
     depends_on:
       - flutter
     # Its own budget, deliberately outside the app's 1 GB.
