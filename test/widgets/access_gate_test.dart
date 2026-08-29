@@ -6,9 +6,13 @@
 /// truth table is the only way to keep it honest as the phase grows.
 library;
 
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/providers/access.dart';
 import 'package:tfc/widgets/access_gate.dart';
+import 'package:tfc/widgets/access_sign_in_dialog.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 
@@ -343,4 +347,295 @@ void main() {
           reason: 'being signed in is not the question; holding the group is');
     });
   });
+
+  group('AccessLockedBody', () {
+    testWidgets('names the missing group by its AccessGroup name',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.administer));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessLockedBodyKey), findsOneWidget);
+      expect(find.text(kAccessLockedGroupNote(AccessGroup.administer)),
+          findsOneWidget);
+      expect(kAccessLockedGroupNote(AccessGroup.administer),
+          contains(AccessGroup.administer.name));
+    });
+
+    testWidgets('anonymous: says a sign-in is needed and offers one',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.configure));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessLockedHeadline), findsOneWidget);
+      expect(find.byKey(kAccessLockedSignInKey), findsOneWidget);
+      // Nobody is signed in, so there is no role to talk about.
+      expect(find.textContaining('You are signed in as'), findsNothing);
+    });
+
+    testWidgets(
+        'elevated but insufficient: names who and their role, and still '
+        'offers a sign-in', (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.administer,
+        session: _elevatedSession(const {AccessGroup.operate}),
+      ));
+      await tester.pumpAndSettle();
+
+      final note = kAccessLockedRoleNote(
+          'Jon B', 'Engineering', AccessGroup.administer);
+      expect(find.text(note), findsOneWidget);
+      expect(note, contains('Jon B'));
+      expect(note, contains('Engineering'));
+      expect(note, contains(AccessGroup.administer.name));
+
+      // Signing in as somebody else is still on offer.
+      expect(find.byKey(kAccessLockedSignInKey), findsOneWidget);
+    });
+
+    testWidgets('an unavailable repository adds the no-database line, in both '
+        'causes', (tester) async {
+      for (final repository in [_absentRepository, _throwingRepository]) {
+        await tester.pumpWidget(_lockedBodyHost(
+          group: AccessGroup.configure,
+          repository: repository,
+        ));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(kAccessLockedNoDatabaseKey), findsOneWidget);
+        expect(find.text(kAccessLockedNoDatabaseNote), findsOneWidget);
+      }
+    });
+
+    testWidgets('the no-database line is absent when a repository is present',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.configure));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessLockedNoDatabaseKey), findsNothing);
+      expect(find.text(kAccessLockedNoDatabaseNote), findsNothing);
+    });
+
+    testWidgets('the no-database line wraps rather than ellipsising',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.configure,
+        repository: _absentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      _expectWrapsLegibly(tester, kAccessLockedNoDatabaseKey,
+          kAccessLockedNoDatabaseNote);
+    });
+
+    test('the no-database line states the consequence and the next step, '
+        'never a cause', () {
+      // Never configured and configured-but-down lead to the same next step
+      // now that Server Config opens in both, and a line that guessed wrong
+      // would send a commissioner and an operator hunting different wrong
+      // problems — the mistake `lib/pages/first_user.dart:55-64` documents.
+      expect(kAccessLockedNoDatabaseNote, isNot(contains('configured')));
+      expect(kAccessLockedNoDatabaseNote, isNot(contains('unreachable')));
+      expect(kAccessLockedNoDatabaseNote, contains('Server Config'));
+    });
+
+    testWidgets('carries the honesty line verbatim, wrapping rather than '
+        'ellipsising', (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(group: AccessGroup.configure));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessSignInHonestyNote), findsOneWidget);
+      _expectWrapsLegibly(
+          tester, kAccessLockedHonestyKey, kAccessSignInHonestyNote);
+    });
+
+    testWidgets('the Sign in action calls the injected opener once per tap',
+        (tester) async {
+      final opener = _CountingOpener();
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.configure,
+        openSignIn: opener.call,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(opener.calls, 0, reason: 'a render must not open the dialog');
+      await tester.tap(find.byKey(kAccessLockedSignInKey));
+      await tester.pumpAndSettle();
+      expect(opener.calls, 1);
+      await tester.tap(find.byKey(kAccessLockedSignInKey));
+      await tester.pumpAndSettle();
+      expect(opener.calls, 2);
+    });
+
+    testWidgets('renders no error styling, in either repository state',
+        (tester) async {
+      for (final repository in [_presentRepository, _absentRepository]) {
+        await tester.pumpWidget(_lockedBodyHost(
+          group: AccessGroup.configure,
+          repository: repository,
+        ));
+        await tester.pumpAndSettle();
+
+        expect(find.byIcon(Icons.error), findsNothing);
+        expect(find.byIcon(Icons.error_outline), findsNothing);
+        expect(find.byIcon(Icons.warning), findsNothing);
+        expect(find.byIcon(Icons.warning_amber), findsNothing);
+        expect(find.textContaining('Exception'), findsNothing);
+        expect(find.textContaining('Error'), findsNothing);
+
+        final scheme = Theme.of(
+          tester.element(find.byKey(kAccessLockedBodyKey)),
+        ).colorScheme;
+        for (final text in tester.widgetList<Text>(find.byType(Text))) {
+          expect(text.style?.color, isNot(scheme.error),
+              reason: 'a lock is not a fault: "${text.data}"');
+        }
+        for (final icon in tester.widgetList<Icon>(find.byType(Icon))) {
+          expect(icon.color, isNot(scheme.error));
+        }
+      }
+    });
+
+    testWidgets('offers no go-back, retry or request-access affordance',
+        (tester) async {
+      await tester.pumpWidget(_lockedBodyHost(
+        group: AccessGroup.configure,
+        repository: _absentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      // Leaving is the app bar's and the navigation bar's job, and there is
+      // nobody in this build to request access from.
+      expect(find.textContaining('Back'), findsNothing);
+      expect(find.textContaining('Retry'), findsNothing);
+      expect(find.textContaining('Try again'), findsNothing);
+      expect(find.textContaining('Request'), findsNothing);
+      expect(find.byIcon(Icons.arrow_back), findsNothing);
+    });
+
+    testWidgets('nothing it renders is disabled, including with no repository',
+        (tester) async {
+      for (final repository in [
+        _presentRepository,
+        _absentRepository,
+        _throwingRepository,
+      ]) {
+        await tester.pumpWidget(_lockedBodyHost(
+          group: AccessGroup.configure,
+          repository: repository,
+        ));
+        await tester.pumpAndSettle();
+
+        final buttons = tester.widgetList<ButtonStyleButton>(
+          find.byWidgetPredicate((w) => w is ButtonStyleButton),
+        );
+        expect(buttons, isNotEmpty);
+        for (final button in buttons) {
+          expect(button.onPressed, isNotNull,
+              reason: 'a greyed control is the one thing the UI rules forbid');
+        }
+        for (final button in tester.widgetList<IconButton>(
+          find.byType(IconButton),
+        )) {
+          expect(button.onPressed, isNotNull);
+        }
+      }
+    });
+  });
+}
+
+/// A session that resolves immediately to whatever the test needs.
+///
+/// Overriding [build] is what keeps the frame chosen rather than raced: none of
+/// the real leaf providers — database, preferences, audit sink, inactivity
+/// monitor — is ever constructed, so there is no I/O to settle against and no
+/// timer to leak. Copied from `test/widgets/access_golden_test.dart`.
+class _FixedSession extends AccessSessionController {
+  _FixedSession(this._session);
+
+  final AccessSession _session;
+
+  @override
+  Future<AccessSession> build() async => _session;
+
+  @override
+  Future<AccessSignInResult> signIn(String username, String password) async =>
+      AccessSignInResult.ok;
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// The three repository states a widget test can be in. The gate's own decision
+/// is tested against `AsyncValue`s directly; these are for the widgets, which
+/// read the provider themselves.
+Future<AccessRepository?> _presentRepository() async => _StubRepository();
+Future<AccessRepository?> _absentRepository() async => null;
+Future<AccessRepository?> _throwingRepository() async =>
+    throw StateError('postgres will not answer');
+
+AccessSession _elevatedSession(Set<AccessGroup> groups) => AccessSession(
+      user: const AuthenticatedUser(
+        username: 'jon',
+        roleName: 'Engineering',
+        displayName: 'Jon B',
+      ),
+      groups: groups,
+      expiresAt: DateTime.utc(2026, 8, 29, 12),
+    );
+
+/// Counts the taps without standing up a dialog route.
+class _CountingOpener {
+  int calls = 0;
+
+  Future<void> call(BuildContext context, WidgetRef ref) async {
+    calls++;
+  }
+}
+
+/// [AccessLockedBody] under a bare `MaterialApp` — no Beamer, no router.
+///
+/// Both access providers are overridden, always: an unoverridden
+/// `accessRepositoryProvider` reaches `databaseProvider` and the keychain, and
+/// the test becomes a race.
+Widget _lockedBodyHost({
+  required AccessGroup group,
+  AccessSession? session,
+  Future<AccessRepository?> Function() repository = _presentRepository,
+  AccessSignInOpener? openSignIn,
+}) {
+  return ProviderScope(
+    overrides: [
+      accessSessionProvider.overrideWith(() => _FixedSession(
+          session ?? AccessSession.anonymous(const {AccessGroup.operate}))),
+      accessRepositoryProvider.overrideWith((ref) => repository()),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: AccessLockedBody(
+          group: group,
+          openSignIn: openSignIn ?? _CountingOpener().call,
+        ),
+      ),
+    ),
+  );
+}
+
+/// The Phase 1 lesson, copied deliberately: `find.text` passes on a string the
+/// painter has clipped to "…not a security bo…", which is how an ellipsised
+/// honesty line shipped past a green assertion. Pin the properties that decide
+/// legibility, then check the paragraph really is taller than one line at the
+/// width the page renders it at.
+void _expectWrapsLegibly(WidgetTester tester, Key key, String expected) {
+  final text = tester.widget<Text>(find.byKey(key));
+  expect(text.data, expected);
+  expect(text.maxLines, isNull);
+  expect(text.overflow, isNot(TextOverflow.ellipsis));
+
+  final rendered = tester.renderObject<RenderParagraph>(
+    find.descendant(of: find.byKey(key), matching: find.byType(RichText)),
+  );
+  expect(rendered.size.height, greaterThan(rendered.preferredLineHeight));
 }
