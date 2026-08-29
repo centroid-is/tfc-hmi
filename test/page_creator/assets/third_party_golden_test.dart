@@ -613,6 +613,91 @@ void main() {
       );
     });
 
+    // The pane with the Modbus link down, driven through the REAL widget so
+    // the gate, the banner and the header badge are all the ones an operator
+    // gets -- not three pieces reassembled by the test.
+    //
+    // The struct fed in is the dangerous one: every bit still says the machine
+    // is fine ("Running" true, no estop, throughput 37) because
+    // FB_BER01ScadaPoll decodes the Saia's process word unconditionally and
+    // those words simply stop being written when polling fails. Without the
+    // gate this pane would show a confident green "Running" for a machine we
+    // have lost contact with, forever. With it: red banner on top, header
+    // reads "No link", every diode grey, throughput "--".
+    testWidgets('boxErector — Modbus link down', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final frozen = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        for (final bit in boxErectorStatusBits) bit.member: true,
+        'p_stat_xModbusHealthy': false,
+        'bpmCartonsOut':
+            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'hmi': DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'avgBPM1Minute': 37.0})),
+        })),
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 1180,
+                child: Material(
+                  child: SidePane(
+                    title: 'BER-01',
+                    subtitle: 'Box erector',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.unknown('No link'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const CommsLostBanner(),
+                        PaneSection(
+                          title: 'Status',
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const PaneDetailRow(
+                                label: 'Cartons per minute',
+                                child: Text('—'),
+                              ),
+                              StructStatusDiodes(
+                                // null, exactly as the gate feeds it: the
+                                // frozen values above are deliberately NOT
+                                // shown.
+                                status: null,
+                                bits: boxErectorStatusBits,
+                                machine: equipmentShortName(
+                                    ThirdPartyEquipmentKind.boxErector),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      // Referenced so the frozen struct is not an unused local: it documents
+      // what the gate is refusing to display.
+      expect(boxErectorCommsOf(frozen), isFalse);
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_boxErector_comms_down.png'),
+      );
+    });
+
     // The Multivac's Status section as an operator on line 2 actually sees it:
     // the four struct diodes off `SP_Packing_HMI`, and BENEATH them the one
     // loose diode the instance declares — `MVC02.PermitOutfeed`, the outfeed

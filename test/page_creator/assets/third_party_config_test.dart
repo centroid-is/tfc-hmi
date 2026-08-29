@@ -1356,4 +1356,38 @@ void main() {
           isTrue);
     });
   });
+
+  group('Box erector Modbus link gate', () {
+    DynamicValue struct(Map<String, dynamic> m) =>
+        DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
+
+    test('healthy, down, and ABSENT are three different answers', () {
+      expect(boxErectorCommsOf(struct({'p_stat_xModbusHealthy': true})), isTrue);
+      expect(
+          boxErectorCommsOf(struct({'p_stat_xModbusHealthy': false})), isFalse);
+
+      // Absent must be null, NOT false. BER02/BER03 run the old flat FB and
+      // never publish this member; treating that as "link down" would blank
+      // two panes that are working fine.
+      expect(boxErectorCommsOf(struct({'p_stat_xRunning': true})), isNull);
+      expect(boxErectorCommsOf(null), isNull);
+    });
+
+    test('a frozen struct still reads Running -- which is why the gate exists',
+        () {
+      // The failure this guards. FB_BER01ScadaPoll decodes the Saia process
+      // word unconditionally, so when the link drops the bits hold their last
+      // values: the struct below is exactly what the pane keeps receiving,
+      // indefinitely, and every bit in it still says the machine is fine.
+      final frozen = struct({
+        'p_stat_xModbusHealthy': false,
+        'p_stat_xRunning': true,
+        'p_stat_xEstopActive': false,
+      });
+      expect(structStatusBitOf(frozen, 'p_stat_xRunning'), isTrue,
+          reason: 'the stale bit is indistinguishable from a live one');
+      expect(boxErectorCommsOf(frozen), isFalse,
+          reason: 'only the health bit reveals it');
+    });
+  });
 }

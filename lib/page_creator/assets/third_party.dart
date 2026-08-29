@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc/theme.dart' show HmiColorRole;
+import 'package:tfc/theme.dart' show HmiColorRole, HmiStateColors;
 
 import '../../providers/state_man.dart';
 import '../../widgets/panes/color_picker_dialog.dart';
@@ -911,6 +911,32 @@ const List<StructStatusBit> boxErectorStatusBits = [
 /// A kind belongs in exactly one of this map and [kEquipmentStatusBits];
 /// membership here means one subscription for the whole handshake instead of
 /// one per bit.
+/// Whether the box erector's Modbus link to the Saia machine is healthy.
+///
+/// `null` when the member is absent — BER02/BER03 on the old flat FB, or a
+/// struct not yet received — which must NOT gate anything: an unknown link is
+/// not a failed one.
+///
+/// This bit is the validity of every other row on the pane. `FB_BER01ScadaPoll`
+/// polls a Saia PCD3.M3160 over Modbus TCP and decodes its alarm word (R998)
+/// and process word (R1000) UNCONDITIONALLY:
+///
+///     p_stat_xAlmEstop   := p_stat_dwAlarmWord.1;
+///     p_stat_xModeManual := p_stat_dwProcessWord.1;
+///
+/// Those words are only written on a successful read, so when the link drops
+/// every decoded bit FREEZES at its last value. Nothing upstream notices:
+/// `p_stat_xComOk` falls after a 2 s TOF and our own OPC UA subscription to
+/// ST101 stays perfectly healthy, so the pane would keep receiving values and
+/// keep showing a confident "Running" for a machine we have lost contact with.
+/// Hence the gate — the same "unknown beats a stale latch" rule the run stream
+/// already follows.
+bool? boxErectorCommsOf(DynamicValue? status) {
+  const member = 'p_stat_xModbusHealthy';
+  if (status == null || !status.contains(member)) return null;
+  return status[member].asBool;
+}
+
 /// The throughput member the box erector FB publishes: finished cartons per
 /// minute, counted off the S104 outfeed sensor's rising edge.
 ///
@@ -1377,6 +1403,66 @@ PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
       return const PaneStatus.stopped();
     case null:
       return fallback;
+  }
+}
+
+/// The banner shown above everything when the Modbus link is down.
+///
+/// Says what is wrong AND what it means for the rest of the pane, because a
+/// bare "no link" leaves the operator to work out whether the rows below are
+/// live. They are not: see [boxErectorCommsOf] for why every bit freezes rather
+/// than going stale. The diodes below are already forced to the grey `!`, so
+/// this explains a pane that has visibly gone blank.
+///
+/// Fault red — the one place this file uses a saturated colour, which is the
+/// repo rule (only fault red may be saturated), and this qualifies: the pane is
+/// not reporting the machine any more.
+///
+/// A top-level widget rather than a method on the state, for the same reason
+/// [StructStatusDiodes] is one: a golden has to be able to render it without a
+/// `StateMan`.
+class CommsLostBanner extends StatelessWidget {
+  const CommsLostBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final red = HmiStateColors.of(context).red;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.12),
+        border: Border.all(color: red),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.link_off, size: 18, color: red),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'No Modbus link to the machine',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(color: red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Nothing below is live — the box erector stopped answering '
+                  'and these values are the last it sent.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -2085,9 +2171,15 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   Widget? _statusSection(BuildContext context) {
     final config = widget.config;
     final rows = <Widget>[];
+    // A dead Modbus link makes every bit below a stale latch rather than a
+    // reading, so they are shown as UNKNOWN. Feeding null in does exactly that
+    // through the existing degrade-to-`!` path -- no separate "stale" mode to
+    // keep in step with the normal one.
+    final commsDown = boxErectorCommsOf(_statusRaw.value) == false;
+    final status = commsDown ? null : _statusRaw.value;
     if (kStructStatusBits[config.kind] case final structBits?) {
       rows.add(StructStatusDiodes(
-        status: _statusRaw.value,
+        status: status,
         bits: structBits,
         machine: equipmentShortName(config.kind),
       ));
@@ -2104,7 +2196,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     // publishes it, and only when the member is present -- "--" while the PLC
     // has not been rolled, never 0, which is a real throughput meaning stopped.
     if (config.kind == ThirdPartyEquipmentKind.boxErector) {
-      final bpm = boxErectorBpmOf(_statusRaw.value);
+      final bpm = boxErectorBpmOf(status);
       rows.add(PaneDetailRow(
         label: 'Cartons per minute',
         child: Text(
@@ -2189,6 +2281,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // "Cleaning", which the run key would misreport as Stopped.
       status = speedBatcherPaneStatus(_statusRaw.value, status);
     }
+    // A dead Modbus link outranks EVERYTHING, including the run key: that key
+    // is a member of the same frozen struct, so "Running" here would be the
+    // last thing the machine said before we lost it, not what it is doing.
+    final commsDown = boxErectorCommsOf(_statusRaw.value) == false;
+    if (commsDown) status = const PaneStatus.unknown('No link');
 
     // The scaffolded accept-rate readouts, in checkweigher order. Surfaced
     // as LIVE figures in the pane — the operator opens it to read the
@@ -2218,6 +2315,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (commsDown) const CommsLostBanner(),
           PaneSection(
             title: 'Equipment',
             child: Column(
