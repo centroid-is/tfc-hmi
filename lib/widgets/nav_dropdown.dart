@@ -8,6 +8,7 @@ import 'package:tfc_dart/core/alarm.dart';
 import '../models/menu_item.dart';
 import '../providers/nav_alarm.dart' show navigationAlarmLevelFor;
 import '../route_registry.dart';
+import 'access_lock_badge.dart';
 import 'nav_alarm_badge.dart';
 import 'leave_guard.dart';
 
@@ -159,6 +160,13 @@ class NavDropdownState extends State<NavDropdown> {
                 const SizedBox(width: 12),
                 Flexible(
                     child: Text(child.label, overflow: TextOverflow.ellipsis)),
+                // A lock when the session cannot open this page, and exactly
+                // nothing otherwise — no SizedBox beside it, because the badge
+                // brings its own gap and an unlocked row must lay out as it
+                // always did. The entry stays enabled and keeps its onTap: the
+                // lock is advisory, and the AccessGate on the route is what
+                // refuses and offers the sign-in.
+                AccessLockBadge(path: child.path),
               ],
             ),
           ),
