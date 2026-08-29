@@ -1179,7 +1179,6 @@ void main() {
         'p_stat_xOutputBlocked',
         'p_stat_xExtNotReady',
         'p_stat_xReadyToVacuum',
-        'p_stat_xRunning',
         'q_xOutfeedPermitted',
         'p_stat_xModeManual',
       ]);
@@ -1231,8 +1230,9 @@ void main() {
       expect(byMember['p_stat_xReadyToVacuum']!.onRole, HmiColorRole.green);
       expect(byMember['p_stat_xReadyToVacuum']!.labelFor('box erector'),
           'Box erector is ready to vacuum');
-      expect(byMember['p_stat_xRunning']!.onRole, HmiColorRole.green);
-      expect(byMember['p_stat_xRunning']!.labelFor('box erector'), 'Running');
+      // No Running diode: the pane header badge is driven by the same bit
+      // through runKey, so a row would show it twice.
+      expect(byMember.containsKey('p_stat_xRunning'), isFalse);
       // Blue mode rows.
       // Yellow, the same yellow conveyor.dart gives DriveState.manual -- an
       // operator override is one fact and gets one colour across the app.

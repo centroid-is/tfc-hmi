@@ -878,7 +878,11 @@ const List<StructStatusBit> boxErectorStatusBits = [
       HmiColorRole.yellow),
   StructStatusBit(
       'p_stat_xReadyToVacuum', '{m} is ready to vacuum', HmiColorRole.green),
-  StructStatusBit('p_stat_xRunning', 'Running', HmiColorRole.green),
+  // `p_stat_xRunning` is deliberately NOT a row. It is the kind's `runKey`, so
+  // the pane header already shows it as the Running/Stopped badge -- a diode
+  // repeating it costs a row and adds nothing, and two indicators for one bit
+  // invite the question of which to believe if they ever disagree.
+  //
   // The actual outfeed permit, and the reason the retired `BER0n.xPermitOutfeed`
   // global vanished: it became this FB output, wired straight out to
   // `ECT.ST101_RM02.O2` and fed from the strapper's infeed
