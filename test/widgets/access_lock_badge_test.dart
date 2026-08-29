@@ -288,8 +288,9 @@ void main() {
     });
 
     testWidgets('the semantics label names the missing group', (tester) async {
+      // Disposed at the end of the body, not in a tearDown: the framework
+      // verifies handles before tearDowns run.
       final handle = tester.ensureSemantics();
-      addTearDown(handle.dispose);
 
       await tester.pumpWidget(_host(path: _kConfigureRoute));
       await tester.pumpAndSettle();
@@ -307,6 +308,8 @@ void main() {
           reason: 'the lock must not be glyph-only — a screen reader has to '
               'be told which permission is missing');
       expect(find.bySemanticsLabel(RegExp('configure')), findsOneWidget);
+
+      handle.dispose();
     });
   });
 
