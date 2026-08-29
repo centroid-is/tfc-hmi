@@ -22,6 +22,7 @@ import 'package:shared_preferences_platform_interface/in_memory_shared_preferenc
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
+import 'package:tfc_dart/core/preferences.dart';
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 
 import 'package:tfc/core/server_config_db.dart';
@@ -79,6 +80,16 @@ Database _testDatabase(WidgetTester tester) {
   addTearDown(() async => appDb.close());
   return db;
 }
+
+/// Seeds the stored config the dialogs read back.
+///
+/// `publish` takes a store rather than a database now, so the seed goes
+/// through a [Preferences] wired to the same [Database] — the row that ends up
+/// in `flutter_preferences` is the one it always was, which is why none of
+/// these images move.
+Future<void> _seed(Database db, StoredServerConfig config) =>
+    ServerConfigDb.publish(
+        Preferences(database: db, secureStorage: FakeSecureStorage()), config);
 
 // ---------------------------------------------------------------------------
 // Fonts — see server_config_reorder_golden_test.dart for the why.
@@ -156,8 +167,8 @@ void main() {
       (tester) async {
     final db = _testDatabase(tester);
     // An envelope is already stored, so the dialog shows what gets replaced.
-    await ServerConfigDb.publish(
-      db.db,
+    await _seed(
+      db,
       StoredServerConfig(
         savedAt: DateTime(2026, 8, 18, 9, 30),
         savedBy: 'packing-hall-1',
@@ -200,8 +211,8 @@ void main() {
       compiledPrefix: 'Flottur köttur:',
       exportPostfix: 'hunter22',
     );
-    await ServerConfigDb.publish(
-      db.db,
+    await _seed(
+      db,
       StoredServerConfig(
         savedAt: DateTime(2026, 8, 18, 9, 30),
         savedBy: 'packing-hall-1',
@@ -226,8 +237,8 @@ void main() {
       compiledPrefix: 'Flottur köttur:',
       exportPostfix: 'hunter22',
     );
-    await ServerConfigDb.publish(
-      db.db,
+    await _seed(
+      db,
       StoredServerConfig(
         savedAt: DateTime(2026, 8, 18, 9, 30),
         savedBy: 'packing-hall-1',

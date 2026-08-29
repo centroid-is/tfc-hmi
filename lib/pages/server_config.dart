@@ -3316,14 +3316,24 @@ class _ImportExportCardState extends ConsumerState<ImportExportCard> {
         exportPostfix: password,
       );
 
-      await ServerConfigDb.publish(
-        db.db,
-        StoredServerConfig(
-          savedAt: DateTime.now(),
-          savedBy: Platform.localHostname,
-          envelope: envelope,
-        ),
-      );
+      // Through the guarded store, not through Drift: replacing the whole
+      // server configuration is an `administer` write and belongs in the
+      // trail like any other.
+      final prefs = await ref.read(preferencesProvider.future);
+      try {
+        await ServerConfigDb.publish(
+          prefs,
+          StoredServerConfig(
+            savedAt: DateTime.now(),
+            savedBy: Platform.localHostname,
+            envelope: envelope,
+          ),
+        );
+      } on AccessDenied {
+        // The shared denial listener already prompts; a second dialog here
+        // would be two prompts for one refused action.
+        return;
+      }
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -37,17 +37,23 @@ class FakeSecureStorage implements MySecureStorage {
   }
 }
 
-/// Creates a test [Preferences] backed by in-memory storage (no database).
+/// Creates a test [Preferences] backed by in-memory storage.
+///
+/// [database] is null by default, which is what almost every test wants. Pass
+/// one where the test needs a write to land in a real `flutter_preferences`
+/// row — the server-config publish path reads back through
+/// `ServerConfigDb.fetch`, which goes to the database rather than the cache.
 Future<Preferences> createTestPreferences({
   KeyMappings? keyMappings,
   StateManConfig? stateManConfig,
+  Database? database,
 }) async {
   // The secret cache is static (process-wide) so stale entries from a
   // previous test would shadow this test's fresh FakeSecureStorage contents.
   Preferences.clearSecretCache();
   DatabaseConfig.clearPrefsCache();
   final secureStorage = FakeSecureStorage();
-  final prefs = Preferences(database: null, secureStorage: secureStorage);
+  final prefs = Preferences(database: database, secureStorage: secureStorage);
 
   // Pre-populate key_mappings
   final km = keyMappings ?? KeyMappings(nodes: {});

@@ -8,6 +8,8 @@ import 'package:shared_preferences_platform_interface/in_memory_shared_preferenc
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:postgres/postgres.dart' as pg;
+import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/access/guarded_preferences.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/preferences.dart';
@@ -45,6 +47,39 @@ Widget _buildCard({
 
 Future<StoredServerConfig?> _storedRow(AppDatabase db) =>
     ServerConfigDb.fetch(db);
+
+/// A [Preferences] whose writes reach [db]'s `flutter_preferences` table.
+///
+/// `publish` takes a [PreferencesApi] now, so a test that wants the row to be
+/// there for `fetch` to find has to hand it a store that is actually wired to
+/// the database — the same wiring `preferencesProvider` gives the page.
+Preferences _dbPrefs(Database db) =>
+    Preferences(database: db, secureStorage: FakeSecureStorage());
+
+/// Publishes [config] into [db] the way the page does: through a store.
+Future<void> _seed(Database db, StoredServerConfig config) =>
+    ServerConfigDb.publish(_dbPrefs(db), config);
+
+/// Anonymous is the Operator role by construction. Handing it an empty group
+/// set would make the denials below pass for the wrong reason.
+AccessSession _anonymous() =>
+    AccessSession.anonymous(const {AccessGroup.operate});
+
+AccessSession _administer() => const AccessSession(
+      user: AuthenticatedUser(username: 'jon', roleName: 'Engineering'),
+      groups: {
+        AccessGroup.operate,
+        AccessGroup.configure,
+        AccessGroup.administer,
+      },
+    );
+
+class _RecordingAuditSink implements AuditSink {
+  final List<AuditRecord> rows = [];
+
+  @override
+  Future<void> record(AuditRecord entry) async => rows.add(entry);
+}
 
 void main() {
   setUp(() {
@@ -86,12 +121,17 @@ void main() {
 
   group('ServerConfigDb', () {
     late AppDatabase db;
+    late Database wrapper;
+    late Preferences prefs;
 
     setUp(() {
       db = AppDatabase.inMemoryForTest();
+      wrapper = Database(db);
+      prefs = _dbPrefs(wrapper);
     });
 
     tearDown(() async {
+      await wrapper.dispose();
       await db.close();
     });
 
@@ -101,7 +141,7 @@ void main() {
 
     test('publish/fetch round-trips, publish overwrites', () async {
       await ServerConfigDb.publish(
-        db,
+        prefs,
         StoredServerConfig(
           savedAt: DateTime(2026, 1, 1),
           savedBy: 'a',
@@ -109,7 +149,7 @@ void main() {
         ),
       );
       await ServerConfigDb.publish(
-        db,
+        prefs,
         StoredServerConfig(
           savedAt: DateTime(2026, 2, 2),
           savedBy: 'b',
@@ -125,9 +165,28 @@ void main() {
 
     test('remove deletes the stored config', () async {
       await ServerConfigDb.publish(
-          db, StoredServerConfig(envelope: {'version': 1}));
-      await ServerConfigDb.remove(db);
+          prefs, StoredServerConfig(envelope: {'version': 1}));
+      await ServerConfigDb.remove(prefs);
       expect(await ServerConfigDb.fetch(db), isNull);
+    });
+
+    test('publishing through Preferences writes the row Drift used to write',
+        () async {
+      final config = StoredServerConfig(
+        savedAt: DateTime(2026, 3, 3),
+        savedBy: 'station-7',
+        envelope: {'version': 1, 'ciphertext_b64': 'abc'},
+      );
+      await ServerConfigDb.publish(prefs, config);
+
+      // Not through `fetch` — straight at the table, so this asserts the
+      // reroute lands in the same row with the same shape rather than
+      // asserting that one half of the reroute agrees with the other.
+      final row = await (db.select(db.flutterPreferences)
+            ..where((t) => t.key.equals(ServerConfigDb.prefsKey)))
+          .getSingle();
+      expect(row.type, 'String');
+      expect(jsonDecode(row.value!), config.toJson());
     });
 
     test('fetch throws on a corrupt row instead of reporting nothing stored',
@@ -140,6 +199,92 @@ void main() {
             ),
           );
       await expectLater(ServerConfigDb.fetch(db), throwsFormatException);
+    });
+  });
+
+  group('ServerConfigDb through the guard', () {
+    late AppDatabase db;
+    late Database wrapper;
+    late _RecordingAuditSink audit;
+
+    setUp(() {
+      db = AppDatabase.inMemoryForTest();
+      wrapper = Database(db);
+      audit = _RecordingAuditSink();
+    });
+
+    tearDown(() async {
+      await wrapper.dispose();
+      await db.close();
+    });
+
+    /// The store the page gets from `preferencesProvider`: the same
+    /// database-backed [Preferences], behind the guard.
+    GuardedPreferences guarded(AccessSession session) => GuardedPreferences(
+          inner: _dbPrefs(wrapper),
+          policy: const AccessPolicy(),
+          session: () => session,
+          audit: audit,
+          station: 'svn-nes-ot-cl02',
+        );
+
+    test('an anonymous session cannot publish the shared server config',
+        () async {
+      await expectLater(
+        ServerConfigDb.publish(
+            guarded(_anonymous()), StoredServerConfig(envelope: {'version': 1})),
+        throwsA(isA<AccessDenied>()),
+      );
+
+      expect(await ServerConfigDb.fetch(db), isNull,
+          reason: 'a refused publish must leave the table untouched');
+      final row = audit.rows.single;
+      expect(row.allowed, isFalse);
+      expect(row.surface, 'pref');
+      expect(row.itemKey, ServerConfigDb.prefsKey);
+      expect(row.groupRequired, 'administer');
+    });
+
+    test('an anonymous session cannot remove it either', () async {
+      await ServerConfigDb.publish(guarded(_administer()),
+          StoredServerConfig(savedBy: 'a', envelope: {'version': 1}));
+      audit.rows.clear();
+
+      await expectLater(
+        ServerConfigDb.remove(guarded(_anonymous())),
+        throwsA(isA<AccessDenied>()),
+      );
+
+      expect(await ServerConfigDb.fetch(db), isNotNull,
+          reason: 'a refused remove must leave the stored config in place');
+      final row = audit.rows.single;
+      expect(row.allowed, isFalse);
+      expect(row.itemKey, ServerConfigDb.prefsKey);
+      expect(row.groupRequired, 'administer');
+    });
+
+    test('an administer session publishes, and the write is in the trail',
+        () async {
+      await ServerConfigDb.publish(
+        guarded(_administer()),
+        StoredServerConfig(
+          savedAt: DateTime(2026, 4, 4),
+          savedBy: 'station-9',
+          envelope: {'version': 1, 'ciphertext_b64': 'abc'},
+        ),
+      );
+
+      final stored = await ServerConfigDb.fetch(db);
+      expect(stored, isNotNull);
+      expect(stored!.savedBy, 'station-9');
+
+      final row = audit.rows.single;
+      expect(row.allowed, isTrue);
+      expect(row.surface, 'pref');
+      expect(row.itemKey, 'server_config_envelope');
+      expect(row.groupRequired, 'administer');
+      expect(row.who, 'jon');
+      expect(row.origin, 'operator');
     });
   });
 
@@ -216,7 +361,11 @@ void main() {
       final db = Database(appDb);
       addTearDown(() async => appDb.close());
 
+      // The page publishes through this store now, so it has to be the one
+      // wired to `appDb` — otherwise the row never reaches the table `fetch`
+      // reads and the assertion below would be measuring the wrong thing.
       final prefs = await createTestPreferences(
+        database: db,
         stateManConfig: StateManConfig(opcua: [
           OpcUAConfig()
             ..endpoint = 'opc.tcp://10.0.0.1:4840'
@@ -289,8 +438,8 @@ void main() {
         compiledPrefix: 'Flottur köttur:',
         exportPostfix: 'hunter22',
       );
-      await ServerConfigDb.publish(
-        appDb,
+      await _seed(
+        db,
         StoredServerConfig(
           savedAt: DateTime(2026, 8, 18),
           savedBy: 'station-2',
@@ -388,8 +537,7 @@ void main() {
         compiledPrefix: 'Flottur köttur:',
         exportPostfix: 'hunter22',
       );
-      await ServerConfigDb.publish(
-          appDb, StoredServerConfig(envelope: envelope));
+      await _seed(db, StoredServerConfig(envelope: envelope));
 
       await pumpAndLoad(tester, _buildCard(database: db, prefs: prefs));
       await tester.tap(find.text('Load from Database'));
@@ -439,8 +587,7 @@ void main() {
         compiledPrefix: 'Flottur köttur:',
         exportPostfix: 'hunter22',
       );
-      await ServerConfigDb.publish(
-          appDb, StoredServerConfig(envelope: envelope));
+      await _seed(db, StoredServerConfig(envelope: envelope));
 
       final prefs = await createTestPreferences();
       await pumpAndLoad(tester, _buildCard(database: db, prefs: prefs));
