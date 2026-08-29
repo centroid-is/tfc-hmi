@@ -557,6 +557,26 @@ bool thirdPartyIsRunning({
 /// One diode of a machine whose handshake arrives as a single published
 /// struct: which member feeds it and how it is presented.
 ///
+/// Fills a `{m}` label template with the machine name and sentence-cases it.
+///
+/// The one copy of the rule for all three bit types ([StructStatusBit],
+/// [EquipmentStatusBit], [ExtraStatusBit]) so a row reads the same wherever it
+/// came from — the Multivac's outfeed permit is the SAME sentence as the box
+/// erector's, and it stays that way because both render the same template
+/// through here rather than each carrying its own prose.
+///
+/// The names are stored the way they read MID-sentence — "box erector",
+/// "batch aligner", but "Multivac", which is a make and capitalised wherever it
+/// falls. Some rows start with the name and some do not, so the first letter of
+/// the FINISHED label is what gets capitalised, not the name. A template with
+/// no `{m}` is returned as written, which is why the SpeedBatcher's labels are
+/// unaffected.
+String fillMachineLabel(String label, String machine) {
+  final filled = label.replaceAll('{m}', machine);
+  if (filled.isEmpty) return filled;
+  return filled[0].toUpperCase() + filled.substring(1);
+}
+
 /// The counterpart to [EquipmentStatusBit], which addresses a bit by appending
 /// a suffix to a key PREFIX. Which of the two a kind uses is decided by
 /// [kStructStatusBits] and is a property of the PLC, not of the HMI: a machine
@@ -583,14 +603,9 @@ class StructStatusBit {
 
   const StructStatusBit(this.member, this.label, this.onRole);
 
-  /// [label] with the machine name filled in, sentence-cased. Same rule as
-  /// [EquipmentStatusBit.labelFor]; a template with no `{m}` is returned as
-  /// written, which is why the SpeedBatcher's labels are unaffected.
-  String labelFor(String machine) {
-    final filled = label.replaceAll('{m}', machine);
-    if (filled.isEmpty) return filled;
-    return filled[0].toUpperCase() + filled.substring(1);
-  }
+  /// [label] with the machine name filled in, sentence-cased — see
+  /// [fillMachineLabel], which every bit type shares.
+  String labelFor(String machine) => fillMachineLabel(label, machine);
 }
 
 /// An extra loose status diode an asset instance declares, read from a COMPLETE
@@ -601,30 +616,49 @@ class StructStatusBit {
 /// (it lives on the instance, not in a per-kind table) and its [key] is a whole
 /// key read directly — the Multivac's outfeed permit is `MVC0n.PermitOutfeed`,
 /// a different namespace from its struct `statusKey` (`SPB0n.multivac`), so it
-/// cannot be reached by appending a suffix. The [label] is the finished row
-/// text (no `{m}` templating — the operator writes exactly what it should say).
+/// cannot be reached by appending a suffix.
+///
+/// The KEY is the only genuinely new thing here. The [label] is the same `{m}`
+/// template the other two bit types carry, rendered through the same
+/// [fillMachineLabel] — so the Multivac's outfeed permit is written
+/// `'{m} may send boxes on'`, character-for-character the box erector's entry in
+/// [kEquipmentStatusBits] and the strapping line's `p_stat_OutfeedPermitted`,
+/// and comes out "Multivac may send boxes on".
+/// Deliberately NOT free prose: this label is typed once per line (MVC01,
+/// MVC02, MVC03), so free text is three chances to misspell an operator-facing
+/// sentence and three places that go stale if the shared wording is ever
+/// reworded.
 @JsonSerializable()
 class ExtraStatusBit {
   /// The full HMI key to read, e.g. `"MVC02.PermitOutfeed"`. A complete key,
   /// NOT a suffix of [ThirdPartyEquipmentConfig.statusKey].
   final String key;
 
-  /// The row label, exactly as it should read — e.g. "Way out of Multivac is
-  /// clear". No `{m}` substitution: these are hand-written per instance.
+  /// Label template beside the diode, e.g. `'{m} may send boxes on'`. `{m}`
+  /// is replaced with the machine's name exactly as in [EquipmentStatusBit] and
+  /// [StructStatusBit], so an extra row reads identically to the kind's own.
   final String label;
 
   /// Diode colour when the bit is true, as a scheme ROLE. See
-  /// [StructStatusBit.onRole] for why this is a role and not a literal. Blue by
-  /// default, matching the outfeed-permit vocabulary the box erector and
-  /// strapper use.
-  @JsonKey(unknownEnumValue: HmiColorRole.blue)
+  /// [StructStatusBit.onRole] for why this is a role and not a literal.
+  ///
+  /// GREEN by default, because that is what a permit is across this file: the
+  /// strapping line's `p_stat_InfeedPermitted` and `p_stat_OutfeedPermitted`
+  /// and the box erector's two infeed permits are all green. Red is reserved
+  /// for `WaitingFrustration`, and yellow/blue mark the Multivac's handshake
+  /// PROGRESSION (waiting to drop, drop complete) rather than permission.
+  @JsonKey(unknownEnumValue: HmiColorRole.green)
   final HmiColorRole onRole;
 
   const ExtraStatusBit({
     required this.key,
     required this.label,
-    this.onRole = HmiColorRole.blue,
+    this.onRole = HmiColorRole.green,
   });
+
+  /// [label] with the machine name filled in, sentence-cased — see
+  /// [fillMachineLabel], which every bit type shares.
+  String labelFor(String machine) => fillMachineLabel(label, machine);
 
   factory ExtraStatusBit.fromJson(Map<String, dynamic> json) =>
       _$ExtraStatusBitFromJson(json);
@@ -696,13 +730,18 @@ const List<StructStatusBit> strappingLineStatusBits = [
       HmiColorRole.green),
   StructStatusBit(
       'p_stat_InfeedPermitted', '{m} is ready for box', HmiColorRole.green),
-  // Not "way out is clear": that reads as an observation about physical
-  // clearance, and the bit is a PERMISSION -- and one travelling the opposite
-  // way to the row above it. Infeed is the machine telling us it can take a
-  // box; outfeed is us telling the machine it may pass one on, wired straight
-  // out to ECT.ST101_RM01.O2. Naming both after the machine keeps the pair
-  // readable as the two questions an operator actually has: can it take one,
-  // can it pass one on.
+  // "{m} may send boxes on" -- and this is now the ONE sentence for this bit
+  // everywhere: the box erector's `PermitOutfeed` and any instance-level outfeed
+  // key (the Multivac's `MVC0n.PermitOutfeed`) say the same thing, because it is
+  // the same bit under three different PLC names.
+  //
+  // Deliberately not "way out is clear": that reads as an observation about
+  // physical clearance, and the bit is a PERMISSION -- one travelling the
+  // opposite way to the row above it. Infeed is the machine telling us it can
+  // take a box; outfeed is us telling the machine it may pass one on, wired
+  // straight out to ECT.ST101_RM01.O2. Naming both after the machine keeps the
+  // pair readable as the two questions an operator actually has: can it take
+  // one, can it pass one on.
   StructStatusBit(
       'p_stat_OutfeedPermitted', '{m} may send boxes on', HmiColorRole.green),
 ];
@@ -822,19 +861,9 @@ class EquipmentStatusBit {
   final HmiColorRole onRole;
   const EquipmentStatusBit(this.suffix, this.label, this.onRole);
 
-  /// [label] with the machine name filled in, sentence-cased.
-  ///
-  /// The names are stored the way they read MID-sentence -- "box erector",
-  /// "batch aligner", but "Multivac", which is a make and capitalised
-  /// wherever it falls. Some rows start with the name and some do not, so the
-  /// first letter of the finished label is what gets capitalised, not the
-  /// name: "Box erector is ready for box bottom", "Way out of box erector is
-  /// clear".
-  String labelFor(String machine) {
-    final filled = label.replaceAll('{m}', machine);
-    if (filled.isEmpty) return filled;
-    return filled[0].toUpperCase() + filled.substring(1);
-  }
+  /// [label] with the machine name filled in, sentence-cased — see
+  /// [fillMachineLabel], which every bit type shares.
+  String labelFor(String machine) => fillMachineLabel(label, machine);
 }
 
 /// The diodes each kind shows, in display order.
@@ -870,8 +899,16 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
   // stopped moving", and these say it directly: either it cannot take another
   // one, or it cannot send the one it has.
   //
-  // Green means "yes, now", amber something in progress, blue the outfeed side,
-  // so a glance down the column reads the same on every machine.
+  // Green means "yes, now" for every permit on every machine -- both of the
+  // strapper's, both infeeds here and the outfeed below. Red is reserved for
+  // WaitingFrustration, the one bit that says something is wrong, and
+  // amber/blue mark the Multivac's handshake PROGRESSION (waiting to drop,
+  // drop complete) rather than permission.
+  //
+  // This outfeed used to be blue, on a "blue the outfeed side" rule that the
+  // code never actually kept: the strapping line's `p_stat_OutfeedPermitted`
+  // was green, so the column did NOT read the same across machines, which is
+  // the only thing the rule was for.
   // The strapping line and the Multivac are NOT here: each is now wrapped in an
   // FB that publishes its whole handshake as one struct (`ST_StrappingLine_HMI`
   // / `SP_Packing_HMI`), so both live in [kStructStatusBits] and cost one
@@ -880,7 +917,7 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
     EquipmentStatusBit('WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
     EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', HmiColorRole.green),
     EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
-    EquipmentStatusBit('PermitOutfeed', 'Way out of {m} is clear', HmiColorRole.blue),
+    EquipmentStatusBit('PermitOutfeed', '{m} may send boxes on', HmiColorRole.green),
   ],
   // The Multivac and the batch aligner are NOT here: the PLC wraps each in an
   // `hmi` member (`SPB0n.multivac.hmi` and `SPB0n.packing.hmi`, both
@@ -916,19 +953,15 @@ class EquipmentStatusDiodes extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A hairline between rows, at the same alpha the pane chrome uses for its
-    // header and footer borders, so the section reads as a list of separate
-    // states rather than one block of text with dots beside it. Between only:
-    // a rule under the last row would fight the section's own boundary.
-    final rule = Divider(
-      height: 1,
-      thickness: 1,
-      color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
-    );
+    // No rules between rows. Every OTHER third-party kind is struct-backed and
+    // renders through [StructStatusDiodes], which draws plain rows; a hairline
+    // here made the box erector the one machine whose Status section looked
+    // different, and once an instance can append [ExtraStatusDiodes] to either
+    // kind the split would have shown up INSIDE a single section. One rule for
+    // all third-party devices, and the majority already had it.
     return Column(
       children: [
-        for (final (i, bit) in bits.indexed) ...[
-          if (i > 0) rule,
+        for (final bit in bits) ...[
           PaneDetailRow(
             // The diode is a fixed 22 px against a label that wraps, so centre
             // it -- top-aligned it hangs off the first line of a two-line row.
@@ -962,18 +995,27 @@ class EquipmentStatusDiodes extends StatelessWidget {
 ///
 /// A plain [StatelessWidget] fed a value per key, exactly like
 /// [EquipmentStatusDiodes] and [StructStatusDiodes] — the subscriptions belong
-/// to the parent state, which outlives the overlay pane. One diode per
-/// [ExtraStatusBit], keyed by the bit's full key. Styled like
-/// [StructStatusDiodes] (plain rows) so it reads as one column with the struct
-/// diodes it sits beneath, which is the immediate use — the Multivac's outfeed.
+/// to the parent state, which outlives the overlay pane.
+///
+/// Labels come from [ExtraStatusBit.labelFor], the same `{m}` substitution the
+/// other two use, so an extra row is indistinguishable from one of the kind's
+/// own — which is the point. The operator is not meant to work out that this
+/// bit arrived on a separate subscription in a different namespace.
+///
+/// Plain rows, no rules — the one style every third-party Status section uses,
+/// so an extra row cannot be told from one of the kind's own.
 class ExtraStatusDiodes extends StatelessWidget {
   const ExtraStatusDiodes({
     super.key,
     required this.bits,
     required this.values,
+    required this.machine,
   });
 
   final List<ExtraStatusBit> bits;
+
+  /// Name filled into each label's `{m}`.
+  final String machine;
 
   /// Latest value per bit key. A missing entry renders unknown — the same grey
   /// `!` a missing struct member or an errored key gets.
@@ -983,10 +1025,10 @@ class ExtraStatusDiodes extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        for (final bit in bits)
+        for (final bit in bits) ...[
           PaneDetailRow(
             crossAxisAlignment: CrossAxisAlignment.center,
-            label: bit.label,
+            label: bit.labelFor(machine),
             child: SizedBox(
               // 22 px for the same reason as the other diodes: below this the
               // unknown state's `!` blurs into the off state.
@@ -1004,6 +1046,7 @@ class ExtraStatusDiodes extends StatelessWidget {
               ),
             ),
           ),
+        ],
       ],
     );
   }
@@ -1784,6 +1827,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       rows.add(ExtraStatusDiodes(
         bits: config.extraBits,
         values: _extraStatusBits.value,
+        machine: equipmentShortName(config.kind),
       ));
     }
     if (rows.isEmpty) return null;

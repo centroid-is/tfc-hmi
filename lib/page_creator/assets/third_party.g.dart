@@ -120,8 +120,8 @@ ExtraStatusBit _$ExtraStatusBitFromJson(Map<String, dynamic> json) =>
       key: json['key'] as String,
       label: json['label'] as String,
       onRole: $enumDecodeNullable(_$HmiColorRoleEnumMap, json['onRole'],
-              unknownValue: HmiColorRole.blue) ??
-          HmiColorRole.blue,
+              unknownValue: HmiColorRole.green) ??
+          HmiColorRole.green,
     );
 
 Map<String, dynamic> _$ExtraStatusBitToJson(ExtraStatusBit instance) =>

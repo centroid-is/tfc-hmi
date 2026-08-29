@@ -1033,7 +1033,7 @@ void main() {
         extraBits: const [
           ExtraStatusBit(
             key: 'MVC02.PermitOutfeed',
-            label: 'Way out of Multivac is clear',
+            label: '{m} may send boxes on',
             onRole: HmiColorRole.blue,
           ),
         ],
@@ -1076,7 +1076,9 @@ void main() {
           tester.widget<ExtraStatusDiodes>(find.byType(ExtraStatusDiodes));
       expect(diodes.values['MVC02.PermitOutfeed'], isTrue,
           reason: 'the value off the wire must light the extra diode');
-      expect(find.text('Way out of Multivac is clear'), findsOneWidget);
+      // The '{m}' template rendered through the shared substitution -- the
+      // instance stores the template, the pane shows the finished sentence.
+      expect(find.text('Multivac may send boxes on'), findsOneWidget);
     });
 
     testWidgets('an empty extraBits renders exactly as before — no extra diodes',
@@ -1114,11 +1116,12 @@ void main() {
           bits: const [
             ExtraStatusBit(
               key: 'MVC02.PermitOutfeed',
-              label: 'Way out of Multivac is clear',
+              label: '{m} may send boxes on',
               onRole: HmiColorRole.blue,
             ),
           ],
           values: const {'MVC02.PermitOutfeed': true},
+          machine: 'Multivac',
         ),
       )));
       await tester.pumpAndSettle();
@@ -1145,6 +1148,7 @@ void main() {
             ExtraStatusBit(key: 'b.Unknown', label: 'Unknown row'),
           ],
           values: const {'a.Off': false},
+          machine: 'Multivac',
         ),
       )));
       await tester.pumpAndSettle();
