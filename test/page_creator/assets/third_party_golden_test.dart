@@ -576,6 +576,95 @@ void main() {
       );
     });
 
+
+    // The Multivac's Status section as an operator on line 2 actually sees it:
+    // the four struct diodes off `SP_Packing_HMI`, and BENEATH them the one
+    // loose diode the instance declares — `MVC02.PermitOutfeed`, the outfeed
+    // permit that is not a member of the handshake struct and had no way to be
+    // shown at all before #381.
+    //
+    // This is the golden to judge the extra-bit treatment by, and the whole
+    // test is whether you can TELL which row is the extra one. You should not
+    // be able to: same label column, same 22 px diode, same plain rows, same
+    // green a permit gets everywhere else in this file, and the label is the
+    // shared `'{m} may send boxes on'` template — the strapping line's
+    // `p_stat_OutfeedPermitted` and the box erector's `PermitOutfeed`, character
+    // for character — rendered through the same substitution rather than typed
+    // out per instance. The operator is not meant to care that this
+    // one bit arrives on a separate subscription in a different namespace.
+    //
+    // The struct is mixed on purpose — ready for fish with a drop waiting
+    // (yellow) and the drop not finished — so the extra diode sits against a
+    // live-looking section rather than a column of identical dots.
+    testWidgets('multivac — status pane with extra outfeed diode',
+        (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_WaitingFrustration': false,
+        'p_stat_DropOk': true,
+        'p_stat_DropRequestFeedback': true,
+        'p_stat_DropFinished': false,
+      }));
+
+      // The template, not the finished sentence — `{m}` becomes "Multivac"
+      // through the same `fillMachineLabel` the struct and prefix bits use.
+      const extra = ExtraStatusBit(
+        key: 'MVC02.PermitOutfeed',
+        label: '{m} may send boxes on',
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 560,
+                child: Material(
+                  child: SidePane(
+                    title: 'MVC-02',
+                    subtitle: 'Multivac',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          StructStatusDiodes(
+                            status: status,
+                            bits: multivacStatusBits,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.multivac),
+                          ),
+                          ExtraStatusDiodes(
+                            bits: const [extra],
+                            values: const {'MVC02.PermitOutfeed': true},
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.multivac),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_multivac_status_pane.png'),
+      );
+    });
+
     // The editor with the box erector selected: the Status Key Prefix field
     // and its suffix-listing help text, which no kind but the SpeedBatcher
     // had before — without it these diodes could never be pointed at keys.

@@ -198,8 +198,8 @@ void main() {
         extraBits: const [
           ExtraStatusBit(
             key: 'MVC02.PermitOutfeed',
-            label: 'Way out of Multivac is clear',
-            onRole: HmiColorRole.blue,
+            label: '{m} may send boxes on',
+            onRole: HmiColorRole.green,
           ),
         ],
       );
@@ -210,8 +210,9 @@ void main() {
       expect(restored.extraBits, hasLength(1));
       final bit = restored.extraBits.single;
       expect(bit.key, 'MVC02.PermitOutfeed');
-      expect(bit.label, 'Way out of Multivac is clear');
-      expect(bit.onRole, HmiColorRole.blue);
+      expect(bit.label, '{m} may send boxes on');
+      expect(bit.labelFor('Multivac'), 'Multivac may send boxes on');
+      expect(bit.onRole, HmiColorRole.green);
     });
 
     test('the extra key is discoverable through allKeys, undecorated', () {
@@ -244,13 +245,15 @@ void main() {
       expect(ThirdPartyEquipmentConfig.fromJson(json).extraBits, isEmpty);
     });
 
-    test('the default colour is blue, matching the outfeed-permit vocabulary',
+    test('the default colour is green, what a permit is everywhere in this file',
         () {
+      // Both of the strapper's permits, both of the box erector's infeeds and
+      // its outfeed are green; red is WaitingFrustration's alone.
       const bit = ExtraStatusBit(key: 'k', label: 'l');
-      expect(bit.onRole, HmiColorRole.blue);
+      expect(bit.onRole, HmiColorRole.green);
     });
 
-    test('an unknown onRole in newer JSON falls back to blue, not a throw', () {
+    test('an unknown onRole in newer JSON falls back to green, not a throw', () {
       // A config written by a newer build must not take the pane down.
       final json = jsonDecode(jsonEncode(ThirdPartyEquipmentConfig(
         extraBits: const [ExtraStatusBit(key: 'k', label: 'l')],
@@ -258,7 +261,7 @@ void main() {
       (json['extraBits'] as List).first['onRole'] = 'someFutureColour';
 
       final restored = ThirdPartyEquipmentConfig.fromJson(json);
-      expect(restored.extraBits.single.onRole, HmiColorRole.blue);
+      expect(restored.extraBits.single.onRole, HmiColorRole.green);
     });
 
     test('several extra bits keep their order and each own key', () {
@@ -266,7 +269,7 @@ void main() {
         extraBits: const [
           ExtraStatusBit(key: 'MVC03.PermitOutfeed', label: 'out'),
           ExtraStatusBit(
-              key: 'MVC03.PermitInfeed', label: 'in', onRole: HmiColorRole.green),
+              key: 'MVC03.PermitInfeed', label: 'in', onRole: HmiColorRole.blue),
         ],
       );
       final restored = ThirdPartyEquipmentConfig.fromJson(
@@ -274,7 +277,7 @@ void main() {
       expect(restored.extraBits.map((b) => b.key),
           ['MVC03.PermitOutfeed', 'MVC03.PermitInfeed']);
       expect(restored.extraBits.map((b) => b.onRole),
-          [HmiColorRole.blue, HmiColorRole.green]);
+          [HmiColorRole.green, HmiColorRole.blue]);
     });
   });
 
@@ -1188,9 +1191,11 @@ void main() {
       expect(bySuffix['PermitBlockInfeed']!.onRole, HmiColorRole.green);
       expect(bySuffix['PermitBlockInfeed']!.labelFor('box erector'),
           'Box erector is ready for block');
-      expect(bySuffix['PermitOutfeed']!.onRole, HmiColorRole.blue);
+      // Green like every other permit, and the SAME sentence the strapping
+      // line's `p_stat_OutfeedPermitted` uses -- one bit, one wording.
+      expect(bySuffix['PermitOutfeed']!.onRole, HmiColorRole.green);
       expect(bySuffix['PermitOutfeed']!.labelFor('box erector'),
-          'Way out of box erector is clear');
+          'Box erector may send boxes on');
     });
 
     test('the box erector is prefix-backed, not struct-backed', () {
