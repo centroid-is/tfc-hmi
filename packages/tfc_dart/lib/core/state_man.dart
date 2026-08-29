@@ -1268,6 +1268,22 @@ class StateMan {
   final List<ClientWrapper> clients;
   final List<DeviceClient> deviceClients;
   final Map<String, AutoDisposingStream<DynamicValue>> _subscriptions = {};
+
+  /// One live [_monitorLoop] per key: each new loop bumps the key's
+  /// generation, and a loop whose generation is no longer current dies at its
+  /// next checkpoint instead of acting.
+  ///
+  /// Without this, nothing serialized the loops. Every session-lost
+  /// resubscribe and key-mapping edit started a fresh loop while the previous
+  /// ones sat on their 1s/10s/60s/600s ladders; a stale loop waking from
+  /// backoff would cancel the raw subscription of the loop that had already
+  /// succeeded (deleting the live monitored items on the PLC) and re-create
+  /// them. On hmi-pokkun (.81, 2026-08-28) whole 280-key cohorts of stale
+  /// loops woke together at 17:22:57 and 17:24:29 and re-created every st101
+  /// key against a healthy session; the delete/create storm left orphaned
+  /// monitored items on the server (8388 "Could not process a notification
+  /// with clienthandle N" over 21h) and froze individual keys forever.
+  final Map<String, int> _monitorLoopGeneration = {};
   bool _shouldRun = true;
   final Map<String, String> _substitutions = {};
   final _subsMap$ = BehaviorSubject<Map<String, String>>.seeded(const {});
@@ -2311,6 +2327,20 @@ class StateMan {
   /// until StateMan closes. Assumes `_subscriptions[key]` is already
   /// registered by [_monitor].
   Future<Stream<DynamicValue>> _monitorLoop(String key) async {
+    // Claim the key: any loop started earlier for it is superseded from this
+    // point on and must not touch the raw subscription again.
+    final gen = (_monitorLoopGeneration[key] ?? 0) + 1;
+    _monitorLoopGeneration[key] = gen;
+    // A superseded loop hands its caller the shared stream (the newer loop
+    // feeds it) and dies without side effects.
+    Stream<DynamicValue> handOver() {
+      logger.d('[$alias] monitor loop for "$key" superseded — handing over');
+      final ads = _subscriptions[key];
+      if (ads != null && !ads.isSpent) return ads.stream;
+      throw StateManException(
+          'monitor loop for "$key" superseded and its entry is gone');
+    }
+
     int retries = 0;
     // Attempt counter and start time, so a stuck key reports how long it has
     // been stuck rather than just that it failed again.
@@ -2320,6 +2350,10 @@ class StateMan {
     // without a line per second per key forever.
     bool shouldLog() => attempt <= 3 || attempt % 10 == 0;
     while (_shouldRun) {
+      // Checkpoint 1 (protects the teardown below — no awaits in between): a
+      // stale loop waking from its backoff ladder must die here, not cancel
+      // whatever raw subscription the current loop wired up.
+      if (_monitorLoopGeneration[key] != gen) return handOver();
       attempt++;
       try {
         // Resolved per attempt rather than captured once before the loop: a
@@ -2407,6 +2441,12 @@ class StateMan {
           continue;
         }
 
+        // Checkpoint 2 (protects the subscribe below — no awaits in between):
+        // the waits above (awaitConnect, worker, subscriptionCreate) are
+        // exactly where a newer loop can start and wire up its own raw
+        // subscription; ads.subscribe() would cancel it — the steal that
+        // deletes live monitored items on the PLC.
+        if (_monitorLoopGeneration[key] != gen) return handOver();
         final ads = _subscriptions[key]!;
         final hadPrevious = ads._rawSub != null;
 
