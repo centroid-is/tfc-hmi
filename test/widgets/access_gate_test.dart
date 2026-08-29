@@ -6,13 +6,20 @@
 /// truth table is the only way to keep it honest as the phase grows.
 library;
 
+import 'dart:async';
+
+import 'package:beamer/beamer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/providers/access.dart';
+import 'package:tfc/route_registry.dart';
 import 'package:tfc/widgets/access_gate.dart';
 import 'package:tfc/widgets/access_sign_in_dialog.dart';
+import 'package:tfc/widgets/access_status_action.dart';
+import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 
@@ -541,6 +548,241 @@ void main() {
       }
     });
   });
+
+  group('AccessGate', () {
+    setUp(() {
+      _childInits = 0;
+      _registerAppMenu();
+    });
+    tearDown(() => RouteRegistry().menuItems.clear());
+
+    test('allowWhenRepositoryUnavailable defaults to false', () {
+      // A caller that forgets the flag gets the strict behaviour. The
+      // permissive direction has to be asked for, at the one route that needs
+      // it.
+      const gate = AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: SizedBox.shrink(),
+      );
+      expect(gate.allowWhenRepositoryUnavailable, isFalse);
+    });
+
+    test('group is required and has no default', () {
+      // Enforced by the compiler — `AccessGate(title: ..., child: ...)` does
+      // not analyse — because a gate that could be built without a group would
+      // fail open by omission. What a runtime test can add is that nothing
+      // substitutes a default behind the caller's back.
+      const gate = AccessGate(
+        group: AccessGroup.administer,
+        title: 'Server Config',
+        child: SizedBox.shrink(),
+      );
+      expect(gate.group, AccessGroup.administer);
+    });
+
+    testWidgets('allowed renders the child, and no scaffold of its own',
+        (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            _elevatedSession(const {AccessGroup.operate, AccessGroup.configure})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byType(AccessLockedBody), findsNothing);
+      expect(find.byKey(kAccessGateWaitingKey), findsNothing);
+      // Exactly one — the page's own. The gate adds no chrome and no frame.
+      expect(find.byType(BaseScaffold), findsOneWidget);
+      expect(find.text('Page Editor'), findsNothing);
+    });
+
+    testWidgets(
+        'denied renders the locked body in a scaffold, so the operator can '
+        'leave', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      expect(find.text(_kGatedChildText), findsNothing);
+      // The way out: the app bar with its own sign-in affordance, and the
+      // navigation bar.
+      expect(find.byType(BaseScaffold), findsOneWidget);
+      expect(find.byType(AccessStatusAction), findsOneWidget);
+      expect(find.byType(NavigationBar), findsOneWidget);
+    });
+
+    testWidgets('waiting renders a progress indicator, not the child and not '
+        'the lock', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _hangingRepository,
+      ));
+      await tester.pump();
+
+      expect(find.byKey(kAccessGateWaitingKey), findsOneWidget);
+      expect(find.text(_kGatedChildText), findsNothing);
+      expect(find.byType(AccessLockedBody), findsNothing);
+      expect(find.byType(BaseScaffold), findsOneWidget);
+    });
+
+    testWidgets('the gate never opens the sign-in dialog by itself',
+        (tester) async {
+      final opener = _CountingOpener();
+      final router = buildAccessGateRouter(AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        openSignIn: opener.call,
+        child: const _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      // A rebuild must not ambush the operator with a modal.
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      expect(opener.calls, 0);
+    });
+
+    testWidgets('the child is not built while denied', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      // A page that ran its initState, its queries and its subscriptions
+      // behind a lock would leak exactly what the lock is for.
+      expect(_childInits, 0);
+    });
+
+    testWidgets('gaining the group reveals the child, with no navigation',
+        (tester) async {
+      final session = _MutableSession(
+          AccessSession.anonymous(const {AccessGroup.operate}));
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.configure,
+        title: 'Page Editor',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: session,
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      final before = _currentPath(router);
+
+      session.become(
+          _elevatedSession(const {AccessGroup.operate, AccessGroup.configure}));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byType(AccessLockedBody), findsNothing);
+      expect(_childInits, 1, reason: 'the page runs once, on reveal');
+      // No beam, no push, no pop: the gate re-ran `build` and the child
+      // appeared where the operator already was.
+      expect(_currentPath(router), before);
+      expect(_currentPath(router), '/gated');
+    });
+
+    testWidgets('a gate on operate renders the child immediately, with no '
+        'waiting frame', (tester) async {
+      final router = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.operate,
+        title: 'Home',
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: router,
+        session: _HangingSession(),
+        repository: _hangingRepository,
+      ));
+      await tester.pump();
+
+      // Neither provider has resolved and neither ever will in this test: an
+      // unraised route must not cost a frame.
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byKey(kAccessGateWaitingKey), findsNothing);
+      expect(find.byType(AccessLockedBody), findsNothing);
+    });
+
+    testWidgets(
+        'allowWhenRepositoryUnavailable: true renders the child with no '
+        'repository, and the lock once one exists', (tester) async {
+      final permissive = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.administer,
+        title: 'Server Config',
+        allowWhenRepositoryUnavailable: true,
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: permissive,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _absentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_kGatedChildText), findsOneWidget);
+      expect(find.byType(AccessLockedBody), findsNothing);
+
+      // The exemption is inert the moment a repository answers.
+      final withRepository = buildAccessGateRouter(const AccessGate(
+        group: AccessGroup.administer,
+        title: 'Server Config',
+        allowWhenRepositoryUnavailable: true,
+        child: _GatedPage(),
+      ));
+      await tester.pumpWidget(buildAccessGateShell(
+        router: withRepository,
+        session: _FixedSession(
+            AccessSession.anonymous(const {AccessGroup.operate})),
+        repository: _presentRepository,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessLockedBody), findsOneWidget);
+      expect(find.text(_kGatedChildText), findsNothing);
+    });
+  });
 }
 
 /// A session that resolves immediately to whatever the test needs.
@@ -621,6 +863,159 @@ Widget _lockedBodyHost({
       ),
     ),
   );
+}
+
+/// A session that never resolves, for the frames the gate must not wait on.
+class _HangingSession extends AccessSessionController {
+  @override
+  Future<AccessSession> build() => Completer<AccessSession>().future;
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// A session a test can move from lacking the group to holding it, without
+/// re-pumping the tree — which is the whole point of the no-replay rule.
+class _MutableSession extends AccessSessionController {
+  _MutableSession(this._initial);
+
+  final AccessSession _initial;
+
+  @override
+  Future<AccessSession> build() async => _initial;
+
+  void become(AccessSession next) => state = AsyncData(next);
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// A repository that never resolves — the "still connecting" station.
+Future<AccessRepository?> _hangingRepository() =>
+    Completer<AccessRepository?>().future;
+
+/// How many times the gated page's body has run `initState`. Reset per test;
+/// the point of the counter is that a denied gate leaves it at zero.
+int _childInits = 0;
+
+const String _kGatedChildText = 'gated-child';
+
+/// The page behind the gate. Brings its own [BaseScaffold], the way every real
+/// page does, so a test can tell whether the gate added one of its own.
+class _GatedPage extends StatelessWidget {
+  const _GatedPage();
+
+  @override
+  Widget build(BuildContext context) => const BaseScaffold(
+        title: 'Gated page',
+        body: _CountingChild(),
+      );
+}
+
+class _CountingChild extends StatefulWidget {
+  const _CountingChild();
+
+  @override
+  State<_CountingChild> createState() => _CountingChildState();
+}
+
+class _CountingChildState extends State<_CountingChild> {
+  @override
+  void initState() {
+    super.initState();
+    _childInits++;
+  }
+
+  @override
+  Widget build(BuildContext context) => const Text(_kGatedChildText);
+}
+
+/// The top-level menu [BaseScaffold] renders its navigation bar from. Gated
+/// routes live under Advanced, the way the six real ones do.
+void _registerAppMenu() {
+  final registry = RouteRegistry();
+  registry.menuItems.clear();
+  registry
+      .addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
+  registry.addMenuItem(const MenuItem(
+    label: 'Advanced',
+    path: '/advanced',
+    icon: Icons.settings,
+    children: [
+      MenuItem(label: 'Gated', path: '/gated', icon: Icons.dns),
+    ],
+  ));
+}
+
+/// The router the gate shell needs: the gated route, plus a `/` to beam to, so
+/// a test can tell a rebuild apart from a navigation.
+BeamerDelegate buildAccessGateRouter(Widget gate) => BeamerDelegate(
+      initialPath: '/gated',
+      locationBuilder: RoutesLocationBuilder(routes: {
+        '/': (context, state, data) => const BeamPage(
+              key: ValueKey('/'),
+              title: 'Home',
+              child: BaseScaffold(title: 'Home', body: Text('home-body')),
+            ),
+        '/gated': (context, state, data) => BeamPage(
+              key: const ValueKey('/gated'),
+              title: 'Gated',
+              child: gate,
+            ),
+      }).call,
+    );
+
+/// The one-route Beamer shell every [AccessGate] widget test pumps.
+///
+/// A named top-level function rather than an inline closure because plan 02-05
+/// builds its own copy for the shell golden — golden files in this repo own
+/// their hosts — and this comment is what stops the copy drifting.
+///
+/// **Both access providers must be overridden, always:**
+///
+/// * `accessSessionProvider` — an unoverridden session runs the real controller
+///   chain, and a frame captured before it settles is `AsyncLoading`, in which
+///   `AccessStatusAction` renders `SizedBox.shrink()` and the app bar looks
+///   empty. That trap cost Phase 1 a re-render of eighteen baselines
+///   (01-08 summary, "The timing dependency").
+/// * `accessRepositoryProvider` — an unoverridden repository reaches
+///   `databaseProvider`, which reads `DatabaseConfig.fromPrefs()` and the
+///   station keychain. The test becomes a race against real I/O.
+///
+/// The Beamer wrapper is not optional either: [BaseScaffold] calls
+/// `context.currentBeamLocation` (`base_scaffold.dart:40` and `:382`), so it
+/// cannot be pumped without a router above it.
+Widget buildAccessGateShell({
+  required BeamerDelegate router,
+  required AccessSessionController session,
+  required Future<AccessRepository?> Function() repository,
+}) {
+  return ProviderScope(
+    overrides: [
+      accessSessionProvider.overrideWith(() => session),
+      accessRepositoryProvider.overrideWith((ref) => repository()),
+    ],
+    child: BeamerProvider(
+      routerDelegate: router,
+      child: MaterialApp.router(
+        routerDelegate: router,
+        routeInformationParser: BeamerParser(),
+      ),
+    ),
+  );
+}
+
+/// The path Beamer is currently showing, so a test can assert that revealing
+/// the child navigated nowhere.
+String? _currentPath(BeamerDelegate router) {
+  final state = router.currentBeamLocation.state;
+  return state is BeamState ? state.uri.path : null;
 }
 
 /// The Phase 1 lesson, copied deliberately: `find.text` passes on a string the
