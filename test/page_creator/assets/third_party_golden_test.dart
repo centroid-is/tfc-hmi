@@ -665,12 +665,73 @@ void main() {
       );
     });
 
+    // The editor's "Extra status diodes" section with one row populated, the
+    // control #385 adds — before it, `extraBits` could only be set through the
+    // MCP `update_asset` tool, so an operator could not put the Multivac's
+    // outfeed permit on its pane at all.
+    //
+    // What this golden is for: the LABEL field is a `{m}` TEMPLATE, not the
+    // finished sentence, and an operator has no way to know that from a text
+    // box. The hint and helper text carrying that ("{m} becomes the machine
+    // name") are the whole reason the row is usable, and they are the first
+    // thing a later layout change would silently crop or overflow. The colour
+    // dropdown sits beside a remove button, and a fresh row comes up GREEN —
+    // what a permit is on every machine in this file.
+    testWidgets('multivac — editor extra status diodes', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(600, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+        statusKey: 'SPB02.multivac.hmi',
+        extraBits: const [
+          ExtraStatusBit(
+            key: 'MVC02.PermitOutfeed',
+            label: '{m} may send boxes on',
+          ),
+        ],
+      );
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: Center(
+              child: RepaintBoundary(
+                key: _key,
+                child: SizedBox(
+                  width: 400,
+                  height: 1320,
+                  child: Material(
+                    child: Builder(
+                        builder: (context) => config.configure(context)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile(
+            'goldens/third_party_multivac_editor_extra_bits.png'),
+      );
+    });
+
     // The editor with the box erector selected: the Status Key Prefix field
     // and its suffix-listing help text, which no kind but the SpeedBatcher
     // had before — without it these diodes could never be pointed at keys.
     testWidgets('boxErector — editor status key field', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(600, 1100);
+      // Taller than the field it is named for needs: #385 added the "Extra
+      // status diodes" section below, and at the old 1100 the frame cut
+      // through the middle of the Running Color row, which reads as a
+      // rendering fault rather than a crop.
+      tester.view.physicalSize = const Size(600, 1500);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
@@ -688,7 +749,7 @@ void main() {
                 key: _key,
                 child: SizedBox(
                   width: 400,
-                  height: 1040,
+                  height: 1420,
                   child: Material(
                     child: Builder(
                         builder: (context) => config.configure(context)),
