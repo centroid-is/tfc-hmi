@@ -33,6 +33,7 @@ library;
 import 'dart:collection' show LinkedHashMap;
 
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_access/tfc_access.dart' show AuditRecord;
 
 /// One member of a struct write that changed, ready to become one audit row.
 class MemberChange {
@@ -115,6 +116,68 @@ List<MemberChange> diffDynamicValue(
   _diffInto(changes, null, oldValue, newValue);
   return changes;
 }
+
+/// N [changes] as N [AuditRecord]s of one action.
+///
+/// Every field except `member`, `oldValue` and `newValue` is shared, so one
+/// human action reads as one action with N member rows beneath it rather than N
+/// unrelated rows.
+///
+/// ## The empty case, and why the caller decides what it means
+///
+/// An empty [changes] list yields an empty record list: a write that changed
+/// nothing writes nothing, which is spec §2's no-op suppression landing in the
+/// only place it can be proven without a running database.
+///
+/// That is right for a **permitted** write and wrong for a **denied** one. A
+/// refused write whose diff came out empty must still leave a row, because the
+/// row is the only evidence a guard fired at all. So the empty list means
+/// exactly "nothing to say about members" and never "record nothing"; a guard
+/// that must record a refusal regardless passes a change of its own — a
+/// `MemberChange` with a null member and no renderings — and gets its one row.
+/// Plan 03-04 owns that decision; this function does not make it on the
+/// caller's behalf in either direction.
+///
+/// [actionId] is a parameter and is never generated here: one human action may
+/// span more than one call — a recipe apply that writes two keys is one action
+/// — and minting the id inside would make that impossible to express.
+///
+/// [reason] is the free-text justification spec §2 wants on `configure` and
+/// `administer` writes. Nothing in Phase 3 supplies one; the prompt that
+/// collects it arrives with tap-time elevation in Phase 4.
+List<AuditRecord> auditRecordsForChanges({
+  required List<MemberChange> changes,
+  required DateTime at,
+  required String who,
+  required String station,
+  required String roleName,
+  required String surface,
+  required String itemKey,
+  required String groupRequired,
+  required bool allowed,
+  required String actionId,
+  String origin = 'operator',
+  String? reason,
+}) =>
+    [
+      for (final change in changes)
+        AuditRecord(
+          at: at,
+          who: who,
+          station: station,
+          roleName: roleName,
+          surface: surface,
+          itemKey: itemKey,
+          member: change.member,
+          oldValue: change.oldValue,
+          newValue: change.newValue,
+          groupRequired: groupRequired,
+          allowed: allowed,
+          origin: origin,
+          actionId: actionId,
+          reason: reason,
+        ),
+    ];
 
 /// Appends to [changes] every difference between [oldValue] and [newValue]
 /// below [path].
