@@ -163,36 +163,11 @@ jobs:
 
   # `latest` is a debug build (the elinux-build above only builds release when
   # tag.yml calls this workflow, which tags `stable`). This pair rebuilds the
-  # same main commit so `latest-profile` always tracks the tip of main as an
-  # AOT image. Skipped on workflow_call with release=true — that run's own
-  # image is already an AOT build.
-  #
-  # It is built in **profile**, not release. Profile is AOT-compiled by the
-  # same gen_snapshot with the same optimisations — a station running it feels
-  # like release — but the engine keeps three things release strips out: the
-  # Dart VM Service, the sampling CPU profiler, and the `Flutter.Frame` timing
-  # events the framework posts under `!kReleaseMode`. Without them there is no
-  # way to answer "why is this station slow" on the station itself; with them,
-  # docker/profiler does it from a terminal. The costs are a larger binary and
-  # the profiler's overhead while a profile is being taken.
-  #
-  # It publishes as `latest-profile`, not `latest-release`. A tag that says
-  # "release" for an image built in profile mode is a trap for whoever reads it
-  # next. The cost is explicit: `latest-release` is no longer produced by any
-  # job, so a station still pinned to it keeps running the last release image
-  # it pulled and silently stops receiving updates. Repoint those stations at
-  # `latest-profile` (the compose file in this repo already is).
-  #
-  # `workflow_dispatch` is in the condition so the profile build can be proven
-  # on a branch before it is merged. Without it the first run of this job is
-  # the one that lands on main, and a mode flag that does not work turns main
-  # red rather than a PR. `gh workflow run centroid-hmi.yml --ref <branch>`;
-  # docker-profile-build stays main-only, so a dispatched run builds and
-  # verifies without publishing `latest-profile` from a branch.
-  elinux-profile-build:
-    if: >-
-      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
-      && !inputs.release
+  # same main commit in release mode so `latest-release` always tracks the tip
+  # of main as a production-mode image. Skipped on workflow_call with
+  # release=true — that run's own image is already a release build.
+  elinux-release-build:
+    if: github.ref == 'refs/heads/main' && !inputs.release
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/centroid-is/tfc-toolchain:latest
@@ -225,6 +200,109 @@ jobs:
           git clone https://github.com/flutter-elinux/flutter-elinux.git /opt/flutter-elinux-347
           git -C /opt/flutter-elinux-347 checkout 4d63880dfaba6e30530b88f2344e0a7b870228b2
           echo "/opt/flutter-elinux-347/bin" >> "$GITHUB_PATH"
+
+      - name: Setup elinux platform
+        working-directory: centroid-hmi
+        run: flutter-elinux create --platforms=elinux .
+
+      - name: Get Flutter Packages
+        working-directory: centroid-hmi
+        run: flutter-elinux pub get
+
+      - name: Build for eLinux
+        working-directory: centroid-hmi
+        run: flutter-elinux build elinux --release
+
+      - name: Move build artifacts
+        working-directory: centroid-hmi
+        run: |
+          mkdir -p assets
+          mv build/elinux/x64/release/bundle/* assets/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroid-hmi-artifacts-release
+          path: centroid-hmi/assets/
+
+  docker-release-build:
+    needs: elinux-release-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: centroid-hmi-artifacts-release
+          path: docker/frontend/bundle
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image (main, release)
+        uses: ./.github/actions/docker-build-push
+        with:
+          context: docker/frontend
+          build-args: |
+            APP_BIN=centroidx
+            APP_BUNDLE=bundle
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-release-build.outputs.centroid_hmi_sha }}-release
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi:latest-release
+
+  # A third build of the same main commit, in **profile** mode, published as
+  # `latest-profile`. Additive: `latest` (debug) and `latest-release` above are
+  # untouched and keep their meaning.
+  #
+  # Profile is AOT-compiled by the same gen_snapshot with the same
+  # optimisations — a station running it feels like release — but the engine
+  # keeps three things release strips out: the Dart VM Service, the sampling
+  # CPU profiler, and the `Flutter.Frame` timing events the framework posts
+  # under `!kReleaseMode`. Without them there is no way to answer "why is this
+  # station slow" on the station itself; with them, docker/profiler does it
+  # from a terminal. The costs are a larger binary and the profiler's overhead
+  # while a profile is actually being taken, which is why this is its own tag
+  # and not a change to what stations already pull.
+  #
+  # `workflow_dispatch` is in the condition so the profile build can be proven
+  # on a branch before it is merged. Without it the first run of this job is
+  # the one that lands on main, and a mode flag that does not work turns main
+  # red rather than a PR. `gh workflow run centroid-hmi.yml --ref <branch>`;
+  # docker-profile-build stays main-only, so a dispatched run builds and
+  # verifies without publishing `latest-profile` from a branch.
+  elinux-profile-build:
+    if: >-
+      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+      && !inputs.release
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/centroid-is/tfc-toolchain:latest
+    outputs:
+      centroid_hmi_sha: ${{ steps.get_sha.outputs.sha }}
+    steps:
+      - name: Make safe directory
+        run: git config --system --add safe.directory '*'
+      - name: Checkout centroid-hmi
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Get commit SHA
+        id: get_sha
+        working-directory: centroid-hmi
+        run: |
+          SHA=$(git rev-parse --short HEAD) || exit 1
+          test -n "$SHA" || (echo "Empty SHA"; exit 1)
+          echo "SHA: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Setup elinux platform
         working-directory: centroid-hmi
