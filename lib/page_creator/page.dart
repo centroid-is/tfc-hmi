@@ -103,7 +103,28 @@ class PageManager {
   /// order alone.
   List<String> topLevelOrder = [];
 
-  PageManager({required this.pages, required this.prefs});
+  /// Where [load]'s **seed write** goes, and nowhere else.
+  ///
+  /// A station with no stored `page_editor_data` writes the hardcoded default
+  /// layout at boot, with nobody signed in, against a `configure` key. On the
+  /// guarded store that is a denial — and because the seed is not awaited, it
+  /// surfaces as an unhandled asynchronous error rather than a failed load:
+  /// the station comes up on the default layout, never persists it, and greets
+  /// whoever is standing there with a denial prompt on every cold boot.
+  ///
+  /// **It is a separate field, and that is the whole point.** The same
+  /// [PageManager] instance is what `page_editor.dart` calls [save] through,
+  /// and that write is a person editing pages — it must stay gated. Handing
+  /// the unchecked store in as [prefs] would unlock the editor for everybody.
+  /// Defaults to [prefs], so every existing construction and every existing
+  /// test is unaffected.
+  final PreferencesApi bootstrapPrefs;
+
+  PageManager({
+    required this.pages,
+    required this.prefs,
+    PreferencesApi? bootstrapPrefs,
+  }) : bootstrapPrefs = bootstrapPrefs ?? prefs;
 
   Future<void> load() async {
     final orderJson = await prefs.getString(orderStorageKey);
@@ -244,7 +265,9 @@ class PageManager {
         }
       ''';
       fromJson(jsonString);
-      prefs.setString(storageKey, jsonString);
+      // Through [bootstrapPrefs], not [prefs]: the app initialising itself,
+      // not a person editing pages. Still unawaited, as it always was.
+      bootstrapPrefs.setString(storageKey, jsonString);
     }
   }
 

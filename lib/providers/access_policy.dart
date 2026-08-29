@@ -93,6 +93,61 @@ void reportAccessDenial(Ref ref, AccessDenied denial) {
   controller.add(denial);
 }
 
+/// Every file allowed to reach the unchecked write path.
+///
+/// The path is `GuardedPreferences.systemWrites`, reached through
+/// `systemPreferencesProvider`. **It is not "writes we want to allow".** It is
+/// "writes the app makes on its own behalf when nobody has acted": a
+/// configuration default written because storage is empty. A Save button never
+/// qualifies, however inconvenient its denial. If a legitimate operator-facing
+/// write turns out to be refused, the fix is a rule in `kPrefAccessRules`, not
+/// an entry here — widening this list moves a write out of the trail and out
+/// of the check at once.
+///
+/// `guard_wiring_test.dart` compares this constant against the source of
+/// `lib/` in **both** directions: a use in a file that is not listed fails,
+/// and a listed file that has stopped using it fails too. Files that are owed
+/// rather than done are in [kSystemWriteCallSitesOwed].
+///
+/// | File | Why it needs it |
+/// |---|---|
+/// | `lib/providers/preferences.dart` | declares `systemPreferencesProvider`, the path itself |
+/// | `lib/providers/state_man.dart` | default `key_mappings`, and `StateManConfig.fromPrefs`' default `state_man_config` |
+/// | `lib/providers/page_manager.dart` | the default page layout, seeded **unawaited** by `PageManager.load()` |
+/// | `lib/providers/alarm.dart` | the empty `alarm_man_config` `AlarmMan.create` would otherwise write |
+/// | `lib/page_creator/assets/recipes.dart` | the empty recipe list written on the **read** path, when an asset is opened |
+/// | `lib/providers/collector.dart` | the default `collector_config` — **owed** |
+/// | `lib/providers/mcp_bridge.dart` | the config migration's removal of the stale `mcp.config` row — **owed** |
+const List<String> kSystemWriteCallSites = [
+  'lib/providers/preferences.dart',
+  'lib/providers/state_man.dart',
+  'lib/providers/page_manager.dart',
+  'lib/providers/alarm.dart',
+  'lib/page_creator/assets/recipes.dart',
+  // TODO(03-09): `collectorProvider` writes its default straight to
+  // `SharedPreferencesAsync`, so it does not pass a guard at all today. Plan
+  // 03-09 owns the file and decides whether it moves onto the guarded store
+  // and through this path, or stays device-local by design.
+  'lib/providers/collector.dart',
+  // TODO(03-09): `mcpConfigMigrationProvider` removes the stale `mcp.config`
+  // row from the **shared** store at boot, with nobody signed in, against an
+  // `administer` prefix rule. It is inside a `try`/`catch`, so it does not
+  // fail boot — but it does fire `onDenied`, which means a denial prompt on a
+  // cold boot until plan 03-09 routes it. Plan 03-09 owns the file.
+  'lib/providers/mcp_bridge.dart',
+];
+
+/// The entries of [kSystemWriteCallSites] that do not use the path **yet**.
+///
+/// The cap test's expected set is [kSystemWriteCallSites] minus this one, so
+/// the two owed files can be declared with their reasons without the test
+/// failing today, and closing one is a two-line edit here that the test then
+/// enforces. Plan 03-11's gate catches the mismatch if neither happens.
+const List<String> kSystemWriteCallSitesOwed = [
+  'lib/providers/collector.dart',
+  'lib/providers/mcp_bridge.dart',
+];
+
 /// The session a guard resolves on while [accessSessionProvider] is still
 /// loading, or has errored.
 ///

@@ -21,9 +21,13 @@ import 'package:tfc_dart/core/access/guarded_state_man.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 import 'package:tfc_dart/core/preferences.dart';
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
 import 'package:tfc/access_routes.dart';
+import 'package:tfc/page_creator/assets/recipes.dart';
+import 'package:tfc/providers/alarm.dart';
+import 'package:tfc/providers/page_manager.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/access_policy.dart';
@@ -38,7 +42,12 @@ void main() {
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
     DatabaseConfig.clearPrefsCache();
-    Preferences.clearSecretCache();
+    // The real backend is the OS keychain, which outlives the process and is
+    // shared by every test in the run: without this, whichever test writes
+    // `state_man_config` first is the only one that observes the write, and on
+    // macOS every run re-asks for the keychain password. `setInstance` clears
+    // the process-wide secret caches too.
+    SecureStorage.setInstance(_MemorySecrets());
   });
 
   group('accessPolicyProvider', () {
@@ -367,6 +376,166 @@ void main() {
     });
   });
 
+  group('boot with nothing stored and nobody signed in', () {
+    test('all four providers build, with no throw and zero denial events',
+        () async {
+      final w = await _wiring();
+
+      final prefs = await w.prefs;
+      await w.stateMan;
+      await w.container.read(pageManagerProvider.future);
+      await w.container.read(alarmManProvider.future);
+      // The page-layout seed at `page.dart` is **unawaited**, so a denial
+      // there arrives as an unhandled asynchronous error one microtask later
+      // rather than as a failed provider. Asserting "no throw" alone would
+      // pass while the operator met a prompt on every cold boot.
+      await pumpEventQueue();
+
+      expect(w.denials, isEmpty,
+          reason: 'boot produced ${w.denials.map((d) => d.itemKey)}');
+
+      // And every default actually landed, so the test cannot pass by nothing
+      // having been written at all.
+      expect(await prefs.getString('key_mappings'), isNotNull);
+      expect(
+          await prefs.getString('state_man_config', secret: true), isNotNull);
+      expect(await prefs.getString('page_editor_data'), isNotNull);
+      expect(await prefs.getString('alarm_man_config'), isNotNull);
+    });
+
+    test('every boot default is in the trail, marked origin: system', () async {
+      final w = await _wiring();
+      await w.stateMan;
+      await w.container.read(pageManagerProvider.future);
+      await w.container.read(alarmManProvider.future);
+      await pumpEventQueue();
+
+      for (final key in const [
+        'key_mappings',
+        'state_man_config',
+        'page_editor_data',
+        'alarm_man_config',
+      ]) {
+        final rows = w.sink.rows.where((r) => r.itemKey == key);
+        expect(rows, isNotEmpty, reason: 'no audit row for $key');
+        expect(rows.every((r) => r.origin == 'system'), isTrue,
+            reason: '$key was recorded as ${rows.map((r) => r.origin)}');
+        expect(rows.every((r) => r.allowed), isTrue);
+      }
+    });
+
+    test('PageManager.save() is still refused to an anonymous session',
+        () async {
+      final w = await _wiring();
+      final manager = await w.container.read(pageManagerProvider.future);
+      await pumpEventQueue();
+
+      // The seed unlocked `load()`, not the editor. `page_editor.dart` saves
+      // through this same instance, and that write is a person editing pages.
+      await expectLater(manager.save(), throwsA(isA<AccessDenied>()));
+    });
+
+    test(
+        'the escape did not become the path: an operator write of the same '
+        'key is still refused', () async {
+      final w = await _wiring();
+      final prefs = await w.prefs;
+      await w.stateMan;
+
+      // `key_mappings` was just seeded through `systemWrites`. An ordinary
+      // write of the very same key, by a session, is a different thing.
+      await expectLater(prefs.setString('key_mappings', '{"nodes":{}}'),
+          throwsA(isA<AccessDenied>()));
+      await expectLater(prefs.setString('alarm_man_config', '{"alarms":[]}'),
+          throwsA(isA<AccessDenied>()));
+    });
+  });
+
+  group('recipes: opening an asset is not saving one', () {
+    test('an anonymous session can open a recipes asset with no denial event',
+        () async {
+      final w = await _wiring();
+      final prefs = await w.prefs;
+      final systemPrefs =
+          await w.container.read(systemPreferencesProvider.future);
+
+      final recipes = await readRecipes(prefs, systemPrefs, 'Line1');
+      await pumpEventQueue();
+
+      expect(recipes, isEmpty);
+      expect(w.denials, isEmpty);
+      expect(await prefs.getString('Line1.recipes'), '[]');
+      // Recorded, not exempted.
+      final rows = w.sink.rows.where((r) => r.itemKey == 'Line1.recipes');
+      expect(rows, hasLength(1));
+      expect(rows.single.origin, 'system');
+    });
+
+    test('an anonymous session cannot save a recipe', () async {
+      final w = await _wiring();
+      final prefs = await w.prefs;
+
+      // The Shift Leader requirement, from the other side: `.recipes` is a
+      // `setpoints` key and this write is a person changing a recipe.
+      await expectLater(
+        writeRecipes(
+            prefs, 'Line1', [Recipe(name: 'A', value: DynamicValue(value: 1))]),
+        throwsA(isA<AccessDenied>()),
+      );
+      await pumpEventQueue();
+      expect(w.denials.map((d) => d.itemKey), contains('Line1.recipes'));
+    });
+
+    test('a shift leader can save a recipe', () async {
+      final w = await _wiring(withDatabase: true);
+      final prefs = await w.prefs;
+      await w.container.read(accessSessionProvider.future);
+      await w.session.signIn('jon', 'correct horse');
+
+      await writeRecipes(
+          prefs, 'Line1', [Recipe(name: 'A', value: DynamicValue(value: 1))]);
+
+      expect(await prefs.getString('Line1.recipes'), isNotNull);
+      final rows = w.sink.rows.where((r) => r.itemKey == 'Line1.recipes');
+      expect(rows.single.origin, 'operator');
+      expect(rows.single.who, 'jon');
+    });
+  });
+
+  group('the system write path is capped', () {
+    test('the files that use it are exactly the ones the constant names', () {
+      final found = _filesUsingTheSystemWritePath();
+      final expected = kSystemWriteCallSites
+          .toSet()
+          .difference(kSystemWriteCallSitesOwed.toSet());
+
+      // Non-vacuous: a walk that found nothing would satisfy a one-directional
+      // subset assertion trivially.
+      expect(found, isNotEmpty);
+      expect(
+          kSystemWriteCallSitesOwed
+              .toSet()
+              .difference(kSystemWriteCallSites.toSet()),
+          isEmpty,
+          reason: 'an owed entry must also be a declared call site');
+
+      expect(found.difference(expected), isEmpty,
+          reason: 'these files use the system write path and are not on '
+              'kSystemWriteCallSites: ${found.difference(expected)}');
+      expect(expected.difference(found), isEmpty,
+          reason: 'these files are on kSystemWriteCallSites but no longer use '
+              'the system write path: ${expected.difference(found)}');
+    });
+
+    test('the two files another plan owns are named with an owner', () {
+      final code = File('lib/providers/access_policy.dart').readAsStringSync();
+      for (final owed in kSystemWriteCallSitesOwed) {
+        expect(code, contains(owed));
+      }
+      expect(code, contains('TODO(03-09)'));
+    });
+  });
+
   group('disposal', () {
     test('closes the inner StateMan exactly once, and not the decorator too',
         () async {
@@ -382,6 +551,38 @@ void main() {
 }
 
 AccessDenied _denial(String key) => AccessDenied(key, AccessGroup.configure);
+
+/// The two tokens that reach the unchecked write path.
+///
+/// `systemWrites` is the member on `GuardedPreferences`;
+/// `systemPreferencesProvider` is how everything but `preferences.dart` gets
+/// hold of it. Capping only the first would leave the provider readable from
+/// anywhere, which is the same hole one indirection further out.
+const List<String> _systemWriteTokens = [
+  'systemWrites',
+  'systemPreferencesProvider',
+];
+
+/// Every file under `lib/` whose **code** reaches the system write path.
+///
+/// Whole-line comments are stripped, so the comment naming the rule cannot
+/// satisfy the test enforcing it, and generated `.g.dart` files are skipped —
+/// `preferences.g.dart` necessarily names the provider it generates, and a
+/// generated file is not a call site anybody chose.
+Set<String> _filesUsingTheSystemWritePath() {
+  final found = <String>{};
+  for (final entity in Directory('lib').listSync(recursive: true)) {
+    if (entity is! File) continue;
+    final path = entity.path;
+    if (!path.endsWith('.dart') || path.endsWith('.g.dart')) continue;
+    final code = entity
+        .readAsLinesSync()
+        .where((l) => !l.trimLeft().startsWith('//'))
+        .join('\n');
+    if (_systemWriteTokens.any(code.contains)) found.add(path);
+  }
+  return found;
+}
 
 /// Hands a test the `Ref` that [reportAccessDenial] takes.
 ///
@@ -442,6 +643,21 @@ class _FakeAuthProvider implements AuthProvider {
     }
     return null;
   }
+}
+
+/// An in-memory stand-in for the OS keychain.
+class _MemorySecrets implements MySecureStorage {
+  final Map<String, String> _values = {};
+
+  @override
+  Future<String?> read({required String key}) async => _values[key];
+
+  @override
+  Future<void> write({required String key, required String value}) async =>
+      _values[key] = value;
+
+  @override
+  Future<void> delete({required String key}) async => _values.remove(key);
 }
 
 class _RecordingSink implements AuditSink {
