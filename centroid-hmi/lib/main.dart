@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
 import 'package:centroidx_upgrader/centroidx_upgrader.dart';
 
+import 'package:tfc/access_routes.dart';
 import 'package:tfc/core/startup_url.dart';
 import 'package:tfc/core/update_channel.dart';
 import 'package:tfc/core/update_launch.dart';
@@ -42,6 +43,7 @@ import 'package:tfc/page_creator/page.dart';
 import 'package:tfc/theme.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
 import 'package:tfc/core/system_clock.dart';
+import 'package:tfc/widgets/access_gate.dart';
 import 'package:tfc/widgets/dbus_gate.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
 import 'package:mcp_dart/mcp_dart.dart' show ElicitResult;
@@ -437,6 +439,42 @@ RoutesLocationBuilder createLocationBuilder(
   List<MenuItem> extraMenuItems, {
   Iterable<String> pagePaths = const [],
 }) {
+  // Declare the raised routes before anything can read them. The navigation
+  // menu resolves a path's group through RouteRegistry, and this is the one
+  // function every boot passes through before a menu is rendered, so the menu
+  // and the route table cannot disagree about which entries are locked.
+  installRaisedRoutes();
+
+  // Wraps a raised route's child in its gate. Two things here are deliberate:
+  //
+  //  - The `!`. A path missing from kRaisedRoutes throws when the route is
+  //    built, rather than resolving to `operate` and quietly leaving the route
+  //    open. A loud failure at boot beats a silent open door.
+  //  - routeAllowedWhenRepositoryUnavailable(path), not a boolean at each call
+  //    site. The menu badge asks the same function, so the one route that stays
+  //    open while the access repository is unavailable cannot drift into a lock
+  //    icon on a page that opens, or the reverse. Exactly one place knows which
+  //    route that is, and it is lib/access_routes.dart.
+  Widget gated(String path, String title, Widget child) => AccessGate(
+        group: kRaisedRoutes[path]!,
+        title: title,
+        allowWhenRepositoryUnavailable: routeAllowedWhenRepositoryUnavailable(path),
+        child: child,
+      );
+
+  // Six routes are gated, and only six. Left open on purpose:
+  //
+  //  - '/advanced/about-linux' reads system information and changes nothing.
+  //  - '/advanced/knowledge-base', '/advanced/history-view',
+  //    AppRoutes.historyView and AppRoutes.alarmView read rather than
+  //    configure. Read permissions are explicitly out of scope
+  //    (docs/access-control-spec.md §Scope, §11).
+  //  - AppRoutes.firstUser. Gating commissioning behind a sign-in on a station
+  //    that has no users yet is the deadlock the first-user design exists to
+  //    avoid.
+  //  - Every page-manager page, which arrives through addRoute below and is
+  //    not gated: those are the plant's own pages and are `operate` by
+  //    definition. That sentence is what "nothing on the floor changes" means.
   final routes = {
     // '/': (context, state, args) => BeamPage(
     //       // this will be replaced most likely
@@ -453,10 +491,19 @@ RoutesLocationBuilder createLocationBuilder(
     '/advanced/ip-settings': (context, state, args) => BeamPage(
           key: const ValueKey('/advanced/ip-settings'),
           title: 'IP Settings',
-          child: DbusGate(
-            title: 'IP Settings',
-            shared: dbusCompleter,
-            builder: (context, client, _) => IpSettingsPage(dbusClient: client),
+          // Main's DbusGate inside the access gate: the two are different
+          // questions in sequence — may this session open the page at all,
+          // and then has the D-Bus login happened. Gate first, so an operator
+          // without `administer` meets the lock rather than a login form for
+          // a page they cannot open.
+          child: gated(
+            '/advanced/ip-settings',
+            'IP Settings',
+            DbusGate(
+              title: 'IP Settings',
+              shared: dbusCompleter,
+              builder: (context, client, _) => IpSettingsPage(dbusClient: client),
+            ),
           ),
         ),
     '/advanced/about-linux': (context, state, args) => BeamPage(
@@ -474,25 +521,32 @@ RoutesLocationBuilder createLocationBuilder(
     '/advanced/page-editor': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/page-editor'),
         title: 'Page Editor',
-        child: PageEditor(proposalData: args is String ? args : null)),
-    '/advanced/preferences': (context, state, args) =>
-        BeamPage(key: const ValueKey('/advanced/preferences'), title: 'Preferences', child: PreferencesPage()),
+        child: gated(
+            '/advanced/page-editor', 'Page Editor', PageEditor(proposalData: args is String ? args : null))),
+    '/advanced/preferences': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/preferences'),
+        title: 'Preferences',
+        child: gated('/advanced/preferences', 'Preferences', PreferencesPage())),
     '/advanced/alarm-editor': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/alarm-editor'),
         title: 'Alarm Editor',
-        child: AlarmEditorPage(proposalData: args is String ? args : null)),
+        child: gated(
+            '/advanced/alarm-editor', 'Alarm Editor', AlarmEditorPage(proposalData: args is String ? args : null))),
     AppRoutes.historyView: (context, state, args) =>
         BeamPage(key: const ValueKey(AppRoutes.historyView), title: 'History View', child: HistoryViewPage()),
     // History View lives at the top level now; the old address keeps working
     // for bookmarks and pages that link to it.
     '/advanced/history-view': (context, state, args) =>
         BeamPage(key: const ValueKey('/advanced/history-view'), title: 'History View', child: HistoryViewPage()),
-    '/advanced/server-config': (context, state, args) =>
-        BeamPage(key: const ValueKey('/advanced/server-config'), title: 'Server Config', child: ServerConfigPage()),
+    '/advanced/server-config': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/server-config'),
+        title: 'Server Config',
+        child: gated('/advanced/server-config', 'Server Config', ServerConfigPage())),
     '/advanced/key-repository': (context, state, args) => BeamPage(
         key: const ValueKey('/advanced/key-repository'),
         title: 'Key Repository',
-        child: KeyRepositoryPage(proposalData: args is String ? args : null)),
+        child: gated('/advanced/key-repository', 'Key Repository',
+            KeyRepositoryPage(proposalData: args is String ? args : null))),
     AppRoutes.alarmView: (context, state, args) =>
         BeamPage(key: const ValueKey('/alarm-view'), title: 'Alarm View', child: AlarmViewPage()),
     // Registered unconditionally. The page itself decides whether the window
