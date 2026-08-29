@@ -1813,6 +1813,11 @@ class FilterEdit extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Not DurationFields: two of these sit side by side in the IO pane's
+    // channel grid, and a unit dropdown does not fit the row. Filter times
+    // are 1-3 digit millisecond figures, so there are no zeros to count —
+    // the field just needs to not throw on junk, which the old bare
+    // int.parse did.
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1826,10 +1831,12 @@ class FilterEdit extends StatelessWidget {
                   labelText: 'On filter',
                   suffixText: 'ms',
                 ),
+                keyboardType: TextInputType.number,
                 initialValue: onFilter.toString(),
                 onChanged: (value) {
-                  if (value.isNotEmpty) {
-                    onChangedOnFilter(int.parse(value));
+                  final parsed = int.tryParse(value);
+                  if (parsed != null && parsed >= 0) {
+                    onChangedOnFilter(parsed);
                   }
                 },
               ),
@@ -1842,10 +1849,12 @@ class FilterEdit extends StatelessWidget {
                   labelText: 'Off filter',
                   suffixText: 'ms',
                 ),
+                keyboardType: TextInputType.number,
                 initialValue: offFilter.toString(),
                 onChanged: (value) {
-                  if (value.isNotEmpty) {
-                    onChangedOffFilter(int.parse(value));
+                  final parsed = int.tryParse(value);
+                  if (parsed != null && parsed >= 0) {
+                    onChangedOffFilter(parsed);
                   }
                 },
               ),

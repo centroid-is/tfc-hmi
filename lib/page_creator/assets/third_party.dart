@@ -24,6 +24,7 @@ import 'ratio_number.dart'
         RatioNumberWidget,
         ratioIntervalChips,
         showRatioAnalysisDialog;
+import '../../widgets/duration_field.dart';
 import 'registry.dart';
 import 'sensor.dart' show SensorConfig;
 import 'third_party_painter.dart';
@@ -2694,20 +2695,18 @@ class _ThirdPartyEquipmentConfigEditorState
                 children: [
                   const Expanded(child: Text('Accept rate window')),
                   SizedBox(
-                    width: 90,
-                    child: TextFormField(
-                      initialValue: '${config.acceptWindowMinutes}',
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        suffixText: 'min',
-                        isDense: true,
-                      ),
-                      onChanged: (v) {
-                        final parsed = int.tryParse(v);
-                        if (parsed != null && parsed > 0) {
-                          setState(() => config.acceptWindowMinutes = parsed);
-                        }
-                      },
+                    width: 130,
+                    child: DurationField(
+                      value: Duration(minutes: config.acceptWindowMinutes),
+                      labelText: '',
+                      isDense: true,
+                      min: const Duration(minutes: 1),
+                      max: const Duration(hours: 24),
+                      units: const [DurationUnit.minutes, DurationUnit.hours],
+                      // The config stores whole minutes.
+                      resolution: const Duration(minutes: 1),
+                      onChanged: (v) => setState(
+                          () => config.acceptWindowMinutes = v.inMinutes),
                     ),
                   ),
                 ],

@@ -35,7 +35,7 @@
 /// 5. Tap the placed Elevator. The config dialog opens. Verify:
 ///      - Position State Key (0-100%)  KeyField (with autocomplete
 ///        dropdown — common.dart's KeyField behaviour).
-///      - Tween Duration (ms)          TextFormField, default `250`,
+///      - Tween Duration               DurationField, default `250 ms`,
 ///        digits-only input formatter (typing letters does nothing).
 ///      - Size                         SizeField with width / height
 ///        sliders (per common.dart).
@@ -304,7 +304,7 @@ void main() {
 
       // Locked field surface (mirror Plan 01-05 smoke test pattern):
       expect(find.text('Position State Key (0-100%)'), findsOneWidget);
-      expect(find.text('Tween Duration (ms)'), findsOneWidget);
+      expect(find.text('Tween Duration'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Add child'), findsOneWidget);
       expect(find.text('No children configured'), findsOneWidget);
       expect(find.text('Children: 0 (managed in Phase 3)'), findsNothing);
@@ -319,8 +319,8 @@ void main() {
       final config = ElevatorConfig(tweenDurationMs: 250);
       await openConfigEditor(tester, config);
 
-      final tweenField =
-          find.widgetWithText(TextFormField, 'Tween Duration (ms)');
+      // The field is a DurationField now — find its inner TextField.
+      final tweenField = find.widgetWithText(TextField, 'Tween Duration');
       expect(tweenField, findsOneWidget);
       await tester.enterText(tweenField, '500');
       await tester.pump();

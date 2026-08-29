@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc/pages/server_config.dart';
+import 'package:tfc/widgets/duration_field.dart';
 import 'package:tfc/providers/preferences.dart';
 import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -12,12 +13,31 @@ import 'package:tfc_dart/core/state_man.dart';
 import '../helpers/test_helpers.dart';
 
 Finder _intervalField() =>
-    find.widgetWithText(TextField, 'Update interval (ms)');
+    find.widgetWithText(TextField, 'Update interval');
 Finder _lifetimeField() =>
-    find.widgetWithText(TextField, 'Secure channel lifetime (s)');
+    find.widgetWithText(TextField, 'Secure channel lifetime');
 
 String _textOf(WidgetTester tester, Finder field) =>
     tester.widget<TextField>(field).controller!.text;
+
+/// The unit dropdown belonging to one of the two [DurationField]s.
+Finder _unitOf(Finder field) => find.descendant(
+    of: find.ancestor(of: field, matching: find.byType(DurationField)).first,
+    matching: find.byType(DropdownButton<DurationUnit>));
+
+DurationUnit _unitValue(WidgetTester tester, Finder field) =>
+    tester.widget<DropdownButton<DurationUnit>>(_unitOf(field)).value!;
+
+/// Opens a unit dropdown and taps [label] in the menu.
+Future<void> pickUnit(
+    WidgetTester tester, Finder field, String label) async {
+  await tester.tap(_unitOf(field));
+  await settle(tester);
+  // The menu repeats the currently-selected item behind the overlay, so take
+  // the last match — the one in the open menu.
+  await tester.tap(find.text(label).last);
+  await settle(tester);
+}
 
 /// Reads the config back out of preferences, as saved.
 Future<StateManConfig> _persistedConfig(WidgetTester tester) async {
@@ -74,21 +94,65 @@ void main() {
       expect(_lifetimeField(), findsOneWidget);
     });
 
-    testWidgets('the fields are seeded from the stored config', (tester) async {
+    testWidgets('the fields are seeded in the largest unit that fits',
+        (tester) async {
       await pumpExpandedCard(
           tester, config: _oneServer(intervalMs: 250, lifetimeMs: 300000));
 
+      // 250 ms does not divide into seconds, so it stays in ms.
       expect(_textOf(tester, _intervalField()), '250');
-      // Lifetime is entered in seconds, not the milliseconds it is stored in.
-      expect(_textOf(tester, _lifetimeField()), '300');
+      expect(_unitValue(tester, _intervalField()), DurationUnit.milliseconds);
+      // 300000 ms is exactly five minutes — nobody should read that as 300000.
+      expect(_textOf(tester, _lifetimeField()), '5');
+      expect(_unitValue(tester, _lifetimeField()), DurationUnit.minutes);
     });
 
-    testWidgets('a whole-second lifetime shows without a decimal point',
+    testWidgets('the 10-minute default reads as 10 min, not 600000',
         (tester) async {
       await pumpExpandedCard(tester);
 
-      // The 600000 ms default reads as 600, not 600.0.
-      expect(_textOf(tester, _lifetimeField()), '600');
+      expect(_textOf(tester, _lifetimeField()), '10');
+      expect(_unitValue(tester, _lifetimeField()), DurationUnit.minutes);
+      expect(_textOf(tester, _intervalField()), '100');
+      expect(_unitValue(tester, _intervalField()), DurationUnit.milliseconds);
+    });
+
+    testWidgets('a value that divides evenly is promoted to the bigger unit',
+        (tester) async {
+      await pumpExpandedCard(tester, config: _oneServer(intervalMs: 2000));
+
+      expect(_textOf(tester, _intervalField()), '2');
+      expect(_unitValue(tester, _intervalField()), DurationUnit.seconds);
+    });
+
+    testWidgets('changing the unit keeps the number and changes the duration',
+        (tester) async {
+      // The move someone makes on realising they picked the wrong unit.
+      // Converting instead would show 600 s and make them clear the box.
+      await pumpExpandedCard(tester);
+      expect(_textOf(tester, _lifetimeField()), '10');
+
+      await pickUnit(tester, _lifetimeField(), 's');
+      await save(tester);
+
+      expect(_textOf(tester, _lifetimeField()), '10');
+      expect(
+          (await _persistedConfig(tester)).opcua.single.secureChannelLifetimeMs,
+          10000);
+    });
+
+    testWidgets('a unit change that overshoots the max clamps and says so',
+        (tester) async {
+      await pumpExpandedCard(tester, config: _oneServer(intervalMs: 100));
+
+      // 100 ms is fine; 100 s is twenty times the ceiling.
+      await pickUnit(tester, _intervalField(), 's');
+      await save(tester);
+
+      expect((await _persistedConfig(tester)).opcua.single.publishingIntervalMs,
+          OpcUAConfig.publishingIntervalMaxMs);
+      // The box must not keep claiming 100 when 5 s was stored.
+      expect(_textOf(tester, _intervalField()), '5');
     });
 
     testWidgets('a typed interval reaches the saved config', (tester) async {
@@ -106,7 +170,8 @@ void main() {
         (tester) async {
       await pumpExpandedCard(tester);
 
-      await tester.enterText(_lifetimeField(), '120');
+      // Two minutes, typed as two.
+      await tester.enterText(_lifetimeField(), '2');
       await settle(tester);
       await save(tester);
 
@@ -115,10 +180,10 @@ void main() {
           120000);
     });
 
-    testWidgets('a fractional lifetime rounds to milliseconds',
-        (tester) async {
+    testWidgets('a fractional value rounds to milliseconds', (tester) async {
       await pumpExpandedCard(tester);
 
+      await pickUnit(tester, _lifetimeField(), 's');
       await tester.enterText(_lifetimeField(), '90.5');
       await settle(tester);
       await save(tester);

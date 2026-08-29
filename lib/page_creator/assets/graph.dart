@@ -13,6 +13,7 @@ import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc_dart/converter/duration_converter.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
+import '../../widgets/duration_field.dart';
 import 'common.dart';
 import 'helper/database_recovery.dart';
 import '../../widgets/graph.dart';
@@ -265,18 +266,20 @@ class GraphContentConfigState extends State<GraphContentConfig> {
                 (updated) => setState(() => widget.config.yAxis2 = updated),
               ),
               const SizedBox(height: 16),
-              TextFormField(
-                initialValue:
-                    widget.config.timeWindowMinutes.inMinutes.toString(),
-                decoration:
-                    const InputDecoration(labelText: 'Time Window (minutes)'),
-                keyboardType: TextInputType.number,
-                onChanged: (value) {
-                  setState(() {
-                    widget.config.timeWindowMinutes =
-                        Duration(minutes: int.tryParse(value) ?? 10);
-                  });
-                },
+              DurationField(
+                value: widget.config.timeWindowMinutes,
+                labelText: 'Time Window',
+                min: const Duration(minutes: 1),
+                max: const Duration(days: 7),
+                units: const [
+                  DurationUnit.minutes,
+                  DurationUnit.hours,
+                  DurationUnit.days,
+                ],
+                // Serialised as whole minutes — see DurationMinutesConverter.
+                resolution: const Duration(minutes: 1),
+                onChanged: (value) => setState(
+                    () => widget.config.timeWindowMinutes = value),
               ),
               const SizedBox(height: 16),
               TextFormField(
