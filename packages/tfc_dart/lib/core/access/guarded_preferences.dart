@@ -1,0 +1,388 @@
+/// The configuration write guard: a [Preferences] that checks and records the
+/// seven write members and leaves every read alone.
+library;
+
+import 'package:logger/logger.dart';
+import 'package:tfc_access/tfc_access.dart';
+
+import '../database.dart';
+import '../preferences.dart';
+import '../secure_storage/interface.dart';
+
+/// The `who` of a row written with nobody signed in.
+const String _anonymousWho = 'anonymous';
+
+/// The `itemKey` of a `clear()` row. There is no key to name, and the whole
+/// store is what was affected.
+const String _wholeStoreItemKey = '*';
+
+/// A [Preferences] that gates every write on the current session and writes one
+/// audit row per write, denials included, and forwards every read untouched.
+///
+/// ## Why it wraps `Preferences` and not `PreferencesApi`
+///
+/// Spec §6 names `PreferencesApi`, but `preferencesProvider` returns a
+/// `Preferences` and callers use members `PreferencesApi` does not have:
+/// `setString(key, value, secret: true)` at `chat_widget.dart:361`,
+/// `StateManConfig.toPrefs` writing with `secret: true, saveToDb: false`,
+/// `onPreferencesChanged` driving the key-mappings watcher at
+/// `state_man.dart:52`, and `isKeyInDatabase` in the preferences editor. A
+/// decorator typed to the narrower interface would force every one of those
+/// callers to change, which is exactly what "callers change nothing" forbids.
+/// `Preferences` is a superset of `PreferencesApi`, so the spec's stated
+/// contract holds too — `guarded_preferences_test.dart` asserts it.
+///
+/// ## Why reads are not gated
+///
+/// Spec §11 defers read permissions. A guarded read would break a station with
+/// no session, which is every station at boot. Reads produce no audit row and
+/// cannot be denied, for any key, at any session.
+///
+/// ## Why this surface fails closed
+///
+/// [AccessPolicy.groupForPref] is non-nullable and answers
+/// [AccessGroup.administer] for anything it does not recognise. That is the
+/// opposite of the tag surface, and the asymmetry is deliberate: a wrongly-open
+/// setpoint is a nuisance, a wrongly-open config write is a broken plant
+/// (spec §7).
+///
+/// ## The `database` escape, stated rather than hidden
+///
+/// `implements Preferences` obliges this class to expose a [database] getter,
+/// so anything holding a `GuardedPreferences` can reach `prefs.database!.db`
+/// and issue raw Drift that no guard sees. That is a real hole and it is not
+/// closed here — see the getter. Section 3 of plan 03-03's write-path sweep is
+/// what finds such a call site the first time it appears.
+class GuardedPreferences implements Preferences {
+  /// [session] is a callback rather than a value on purpose: a captured session
+  /// would keep granting whatever was held when the provider was built, long
+  /// after a logout or an inactivity timeout.
+  ///
+  /// [surface] is one string used for **both** the policy lookup and the
+  /// `surface` column of every row this guard writes, so the group that was
+  /// checked and the surface that was recorded cannot disagree. A surface the
+  /// policy does not know answers [AccessGroup.administer], so a typo is a
+  /// denial waiting to be noticed rather than a hole nobody sees.
+  GuardedPreferences({
+    required Preferences inner,
+    required AccessPolicy policy,
+    required AccessSession Function() session,
+    required AuditSink audit,
+    required String station,
+    String surface = 'pref',
+    void Function(AccessDenied denial)? onDenied,
+    Logger? logger,
+  })  : _inner = inner,
+        _policy = policy,
+        _session = session,
+        _audit = audit,
+        _station = station,
+        _surface = surface,
+        _onDenied = onDenied,
+        _logger = logger ?? Logger();
+
+  final Preferences _inner;
+  final AccessPolicy _policy;
+  final AccessSession Function() _session;
+  final AuditSink _audit;
+  final String _station;
+  final String _surface;
+  final void Function(AccessDenied denial)? _onDenied;
+  final Logger _logger;
+
+  // ---------------------------------------------------------------------------
+  // The rule, in one place.
+  // ---------------------------------------------------------------------------
+
+  /// The group [key] requires on this guard's surface.
+  ///
+  /// [AccessPolicy.groupForWireSurface] returns a nullable group for the tag
+  /// surface's sake, where null means unrestricted. **A null here is
+  /// [AccessGroup.administer], never unrestricted.** Routing the surface that
+  /// fails closed through a nullable lookup must not quietly reintroduce a
+  /// fail-open path.
+  AccessGroup _groupFor(String key) =>
+      _policy.groupForWireSurface(_surface, key) ?? AccessGroup.administer;
+
+  /// The old-value reader for a write, or null when there must not be one.
+  ///
+  /// **A secret's old value is never read.** Reading it is the single edit that
+  /// would copy a credential into a permanent, replicated table, and it would
+  /// look like completeness while doing it.
+  Future<String?> Function()? _oldValueOf(
+          bool secret, Future<String?> Function() read) =>
+      secret ? null : read;
+
+  /// Check, record, then delegate — the one implementation of the rule, with
+  /// seven thin members on top of it.
+  ///
+  /// On the deny path the row is written **before** the throw: a denial that
+  /// leaves no row is the repudiation the trail exists to prevent. On the
+  /// permitted path the row is written before the delegate, per spec §6 and to
+  /// match `GuardedStateMan`.
+  Future<void> _guard({
+    required String key,
+    required AccessGroup group,
+    required String? newValue,
+    required Future<String?> Function()? readOldValue,
+    required Future<void> Function() write,
+  }) async {
+    final actionId = newActionId();
+    final session = _session();
+
+    if (!session.can(group)) {
+      final denial = AccessDenied(key, group);
+      await _record(_row(
+        session: session,
+        key: key,
+        group: group,
+        oldValue: null,
+        newValue: newValue,
+        allowed: false,
+        actionId: actionId,
+      ));
+      _onDenied?.call(denial);
+      throw denial;
+    }
+
+    String? oldValue;
+    if (readOldValue != null) {
+      try {
+        oldValue = await readOldValue();
+      } on Object catch (error) {
+        // A store that cannot be read must not fail a write the session was
+        // allowed to make. The row simply says nothing about what was there.
+        _logger.w('audit old value unreadable for $_surface:$key: $error');
+        oldValue = null;
+      }
+    }
+
+    await _record(_row(
+      session: session,
+      key: key,
+      group: group,
+      oldValue: oldValue,
+      newValue: newValue,
+      allowed: true,
+      actionId: actionId,
+    ));
+    await write();
+  }
+
+  AuditRecord _row({
+    required AccessSession session,
+    required String key,
+    required AccessGroup group,
+    required String? oldValue,
+    required String? newValue,
+    required bool allowed,
+    required String actionId,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: DateTime.now(),
+        who: session.user?.username ?? _anonymousWho,
+        station: _station,
+        roleName: session.roleName,
+        surface: _surface,
+        itemKey: key,
+        oldValue: oldValue,
+        newValue: newValue,
+        groupRequired: group.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+      );
+
+  /// Append [row], and never let the sink's failure become the caller's.
+  ///
+  /// `DriftAuditSink` already swallows its own failures, so this is
+  /// belt-and-braces there — but [AuditSink] is an interface whose non-throwing
+  /// contract lives in a doc comment and nothing enforces it, and the
+  /// consequences of trusting it differ by path. On the permitted path an
+  /// escaping sink exception would fail a write the session was allowed to
+  /// make. On the deny path it would replace [AccessDenied] with something no
+  /// caller catches, skip `onDenied`, and leave the operator with no prompt and
+  /// no explanation for a control that did nothing.
+  Future<void> _record(AuditRecord row) async {
+    try {
+      await _audit.record(row);
+    } on Object catch (error, stackTrace) {
+      _logger.e('AUDIT ROW LOST for ${row.surface}:${row.itemKey}',
+          error: error, stackTrace: stackTrace);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reads — straight through. No lookup, no row, no denial.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<Set<String>> getKeys({Set<String>? allowList}) =>
+      _inner.getKeys(allowList: allowList);
+
+  @override
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) =>
+      _inner.getAll(allowList: allowList);
+
+  @override
+  Future<bool?> getBool(String key, {bool secret = false}) =>
+      _inner.getBool(key, secret: secret);
+
+  @override
+  Future<int?> getInt(String key, {bool secret = false}) =>
+      _inner.getInt(key, secret: secret);
+
+  @override
+  Future<double?> getDouble(String key, {bool secret = false}) =>
+      _inner.getDouble(key, secret: secret);
+
+  @override
+  Future<String?> getString(String key, {bool secret = false}) =>
+      _inner.getString(key, secret: secret);
+
+  @override
+  Future<List<String>?> getStringList(String key, {bool secret = false}) =>
+      _inner.getStringList(key, secret: secret);
+
+  @override
+  Future<bool> containsKey(String key, {bool secret = false}) =>
+      _inner.containsKey(key, secret: secret);
+
+  // ---------------------------------------------------------------------------
+  // Writes — the seven members spec §6 names, and only these seven.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<void> setBool(String key, bool value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _guard(
+        key: key,
+        group: _groupFor(key),
+        newValue: secret ? null : '$value',
+        readOldValue: _oldValueOf(
+            secret, () async => (await _inner.getBool(key))?.toString()),
+        write: () =>
+            _inner.setBool(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setInt(String key, int value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _guard(
+        key: key,
+        group: _groupFor(key),
+        newValue: secret ? null : '$value',
+        readOldValue: _oldValueOf(
+            secret, () async => (await _inner.getInt(key))?.toString()),
+        write: () =>
+            _inner.setInt(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setDouble(String key, double value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _guard(
+        key: key,
+        group: _groupFor(key),
+        newValue: secret ? null : '$value',
+        readOldValue: _oldValueOf(
+            secret, () async => (await _inner.getDouble(key))?.toString()),
+        write: () =>
+            _inner.setDouble(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setString(String key, String value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _guard(
+        key: key,
+        group: _groupFor(key),
+        newValue: secret ? null : value,
+        readOldValue: _oldValueOf(secret, () => _inner.getString(key)),
+        write: () =>
+            _inner.setString(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setStringList(String key, List<String> value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _guard(
+        key: key,
+        group: _groupFor(key),
+        newValue: secret ? null : value.join(','),
+        readOldValue: _oldValueOf(
+            secret, () async => (await _inner.getStringList(key))?.join(',')),
+        write: () => _inner.setStringList(key, value,
+            saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> remove(String key, {bool secret = false}) => _guard(
+        key: key,
+        group: _groupFor(key),
+        newValue: null,
+        readOldValue: _oldValueOf(
+            secret, () async => (await _inner.getAll())[key]?.toString()),
+        write: () => _inner.remove(key, secret: secret),
+      );
+
+  /// Clears the store, or the part of it [allowList] names.
+  ///
+  /// There is no key for the policy to look up, so this member carries its own
+  /// rule: **[AccessGroup.administer], always, whatever the allow list says.**
+  /// It is the destructive whole-store operation, and an allow list is a
+  /// parameter, not a smaller permission.
+  @override
+  Future<void> clear({Set<String>? allowList}) => _guard(
+        key: _wholeStoreItemKey,
+        group: AccessGroup.administer,
+        newValue: null,
+        readOldValue: null,
+        write: () => _inner.clear(allowList: allowList),
+      );
+
+  // ---------------------------------------------------------------------------
+  // Everything else — forwarded explicitly, one member at a time.
+  // ---------------------------------------------------------------------------
+
+  /// The wrapped store's database handle, and a hole this class cannot close.
+  ///
+  /// `implements Preferences` obliges this getter to exist, so anything holding
+  /// a `GuardedPreferences` can reach `prefs.database!.db` and write
+  /// `flutter_preferences` — or anything else — straight through Drift, past
+  /// every check and every row above. Returning null instead would break the
+  /// preferences editor and `ServerConfigDb`, which legitimately need it.
+  ///
+  /// **The residual risk is real and is not contained by this file.** What
+  /// bounds it is plan 03-03's write-path sweep, which enumerates the direct
+  /// Drift writers reachable from a widget and gets a verdict per site.
+  @override
+  Database? get database => _inner.database;
+
+  @override
+  KeyCache get keyCache => _inner.keyCache;
+
+  @override
+  MySecureStorage get secureStorage => _inner.secureStorage;
+
+  @override
+  PreferencesApi? get localCache => _inner.localCache;
+
+  @override
+  Stream<String> get onPreferencesChanged => _inner.onPreferencesChanged;
+
+  @override
+  Future<bool> isKeyInDatabase(String key) => _inner.isKeyInDatabase(key);
+
+  // Forwarding a @visibleForTesting member is what "callers change nothing"
+  // costs: the test that calls it holds a Preferences, and after plan 03-06
+  // that Preferences is this one. The ignore covers the forward, not a missing
+  // implementation.
+  @override
+  // ignore: invalid_use_of_visible_for_testing_member
+  Future<void> syncToLocalCache() => _inner.syncToLocalCache();
+
+  @override
+  Future<void> loadFromPostgres() => _inner.loadFromPostgres();
+}

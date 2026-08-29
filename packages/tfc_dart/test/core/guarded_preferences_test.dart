@@ -57,13 +57,24 @@ class _RecordingPreferences implements Preferences {
     Map<String, Object?>? initial,
     List<String>? log,
     this.localCache,
-  }) : calls = log ?? <String>[] {
+  }) : _sharedLog = log {
     if (initial != null) store.addAll(initial);
   }
 
   final Map<String, Object?> store = {};
   final Map<String, String> secrets = {};
-  final List<String> calls;
+
+  /// This double's own calls.
+  final List<String> calls = [];
+
+  /// The ordering log it shares with the audit sink, so "the row precedes the
+  /// write" is assertable as one sequence.
+  final List<String>? _sharedLog;
+
+  void _log(String call) {
+    calls.add(call);
+    _sharedLog?.add(call);
+  }
 
   /// When true every read throws — the unreadable store of T-03-28.
   bool failReads = false;
@@ -81,7 +92,7 @@ class _RecordingPreferences implements Preferences {
       .toList();
 
   void _read(String call) {
-    calls.add(call);
+    _log(call);
     if (failReads) throw StateError('store unreadable');
   }
 
@@ -142,48 +153,48 @@ class _RecordingPreferences implements Preferences {
   @override
   Future<void> setBool(String key, bool value,
       {bool saveToDb = true, bool secret = false}) async {
-    calls.add('setBool($key, $value, saveToDb: $saveToDb, secret: $secret)');
+    _log('setBool($key, $value, saveToDb: $saveToDb, secret: $secret)');
     secret ? secrets[key] = '$value' : store[key] = value;
   }
 
   @override
   Future<void> setInt(String key, int value,
       {bool saveToDb = true, bool secret = false}) async {
-    calls.add('setInt($key, $value, saveToDb: $saveToDb, secret: $secret)');
+    _log('setInt($key, $value, saveToDb: $saveToDb, secret: $secret)');
     secret ? secrets[key] = '$value' : store[key] = value;
   }
 
   @override
   Future<void> setDouble(String key, double value,
       {bool saveToDb = true, bool secret = false}) async {
-    calls.add('setDouble($key, $value, saveToDb: $saveToDb, secret: $secret)');
+    _log('setDouble($key, $value, saveToDb: $saveToDb, secret: $secret)');
     secret ? secrets[key] = '$value' : store[key] = value;
   }
 
   @override
   Future<void> setString(String key, String value,
       {bool saveToDb = true, bool secret = false}) async {
-    calls.add('setString($key, $value, saveToDb: $saveToDb, secret: $secret)');
+    _log('setString($key, $value, saveToDb: $saveToDb, secret: $secret)');
     secret ? secrets[key] = value : store[key] = value;
   }
 
   @override
   Future<void> setStringList(String key, List<String> value,
       {bool saveToDb = true, bool secret = false}) async {
-    calls.add(
+    _log(
         'setStringList($key, ${value.join('|')}, saveToDb: $saveToDb, secret: $secret)');
     secret ? secrets[key] = value.join(',') : store[key] = value;
   }
 
   @override
   Future<void> remove(String key, {bool secret = false}) async {
-    calls.add('remove($key, secret: $secret)');
+    _log('remove($key, secret: $secret)');
     secret ? secrets.remove(key) : store.remove(key);
   }
 
   @override
   Future<void> clear({Set<String>? allowList}) async {
-    calls.add('clear(allowList: $allowList)');
+    _log('clear(allowList: $allowList)');
     if (allowList == null) {
       store.clear();
     } else {
@@ -205,15 +216,15 @@ class _RecordingPreferences implements Preferences {
 
   @override
   Future<bool> isKeyInDatabase(String key) async {
-    calls.add('isKeyInDatabase($key)');
+    _log('isKeyInDatabase($key)');
     return store.containsKey(key);
   }
 
   @override
-  Future<void> syncToLocalCache() async => calls.add('syncToLocalCache()');
+  Future<void> syncToLocalCache() async => _log('syncToLocalCache()');
 
   @override
-  Future<void> loadFromPostgres() async => calls.add('loadFromPostgres()');
+  Future<void> loadFromPostgres() async => _log('loadFromPostgres()');
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -229,10 +240,11 @@ class _NoSecrets implements MySecureStorage {
 }
 
 class _RecordingAuditSink implements AuditSink {
-  _RecordingAuditSink({List<String>? log}) : calls = log ?? <String>[];
+  _RecordingAuditSink({List<String>? log}) : _sharedLog = log;
 
   final List<AuditRecord> rows = [];
-  final List<String> calls;
+  final List<String> calls = [];
+  final List<String>? _sharedLog;
 
   /// The sink whose non-throwing contract lives only in a doc comment.
   bool shouldThrow = false;
@@ -240,7 +252,9 @@ class _RecordingAuditSink implements AuditSink {
   @override
   Future<void> record(AuditRecord entry) async {
     rows.add(entry);
-    calls.add('audit(${entry.itemKey}, allowed: ${entry.allowed})');
+    final call = 'audit(${entry.itemKey}, allowed: ${entry.allowed})';
+    calls.add(call);
+    _sharedLog?.add(call);
     if (shouldThrow) throw StateError('audit database is down');
   }
 }
