@@ -782,6 +782,169 @@ void main() {
               'throwing at runtime, on a plant');
     });
   });
+
+  group('forwards every public member', () {
+    test('the derived member list is not empty', () {
+      // First, and in its own test: an assertion that silently reads nothing
+      // is the failure mode this whole phase is about. Everything below is
+      // vacuous if this is.
+      expect(stateManPublicMembers(), isNotEmpty,
+          reason: 'the member list is derived from state_man.dart at test '
+              'time. An empty list means the file moved or the class head '
+              'changed shape, not that StateMan has no members.');
+    });
+
+    test('the derived list contains the members it obviously must', () {
+      // A second guard against a regex that reads the file and finds almost
+      // nothing: these five are a field, a mutable field, a getter, a method
+      // and the intercepted member, so a derivation that lost any *kind* of
+      // declaration fails here rather than passing with a short list.
+      expect(
+          stateManPublicMembers(),
+          containsAll(<String>[
+            'config',
+            'alias',
+            'substitutions',
+            'resolveKey',
+            'write',
+          ]));
+    });
+
+    test('every public member of StateMan is an @override member of the guard',
+        () {
+      final declared = stateManPublicMembers();
+      final forwarded = guardOverriddenMembers();
+      final missing = declared.difference(forwarded);
+
+      expect(missing, isEmpty,
+          reason: 'GuardedStateMan implements StateMan by writing every '
+              'member out. A member added to StateMan and not forwarded here '
+              'is a hole that only shows up when somebody calls it, on a '
+              'plant. Add it to guarded_state_man.dart.\n'
+              'Derived from state_man.dart: ${declared.toList()..sort()}\n'
+              'Found in guarded_state_man.dart: '
+              '${forwarded.toList()..sort()}');
+    });
+
+    test('the guard overrides nothing StateMan no longer declares', () {
+      // The other direction. A member removed from StateMan leaves a dead
+      // @override behind that no longer compiles - but this says so in words
+      // rather than as an inscrutable analyzer error, and it catches a
+      // renamed member before the build does.
+      expect(guardOverriddenMembers().difference(stateManPublicMembers()),
+          isEmpty);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The forwarding-completeness derivation
+// ---------------------------------------------------------------------------
+//
+// "Callers change nothing" is checked here rather than asserted in a doc
+// comment. Both sides are read from source at test time with comment lines
+// stripped, because otherwise the comment explaining the rule would be free to
+// satisfy the test enforcing it.
+
+/// Members of `StateMan` that [GuardedStateMan] does not have to forward, and
+/// why. An explicit list rather than a regex nobody can read.
+const Map<String, String> kNotPartOfTheInterface = <String, String>{
+  'applyBitMask': 'static, so not part of the implicit interface',
+  'create': 'a static factory, not an instance member',
+  'StateMan': 'the class name, if a declaration line ever yields it',
+};
+
+/// Anything starting with an underscore is private and invisible to
+/// `implements`, so it is filtered rather than listed: `StateMan._` (the
+/// constructor), `_subscriptions`, `_monitor` and the rest.
+bool _isPrivate(String name) => name.startsWith('_');
+
+/// A method or setter declaration at two-space indent: a type, a name, then a
+/// parenthesis. `set alias(String v)` matches with `set` as the type.
+final RegExp _methodDecl =
+    RegExp(r'^  (?! )(?:static\s+)?[\w$<>?,\[\] ]+\s+([a-zA-Z_$][\w$]*)\s*\(');
+
+/// A getter declaration at two-space indent.
+final RegExp _getterDecl =
+    RegExp(r'^  (?! ).*\bget\s+([a-zA-Z_$][\w$]*)\s*(?:=>|\{|;)');
+
+/// A field declaration at two-space indent: an optional type, a name, then an
+/// initializer or a semicolon. `=[^>]` keeps it from swallowing a `=>` getter.
+final RegExp _fieldDecl = RegExp(
+    r'^  (?! )(?:late\s+)?(?:final\s+|const\s+|static\s+)*(?:[\w$<>?,\[\] ]+\s+)?'
+    r'([a-zA-Z_$][\w$]*)\s*(?:=[^>]|;)');
+
+/// [path]'s lines with every whole-line comment dropped.
+///
+/// Whole-line only, which is all that is needed and all that is honest: a
+/// trailing `// ...` cannot fabricate a declaration, and a doc comment
+/// mentioning a member name can.
+List<String> _sourceLinesWithoutComments(String path) {
+  final file = File(path);
+  expect(file.existsSync(), isTrue,
+      reason: 'Run this suite from packages/tfc_dart. Without $path these '
+          'source assertions would pass vacuously.');
+  return file
+      .readAsLinesSync()
+      .where((line) => !line.trimLeft().startsWith('//'))
+      .toList();
+}
+
+/// The body of `class [name]` in [lines], from the head to its closing brace.
+List<String> _classBody(List<String> lines, String name) {
+  final start = lines.indexWhere((l) => l.trimRight() == 'class $name {');
+  expect(start, isNonNegative,
+      reason: 'could not find the head of class $name; the derivation below '
+          'would silently read nothing');
+  final end = lines.indexWhere((l) => l == '}', start + 1);
+  expect(end, isNonNegative, reason: 'class $name has no closing brace');
+  return lines.sublist(start + 1, end);
+}
+
+/// The name declared on [line], or null when it declares nothing.
+String? _declaredName(String line) {
+  for (final pattern in [_methodDecl, _getterDecl, _fieldDecl]) {
+    final match = pattern.firstMatch(line);
+    if (match != null) return match.group(1);
+  }
+  return null;
+}
+
+/// Every public instance member of `StateMan`, derived from its source.
+Set<String> stateManPublicMembers() {
+  final body = _classBody(
+      _sourceLinesWithoutComments('lib/core/state_man.dart'), 'StateMan');
+  return {
+    for (final line in body)
+      if (_declaredName(line) case final name?)
+        if (!_isPrivate(name) && !kNotPartOfTheInterface.containsKey(name))
+          name,
+  };
+}
+
+/// Every member `GuardedStateMan` declares with `@override`.
+///
+/// The annotation is what is counted, not the presence of the name anywhere in
+/// the file: a name in a doc comment is stripped before this runs, and a
+/// private helper that happens to share a name is not an override.
+Set<String> guardOverriddenMembers() {
+  final body = _classBody(
+      _sourceLinesWithoutComments('lib/core/access/guarded_state_man.dart'),
+      'GuardedStateMan implements StateMan');
+  final names = <String>{};
+  for (var i = 0; i < body.length; i++) {
+    if (body[i].trim() != '@override') continue;
+    // Skip any further annotations (`@visibleForTesting`) and blank lines.
+    var j = i + 1;
+    while (j < body.length &&
+        (body[j].trim().isEmpty || body[j].trim().startsWith('@'))) {
+      j++;
+    }
+    if (j >= body.length) continue;
+    final name = _declaredName(body[j]);
+    if (name != null) names.add(name);
+  }
+  return names;
 }
 
 /// An `onDenied` firing, journalled so its position relative to the rows and
