@@ -140,9 +140,11 @@ flutter run -d macos
 
 ### Profiling
 
-The station image `ghcr.io/centroid-is/centroid-hmi:latest-profile` is a
-Flutter **profile** build — AOT-compiled like release, so its timings are the
-ones an operator feels, but with the Dart VM Service left in. `tools/hmi_profiler.py`
+`ghcr.io/centroid-is/centroid-hmi:latest-profile` is a Flutter **profile**
+build — AOT-compiled like release, so its timings are the ones an operator
+feels, but with the Dart VM Service left in. It is an extra tag alongside
+`latest` and `latest-release`, which are unchanged; point a station's compose
+at it when you want to profile that station. `tools/hmi_profiler.py`
 turns that into a markdown report: frame build/raster percentiles, the call
 tree behind them, timeline blocks and the largest classes on the heap — led by
 a "Where to look" summary.

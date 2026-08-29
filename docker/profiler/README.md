@@ -20,6 +20,20 @@ performance numbers it reports are real, unlike a debug/JIT build — and pays
 for the instrumentation with a slightly larger binary and the sampling
 profiler's overhead while a profile is actually being taken.
 
+It is an **extra** tag. `latest` (debug) and `latest-release` (release) are
+built exactly as before and keep their meaning, and the compose file here still
+deploys `latest`. Switching a station to `latest-profile` is a deliberate act:
+
+```sh
+# in that station's docker-compose.yml
+image: ghcr.io/centroid-is/centroid-hmi:latest-profile
+docker compose up -d --force-recreate flutter profiler
+```
+
+`latest` also exposes a VM service, so the profiler works against it — but a
+JIT build's timings say little about what a station actually does, which is
+the whole reason `latest-profile` exists.
+
 The engine then needs three switches. The flutter-elinux embedder reads them
 from the environment (`GetSwitchesFromEnvironment`), which is why they are
 plain compose `environment:` entries rather than command-line arguments:

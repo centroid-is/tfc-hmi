@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Read the Dart VM Service of a running CentroidX and report on performance.
 
-The `latest-release` container image is a Flutter *profile* build: AOT-compiled
+The `latest-profile` container image is a Flutter *profile* build: AOT-compiled
 like release, but with the Dart VM Service, the sampling CPU profiler and the
-`Flutter.Frame` timing events still compiled in. This script talks to that
-service and turns it into something a person — or an LLM asked to "find where
-the app is slow" — can read without opening DevTools.
+`Flutter.Frame` timing events still compiled in. (`latest-release` remains a
+release build, which strips all three; `latest` is debug/JIT and does expose a
+service, but its timings are a JIT build's.) This script talks to that service
+and turns it into something a person — or an LLM asked to "find where the app
+is slow" — can read without opening DevTools.
 
 No third-party packages. The WebSocket client below is deliberately small so
 the script runs anywhere python3 does, including a stock `python:alpine`.
