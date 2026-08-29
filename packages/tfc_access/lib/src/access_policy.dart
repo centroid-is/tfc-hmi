@@ -79,7 +79,18 @@ enum PrefRuleKind { exact, prefix, suffix }
 /// A single classification rule for a preference key.
 typedef PrefAccessRule = ({PrefRuleKind kind, String match, AccessGroup group});
 
-/// The declared group for each preference key, in precedence order.
+/// The declared group for every preference key the app writes today.
+///
+/// Derived by resolving key *expressions* to their literals across `lib/` and
+/// the two `tfc_dart` core files that write preferences — not by grepping for
+/// string literals. The keys that matter here are constants and interpolations
+/// at the call site (`storageKey`, `orderStorageKey`, the `page_editor_image:`
+/// interpolation and the `.recipes` bucket interpolation), all invisible to a
+/// literal grep, which is how spec §7's original table came to name `page.*`
+/// and miss `page_editor_data` entirely. The resolved inventory is pasted into
+/// `test/access_policy_test.dart` with a line per call site, and a test there
+/// asserts every literal it produced is matched by a rule below rather than
+/// resting on the default.
 ///
 /// Precedence is **exact, then prefix, then suffix, then the `administer`
 /// default** — see [PrefRuleKind], which carries that order. The list is
@@ -87,10 +98,118 @@ typedef PrefAccessRule = ({PrefRuleKind kind, String match, AccessGroup group});
 /// decides: [AccessPolicy.groupForPref] iterates by kind, so inserting a rule
 /// in the wrong block cannot change precedence.
 const List<PrefAccessRule> kPrefAccessRules = <PrefAccessRule>[
-  // Task 2 of this plan fills this list, from key expressions resolved to
-  // their literals. Empty here on purpose: with no rules every key falls to
-  // the `administer` default, which is the fail-closed behaviour this file
-  // ships and the thing Task 1's tests pin.
+  // ---------------------------------------------------------------------
+  // exact -> configure. **Route parity.** Phase 2 raised
+  // `/advanced/page-editor`, `/advanced/alarm-editor` and
+  // `/advanced/key-repository` to `configure`. A key those pages save is the
+  // same concern as the page that saves it, and classifying it `administer`
+  // would ship a role that can open the editor and cannot save from it — a
+  // defect nobody sees until Phase 6 creates such a role.
+  //
+  // `page_editor_data` is also written at boot with nobody signed in
+  // (`page.dart:247`, unawaited, from `PageManager.load()`), so under the
+  // fail-closed default a fresh station would have shown no pages at all.
+  (kind: PrefRuleKind.exact, match: 'page_editor_data', group: AccessGroup.configure),
+  (kind: PrefRuleKind.exact, match: 'page_editor_top_level_order', group: AccessGroup.configure),
+  (kind: PrefRuleKind.exact, match: 'key_mappings', group: AccessGroup.configure),
+  // `alarm_man_config` is written by AlarmMan.create at boot when the key is
+  // absent, and otherwise only by addAlarm/removeAlarm/updateAlarm — human
+  // actions behind the configure-gated alarm editor. Acknowledging an alarm
+  // writes nothing, so this rule does not stand between an operator and an
+  // alarm ack.
+  (kind: PrefRuleKind.exact, match: 'alarm_man_config', group: AccessGroup.configure),
+
+  // ---------------------------------------------------------------------
+  // exact -> operate. These are what a panel writes about *itself*: its theme,
+  // which page it starts on, the colours somebody recently picked, the session
+  // payload. They are not plant configuration, and gating them would make the
+  // guard's first visible effect a panel that cannot remember its own
+  // appearance.
+  //
+  // They are in the table rather than exempted from it, so they appear in the
+  // audit trail and so an edited `Operator` role still governs them: strip
+  // `operate` from Operator and these become deniable, which "unrestricted"
+  // could never be.
+  (kind: PrefRuleKind.exact, match: 'theme_mode', group: AccessGroup.operate),
+  (kind: PrefRuleKind.exact, match: 'color_scheme', group: AccessGroup.operate),
+  (kind: PrefRuleKind.exact, match: 'startup_url', group: AccessGroup.operate),
+  (kind: PrefRuleKind.exact, match: 'asset_stack_config', group: AccessGroup.operate),
+  (kind: PrefRuleKind.exact, match: 'color_picker_recent_colors', group: AccessGroup.operate),
+  // Written on every poke() — i.e. every pointer-down. A denial here would fire
+  // continuously.
+  (kind: PrefRuleKind.exact, match: 'access.session', group: AccessGroup.operate),
+  (kind: PrefRuleKind.exact, match: 'access.inactivity_timeout_minutes', group: AccessGroup.operate),
+
+  // ---------------------------------------------------------------------
+  // exact -> administer. Server, database and machine configuration.
+  (kind: PrefRuleKind.exact, match: 'server_config_envelope', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'state_man_config', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'collector_config', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'update_channel', group: AccessGroup.administer),
+  // The five dbus_login keys (`dbus_login.dart:127-131`). Bare, generic names
+  // with no prefix to hang a rule on, so each is spelled out. D-Bus is the
+  // mechanism *underneath* `administer` — its credential is a station
+  // credential and it is how the app makes system-level changes — so these are
+  // the strictest thing in the table even though they read like UI state.
+  (kind: PrefRuleKind.exact, match: 'connectionType', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'host', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'username', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'autoLogin', group: AccessGroup.administer),
+  (kind: PrefRuleKind.exact, match: 'sshPrivateKeyPath', group: AccessGroup.administer),
+
+  // ---------------------------------------------------------------------
+  // prefix -> configure.
+  // One preference key per stored page-editor image (`image_store.dart:94`).
+  (kind: PrefRuleKind.prefix, match: 'page_editor_image:', group: AccessGroup.configure),
+  // Forward-looking only. **No key in the tree matches `page.`, `alarm.` or
+  // `keymap.` today** — the real names use underscores, which is the defect
+  // spec §7 was amended to fix. They are kept so a dotted key added later
+  // lands on `configure` rather than on the `administer` default, and they are
+  // explicitly not the load-bearing rules: deleting them changes nothing about
+  // the app as it stands.
+  (kind: PrefRuleKind.prefix, match: 'page.', group: AccessGroup.configure),
+  (kind: PrefRuleKind.prefix, match: 'alarm.', group: AccessGroup.configure),
+  (kind: PrefRuleKind.prefix, match: 'keymap.', group: AccessGroup.configure),
+
+  // ---------------------------------------------------------------------
+  // prefix -> operate. Per-conversation chat state, one key per conversation
+  // (`chat.dart:340`), plus the history and conversation-list keys. Device
+  // local, like the block above.
+  (kind: PrefRuleKind.prefix, match: 'chat.', group: AccessGroup.operate),
+
+  // ---------------------------------------------------------------------
+  // prefix -> administer. The restrictive prefixes, and the reason prefix
+  // outranks suffix; see [PrefRuleKind].
+  //
+  // `mcp.`, `database`, `network`, `ip_` and `hostname` match no key in the
+  // tree today and are forward-looking, exactly as the block above is — but
+  // these fail in the safe direction, so a key added later that nobody
+  // classified lands on `administer` either way.
+  (kind: PrefRuleKind.prefix, match: 'database', group: AccessGroup.administer),
+  (kind: PrefRuleKind.prefix, match: 'network', group: AccessGroup.administer),
+  (kind: PrefRuleKind.prefix, match: 'ip_', group: AccessGroup.administer),
+  (kind: PrefRuleKind.prefix, match: 'hostname', group: AccessGroup.administer),
+  (kind: PrefRuleKind.prefix, match: 'mcp.', group: AccessGroup.administer),
+  // Six keys, three of them API keys (`llm_provider.dart:4-11`).
+  (kind: PrefRuleKind.prefix, match: 'llm.', group: AccessGroup.administer),
+
+  // ---------------------------------------------------------------------
+  // suffix -> setpoints. The one suffix rule, and the one reason suffixes
+  // exist at all: `recipes.dart:266,280` builds the key as
+  // `'${widget.config.recipesBucket}.recipes'`, so the bucket is a runtime
+  // value and only the tail is knowable here.
+  //
+  // `setpoints` rather than `configure` because REQUIREMENTS.md's shift-leader
+  // story is "I sign in to change a setpoint or a recipe" — one breath — and
+  // spec §1 glosses `setpoints` as "targets, limits, recipes". Shift Leader
+  // holds {operate, setpoints}, so this is what lets one save a recipe.
+  //
+  // `recipes.dart:266` writes an empty default on the **read** path, which
+  // fires for an anonymous operator merely opening a recipes asset. That write
+  // is covered by this same rule and would be denied for an anonymous
+  // operator; plan 03-06's read-path handling is where that is addressed, and
+  // it is called out here so the next reader does not rediscover it.
+  (kind: PrefRuleKind.suffix, match: '.recipes', group: AccessGroup.setpoints),
 ];
 
 /// The single place that answers "what does writing *this* require?".
