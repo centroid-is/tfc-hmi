@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max, min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +12,7 @@ import '../../widgets/alarm.dart'
     show AlarmNotificationColors, ViewActiveAlarm, alarmLevelColors;
 import '../../widgets/alarm_pulse.dart';
 import '../../widgets/fuzzy_search_bar.dart';
+import '../../widgets/hit_boundary.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'common.dart';
@@ -255,14 +257,106 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
   /// otherwise fall back to the config size resolved against the screen.
   Widget _sizedPaint(CustomPainter painter) {
     return LayoutBuilder(
+      builder: (context, constraints) => CustomPaint(
+        size: _paintSize(context, constraints),
+        painter: painter,
+      ),
+    );
+  }
+
+  Size _paintSize(BuildContext context, BoxConstraints constraints) {
+    if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+      return Size(constraints.maxWidth, constraints.maxHeight);
+    }
+    return widget.config.size.toSize(MediaQuery.of(context).size);
+  }
+
+  /// Diameter of the beacon's tap region for a drawing of [paintSize].
+  ///
+  /// Sized from the marker, then floored so a finger can still land on it:
+  ///
+  ///  * the marker's own outer ring — the SAME expression the idle painter
+  ///    draws with (`maxRadius * AlarmIdlePainter.outerRingFactor`, i.e.
+  ///    `shortestSide * factor` as a diameter), so the target tracks the
+  ///    drawing if that ever changes;
+  ///  * never smaller than [kMinInteractiveDimension], and never wider than
+  ///    the box. At the default asset size (0.03 x 0.03 of the page) the box
+  ///    is only ~32 px tall on a 1080p panel, which puts a marker-sized
+  ///    target at ~13 px — untappable on a touch station. Growing to the box
+  ///    is safe exactly there: a box that small is not a large invisible
+  ///    click target in the first place.
+  double _hitDiameter(Size paintSize) {
+    final shortestSide = paintSize.shortestSide;
+    final markerDiameter = shortestSide * AlarmIdlePainter.outerRingFactor;
+    return min(shortestSide, max(markerDiameter, kMinInteractiveDimension));
+  }
+
+  /// Draws [paint] across the whole placed box (unchanged visual) but only
+  /// takes taps on a centred region about the size of the idle marker — so a
+  /// tap near the marker opens the pane while a tap in the empty space around
+  /// it falls through to whatever is beneath.
+  ///
+  /// A placed beacon's box is many times its drawing: idle it draws only a
+  /// small dot/ring in the centre, so an opaque full-box `GestureDetector`
+  /// (the old behaviour) made that whole box a large invisible click target
+  /// that swallowed taps over empty space on a dense mimic.
+  ///
+  /// The active pulse's centre dot (`dotRadiusFactor` 0.22) is smaller than
+  /// the marker's outer ring, so a marker-sized region covers the active look
+  /// too — the operator asked for "roughly the size of the idle marker", and
+  /// the transient expanding rings are not meant to be a tap surface.
+  ///
+  /// A non-hit falls through to whatever is beneath because the drawing is
+  /// wrapped in an [IgnorePointer] — without it the beacon would stop opening
+  /// its pane but still swallow the tap, which is worse than the full-box
+  /// target it replaced. `RenderCustomPaint.hitTestSelf` is
+  /// `painter.hitTest(position) ?? true`, so a background painter that does
+  /// not override `hitTest` (neither of these two do — they are shared with
+  /// the navigation badge, which is not tappable at all) claims every point
+  /// in its box. Past that, the `Stack` does not hit-test itself, so the
+  /// centred `GestureDetector` is the only thing left that can answer.
+  ///
+  /// A rotated placement rotates this whole subtree about its centre, so the
+  /// centred region stays over the (rotation-invariant) marker.
+  ///
+  /// Because the beacon no longer takes taps on its whole face it publishes
+  /// the region it does take them on ([AssetHitShape]), so the mark the plant
+  /// view draws while this beacon's pane is open outlines the tap target
+  /// instead of the box around it — the default for an asset that publishes
+  /// nothing is its face, and for this one that would now be a lie.
+  Widget _markerTappable({
+    required Widget Function(Size paintSize) paint,
+    required VoidCallback onTap,
+  }) {
+    return LayoutBuilder(
       builder: (context, constraints) {
-        final Size paintSize;
-        if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
-          paintSize = Size(constraints.maxWidth, constraints.maxHeight);
-        } else {
-          paintSize = widget.config.size.toSize(MediaQuery.of(context).size);
-        }
-        return CustomPaint(size: paintSize, painter: painter);
+        final paintSize = _paintSize(context, constraints);
+        final hitDiameter = _hitDiameter(paintSize);
+        return AssetHitShape(
+          // The `SizedBox` below is the tap target, so the published shape is
+          // that same square — not a circle drawn to match the marker, which
+          // would be a second opinion about where taps land.
+          shape: () => Path()
+            ..addRect(Rect.fromCenter(
+              center: Offset(paintSize.width / 2, paintSize.height / 2),
+              width: hitDiameter,
+              height: hitDiameter,
+            )),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              IgnorePointer(child: paint(paintSize)),
+              SizedBox(
+                width: hitDiameter,
+                height: hitDiameter,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onTap,
+                ),
+              ),
+            ],
+          ),
+        );
       },
     );
   }
@@ -287,13 +381,16 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
       // The linked alarm's own colours — the exact pair its card renders
       // with in the alarm list and app-bar banner.
       final (fill, ring) = _active.first.notification.getColors(context);
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      // The `AnimatedBuilder` sits *under* the layout/hit-test scaffolding so
+      // a ticking beacon rebuilds one `CustomPaint`, not a `LayoutBuilder`
+      // (and its layout pass) every frame — this runs 24/7 on a mimic.
+      return _markerTappable(
         onTap: () => _showPane(context),
-        child: AnimatedBuilder(
+        paint: (paintSize) => AnimatedBuilder(
           animation: _controller,
-          builder: (context, _) => _sizedPaint(
-            AlarmPulsePainter(
+          builder: (context, _) => CustomPaint(
+            size: paintSize,
+            painter: AlarmPulsePainter(
               color: fill,
               dotOutlineColor: ring,
               progress: _controller.value,
@@ -311,14 +408,21 @@ class _AlarmVisibilityState extends ConsumerState<AlarmVisibility>
       return const SizedBox.shrink();
     }
     final outline = Theme.of(context).colorScheme.outline;
-    final marker = _sizedPaint(
-      AlarmIdlePainter(color: outline.withValues(alpha: editing ? 0.9 : 0.5)),
-    );
-    if (editing) return marker;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    if (editing) {
+      // Editor placeholder: no tap target (selection/drag is the page
+      // editor's own gesture layer).
+      return _sizedPaint(
+        AlarmIdlePainter(color: outline.withValues(alpha: 0.9)),
+      );
+    }
+    // Page view, showWhenInactive: the marker is tappable, but only on the
+    // marker itself — not the empty box around it.
+    return _markerTappable(
       onTap: () => _showPane(context),
-      child: marker,
+      paint: (paintSize) => CustomPaint(
+        size: paintSize,
+        painter: AlarmIdlePainter(color: outline.withValues(alpha: 0.5)),
+      ),
     );
   }
 }

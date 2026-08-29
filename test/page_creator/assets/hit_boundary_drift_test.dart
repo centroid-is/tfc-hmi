@@ -23,6 +23,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
+import 'package:tfc/page_creator/assets/alarm_visibility.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
@@ -211,6 +212,25 @@ void main() {
     expect(target.left, greaterThanOrEqualTo(0),
         reason: 'the hub painted outside the box cannot answer a tap, so the '
             'gate does not claim it');
+  });
+
+  testWidgets('an alarm beacon publishes the marker it takes taps on',
+      (tester) async {
+    // The beacon draws a small marker in the middle of a much larger placed
+    // box and only takes taps there, so the mark has to outline the marker —
+    // a face-sized rectangle around a dot is the drift this test exists for.
+    final beacon = AlarmVisibilityConfig(showWhenInactive: true)
+      ..coordinates = Coordinates(x: 0.5, y: 0.5)
+      ..size = const RelativeSize(width: 0.3, height: 0.3);
+
+    final asset = await pumpAsset(tester, beacon);
+    expectShapeMatchesHitTest(asset);
+
+    // And it really is a fraction of the box, not the box under another name.
+    final face = Offset.zero & asset.box.size;
+    final target = asset.shape.getBounds();
+    expect(target.width, lessThan(face.width * 0.5),
+        reason: 'the empty box around the marker no longer takes taps');
   });
 
   testWidgets('an asset that publishes nothing takes taps on its whole face',
