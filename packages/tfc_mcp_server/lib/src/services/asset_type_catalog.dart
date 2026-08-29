@@ -866,13 +866,27 @@ class AssetTypeCatalog {
       displayName: 'Beckhoff EL9222',
       category: 'Beckhoff Devices',
       description:
-          'Visualization of a Beckhoff EL9222 2-channel overcurrent '
-          'protection terminal. Shows channel status and trip state.',
+          'Beckhoff EL9222 2-channel overcurrent protection terminal. The '
+          'face shows which channel has tripped and a tap opens a pane that '
+          'resets it. Without stateKey it is only a drawing.',
       properties: [
         AssetPropertyInfo(
-            name: 'keys',
-            type: 'List<String>',
-            description: 'Tag keys for channel status'),
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Terminal name shown on the pane, e.g. ST101.A1.02'),
+        AssetPropertyInfo(
+            name: 'stateKey',
+            type: 'String?',
+            description:
+                "Key of the terminal's ST_EL9222_5500 struct — the 16 status "
+                'bits and 4 command bits for both channels. Required for any '
+                'live state or reset'),
+        AssetPropertyInfo(
+            name: 'descriptionsKey',
+            type: 'String?',
+            description:
+                'Optional array of what each channel feeds, one entry per '
+                'channel, named in the pane'),
       ],
     ),
     AssetTypeInfo(

@@ -144,6 +144,7 @@ BeckhoffEL9222Config _$BeckhoffEL9222ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEL9222Config(
       nameOrId: json['nameOrId'] as String,
+      stateKey: json['stateKey'] as String?,
       descriptionsKey: json['descriptionsKey'] as String?,
     )
       ..variant = json['asset_name'] as String
@@ -166,6 +167,7 @@ Map<String, dynamic> _$BeckhoffEL9222ConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'nameOrId': instance.nameOrId,
+      'stateKey': instance.stateKey,
       'descriptionsKey': instance.descriptionsKey,
     };
 
