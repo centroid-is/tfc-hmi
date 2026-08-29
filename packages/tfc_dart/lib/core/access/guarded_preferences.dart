@@ -16,6 +16,12 @@ const String _anonymousWho = 'anonymous';
 /// store is what was affected.
 const String _wholeStoreItemKey = '*';
 
+/// A hand-made write. Spec §2's default.
+const String _operatorOrigin = 'operator';
+
+/// A write the app made for itself, with nobody signed in.
+const String _systemOrigin = 'system';
+
 /// A [Preferences] that gates every write on the current session and writes one
 /// audit row per write, denials included, and forwards every read untouched.
 ///
@@ -145,6 +151,33 @@ class GuardedPreferences implements Preferences {
       throw denial;
     }
 
+    await _commit(
+      session: session,
+      key: key,
+      group: group,
+      newValue: newValue,
+      readOldValue: readOldValue,
+      write: write,
+      actionId: actionId,
+      origin: _operatorOrigin,
+    );
+  }
+
+  /// Read the old value, write the row, then delegate.
+  ///
+  /// Shared by the checked path and by [systemWrites], so the row a boot-time
+  /// default produces is built by the same code as any other — the only
+  /// difference is [origin], and the check that did not happen.
+  Future<void> _commit({
+    required AccessSession session,
+    required String key,
+    required AccessGroup group,
+    required String? newValue,
+    required Future<String?> Function()? readOldValue,
+    required Future<void> Function() write,
+    required String actionId,
+    required String origin,
+  }) async {
     String? oldValue;
     if (readOldValue != null) {
       try {
@@ -165,9 +198,35 @@ class GuardedPreferences implements Preferences {
       newValue: newValue,
       allowed: true,
       actionId: actionId,
+      origin: origin,
     ));
     await write();
   }
+
+  /// The unchecked write [systemWrites] performs: no session check, one row,
+  /// [_systemOrigin].
+  ///
+  /// [group] is still resolved and still recorded, so the trail shows what
+  /// authority was skipped rather than showing none. `who` and `roleName` are
+  /// whoever was standing at the panel — usually nobody, at boot — because
+  /// that is the honest answer to "who was there when the machine did this".
+  Future<void> _uncheckedWrite({
+    required String key,
+    required AccessGroup group,
+    required String? newValue,
+    required Future<String?> Function()? readOldValue,
+    required Future<void> Function() write,
+  }) =>
+      _commit(
+        session: _session(),
+        key: key,
+        group: group,
+        newValue: newValue,
+        readOldValue: readOldValue,
+        write: write,
+        actionId: newActionId(),
+        origin: _systemOrigin,
+      );
 
   AuditRecord _row({
     required AccessSession session,
@@ -177,7 +236,7 @@ class GuardedPreferences implements Preferences {
     required String? newValue,
     required bool allowed,
     required String actionId,
-    String origin = 'operator',
+    String origin = _operatorOrigin,
   }) =>
       AuditRecord(
         at: DateTime.now(),
@@ -212,6 +271,16 @@ class GuardedPreferences implements Preferences {
           error: error, stackTrace: stackTrace);
     }
   }
+
+  _SystemPreferences? _systemWrites;
+
+  /// The app's own boot-time defaults, written with nobody signed in.
+  ///
+  /// See [_SystemPreferences] for what this is, which call sites may use it,
+  /// and what it costs. It is a separate object rather than a parameter on the
+  /// members above, because a parameter would be one keystroke from being
+  /// copied into an operator path.
+  Preferences get systemWrites => _systemWrites ??= _SystemPreferences(this);
 
   // ---------------------------------------------------------------------------
   // Reads — straight through. No lookup, no row, no denial.
@@ -379,6 +448,216 @@ class GuardedPreferences implements Preferences {
   // costs: the test that calls it holds a Preferences, and after plan 03-06
   // that Preferences is this one. The ignore covers the forward, not a missing
   // implementation.
+  @override
+  // ignore: invalid_use_of_visible_for_testing_member
+  Future<void> syncToLocalCache() => _inner.syncToLocalCache();
+
+  @override
+  Future<void> loadFromPostgres() => _inner.loadFromPostgres();
+}
+
+/// The one write path that skips the session check — the app's own boot-time
+/// defaults, and nothing else.
+///
+/// ## Why it exists
+///
+/// The app writes its own defaults at boot with nobody signed in. Under a
+/// fail-closed config guard every one of these is an `administer` denial, and
+/// the station does not come up:
+///
+/// - `lib/providers/state_man.dart:26` — default `key_mappings` on a fresh
+///   station, inside `stateManProvider`.
+/// - `packages/tfc_dart/lib/core/state_man.dart:443` — `StateManConfig`'s
+///   default, written with `secret: true, saveToDb: false`. It takes a
+///   `Preferences`, which is why this object is typed `Preferences` and not
+///   `PreferencesApi`.
+/// - `lib/page_creator/page.dart:247`, reached from
+///   `lib/providers/page_manager.dart:29` — the default page layout. This one
+///   is **unawaited**, so a denial there surfaces as an unhandled asynchronous
+///   error: the station shows the hardcoded layout, never persists it, and
+///   prompts whoever is standing there on every cold boot.
+/// - `packages/tfc_dart/lib/core/alarm.dart:220`, reached from
+///   `lib/providers/alarm.dart:13` — the default `alarm_man_config`.
+/// - `lib/providers/collector.dart:27` — the default `collector_config`.
+/// - `lib/providers/mcp_bridge.dart:112` — the MCP config migration's removes.
+///
+/// Plan 03-06 owns that list, routes each site through here and caps the set
+/// with a test. It has already grown once, from three to six. **Anything else
+/// using this is a defect**, not a shortcut.
+///
+/// ## Why a named object and not a flag
+///
+/// The alternative was to make those paths fail open by key pattern. That would
+/// put permanently unguarded keys in the policy table, and the next person
+/// adding a boot default would add another without anyone noticing. A named
+/// object with counted call sites is the version that stays visible.
+///
+/// ## Why it still writes a row
+///
+/// Spec §2: `origin` defaults to hand-made on purpose, so an unmarked machine
+/// caller lands *in* the trail loudly rather than escaping it silently — an
+/// absent audit row is the one defect nobody ever notices. Every write through
+/// here is recorded with `origin: 'system'`, `allowed: true` and the group that
+/// would have been required.
+///
+/// ## Residual risk
+///
+/// Anything holding a `GuardedPreferences` can reach
+/// [GuardedPreferences.systemWrites] and write any configuration key without a
+/// check. The controls are plan 03-06's call-site test and the fact that this
+/// is a named member somebody has to type on purpose. Phase 4 can narrow it
+/// further by moving the boot defaults behind a first-run path. Nothing here
+/// makes it unreachable.
+class _SystemPreferences implements Preferences {
+  _SystemPreferences(this._owner);
+
+  final GuardedPreferences _owner;
+
+  Preferences get _inner => _owner._inner;
+
+  // ---------------------------------------------------------------------------
+  // Writes — unchecked, still audited.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<void> setBool(String key, bool value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _owner._uncheckedWrite(
+        key: key,
+        group: _owner._groupFor(key),
+        newValue: secret ? null : '$value',
+        readOldValue: _owner._oldValueOf(
+            secret, () async => (await _inner.getBool(key))?.toString()),
+        write: () =>
+            _inner.setBool(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setInt(String key, int value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _owner._uncheckedWrite(
+        key: key,
+        group: _owner._groupFor(key),
+        newValue: secret ? null : '$value',
+        readOldValue: _owner._oldValueOf(
+            secret, () async => (await _inner.getInt(key))?.toString()),
+        write: () =>
+            _inner.setInt(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setDouble(String key, double value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _owner._uncheckedWrite(
+        key: key,
+        group: _owner._groupFor(key),
+        newValue: secret ? null : '$value',
+        readOldValue: _owner._oldValueOf(
+            secret, () async => (await _inner.getDouble(key))?.toString()),
+        write: () =>
+            _inner.setDouble(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setString(String key, String value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _owner._uncheckedWrite(
+        key: key,
+        group: _owner._groupFor(key),
+        newValue: secret ? null : value,
+        readOldValue: _owner._oldValueOf(secret, () => _inner.getString(key)),
+        write: () =>
+            _inner.setString(key, value, saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> setStringList(String key, List<String> value,
+          {bool saveToDb = true, bool secret = false}) =>
+      _owner._uncheckedWrite(
+        key: key,
+        group: _owner._groupFor(key),
+        newValue: secret ? null : value.join(','),
+        readOldValue: _owner._oldValueOf(
+            secret, () async => (await _inner.getStringList(key))?.join(',')),
+        write: () => _inner.setStringList(key, value,
+            saveToDb: saveToDb, secret: secret),
+      );
+
+  @override
+  Future<void> remove(String key, {bool secret = false}) =>
+      _owner._uncheckedWrite(
+        key: key,
+        group: _owner._groupFor(key),
+        newValue: null,
+        readOldValue: _owner._oldValueOf(
+            secret, () async => (await _inner.getAll())[key]?.toString()),
+        write: () => _inner.remove(key, secret: secret),
+      );
+
+  @override
+  Future<void> clear({Set<String>? allowList}) => _owner._uncheckedWrite(
+        key: _wholeStoreItemKey,
+        group: AccessGroup.administer,
+        newValue: null,
+        readOldValue: null,
+        write: () => _inner.clear(allowList: allowList),
+      );
+
+  // ---------------------------------------------------------------------------
+  // Everything else — the same store, forwarded, indistinguishable from the
+  // guard's own reads.
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<Set<String>> getKeys({Set<String>? allowList}) =>
+      _inner.getKeys(allowList: allowList);
+
+  @override
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) =>
+      _inner.getAll(allowList: allowList);
+
+  @override
+  Future<bool?> getBool(String key, {bool secret = false}) =>
+      _inner.getBool(key, secret: secret);
+
+  @override
+  Future<int?> getInt(String key, {bool secret = false}) =>
+      _inner.getInt(key, secret: secret);
+
+  @override
+  Future<double?> getDouble(String key, {bool secret = false}) =>
+      _inner.getDouble(key, secret: secret);
+
+  @override
+  Future<String?> getString(String key, {bool secret = false}) =>
+      _inner.getString(key, secret: secret);
+
+  @override
+  Future<List<String>?> getStringList(String key, {bool secret = false}) =>
+      _inner.getStringList(key, secret: secret);
+
+  @override
+  Future<bool> containsKey(String key, {bool secret = false}) =>
+      _inner.containsKey(key, secret: secret);
+
+  @override
+  Database? get database => _inner.database;
+
+  @override
+  KeyCache get keyCache => _inner.keyCache;
+
+  @override
+  MySecureStorage get secureStorage => _inner.secureStorage;
+
+  @override
+  PreferencesApi? get localCache => _inner.localCache;
+
+  @override
+  Stream<String> get onPreferencesChanged => _inner.onPreferencesChanged;
+
+  @override
+  Future<bool> isKeyInDatabase(String key) => _inner.isKeyInDatabase(key);
+
   @override
   // ignore: invalid_use_of_visible_for_testing_member
   Future<void> syncToLocalCache() => _inner.syncToLocalCache();
