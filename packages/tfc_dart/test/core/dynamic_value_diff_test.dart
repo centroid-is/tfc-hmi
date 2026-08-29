@@ -8,9 +8,11 @@
 // jog.
 
 import 'dart:collection' show LinkedHashMap;
+import 'dart:io' show File;
 
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:test/test.dart';
+import 'package:tfc_access/tfc_access.dart' show AuditRecord;
 import 'package:tfc_dart/core/access/dynamic_value_diff.dart';
 
 /// A struct built the way the assets build one: a fresh [DynamicValue] with
@@ -301,6 +303,115 @@ void main() {
       expect(changes.single.oldValue, 'short',
           reason: 'a short rendering carries no marker, so a reader can tell '
               'the two apart');
+    });
+  });
+
+  group('auditRecordsForChanges', () {
+    final at = DateTime.utc(2026, 8, 29, 11, 30);
+
+    List<AuditRecord> records(
+      List<MemberChange> changes, {
+      bool allowed = true,
+      String origin = 'operator',
+      String? reason,
+    }) =>
+        auditRecordsForChanges(
+          changes: changes,
+          at: at,
+          who: 'gudrun',
+          station: 'SVN-NES-OT-CL02',
+          roleName: 'Supervisor',
+          surface: 'tag',
+          itemKey: 'CN04.MTR01.p_cfg',
+          groupRequired: 'configure',
+          allowed: allowed,
+          actionId: 'f2c1a09b4d6e8f01a2b3c4d5e6f70819',
+          origin: origin,
+          reason: reason,
+        );
+
+    final threeChanges = <MemberChange>[
+      const MemberChange(member: 'Freq', oldValue: '42.5', newValue: '47.5'),
+      const MemberChange(member: 'Ramp', oldValue: '3', newValue: '5'),
+      const MemberChange(member: 'Note', oldValue: null, newValue: ''),
+    ];
+
+    test('N changes become N records sharing one action and every field but '
+        'the member', () {
+      final rows = records(threeChanges);
+      expect(rows, hasLength(3));
+
+      final first = rows.first;
+      for (final row in rows) {
+        // Compared to the first row rather than to a literal, so a field that
+        // ought to be shared and is not fails here rather than silently
+        // splitting one action into three.
+        expect(row.actionId, first.actionId);
+        expect(row.at, first.at);
+        expect(row.who, first.who);
+        expect(row.station, first.station);
+        expect(row.roleName, first.roleName);
+        expect(row.surface, first.surface);
+        expect(row.itemKey, first.itemKey);
+        expect(row.groupRequired, first.groupRequired);
+        expect(row.allowed, first.allowed);
+        expect(row.origin, first.origin);
+      }
+      expect(first.actionId, isNotEmpty);
+    });
+
+    test('each record carries its own member, old value and new value', () {
+      final rows = records(threeChanges);
+      expect(rows.map((r) => r.member).toList(), ['Freq', 'Ramp', 'Note']);
+      expect(rows.map((r) => r.oldValue).toList(), ['42.5', '3', null]);
+      expect(rows.map((r) => r.newValue).toList(), ['47.5', '5', '']);
+    });
+
+    test('a write that changed nothing writes no rows', () {
+      expect(records(const []), isEmpty);
+    });
+
+    test('a denial still produces its member rows, marked not allowed', () {
+      final rows = records(threeChanges, allowed: false);
+      expect(rows, hasLength(3));
+      expect(rows.every((r) => r.allowed == false), isTrue);
+      expect(rows.map((r) => r.member).toList(), ['Freq', 'Ramp', 'Note'],
+          reason: 'a denied recipe apply must show what would have changed');
+    });
+
+    test('a denial whose diff was empty can still be one whole-value row', () {
+      // The seam plan 03-04 depends on. An empty change list produces nothing,
+      // so a guard that must record a refusal with nothing to show supplies the
+      // row itself — a null member with no renderings — rather than relying on
+      // this function to invent one. Without this being expressible, a refused
+      // no-op write would leave no evidence that a guard fired at all.
+      final rows = records(const [MemberChange()], allowed: false);
+      expect(rows, hasLength(1));
+      expect(rows.single.member, isNull);
+      expect(rows.single.oldValue, isNull);
+      expect(rows.single.newValue, isNull);
+      expect(rows.single.allowed, isFalse);
+    });
+
+    test('origin defaults to operator and is passed through when supplied', () {
+      expect(records(threeChanges).first.origin, 'operator');
+      expect(records(threeChanges, origin: 'holdTick').first.origin,
+          'holdTick');
+    });
+
+    test('reason is null unless supplied, and is passed through', () {
+      expect(records(threeChanges).first.reason, isNull);
+      expect(records(threeChanges, reason: 'line changeover').first.reason,
+          'line changeover');
+    });
+
+    test('the correlation id is never minted here', () {
+      final source =
+          File('lib/core/access/dynamic_value_diff.dart').readAsStringSync();
+      expect(source, isNot(contains('newActionId')),
+          reason: 'one human action may span more than one call — a recipe '
+              'apply that writes two keys is one action — so the id is always '
+              'a parameter');
     });
   });
 }
