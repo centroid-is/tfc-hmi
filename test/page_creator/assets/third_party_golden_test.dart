@@ -8,7 +8,8 @@ import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
-import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus, PaneSection;
+import 'package:tfc/widgets/panes/pane_chrome.dart'
+    show PaneStatus, PaneSection, PaneDetailRow;
 import 'package:tfc/widgets/panes/side_pane.dart' show SidePane, closeSidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
@@ -533,7 +534,7 @@ void main() {
     // strapper's, pinning the curated fault-first vocabulary in pixels.
     testWidgets('boxErector — status pane diodes', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.physicalSize = const Size(900, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
@@ -543,6 +544,15 @@ void main() {
         'p_stat_xDriveError': true,
         'p_stat_xWaitingBottoms': true,
         'p_stat_xRunning': true,
+        // Lit so the manual row's colour is actually IN the golden: it is the
+        // same yellow a belt in manual gets, and a row left unset would render
+        // the grey unknown and pin nothing. A box erector can be running while
+        // an operator jogs it, so both being true is a real state.
+        'p_stat_xModeManual': true,
+        // The throughput the enhanced FB publishes, shown as a figure above
+        // the diodes. Non-zero on purpose: 0 is what a stopped machine reads,
+        // and the point of this row is that it is a live rate, not a lamp.
+        'bpmCartonsOut': 37.0,
       }));
 
       await tester.pumpWidget(MaterialApp(
@@ -553,7 +563,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 560,
+                height: 1180,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -562,11 +572,28 @@ void main() {
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: StructStatusDiodes(
-                        status: status,
-                        bits: boxErectorStatusBits,
-                        machine: equipmentShortName(
-                            ThirdPartyEquipmentKind.boxErector),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // The same two blocks `_statusSection` composes for a
+                          // box erector: the throughput figure, then the
+                          // diodes.
+                          PaneDetailRow(
+                            label: 'Cartons per minute',
+                            child: Builder(
+                              builder: (context) => Text(
+                                boxErectorBpmOf(status)!.toStringAsFixed(0),
+                                style: Theme.of(context).textTheme.bodyLarge,
+                              ),
+                            ),
+                          ),
+                          StructStatusDiodes(
+                            status: status,
+                            bits: boxErectorStatusBits,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                        ],
                       ),
                     ),
                   ),

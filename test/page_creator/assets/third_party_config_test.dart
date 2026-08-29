@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry;
 import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
@@ -1085,7 +1086,7 @@ void main() {
           HmiColorRole.yellow);
       expect(byMember['p_stat_DropRequestFeedback']!.labelFor('Multivac'),
           'Fish waiting to drop to Multivac');
-      expect(byMember['p_stat_DropFinished']!.onRole, HmiColorRole.blue);
+      expect(byMember['p_stat_DropFinished']!.onRole, HmiColorRole.green);
       expect(byMember['p_stat_DropFinished']!.labelFor('Multivac'),
           'Drop to Multivac is complete');
     });
@@ -1136,7 +1137,7 @@ void main() {
           HmiColorRole.yellow);
       expect(byMember['p_stat_DropRequestFeedback']!.labelFor('batch aligner'),
           'Fish waiting to drop to batch aligner');
-      expect(byMember['p_stat_DropFinished']!.onRole, HmiColorRole.blue);
+      expect(byMember['p_stat_DropFinished']!.onRole, HmiColorRole.green);
       expect(byMember['p_stat_DropFinished']!.labelFor('batch aligner'),
           'Drop to batch aligner is complete');
     });
@@ -1180,7 +1181,6 @@ void main() {
         'p_stat_xReadyToVacuum',
         'p_stat_xRunning',
         'p_stat_xModeManual',
-        'p_stat_xModeTransport',
       ]);
     });
 
@@ -1198,7 +1198,7 @@ void main() {
           'Box erector is stopping the line');
     });
 
-    test('the fault rows are red, the waiting rows amber, then green then blue',
+    test('fault rows red, waiting amber, ready green, manual amber',
         () {
       final byMember = {for (final b in boxErectorStatusBits) b.member: b};
       // The three fault rows.
@@ -1215,22 +1215,25 @@ void main() {
       expect(byMember['p_stat_xWaitingLids']!.onRole, HmiColorRole.yellow);
       expect(byMember['p_stat_xWaitingProduct']!.onRole, HmiColorRole.yellow);
       expect(byMember['p_stat_xOutputBlocked']!.onRole, HmiColorRole.yellow);
+      // The inverse of the outfeed permit, worded from the same family.
       expect(byMember['p_stat_xOutputBlocked']!.labelFor('box erector'),
-          'Way out is blocked');
+          'Box erector cannot send boxes on');
       expect(byMember['p_stat_xExtNotReady']!.onRole, HmiColorRole.yellow);
       // Green ready/running.
       expect(byMember['p_stat_xReadyToVacuum']!.onRole, HmiColorRole.green);
       expect(byMember['p_stat_xReadyToVacuum']!.labelFor('box erector'),
-          'Ready to vacuum');
+          'Box erector is ready to vacuum');
       expect(byMember['p_stat_xRunning']!.onRole, HmiColorRole.green);
       expect(byMember['p_stat_xRunning']!.labelFor('box erector'), 'Running');
       // Blue mode rows.
-      expect(byMember['p_stat_xModeManual']!.onRole, HmiColorRole.blue);
+      // Yellow, the same yellow conveyor.dart gives DriveState.manual -- an
+      // operator override is one fact and gets one colour across the app.
+      expect(byMember['p_stat_xModeManual']!.onRole, HmiColorRole.yellow);
       expect(byMember['p_stat_xModeManual']!.labelFor('box erector'),
           'In manual mode');
-      expect(byMember['p_stat_xModeTransport']!.onRole, HmiColorRole.blue);
-      expect(byMember['p_stat_xModeTransport']!.labelFor('box erector'),
-          'In transport mode');
+      // Transport is deliberately absent: it is lit during normal running, so
+      // it says nothing about why product stopped.
+      expect(byMember.containsKey('p_stat_xModeTransport'), isFalse);
     });
 
     test('the box erector is struct-backed, not prefix-backed', () {
@@ -1276,6 +1279,51 @@ void main() {
         () {
       expect(speedBatcherPaneStatus(null, fallback), fallback);
       expect(speedBatcherPaneStatus(struct({}), fallback), fallback);
+    });
+  });
+
+  group('Box erector throughput (bpm)', () {
+    test('the member is read off the struct, missing reads unknown', () {
+      final withBpm =
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_xRunning': true,
+        'bpmCartonsOut': 42.0,
+      }));
+      expect(boxErectorBpmOf(withBpm), 42.0);
+
+      // A struct that does not carry it -- BER02/BER03 until the PLC is
+      // rolled, or a mistyped member name -- is UNKNOWN, not zero. Zero is a
+      // real throughput and would read as "the machine has stopped".
+      final without = DynamicValue.fromMap(
+          LinkedHashMap<String, dynamic>.from({'p_stat_xRunning': true}));
+      expect(boxErectorBpmOf(without), isNull);
+      expect(boxErectorBpmOf(null), isNull);
+    });
+
+    test('a non-numeric value on the member reads unknown, not a throw', () {
+      // `DynamicValue.asDouble` on a string member must not take the pane
+      // down: the member name is unverified against the live PLC.
+      final odd = DynamicValue.fromMap(
+          LinkedHashMap<String, dynamic>.from({'bpmCartonsOut': 'n/a'}));
+      expect(() => boxErectorBpmOf(odd), returnsNormally);
+      expect(boxErectorBpmOf(odd), isNull);
+    });
+
+    test('the trend needs the member picked into its own column', () {
+      // The live figure rides the struct subscription for free; HISTORY only
+      // exists if the collector was told to sample this member out.
+      expect(boxErectorBpmTrendAvailable(null), isFalse);
+      expect(
+          boxErectorBpmTrendAvailable(
+              CollectEntry(
+                  key: 'BER01.BER01', sampleMembers: const ['p_stat_xRunning'])),
+          isFalse,
+          reason: 'collected, but not this member');
+      expect(
+          boxErectorBpmTrendAvailable(
+              CollectEntry(
+                  key: 'BER01.BER01', sampleMembers: const ['bpmCartonsOut'])),
+          isTrue);
     });
   });
 }

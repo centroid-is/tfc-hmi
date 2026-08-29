@@ -12,7 +12,7 @@ import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/theme.dart'
-    show AppColorScheme, HmiColorRole, MutedColors, themesForScheme;
+    show AppColorScheme, HmiColorRole, HmiStateColors, MutedColors, themesForScheme;
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/providers/database.dart' show databaseProvider;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -1168,6 +1168,40 @@ void main() {
           reason: 'a key with no value is the grey `!`, not off');
     });
   });
+
+  group('Box erector manual mode colour', () {
+    testWidgets('is the SAME colour a belt in manual gets, in every scheme',
+        (tester) async {
+      // Not "a yellow" -- THE yellow. `conveyor.dart` maps DriveState.manual to
+      // `HmiStateColors.of(context).yellow` and prints it in the belt legend,
+      // so this diode must resolve to the IDENTICAL Color, per scheme. If the
+      // two ever diverge, a machine under manual control looks like one thing
+      // on a belt and another on a pane, which is the whole reason the colour
+      // was chosen.
+      final manualBit = boxErectorStatusBits
+          .firstWhere((b) => b.member == 'p_stat_xModeManual');
+
+      for (final scheme in AppColorScheme.values) {
+        for (final theme in [
+          themesForScheme(scheme).$1,
+          themesForScheme(scheme).$2,
+        ]) {
+          await tester.pumpWidget(MaterialApp(
+            theme: theme,
+            home: Builder(builder: (context) {
+              expect(
+                manualBit.onRole.resolve(context),
+                HmiStateColors.of(context).yellow,
+                reason: 'manual diode must be the scheme yellow ($scheme)',
+              );
+              return const SizedBox();
+            }),
+          ));
+        }
+      }
+    });
+  });
+
 }
 
 /// Hands out one controllable stream per subscribed key, so tests can both

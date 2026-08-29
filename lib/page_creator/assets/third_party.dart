@@ -16,7 +16,12 @@ import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
-import 'graph.dart' show GraphAssetConfig;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry, Collector;
+import 'package:tfc_dart/core/database.dart' show TimeseriesData;
+import '../../providers/collector.dart';
+import '../../widgets/graph.dart';
+import 'graph.dart' show GraphAssetConfig, extractSeriesMemberValue;
+import 'sensor.dart' show SensorConfig, kSensorTrendCompactPadding;
 import 'number.dart' show NumberConfig, NumberWidget, showNumberGraphDialog;
 import 'ratio_number.dart'
     show
@@ -25,7 +30,7 @@ import 'ratio_number.dart'
         ratioIntervalChips,
         showRatioAnalysisDialog;
 import 'registry.dart';
-import 'sensor.dart' show SensorConfig;
+
 import 'third_party_painter.dart';
 
 part 'third_party.g.dart';
@@ -774,7 +779,7 @@ const List<StructStatusBit> multivacStatusBits = [
   StructStatusBit('p_stat_DropRequestFeedback', 'Fish waiting to drop to {m}',
       HmiColorRole.yellow),
   StructStatusBit(
-      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
+      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.green),
 ];
 
 /// The batch aligner's (vodlari) handshake, published exactly like the
@@ -807,7 +812,7 @@ const List<StructStatusBit> fishAlignerStatusBits = [
   StructStatusBit('p_stat_DropRequestFeedback', 'Fish waiting to drop to {m}',
       HmiColorRole.yellow),
   StructStatusBit(
-      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
+      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.green),
 ];
 
 /// The box erector's handshake, as published by the line-1 box-erector FB the
@@ -833,8 +838,12 @@ const List<StructStatusBit> fishAlignerStatusBits = [
 /// Ordered fault-first, exactly like [strappingLineStatusBits]: the three red
 /// rows that say something is WRONG lead — the machine is holding up the line,
 /// the estop is out, a drive has faulted — then the amber "waiting for X" cycle
-/// rows, then the green ready/running rows, then the blue mode rows. A glance
+/// rows, then the green ready/running rows, then the one mode row. A glance
 /// down the column reads the same as every other machine's pane.
+///
+/// The one mode row follows the conveyor's drive-state legend rather than
+/// inventing a scheme: `DriveState.manual` is `states.yellow` there, printed in
+/// the belt legend, so manual is yellow here too.
 ///
 /// `p_stat_WaitingFrustration` keeps the strapper's exact "{m} is stopping the
 /// line" wording and red-first placement: everything upstream is ready and the
@@ -856,16 +865,29 @@ const List<StructStatusBit> boxErectorStatusBits = [
       'p_stat_xWaitingLids', 'Waiting for lids', HmiColorRole.yellow),
   StructStatusBit(
       'p_stat_xWaitingProduct', 'Waiting for product', HmiColorRole.yellow),
+  // The inverse of the outfeed permit every other machine carries, so it is
+  // worded from the same family rather than as "way out is blocked" -- that
+  // phrasing was retired in #382. True means stalled, hence yellow, not the
+  // green a permit gets when it means "yes, now".
   StructStatusBit(
-      'p_stat_xOutputBlocked', 'Way out is blocked', HmiColorRole.yellow),
+      'p_stat_xOutputBlocked', '{m} cannot send boxes on', HmiColorRole.yellow),
   StructStatusBit(
       'p_stat_xExtNotReady', 'Downstream not ready', HmiColorRole.yellow),
   StructStatusBit(
-      'p_stat_xReadyToVacuum', 'Ready to vacuum', HmiColorRole.green),
+      'p_stat_xReadyToVacuum', '{m} is ready to vacuum', HmiColorRole.green),
   StructStatusBit('p_stat_xRunning', 'Running', HmiColorRole.green),
-  StructStatusBit('p_stat_xModeManual', 'In manual mode', HmiColorRole.blue),
-  StructStatusBit(
-      'p_stat_xModeTransport', 'In transport mode', HmiColorRole.blue),
+  // Yellow, the SAME yellow a belt in manual gets -- `conveyor.dart` maps
+  // DriveState.manual to `states.yellow`, prints it in its on-screen legend,
+  // and `HmiStateColors.yellow` is documented as "the scheme's yellow -- manual
+  // mode by convention" (its muted value is literally named `manualOchre`). A
+  // machine under manual control is one fact, so it is one colour everywhere.
+  //
+  // `p_stat_xModeTransport` is deliberately NOT drawn. Transport is how the
+  // machine runs some of the time, not a reason product stopped, and a mode row
+  // that is lit during normal operation is noise on a pane whose whole job is
+  // answering "why has product stopped moving". It joins the 47 other members
+  // left out for the same reason; adding it later is one line, no new key.
+  StructStatusBit('p_stat_xModeManual', 'In manual mode', HmiColorRole.yellow),
 ];
 
 /// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
@@ -874,13 +896,186 @@ const List<StructStatusBit> boxErectorStatusBits = [
 /// A kind belongs in exactly one of this map and [kEquipmentStatusBits];
 /// membership here means one subscription for the whole handshake instead of
 /// one per bit.
+/// The throughput member the enhanced box erector FB publishes: cartons out
+/// per minute, alongside the `p_stat_*` bits under `BER0n.BER0n`.
+///
+/// Note the name carries NO `p_stat_` prefix, unlike every bit in
+/// [boxErectorStatusBits] — it is a figure the FB computes, not a status flag.
+/// **Unverified against the live PLC**: the enhanced FB is not in the
+/// `sildarvinnsla` repo at any commit, so this name comes from the FB
+/// description rather than from source. If it is wrong the row reads "—" and
+/// the trend says "No data", exactly like a machine whose PLC has not been
+/// rolled yet — see the class doc on [boxErectorStatusBits].
+const String kBoxErectorBpmMember = 'bpmCartonsOut';
+
+/// Series name for the box erector's throughput trend, fixed so the pane
+/// preview and the floating chart read as the same chart — mirrors
+/// `kSensorTrendSeries` / `kConveyorFreqSeries`.
+const String kBoxErectorBpmSeries = 'Cartons/min';
+
+const Map<String, Color> boxErectorBpmColors = {
+  kBoxErectorBpmSeries: Color.fromARGB(255, 38, 139, 210),
+};
+
+/// Whether the throughput trend can be drawn for this key.
+///
+/// The struct arrives on ONE subscription, so the live figure is free — it is
+/// already in the status value. History is not: charting needs the collector to
+/// have been told to pick [kBoxErectorBpmMember] out of the struct into its own
+/// column (`sample_members`). Without that the table has rows but no series,
+/// which would draw an empty chart rather than no chart.
+bool boxErectorBpmTrendAvailable(CollectEntry? collect) =>
+    collect?.sampleMembers?.contains(kBoxErectorBpmMember) ?? false;
+
+/// Reads the throughput out of the status struct, degrading to null.
+///
+/// Same defensive shape as [structStatusBitOf] and for the same reason:
+/// `DynamicValue.operator[]` THROWS on a missing member, and this member is
+/// unverified, so a struct without it must render "—" rather than take the
+/// pane down.
+///
+/// Deliberately NOT `asDouble`. That getter is `_parseDouble(value) ?? 0.0`, so
+/// a member carrying anything non-numeric comes back as **0.0** — which on this
+/// pane reads as "0 cartons a minute", i.e. the machine has stopped. A wrong
+/// member name would then look like a genuine production halt rather than a
+/// configuration error. Only an actual number is a number here; everything else
+/// is unknown and renders "—".
+double? boxErectorBpmOf(DynamicValue? status) {
+  if (status == null || !status.contains(kBoxErectorBpmMember)) return null;
+  final raw = status[kBoxErectorBpmMember].value;
+  return raw is num ? raw.toDouble() : null;
+}
+
+/// The box erector's throughput over time, off the collector's stored rows.
+///
+/// Numeric rather than the sensor trend's boolean axis: this is a rate, so the
+/// y axis carries a unit and starts at zero — a cartons/min plot that autoscales
+/// its floor makes a small dip look like a stoppage.
+class BoxErectorBpmGraph extends ConsumerWidget {
+  final Collector? collector;
+  final String keyName;
+
+  /// Pan/zoom/now buttons. Off in the pane preview, on in the floating chart.
+  final bool showButtons;
+
+  final Duration xSpan;
+
+  /// Drops the axis units/labels — the small pane preview has no room and the
+  /// tile caption names the chart instead.
+  final bool compact;
+
+  const BoxErectorBpmGraph({
+    required this.collector,
+    required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 15),
+    this.compact = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<List<TimeseriesData<dynamic>>>(
+      stream: collector?.collectStream(keyName, since: const Duration(hours: 2)),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
+
+        final data = <Map<String, dynamic>>[
+          for (final sample in snapshot.data!)
+            if (extractSeriesMemberValue(sample.value, kBoxErectorBpmMember)
+                case final num y)
+              {
+                'x': sample.time.millisecondsSinceEpoch.toDouble(),
+                'y': y,
+                's': kBoxErectorBpmSeries,
+              },
+        ];
+        if (data.isEmpty) {
+          // Rows exist but carry no such member — the collector is storing the
+          // struct without picking this field out. Say so rather than draw an
+          // empty frame.
+          return const Center(child: Text('Not collected'));
+        }
+
+        final graphConfig = GraphConfig(
+          type: GraphType.timeseries,
+          xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
+          // Floor pinned at zero: this is a rate, and a chart that rescales its
+          // baseline turns a small dip into an apparent stoppage.
+          yAxis: GraphAxisConfig(unit: compact ? '' : 'Cartons/min', min: 0),
+          xSpan: xSpan,
+          legend: false,
+        );
+
+        final theme = compact
+            ? (Theme.of(context).brightness == Brightness.dark
+                ? darkChartTheme(padding: kSensorTrendCompactPadding)
+                : lightChartTheme(padding: kSensorTrendCompactPadding))
+            : ref.watch(chartThemeNotifierProvider);
+
+        return Graph(
+          config: graphConfig,
+          data: data,
+          showButtons: showButtons,
+          categoryColors: boxErectorBpmColors,
+          chartTheme: theme,
+          redraw: () {},
+        ).build(context);
+      },
+    );
+  }
+}
+
+/// Resolves the collector for [BoxErectorBpmGraph] — mirrors
+/// `SensorTrendGraphLoader`.
+class BoxErectorBpmGraphLoader extends ConsumerWidget {
+  final String keyName;
+  final bool showButtons;
+  final Duration xSpan;
+  final bool compact;
+
+  const BoxErectorBpmGraphLoader({
+    required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 15),
+    this.compact = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Collector?>(
+      future: ref.watch(collectorProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return BoxErectorBpmGraph(
+          collector: snapshot.data,
+          keyName: keyName,
+          showButtons: showButtons,
+          xSpan: xSpan,
+          compact: compact,
+        );
+      },
+    );
+  }
+}
+
 /// One colour vocabulary across every machine, so a glance down any Status
 /// column means the same thing:
 ///
 ///   RED    -- something is wrong. Reserved for the frustration/fault rows.
 ///   YELLOW -- waiting on something; the cycle is stalled but healthy.
 ///   GREEN  -- yes, now. Every PERMIT is green, on every machine.
-///   BLUE   -- a mode or a completed hand-over, not a permission.
+///   BLUE   -- a deliberate non-production state. Cleaning, and only that.
+///
+/// GREEN covers the whole "this is fine, it happened" side: a permit, a machine
+/// running, and a hand-over that completed. `p_stat_DropFinished` was blue for a
+/// while on the reading that a finished drop is its own kind of event; it is
+/// simply good news, and good news is green.
 ///
 /// The green rule is the load-bearing one and was arrived at the hard way: the
 /// box erector's outfeed permit used to be blue, on a "blue the outfeed side"
@@ -1490,6 +1685,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   final ValueNotifier<DynamicValue?> _statusRaw =
       ValueNotifier<DynamicValue?>(null);
 
+  /// The collector settings for the hoisted status key, or null when the key is
+  /// not collected. Drives whether the pane offers a Trend section at all —
+  /// resolved once per hoist rather than per build, since it comes from the
+  /// key mappings and only changes when the key does.
+  final ValueNotifier<CollectEntry?> _statusCollect =
+      ValueNotifier<CollectEntry?>(null);
+
   /// Latest value per status-bit suffix, for the kinds whose diodes come from
   /// separate keys rather than one struct. Held here rather than in the pane
   /// because the pane lives in an overlay and is torn down and rebuilt every
@@ -1689,6 +1891,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     _statusSub?.cancel();
     _statusSub = null;
     _statusRaw.value = null;
+    _statusCollect.value = null;
     if (key.isEmpty) {
       _statusStream = null;
       return;
@@ -1703,6 +1906,18 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // Same honesty rule as the run stream: unknown beats a stale latch.
       onError: (Object _) => _statusRaw.value = null,
     );
+
+    // Resolved off the same StateMan, for the Trend section's availability.
+    // unawaited + catchError rather than bare: a fire-and-forget future with no
+    // handler takes the zone down if the provider errors, and a pane that
+    // cannot say whether a key is collected should simply offer no trend.
+    unawaited(ref
+        .read(stateManProvider.future)
+        .then((sm) {
+          if (!mounted || _hoistedStatusKey != key) return;
+          _statusCollect.value = sm.keyMappings.nodes[key]?.collect;
+        })
+        .catchError((Object _) => _statusCollect.value = null));
   }
 
   /// Test-only window onto the hoisted stream identity, so the stream
@@ -1734,6 +1949,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     _raw.dispose();
     _statusSub?.cancel();
     _statusRaw.dispose();
+    _statusCollect.dispose();
     for (final sub in _bitSubs.values) {
       sub.cancel();
     }
@@ -1805,7 +2021,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
         listenable: Listenable.merge(
-            [_raw, _statusRaw, _statusBits, _extraStatusBits, _acceptWindow]),
+            [_raw, _statusRaw, _statusCollect, _statusBits, _extraStatusBits,
+              _acceptWindow]),
         builder: (context, _) => _paneFor(context, _isRunning, weights),
       ),
     );
@@ -1856,6 +2073,21 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         machine: equipmentShortName(config.kind),
       ));
     }
+    // The throughput figure, above the diodes: it is the one number on this
+    // pane that says whether the machine is actually producing, and a rate
+    // reads better as a value than as a lit dot. Only the box erector's FB
+    // publishes it, and only when the member is present -- "--" while the PLC
+    // has not been rolled, never 0, which is a real throughput meaning stopped.
+    if (config.kind == ThirdPartyEquipmentKind.boxErector) {
+      final bpm = boxErectorBpmOf(_statusRaw.value);
+      rows.add(PaneDetailRow(
+        label: 'Cartons per minute',
+        child: Text(
+          bpm == null ? '—' : bpm.toStringAsFixed(0),
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
+      ));
+    }
     if (config.extraBits.isNotEmpty) {
       rows.add(ExtraStatusDiodes(
         bits: config.extraBits,
@@ -1872,6 +2104,46 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: rows,
             ),
+    );
+  }
+
+  /// The pane's Trend section: the box erector's throughput over time.
+  ///
+  /// Null for every other kind, and null for a box erector whose key is not
+  /// being collected with [kBoxErectorBpmMember] picked out — the live figure
+  /// costs nothing (it rides the struct subscription the diodes already need)
+  /// but history has to have been stored, so an uncollected machine gets no
+  /// section rather than an empty chart.
+  ///
+  /// Placed after Status to match the house section order
+  /// (status -> trend -> manual -> setpoints) that [PaneSectionSlot] defines.
+  /// This pane still composes raw [PaneSection]s rather than a [PaneBody], so
+  /// the order is positional here; converting it is a separate change.
+  Widget? _trendSection(BuildContext context) {
+    final config = widget.config;
+    if (config.kind != ThirdPartyEquipmentKind.boxErector) return null;
+    if (config.statusKey.isEmpty) return null;
+    if (!boxErectorBpmTrendAvailable(_statusCollect.value)) return null;
+
+    final key = config.statusKey;
+    return PaneSection(
+      title: 'Trend',
+      child: PaneGraphTile(
+        // Same height as the sensor's tile: enough for the trace plus the time
+        // row without the two printing over each other.
+        height: 84,
+        preview: BoxErectorBpmGraphLoader(
+          keyName: key,
+          showButtons: false,
+          compact: true,
+          xSpan: const Duration(minutes: 15),
+        ),
+        expandedTitle: 'Cartons per minute',
+        expandedBuilder: (context) => BoxErectorBpmGraphLoader(
+          keyName: key,
+          xSpan: const Duration(hours: 1),
+        ),
+      ),
     );
   }
 
@@ -2040,6 +2312,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
             ),
           ),
           if (_statusSection(context) case final section?) section,
+          if (_trendSection(context) case final section?) section,
           if (config.notes != null && config.notes!.isNotEmpty)
             PaneSection(
               title: 'Notes',
