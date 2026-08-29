@@ -33,16 +33,38 @@ const Map<String, Asset Function()> _availableSubdevices = {
   "EL9186": BeckhoffEL9186Config.preview,
 };
 
-@JsonSerializable(explicitToJson: true)
-class BeckhoffCX5010Config extends BaseAsset {
-  @override
-  String get displayName => 'Beckhoff CX5010';
+/// A Beckhoff CX embedded PC carrying a rack of subdevices.
+///
+/// The `CXxxxx` painter has always taken the model name as a parameter — its
+/// own comment says the label is "actually whatever `name` is" — so the CX
+/// variants on this plant differ in exactly one string. Everything that is
+/// not that string lives here, once.
+///
+/// A variant is a concrete `@JsonSerializable` subclass rather than a `model`
+/// field on one class, because the page editor picks assets by type: the
+/// palette, `assetRegistry`, and the saved `asset_name` in a page's JSON all
+/// key off the class. A CX5010 and a CX5340 are different pieces of hardware
+/// and an operator should be able to place the right one.
+///
+/// The drawing is a CX50xx front: the CX53xx is a wider box with a different
+/// port complement, so a CX5340 renders as the right label on approximately
+/// the right shape, not a photograph. That is the same bargain every mimic on
+/// this page makes — the asset is there to be identified and clicked, and the
+/// label is what identifies it.
+abstract class BeckhoffCXConfig extends BaseAsset {
+  BeckhoffCXConfig();
+
   @override
   String get category => 'Beckhoff Devices';
 
+  /// The name printed down the red stripe, e.g. `CX5340`.
+  String get model;
+
+  @override
+  String get displayName => 'Beckhoff $model';
+
   @AssetListConverter()
   List<Asset> subdevices = [];
-  BeckhoffCX5010Config();
 
   @override
   List<String> get allKeys {
@@ -55,8 +77,8 @@ class BeckhoffCX5010Config extends BaseAsset {
     return keys.toList();
   }
 
-  /// Native painter size for the CX5010 drawing (keeps 105.5:100 aspect).
-  static const Size _cxNativeSize = Size(1055, 1000);
+  /// Native painter size for the CX drawing (keeps 105.5:100 aspect).
+  static const Size cxNativeSize = Size(1055, 1000);
 
   @override
   Widget build(BuildContext context) {
@@ -74,11 +96,11 @@ class BeckhoffCX5010Config extends BaseAsset {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Main CX5010 device at native size; outer FittedBox scales it.
+            // Main CX device at native size; outer FittedBox scales it.
             CustomPaint(
-              size: _cxNativeSize,
+              size: cxNativeSize,
               painter: CXxxxx(
-                name: "CX5010",
+                name: model,
                 pwrColor: Colors.green,
                 tcColor: Colors.green,
               ),
@@ -88,7 +110,7 @@ class BeckhoffCX5010Config extends BaseAsset {
               for (final sub in subdevices)
                 _SubdeviceNormalized(
                   child: sub.build(context),
-                  targetHeight: _cxNativeSize.height,
+                  targetHeight: cxNativeSize.height,
                 ),
             ],
           ],
@@ -105,6 +127,14 @@ class BeckhoffCX5010Config extends BaseAsset {
       child: _CXxxxxConfigContent(config: this),
     );
   }
+}
+
+@JsonSerializable(explicitToJson: true)
+class BeckhoffCX5010Config extends BeckhoffCXConfig {
+  @override
+  String get model => 'CX5010';
+
+  BeckhoffCX5010Config();
 
   static const previewStr = 'Baader221 preview';
 
@@ -112,7 +142,25 @@ class BeckhoffCX5010Config extends BaseAsset {
 
   factory BeckhoffCX5010Config.fromJson(Map<String, dynamic> json) =>
       _$BeckhoffCX5010ConfigFromJson(json);
+  @override
   Map<String, dynamic> toJson() => _$BeckhoffCX5010ConfigToJson(this);
+}
+
+/// The CX5340 that heads ST101. Same asset as the [BeckhoffCX5010Config] in
+/// every respect but the label — see [BeckhoffCXConfig].
+@JsonSerializable(explicitToJson: true)
+class BeckhoffCX5340Config extends BeckhoffCXConfig {
+  @override
+  String get model => 'CX5340';
+
+  BeckhoffCX5340Config();
+
+  BeckhoffCX5340Config.preview() : super();
+
+  factory BeckhoffCX5340Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffCX5340ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffCX5340ConfigToJson(this);
 }
 
 /// Wraps a subdevice widget and normalizes its visual height so it lines up
@@ -140,7 +188,7 @@ class _SubdeviceNormalized extends StatelessWidget {
 }
 
 class _CXxxxxConfigContent extends StatefulWidget {
-  final BeckhoffCX5010Config config;
+  final BeckhoffCXConfig config;
 
   const _CXxxxxConfigContent({required this.config});
 
@@ -161,7 +209,8 @@ class _CXxxxxConfigContentState extends State<_CXxxxxConfigContent> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('CX5010', style: Theme.of(context).textTheme.titleMedium),
+                Text(widget.config.model,
+                    style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 12),
                 SizeField(
                   initialValue: widget.config.size,

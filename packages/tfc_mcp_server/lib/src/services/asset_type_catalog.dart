@@ -805,6 +805,22 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'BeckhoffCX5340Config',
+      displayName: 'Beckhoff CX5340',
+      category: 'Beckhoff Devices',
+      description:
+          'Visualization of a Beckhoff CX5340 embedded PC — the CX5010 asset '
+          'with the CX5340 label. Same drawing, same subdevice rack; pick it '
+          'over BeckhoffCX5010Config when the station really runs a CX5340.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'subdevices',
+            type: 'List<Asset>',
+            description:
+                'Attached I/O terminals (EL1008, EL2008, EL3054, etc.)'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'BeckhoffEK1100Config',
       displayName: 'Beckhoff EK1100',
       category: 'Beckhoff Devices',

@@ -41,6 +41,33 @@ const _$TextPosEnumMap = {
   TextPos.inside: 'inside',
 };
 
+BeckhoffCX5340Config _$BeckhoffCX5340ConfigFromJson(
+        Map<String, dynamic> json) =>
+    BeckhoffCX5340Config()
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..subdevices =
+          const AssetListConverter().fromJson(json['subdevices'] as List);
+
+Map<String, dynamic> _$BeckhoffCX5340ConfigToJson(
+        BeckhoffCX5340Config instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
+      'subdevices': const AssetListConverter().toJson(instance.subdevices),
+    };
+
 BeckhoffEK1100Config _$BeckhoffEK1100ConfigFromJson(
         Map<String, dynamic> json) =>
     BeckhoffEK1100Config()
