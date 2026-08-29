@@ -532,27 +532,31 @@ void main() {
     // erector was the last prefix-backed kind; the enhanced FB moved it onto
     // the struct system, so this is now a [StructStatusDiodes] pane like the
     // strapper's, pinning the curated fault-first vocabulary in pixels.
-    testWidgets('boxErector — status pane diodes', (tester) async {
+    testWidgets('boxErector — status pane diodes, every row lit', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
+      // EVERY bit true. Not a state the machine is ever in -- it could not be
+      // faulted, waiting and running at once -- but this golden exists to be
+      // read as a COLOUR CHART: one lit diode per row, so the whole vocabulary
+      // can be checked down a single column. A realistic mixed state leaves
+      // most rows grey, which pins the unknown treatment (already covered by
+      // the Multivac's pane) and pins none of the colours.
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        'p_stat_WaitingFrustration': false,
-        'p_stat_xEstopActive': false,
-        'p_stat_xDriveError': true,
-        'p_stat_xWaitingBottoms': true,
-        'p_stat_xRunning': true,
-        // Lit so the manual row's colour is actually IN the golden: it is the
-        // same yellow a belt in manual gets, and a row left unset would render
-        // the grey unknown and pin nothing. A box erector can be running while
-        // an operator jogs it, so both being true is a real state.
-        'p_stat_xModeManual': true,
-        // The throughput the enhanced FB publishes, shown as a figure above
-        // the diodes. Non-zero on purpose: 0 is what a stopped machine reads,
+        for (final bit in boxErectorStatusBits) bit.member: true,
+        // The throughput, in the shape the PLC actually publishes: an FB_BPM
+        // INSTANCE carrying an `hmi : ST_BPM` of rolling averages, not a
+        // scalar. Non-zero on purpose -- 0 is what a stopped machine reads,
         // and the point of this row is that it is a live rate, not a lamp.
-        'bpmCartonsOut': 37.0,
+        'bpmCartonsOut':
+            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'hmi': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+            'avgBPM1Minute': 37.0,
+            'avgBPM5Minute': 35.0,
+          })),
+        })),
       }));
 
       await tester.pumpWidget(MaterialApp(
@@ -608,7 +612,6 @@ void main() {
         matchesGoldenFile('goldens/third_party_boxErector_status_pane.png'),
       );
     });
-
 
     // The Multivac's Status section as an operator on line 2 actually sees it:
     // the four struct diodes off `SP_Packing_HMI`, and BENEATH them the one

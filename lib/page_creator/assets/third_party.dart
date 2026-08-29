@@ -865,17 +865,32 @@ const List<StructStatusBit> boxErectorStatusBits = [
       'p_stat_xWaitingLids', 'Waiting for lids', HmiColorRole.yellow),
   StructStatusBit(
       'p_stat_xWaitingProduct', 'Waiting for product', HmiColorRole.yellow),
-  // The inverse of the outfeed permit every other machine carries, so it is
-  // worded from the same family rather than as "way out is blocked" -- that
-  // phrasing was retired in #382. True means stalled, hence yellow, not the
-  // green a permit gets when it means "yes, now".
+  // These two come off the Saia machine's own process word and are its words,
+  // not ours: "Running but carton outfeed is blocked downstream" and
+  // "Downstream equipment not ready". Neither is the outfeed PERMIT -- that is
+  // `q_xOutfeedPermitted` below, a Beckhoff-side handshake. They are close in
+  // meaning and may well prove redundant against each other once the pane has
+  // been watched on the line; if so, drop one, but do not fold either into the
+  // permit.
   StructStatusBit(
-      'p_stat_xOutputBlocked', '{m} cannot send boxes on', HmiColorRole.yellow),
-  StructStatusBit(
-      'p_stat_xExtNotReady', 'Downstream not ready', HmiColorRole.yellow),
+      'p_stat_xOutputBlocked', 'Carton outfeed is blocked', HmiColorRole.yellow),
+  StructStatusBit('p_stat_xExtNotReady', 'Downstream equipment not ready',
+      HmiColorRole.yellow),
   StructStatusBit(
       'p_stat_xReadyToVacuum', '{m} is ready to vacuum', HmiColorRole.green),
   StructStatusBit('p_stat_xRunning', 'Running', HmiColorRole.green),
+  // The actual outfeed permit, and the reason the retired `BER0n.xPermitOutfeed`
+  // global vanished: it became this FB output, wired straight out to
+  // `ECT.ST101_RM02.O2` and fed from the strapper's infeed
+  // (`i_xOutfeedPermitted := STM01.STM01.q_xInfeedPermitted`). It is a
+  // VAR_OUTPUT rather than a `p_stat_*` var, but the FB carries
+  // `OPC.UA.DA.StructuredType`, so it is published under the same node.
+  //
+  // Nothing showed it before, which left the pane with two rows about product
+  // not leaving and none about being ALLOWED to send -- the one an operator
+  // actually asks for. Green and the shared sentence, like every other machine.
+  StructStatusBit(
+      'q_xOutfeedPermitted', '{m} may send boxes on', HmiColorRole.green),
   // Yellow, the SAME yellow a belt in manual gets -- `conveyor.dart` maps
   // DriveState.manual to `states.yellow`, prints it in its on-screen legend,
   // and `HmiStateColors.yellow` is documented as "the scheme's yellow -- manual
@@ -896,17 +911,21 @@ const List<StructStatusBit> boxErectorStatusBits = [
 /// A kind belongs in exactly one of this map and [kEquipmentStatusBits];
 /// membership here means one subscription for the whole handshake instead of
 /// one per bit.
-/// The throughput member the enhanced box erector FB publishes: cartons out
-/// per minute, alongside the `p_stat_*` bits under `BER0n.BER0n`.
+/// The throughput member the box erector FB publishes: finished cartons per
+/// minute, counted off the S104 outfeed sensor's rising edge.
 ///
-/// Note the name carries NO `p_stat_` prefix, unlike every bit in
-/// [boxErectorStatusBits] — it is a figure the FB computes, not a status flag.
-/// **Unverified against the live PLC**: the enhanced FB is not in the
-/// `sildarvinnsla` repo at any commit, so this name comes from the FB
-/// description rather than from source. If it is wrong the row reads "—" and
-/// the trend says "No data", exactly like a machine whose PLC has not been
-/// rolled yet — see the class doc on [boxErectorStatusBits].
-const String kBoxErectorBpmMember = 'bpmCartonsOut';
+/// A DOTTED PATH, not a bare name. `bpmCartonsOut` is an `FB_BPM` INSTANCE, not
+/// a scalar — its OPC UA surface is the `hmi : ST_BPM` member inside it, which
+/// carries five rolling averages (`avgBPM1Minute` through `avgBPM60Minute`).
+/// Reading `bpmCartonsOut` itself yields a struct, so a scalar read of it would
+/// render "—" forever while looking exactly like a PLC that had not been rolled
+/// out. Verified against `ST101/ST101/BER/FB_BER01ScadaPoll.TcPOU` and
+/// `SVNCoreComponents/BatchLines/FB_BPM.TcPOU`.
+///
+/// The 1-minute average, because the row is labelled "cartons per minute" and
+/// an operator watching a line wants the rate NOW; the longer averages are
+/// there if a calmer trace is ever wanted.
+const String kBoxErectorBpmMember = 'bpmCartonsOut.hmi.avgBPM1Minute';
 
 /// Series name for the box erector's throughput trend, fixed so the pane
 /// preview and the floating chart read as the same chart — mirrors
@@ -941,8 +960,14 @@ bool boxErectorBpmTrendAvailable(CollectEntry? collect) =>
 /// configuration error. Only an actual number is a number here; everything else
 /// is unknown and renders "—".
 double? boxErectorBpmOf(DynamicValue? status) {
-  if (status == null || !status.contains(kBoxErectorBpmMember)) return null;
-  final raw = status[kBoxErectorBpmMember].value;
+  var cur = status;
+  // Same walk as [structStatusBitOf]: `contains` guards every segment, because
+  // `operator[]` THROWS on a missing member and this path is three deep.
+  for (final segment in structMemberPath(kBoxErectorBpmMember)) {
+    if (cur == null || !cur.contains(segment)) return null;
+    cur = cur[segment];
+  }
+  final raw = cur?.value;
   return raw is num ? raw.toDouble() : null;
 }
 

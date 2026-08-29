@@ -1180,6 +1180,7 @@ void main() {
         'p_stat_xExtNotReady',
         'p_stat_xReadyToVacuum',
         'p_stat_xRunning',
+        'q_xOutfeedPermitted',
         'p_stat_xModeManual',
       ]);
     });
@@ -1215,9 +1216,16 @@ void main() {
       expect(byMember['p_stat_xWaitingLids']!.onRole, HmiColorRole.yellow);
       expect(byMember['p_stat_xWaitingProduct']!.onRole, HmiColorRole.yellow);
       expect(byMember['p_stat_xOutputBlocked']!.onRole, HmiColorRole.yellow);
-      // The inverse of the outfeed permit, worded from the same family.
+      // The Saia machine's own words for its two downstream conditions.
       expect(byMember['p_stat_xOutputBlocked']!.labelFor('box erector'),
-          'Box erector cannot send boxes on');
+          'Carton outfeed is blocked');
+      expect(byMember['p_stat_xExtNotReady']!.labelFor('box erector'),
+          'Downstream equipment not ready');
+      // The real permit: an FB VAR_OUTPUT, not a p_stat_ var, carrying the
+      // shared outfeed sentence and green like every other permit.
+      expect(byMember['q_xOutfeedPermitted']!.onRole, HmiColorRole.green);
+      expect(byMember['q_xOutfeedPermitted']!.labelFor('box erector'),
+          'Box erector may send boxes on');
       expect(byMember['p_stat_xExtNotReady']!.onRole, HmiColorRole.yellow);
       // Green ready/running.
       expect(byMember['p_stat_xReadyToVacuum']!.onRole, HmiColorRole.green);
@@ -1284,12 +1292,28 @@ void main() {
 
   group('Box erector throughput (bpm)', () {
     test('the member is read off the struct, missing reads unknown', () {
+      // `bpmCartonsOut` is an FB_BPM INSTANCE whose OPC UA surface is
+      // `hmi : ST_BPM` -- five rolling averages. The value is three levels
+      // down, not on the instance itself.
       final withBpm =
           DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         'p_stat_xRunning': true,
-        'bpmCartonsOut': 42.0,
+        'bpmCartonsOut': DynamicValue.fromMap(
+            LinkedHashMap<String, dynamic>.from({
+          'hmi': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+            'avgBPM1Minute': 42.0,
+            'avgBPM5Minute': 38.0,
+          })),
+        })),
       }));
       expect(boxErectorBpmOf(withBpm), 42.0);
+
+      // Reading the INSTANCE as a scalar -- what a bare 'bpmCartonsOut' member
+      // name would do -- must not pass for a number.
+      final instanceOnly = DynamicValue.fromMap(
+          LinkedHashMap<String, dynamic>.from({'bpmCartonsOut': 1.0}));
+      expect(boxErectorBpmOf(instanceOnly), isNull,
+          reason: 'the path is bpmCartonsOut.hmi.avgBPM1Minute, three deep');
 
       // A struct that does not carry it -- BER02/BER03 until the PLC is
       // rolled, or a mistyped member name -- is UNKNOWN, not zero. Zero is a
@@ -1303,8 +1327,13 @@ void main() {
     test('a non-numeric value on the member reads unknown, not a throw', () {
       // `DynamicValue.asDouble` on a string member must not take the pane
       // down: the member name is unverified against the live PLC.
-      final odd = DynamicValue.fromMap(
-          LinkedHashMap<String, dynamic>.from({'bpmCartonsOut': 'n/a'}));
+      final odd = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'bpmCartonsOut': DynamicValue.fromMap(
+            LinkedHashMap<String, dynamic>.from({
+          'hmi': DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'avgBPM1Minute': 'n/a'})),
+        })),
+      }));
       expect(() => boxErectorBpmOf(odd), returnsNormally);
       expect(boxErectorBpmOf(odd), isNull);
     });
@@ -1321,8 +1350,9 @@ void main() {
           reason: 'collected, but not this member');
       expect(
           boxErectorBpmTrendAvailable(
-              CollectEntry(
-                  key: 'BER01.BER01', sampleMembers: const ['bpmCartonsOut'])),
+              CollectEntry(key: 'BER01.BER01', sampleMembers: const [
+                'bpmCartonsOut.hmi.avgBPM1Minute'
+              ])),
           isTrue);
     });
   });
