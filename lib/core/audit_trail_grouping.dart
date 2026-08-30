@@ -14,7 +14,38 @@
 /// transform the page is tested through.
 library;
 
+import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/database_drift.dart';
+
+/// The audit surfaces this build knows how to talk about.
+///
+/// ## What this is for
+///
+/// It is the one place the surface vocabulary is written down, and it is a
+/// **change-detector**. Exactly one assertion in
+/// `test/core/audit_trail_grouping_test.dart` pins it. Add a surface and that
+/// one test fails, in one file, with a message saying what to do about it.
+///
+/// ## What this is not for
+///
+/// It is **not** a whitelist. Nothing filters, drops, gates or branches on
+/// membership in this set, and nothing may start to. A row whose `surface` is
+/// not listed here flows through [groupAuditRows] untouched and is rendered by
+/// the row widget's default branch, because it came from a station running a
+/// newer build against the same database and the operator needs to see what
+/// that station did. Dropping it would make the page lie by omission, which is
+/// the one failure mode an audit trail cannot have.
+///
+/// ## Why it exists at all
+///
+/// Phase 6 adds a fifth surface, `admin`, for role and user administration:
+/// `itemKey`s `role.create` / `role.update` / `role.delete` / `role.rename`
+/// and `user.create` / `user.delete` / `user.role` / `user.password`, all
+/// carrying `groupRequired: 'users'`. That is confirmed, scheduled work. The
+/// point of this constant is that when it lands the phase fails in one obvious
+/// place with instructions attached, instead of in a row widget, a filter bar
+/// and three goldens with no explanation in any of them.
+const Set<String> kKnownAuditSurfaces = {'tag', 'pref', 'route', 'auth'};
 
 /// One human action and the rows of it this query could see.
 ///
@@ -70,6 +101,19 @@ class AuditAction {
   /// with eight hidden ones still expands, because otherwise the
   /// "8 of 9 members hidden by filters" line has nowhere to live.
   bool get isMulti => rows.length > 1 || hiddenCount > 0;
+
+  /// The one permission the parent row names: the strictest across the
+  /// children.
+  ///
+  /// `auditRecordsForChanges` shares one `groupRequired` across the rows of one
+  /// call, so usually every child already agrees and this is a no-op. But
+  /// `dynamic_value_diff.dart` says in as many words that one human action may
+  /// span more than one call — a recipe apply that writes two keys is one
+  /// action — and then the strings genuinely differ. Computing the maximum
+  /// costs three lines and removes the case where the parent under-reports what
+  /// the operator was allowed to do. See [strictestGroupName].
+  String get requiredGroupLabel =>
+      strictestGroupName(rows.map((row) => row.groupRequired));
 }
 
 /// A flat newest-first row list as one entry per `actionId`, in the order the
@@ -119,3 +163,77 @@ List<AuditAction> groupAuditRows(
       ),
   ];
 }
+
+/// The strictest of [names], or the empty string when there is nothing to rank.
+///
+/// ## Where the ranking comes from
+///
+/// `AccessGroup`'s declaration index, which is declared in increasing privilege
+/// and is the single ranking in this codebase. This is
+/// `guarded_state_man.dart`'s private `_strictest`, copied deliberately rather
+/// than exposed by widening that file's API: it is three lines, and a second
+/// ranking *table* would be a second thing to keep in step — which is the
+/// defect that function's own comment warns about.
+///
+/// ## Why an unrecognised name is a real state and not a defensive flourish
+///
+/// The trail stores `group_required` as a **string**, and `AccessGroup.byName`
+/// answers null for anything this build does not know. Its own doc says why: a
+/// station running a newer build may have written a group name this one has
+/// never heard of. Several SVN stations share one database, so on a
+/// mixed-version site that is a row that exists.
+///
+/// So an unrecognised name loses to any recognised one, and when *every* name
+/// is unrecognised the first is returned verbatim — the operator sees the
+/// string the database actually holds, and the row is neither dropped nor
+/// fatal.
+///
+/// There is deliberately no accessor here that turns an unknown name into
+/// `operate`. Defaulting an unrecognised permission downward is exactly the
+/// failure `byName`'s null return exists to prevent.
+///
+/// The empty string is not a group and never wins over one. An all-auth action
+/// therefore yields the empty string: auth rows carry an empty `groupRequired`
+/// because signing in is not gated on a group, and reporting `operate` for one
+/// would be an invention.
+String strictestGroupName(Iterable<String> names) {
+  AccessGroup? strictest;
+  String? firstUnknown;
+
+  for (final name in names) {
+    if (name.isEmpty) continue;
+    final group = AccessGroup.byName(name);
+    if (group == null) {
+      firstUnknown ??= name;
+      continue;
+    }
+    if (strictest == null || group.index > strictest.index) strictest = group;
+  }
+
+  if (strictest != null) return strictest.name;
+  return firstUnknown ?? '';
+}
+
+/// True when [row] records an authentication event rather than a write.
+///
+/// ## Why this is a named predicate rather than a literal
+///
+/// `surface == 'auth'` is about to be asked in the row widget, the filter bar
+/// and the golden fixture. Three copies of a string literal is three places to
+/// typo it, and a typo here renders a login as a write with an empty
+/// `old → new` instead of failing loudly.
+///
+/// `AuditRecord.isAuthEvent` (`packages/tfc_access/lib/src/audit.dart`) is the
+/// same predicate on the writer's type. The two must stay in step.
+///
+/// ## Why it keys on `surface` and not on an empty `group_required`
+///
+/// 05-01's store selects its auth leg with `surface = 'auth'` and this function
+/// recognises them with `surface == 'auth'` — the same column, the same value,
+/// aligned on purpose. An earlier draft had the store keying on an empty
+/// `group_required` while this keyed on `surface`. Those agree on every row in
+/// the table today, which is precisely why nothing would have caught them
+/// diverging: the row that breaks it is an unbound tag write, which carries an
+/// empty `group_required` too (`guarded_state_man.dart` writes
+/// `strictestRequired?.name ?? ''`).
+bool isAuthEntry(AuditEntryData row) => row.surface == 'auth';
