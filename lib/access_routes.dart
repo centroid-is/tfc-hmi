@@ -2,12 +2,13 @@
 ///
 /// Every other route in the app declares nothing and therefore answers
 /// [AccessGroup.operate] — what an anonymous session already holds — so this
-/// map is the entire blast radius of route gating. Seven entries are raised
-/// because they configure the station rather than run the line; nothing on
-/// the floor changes — with one exception, Knowledge Base, which is spelled
-/// out below because it does take something away from an operator.
+/// map is the entire blast radius of route gating. Eight entries are raised:
+/// seven because they configure the station rather than run the line, and one
+/// — the audit trail — because of what it puts on the screen. Nothing on the
+/// floor changes, with one exception, Knowledge Base, which is spelled out
+/// below because it does take something away from an operator.
 ///
-/// **The seven, and why each one.**
+/// **The eight, and why each one.**
 ///
 /// * Page Editor, Alarm Editor and Key Repository need `configure`: they
 ///   author what the station shows and how it alarms, and the key repository
@@ -17,6 +18,9 @@
 ///   the read surface its menu label suggests.
 /// * Server Config, IP Settings and Preferences need `administer`: they point
 ///   the station at a database, a PLC and a network.
+/// * The audit trail needs `users`, and it is the only entry here raised for
+///   what it *shows* rather than for what it writes. The paragraph below says
+///   why.
 ///
 /// **`/advanced/preferences` is a deliberate amendment to the spec's five**,
 /// decided by the user on 2026-08-29 after plan review;
@@ -94,13 +98,28 @@
 /// D-Bus credential authenticates the *station* to the system bus;
 /// `administer` is the human gate above it.
 ///
-/// **`AccessGroup.users` is not used here.** Nothing in this phase manages
-/// roles or users; those routes arrive with the audit trail and the admin
-/// screens.
+/// **The audit trail is `users` because the data is `users`-grade.** It is the
+/// first entry on this list that writes nothing at all —
+/// `lib/core/audit_trail_store.dart` takes no session and holds no sink, and
+/// its reads are deliberately ungated because a guarded read would put a row in
+/// the trail every time somebody scrolled the trail. That makes this map the
+/// whole of the enforcement, and the group is chosen from what the page
+/// displays: every setpoint change anybody ever made, with its old and new
+/// values, its author and its station, alongside the denials that show where a
+/// role is configured too tightly. Lowering it to `configure` would hand that
+/// history to anyone who can edit a page or import a key map, so it sits at the
+/// authorization model's own gate. The word is named once, in the store's
+/// [kAuditTrailGroup]; the entry below spells it, and
+/// `test/access_routes_test.dart` asserts the two agree.
 ///
 /// **What stays open, on purpose.** About Linux, Alarm View and History View
-/// read rather than configure. The first-account route stays open because
-/// gating it is the deadlock the whole design exists to avoid.
+/// read rather than configure. The audit trail also reads and is raised anyway,
+/// which is not an inconsistency but this doc's own standard applied twice: a
+/// route is judged by what its call sites reach, not by the label on its menu
+/// entry. Those three reach system information and plant telemetry; the audit
+/// trail reaches the record of every write on the station. The first-account
+/// route stays open because gating it is the deadlock the whole design exists
+/// to avoid.
 ///
 /// Knowledge Base used to be on that list and is not any more; so was
 /// History View, whose destructive Drift deletes plan 03-10 closes at the
@@ -132,7 +151,16 @@ import 'route_registry.dart';
 /// unavailable. See [routeAllowedWhenRepositoryUnavailable].
 const String kServerConfigRoute = '/advanced/server-config';
 
-/// The seven routes raised above `operate`, and the group each one needs.
+/// The audit trail route — the only `users` entry, and deliberately **not**
+/// exempt while the access repository is unavailable: the trail is the
+/// database, so a trail readable while the database is down would be a
+/// promise nothing could keep.
+///
+/// Named as a constant because two tests spell it and one of them asserts it
+/// equals `kAuditTrailGroup` in `lib/core/audit_trail_store.dart`.
+const String kAuditTrailRoute = '/advanced/audit-trail';
+
+/// The eight routes raised above `operate`, and the group each one needs.
 ///
 /// One const map so that the route table and the navigation menu can never
 /// disagree about which entries are locked. Paths are spelled exactly as in
@@ -146,6 +174,7 @@ const Map<String, AccessGroup> kRaisedRoutes = {
   kServerConfigRoute: AccessGroup.administer,
   '/advanced/ip-settings': AccessGroup.administer,
   '/advanced/preferences': AccessGroup.administer,
+  kAuditTrailRoute: AccessGroup.users,
 };
 
 /// Whether [path] stays reachable while the access repository is unavailable.
