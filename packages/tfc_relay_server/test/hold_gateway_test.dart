@@ -82,7 +82,11 @@ final class _Gate {
   final List<String> inbound;
 
   /// Everything the session's `RelayErrorHandler` was told about.
-  final List<({String where, Object error})> errors;
+  ///
+  /// The stack is kept as well as the message: a condition an unauthenticated
+  /// peer can produce at will must not carry one (05-REVIEW WR-03), and the
+  /// only way to assert that is to look.
+  final List<({String where, Object error, StackTrace stack})> errors;
 
   Future<Object?> ask(String method, Object? params) => within(
       client.sendRequest(method, params), 'the $method answer from the gateway');
@@ -120,7 +124,7 @@ _Gate _gate() {
   final api = FakeStateMan();
   final clock = FakeClock(start: _epochStart);
   final inbound = <String>[];
-  final errors = <({String where, Object error})>[];
+  final errors = <({String where, Object error, StackTrace stack})>[];
   final session = RelaySession.serve(
     channel: pair.server,
     api: api,
@@ -128,7 +132,8 @@ _Gate _gate() {
     handles: HandleTable(),
     buffer: ConflatingSendBuffer(maxPending: 4096),
     now: clock.now,
-    onError: (error, stack, where) => errors.add((where: where, error: error)),
+    onError: (error, stack, where) =>
+        errors.add((where: where, error: error, stack: stack)),
   );
   final client = rpc.Client(StreamChannel<String>(
       pair.client.stream.map((frame) {
@@ -192,13 +197,17 @@ void main() {
               'subscription on that panel with it');
     });
 
-    test('a tick before hello is refused by the gate and no frame comes back',
+    test('a tick before hello is dropped, counted, and complained about once',
         () async {
-      // D-P5-H. The tick is registered through `_on`, so it inherits `_gated`
-      // for free and a pre-hello tick is refused — correctly, since there is
-      // no hold to feed. What is asymmetric, and what this case pins, is that
-      // the refusal is *invisible*: every other gate refusal is answered, and
-      // this one evaporates because the frame has no id.
+      // D-P5-H, as amended by 05-REVIEW WR-03. A pre-hello tick is refused —
+      // correctly, since there is no hold to feed — and the refusal is
+      // *invisible* to the peer, because the frame has no id for a response
+      // to name. What changed is how the gateway records it: the refusal used
+      // to be thrown, and a notification's exception goes to
+      // `onUnhandledError`, which means one exception and one full stack
+      // trace per frame from a peer that has not authenticated. It is now
+      // dropped and counted like every other tick the handler cannot use,
+      // with one summary line for the session.
       final gate = _gate();
       gate.api.setValue(_key, 5);
 
@@ -208,21 +217,79 @@ void main() {
           reason: 'json_rpc_2 returns before building a response for a frame '
               'with no id, so a refused notification tells an unauthenticated '
               'peer nothing at all');
-      expect(gate.session.droppedHoldTicks, 0,
-          reason: 'the gate refused before the handler ran, so this is not a '
-              'dropped tick — it is a frame that never reached the hold map');
-      expect(gate.errors.map((entry) => entry.where), contains('session peer'),
-          reason: 'the refusal is not answered, but it is not lost either: it '
-              'reaches the server\'s one error seam, which is the difference '
-              'between a silence somebody chose and a silence nobody knows '
-              'about');
-      expect(gate.errors.map((entry) => '${entry.error}'),
-          contains(contains('hello_required')),
-          reason: 'and it is the *gate* refusing, not the fallback answering '
-              '"unknown method": the tick is registered, and what stopped it '
-              'is the handshake. An unregistered name would produce the same '
-              'silence for a completely different reason');
+      expect(gate.session.droppedHoldTicks, 1,
+          reason: 'dropped is not the same as ignored. A pre-hello tick is a '
+              'frame that reached a handler and did nothing, which is exactly '
+              'what droppedHoldTicks counts — and the one number Phase 8 will '
+              'surface should not have a hole in it where the unauthenticated '
+              'peers go');
+      expect(gate.errors, hasLength(1),
+          reason: 'the condition is worth exactly one line: it is reachable '
+              'by anyone who completes the WebSocket upgrade, so a report per '
+              'frame is a peer choosing how much the gateway logs');
+      expect('${gate.errors.single.error}', contains('before hello'),
+          reason: 'the line has to say what was dropped and why, because it '
+              'is the only trace of a peer that never authenticated: '
+              '${gate.errors.single.error}');
+      expect(gate.errors.single.stack, StackTrace.empty,
+          reason: 'a stack trace here points at json_rpc_2\'s dispatch and '
+              'says nothing the message does not, and reportToStderr writes '
+              'the whole of it. Empty is how this file says "the line is the '
+              'report"');
       expect(gate.valueOf(_key), 5);
+    });
+
+    test('a pre-hello tick flood is one complaint and does not keep the '
+        'session alive', () async {
+      // 05-REVIEW WR-03, the flood the case above is the unit of. An
+      // unauthenticated peer that completes the upgrade and sends `h` at line
+      // rate used to drive one exception plus one full stack trace to the
+      // gateway's stderr per frame — the log volume that fills a plant
+      // gateway's disk or drowns the line an operator needs — *and* keep its
+      // own session out of the reaper's reach while doing it.
+      final gate = _gate();
+      gate.api.setValue(_key, 5);
+
+      gate.clock.advance(const Duration(seconds: 10).inMilliseconds);
+      expect(gate.session.silentForMs(), 10000,
+          reason: 'anti-vacuity: with nothing arriving the session is silent '
+              'and the reaper would eventually take it');
+
+      for (var i = 0; i < 100; i++) {
+        gate.client.sendNotification(Methods.holdTick, {'k': _key, 'n': i + 2});
+      }
+      await pumpEventQueue();
+
+      expect(gate.session.droppedHoldTicks, 100,
+          reason: 'every frame was counted');
+      expect(gate.errors, hasLength(1),
+          reason: 'a hundred frames produced ${gate.errors.length} reports. '
+              'The complaint is per session, not per frame — otherwise the '
+              'peer decides how big the log gets');
+      expect(gate.session.silentForMs(), 10000,
+          reason: 'the flood fed the session\'s own liveness, so a peer that '
+              'never says hello holds its session open indefinitely by '
+              'shouting at a gate that keeps refusing it. A frame the *gate* '
+              'refuses is not evidence of a client worth keeping — the '
+              'handshake is what makes an inbound frame mean that');
+      expect(gate.valueOf(_key), 5);
+      expect(gate.inbound, isEmpty);
+    });
+
+    test('the handshake starts the heartbeat clock', () async {
+      // The other half of gating the liveness tap: a session whose lastSeen
+      // stopped moving pre-hello must be given the clock back the moment the
+      // handshake lands, or a panel that took its time connecting would be
+      // reaped for the silence that preceded its own hello.
+      final gate = _gate();
+
+      gate.clock.advance(const Duration(seconds: 10).inMilliseconds);
+      await gate.hello();
+
+      expect(gate.session.silentForMs(), 0,
+          reason: 'the session has been silent for '
+              '${gate.session.silentForMs()} ms immediately after a '
+              'successful handshake');
     });
 
     test('a hundred unknown-hold ticks cost a map lookup each and nothing else',

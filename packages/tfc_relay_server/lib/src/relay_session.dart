@@ -54,10 +54,32 @@ final class _LastSeen {
   final int Function() _now;
   int at;
 
+  /// Whether inbound frames count as evidence of a client worth keeping.
+  ///
+  /// Null until the session exists, and answering false until the handshake
+  /// lands (05-REVIEW WR-03). Before `hello` an inbound frame is not evidence
+  /// of a panel — it is evidence of a socket, which the reaper is entitled to
+  /// take back. A peer that never authenticates and sends `h` at line rate
+  /// would otherwise hold its own session open indefinitely by shouting at a
+  /// gate that keeps refusing it.
+  bool Function()? _helloed;
+
+  // ignore: use_setters_to_change_properties — a setter here would read as a
+  // field assignment at the one call site, where the point is that the
+  // predicate is installed once and late.
+  void gateOn(bool Function() helloed) => _helloed = helloed;
+
   String touch(String frame) {
-    at = _now();
+    if (_helloed?.call() ?? false) at = _now();
     return frame;
   }
+
+  /// Starts the heartbeat clock at the handshake.
+  ///
+  /// The `hello` frame itself arrives before [touch] will move anything, so
+  /// without this a panel that took ten seconds to connect would begin its
+  /// session already ten seconds silent.
+  void touchNow() => at = _now();
 }
 
 /// One client session.
@@ -150,7 +172,9 @@ final class RelaySession {
       writeOutcomes ??
           WriteOutcomeLog(ttl: config.writeOutcomeTtl, now: clock),
       mintGeneration,
-    ).._start();
+    )
+      .._onError = onError
+      .._start();
   }
 
   /// Refuses one inbound frame that is over the ingress ceiling, before
@@ -321,22 +345,46 @@ final class RelaySession {
   String? get epoch => _epoch;
   String? _epoch;
 
-  /// How many hold-to-run ticks this session dropped — malformed, or naming a
-  /// hold it never engaged.
+  /// How many hold-to-run ticks this session dropped — malformed, naming a
+  /// hold it never engaged, or arriving before the handshake.
   ///
-  /// A passthrough to [ValueHandlers.droppedHoldTicks], exposed here for the
-  /// same reason [sentCloseCode] and [lastSeenMs] are: it is the only way a
-  /// case that drives a whole session can read a property the wire cannot
-  /// report, because a tick is never answered. Nothing in production depends
-  /// on it; the production home for the number is a `PIPE.*` health key in
-  /// Phase 8 (D-P5-I).
-  int get droppedHoldTicks => _values?.droppedHoldTicks ?? 0;
+  /// A passthrough to [ValueHandlers.droppedHoldTicks] *plus* the ones the
+  /// gate refused before the handler was reached, exposed here for the same
+  /// reason [sentCloseCode] and [lastSeenMs] are: it is the only way a case
+  /// that drives a whole session can read a property the wire cannot report,
+  /// because a tick is never answered. Nothing in production depends on it;
+  /// the production home for the number is a `PIPE.*` health key in Phase 8
+  /// (D-P5-I).
+  ///
+  /// One number and not two (05-REVIEW WR-03): a pre-hello tick is a frame
+  /// that reached a handler and did nothing, which is what every other entry
+  /// in this count is, and the health key Phase 8 surfaces should not have a
+  /// hole in it where the unauthenticated peers go.
+  int get droppedHoldTicks =>
+      (_values?.droppedHoldTicks ?? 0) + _ungatedNotifications;
+
+  /// Notifications the gate refused, dropped rather than thrown.
+  var _ungatedNotifications = 0;
+
+  /// Whether the one summary line has been emitted for this session.
+  var _complainedUngated = false;
+
+  /// The server's one error seam, kept because a notification's refusal has
+  /// nowhere else to be reported: `onUnhandledError` is per *thrown* error,
+  /// and the whole point of [_onNotification] is not to throw one per frame.
+  RelayErrorHandler? _onError;
 
   /// When the last inbound frame arrived, on the session's clock.
   ///
   /// The heartbeat reaper (03-11) sweeps on this. A tap on the read side
   /// rather than a touch in each handler, because a frame the peer *rejects*
   /// is still evidence the client is alive.
+  ///
+  /// **Not before the handshake, though** (05-REVIEW WR-03). Until `hello` is
+  /// accepted an inbound frame is evidence of a socket, not of a panel, and a
+  /// peer that never authenticates would otherwise keep its own session out
+  /// of the reaper's reach by sending frames the gate keeps refusing. The
+  /// clock starts at the handshake, which touches this once on the way past.
   ///
   /// **WebSocket pongs deliberately do not move it.** `dart:io` answers the
   /// server's pings inside the socket and surfaces nothing on the stream, so
@@ -399,7 +447,47 @@ final class RelaySession {
             _gated(method, () => _answer(method, () async => handler(params))));
   }
 
+  /// As [_on], for a **notification**.
+  ///
+  /// json_rpc_2 has no id to answer a notification with, so a gate refusal
+  /// raised here cannot reach the client — and must not reach the error
+  /// handler once per frame either (05-REVIEW WR-03). Thrown, it went to
+  /// `onUnhandledError` and `reportToStderr` wrote the message *and a full
+  /// stack trace*, with no rate limit and no dedup, for a condition any peer
+  /// that completes the WebSocket upgrade can produce at line rate.
+  ///
+  /// So the refusal is dropped rather than thrown: counted in
+  /// [droppedHoldTicks], which is what a tick the handler cannot use is
+  /// counted in everywhere else, and reported once per session. A pre-hello
+  /// tick has no hold to feed, so there is nothing else to do with it.
+  void _onNotification(
+      String method, Future<Object?> Function(rpc.Parameters) handler) {
+    _registered.add(method);
+    peer.registerMethod(method, (rpc.Parameters params) async {
+      if (_gate.checkRequest(method) is! GateAllow) {
+        _ungatedNotifications++;
+        if (!_complainedUngated) {
+          _complainedUngated = true;
+          // `StackTrace.empty` is the deliberate spelling: the line is the
+          // whole report, and `reportToStderr` skips the trace for it. A
+          // trace here would point at json_rpc_2's dispatch and say nothing
+          // the message does not.
+          _onError?.call(
+              'a "$method" notification arrived before hello and was dropped: '
+              'a pre-hello tick has no hold to feed. Further ones on this '
+              'session are counted in droppedHoldTicks and not reported '
+              'again',
+              StackTrace.empty,
+              'notification gate');
+        }
+        return null;
+      }
+      return _answer(method, () async => handler(params));
+    });
+  }
+
   void _start() {
+    _lastSeen.gateOn(() => _sessionId != null);
     // Every one of these goes through `_on`, and there is no second path.
     //
     // The table is nine names. Phase 3 registered four; 04-02 added `write`,
@@ -461,16 +549,17 @@ final class RelaySession {
     // `registeredMethods` and `surface_test.dart` keeps it in a literal of its
     // own rather than in the nine names a client may *call*.
     //
-    // It comes through `_on` deliberately, which buys the gate and the armor
-    // with no new rule for anyone to remember. **D-P5-H**: a tick arriving
-    // before `hello` is therefore refused by `_gated` — right, since a
+    // It comes through `_onNotification` — the same gate and the same armor
+    // as `_on`, with the one difference a notification forces. **D-P5-H**: a
+    // tick arriving before `hello` is still refused — right, since a
     // pre-hello tick has no hold to feed — and the refusal *evaporates*
     // instead of being answered, because the frame has no id for a response
     // to name. That is the one asymmetry in this table: every other gate
-    // refusal is visible to the client. The refusal still reaches the
-    // `RelayErrorHandler` through `onUnhandledError`, so it is unanswered,
-    // not unnoticed.
-    _on(Methods.holdTick, values.holdTick);
+    // refusal is visible to the client. What `_onNotification` changes is
+    // where the refusal goes on this side: dropped and counted, with one
+    // summary line per session, rather than thrown once per frame into the
+    // error handler (05-REVIEW WR-03).
+    _onNotification(Methods.holdTick, values.holdTick);
     // Method-not-found, answered by us rather than by json_rpc_2.
     //
     // Left to the library, `Server._tryFallbacks` throws
@@ -626,6 +715,13 @@ final class RelaySession {
         final id = newUlid();
         _sessionId = id;
         _epoch = newUlid();
+        // The handshake starts the heartbeat clock. Inbound frames do not
+        // move `lastSeen` until this line has run (05-REVIEW WR-03), and the
+        // `hello` frame itself arrived before it — so without this a panel
+        // that took ten seconds to connect would begin its session already
+        // ten seconds silent, and be reaped for the silence that preceded its
+        // own handshake.
+        _lastSeen.touchNow();
         return HelloResult(
           protocol: protocol,
           server: const PeerInfo('tfc-relay-gateway', '0.1.0'),

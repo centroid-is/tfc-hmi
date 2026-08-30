@@ -33,7 +33,16 @@ typedef RelayErrorHandler = void Function(
 /// Deliberately not a `print`. stdout on a gateway is where a supervisor
 /// expects structured output to go, and an error interleaved into it is an
 /// error that gets parsed as data.
+///
+/// **[StackTrace.empty] means the line is the whole report** (05-REVIEW
+/// WR-03). A caller that passes it is saying this is a condition rather than
+/// a defect — something a peer can produce at will, already summarized in the
+/// message — and a trace for one of those is unbounded log volume chosen by
+/// whoever is connecting. Everything that arrives with a real trace still
+/// gets it: an unencodable error response, a socket that threw inside the
+/// tick, a handler that failed while answering a notification.
 void reportToStderr(Object error, StackTrace stack, String where) {
   stderr.writeln('[tfc-relay] $where: $error');
+  if (identical(stack, StackTrace.empty)) return;
   stderr.writeln(stack);
 }
