@@ -5,10 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderConstrainedBox, BoxHitTestResult, BoxHitTestEntry;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import 'package:json_annotation/json_annotation.dart';
-import 'package:tfc/core/preferences.dart';
+import 'package:tfc_dart/core/preferences.dart' show PreferencesApi;
 import 'package:tfc/page_creator/page.dart' show AssetPage;
 
 import '../chat/asset_context_menu.dart';
@@ -16,6 +15,7 @@ import '../core/feature_flags.dart';
 import '../widgets/proposal_visual.dart';
 import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
+import '../providers/preferences.dart' show localPreferencesProvider;
 import '../providers/state_man.dart';
 import '../theme.dart' show HmiStateColors;
 import '../page_creator/assets/common.dart'; // your Asset, Coordinates, RelativeSize, TextPos, etc.
@@ -252,7 +252,12 @@ class _RenderHitPermissiveConstrainedBox extends RenderConstrainedBox {
 }
 
 class _AssetStackState extends ConsumerState<AssetStack> {
-  final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+  // `late` so `ref` is available by the time it is read; `final` so the store
+  // is resolved once per mount rather than per build. Read through the
+  // provider rather than the factory because a `ref` exists here — spec §6's
+  // one-construction-site rule, enforced by
+  // `scripts/check-preferences-construction.sh`.
+  late final PreferencesApi prefs = ref.read(localPreferencesProvider);
 
   /// Read once per mount, not once per build. The stack rebuilds on every
   /// drag tick while an asset is moved, and handing FutureBuilder a fresh

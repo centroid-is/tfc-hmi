@@ -218,7 +218,9 @@ List<String> _childrenOf(PageManager manager, String path) =>
 
 void main() {
   setUp(() {
-    // The asset canvas constructs SharedPreferencesAsync directly.
+    // The asset canvas reads the device-local store, which sits on this
+    // platform instance — still required after 03-11; see
+    // `setUpEditorEnvironment`.
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
 

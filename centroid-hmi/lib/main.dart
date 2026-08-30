@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:beamer/beamer.dart';
 import 'package:dbus/dbus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:amplify_secure_storage_dart/amplify_secure_storage_dart.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:upgrader/upgrader.dart';
@@ -37,7 +36,8 @@ import 'package:tfc/pages/first_user.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/feature_flags.dart';
-import 'package:tfc/core/preferences.dart';
+import 'package:tfc/providers/preferences.dart'
+    show createDeviceLocalPreferences;
 import 'package:tfc/page_creator/page.dart';
 
 import 'package:tfc/theme.dart';
@@ -268,7 +268,11 @@ Future<void> _startApp([bool debugMode = false]) async {
   final registry = RouteRegistry();
 
   // This is not ideal, if a second HMI adds a page, we will need to restart the app twice
-  final prefs = SharedPreferencesWrapper(SharedPreferencesAsync());
+  // Before `runApp`, so there is no `ProviderScope` to read
+  // `localPreferencesProvider` from — the factory is the one construction
+  // point spec §6 asks for, enforced by
+  // `scripts/check-preferences-construction.sh`.
+  final prefs = createDeviceLocalPreferences();
   final pageManager = PageManager(pages: {}, prefs: prefs);
   await pageManager.load();
 
