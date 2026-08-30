@@ -215,40 +215,25 @@ const Duration _recovery = Duration(seconds: 5);
 /// shape a poll cannot establish.
 const Duration _settle = Duration(milliseconds: 400);
 
-/// The freshness deadline the three F6/F7 recovery arms run with.
-///
-/// Lowered deliberately and greppably, the way `faultClientConfig` lowers the
-/// deadline floor. A `writeStatus` re-query goes out on *entry* to `ready` and
-/// nowhere else (`remote_state_man.dart`, `_onLinkState`), so an arm about the
-/// recovery needs the client to have genuinely left `ready` first — and under
-/// a blackhole the socket never closes, so the watchdog noticing the silence
-/// is the only thing that takes it out. The production number is 3 s and is
-/// not what these arms are about.
-const Duration _noticeTheSilence = Duration(milliseconds: 500);
-
-/// The budget for "the panel came back **after an outage it sat through**".
-///
-/// Wider than [_recovery], and measured rather than guessed: driven at 5 s, the
-/// applied-while-down arm timed out on the reconnect once and completed in
-/// under a second on the next run, which is a budget sitting on top of a
-/// distribution rather than clear of it. Every dial attempted while the
-/// blackhole is still on costs a full control deadline before it fails, and
-/// each failure draws the next window from `[0, min(2 s, 40 ms x 2^n)]` — so a
-/// client that spent two or three attempts inside the outage can legitimately
-/// be most of five seconds from its next attempt at the moment the link comes
-/// back.
-///
-/// A liveness budget, never a latency measurement: nothing here asserts the
-/// reconnect was *fast*, only that a panel whose link returned does come back
-/// on its own. `_recovery`'s doc makes the same distinction, and this is the
-/// same argument with more attempts behind it.
-const Duration _outageRecovery = Duration(seconds: 15);
-
-/// The write and control deadline those same arms run with.
-///
-/// Short enough that a write into a swallowed link resolves inside the case's
-/// own budget rather than outliving the outage it is supposed to be measuring.
-const Duration _shortWrite = Duration(milliseconds: 400);
+// **A recovery arm ends its outage with a kill, never by lifting a
+// blackhole.** Measured, not preferred.
+//
+// The `writeStatus` re-query goes out on *entry* to `ready`
+// (`remote_state_man.dart`, `_onLinkState`) and nowhere else, so any arm
+// about the recovery has to take the client out of `ready` and put it back.
+// Driven by lowering the freshness deadline and waiting for the watchdog to
+// notice a blackholed link, the applied-while-down arm wedged the reconnect
+// past a fifteen-second budget in one run of four and finished in under a
+// second in the other three. The mechanism is in the lever's own
+// documentation: a blackhole swallows *both* directions, so the client's own
+// close never reaches the gateway either, and the replacement session has to
+// establish beside a session the gateway still believes in.
+//
+// `killOnce` has none of that — it is the lever F1, F6/F7 and F18 all use,
+// the gateway sees the close immediately, and the arms below run in a second.
+// The blackhole survives in exactly one place, the `not_received` arm, where
+// swallowing the outbound frame *is* the fault being injected; that arm
+// restores forwarding before it cuts.
 
 /// The one-way delay F13 imposes. A round trip therefore costs twice this.
 const Duration _f13Latency = Duration(milliseconds: 100);
@@ -628,11 +613,6 @@ void main() {
       final fixture = await faultFixture(
         keys: const {_key},
         withProxy: true,
-        config: faultClientConfig(
-          write: _shortWrite,
-          control: _shortWrite,
-          freshness: _noticeTheSilence,
-        ),
         seed: (plant) => plant.setValue(_key, 1200),
       );
       await until('the link', () => fixture.client.isReady);
@@ -641,7 +621,13 @@ void main() {
       final watching = fixture.client.onWriteResolved.listen(resolved.add);
       addTearDown(watching.cancel);
 
-      // Stalled at the plant, so the outage lands with the write genuinely
+      /// Every answer this client has been given about [cmd], in order.
+      List<WriteResult> answersAbout(String cmd) => fixture
+          .client.debugWriteStatusAnswers
+          .where((result) => result.cmd == cmd)
+          .toList();
+
+      // Stalled at the plant, so the cut lands with the write genuinely
       // upstream rather than before it left.
       fixture.served.stallWrites();
       final pending = fixture.client.write(_key, 1500);
@@ -649,50 +635,60 @@ void main() {
           () => fixture.served.writesInFlight > 0,
           budget: _recovery);
 
-      // A blackhole rather than a kill: both directions swallowed keeps the
-      // link down for exactly as long as this case says, which is what makes
-      // the ordering below deterministic instead of a race between the plant
-      // being released and the client reconnecting.
-      fixture.proxy.blackhole();
+      // `killOnce`, the same lever the case above uses, and **not** a
+      // blackhole. Driven at a blackhole this arm wedged the reconnect for
+      // 15 s in one run of four: the client's own close is swallowed too, so
+      // the gateway keeps the dead session — and its subscription — while the
+      // replacement session tries to establish. The kill is the fault this arm
+      // is about anyway, and it is the one the rest of this file is built on.
+      fixture.proxy.killOnce();
       final outcome = await pending.timeout(_recovery);
       expect(outcome, isA<WriteUnknown>(),
-          reason: 'the write came back $outcome with the link swallowed under '
-              'it; nobody could know yet');
+          reason: 'the write came back $outcome with the link cut under it; '
+              'nobody could know yet');
       expect(fixture.client.debugUnresolvedCmds, contains(outcome.cmd),
           reason: 'the command was not held for re-query, so the resolution '
               'this case is about could never be asked for');
 
-      // And now it lands, with nobody able to hear about it.
+      // **The first re-query still finds it parked**, and that is the state
+      // the existing case above ends in. The gateway records
+      // `unknown(in_flight)` *before* it crosses into the plant, precisely so
+      // that a question asked at this moment is answered "on its way to a
+      // machine" rather than "never received".
+      await until('the first re-query after the reconnect to be answered',
+          () => answersAbout(outcome.cmd).isNotEmpty,
+          budget: _recovery);
+      expect(answersAbout(outcome.cmd).first, isA<WriteUnknown>(),
+          reason: 'the first answer was '
+              '${answersAbout(outcome.cmd).first}, not unknown — the write is '
+              'stalled at the plant at this instant, so anything else means '
+              'this arm never passed through the state it is supposed to '
+              'resolve *from* and proves nothing the case above does not');
+      expect(resolved.where((result) => result.cmd == outcome.cmd), isEmpty,
+          reason: 'an unknown answer settles nothing and must not be announced '
+              'to the operator as a resolution');
+      expect(fixture.client.read(_key)?.value, isNot(1500),
+          reason: 'the client already shows the new value, so the plant took '
+              'the write before this case released it and the resolution '
+              'below is a subscription update wearing a re-query\'s clothes');
+
+      // And now it lands, with the panel no longer waiting on it.
       fixture.served.releaseWrites();
-      await until('the plant to take the write during the outage',
+      await until('the plant to take the write',
           () => fixture.served.writesInFlight == 0,
           budget: _recovery);
-      expect(fixture.client.read(_key)?.value, isNot(1500),
-          reason: 'the client already shows the new value, so the link was '
-              'not actually down and the resolution below would be a '
-              'subscription update wearing a re-query\'s clothes');
 
-      // **The client has to have genuinely left `ready`**, and this wait is
-      // not a tidiness: the re-query goes out on *entry* to ready and nowhere
-      // else. Lifting the blackhole before the watchdog had noticed the
-      // silence left the client where it already was, no transition happened,
-      // and the recovery this arm is about never ran — measured, the first
-      // time this case was driven.
-      await until('the client to notice the link went silent',
-          () => !fixture.client.isReady,
+      // The next entry to `ready` is what asks again — the re-query goes out
+      // there and nowhere else. Counted rather than watched for `isReady`
+      // going false: the reconnect can be over before a 10 ms poll sees it.
+      final answersBefore = answersAbout(outcome.cmd).length;
+      fixture.proxy.killOnce();
+      await until(
+          'the re-query that goes out after the write had landed',
+          () => answersAbout(outcome.cmd).length > answersBefore,
           budget: _recovery);
 
-      fixture.proxy.blackhole(enabled: false);
-      await until('the reconnect', () => fixture.client.isReady,
-          budget: _outageRecovery);
-      await until(
-          'the re-query to come back with an answer about ${outcome.cmd}',
-          () => fixture.client.debugWriteStatusAnswers
-              .any((result) => result.cmd == outcome.cmd),
-          budget: _outageRecovery);
-
-      final answered = fixture.client.debugWriteStatusAnswers
-          .firstWhere((result) => result.cmd == outcome.cmd);
+      final answered = answersAbout(outcome.cmd).last;
       expect(answered, isA<WriteApplied>(),
           reason: 'the write reached the device and the device took it, and '
               'the re-query answered $answered. An operator who was shown '
@@ -736,11 +732,6 @@ void main() {
       final fixture = await faultFixture(
         keys: const {_key},
         withProxy: true,
-        config: faultClientConfig(
-          write: _shortWrite,
-          control: _shortWrite,
-          freshness: _noticeTheSilence,
-        ),
         seed: (plant) => plant.setValue(_key, 1200),
       );
       await until('the link', () => fixture.client.isReady);
@@ -749,11 +740,17 @@ void main() {
       final watching = fixture.client.onWriteResolved.listen(resolved.add);
       addTearDown(watching.cancel);
 
-      // Swallowed on the way *out*, before the gateway sees a byte of it —
-      // the only way a `not_received` is earned honestly. The command is
-      // freshly minted, datable, after the outcome log's own start and inside
-      // its TTL, which is the positive evidence the gateway requires
-      // (`value_handlers.dart:_statusOf`).
+      // **Swallowed on the way out**, before the gateway sees a byte of it,
+      // and the blackhole is the only lever that can do that: `killOnce`
+      // would cut before the frame left or after it arrived, and `sever` on
+      // the in-memory pair drops server-to-client only. Blackholed bytes are
+      // lost and never replayed (`fault_proxy.dart`, RESEARCH Finding 4),
+      // which is what makes the answer below honest rather than merely early.
+      //
+      // The command is freshly minted, datable, after the outcome log's own
+      // start and inside its TTL: the positive evidence the gateway insists on
+      // before it will say "never received" (`value_handlers.dart`,
+      // `_statusOf`). Forgetting is not evidence.
       fixture.proxy.blackhole();
       final outcome = await fixture.client.write(_key, 1500).timeout(_recovery);
 
@@ -771,20 +768,19 @@ void main() {
           reason: 'an unknown that is not held for re-query is an unknown '
               'nobody will ever establish');
 
-      // As in the arm above: the re-query goes out on entry to `ready`, so the
-      // client has to have left it first.
-      await until('the client to notice the link went silent',
-          () => !fixture.client.isReady,
-          budget: _recovery);
-
+      // Forwarding restored and *then* the link cut: the re-query goes out on
+      // entry to `ready` and nowhere else, and a kill is how this file's other
+      // cases get there. Waiting for a blackholed link to be noticed by the
+      // freshness watchdog instead left the gateway holding a session whose
+      // close it never saw, which wedged the replacement's establishment for
+      // fifteen seconds in one run of four.
       fixture.proxy.blackhole(enabled: false);
-      await until('the reconnect', () => fixture.client.isReady,
-          budget: _outageRecovery);
+      fixture.proxy.killOnce();
       await until(
           'the re-query to come back with an answer about ${outcome.cmd}',
           () => fixture.client.debugWriteStatusAnswers
               .any((result) => result.cmd == outcome.cmd),
-          budget: _outageRecovery);
+          budget: _recovery);
 
       final answered = fixture.client.debugWriteStatusAnswers
           .firstWhere((result) => result.cmd == outcome.cmd);
