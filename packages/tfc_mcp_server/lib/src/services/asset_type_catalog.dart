@@ -674,6 +674,32 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'RtspCameraConfig',
+      displayName: 'RTSP camera',
+      category: 'Visualization',
+      description:
+          'A live IP-camera tile playing an RTSP stream (media_kit/libmpv). '
+          'Shows a LIVE badge while frames decode, retries a dropped stream '
+          'automatically, and degrades to a placeholder on platforms without '
+          'video playback.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'url',
+            type: 'String',
+            description:
+                'Stream URL, e.g. rtsp://user:pass@10.0.0.5:554/stream1. '
+                'Empty renders an unconfigured placeholder.'),
+        AssetPropertyInfo(
+            name: 'fit',
+            type: 'BoxFit',
+            description: 'How the video fills the tile (cover/contain/fill)'),
+        AssetPropertyInfo(
+            name: 'muted',
+            type: 'bool',
+            description: 'Suppress stream audio (default true)'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'GraphAssetConfig',
       displayName: 'Graph',
       category: 'Visualization',
