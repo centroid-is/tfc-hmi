@@ -282,7 +282,14 @@ void main() {
           reason: 'the store\'s keysBoundTo reads the database and is reserved '
               'for the delete block. Rendering must use the resolver.');
       expect(store!.calls, ['list', 'bindings']);
-      expect(find.text(kAccessTemplateSummary(1, 1)), findsNWidgets(5));
+
+      // The list is bounded and lazy, so not every tile is built at once —
+      // scrolling to the end must not turn the counts into queries either.
+      await tester.drag(
+          find.byType(ListView).first, const Offset(0, -400));
+      await tester.pumpAndSettle();
+      expect(store!.calls, ['list', 'bindings']);
+      expect(find.text(kAccessTemplateSummary(1, 1)), findsAtLeastNWidgets(1));
     });
 
     testWidgets('while the templates are loading it renders nothing, not a '
