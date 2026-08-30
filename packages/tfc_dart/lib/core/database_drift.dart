@@ -217,7 +217,9 @@ class AccessTemplateTable extends Table {
 
   /// JSON object of member name -> `AccessGroup` name, written by
   /// `AccessTemplate.encodeRules()` and read back by
-  /// `AccessTemplate.decodeRules()`. An empty member name means the whole key.
+  /// `AccessTemplate.decodeRules()`. The member name `'*'` (`kWholeKeyMember`)
+  /// means the whole key — deliberately not a legal IEC 61131-3 identifier, so
+  /// it cannot collide with a real member.
   ///
   /// A member no rule mentions is **unrestricted** — tags fail open, which is
   /// why the key repository has to make unbound keys findable at a glance:
