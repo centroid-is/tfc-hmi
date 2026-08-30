@@ -226,4 +226,318 @@ void main() {
           '');
     });
   });
+
+  _resolverTests();
+}
+
+// ---------------------------------------------------------------------------
+// TagBindingResolver — the mutable snapshot the policy holds forever.
+// ---------------------------------------------------------------------------
+
+/// The bound conveyor key from the phase's acceptance criterion.
+const String _cn04 = 'CN04.conveyor';
+
+TagBindingResolver _loadedResolver({String templateName = 'conveyor'}) {
+  final resolver = TagBindingResolver();
+  resolver.setSnapshot(
+    keyToTemplate: <String, String>{_cn04: templateName},
+    templates: <String, AccessTemplate>{'conveyor': _conveyor()},
+  );
+  return resolver;
+}
+
+void _resolverTests() {
+  group('TagBindingResolver snapshot state', () {
+    test('a fresh resolver is neverLoaded and answers null for everything', () {
+      final resolver = TagBindingResolver();
+      expect(resolver.state, TagBindingSnapshotState.neverLoaded);
+      expect(resolver.groupFor(_cn04, 'p_cfg_ManualFreq'), isNull);
+      expect(resolver.groupFor(_cn04, null), isNull);
+      expect(resolver.groupFor('anything', 'anything'), isNull);
+      expect(resolver.boundKeyCount, 0);
+      expect(resolver.templateCount, 0);
+    });
+
+    test(
+        'neverLoaded and loaded-but-empty both answer null and are told apart '
+        'by state and by nothing else', () {
+      // The property 04-05 and 04-08 depend on. `neverLoaded` is deliberately
+      // permissive — a resolver does not know which keys exist, so "strict
+      // until loaded" would refuse every write on a booting panel and for ever
+      // on a station with no database. What must not be lost is that the two
+      // cases are different *values*, so nothing can report "nobody has told me
+      // yet" and "nothing is bound" the same way.
+      final never = TagBindingResolver();
+      final empty = TagBindingResolver()
+        ..setSnapshot(
+          keyToTemplate: const <String, String>{},
+          templates: const <String, AccessTemplate>{},
+        );
+
+      expect(never.state, TagBindingSnapshotState.neverLoaded);
+      expect(empty.state, TagBindingSnapshotState.loaded);
+      expect(never.state, isNot(empty.state));
+
+      for (final member in <String?>[null, 'p_cfg_ManualFreq', 'p_cmd_JogFwd']) {
+        expect(never.groupFor(_cn04, member), isNull);
+        expect(empty.groupFor(_cn04, member), isNull);
+      }
+      expect(never.boundKeyCount, empty.boundKeyCount);
+      expect(never.templateCount, empty.templateCount);
+      expect(never.unboundKeys(const [_cn04]), empty.unboundKeys(const [_cn04]));
+    });
+
+    test('setSnapshot moves neverLoaded to loaded and changes the answers', () {
+      final resolver = TagBindingResolver();
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), isNull);
+      resolver.setSnapshot(
+        keyToTemplate: <String, String>{_cn04: 'conveyor'},
+        templates: <String, AccessTemplate>{'conveyor': _conveyor()},
+      );
+      expect(resolver.state, TagBindingSnapshotState.loaded);
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
+    });
+
+    test('replacing the snapshot does not change the object identity', () {
+      // T-04-05. `accessPolicyProvider` is keepAlive and pure, and
+      // `stateManProvider` reads it once and holds the resulting
+      // GuardedStateMan for the life of the panel. If a template edit rebuilt
+      // the policy it would rebuild `stateManProvider` and drop every OPC UA
+      // connection on the station. So the policy captures one callback on one
+      // long-lived object, and a template edit replaces that object's snapshot.
+      final resolver = TagBindingResolver();
+      final before = resolver;
+      resolver.setSnapshot(
+        keyToTemplate: <String, String>{_cn04: 'conveyor'},
+        templates: <String, AccessTemplate>{'conveyor': _conveyor()},
+      );
+      resolver.setSnapshot(
+        keyToTemplate: <String, String>{_cn04: 'schneider'},
+        templates: <String, AccessTemplate>{
+          'schneider': AccessTemplate(
+            name: 'schneider',
+            rules: <String, AccessGroup>{'p_cmd_JogFwd': AccessGroup.device},
+          ),
+        },
+      );
+      expect(
+        identical(before, resolver),
+        isTrue,
+        reason: 'the resolver must be re-pointed in place. Making it '
+            'immutable and rebuilding AccessPolicy on every template edit '
+            'would rebuild stateManProvider and drop every OPC UA connection '
+            'on the panel.',
+      );
+      // And the answers did move, so the identity is not being preserved by
+      // the snapshot having failed to land.
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.device);
+      expect(resolver.groupFor(_cn04, 'p_cfg_ManualFreq'), isNull);
+    });
+
+    test('markStale changes no answer', () {
+      // 04-05's T-04-26: a load that failed against a snapshot already in
+      // memory keeps answering from it. If markStale changed an answer, the
+      // keep-the-previous-snapshot rule would be cosmetic.
+      final resolver = _loadedResolver();
+      final before = <String?, AccessGroup?>{
+        null: resolver.groupFor(_cn04, null),
+        'p_cmd_JogFwd': resolver.groupFor(_cn04, 'p_cmd_JogFwd'),
+        'p_cfg_ManualFreq': resolver.groupFor(_cn04, 'p_cfg_ManualFreq'),
+        'p_stat_Frequency': resolver.groupFor(_cn04, 'p_stat_Frequency'),
+      };
+      resolver.markStale();
+      expect(resolver.state, TagBindingSnapshotState.stale);
+      before.forEach((member, group) {
+        expect(resolver.groupFor(_cn04, member), group,
+            reason: 'markStale must change no answer');
+      });
+      expect(resolver.boundKeyCount, 1);
+      expect(resolver.templateCount, 1);
+      expect(resolver.templateForKey(_cn04), isNotNull);
+    });
+
+    test('markStale is a no-op on a resolver that has never been loaded', () {
+      final resolver = TagBindingResolver();
+      resolver.markStale();
+      expect(resolver.state, TagBindingSnapshotState.neverLoaded,
+          reason: 'there is nothing to be stale about');
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), isNull);
+    });
+
+    test('a successful load after markStale returns the state to loaded', () {
+      final resolver = _loadedResolver()..markStale();
+      expect(resolver.state, TagBindingSnapshotState.stale);
+      resolver.setSnapshot(
+        keyToTemplate: <String, String>{_cn04: 'conveyor'},
+        templates: <String, AccessTemplate>{'conveyor': _conveyor()},
+      );
+      expect(resolver.state, TagBindingSnapshotState.loaded);
+    });
+  });
+
+  group('TagBindingResolver.groupFor', () {
+    test('is assignable to TagBindingLookup with no adapter', () {
+      // The assignability is exercised, not asserted in a comment — and the
+      // typedef is synchronous, so this assignment is what stops anybody
+      // making the binding read awaited on the write path.
+      final resolver = _loadedResolver();
+      final TagBindingLookup lookup = resolver.groupFor;
+      expect(lookup(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
+      final policy = AccessPolicy(tagBindings: lookup);
+      expect(policy.groupForTag(_cn04, member: 'p_cmd_JogFwd'),
+          AccessGroup.operate);
+    });
+
+    test('answers null for a key nobody bound, on every member', () {
+      final resolver = _loadedResolver();
+      for (final member in <String?>[null, 'p_cmd_JogFwd', 'p_cfg_ManualFreq']) {
+        expect(resolver.groupFor('CN05.conveyor', member), isNull);
+      }
+    });
+
+    test('a dangling binding answers null rather than locking the key', () {
+      // T-04-03. A key naming a template somebody removed in psql is
+      // indistinguishable, from here, from a key nobody bound.
+      final resolver = _loadedResolver(templateName: 'deleted_template');
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), isNull);
+      expect(resolver.groupFor(_cn04, null), isNull);
+      expect(resolver.templateForKey(_cn04), isNull);
+    });
+
+    test('the whole-key row of a bound template answers a scalar write', () {
+      final resolver = TagBindingResolver()
+        ..setSnapshot(
+          keyToTemplate: <String, String>{_cn04: 'conveyor'},
+          templates: <String, AccessTemplate>{
+            'conveyor': _conveyor(wholeKey: AccessGroup.device),
+          },
+        );
+      expect(resolver.groupFor(_cn04, null), AccessGroup.device);
+      expect(resolver.groupFor(_cn04, 'p_stat_Frequency'), AccessGroup.device);
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
+    });
+  });
+
+  group('TagBindingResolver through AccessPolicy — the phase acceptance criterion',
+      () {
+    test('a conveyor key locks p_cfg_ManualFreq while leaving p_cmd_JogFwd open',
+        () {
+      final resolver = _loadedResolver();
+      final policy = AccessPolicy(tagBindings: resolver.groupFor);
+      expect(policy.groupForTag(_cn04, member: 'p_cmd_JogFwd'),
+          AccessGroup.operate);
+      expect(policy.groupForTag(_cn04, member: 'p_cfg_ManualFreq'),
+          AccessGroup.setpoints);
+      // And the same answers arrive through the wire-surface entry point the
+      // decorators actually call.
+      expect(policy.groupForWireSurface('tag', _cn04, member: 'p_cmd_JogFwd'),
+          AccessGroup.operate);
+      expect(
+          policy.groupForWireSurface('tag', _cn04, member: 'p_cfg_ManualFreq'),
+          AccessGroup.setpoints);
+    });
+
+    test('an unmentioned member of a bound key stays unrestricted', () {
+      final policy = AccessPolicy(tagBindings: _loadedResolver().groupFor);
+      expect(policy.groupForTag(_cn04, member: 'p_stat_Frequency'), isNull);
+      expect(policy.groupForTag(_cn04), isNull);
+    });
+  });
+
+  group('TagBindingResolver snapshot copying', () {
+    test('mutating the caller maps after setSnapshot changes no answer', () {
+      final keyToTemplate = <String, String>{_cn04: 'conveyor'};
+      final templates = <String, AccessTemplate>{'conveyor': _conveyor()};
+      final resolver = TagBindingResolver()
+        ..setSnapshot(keyToTemplate: keyToTemplate, templates: templates);
+
+      keyToTemplate['CN05.conveyor'] = 'conveyor';
+      keyToTemplate[_cn04] = 'schneider';
+      templates.remove('conveyor');
+      templates['schneider'] = AccessTemplate(
+          name: 'schneider',
+          rules: <String, AccessGroup>{'p_cmd_JogFwd': AccessGroup.administer});
+
+      expect(resolver.groupFor(_cn04, 'p_cmd_JogFwd'), AccessGroup.operate);
+      expect(resolver.groupFor('CN05.conveyor', 'p_cmd_JogFwd'), isNull);
+      expect(resolver.boundKeyCount, 1);
+      expect(resolver.templateCount, 1);
+    });
+  });
+
+  group('TagBindingResolver reporting', () {
+    TagBindingResolver plant() {
+      final resolver = TagBindingResolver();
+      resolver.setSnapshot(
+        keyToTemplate: <String, String>{
+          'CN04.conveyor': 'conveyor',
+          'CN02.conveyor': 'conveyor',
+          'CN21.conveyor': 'deleted_template',
+          'ST101.drive': 'schneider',
+        },
+        templates: <String, AccessTemplate>{
+          'conveyor': _conveyor(),
+          'schneider': AccessTemplate(
+              name: 'schneider',
+              rules: <String, AccessGroup>{
+                'p_cfg_AutoFreq': AccessGroup.device
+              }),
+        },
+      );
+      return resolver;
+    }
+
+    test('templateForKey returns the bound template, or null', () {
+      expect(plant().templateForKey('CN04.conveyor')?.name, 'conveyor');
+      expect(plant().templateForKey('ST101.drive')?.name, 'schneider');
+      expect(plant().templateForKey('CN99.nothing'), isNull);
+    });
+
+    test('keysBoundTo returns every key naming the template, sorted', () {
+      expect(plant().keysBoundTo('conveyor').toList(),
+          <String>['CN02.conveyor', 'CN04.conveyor']);
+      expect(plant().keysBoundTo('schneider').toList(), <String>['ST101.drive']);
+      expect(plant().keysBoundTo('nobody_uses_this'), isEmpty);
+    });
+
+    test('keysBoundTo reports a dangling binding by the name it carries', () {
+      expect(plant().keysBoundTo('deleted_template').toList(),
+          <String>['CN21.conveyor']);
+    });
+
+    test('unboundKeys reports both an unbound key and a dangling binding', () {
+      final keys = <String>[
+        'CN04.conveyor', // bound, template exists
+        'CN21.conveyor', // dangling — the template was removed
+        'CN05.conveyor', // nobody bound it
+        'ST101.drive', // bound, template exists
+      ];
+      expect(plant().unboundKeys(keys).toList(),
+          <String>['CN21.conveyor', 'CN05.conveyor']);
+    });
+
+    test('unboundKeys preserves the order it was given', () {
+      final keys = <String>['zz.key', 'aa.key', 'CN04.conveyor', 'mm.key'];
+      expect(plant().unboundKeys(keys).toList(),
+          <String>['zz.key', 'aa.key', 'mm.key']);
+    });
+
+    test('a never-loaded resolver reports every key as unbound', () {
+      final keys = <String>['CN04.conveyor', 'ST101.drive'];
+      expect(TagBindingResolver().unboundKeys(keys).toList(), keys);
+    });
+
+    test('boundKeyCount and templateCount are the summary line', () {
+      expect(plant().boundKeyCount, 4);
+      expect(plant().templateCount, 2);
+    });
+
+    test('boundKeyCount counts binding rows, dangling ones included', () {
+      // The count is of what the table says, not of what resolves — a summary
+      // that quietly excluded the dangling rows would hide the gap the
+      // repository exists to surface.
+      expect(plant().keysBoundTo('deleted_template'), hasLength(1));
+      expect(plant().boundKeyCount, 4);
+    });
+  });
 }
