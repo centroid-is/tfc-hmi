@@ -559,28 +559,62 @@ td:first-child{white-space:nowrap}
     </section>
 
     <section>
-      <h2>What the next phase has to answer</h2>
+      <h2>What SVN actually has today</h2>
+      <p>
+        Checked against the live plant key mapping (1556 keys, snapshot 11 Aug 2026) and the
+        collector config, rather than assumed.
+      </p>
+      <h3>The history already exists — and it is not the alarm system</h3>
+      <p>
+        <strong>91 drive structs are collected whole, every 5 seconds, with one-year retention</strong>
+        — <code>CVS01.CN01.FD01</code> and its siblings, each carrying <code>p_stat_State</code>,
+        <code>p_stat_Error</code> and <code>p_stat_LastFault</code>. That is a machine state
+        timeline for most of the plant, already accumulating, with no new plumbing.
+      </p>
+      <p>
+        <code>alarm_history</code> is the opposite story. The live plant’s
+        <code>alarm_man_config</code> is <code>{"alarms":[]}</code> — <strong>zero alarms
+        configured</strong> — and the station backup has <code>historyToDb: false</code>, so nothing
+        is being written there at all. The 39 alarms in the older backup belong to the previous
+        <code>Line1.Motor1</code> topology, not this one. <strong>The asset must read equipment
+        state, not alarms.</strong> The alarm link stays in the design as an enrichment for the
+        detail row — when a fault interval coincides with an activation, name it — but it cannot be
+        the source, or v1 renders an empty timeline.
+      </p>
+      <h3>Grouping is already in the key names</h3>
+      <p>
+        <code>CVS01.CN01.FD01</code> is system · device · drive, and the whole live namespace is
+        shaped that way (<code>CVS01–03</code>, <code>SPB01–03</code>, <code>BER02/03</code>,
+        <code>STM02/03</code>, <code>Baader1–10</code>). So the tree can be derived from the key
+        convention with an explicit override for the cases it gets wrong, rather than hand-built
+        from nothing.
+      </p>
+      <h3>The resolution floor is 5 seconds</h3>
+      <p>
+        Collection is periodic sampling, so stop edges quantise to ±5&nbsp;s and anything shorter
+        can fall between samples. The micro-stop comb above still earns its keep — a 20-second stop
+        is four samples — but it only becomes fully honest if those keys move to change-of-value.
+        The collector already supports that: <code>sample_interval_us: null</code> inserts on every
+        subscription update, which for a state enum means one row per transition. That is a per-key
+        config change, not code.
+      </p>
+      <h3>Volume is the real constraint</h3>
+      <p>
+        91 drives × 5&nbsp;s × one year is on the order of half a billion rows, each holding a whole
+        struct. The asset has to query a bounded window and fold rows into intervals server-side;
+        pulling a shift of raw samples into the widget will not work.
+      </p>
+    </section>
+
+    <section>
+      <h2>What is still genuinely open</h2>
       <div class="q">
-        <h3>Where does a stop come from?</h3>
-        <p>
-          <code>alarm_history</code> already stores <code>created_at</code> / <code>deactivated_at</code>
-          per activation, which is an interval — that is a fault-reason stop almost for free. The
-          other five reasons are not alarms: they are equipment state (manual mode, cleaning mode,
-          starved/blocked from a photocell or an upstream run bit). So the asset probably reads
-          <em>two</em> sources and normalises them into one interval model, rather than being an
-          alarm viewer.
-        </p>
-        <h3>What defines a group?</h3>
-        <p>
-          Lines are not a concept the config knows about yet. Options are an explicit tree in the
-          asset config, or deriving it from the <code>AREAnn.DEVnn.SUBnn</code> key convention.
-          Explicit is more work to configure and survives contact with reality; derived is free and
-          wrong the first time a machine moves between lines.
-        </p>
         <h3>Which stops impact the line?</h3>
         <p>
-          The rollup depends on it, and nothing in the current data says it. Most likely a per-child
-          flag in the asset config, defaulting to on.
+          There is no system-level run bit in the live namespace — <code>CVS01</code> has no keys of
+          its own, only <code>CN01…CN39</code> beneath it. So the rollup really must be a union of
+          children, and something has to say which children count. Most likely a per-child flag in
+          the asset config, defaulting to on.
         </p>
         <p>
           It also decides what the table means. Right now the Pareto ranks <em>machine</em> downtime
@@ -588,6 +622,13 @@ td:first-child{white-space:nowrap}
           line it belongs to shows 95% availability. That is honest but it is not the same question
           as “what cost us the most product”. Once the impact flag exists the table should probably
           offer both — machine downtime and line-impacting downtime — rather than silently picking one.
+        </p>
+        <h3>How does a state value become a reason?</h3>
+        <p>
+          The six reasons above have to be read off <code>p_stat_State</code> and its neighbours.
+          The enum lives in the PLC source (<code>~/Projects/sildarvinnsla</code>), so this is a
+          mapping to be read rather than invented — but starved and blocked in particular may need
+          the <code>PX01</code> photocells and <code>Jam</code> bits, not just the drive state.
         </p>
       </div>
     </section>
