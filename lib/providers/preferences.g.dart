@@ -6,7 +6,7 @@ part of 'preferences.dart';
 // RiverpodGenerator
 // **************************************************************************
 
-String _$preferencesHash() => r'fb7419304055725e4b9cd90e5c3e41e3f0ea4502';
+String _$preferencesHash() => r'3ece1eec7b3e29e501e88cc777cdad22d7d7f2c9';
 
 /// The shared configuration store, **guarded**.
 ///

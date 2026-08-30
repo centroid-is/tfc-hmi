@@ -73,7 +73,7 @@ class _FixedSession extends AccessSessionController {
   Future<AccessSession> build() async => _session;
 
   /// A sign-in, without any explicit invalidation of anything downstream.
-  void signIn(AccessSession next) {
+  void becomeSignedIn(AccessSession next) {
     _session = next;
     state = AsyncData(next);
   }
@@ -153,6 +153,25 @@ void main() {
     return container;
   }
 
+  /// A store straight onto the in-memory database, holding `users`.
+  ///
+  /// These tests are about the loader and the resolver, not about the gate —
+  /// 04-03's own suite drives a `configure`-only session into all six writes.
+  /// Seeding through a store of its own also keeps the fixtures independent of
+  /// whichever session a container happens to be in.
+  AccessTemplateStore rawStore() => AccessTemplateStore(
+        db: db,
+        session: _withUsers,
+        audit: const NullAuditSink(),
+        station: 'test',
+      );
+
+  Future<void> seedConveyor({bool bind = true}) async {
+    final store = rawStore();
+    await store.create(_conveyor());
+    if (bind) await store.bind(_kKey, 'conveyor');
+  }
+
   // -------------------------------------------------------------------------
   // The resolver
   // -------------------------------------------------------------------------
@@ -177,14 +196,11 @@ void main() {
         () async {
       final w = wired();
       final resolver = w.container.read(tagBindingResolverProvider);
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
 
       await w.container.read(accessTemplatesProvider.future);
       expect(resolver.groupFor(_kKey, _kManualFreq), isNull);
 
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
 
@@ -220,9 +236,10 @@ void main() {
     test('takes the session at write time, so a sign-in does not rebuild it',
         () async {
       final w = wired(session: _anonymous());
+      await w.container.read(accessSessionProvider.future);
       final before = await w.container.read(accessTemplateStoreProvider.future);
 
-      w.session.signIn(_withUsers());
+      w.session.becomeSignedIn(_withUsers());
       await Future<void>.delayed(Duration.zero);
 
       final after = await w.container.read(accessTemplateStoreProvider.future);
@@ -242,10 +259,7 @@ void main() {
   group('accessTemplatesProvider', () {
     test('reads both tables into one snapshot', () async {
       final w = wired();
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
 
       w.container.invalidate(accessTemplatesProvider);
       final templates = await w.container.read(accessTemplatesProvider.future);
@@ -277,15 +291,13 @@ void main() {
     test('a binding write followed by an invalidate changes the answer',
         () async {
       final w = wired();
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
+      await seedConveyor(bind: false);
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
       final resolver = w.container.read(tagBindingResolverProvider);
       expect(resolver.groupFor(_kKey, _kManualFreq), isNull);
 
-      await store.bind(_kKey, 'conveyor');
+      await rawStore().bind(_kKey, 'conveyor');
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
 
@@ -295,16 +307,13 @@ void main() {
     test('a template edit followed by an invalidate changes the answer',
         () async {
       final w = wired();
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
       final resolver = w.container.read(tagBindingResolverProvider);
       expect(resolver.groupFor(_kKey, _kJog), AccessGroup.operate);
 
-      await store.update(AccessTemplate(
+      await rawStore().update(AccessTemplate(
           name: 'conveyor', rules: const {_kJog: AccessGroup.device}));
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
@@ -316,10 +325,7 @@ void main() {
         'loading twice with the same data changes neither the answers nor '
         'the identity', () async {
       final w = wired();
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
 
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
@@ -339,19 +345,11 @@ void main() {
         () async {
       late _FlakyStore flaky;
       final w = wired(extra: [
-        accessTemplateStoreProvider.overrideWith((ref) async {
-          final wrapper = await ref.watch(databaseProvider.future);
-          return flaky = _FlakyStore(AccessTemplateStore(
-            db: (wrapper! as _FakeDatabase).db,
-            session: () => sessionInForce(ref),
-            audit: const NullAuditSink(),
-            station: 'test',
-          ));
-        }),
+        accessTemplateStoreProvider
+            .overrideWith((ref) async => flaky = _FlakyStore(rawStore())),
       ]);
       await w.container.read(accessTemplateStoreProvider.future);
-      await flaky.inner.create(_conveyor());
-      await flaky.inner.bind(_kKey, 'conveyor');
+      await seedConveyor();
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
       final resolver = w.container.read(tagBindingResolverProvider);
@@ -373,16 +371,8 @@ void main() {
     test('a first load that fails leaves the resolver at neverLoaded',
         () async {
       final w = wired(extra: [
-        accessTemplateStoreProvider.overrideWith((ref) async {
-          final flaky = _FlakyStore(AccessTemplateStore(
-            db: db,
-            session: () => sessionInForce(ref),
-            audit: const NullAuditSink(),
-            station: 'test',
-          ));
-          flaky.throwing = true;
-          return flaky;
-        }),
+        accessTemplateStoreProvider.overrideWith((ref) async =>
+            _FlakyStore(rawStore())..throwing = true),
       ]);
 
       await expectLater(
@@ -456,10 +446,7 @@ void main() {
     test('a bound key resolves through the policy once the snapshot loads',
         () async {
       final w = wired();
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
 
@@ -490,10 +477,7 @@ void main() {
       final policyBefore = w.container.read(accessPolicyProvider);
       expect(stateManBuilds, 1);
 
-      final store =
-          (await w.container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
       w.container.invalidate(accessTemplatesProvider);
       await w.container.read(accessTemplatesProvider.future);
       await Future<void>.delayed(Duration.zero);
@@ -515,9 +499,7 @@ void main() {
 
   group('tagAccessProvider', () {
     Future<TagAccess> loaded(ProviderContainer container) async {
-      final store = (await container.read(accessTemplateStoreProvider.future))!;
-      await store.create(_conveyor());
-      await store.bind(_kKey, 'conveyor');
+      await seedConveyor();
       container.invalidate(accessTemplatesProvider);
       await container.read(accessTemplatesProvider.future);
       return container.read(tagAccessProvider);
@@ -574,6 +556,7 @@ void main() {
 
     test('a sign-in changes canWrite with no explicit invalidation', () async {
       final w = wired(session: _anonymous());
+      await w.container.read(accessSessionProvider.future);
       await loaded(w.container);
       expect(
           w.container
@@ -581,8 +564,8 @@ void main() {
               .canWrite(_kKey, member: _kManualFreq),
           isFalse);
 
-      w.session.signIn(_withDevice());
-      await Future<void>.delayed(Duration.zero);
+      w.session.becomeSignedIn(_withDevice());
+      await w.container.read(accessSessionProvider.future);
 
       expect(
           w.container
