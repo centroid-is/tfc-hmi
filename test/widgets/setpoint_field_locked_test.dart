@@ -22,6 +22,15 @@ import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/setpoint_field.dart';
 
 void main() {
+  /// Whether a cursor is sitting in any editable field on screen.
+  ///
+  /// Not `FocusScope.of(...).hasFocus`, which answers true for the whole app
+  /// scope whether or not a text field holds the primary focus, and would pass
+  /// this file's assertions vacuously.
+  bool anyFieldFocused(WidgetTester tester) => tester
+      .widgetList<EditableText>(find.byType(EditableText))
+      .any((w) => w.focusNode.hasFocus);
+
   Widget host(Widget child) => MaterialApp(
         home: Scaffold(
           body: Column(children: [child, const TextField(key: Key('other'))]),
@@ -69,10 +78,7 @@ void main() {
       await tester.pump();
 
       expect(taps, 1);
-      expect(
-          FocusScope.of(tester.element(find.byType(SetpointField<double>)))
-              .hasFocus,
-          isFalse,
+      expect(anyFieldFocused(tester), isFalse,
           reason: 'the tap opens the prompt; it does not put a cursor in a '
               'field the operator may not commit');
     });
@@ -111,6 +117,7 @@ void main() {
       final lockedHeight =
           tester.getSize(find.byType(SetpointField<double>)).height;
 
+      expect(unlocked, greaterThan(0), reason: 'a real box to compare against');
       expect(lockedHeight, unlocked);
     });
 
@@ -173,13 +180,12 @@ void main() {
       await tester.tap(find.byKey(const Key('f')));
       await tester.pumpAndSettle();
 
+      expect(anyFieldFocused(tester), isTrue, reason: 'a cursor to lose');
+
       await tester.pumpWidget(host(field(locked: true, onLockedTap: () {})));
       await tester.pumpAndSettle();
 
-      expect(
-          FocusScope.of(tester.element(find.byType(SetpointField<double>)))
-              .hasFocus,
-          isFalse);
+      expect(anyFieldFocused(tester), isFalse);
     });
   });
 
