@@ -24,7 +24,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/providers/access.dart';
-import 'package:tfc/providers/access_policy.dart';
 import 'package:tfc/providers/access_templates.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/route_registry.dart';
@@ -116,9 +115,9 @@ class _ThrowingSink implements AuditSink {
 /// A `StateMan` that records writes and resolves keys the way the real one
 /// does: unchanged unless they name a variable.
 class _FakeStateMan implements StateMan {
-  _FakeStateMan({this.substitutions = const {}, this.writeThrows});
+  _FakeStateMan({this.subs = const {}, this.writeThrows});
 
-  final Map<String, String> substitutions;
+  final Map<String, String> subs;
 
   /// What `write` throws instead of recording, when a test needs to prove the
   /// exception reaches the caller.
@@ -129,7 +128,7 @@ class _FakeStateMan implements StateMan {
   @override
   String resolveKey(String key) {
     var resolved = key;
-    for (final entry in substitutions.entries) {
+    for (final entry in subs.entries) {
       resolved = resolved.replaceAll('\$${entry.key}', entry.value);
     }
     return resolved;
@@ -149,6 +148,14 @@ class _FakeStateMan implements StateMan {
 
 DynamicValue _value(double v) =>
     DynamicValue(value: v, typeId: NodeId.double);
+
+/// The whole-struct write one conveyor key carries — the shape the member
+/// gating in 04-04 exists for.
+DynamicValue _struct(Map<String, Object?> members) {
+  final v = DynamicValue();
+  members.forEach((key, value) => v[key] = DynamicValue(value: value));
+  return v;
+}
 
 /// The overrides every host shares: a loaded resolver, a fixed session, a
 /// recording sink, and no path at all to Postgres.
@@ -205,6 +212,17 @@ Widget _shell({required Widget body, required List<Override> overrides}) {
         routeInformationParser: BeamerParser(),
       ),
     ),
+  );
+}
+
+/// A bare `MaterialApp` host, for the claims that are about a widget's own
+/// size or answer rather than about the prompt. No Beamer, so a test may pump
+/// it twice with different overrides — which is how "the lock comes off when
+/// the session changes" is asserted without a second file.
+Widget _plainHost({required Widget body, required List<Override> overrides}) {
+  return ProviderScope(
+    overrides: overrides,
+    child: MaterialApp(home: Scaffold(body: Center(child: body))),
   );
 }
 
@@ -496,7 +514,7 @@ void main() {
         (tester) async {
       // `$station` resolves to `ST101.CN01`, which is bound. The refusal must
       // name the resolved key, exactly as the guard's row would.
-      final inner = _FakeStateMan(substitutions: const {'station': _key});
+      final inner = _FakeStateMan(subs: const {'station': _key});
       final sink = _RecordingSink();
 
       await tester.pumpWidget(_shell(
@@ -633,10 +651,14 @@ void main() {
         session: _anonymous,
         audit: const NullAuditSink(),
         station: 'test-station',
+        // With a baseline the guard asks per changed member, which is the
+        // question this template answers. Without one it falls back to the
+        // key-level row — a documented hole (04-04), not this test's subject.
+        readBaseline: (key) async => _struct(const {'p_cfg_ManualFreq': 42.5}),
       );
 
       await expectLater(
-        guarded.write(_key, _value(42)),
+        guarded.write(_key, _struct(const {'p_cfg_ManualFreq': 55.0})),
         throwsA(isA<AccessDenied>()),
       );
       expect(inner.writes, isEmpty);
@@ -645,10 +667,8 @@ void main() {
 
   group('TagLockBadge', () {
     testWidgets('measures Size.zero for an unbound key', (tester) async {
-      await tester.pumpWidget(_shell(
-        body: const Center(
-          child: TagLockBadge(tagKey: _unboundKey),
-        ),
+      await tester.pumpWidget(_plainHost(
+        body: const TagLockBadge(tagKey: _unboundKey),
         overrides: _overrides(
           resolver: _loadedResolver(),
           session: _anonymous(),
@@ -665,10 +685,8 @@ void main() {
 
     testWidgets('measures Size.zero for a member no rule mentions',
         (tester) async {
-      await tester.pumpWidget(_shell(
-        body: const Center(
-          child: TagLockBadge(tagKey: _key, member: _openMember),
-        ),
+      await tester.pumpWidget(_plainHost(
+        body: const TagLockBadge(tagKey: _key, member: _openMember),
         overrides: _overrides(
           resolver: _loadedResolver(),
           session: _anonymous(),
@@ -680,12 +698,9 @@ void main() {
       expect(tester.getSize(find.byType(TagLockBadge)), Size.zero);
     });
 
-    testWidgets('renders a lock on a locked member, and nothing once the '
-        'session holds the group', (tester) async {
-      await tester.pumpWidget(_shell(
-        body: const Center(
-          child: TagLockBadge(tagKey: _key, member: _lockedMember),
-        ),
+    testWidgets('renders a lock on a locked member', (tester) async {
+      await tester.pumpWidget(_plainHost(
+        body: const TagLockBadge(tagKey: _key, member: _lockedMember),
         overrides: _overrides(
           resolver: _loadedResolver(),
           session: _anonymous(),
@@ -696,12 +711,12 @@ void main() {
 
       expect(find.byIcon(Icons.lock_outline), findsOneWidget);
       expect(tester.getSize(find.byType(TagLockBadge)).width, greaterThan(0));
+    });
 
-      // A different container, holding the group: no lock.
-      await tester.pumpWidget(_shell(
-        body: const Center(
-          child: TagLockBadge(tagKey: _key, member: _lockedMember),
-        ),
+    testWidgets('renders nothing once the session holds the group',
+        (tester) async {
+      await tester.pumpWidget(_plainHost(
+        body: const TagLockBadge(tagKey: _key, member: _lockedMember),
         overrides: _overrides(
           resolver: _loadedResolver(),
           session: _device(),
@@ -716,12 +731,10 @@ void main() {
     testWidgets('takes no tap of its own', (tester) async {
       var taps = 0;
 
-      await tester.pumpWidget(_shell(
-        body: Center(
-          child: GestureDetector(
-            onTap: () => taps++,
-            child: const TagLockBadge(tagKey: _key, member: _lockedMember),
-          ),
+      await tester.pumpWidget(_plainHost(
+        body: GestureDetector(
+          onTap: () => taps++,
+          child: const TagLockBadge(tagKey: _key, member: _lockedMember),
         ),
         overrides: _overrides(
           resolver: _loadedResolver(),
@@ -743,7 +756,7 @@ void main() {
     testWidgets('answers the same question the badge renders', (tester) async {
       final answers = <String, bool>{};
 
-      await tester.pumpWidget(_shell(
+      await tester.pumpWidget(_plainHost(
         body: Consumer(builder: (context, ref, _) {
           answers['unbound'] = tagWriteAllowed(ref, _unboundKey);
           answers['open'] = tagWriteAllowed(ref, _key, member: _openMember);
