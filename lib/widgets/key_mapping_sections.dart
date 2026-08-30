@@ -1410,10 +1410,18 @@ class KeyAccessTemplateSection extends ConsumerWidget {
               // station where no template is left at all.
               if (store != null &&
                   (bindings.templateNames.isNotEmpty ||
-                      boundTemplate != null)) ...[
-                const Spacer(),
-                _dropdown(context, ref, store),
-              ],
+                      boundTemplate != null))
+                // Expanded rather than a Spacer plus a fixed box: on a narrow
+                // card the dropdown then shrinks instead of overflowing, and
+                // on a wide one it stops growing at a width where the longest
+                // entry — a dangling name plus "no such template" — still
+                // reads.
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _dropdown(context, ref, store),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 4),
@@ -1453,7 +1461,7 @@ class KeyAccessTemplateSection extends ConsumerWidget {
     final dangling = bound != null && !bindings.exists(bound);
 
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 240),
+      constraints: const BoxConstraints(maxWidth: 320),
       child: DropdownButton<String?>(
         key: kKeyAccessTemplateDropdownKey(keyName),
         value: bound,
