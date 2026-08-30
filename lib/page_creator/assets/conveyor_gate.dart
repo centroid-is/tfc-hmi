@@ -19,6 +19,7 @@ import 'package:tfc/converter/color_converter.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate_painter.dart';
 import 'package:tfc/providers/state_man.dart';
+import '../../widgets/duration_field.dart';
 import '../../widgets/memo_stream_builder.dart';
 
 part 'conveyor_gate.g.dart';
@@ -708,9 +709,6 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
   /// Animation controller for the "play" preview cycle.
   late final AnimationController _animController;
 
-  late TextEditingController _openTimeController;
-  late TextEditingController _closeTimeController;
-
   @override
   void initState() {
     super.initState();
@@ -722,21 +720,12 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
         // Forward 0->1 then reverse 1->0 via a ping-pong curve.
         _previewProgress.value = _animController.value;
       });
-
-    _openTimeController = TextEditingController(
-      text: widget.config.openTimeMs.toString(),
-    );
-    _closeTimeController = TextEditingController(
-      text: widget.config.closeTimeMs?.toString() ?? '',
-    );
   }
 
   @override
   void dispose() {
     _previewProgress.dispose();
     _animController.dispose();
-    _openTimeController.dispose();
-    _closeTimeController.dispose();
     super.dispose();
   }
 
@@ -922,36 +911,35 @@ class _ConveyorGateConfigEditorState extends State<_ConveyorGateConfigEditor>
           ],
 
           // -- Open Time --
-          TextFormField(
-            controller: _openTimeController,
-            decoration: const InputDecoration(
-              labelText: 'Open Time (ms)',
-            ),
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            onChanged: (v) {
-              final parsed = int.tryParse(v);
-              if (parsed != null && parsed > 0) {
-                setState(() => config.openTimeMs = parsed);
-              }
-            },
+          DurationField(
+            value: Duration(milliseconds: config.openTimeMs),
+            labelText: 'Open Time',
+            min: const Duration(milliseconds: 1),
+            max: const Duration(minutes: 10),
+            units: const [DurationUnit.milliseconds, DurationUnit.seconds],
+            // The config stores whole milliseconds.
+            resolution: const Duration(milliseconds: 1),
+            onChanged: (v) =>
+                setState(() => config.openTimeMs = v.inMilliseconds),
           ),
           const SizedBox(height: 8),
 
           // -- Close Time --
-          TextFormField(
-            controller: _closeTimeController,
-            decoration: const InputDecoration(
-              labelText: 'Close Time (ms)',
-              hintText: 'Same as open time',
-            ),
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            onChanged: (v) {
-              setState(() {
-                config.closeTimeMs = v.isEmpty ? null : int.tryParse(v);
-              });
-            },
+          DurationField(
+            value: config.closeTimeMs == null
+                ? null
+                : Duration(milliseconds: config.closeTimeMs!),
+            labelText: 'Close Time',
+            hintText: 'Same as open time',
+            min: const Duration(milliseconds: 1),
+            max: const Duration(minutes: 10),
+            units: const [DurationUnit.milliseconds, DurationUnit.seconds],
+            resolution: const Duration(milliseconds: 1),
+            onChanged: (v) =>
+                setState(() => config.closeTimeMs = v.inMilliseconds),
+            // Empty means "mirror the open time" — a real state, not
+            // half-typed input.
+            onCleared: () => setState(() => config.closeTimeMs = null),
           ),
           const SizedBox(height: 16),
 

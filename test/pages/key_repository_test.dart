@@ -656,7 +656,7 @@ void main() {
 
       // Collection fields should not be visible yet
       expect(
-          find.widgetWithText(TextField, 'Sample Interval (microseconds)'),
+          find.widgetWithText(TextField, 'Sample Interval'),
           findsNothing);
 
       // Scroll down to make the Switch visible
@@ -675,7 +675,7 @@ void main() {
 
       // Collection fields should now be visible
       expect(
-          find.widgetWithText(TextField, 'Sample Interval (microseconds)'),
+          find.widgetWithText(TextField, 'Sample Interval'),
           findsOneWidget);
       expect(find.widgetWithText(TextField, 'Retention (days)'),
           findsOneWidget);
@@ -701,7 +701,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final sampleField =
-          find.widgetWithText(TextField, 'Sample Interval (microseconds)');
+          find.widgetWithText(TextField, 'Sample Interval');
       expect(sampleField, findsOneWidget);
 
       await tester.enterText(sampleField, '1000000');

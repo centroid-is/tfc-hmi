@@ -15,6 +15,7 @@ import '../pages/key_repository.dart' show ModbusConfigListExt;
 import 'opcua_array_index_field.dart';
 import 'opcua_browse.dart';
 import 'umas_browse.dart';
+import 'duration_field.dart';
 
 // ===================== OPC UA Config Section =====================
 
@@ -897,10 +898,14 @@ class CollectionConfigSection extends StatefulWidget {
 
 class _CollectionConfigSectionState extends State<CollectionConfigSection> {
   late TextEditingController _collectionNameController;
-  late TextEditingController _sampleIntervalController;
   late TextEditingController _retentionDaysController;
-  late TextEditingController _scheduleIntervalController;
   late TextEditingController _sampleMembersController;
+
+  /// Held as values, not controllers: [DurationField] owns its own text and
+  /// only reports back a duration it has already parsed and clamped. Null =
+  /// the collector's default cadence / no scheduled job.
+  Duration? _sampleInterval;
+  Duration? _scheduleInterval;
 
   @override
   void initState() {
@@ -908,12 +913,10 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
     final collect = widget.collect;
     _collectionNameController =
         TextEditingController(text: collect?.name ?? '');
-    _sampleIntervalController = TextEditingController(
-        text: collect?.sampleInterval?.inMicroseconds.toString() ?? '');
+    _sampleInterval = collect?.sampleInterval;
     _retentionDaysController = TextEditingController(
         text: collect?.retention.dropAfter.inDays.toString() ?? '365');
-    _scheduleIntervalController = TextEditingController(
-        text: collect?.retention.scheduleInterval?.inMinutes.toString() ?? '');
+    _scheduleInterval = collect?.retention.scheduleInterval;
     _sampleMembersController =
         TextEditingController(text: collect?.sampleMembers?.join(', ') ?? '');
   }
@@ -925,12 +928,10 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
     if (widget.enabled && !oldWidget.enabled) {
       final collect = widget.collect;
       _collectionNameController.text = collect?.name ?? '';
-      _sampleIntervalController.text =
-          collect?.sampleInterval?.inMicroseconds.toString() ?? '';
+      _sampleInterval = collect?.sampleInterval;
       _retentionDaysController.text =
           collect?.retention.dropAfter.inDays.toString() ?? '365';
-      _scheduleIntervalController.text =
-          collect?.retention.scheduleInterval?.inMinutes.toString() ?? '';
+      _scheduleInterval = collect?.retention.scheduleInterval;
       _sampleMembersController.text = collect?.sampleMembers?.join(', ') ?? '';
     }
   }
@@ -938,11 +939,37 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
   @override
   void dispose() {
     _collectionNameController.dispose();
-    _sampleIntervalController.dispose();
     _retentionDaysController.dispose();
-    _scheduleIntervalController.dispose();
     _sampleMembersController.dispose();
     super.dispose();
+  }
+
+  /// One field, two layouts (narrow column / wide row) — built once so the
+  /// two cannot drift.
+  Widget _scheduleIntervalField() {
+    return DurationField(
+      value: _scheduleInterval,
+      labelText: 'Schedule Interval',
+      hintText: 'No schedule',
+      min: const Duration(minutes: 1),
+      max: const Duration(days: 7),
+      units: const [
+        DurationUnit.minutes,
+        DurationUnit.hours,
+        DurationUnit.days,
+      ],
+      // Serialised as whole minutes.
+      resolution: const Duration(minutes: 1),
+      onChanged: (v) {
+        setState(() => _scheduleInterval = v);
+        _notifyChanged();
+      },
+      // Empty means no scheduled retention job — a real state.
+      onCleared: () {
+        setState(() => _scheduleInterval = null);
+        _notifyChanged();
+      },
+    );
   }
 
   /// What the retention field will actually be applied as, and what is wrong
@@ -1014,17 +1041,14 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
   }
 
   void _notifyChanged() {
-    final sampleUs = int.tryParse(_sampleIntervalController.text);
     final retDays = _retentionFromText().days;
-    final schedMins = int.tryParse(_scheduleIntervalController.text);
 
     final collect = CollectEntry(
       key: widget.keyName,
       name: _collectionNameController.text.isNotEmpty
           ? _collectionNameController.text
           : null,
-      sampleInterval:
-          sampleUs != null ? Duration(microseconds: sampleUs) : null,
+      sampleInterval: _sampleInterval,
       sampleMembers: () {
         final members = _sampleMembersController.text
             .split(',')
@@ -1035,8 +1059,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
       }(),
       retention: RetentionPolicy(
         dropAfter: Duration(days: retDays),
-        scheduleInterval:
-            schedMins != null ? Duration(minutes: schedMins) : null,
+        scheduleInterval: _scheduleInterval,
       ),
     );
     widget.onChanged(collect);
@@ -1073,13 +1096,26 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                 onChanged: (_) => _notifyChanged(),
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _sampleIntervalController,
-                decoration: const InputDecoration(
-                  labelText: 'Sample Interval (microseconds)',
-                ),
-                keyboardType: TextInputType.number,
-                onChanged: (_) => _notifyChanged(),
+              DurationField(
+                value: _sampleInterval,
+                labelText: 'Sample Interval',
+                hintText: 'Collector default',
+                min: const Duration(microseconds: 100),
+                max: const Duration(minutes: 10),
+                units: const [
+                  DurationUnit.microseconds,
+                  DurationUnit.milliseconds,
+                  DurationUnit.seconds,
+                ],
+                onChanged: (v) {
+                  setState(() => _sampleInterval = v);
+                  _notifyChanged();
+                },
+                // Empty falls back to the collector's default cadence.
+                onCleared: () {
+                  setState(() => _sampleInterval = null);
+                  _notifyChanged();
+                },
               ),
               const SizedBox(height: 12),
               TextField(
@@ -1104,15 +1140,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                       children: [
                         _buildRetentionField(),
                         const SizedBox(height: 12),
-                        TextField(
-                          controller: _scheduleIntervalController,
-                          decoration: const InputDecoration(
-                            labelText: 'Schedule Interval (minutes, optional)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                          onChanged: (_) => _notifyChanged(),
-                        ),
+                        _scheduleIntervalField(),
                       ],
                     );
                   }
@@ -1122,15 +1150,7 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
                       Expanded(child: _buildRetentionField()),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: TextField(
-                          controller: _scheduleIntervalController,
-                          decoration: const InputDecoration(
-                            labelText: 'Schedule Interval (minutes, optional)',
-                          ),
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                          onChanged: (_) => _notifyChanged(),
-                        ),
+                        child: _scheduleIntervalField(),
                       ),
                     ],
                   );

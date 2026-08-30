@@ -13,7 +13,11 @@ OpcUAConfig _$OpcUAConfigFromJson(Map<String, dynamic> json) => OpcUAConfig()
   ..sslCert = const Base64Converter().fromJson(json['ssl_cert'] as String?)
   ..sslKey = const Base64Converter().fromJson(json['ssl_key'] as String?)
   ..serverAlias = json['server_alias'] as String?
-  ..enabled = json['enabled'] as bool? ?? true;
+  ..enabled = json['enabled'] as bool? ?? true
+  ..secureChannelLifetimeMs =
+      (json['secure_channel_lifetime_ms'] as num?)?.toInt() ?? 600000
+  ..publishingIntervalMs =
+      (json['publishing_interval_ms'] as num?)?.toInt() ?? 100;
 
 Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
     <String, dynamic>{
@@ -24,6 +28,8 @@ Map<String, dynamic> _$OpcUAConfigToJson(OpcUAConfig instance) =>
       'ssl_key': const Base64Converter().toJson(instance.sslKey),
       'server_alias': instance.serverAlias,
       'enabled': instance.enabled,
+      'secure_channel_lifetime_ms': instance.secureChannelLifetimeMs,
+      'publishing_interval_ms': instance.publishingIntervalMs,
     };
 
 M2400Config _$M2400ConfigFromJson(Map<String, dynamic> json) => M2400Config(

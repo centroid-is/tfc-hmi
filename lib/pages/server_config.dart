@@ -20,6 +20,7 @@ import 'package:cryptography_flutter/cryptography_flutter.dart' as crypto_fl;
 import '../core/server_config_db.dart';
 import '../widgets/base_scaffold.dart';
 import '../widgets/connection_status_chip.dart';
+import '../widgets/duration_field.dart';
 import '../widgets/preferences.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import 'package:tfc_dart/core/modbus_device_client.dart';
@@ -1773,7 +1774,6 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   late TextEditingController _unitIdController;
   late TextEditingController _aliasController;
   List<TextEditingController> _pollGroupNameControllers = [];
-  List<TextEditingController> _pollGroupIntervalControllers = [];
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _statusSub;
   // TD-004 (v1.1.x): mirror the TCP-status subscription pattern for
@@ -1805,19 +1805,14 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
   }
 
   void _initPollGroupControllers() {
-    // Dispose old controllers
+    // Dispose old controllers. Intervals need none — each row's
+    // [DurationField] owns its own text.
     for (final c in _pollGroupNameControllers) {
-      c.dispose();
-    }
-    for (final c in _pollGroupIntervalControllers) {
       c.dispose();
     }
     // Create new controllers from current poll groups
     _pollGroupNameControllers = widget.server.pollGroups
         .map((pg) => TextEditingController(text: pg.name))
-        .toList();
-    _pollGroupIntervalControllers = widget.server.pollGroups
-        .map((pg) => TextEditingController(text: pg.intervalMs.toString()))
         .toList();
   }
 
@@ -1860,9 +1855,6 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     _unitIdController.dispose();
     _aliasController.dispose();
     for (final c in _pollGroupNameControllers) {
-      c.dispose();
-    }
-    for (final c in _pollGroupIntervalControllers) {
       c.dispose();
     }
     super.dispose();
@@ -1925,14 +1917,13 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
     widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
 
-  void _updatePollGroup(int index) {
+  void _updatePollGroup(int index, {Duration? interval}) {
     final pollGroups =
         List<ModbusPollGroupConfig>.from(widget.server.pollGroups);
     pollGroups[index] = ModbusPollGroupConfig(
       name: _pollGroupNameControllers[index].text,
-      intervalMs:
-          (int.tryParse(_pollGroupIntervalControllers[index].text) ?? 1000)
-              .clamp(50, 999999),
+      intervalMs: interval?.inMilliseconds ??
+          widget.server.pollGroups[index].intervalMs,
     );
     widget.onUpdate(_buildConfig(pollGroups: pollGroups));
   }
@@ -2144,12 +2135,22 @@ class _ModbusServerConfigCardState extends State<_ModbusServerConfigCard> {
                           const SizedBox(width: 8),
                           Expanded(
                             flex: 1,
-                            child: TextField(
-                              controller: _pollGroupIntervalControllers[i],
-                              decoration: const InputDecoration(
-                                  labelText: 'Interval (ms)', isDense: true),
-                              keyboardType: TextInputType.number,
-                              onChanged: (_) => _updatePollGroup(i),
+                            child: DurationField(
+                              value: Duration(
+                                  milliseconds: entry.value.intervalMs),
+                              labelText: 'Interval',
+                              isDense: true,
+                              // Same bounds the old clamp enforced.
+                              min: const Duration(milliseconds: 50),
+                              max: const Duration(milliseconds: 999999),
+                              units: const [
+                                DurationUnit.milliseconds,
+                                DurationUnit.seconds,
+                                DurationUnit.minutes,
+                              ],
+                              resolution: const Duration(milliseconds: 1),
+                              onChanged: (v) =>
+                                  _updatePollGroup(i, interval: v),
                             ),
                           ),
                           IconButton(
@@ -2334,6 +2335,10 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
   late TextEditingController _usernameController;
   late TextEditingController _passwordController;
   late TextEditingController _serverAliasController;
+  /// Held as values, not controllers: [DurationField] owns its own text and
+  /// only reports back a duration it has already parsed and clamped.
+  late Duration _publishingInterval;
+  late Duration _secureChannelLifetime;
   ConnectionStatus? _connectionStatus;
   StreamSubscription<ConnectionStatus>? _stateSubscription;
   EffectiveDeviceStatus? _effectiveStatus;
@@ -2354,6 +2359,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     _passwordController = TextEditingController();
     _serverAliasController =
         TextEditingController(text: widget.server.serverAlias ?? '');
+    _publishingInterval = widget.server.publishingInterval;
+    _secureChannelLifetime = widget.server.secureChannelLifetime;
     _connectionStatus = widget.connectionStatus;
     _effectiveStatus = widget.effectiveStatus;
     _listenToState();
@@ -2405,7 +2412,11 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
           : _serverAliasController.text
       ..sslCert = widget.server.sslCert
       ..sslKey = widget.server.sslKey
-      ..enabled = enabled ?? widget.server.enabled;
+      ..enabled = enabled ?? widget.server.enabled
+      // Already parsed and clamped by the DurationFields, which stay silent
+      // on a half-typed box rather than reporting a value nobody asked for.
+      ..publishingIntervalMs = _publishingInterval.inMilliseconds
+      ..secureChannelLifetimeMs = _secureChannelLifetime.inMilliseconds;
 
     widget.onUpdate(updatedServer);
   }
@@ -2541,6 +2552,89 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
     );
   }
 
+  /// Publishing interval and SecureChannel lifetime.
+  ///
+  /// Both are shown with their effect spelled out rather than their protocol
+  /// name — an operator setting these is deciding how fast the screen
+  /// updates and how often the session is renewed, not filling in an OPC-UA
+  /// service parameter.
+  Widget _timingCard(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 400;
+        // Units are restricted per field rather than left wide open: minutes
+        // on a field that stops at five seconds would be a dropdown where
+        // every choice is out of range.
+        final intervalField = DurationField(
+          value: _publishingInterval,
+          labelText: 'Update interval',
+          helperText: 'higher = less PLC load',
+          prefixIcon: const FaIcon(FontAwesomeIcons.gaugeHigh, size: 16),
+          min: const Duration(milliseconds: OpcUAConfig.publishingIntervalMinMs),
+          max: const Duration(milliseconds: OpcUAConfig.publishingIntervalMaxMs),
+          units: const [DurationUnit.milliseconds, DurationUnit.seconds],
+          onChanged: (value) {
+            setState(() => _publishingInterval = value);
+            _updateServer();
+          },
+        );
+        final lifetimeField = DurationField(
+          value: _secureChannelLifetime,
+          labelText: 'Secure channel lifetime',
+          helperText: 'renewed at 75% of this',
+          prefixIcon: const FaIcon(FontAwesomeIcons.clockRotateLeft, size: 16),
+          min: const Duration(
+              milliseconds: OpcUAConfig.secureChannelLifetimeMinMs),
+          max: const Duration(
+              milliseconds: OpcUAConfig.secureChannelLifetimeMaxMs),
+          units: const [
+            DurationUnit.seconds,
+            DurationUnit.minutes,
+            DurationUnit.hours,
+          ],
+          onChanged: (value) {
+            setState(() => _secureChannelLifetime = value);
+            _updateServer();
+          },
+        );
+        return Card(
+          child: Padding(
+            padding: EdgeInsets.all(isNarrow ? 12.0 : 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const FaIcon(FontAwesomeIcons.stopwatch, size: 16),
+                    const SizedBox(width: 8),
+                    Text('Timing',
+                        style: Theme.of(context).textTheme.titleSmall),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (isNarrow)
+                  Column(children: [
+                    intervalField,
+                    const SizedBox(height: 12),
+                    lifetimeField,
+                  ])
+                else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: intervalField),
+                      const SizedBox(width: 12),
+                      Expanded(child: lifetimeField),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sslCertString = uint8ListToString(widget.server.sslCert);
@@ -2670,6 +2764,8 @@ class _ServerConfigCardState extends State<_ServerConfigCard> {
                     );
                   },
                 ),
+                const SizedBox(height: 16),
+                _timingCard(context),
                 const SizedBox(height: 16),
                 LayoutBuilder(
                   builder: (context, constraints) {

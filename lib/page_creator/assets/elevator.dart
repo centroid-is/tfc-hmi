@@ -13,6 +13,7 @@ import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'package:tfc/widgets/number_slider.dart';
+import '../../widgets/duration_field.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'elevator_layout.dart';
@@ -969,8 +970,6 @@ class _ElevatorConfigEditor extends StatefulWidget {
 }
 
 class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
-  late TextEditingController _tweenController;
-
   /// Hard-coded factory map per CONTEXT §specifics + ELEV-07. The user
   /// explicitly locked the dropdown to {Sensor, Conveyor} — do NOT iterate
   /// `AssetRegistry.defaultFactories` and filter; the explicit list is the
@@ -986,18 +985,6 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
     'Conveyor': ConveyorConfig.preview,
   };
 
-  @override
-  void initState() {
-    super.initState();
-    _tweenController =
-        TextEditingController(text: widget.config.tweenDurationMs.toString());
-  }
-
-  @override
-  void dispose() {
-    _tweenController.dispose();
-    super.dispose();
-  }
 
   /// Opens a `SimpleDialog` listing the allowed child factories. Picking
   /// one appends a new `ElevatorChildEntry` with auto-generated UUID and
@@ -1153,26 +1140,18 @@ class _ElevatorConfigEditorState extends State<_ElevatorConfigEditor> {
             ),
             const SizedBox(height: 8),
 
-            // -- Tween Duration (ms) --
-            TextFormField(
-              controller: _tweenController,
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-              ],
-              decoration: const InputDecoration(
-                labelText: 'Tween Duration (ms)',
-                hintText: '250',
-                helperText: 'Smoothing for platform position changes',
-              ),
-              onChanged: (v) {
-                final parsed = int.tryParse(v);
-                if (parsed != null && parsed >= 0) {
-                  setState(() => config.tweenDurationMs = parsed);
-                }
-                // Empty / non-numeric input: leave config.tweenDurationMs
-                // unchanged so the runtime keeps the last valid value.
-              },
+            // -- Tween Duration --
+            DurationField(
+              value: Duration(milliseconds: config.tweenDurationMs),
+              labelText: 'Tween Duration',
+              helperText: 'smoothing for platform position changes',
+              min: Duration.zero,
+              max: const Duration(seconds: 10),
+              units: const [DurationUnit.milliseconds, DurationUnit.seconds],
+              // The config stores whole milliseconds.
+              resolution: const Duration(milliseconds: 1),
+              onChanged: (v) =>
+                  setState(() => config.tweenDurationMs = v.inMilliseconds),
             ),
             const SizedBox(height: 16),
 

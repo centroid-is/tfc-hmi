@@ -278,7 +278,7 @@ void main() {
       // Should show name fields with 'default' and 'fast' values
       expect(find.widgetWithText(TextField, 'Name'), findsAtLeastNWidgets(1));
       expect(
-          find.widgetWithText(TextField, 'Interval (ms)'), findsAtLeastNWidgets(1));
+          find.widgetWithText(TextField, 'Interval'), findsAtLeastNWidgets(1));
     });
 
     testWidgets('add poll group creates new row', (tester) async {
@@ -391,14 +391,14 @@ void main() {
 
       // Scroll to interval field
       await tester.scrollUntilVisible(
-        find.widgetWithText(TextField, 'Interval (ms)'),
+        find.widgetWithText(TextField, 'Interval'),
         200,
         scrollable: find.byType(Scrollable).first,
       );
       await settle(tester);
 
       // Change interval
-      final intervalField = find.widgetWithText(TextField, 'Interval (ms)');
+      final intervalField = find.widgetWithText(TextField, 'Interval');
       await tester.enterText(intervalField.first, '500');
       await settle(tester);
 

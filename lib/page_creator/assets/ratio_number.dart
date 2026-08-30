@@ -5,6 +5,7 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../widgets/duration_field.dart';
 import 'common.dart';
 import 'option_variable.dart';
 import 'helper/timeseries_notify_mixin.dart';
@@ -203,20 +204,21 @@ class _RatioNumberConfigEditorState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: TextFormField(
-                  initialValue: widget.config.sinceMinutes.inMinutes.toString(),
-                  decoration: const InputDecoration(
-                    labelText: 'Since (minutes)',
-                    helperText: 'Time window for counting data points',
-                  ),
-                  keyboardType: TextInputType.number,
-                  onChanged: (value) {
-                    final minutes = int.tryParse(value);
-                    if (minutes != null && minutes > 0) {
-                      setState(() => widget.config.sinceMinutes =
-                          Duration(minutes: minutes));
-                    }
-                  },
+                child: DurationField(
+                  value: widget.config.sinceMinutes,
+                  labelText: 'Since',
+                  helperText: 'window for counting data points',
+                  min: const Duration(minutes: 1),
+                  max: const Duration(days: 7),
+                  units: const [
+                    DurationUnit.minutes,
+                    DurationUnit.hours,
+                    DurationUnit.days,
+                  ],
+                  // Serialised as whole minutes.
+                  resolution: const Duration(minutes: 1),
+                  onChanged: (value) =>
+                      setState(() => widget.config.sinceMinutes = value),
                 ),
               ),
               const SizedBox(width: 16),
@@ -263,20 +265,15 @@ class _RatioNumberConfigEditorState
             },
           ),
           const SizedBox(height: 16),
-          TextFormField(
-            initialValue: widget.config.pollInterval.inSeconds.toString(),
-            decoration: const InputDecoration(
-              labelText: 'Poll Interval (seconds)',
-              helperText: 'How often to refresh the ratio',
-            ),
-            keyboardType: TextInputType.number,
-            onChanged: (value) {
-              final seconds = int.tryParse(value);
-              if (seconds != null && seconds > 0) {
-                setState(() =>
-                    widget.config.pollInterval = Duration(seconds: seconds));
-              }
-            },
+          DurationField(
+            value: widget.config.pollInterval,
+            labelText: 'Poll Interval',
+            helperText: 'how often to refresh the ratio',
+            min: const Duration(seconds: 1),
+            max: const Duration(hours: 1),
+            units: const [DurationUnit.seconds, DurationUnit.minutes],
+            onChanged: (value) =>
+                setState(() => widget.config.pollInterval = value),
           ),
           const SizedBox(height: 16),
           TextFormField(

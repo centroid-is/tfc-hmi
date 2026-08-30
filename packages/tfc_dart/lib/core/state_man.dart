@@ -151,11 +151,69 @@ class OpcUAConfig implements ServerConfigEntry {
   @JsonKey(defaultValue: true)
   bool enabled = true;
 
+  /// Lifetime the client asks for when it opens the SecureChannel, in
+  /// milliseconds.
+  ///
+  /// open62541 renews the channel at 75% of whatever the server grants, so
+  /// this is really "how often do we exercise the renew path", and each
+  /// renewal rotates the channel's symmetric keys.
+  ///
+  /// Defaults to open62541's own default of 10 minutes — deliberately NOT
+  /// the 60 s that used to be hardcoded in [StateMan.create]. That minute
+  /// existed to reproduce the frozen-session bug on the bench and made every
+  /// station renew 80 times an hour; 10 minutes drops that to 8, which is
+  /// already nothing beside a subscription publishing ten times a second.
+  /// Going longer still buys no measurable relief and only ages the
+  /// symmetric keys on the SIGNANDENCRYPT links.
+  ///
+  /// This is a *requested* lifetime. The server answers with what it granted
+  /// and may cap it well below this; the binding does not surface that
+  /// figure, so a long value here is a ceiling, not a promise.
+  @JsonKey(name: 'secure_channel_lifetime_ms', defaultValue: 600000)
+  int secureChannelLifetimeMs = 600000;
+
+  /// How often the server is asked to publish subscription notifications,
+  /// in milliseconds — the rate at which values reach the HMI.
+  ///
+  /// Applied both as the subscription's requested publishing interval and as
+  /// the sampling interval of every monitored item on it, so the one number
+  /// governs the update rate end to end. Slowing it down is the cheapest way
+  /// to cut load on a PLC that is drowning in monitored items.
+  ///
+  /// Keep it well under [ClientWrapper.heartbeatStaleAfter]: the heartbeat
+  /// rides this same subscription, so an interval near 15 s would make a
+  /// perfectly healthy server report `opcuaUnhealthy`. The UI clamps to
+  /// [publishingIntervalMaxMs] for that reason.
+  @JsonKey(name: 'publishing_interval_ms', defaultValue: 100)
+  int publishingIntervalMs = 100;
+
+  /// Smallest accepted [publishingIntervalMs]. Below this the client asks
+  /// for more publishes per second than a PLC will honour anyway.
+  static const publishingIntervalMinMs = 10;
+
+  /// Largest accepted [publishingIntervalMs]. Bounded by the heartbeat
+  /// staleness window — see [publishingIntervalMs].
+  static const publishingIntervalMaxMs = 5000;
+
+  /// Smallest accepted [secureChannelLifetimeMs] (10 s).
+  static const secureChannelLifetimeMinMs = 10000;
+
+  /// Largest accepted [secureChannelLifetimeMs] (24 h).
+  static const secureChannelLifetimeMaxMs = 86400000;
+
+  /// Convenience getter for use with the open62541 Duration APIs.
+  Duration get secureChannelLifetime =>
+      Duration(milliseconds: secureChannelLifetimeMs);
+
+  /// Convenience getter for use with the open62541 Duration APIs.
+  Duration get publishingInterval =>
+      Duration(milliseconds: publishingIntervalMs);
+
   OpcUAConfig();
 
   @override
   String toString() {
-    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey, enabled: $enabled)';
+    return 'OpcUAConfig(endpoint: $endpoint, username: $username, password: $password, sslCert: $sslCert, sslKey: $sslKey, enabled: $enabled, secureChannelLifetimeMs: $secureChannelLifetimeMs, publishingIntervalMs: $publishingIntervalMs)';
   }
 
   factory OpcUAConfig.fromJson(Map<String, dynamic> json) =>
@@ -892,9 +950,11 @@ class ClientWrapper {
   Stream<ConnectionStatus> get connectionStream => _connectionController.stream;
 
   /// Heartbeat older than this while "connected" → [EffectiveDeviceStatus
-  /// .opcuaUnhealthy]. The heartbeat samples the server-time node at 100 ms
-  /// on the same subscription as every data key, so 15 s of silence means
-  /// the operator has been looking at frozen values for 15 s.
+  /// .opcuaUnhealthy]. The heartbeat samples the server-time node at the
+  /// server's [OpcUAConfig.publishingInterval] on the same subscription as
+  /// every data key, so 15 s of silence means the operator has been looking
+  /// at frozen values for 15 s. This is why that interval is clamped to
+  /// [OpcUAConfig.publishingIntervalMaxMs], well below 15 s.
   static const heartbeatStaleAfter = Duration(seconds: 15);
 
   /// How long after a connect the heartbeat may take to produce its first
@@ -1029,6 +1089,7 @@ class ClientWrapper {
         serverTimeNode: [AttributeId.UA_ATTRIBUTEID_VALUE]
       },
       subId,
+      samplingInterval: config.publishingInterval,
     ).listen(
       (_) {
         if (gen != _heartbeatGeneration) return;
@@ -1482,6 +1543,13 @@ class StateMan {
         username = opcuaConfig.username;
         password = opcuaConfig.password;
       }
+      // Per-server now, not a hardcoded minute: the short lifetime was here
+      // to reproduce the frozen-session bug, and a station that is not
+      // hunting that bug should not be renewing its channel every minute.
+      // Recovery from a bad renewal does not depend on this being short —
+      // see [ClientWrapper.isSubscriptionDead] and the heartbeat-derived
+      // effective status.
+      final channelLifetime = opcuaConfig.secureChannelLifetime;
       clients.add(ClientWrapper(
         useIsolate
             ? await ClientIsolate.create(
@@ -1491,8 +1559,7 @@ class StateMan {
                 privateKey: key,
                 securityMode: securityMode,
                 logLevel: opcuaLogLevelFromEnv(),
-                secureChannelLifeTime: Duration(
-                    minutes: 1), // TODO can I reproduce the problem more often
+                secureChannelLifeTime: channelLifetime,
               )
             : Client(
                 username: username,
@@ -1501,8 +1568,7 @@ class StateMan {
                 privateKey: key,
                 securityMode: securityMode,
                 logLevel: opcuaLogLevelFromEnv(),
-                secureChannelLifeTime: Duration(
-                    minutes: 1), // TODO can I reproduce the problem more often
+                secureChannelLifeTime: channelLifetime,
               ),
         opcuaConfig,
         resendOnRecovery: resendOnRecovery,
@@ -2399,8 +2465,9 @@ class StateMan {
 
         if (needsSubscription && gotWorker) {
           try {
-            // keepAliveCount=30 → inactivity after (100ms×30)+5s ≈ 8s.
-            // Tolerates intermittent packet loss on unstable connections.
+            // keepAliveCount=30 → inactivity after (interval×30)+5s, ≈8s at
+            // the default 100 ms interval. Tolerates intermittent packet loss
+            // on unstable connections.
             // Bounded: a server that accepts the channel and then never
             // answers CreateSubscription would otherwise hold the worker
             // forever, and with it every key routed to this server -- not on
@@ -2408,7 +2475,10 @@ class StateMan {
             // the catch, the `finally` releases the worker, and the normal
             // ladder takes over.
             wrapper.subscriptionId = await client
-                .subscriptionCreate(requestedMaxKeepAliveCount: 30)
+                .subscriptionCreate(
+                  requestedPublishingInterval: wrapper.config.publishingInterval,
+                  requestedMaxKeepAliveCount: 30,
+                )
                 .timeout(const Duration(seconds: 10));
             logger.i(
                 '[$alias ${wrapper.config.endpoint}] Created subscription ${wrapper.subscriptionId}');
@@ -2468,7 +2538,11 @@ class StateMan {
           logger.w('[$srv] monitored items: ${wrapper.monitoredItemReport}');
         }
 
-        var stream = client.monitor(id, wrapper.subscriptionId!);
+        // Sampled at the same rate the subscription publishes: sampling
+        // faster than we publish only fills a queue of size 1 that then
+        // discards everything but the last value.
+        var stream = client.monitor(id, wrapper.subscriptionId!,
+            samplingInterval: wrapper.config.publishingInterval);
         // Count each monitored-item emission toward this server's
         // requests-per-second load figure (see [ClientWrapper.requestsPerSec]).
         stream = stream.map((value) {

@@ -6,6 +6,7 @@ import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../widgets/duration_field.dart';
 import 'common.dart';
 import 'option_variable.dart';
 import 'helper/database_recovery.dart';
@@ -163,19 +164,17 @@ class _BpmConfigEditorState extends ConsumerState<_BpmConfigEditor> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: TextFormField(
-                  initialValue: widget.config.defaultInterval.toString(),
-                  decoration: const InputDecoration(
-                    labelText: 'Default Interval (minutes)',
-                    helperText: 'Window used for the main display rate',
-                  ),
-                  keyboardType: TextInputType.number,
-                  onChanged: (value) {
-                    final v = int.tryParse(value);
-                    if (v != null && v > 0) {
-                      setState(() => widget.config.defaultInterval = v);
-                    }
-                  },
+                child: DurationField(
+                  value: Duration(minutes: widget.config.defaultInterval),
+                  labelText: 'Default Interval',
+                  helperText: 'window for the main display rate',
+                  min: const Duration(minutes: 1),
+                  max: const Duration(hours: 24),
+                  units: const [DurationUnit.minutes, DurationUnit.hours],
+                  // The config stores bare minutes.
+                  resolution: const Duration(minutes: 1),
+                  onChanged: (value) => setState(
+                      () => widget.config.defaultInterval = value.inMinutes),
                 ),
               ),
               const SizedBox(width: 16),
@@ -200,20 +199,15 @@ class _BpmConfigEditorState extends ConsumerState<_BpmConfigEditor> {
             },
           ),
           const SizedBox(height: 16),
-          TextFormField(
-            initialValue: widget.config.pollInterval.inSeconds.toString(),
-            decoration: const InputDecoration(
-              labelText: 'Poll Interval (seconds)',
-              helperText: 'How often to refresh the count',
-            ),
-            keyboardType: TextInputType.number,
-            onChanged: (value) {
-              final seconds = int.tryParse(value);
-              if (seconds != null && seconds > 0) {
-                setState(() =>
-                    widget.config.pollInterval = Duration(seconds: seconds));
-              }
-            },
+          DurationField(
+            value: widget.config.pollInterval,
+            labelText: 'Poll Interval',
+            helperText: 'how often to refresh the count',
+            min: const Duration(seconds: 1),
+            max: const Duration(hours: 1),
+            units: const [DurationUnit.seconds, DurationUnit.minutes],
+            onChanged: (value) =>
+                setState(() => widget.config.pollInterval = value),
           ),
           const SizedBox(height: 16),
           TextFormField(
