@@ -280,12 +280,45 @@ class _SchneiderATV320 extends ConsumerWidget {
   }
 }
 
+/// The single member of [after] that differs from [before], or null when none
+/// or several do.
+///
+/// The ATV320 pane writes the whole parameter struct back, so the member a
+/// template's rules are written against is invisible at the write. This reads
+/// it at the **edit**, where `DynamicValueWidget` hands back the value it was
+/// rendered from with exactly one member replaced.
+///
+/// Compared by rendered form rather than by `==`: `DynamicValue` defines no
+/// equality, so two structurally identical values are never equal and an
+/// identity comparison would report every member as changed — and therefore
+/// answer null on every real edit. `toString` walks the whole value, which is
+/// what makes a nested parameter answer with the top-level member containing
+/// it, and the top level is what a template names.
+///
+/// **Null is the safe answer, not a failure.** It asks about the key as a
+/// whole — a template's `*` row — which can only be broader than the member
+/// rule, never narrower. Top-level and named so the answer is pinned by
+/// `schneider_changed_member_test.dart` rather than trusted: a member that
+/// does not match the struct's key silently means "unrestricted".
+String? atv320ChangedMember(DynamicValue before, DynamicValue after) {
+  if (!before.isObject || !after.isObject) return null;
+  String? changed;
+  for (final entry in after.asObject.entries) {
+    if (!before.contains(entry.key)) return null;
+    if (before[entry.key].toString() == entry.value.toString()) continue;
+    if (changed != null) return null;
+    changed = entry.key;
+  }
+  return changed;
+}
+
 /// The drive's parameter surface.
 ///
 /// A docked pane rather than a dialog: commissioning an ATV320 means reading
 /// a parameter, watching what the motor does, then reading the next one — and
 /// the old modal covered the very mimic that shows it. `Write` stays pinned
 /// in the footer so it cannot scroll out of reach of a long parameter list.
+///
 /// A `ConsumerStatefulWidget` rather than a plain one, because `Write` asks
 /// `writeTag` whether this session may set the parameter it is about to send,
 /// and that question needs a `WidgetRef`.
@@ -389,26 +422,6 @@ class _ATV320ConfigPaneState extends ConsumerState<_ATV320ConfigPane> {
     return enriched;
   }
 
-  /// The single member of [after] that differs from [before], or null when
-  /// none or several do.
-  ///
-  /// Compared by rendered form rather than by `==`: `DynamicValue` does not
-  /// define equality, so two structurally identical values are never equal and
-  /// identity would report every member as changed. `toString` walks the whole
-  /// value, which is what makes a nested parameter answer with the top-level
-  /// member containing it — and the top level is what a template names.
-  static String? _soleChangedMember(DynamicValue before, DynamicValue after) {
-    if (!before.isObject || !after.isObject) return null;
-    String? changed;
-    for (final entry in after.asObject.entries) {
-      if (!before.contains(entry.key)) return null;
-      if (before[entry.key].toString() == entry.value.toString()) continue;
-      if (changed != null) return null;
-      changed = entry.key;
-    }
-    return changed;
-  }
-
   Future<void> _write() async {
     final pending = _pendingConfigValue;
     if (pending == null) return;
@@ -484,7 +497,7 @@ class _ATV320ConfigPaneState extends ConsumerState<_ATV320ConfigPane> {
                   _pendingConfigValue = newValue;
                   // The member is only knowable here, against the value that
                   // was on screen — see [_pendingMember].
-                  _pendingMember = _soleChangedMember(rendered, newValue);
+                  _pendingMember = atv320ChangedMember(rendered, newValue);
                 });
               },
             ),
