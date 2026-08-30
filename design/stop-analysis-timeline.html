@@ -98,6 +98,11 @@ h1{font-size:clamp(28px,4vw,40px);line-height:1.1;margin:6px 0 0;font-weight:620
 .seg button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
 .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .hint{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-left:auto}
+.cfg-lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim)}
+.emptyscope{
+  padding:26px 14px;text-align:center;color:var(--ink-dim);
+  font-family:var(--mono);font-size:11px;
+}
 
 .canvas{
   background:var(--ground);
@@ -394,6 +399,17 @@ pre{
       <button type="button" data-force="dark" aria-pressed="false">Dark</button>
     </div>
     <span class="hint">the asset has a live resize handle in its bottom-right corner</span>
+  </div>
+
+  <div class="controls">
+    <span class="cfg-lbl">Asset config · path</span>
+    <div class="seg" role="group" aria-label="Alarm tree path this asset shows">
+      <button type="button" data-scope="all" aria-pressed="true">Whole plant</button>
+      <button type="button" data-scope="lines" aria-pressed="false">Lines 1 + 2</button>
+      <button type="button" data-scope="l3" aria-pressed="false">Line 3 · Packing</button>
+      <button type="button" data-scope="mv" aria-pressed="false">Line 3 › Multivac</button>
+    </div>
+    <span class="hint" id="scopeEcho"></span>
   </div>
 
   <div class="stage" id="stage">
@@ -728,6 +744,29 @@ pre{
   final bool bindToPath;            // new
 }</pre>
 
+      <h3>The asset’s whole configuration is a path</h3>
+      <p>
+        Because the tree comes from the alarm definitions, the asset has almost nothing left to
+        configure: it picks which part of that tree to show. Try the
+        <strong>Asset config · path</strong> switch above the mockup — the same asset becomes a
+        plant overview, a two-line comparison, or a Multivac-only panel, and the chosen node is
+        re-indented to sit at the top. Severity colours, what a leaf means, how deep it nests: none
+        of that is the asset’s to decide, so a page can never drift out of step with the alarm
+        system.
+      </p>
+      <pre>class StopTimelineConfig {
+  /// Which subtrees to draw. [] is the whole plant.
+  /// [["Line 3", "Multivac"]] is a Multivac-only panel.
+  final List&lt;List&lt;String&gt;&gt; paths;
+}</pre>
+      <p>
+        A <em>list</em> rather than one path, because “Line 1 and Line 2 but not Infrastructure” is
+        an obvious thing to want on a line-comparison page and there is otherwise no way to say it.
+        And because a path is matched by name, renaming a segment in the alarm definitions orphans
+        any asset pointing at it — so an unmatched path says <em>no alarms are defined under
+        this path</em> rather than rendering a convincing empty chart.
+      </p>
+
       <h3>Colour is severity, straight from AlarmColors</h3>
       <p>
         <code>error</code> Solarized red, <code>warning</code> signal yellow, <code>info</code>
@@ -927,19 +966,20 @@ ALARM_DEFS.forEach(def=>{
 const ROWS=[];
 (function flatten(node){
   node.children.forEach(child=>{
+    const segs=child.id.split("/").slice(1);
     ROWS.push({kind:"node", id:child.id, name:child.name, depth:child.depth, node:child,
-               parentId:node.id==="root"?null:node.id});
+               parentId:node.id==="root"?null:node.id, segs});
     // A branch with an alarm of its own AND children gets that alarm as its
     // first child row too — otherwise the branch lane shows intervals nothing
     // underneath it explains, and expanding would reveal less than it hides.
     if(child.bound && (child.children.length || child.alarms.length)){
       ROWS.push({kind:"alarm", id:child.id+"::"+child.bound.uid, name:child.bound.title,
-                 depth:child.depth+1, def:child.bound, parentId:child.id, isBound:true});
+                 depth:child.depth+1, def:child.bound, parentId:child.id, isBound:true, segs});
     }
     flatten(child);
     child.alarms.forEach(def=>{
       ROWS.push({kind:"alarm", id:child.id+"::"+def.uid, name:def.title, depth:child.depth+1,
-                 def, parentId:child.id});
+                 def, parentId:child.id, segs});
     });
   });
 })(ROOT);
@@ -961,6 +1001,7 @@ const state = {
   levels: new Set(Object.keys(LEVELS)),
   selected: null,
   view: "timeline",
+  roots: [],
   groupBy: "alarm",
   sort: {key:"total", dir:-1}
 };
@@ -1172,8 +1213,42 @@ ROWS.forEach(row=>{
 /* O(depth) visibility instead of an O(rows) lookup per row per frame */
 const ROW_BY_ID = new Map(ROWS.map(r=>[r.id,r]));
 ROWS.forEach(r=>{ r.parent = r.parentId ? ROW_BY_ID.get(r.parentId) : null; });
+
+/* ------------------------------------------------------------------ *
+ * Scope — the asset's entire configuration.
+ *
+ * A list of paths into the alarm tree. Everything at or under one of them
+ * is drawn, re-indented so the chosen node sits at the top level. An empty
+ * list is the whole plant. Nothing else about the tree is the asset's to
+ * decide; it all comes from the alarm definitions.
+ * ------------------------------------------------------------------ */
+function applyScope(roots){
+  state.roots = roots;
+  ROWS.forEach(row=>{
+    let match = null;
+    if(!roots.length) match = [];
+    else for(const r of roots){
+      if(r.length<=row.segs.length && r.every((seg,i)=>row.segs[i]===seg)){ match=r; break; }
+    }
+    row.inScope = match !== null;
+    row.dispDepth = row.inScope ? row.depth - Math.max(0, match.length-1) : 0;
+    if(row.inScope) row.scopeRootId = match.length ? "root/"+match.join("/") : null;
+  });
+  // a parent outside the scope is not a parent for visibility purposes
+  ROWS.forEach(row=>{
+    row.scopeParent = (row.inScope && row.parent && row.parent.inScope && row.id!==row.scopeRootId)
+      ? row.parent : null;
+  });
+  ROWS.forEach(row=>{
+    const ui=rowEls.get(row.id);
+    if(ui) ui.r.style.setProperty("--d", row.dispDepth);
+  });
+  // open the chosen roots so the asset shows something on arrival
+  roots.forEach(r=>{ let id="root"; r.forEach(seg=>{ id+="/"+seg; state.open.add(id); }); });
+}
 function rowVisibleFast(row){
-  for(let p=row.parent; p; p=p.parent) if(!state.open.has(p.id)) return false;
+  if(!row.inScope) return false;
+  for(let p=row.scopeParent; p; p=p.scopeParent) if(!state.open.has(p.id)) return false;
   return true;
 }
 
@@ -1249,6 +1324,13 @@ function paintChrome(marks,span){
   }
 }
 
+/* is this alarm definition inside the asset's configured path? */
+function defInScope(def){
+  const r=state.roots;
+  if(!r.length) return true;
+  return r.some(root=>root.length<=def.path.length && root.every((seg,i)=>def.path[i]===seg));
+}
+
 /* count activations of one alarm inside the window, without walking them all */
 function countIn(acts,t0,t1){
   if(!acts.length) return 0;
@@ -1304,7 +1386,9 @@ function render(){
   paintChrome(marks,span);
 
   const counts={error:0,warning:0,info:0};
-  ALARM_DEFS.forEach(def=>{ counts[def.level]+=countIn(def.activations,state.t0,state.t1); });
+  ALARM_DEFS.forEach(def=>{
+    if(defInScope(def)) counts[def.level]+=countIn(def.activations,state.t0,state.t1);
+  });
   Object.keys(chipEls).forEach(k=>{
     const v=String(counts[k]);
     if(chipEls[k].textContent!==v) chipEls[k].textContent=v;
@@ -1312,6 +1396,21 @@ function render(){
 
   const winEnd=Math.min(state.t1,NOW);
   const sched=Math.max(0,winEnd-state.t0)-unschedIn(state.t0,winEnd);
+
+  // A configured path matches nothing when a segment has been renamed in the
+  // alarm definitions. Say so — a silently blank asset looks like a dead page.
+  const anyScoped = ROWS.some(r=>r.inScope);
+  let empty = bodyEl.querySelector(".emptyscope");
+  if(!anyScoped){
+    if(!empty){
+      empty=document.createElement("div");
+      empty.className="emptyscope";
+      bodyEl.appendChild(empty);
+    }
+    empty.textContent="No alarms are defined under "+
+      state.roots.map(p=>p.join(" › ")).join(" or ")+".";
+    empty.style.display="";
+  } else if(empty) empty.style.display="none";
 
   ROWS.forEach(row=>{
     const ui=rowEls.get(row.id);
@@ -1353,7 +1452,7 @@ function buildBrush(){
   trackEl.querySelectorAll(".tick-b,.band").forEach(e=>e.remove());
   const period=T1-T0;
   const all=[];
-  ALARM_DEFS.forEach(def=>all.push(...def.activations));
+  ALARM_DEFS.forEach(def=>{ if(defInScope(def)) all.push(...def.activations); });
   mergeWithLevel(all).forEach(iv=>{
     const d=document.createElement("div");
     d.className="tick-b";
@@ -1509,7 +1608,7 @@ function renderDetail(){
 function windowActivations(){
   const out=[];
   ALARM_DEFS.forEach(def=>{
-    if(!state.levels.has(def.level)) return;
+    if(!state.levels.has(def.level) || !defInScope(def)) return;
     def.activations.forEach(a=>{
       const s=Math.max(a.start,state.t0), e2=Math.min(endOf(a),state.t1);
       if(e2<=s) return;
@@ -1682,6 +1781,29 @@ document.querySelectorAll("[data-group]").forEach(b=>{
   });
 });
 
+const SCOPES = {
+  all:   [],
+  lines: [["Line 1 · Filleting"],["Line 2 · Freezing"]],
+  l3:    [["Line 3 · Packing"]],
+  mv:    [["Line 3 · Packing","Multivac"]]
+};
+document.querySelectorAll("[data-scope]").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll("[data-scope]").forEach(b=>b.setAttribute("aria-pressed","false"));
+    btn.setAttribute("aria-pressed","true");
+    applyScope(SCOPES[btn.dataset.scope]);
+    echoScope();
+    brushBuilt=false;   // the overview strip is scoped too
+    render();
+  });
+});
+function echoScope(){
+  const r=state.roots;
+  el("scopeEcho").textContent = r.length
+    ? "path: "+r.map(p=>JSON.stringify(p)).join(" + ")
+    : "path: [] — the whole alarm tree";
+}
+
 const assetEl=el("asset"), stageEl=el("stage");
 document.querySelectorAll("[data-size]").forEach(btn=>{
   btn.addEventListener("click",()=>{
@@ -1721,6 +1843,8 @@ setInterval(()=>{
   if(state.t1 > NOW - 5*M) scheduleRender();
 }, 1000);
 
+applyScope(state.roots);
+echoScope();
 measure();
 render();
 })();
