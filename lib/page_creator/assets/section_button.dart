@@ -17,6 +17,7 @@ import '../../widgets/memo_stream_builder.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import '../../widgets/panes/standard_dialog.dart';
+import '../../widgets/tag_access_guard.dart' show writeTag;
 
 part 'section_button.g.dart';
 
@@ -1166,7 +1167,15 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       final next = DynamicValue.from(current);
       next[field] = true;
       try {
-        await stateMan.write(refs[i].key.trim(), next);
+        // `field` is the member: a section struct carries the status bits an
+        // operator has to keep reading, so a template locking `p_cmd_Start`
+        // must not lock the reading of `p_stat_xEnabled` beside it.
+        //
+        // Per section, and deliberately: the sections in a group can be bound
+        // to different templates, so one refused member does not make the
+        // press a no-op for the others. That matches the mode guard directly
+        // above it, which is also per section.
+        await writeTag(ref, stateMan, refs[i].key.trim(), next, member: field);
       } catch (e, st) {
         // A command that silently fails to reach the PLC is indistinguishable
         // from a section that refused to start.
@@ -1195,7 +1204,9 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
     final next = DynamicValue.from(current);
     next[field] = true;
     try {
-      await stateMan.write(refs[index].key.trim(), next);
+      // The member again, same argument as the fan-out.
+      await writeTag(ref, stateMan, refs[index].key.trim(), next,
+          member: field);
     } catch (e, st) {
       _log.e('section ${refs[index].key}: writing $field failed',
           error: e, stackTrace: st);

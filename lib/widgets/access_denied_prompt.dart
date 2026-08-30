@@ -18,6 +18,14 @@
 /// elevation prompt fires at *tap* time and the control itself renders locked,
 /// so a write that would be refused is never issued. What ships here is that
 /// every denial reaches the operator meanwhile.
+///
+/// **Since plan 04-11 the good version is in front of it on the tag path.**
+/// Every `StateMan` write site in `lib/` goes through `writeTag`
+/// (`tag_access_guard.dart`) and resolves before it issues — see
+/// [kUncaughtAccessDeniedWriteSites], which is 0 and says what that does and
+/// does not mean. This widget is unchanged and still needed: the guards still
+/// throw, `GuardedPreferences` has no tap-time gate, and a future site that
+/// skips `writeTag` lands here.
 library;
 
 import 'dart:async';
@@ -48,20 +56,18 @@ import 'panes/standard_dialog.dart';
 /// grep is empty — the claim that none of these sites *handles* the refusal is
 /// checked rather than assumed.
 ///
-/// **What this number means, in the terms the phase agreed and no softer.**
-/// At these call sites `AccessDenied` is not handled. At some of them — the
-/// `advantys_stb.dart` and `beckhoff.dart` force grids — it escapes as an
-/// unhandled asynchronous error. At the rest — `button.dart`,
-/// `section_button.dart` — a bare `catch (e)` swallows it into a log line or
-/// renders its developer string into a snackbar. **None of those is a
-/// handling**: not one of them tells the operator what permission was missing
-/// or offers a way through, which is why they are all counted here.
+/// **What this number counts, in the terms the phase agreed and no softer.**
+/// A site counted here is one where `AccessDenied` is not handled — where it
+/// escapes as an unhandled asynchronous error, or where a bare `catch (e)`
+/// swallows it into a log line or renders its developer string into a
+/// snackbar. **None of those is a handling**: not one of them tells the
+/// operator what permission was missing or offers a way through, which is why
+/// they were all counted.
 ///
-/// The operator still sees this prompt in every one of those cases, because
+/// The operator saw this prompt in every one of those cases anyway, because
 /// the guard publishes to `accessDenialsProvider` before it throws. Phase 4's
-/// tap-time elevation is what removes the throw from the operator's path, by
-/// never issuing a write that will be refused. This number is expected to fall
-/// to zero there, and the test above is what makes that visible.
+/// tap-time elevation is what removed the throw from the operator's path, by
+/// never issuing a write that will be refused.
 ///
 /// **2026-08-30, plan 04-10: 31 -> 22.** Nine sites moved onto
 /// `writeTag` (`tag_access_guard.dart`), which owns the `.write(` call, so
@@ -78,11 +84,39 @@ import 'panes/standard_dialog.dart';
 /// | `analog_box.dart` | 1 | none — a scalar setpoint |
 /// | `conveyor_gate.dart` | 1 | none — a force BOOL |
 ///
-/// The number was **re-derived by running the walk**, not by subtracting nine.
-/// Plan 04-11 takes the twenty-two that remain: the two force grids
-/// (`advantys_stb.dart`, `beckhoff.dart`) and the two button assets
-/// (`button.dart`, `section_button.dart`).
-const int kUncaughtAccessDeniedWriteSites = 22;
+/// **2026-08-30, plan 04-11: 22 -> 0.** The last twenty-two, same move:
+///
+/// | File | Sites | Member passed |
+/// |---|---|---|
+/// | `beckhoff.dart` | 8 | none — `force`, `on_filters` and `off_filters` are arrays, so the channel is an index and not a member a template could have a rule for |
+/// | `beckhoff.dart` | 1 | `p_cmd_Reset` — the EL9222 reset, a genuine struct member |
+/// | `advantys_stb.dart` | 8 | none — the same three arrays |
+/// | `button.dart` | 3 | none — a command BOOL |
+/// | `section_button.dart` | 2 | the `p_cmd_*` bit being set on `ST_Section_HMI` |
+///
+/// Both numbers were **re-derived by running the walk**, never by subtracting.
+///
+/// ## What the zero claims, and what it must not be read as claiming
+///
+/// Zero means: **no `StateMan.write` call site in `lib/` can present an
+/// operator with an unexplained refusal.** Every one of them now goes through
+/// `writeTag`, which resolves the permission at the tap, prompts, records the
+/// refusal and issues nothing.
+///
+/// Zero does **not** mean `AccessDenied` is never thrown. `GuardedStateMan`
+/// still throws it, deliberately, and it is still the enforcement point — the
+/// tap-time check in front of it is advisory, and a write that skips
+/// `writeTag` is refused there instead (`tag_access_guard_test.dart`, T-04-32).
+/// Reading "0 uncaught sites" as "refusals no longer happen" would be exactly
+/// the wrong conclusion about the layer underneath.
+///
+/// It is not deleted now that it is zero. A constant at zero with a live
+/// derivation is a regression test: a future asset that writes without
+/// `writeTag` reopens the gap, and `access_denied_prompt_test.dart` is what
+/// says so on the next run. That is also why the walk itself is guarded —
+/// the scan still finds `tag_access_guard.dart`'s own `sm.write`, so a walk
+/// that had quietly stopped finding anything could not pass as a zero.
+const int kUncaughtAccessDeniedWriteSites = 0;
 
 /// The headline, kept at the top of the file so tests assert against the
 /// string the widget renders rather than one they supply — the

@@ -945,14 +945,23 @@ void main() {
       //
       // Over the **unhandled** set, because `tag_access_guard.dart` mentioning
       // `AccessDenied` is exactly what its handling consists of.
+      //
+      // **Vacuous since plan 04-11, and left in place on purpose.** The
+      // unhandled set is empty, so this iterates nothing and asserts nothing;
+      // it re-arms the moment a site comes back. A green run here is not
+      // evidence about anything today — the reason string below says so, so
+      // that nobody reads the tick as a check that was made.
       final files = _unhandledWriteSites().map((s) => s.file).toSet();
       final handling = <String>[
         for (final file in files)
           if (File(file).readAsStringSync().contains('AccessDenied')) file,
       ];
       expect(handling, isEmpty,
-          reason: 'a site that now handles AccessDenied must come off the '
-              'count: lower kUncaughtAccessDeniedWriteSites and say so');
+          reason: 'VACUOUS AT ZERO: there are no unhandled sites left, so '
+              'this test currently asserts nothing. It re-arms when one '
+              'returns, and then means: a site that handles AccessDenied '
+              'must come off the count — lower '
+              'kUncaughtAccessDeniedWriteSites and say so');
     });
 
     test('every .write( receiver in lib/ is classified', () {
