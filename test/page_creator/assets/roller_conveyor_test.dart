@@ -58,99 +58,78 @@ void main() {
     });
   });
 
-  group('ConveyorPainter with rails', () {
-    test('centres an explicit band in the belt area, not the whole box', () {
-      const size = Size(240, 100);
-      final flat = ConveyorPainter(
-        color: Colors.grey,
-        batches: const {},
-        angle: 0,
-        straightBeltWidth: 20,
-        paintSize: size,
-      );
-      final railed = ConveyorPainter(
-        color: Colors.grey,
-        batches: const {},
-        angle: 0,
-        straightBeltWidth: 20,
-        paintSize: size,
-        onRails: true,
-      );
-      final flatCenter = flat.hitShape()!.getBounds().center.dy;
-      final railedCenter = railed.hitShape()!.getBounds().center.dy;
-      expect(flatCenter, closeTo(size.height / 2, 0.01));
-      final beltArea =
-          size.height * (1 - ConveyorPainter.railZoneFraction);
-      expect(railedCenter, closeTo(beltArea / 2, 0.01));
-    });
+  group('ConveyorPainter with rails (top view)', () {
+    const size = Size(240, 100);
+    ConveyorPainter wagonAt(double? pos, {double? band}) => ConveyorPainter(
+          color: Colors.grey,
+          batches: const {},
+          angle: 0,
+          paintSize: size,
+          onRails: true,
+          wagonPosition: pos,
+          wagonFraction: 0.4,
+          straightBeltWidth: band,
+        );
 
     test('a position-driven wagon slides along the rail, 0..1 flush to ends',
         () {
-      const size = Size(240, 100);
-      ConveyorPainter wagonAt(double pos) => ConveyorPainter(
-            color: Colors.grey,
-            batches: const {},
-            angle: 0,
-            paintSize: size,
-            onRails: true,
-            wagonPosition: pos,
-            wagonFraction: 0.4,
-          );
       final atStart = wagonAt(0).hitShape()!.getBounds();
       final atMid = wagonAt(0.5).hitShape()!.getBounds();
       final atEnd = wagonAt(1).hitShape()!.getBounds();
-      expect(atStart.width, closeTo(size.width * 0.4, 0.01));
+      // The hit shape is the wagon — belt plus chassis bumpers — and at the
+      // extremes the bumper, not the belt, sits flush with the box edge.
       expect(atStart.left, closeTo(0, 0.01));
       expect(atMid.center.dx, closeTo(size.width / 2, 0.01));
       expect(atEnd.right, closeTo(size.width, 0.01));
-      // The empty rail beside the wagon does not take the tap.
-      expect(wagonAt(0).hitTest(const Offset(200, 30)), isFalse);
-      expect(wagonAt(0).hitTest(const Offset(40, 30)), isTrue);
+      expect(atStart.width, greaterThan(size.width * 0.4));
+      // The empty track beside the wagon does not take the tap.
+      expect(wagonAt(0).hitTest(const Offset(200, 50)), isFalse);
+      expect(wagonAt(0).hitTest(const Offset(40, 50)), isTrue);
+      // The band stays vertically centred — the track runs behind it, not
+      // below it.
+      expect(atMid.center.dy, closeTo(size.height / 2, 0.01));
     });
 
-    test('a wagon without a position binding still spans the whole box', () {
-      const size = Size(240, 100);
-      final parked = ConveyorPainter(
-        color: Colors.grey,
-        batches: const {},
-        angle: 0,
-        paintSize: size,
-        onRails: true,
-      );
-      // No explicit band and no position: the belt fills the belt area, so
-      // there is no separate hit shape and the box stays the tap target.
-      expect(parked.hasHitShape, isFalse);
-      expect(parked.hitTest(const Offset(200, 30)), isTrue);
+    test('a wagon without a position binding parks mid-rail', () {
+      final parked = wagonAt(null);
+      expect(parked.hasHitShape, isTrue);
+      final bounds = parked.hitShape()!.getBounds();
+      expect(bounds.center.dx, closeTo(size.width / 2, 0.01));
+      expect(parked.hitTest(const Offset(10, 50)), isFalse);
+      expect(parked.hitTest(Offset(size.width / 2, 50)), isTrue);
     });
 
-    test('position key round-trips and only reads while rails are active',
-        () {
+    test('chassis bumpers are wagon but not belt — the motor tap target', () {
+      final painter = wagonAt(0.5);
+      final belt = painter.beltRect(size);
+      final wagon = painter.wagonRect(size);
+      expect(wagon.left, lessThan(belt.left));
+      expect(wagon.right, greaterThan(belt.right));
+      final bumper = Offset((wagon.left + belt.left) / 2, size.height / 2);
+      expect(belt.contains(bumper), isFalse);
+      expect(wagon.contains(bumper), isTrue);
+      expect(painter.hitTest(bumper), isTrue);
+    });
+
+    test('an explicit band stays centred in the box with rails', () {
+      final railed = wagonAt(0.5, band: 40);
+      final bounds = railed.hitShape()!.getBounds();
+      expect(bounds.center.dy, closeTo(size.height / 2, 0.01));
+      expect(bounds.height, closeTo(40, 0.01));
+    });
+
+    test('wagon keys round-trip through JSON', () {
       final config = ConveyorConfig(
-          onRails: true, positionKey: 'AREA01.WAG01.position',
+          onRails: true,
+          positionKey: 'AREA01.WAG01.position',
+          wagonMotorKey: 'AREA01.WAG01.motor',
           wagonLength: 0.3);
-      final json = config.toJson();
-      final restored = ConveyorConfig.fromJson(json);
+      final restored = ConveyorConfig.fromJson(config.toJson());
       expect(restored.positionKey, 'AREA01.WAG01.position');
+      expect(restored.wagonMotorKey, 'AREA01.WAG01.motor');
       expect(restored.wagonLength, 0.3);
       expect(restored.effectiveWagonLength, 0.3);
       expect(ConveyorConfig().effectiveWagonLength, 0.4);
-    });
-
-    test('band above the rails still takes the tap, the rail zone does not',
-        () {
-      const size = Size(240, 100);
-      final railed = ConveyorPainter(
-        color: Colors.grey,
-        batches: const {},
-        angle: 0,
-        straightBeltWidth: 40,
-        paintSize: size,
-        onRails: true,
-      );
-      final beltArea =
-          size.height * (1 - ConveyorPainter.railZoneFraction);
-      expect(railed.hitTest(Offset(120, beltArea / 2)), isTrue);
-      expect(railed.hitTest(const Offset(120, 95)), isFalse);
     });
   });
 }

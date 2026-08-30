@@ -99,7 +99,8 @@ Widget buildRollerScenario(ThemeData theme) {
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Text('wagon (box)', style: theme.textTheme.bodySmall),
+                      Text('wagon (box, motor manual)',
+                          style: theme.textTheme.bodySmall),
                       belt(
                         wagonSize,
                         ConveyorPainter(
@@ -108,10 +109,12 @@ Widget buildRollerScenario(ThemeData theme) {
                           angle: 0,
                           onRails: true,
                           railInk: theme.colorScheme.onSurface,
+                          chassisColor: states.yellow,
                         ),
                       ),
                       const SizedBox(height: 16),
-                      Text('wagon (roller)', style: theme.textTheme.bodySmall),
+                      Text('wagon (roller, no motor key)',
+                          style: theme.textTheme.bodySmall),
                       belt(
                         wagonSize,
                         ConveyorPainter(
@@ -137,6 +140,7 @@ Widget buildRollerScenario(ThemeData theme) {
                           railInk: theme.colorScheme.onSurface,
                           wagonPosition: 0.25,
                           wagonFraction: 0.4,
+                          chassisColor: states.green,
                         ),
                       ),
                     ],
