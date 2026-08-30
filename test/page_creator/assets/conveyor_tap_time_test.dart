@@ -267,7 +267,7 @@ void main() {
     final view =
         TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
     view.devicePixelRatio = 1.0;
-    view.physicalSize = const Size(1200, 900);
+    view.physicalSize = const Size(1200, 1400);
   });
 
   tearDown(() {

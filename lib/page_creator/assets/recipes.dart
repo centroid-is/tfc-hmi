@@ -12,6 +12,7 @@ import 'package:tfc/providers/preferences.dart';
 import 'package:tfc/widgets/dynamic_value.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc/widgets/state_value_builder.dart';
+import 'package:tfc/widgets/tag_access_guard.dart';
 import 'package:tfc_dart/converter/dynamic_value_converter.dart';
 
 import 'package:open62541/open62541.dart' show DynamicValue;
@@ -480,15 +481,26 @@ class _RecipesState extends ConsumerState<Recipes> {
                                     // rewrites every other line with whatever
                                     // this dialog last read -- one reason
                                     // per-line keys are preferable.
+                                    //
+                                    // **Neither branch names a member, and
+                                    // that is the honest answer rather than a
+                                    // shortcut.** Sending a recipe replaces
+                                    // every member of the line at once, and
+                                    // the legacy branch replaces every line of
+                                    // the array; there is no one member being
+                                    // set. So the question asked is about the
+                                    // key as a whole, which is what a
+                                    // template's `*` row answers.
                                     final chosen = DynamicValue.from(
                                         recipes[selectedRecipeIndex!].value);
                                     if (widget.config.perLineKeys) {
-                                      await stateMan.write(_activeKey, chosen);
+                                      await writeTag(
+                                          ref, stateMan, _activeKey, chosen);
                                     } else {
                                       final newValue = DynamicValue.from(data);
                                       newValue[selectedLine] = chosen;
-                                      await stateMan.write(
-                                          _activeKey, newValue);
+                                      await writeTag(
+                                          ref, stateMan, _activeKey, newValue);
                                     }
                                   },
                             child: Text('Send values ->'),
