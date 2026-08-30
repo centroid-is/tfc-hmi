@@ -2,54 +2,48 @@
 <title>Stop Analysis Timeline</title>
 <style>
 /* ------------------------------------------------------------------ *
- * Palette is lifted from lib/theme.dart (MutedColors, ISA-101).
- * Light tokens live on :root; dark blocks remap only the mapped vars.
+ * Surfaces come from lib/theme.dart (MutedColors, ISA-101).
+ * Bar colours come from AlarmColors — identical in both themes on
+ * purpose (ISA-18.2), so severity never depends on the operator's scheme.
  * ------------------------------------------------------------------ */
 :root{
   color-scheme: light dark;
 
   --l-ground:#E3E5E7; --l-surface:#ECEDEE; --l-lane:#DEE1E3; --l-lane-alt:#D7DBDE;
-  --l-ink:#3C3F41;    --l-hair:#C6CBCE;    --l-accent:#4A6572; --l-blocked:#4A6572;
+  --l-ink:#3C3F41;    --l-hair:#C6CBCE;    --l-accent:#4A6572;
   --l-shadow:rgba(30,38,42,.13);
 
   --d-ground:#1A1D1F; --d-surface:#232628; --d-lane:#2C3033; --d-lane-alt:#31363A;
-  --d-ink:#C2C7CB;    --d-hair:#3B4145;    --d-accent:#7FA3B8; --d-blocked:#5E7A88;
+  --d-ink:#C2C7CB;    --d-hair:#3B4145;    --d-accent:#7FA3B8;
   --d-shadow:rgba(0,0,0,.45);
 
-  /* mapped — the only things the theme blocks touch */
   --ground:var(--l-ground);   --surface:var(--l-surface);
   --lane:var(--l-lane);       --lane-alt:var(--l-lane-alt);
   --ink:var(--l-ink);         --hair:var(--l-hair);
-  --accent:var(--l-accent);   --st-blocked:var(--l-blocked);
-  --shadow:var(--l-shadow);
+  --accent:var(--l-accent);   --shadow:var(--l-shadow);
+  --ink-mid:color-mix(in srgb, var(--l-ink) 64%, transparent);
+  --ink-dim:color-mix(in srgb, var(--l-ink) 45%, transparent);
 
-  /* equipment-state vocabulary — identical in both themes, as in theme.dart */
-  --st-fault:#FF1744;
-  --st-manual:#B09F72;
-  --st-clean:#8197AC;
-  --st-starved:#8E8E8E;
-  --st-unknown:#9588A7;
-  --st-run:#8DA28A;
-
-  --ink-mid:color-mix(in srgb, var(--ink) 64%, transparent);
-  --ink-dim:color-mix(in srgb, var(--ink) 40%, transparent);
+  /* AlarmColors — signalGreen / signalYellow / Solarized red */
+  --al-info:#00E676;
+  --al-warning:#FFEA00;
+  --al-error:#DC322F;
+  --al-on:#0A0F0C;
 
   --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Roboto Mono",monospace;
 
-  --labelw:200px;
+  --labelw:236px;
   --r:3px;
 }
-/* --ink-mid / --ink-dim derive from --ink, and a custom property resolves its
-   var()s on the element that declares it — so every block that remaps --ink
-   must remap these two as well, or they keep the previous theme's value. */
+/* --ink-mid / --ink-dim resolve where they are declared, so every block that
+   remaps --ink must remap them too or they keep the other theme's value. */
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --ground:var(--d-ground); --surface:var(--d-surface);
     --lane:var(--d-lane);     --lane-alt:var(--d-lane-alt);
     --ink:var(--d-ink);       --hair:var(--d-hair);
-    --accent:var(--d-accent); --st-blocked:var(--d-blocked);
-    --shadow:var(--d-shadow);
+    --accent:var(--d-accent); --shadow:var(--d-shadow);
     --ink-mid:color-mix(in srgb, var(--d-ink) 64%, transparent);
     --ink-dim:color-mix(in srgb, var(--d-ink) 40%, transparent);
   }
@@ -58,18 +52,15 @@
   --ground:var(--d-ground); --surface:var(--d-surface);
   --lane:var(--d-lane);     --lane-alt:var(--d-lane-alt);
   --ink:var(--d-ink);       --hair:var(--d-hair);
-  --accent:var(--d-accent); --st-blocked:var(--d-blocked);
-  --shadow:var(--d-shadow);
+  --accent:var(--d-accent); --shadow:var(--d-shadow);
   --ink-mid:color-mix(in srgb, var(--d-ink) 64%, transparent);
   --ink-dim:color-mix(in srgb, var(--d-ink) 40%, transparent);
 }
-/* in-page preview override, so both HMI themes can be judged side by side */
 .stage[data-force="light"]{
   --ground:var(--l-ground); --surface:var(--l-surface);
   --lane:var(--l-lane);     --lane-alt:var(--l-lane-alt);
   --ink:var(--l-ink);       --hair:var(--l-hair);
-  --accent:var(--l-accent); --st-blocked:var(--l-blocked);
-  --shadow:var(--l-shadow);
+  --accent:var(--l-accent); --shadow:var(--l-shadow);
   --ink-mid:color-mix(in srgb, var(--l-ink) 64%, transparent);
   --ink-dim:color-mix(in srgb, var(--l-ink) 45%, transparent);
 }
@@ -77,37 +68,24 @@
   --ground:var(--d-ground); --surface:var(--d-surface);
   --lane:var(--d-lane);     --lane-alt:var(--d-lane-alt);
   --ink:var(--d-ink);       --hair:var(--d-hair);
-  --accent:var(--d-accent); --st-blocked:var(--d-blocked);
-  --shadow:var(--d-shadow);
+  --accent:var(--d-accent); --shadow:var(--d-shadow);
   --ink-mid:color-mix(in srgb, var(--d-ink) 64%, transparent);
   --ink-dim:color-mix(in srgb, var(--d-ink) 40%, transparent);
 }
 
 *{box-sizing:border-box}
 body{
-  margin:0;
-  background:var(--ground);
-  color:var(--ink);
-  font-family:var(--ui);
-  font-size:15px;
-  line-height:1.55;
-  -webkit-font-smoothing:antialiased;
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--ui);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
 }
 .wrap{max-width:1180px;margin:0 auto;padding:40px 24px 96px;display:flex;flex-direction:column;gap:28px}
-/* `color` is resolved where it is declared, so re-declare it inside the stage
-   or the forced-theme preview inherits the document theme's ink. */
+/* `color` resolves where it is declared — re-declare inside the stage or the
+   forced-theme preview inherits the document theme's ink. */
 .stage{color:var(--ink)}
 
-/* ---------------- page furniture ---------------- */
-.eyebrow{
-  font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--ink-dim);margin:0;
-}
-h1{
-  font-size:clamp(28px,4vw,40px);line-height:1.1;margin:6px 0 0;font-weight:620;
-  letter-spacing:-.02em;text-wrap:balance;
-}
-.lede{margin:0;max-width:64ch;color:var(--ink-mid);font-size:16px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-dim);margin:0}
+h1{font-size:clamp(28px,4vw,40px);line-height:1.1;margin:6px 0 0;font-weight:620;letter-spacing:-.02em;text-wrap:balance}
+.lede{margin:0;max-width:66ch;color:var(--ink-mid);font-size:16px}
 
 .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .seg{display:flex;border:1px solid var(--hair);border-radius:var(--r);overflow:hidden;background:var(--surface)}
@@ -121,72 +99,69 @@ h1{
 .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .hint{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-left:auto}
 
-/* the page-editor canvas the asset is dropped onto */
 .canvas{
   background:var(--ground);
   background-image:radial-gradient(color-mix(in srgb,var(--ink) 14%,transparent) 1px,transparent 1px);
   background-size:16px 16px;
-  border:1px solid var(--hair);
-  border-radius:var(--r);
-  padding:22px;
-  display:flex;justify-content:center;
+  border:1px solid var(--hair);border-radius:var(--r);padding:22px;display:flex;justify-content:center;
 }
 
 /* ---------------- the asset ---------------- */
 .asset{
-  --rowh:40px; --rowh-child:34px;
-  width:100%;max-width:1000px;height:520px;min-height:120px;min-width:300px;
+  --rowh:38px; --rowh-leaf:32px;
+  width:100%;max-width:1000px;height:540px;min-height:120px;min-width:300px;
   resize:both;overflow:hidden;
-  background:var(--surface);
-  border:1px solid var(--hair);
-  border-radius:var(--r);
+  background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);
   box-shadow:0 1px 3px var(--shadow),0 8px 24px -12px var(--shadow);
   display:grid;grid-template-rows:auto 1fr auto auto;
-  font-size:13px;
-  position:relative;
+  font-size:13px;position:relative;
 }
-.main{display:grid;grid-template-rows:auto 1fr;min-height:0;overflow:hidden}
+.main{display:grid;grid-template-rows:auto 1fr;min-height:0;overflow:hidden;position:relative}
 .asset[data-view="table"] .main{grid-template-rows:1fr}
+/* Gridlines, the unscheduled hatch and the future dim are vertical and span
+   every lane, so they are ONE overlay over the whole body — not 11 elements
+   per row rebuilt on every pan frame. */
+.chrome{position:absolute;top:26px;left:var(--labelw);right:0;bottom:0;pointer-events:none;overflow:hidden}
+.asset[data-view="table"] .chrome{display:none}
 
-/* header */
-.hd{
-  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
-  padding:9px 12px;border-bottom:1px solid var(--hair);
-}
-.hd h2{margin:0;font-size:13px;font-weight:640;letter-spacing:.01em;white-space:nowrap}
+.hd{display:flex;align-items:center;gap:14px;padding:9px 12px;border-bottom:1px solid var(--hair)}
+.hd h2{margin:0;font-size:13px;font-weight:640;white-space:nowrap}
 .hd .scope{font-family:var(--mono);font-size:11px;color:var(--ink-dim);white-space:nowrap}
-.legend{display:flex;gap:4px;flex-wrap:wrap}
+.legend{display:flex;gap:4px}
 .chip{
   display:inline-flex;align-items:center;gap:5px;
   font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;
   padding:3px 7px 3px 5px;border-radius:2px;border:1px solid transparent;
-  background:transparent;color:var(--ink-mid);cursor:pointer;
+  background:transparent;color:var(--ink-mid);cursor:pointer;white-space:nowrap;
 }
 .chip:hover{border-color:var(--hair)}
 .chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .chip .sw{width:9px;height:9px;border-radius:1px;flex:none}
 .chip[aria-pressed="false"]{opacity:.34}
+.chip .n{color:var(--ink-dim);font-variant-numeric:tabular-nums}
 .hd .clock{
   margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink-mid);
   font-variant-numeric:tabular-nums;white-space:nowrap;
 }
+.hd .live-dot{
+  display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--al-error);
+  margin-right:5px;vertical-align:1px;animation:pulse 2s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
-/* time axis */
 .axisrow{display:grid;grid-template-columns:var(--labelw) 1fr;border-bottom:1px solid var(--hair)}
 .axis-corner{
-  border-right:1px solid var(--hair);
-  font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;
-  color:var(--ink-dim);display:flex;align-items:flex-end;padding:0 0 5px 12px;
+  border-right:1px solid var(--hair);font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim);
+  display:flex;align-items:flex-end;padding:0 0 5px 12px;
 }
 .axis{position:relative;height:26px;overflow:hidden}
 .tick{position:absolute;bottom:4px;transform:translateX(-50%);white-space:nowrap;
   font-family:var(--mono);font-size:10.5px;color:var(--ink-mid);font-variant-numeric:tabular-nums}
 .tick.major{color:var(--ink);font-weight:600}
 
-/* rows */
 .body{
   overflow-y:auto;overflow-x:hidden;position:relative;overscroll-behavior:contain;min-height:0;
-  /* keep the label divider and lane ground running past the last row */
   background:linear-gradient(to right,
     var(--surface) 0 var(--labelw),
     var(--hair) var(--labelw) calc(var(--labelw) + 1px),
@@ -194,69 +169,72 @@ h1{
 }
 .row{display:grid;grid-template-columns:var(--labelw) 1fr;height:var(--rowh);
   border-bottom:1px solid color-mix(in srgb,var(--hair) 55%,transparent)}
-.row.child{height:var(--rowh-child)}
+.row.leaf{height:var(--rowh-leaf)}
 
 .label{
-  border-right:1px solid var(--hair);display:flex;align-items:center;gap:6px;
-  padding:0 8px 0 6px;min-width:0;background:var(--surface);
+  border-right:1px solid var(--hair);display:flex;align-items:center;gap:5px;
+  padding:0 8px 0 calc(6px + var(--d) * 15px);min-width:0;background:var(--surface);
 }
-.row.child .label{padding-left:22px}
 .tw{
-  flex:none;width:16px;height:16px;border:0;background:transparent;padding:0;cursor:pointer;
+  flex:none;width:15px;height:15px;border:0;background:transparent;padding:0;cursor:pointer;
   color:var(--ink-mid);display:grid;place-items:center;border-radius:2px;
 }
 .tw:hover{background:var(--lane)}
 .tw:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 .tw svg{transition:transform .16s ease}
 .row.open .tw svg{transform:rotate(90deg)}
+.spacer{width:15px;flex:none}
 .ltext{min-width:0;display:flex;flex-direction:column;justify-content:center;line-height:1.25}
-.lname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row.child .lname{font-weight:450;font-size:12px;color:var(--ink-mid)}
+.lname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  display:flex;align-items:center;gap:6px}
+.lname .nm{overflow:hidden;text-overflow:ellipsis}
+.row.leaf .lname{font-weight:450;font-size:12px;color:var(--ink-mid)}
+.row.leaf .lvl{width:7px;height:7px;border-radius:1px;flex:none}
+/* hollow ring = this branch has an alarm bound to it, not just children */
+.bnd{width:8px;height:8px;border-radius:50%;border:1.5px solid;flex:none;background:transparent}
 .lstat{
   font-family:var(--mono);font-size:10px;color:var(--ink-dim);
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .lstat b{font-weight:600;color:var(--ink-mid)}
+.lstat .on{color:var(--al-error);font-weight:600}
 
 .lane{position:relative;background:var(--lane);overflow:hidden}
-.row.child .lane{background:var(--lane-alt)}
-.grid-lines{position:absolute;inset:0;pointer-events:none}
+.row.leaf .lane{background:var(--lane-alt)}
+.overlay{position:absolute;inset:0;pointer-events:none}
 .gl{position:absolute;top:0;bottom:0;width:1px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
 .gl.major{background:color-mix(in srgb,var(--ink) 15%,transparent)}
 
-.bar{
-  position:absolute;top:50%;transform:translateY(-50%);
-  min-width:3px;border-radius:1px;cursor:pointer;
-}
-.bar.rollup{height:18px}
-.bar.leaf{height:10px}
-.bar:hover{filter:brightness(1.14);box-shadow:0 0 0 1px var(--surface),0 0 0 2px var(--accent)}
+/* left stays 0 and JS writes the full transform — moving a bar must not cost
+   a layout pass */
+.bar{position:absolute;top:50%;left:0;border-radius:1px;cursor:pointer;will-change:transform}
+.bar.rollup{height:17px}
+.bar.leafbar{height:10px}
+.bar:hover{filter:brightness(1.15);box-shadow:0 0 0 1px var(--surface),0 0 0 2px var(--accent)}
 .bar.sel{box-shadow:0 0 0 1px var(--surface),0 0 0 2px var(--accent)}
-.bar.thin::after{
-  content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;
-  background:inherit;opacity:.55;
+.bar.thin::after{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:inherit;opacity:.55}
+/* an activation with no deactivation time: it is happening now */
+.bar.live{border-radius:1px 0 0 1px}
+.bar.live::before{
+  content:"";position:absolute;right:-1px;top:-3px;bottom:-3px;width:2px;
+  background:inherit;animation:pulse 1.4s ease-in-out infinite;
 }
 
-/* non-production overlays, drawn under the bars */
 .band{position:absolute;top:0;bottom:0;pointer-events:none}
 .band.unscheduled{
-  background:repeating-linear-gradient(-45deg,
-    transparent 0 5px,color-mix(in srgb,var(--ink) 9%,transparent) 5px 6px);
+  background:repeating-linear-gradient(-45deg,transparent 0 5px,
+    color-mix(in srgb,var(--ink) 9%,transparent) 5px 6px);
 }
 .band.future{background:color-mix(in srgb,var(--surface) 62%,transparent)}
-.nowline{position:absolute;top:0;bottom:0;width:1px;background:var(--st-fault);opacity:.65;pointer-events:none}
+.nowline{position:absolute;top:0;bottom:0;width:1px;background:var(--ink-mid);pointer-events:none}
 
-/* brush */
-.brush{
-  display:grid;grid-template-columns:var(--labelw) 1fr;
-  border-top:1px solid var(--hair);height:38px;
-}
+.brush{display:grid;grid-template-columns:var(--labelw) 1fr;border-top:1px solid var(--hair);height:38px}
 .brush-lbl{
   border-right:1px solid var(--hair);display:flex;align-items:center;padding-left:12px;
   font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim);
 }
 .track{position:relative;background:var(--lane);cursor:crosshair;touch-action:none}
-.tick-b{position:absolute;top:8px;height:22px;min-width:2px;border-radius:1px;opacity:.85}
+.tick-b{position:absolute;top:8px;height:22px;min-width:2px;border-radius:1px;opacity:.9}
 .window{
   position:absolute;top:0;bottom:0;border:1px solid var(--accent);
   background:color-mix(in srgb,var(--accent) 16%,transparent);cursor:grab;touch-action:none;
@@ -270,43 +248,43 @@ h1{
 }
 .shade{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--surface) 55%,transparent);pointer-events:none}
 
-/* detail strip */
 .detail{
   border-top:1px solid var(--hair);padding:8px 12px;display:flex;align-items:center;
-  gap:16px;flex-wrap:wrap;min-height:44px;font-family:var(--mono);font-size:11px;
+  gap:16px;flex-wrap:wrap;min-height:46px;font-family:var(--mono);font-size:11px;
   font-variant-numeric:tabular-nums;color:var(--ink-mid);
 }
 .detail .empty{color:var(--ink-dim)}
 .detail .who{font-family:var(--ui);font-size:13px;font-weight:620;color:var(--ink)}
+.detail .path{color:var(--ink-dim)}
 .detail dl{display:flex;gap:16px;margin:0;flex-wrap:wrap}
 .detail dt{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);margin:0}
 .detail dd{margin:0;color:var(--ink)}
-.detail .alarmref{
-  display:inline-flex;align-items:center;gap:6px;border:1px dashed var(--hair);
-  border-radius:2px;padding:3px 7px;color:var(--ink-mid);
+.detail dd.ongoing{color:var(--al-error);font-weight:600}
+.detail .uid{
+  display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair);
+  border-radius:2px;padding:3px 7px;color:var(--ink-dim);
 }
-.detail .alarmref .uid{color:var(--ink-dim)}
-.rchip{display:inline-flex;align-items:center;gap:5px;color:var(--ink)}
-.rchip .sw{width:9px;height:9px;border-radius:1px}
+.lchip{display:inline-flex;align-items:center;gap:5px;color:var(--ink)}
+.lchip .sw{width:9px;height:9px;border-radius:1px}
 
-/* tooltip */
 .tip{
   position:fixed;z-index:20;pointer-events:none;opacity:0;transition:opacity .1s ease;
   background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);
-  box-shadow:0 6px 20px -6px var(--shadow);padding:7px 9px;min-width:160px;
+  box-shadow:0 6px 20px -6px var(--shadow);padding:7px 9px;min-width:180px;
   font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--ink-mid);
 }
 .tip.on{opacity:1}
-.tip .t-who{font-family:var(--ui);font-size:12.5px;font-weight:620;color:var(--ink);margin-bottom:3px}
+.tip .t-who{font-family:var(--ui);font-size:12.5px;font-weight:620;color:var(--ink);margin-bottom:1px}
+.tip .t-path{font-size:10px;color:var(--ink-dim);margin-bottom:4px}
 .tip .t-row{display:flex;justify-content:space-between;gap:14px}
 .tip .t-row span:last-child{color:var(--ink)}
+.tip .t-live{color:var(--al-error);font-weight:600}
 
-/* ---------------- table / pareto view ---------------- */
+/* ---------------- table ---------------- */
 .viewseg{display:flex;border:1px solid var(--hair);border-radius:2px;overflow:hidden;flex:none}
 .viewseg button{
-  font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;
-  padding:3px 9px;border:0;border-right:1px solid var(--hair);
-  background:transparent;color:var(--ink-mid);cursor:pointer;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;padding:3px 9px;
+  border:0;border-right:1px solid var(--hair);background:transparent;color:var(--ink-mid);cursor:pointer;
 }
 .viewseg button:last-child{border-right:0}
 .viewseg button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
@@ -314,14 +292,11 @@ h1{
 
 .tablewrap{display:none;grid-template-rows:auto 1fr;min-height:0}
 .asset[data-view="table"] .tablewrap{display:grid}
-.asset[data-view="table"] .body,
-.asset[data-view="table"] .axisrow{display:none}
+.asset[data-view="table"] .body,.asset[data-view="table"] .axisrow{display:none}
 .tscroll{overflow:auto;min-height:0;overscroll-behavior:contain}
-
 .tbar{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  padding:6px 12px;border-bottom:1px solid var(--hair);
-  background:var(--surface);
+  padding:6px 12px;border-bottom:1px solid var(--hair);background:var(--surface);
 }
 .tbar .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim)}
 .tbar .tot{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--ink-mid);font-variant-numeric:tabular-nums}
@@ -347,45 +322,35 @@ table.pareto tbody tr{cursor:pointer}
 table.pareto tbody tr:hover td{background:var(--lane)}
 table.pareto tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 td.rank{font-family:var(--mono);color:var(--ink-dim);width:1%;font-variant-numeric:tabular-nums}
-td.what{font-weight:560;max-width:210px;overflow:hidden;text-overflow:ellipsis}
-td.sub{color:var(--ink-mid);font-weight:400}
-.rzn{display:inline-flex;align-items:center;gap:6px;color:var(--ink-mid);font-family:var(--mono);font-size:10.5px}
-.rzn .sw{width:8px;height:8px;border-radius:1px;flex:none}
+td.what{font-weight:560;max-width:230px;overflow:hidden;text-overflow:ellipsis}
+td.sub{color:var(--ink-mid);font-weight:400;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+td.live{color:var(--al-error);font-weight:600}
+.lz{display:inline-flex;align-items:center;gap:6px;color:var(--ink-mid);font-family:var(--mono);font-size:10.5px}
+.lz .sw{width:8px;height:8px;border-radius:1px;flex:none}
 .sharecell{width:210px}
 .shrow{display:flex;align-items:center;gap:9px}
-.sharebar{
-  position:relative;flex:1;min-width:0;height:10px;
-  background:var(--lane);border-radius:1px;overflow:visible;
-}
+.sharebar{position:relative;flex:1;min-width:0;height:10px;background:var(--lane);border-radius:1px}
 .sharebar i{position:absolute;left:0;top:0;bottom:0;display:block;border-radius:1px}
-.sharebar u{
-  position:absolute;top:-3px;bottom:-3px;width:1px;
-  background:color-mix(in srgb,var(--ink) 50%,transparent);
-}
-.cum{
-  flex:none;width:80px;text-align:right;
-  font-family:var(--mono);font-size:10px;color:var(--ink-dim);font-variant-numeric:tabular-nums;
-}
+.sharebar u{position:absolute;top:-3px;bottom:-3px;width:1px;background:color-mix(in srgb,var(--ink) 50%,transparent)}
+.cum{flex:none;width:80px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--ink-dim);font-variant-numeric:tabular-nums}
 .tempty{padding:28px 12px;text-align:center;color:var(--ink-dim);font-family:var(--mono);font-size:11px}
-
 .asset.narrow table.pareto .opt{display:none}
 
-/* size-responsive behaviour */
-.asset.sz-s{--rowh:26px;--rowh-child:24px;--labelw:130px}
+/* size-responsive */
+.asset.w-md .hd .scope{display:none}
+.asset.narrow{--labelw:150px}
+.asset.narrow .legend .chip .lb{display:none}
+.asset.sz-s{--rowh:26px;--rowh-leaf:24px;--labelw:150px}
 .asset.sz-s .brush,.asset.sz-s .detail,.asset.sz-s .legend,.asset.sz-s .viewseg{display:none}
 .asset.sz-s .lstat{display:none}
 .asset.sz-s .bar.rollup{height:13px}
-.asset.sz-s .bar.leaf{height:8px}
-.asset.w-md .hd .scope{display:none}
-.asset.narrow{--labelw:130px}
-.asset.narrow .legend .chip .lb{display:none}
+.asset.sz-s .bar.leafbar{height:8px}
 
 /* ---------------- notes ---------------- */
 .notes{display:flex;flex-direction:column;gap:26px;max-width:74ch}
 .notes h2{
   font-size:12px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;
-  color:var(--ink-dim);margin:0 0 10px;padding-bottom:7px;border-bottom:1px solid var(--hair);
-  font-weight:500;
+  color:var(--ink-dim);margin:0 0 10px;padding-bottom:7px;border-bottom:1px solid var(--hair);font-weight:500;
 }
 .notes h3{font-size:15px;margin:18px 0 4px;font-weight:620}
 .notes p{margin:0 0 10px;color:var(--ink-mid)}
@@ -393,12 +358,10 @@ td.sub{color:var(--ink-mid);font-weight:400}
 .notes li{margin-bottom:5px}
 .notes strong{color:var(--ink);font-weight:620}
 .notes code{font-family:var(--mono);font-size:.88em;background:var(--lane);padding:1px 4px;border-radius:2px;color:var(--ink)}
-.tblwrap{overflow-x:auto;border:1px solid var(--hair);border-radius:var(--r)}
-table{border-collapse:collapse;width:100%;font-size:13px}
-th,td{text-align:left;padding:7px 11px;border-bottom:1px solid var(--hair);vertical-align:top}
-th{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);font-weight:500}
-tbody tr:last-child td{border-bottom:0}
-td:first-child{white-space:nowrap}
+pre{
+  font-family:var(--mono);font-size:12px;line-height:1.5;background:var(--lane);
+  border:1px solid var(--hair);border-radius:var(--r);padding:12px 14px;overflow-x:auto;margin:0 0 10px;
+}
 .q{border-left:2px solid var(--accent);padding-left:14px}
 
 @media (prefers-reduced-motion: reduce){
@@ -411,10 +374,11 @@ td:first-child{white-space:nowrap}
     <p class="eyebrow">CentroidX · page asset · design review</p>
     <h1>Stop Analysis Timeline</h1>
     <p class="lede">
-      A hierarchical state timeline for production stops. Groups roll up to “was the line
-      down?”; expanding a group shows which machine caused it. Drag to pan, scroll to zoom,
-      drag the window in the overview strip. Switch to <b>Table</b> for a Pareto of the same
-      window. Sample data — a Friday day shift in the packing hall.
+      The alarm system on a time axis. The tree is the alarm definitions, nested as deep as you
+      configure them, so you can go from “Line 3 was down” to “Multivac” to “film reel empty”.
+      Bars are alarm activations coloured by severity; an alarm standing right now runs to the live
+      edge and keeps growing. Drag to pan, scroll to zoom, or switch to <b>Table</b> for a Pareto of
+      the same window.
     </p>
   </header>
 
@@ -437,7 +401,7 @@ td:first-child{white-space:nowrap}
       <section class="asset" id="asset" data-view="timeline" aria-label="Stop analysis timeline">
         <div class="hd">
           <h2>Stop analysis</h2>
-          <span class="scope">Packing hall · ST101 / ST201 / ST301</span>
+          <span class="scope">Alarm groups · packing hall</span>
           <div class="viewseg" role="group" aria-label="View">
             <button type="button" data-view="timeline" aria-pressed="true">Timeline</button>
             <button type="button" data-view="table" aria-pressed="false">Table</button>
@@ -448,25 +412,26 @@ td:first-child{white-space:nowrap}
 
         <div class="main">
           <div class="axisrow">
-            <div class="axis-corner">Line / machine</div>
+            <div class="axis-corner">Alarm group</div>
             <div class="axis" id="axis"></div>
           </div>
 
           <div class="body" id="bodyEl"></div>
+          <div class="chrome" id="chrome"></div>
 
-          <div class="tablewrap" id="tablewrap">
+          <div class="tablewrap">
             <div class="tbar">
               <span class="lbl">Rank by</span>
               <div class="viewseg" role="group" aria-label="Grouping">
-                <button type="button" data-group="cause" aria-pressed="true">Machine &amp; cause</button>
-                <button type="button" data-group="machine" aria-pressed="false">Machine</button>
-                <button type="button" data-group="reason" aria-pressed="false">Cause</button>
-                <button type="button" data-group="events" aria-pressed="false">Every stop</button>
+                <button type="button" data-group="alarm" aria-pressed="true">Alarm</button>
+                <button type="button" data-group="node" aria-pressed="false">Group</button>
+                <button type="button" data-group="level" aria-pressed="false">Severity</button>
+                <button type="button" data-group="events" aria-pressed="false">Every activation</button>
               </div>
               <span class="tot" id="tabletot"></span>
             </div>
             <div class="tscroll">
-              <table class="pareto" id="pareto"><thead id="ptHead"></thead><tbody id="ptBody"></tbody></table>
+              <table class="pareto"><thead id="ptHead"></thead><tbody id="ptBody"></tbody></table>
             </div>
           </div>
         </div>
@@ -483,7 +448,7 @@ td:first-child{white-space:nowrap}
           </div>
         </div>
 
-        <div class="detail" id="detail"><span class="empty">Select a stop to inspect it.</span></div>
+        <div class="detail" id="detail"><span class="empty">Select an activation to inspect it.</span></div>
       </section>
     </div>
   </div>
@@ -492,143 +457,358 @@ td:first-child{white-space:nowrap}
 
   <div class="notes">
     <section>
-      <h2>What is decided</h2>
-      <h3>The collapsed lane answers one question</h3>
+      <h2>Architecture</h2>
       <p>
-        A group lane shows only the intervals where <strong>the line itself was down</strong> — the
-        union of its children’s line-impacting stops. A machine that stopped without taking
-        production down (a weigher on standby, a spare erector) contributes nothing to the group
-        bar and only appears once you expand. So expanding always reveals more, never less, and the
-        collapsed view stays a clean read of availability.
+        Three new pieces, and they sit on top of the alarm system rather than beside it. The one
+        thing that is not obvious: <strong>the intervals come from two places and have to be
+        unioned</strong>, because a row only reaches <code>alarm_history</code> when the alarm
+        clears.
       </p>
-      <h3>Colour is the plant’s existing vocabulary, not a new one</h3>
+
+      <figure>
+        <svg viewBox="0 0 740 664" role="img" width="740"
+             aria-label="Data flow: PLC to StateMan to AlarmMan, which forks into a live activeAlarms stream and, on clear, rows written to alarm_history; both feed a new StopIntervalSource, then a new AlarmTree grouped by AlarmConfig.path, then the new StopTimelineAsset.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g fill="none" stroke="currentColor" stroke-width="1"
+             font-family="ui-monospace,Menlo,monospace">
+
+            <rect x="285" y="12" width="170" height="38" rx="3"/>
+            <text x="370" y="36" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">PLC · OPC UA</text>
+
+            <rect x="285" y="92" width="170" height="38" rx="3"/>
+            <text x="370" y="116" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">StateMan</text>
+
+            <rect x="225" y="172" width="290" height="54" rx="3"/>
+            <text x="370" y="194" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">AlarmMan</text>
+            <text x="370" y="212" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">evaluates AlarmRule per AlarmConfig</text>
+
+            <rect x="470" y="300" width="200" height="48" rx="3"/>
+            <text x="570" y="321" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">alarm_history</text>
+            <text x="570" y="338" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">postgres · closed only</text>
+
+            <rect x="195" y="408" width="350" height="52" rx="3" style="stroke:var(--accent)" stroke-width="1.6"/>
+            <text x="370" y="430" font-size="12" text-anchor="middle" stroke="none" style="fill:var(--accent)">StopIntervalSource</text>
+            <text x="370" y="448" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">open ∪ closed, one interval model</text>
+
+            <rect x="195" y="498" width="350" height="52" rx="3" style="stroke:var(--accent)" stroke-width="1.6"/>
+            <text x="370" y="520" font-size="12" text-anchor="middle" stroke="none" style="fill:var(--accent)">AlarmTree</text>
+            <text x="370" y="538" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">nested by AlarmConfig.path / bindToPath</text>
+
+            <rect x="195" y="588" width="350" height="52" rx="3" style="stroke:var(--accent)" stroke-width="1.6"/>
+            <text x="370" y="610" font-size="12" text-anchor="middle" stroke="none" style="fill:var(--accent)">StopTimelineAsset</text>
+            <text x="370" y="628" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">lanes · rollup · pareto table</text>
+
+            <line x1="370" y1="50"  x2="370" y2="88"  marker-end="url(#ar)"/>
+            <line x1="370" y1="130" x2="370" y2="168" marker-end="url(#ar)"/>
+            <line x1="270" y1="226" x2="270" y2="404" marker-end="url(#ar)"/>
+            <polyline points="470,226 470,268 620,268 620,296" marker-end="url(#ar)"/>
+            <polyline points="520,348 520,380 440,380 440,404" marker-end="url(#ar)"/>
+            <line x1="370" y1="460" x2="370" y2="494" marker-end="url(#ar)"/>
+            <line x1="370" y1="550" x2="370" y2="584" marker-end="url(#ar)"/>
+
+            <g fill="currentColor" stroke="none" font-size="10.5">
+              <text x="380" y="74">subscriptions by key</text>
+              <text x="380" y="154">values</text>
+              <text x="258" y="300" text-anchor="end">activeAlarms()</text>
+              <text x="258" y="315" text-anchor="end" opacity=".65">open — no end yet</text>
+              <text x="630" y="256">on clear</text>
+              <text x="630" y="271" opacity=".65">closed interval</text>
+              <text x="480" y="374" text-anchor="middle">windowed query</text>
+            </g>
+            <g stroke="none" font-size="9" letter-spacing="1.2" style="fill:var(--accent)">
+              <text x="537" y="423" text-anchor="end">NEW</text>
+              <text x="537" y="513" text-anchor="end">NEW</text>
+              <text x="537" y="603" text-anchor="end">NEW</text>
+            </g>
+          </g>
+        </svg>
+        <figcaption>
+          The union is the load-bearing part: without the live <code>activeAlarms()</code> leg, the
+          one stop an operator is standing in front of is the only one missing from the chart.
+        </figcaption>
+      </figure>
+
+      <h3>An alarm can be a leaf or the branch itself</h3>
       <p>
-        Bars reuse <code>HmiStateColors</code> exactly as the mimic assets do, so an operator does
-        not learn a second colour language. Lane background is the neutral container gray —
-        running time is deliberately unpainted, per ISA-101. Only fault red is saturated.
+        A leaf is a diagnosis — <em>film reel empty</em>. But where no diagnosis alarm exists yet,
+        an alarm binds to the branch and <em>is</em> that machine’s signal. Both can be true at
+        once: Multivac has a coarse alarm of its own <em>and</em> finer ones underneath, so
+        anything the fine alarms don’t explain still shows up. Adding a diagnosis later is a new
+        alarm definition, not a restructuring.
       </p>
-      <div class="tblwrap">
-        <table>
-          <thead><tr><th>Reason</th><th>Token</th><th>Meaning on the floor</th></tr></thead>
-          <tbody>
-            <tr><td>Fault / trip</td><td><code>red</code></td><td>Machine tripped — an alarm was active</td></tr>
-            <tr><td>Operator stop</td><td><code>yellow</code></td><td>Stopped by hand, manual mode, changeover</td></tr>
-            <tr><td>Cleaning</td><td><code>blue</code></td><td>Washdown — planned downtime</td></tr>
-            <tr><td>Starved</td><td><code>grey</code></td><td>No product coming in — not this machine’s fault</td></tr>
-            <tr><td>Blocked</td><td><code>slate</code></td><td>No room downstream — not this machine’s fault</td></tr>
-            <tr><td>Unclassified</td><td><code>violet</code></td><td>Stopped, no rule matched — same convention as an unreadable state</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <h3>Short stops stay visible</h3>
+
+      <figure>
+        <svg viewBox="0 0 740 344" role="img" width="740"
+             aria-label="Tree of alarm definitions. Line 3 Packing contains Multivac, which has a bound alarm of its own plus three diagnosis alarms; Box erector BER01 has no bound alarm and two diagnosis alarms; Afak SL-15-3 has a bound alarm and no children. Each row's lane draws the union of its own alarm and everything beneath it."
+             font-family="ui-monospace,Menlo,monospace">
+          <g stroke="currentColor" opacity=".28" stroke-width="1">
+            <line x1="414" y1="30" x2="414" y2="322"/>
+            <line x1="28"  y1="64" x2="28"  y2="296"/>
+            <line x1="52"  y1="94" x2="52"  y2="176"/>
+            <line x1="52"  y1="214" x2="52" y2="266"/>
+            <line x1="28" y1="86"  x2="40" y2="86"/>
+            <line x1="52" y1="116" x2="64" y2="116"/>
+            <line x1="52" y1="146" x2="64" y2="146"/>
+            <line x1="52" y1="176" x2="64" y2="176"/>
+            <line x1="28" y1="206" x2="40" y2="206"/>
+            <line x1="52" y1="236" x2="64" y2="236"/>
+            <line x1="52" y1="266" x2="64" y2="266"/>
+            <line x1="28" y1="296" x2="40" y2="296"/>
+          </g>
+          <g fill="currentColor" stroke="none" font-size="9.5" letter-spacing="1.4" opacity=".55">
+            <text x="16" y="22">ALARM DEFINITIONS</text>
+            <text x="430" y="22">WHAT THAT ROW’S LANE DRAWS</text>
+          </g>
+
+          <circle cx="46"  cy="86"  r="4.5" fill="none" stroke="#DC322F" stroke-width="1.6"/>
+          <circle cx="46"  cy="296" r="4.5" fill="none" stroke="#DC322F" stroke-width="1.6"/>
+          <rect x="66" y="112" width="7" height="7" fill="#DC322F"/>
+          <rect x="66" y="142" width="7" height="7" fill="#DC322F"/>
+          <rect x="66" y="172" width="7" height="7" fill="#FFEA00"/>
+          <rect x="66" y="232" width="7" height="7" fill="#DC322F"/>
+          <rect x="66" y="262" width="7" height="7" fill="#FFEA00"/>
+
+          <g fill="currentColor" stroke="none" font-size="12">
+            <text x="16" y="60" font-weight="600">Line 3 · Packing</text>
+            <text x="58" y="90" font-weight="600">Multivac</text>
+            <text x="80" y="119" opacity=".72">Film reel empty</text>
+            <text x="80" y="149" opacity=".72">Seal temperature out of band</text>
+            <text x="80" y="179" opacity=".72">Vacuum not reached</text>
+            <text x="58" y="210" font-weight="600">Box erector BER01</text>
+            <text x="80" y="239" opacity=".72">Blank magazine empty</text>
+            <text x="80" y="269" opacity=".72">Glue temperature low</text>
+            <text x="58" y="300" font-weight="600">Afak SL-15-3</text>
+          </g>
+
+          <g fill="currentColor" stroke="none" font-size="11" opacity=".75">
+            <text x="430" y="60">everything beneath it</text>
+            <text x="430" y="90">its own alarm ∪ the three below</text>
+            <text x="430" y="119">this alarm only</text>
+            <text x="430" y="149">this alarm only</text>
+            <text x="430" y="179">this alarm only</text>
+            <text x="430" y="210">the two below — it has no alarm of its own</text>
+            <text x="430" y="239">this alarm only</text>
+            <text x="430" y="269">this alarm only</text>
+            <text x="430" y="300">its own alarm — nothing beneath it yet</text>
+          </g>
+
+          <g font-size="10.5" fill="currentColor" stroke="none" opacity=".6">
+            <text x="16" y="336">
+              <tspan font-size="13">○</tspan> alarm bound to the branch
+              <tspan dx="18" font-size="13">▪</tspan> alarm as a leaf
+            </text>
+          </g>
+        </svg>
+        <figcaption>
+          Multivac shows the mixed case: a coarse alarm on the branch catches what the three
+          diagnoses underneath do not explain. When a branch has both, its own alarm also appears
+          as the first row beneath it, so expanding never reveals less than the branch lane showed.
+        </figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Making it fast</h2>
       <p>
-        Over an eight-hour window a 40-second stop is a fifth of a pixel. Bars clamp to a 3&nbsp;px
-        minimum and grow a hairline tick above and below when they are at the clamp, so a burst of
-        micro-stops reads as a comb rather than disappearing. This is what makes the timeline
-        useful for chronic small stops, which is where most availability actually goes.
+        The first version of this mockup took <strong>51&nbsp;ms per pan frame</strong> with 45 rows
+        and 62 bars — about 19&nbsp;fps on a dataset small enough to be a rounding error. It is now
+        <strong>0.2&nbsp;ms</strong> for the same frame with a forced layout included. Four things
+        were wrong, and all four have direct Flutter equivalents.
       </p>
+      <ul>
+        <li>
+          <strong>It re-merged every rollup on every frame.</strong> A node’s intervals are a pure
+          function of its subtree and the severity filter — panning cannot change them. They are now
+          merged once per filter change and cached. This is the big one.
+        </li>
+        <li>
+          <strong>It walked every interval to find the visible ones.</strong> The cached lists are
+          sorted and disjoint, so the visible slice is two binary searches, and the window
+          statistics come from a prefix sum in <code>O(log n)</code> instead of a full scan.
+        </li>
+        <li>
+          <strong>It tore down and rebuilt the DOM.</strong> Bars are created once and re-positioned
+          with <code>transform</code>; gridlines, the hatch and the future dim became one pooled
+          overlay for the whole body instead of eleven elements per row. In Flutter this is the
+          difference between rebuilding a widget subtree and repainting a <code>CustomPainter</code>
+          — and the lanes should be a painter, exactly like the conveyor and elevator assets already
+          are.
+        </li>
+        <li>
+          <strong>It read <code>clientWidth</code> inside the write loop</strong>, forcing a
+          synchronous layout per row per frame. One measurement is taken before any write.
+        </li>
+      </ul>
+      <p>
+        Two more things keep it flat as data grows: intervals closer together than a pixel are
+        <strong>coalesced into one run</strong>, so the number of elements touched is bounded by the
+        lane’s width rather than by how much history is loaded; and pan, zoom and the live tick are
+        coalesced to one frame. Honest caveat — this was measured on a few hundred activations. The
+        merge and the coalescing loop are still linear in <em>loaded</em> intervals, which is why the
+        window a query loads matters as much as the drawing.
+      </p>
+
+      <h3>What the database should do</h3>
+      <p>
+        More than it does now, and it is well placed to — unlike the drive-struct history, an alarm
+        activation <em>already is</em> an interval, one row, no folding of samples required.
+      </p>
+      <ul>
+        <li>
+          <strong>Insert on activate, update on clear.</strong> Today <code>_addToDb</code> only
+          fires from <code>_removeActiveAlarm</code>, and <code>deactivated_at</code> is written as
+          an empty string cast to timestamp. If the row were inserted on activation with a NULL
+          deactivation and updated when it clears, the database could answer “what is standing”
+          too — the two-source union in the diagram above collapses into one query, and the live
+          stream becomes a refresh trigger rather than a second source of truth. Small change to
+          <code>AlarmMan</code>, large simplification everywhere downstream.
+        </li>
+        <li>
+          <strong>Index the interval, not the timestamp.</strong> Every query here is a range
+          overlap — <code>created_at &lt; :t1 AND (deactivated_at IS NULL OR deactivated_at &gt; :t0)</code>
+          — which is a GiST index on <code>tstzrange(created_at, deactivated_at)</code>, not a btree
+          on <code>created_at</code>.
+        </li>
+        <li>
+          <strong>Bucket wide windows in SQL.</strong> A month view does not need fifty thousand
+          intervals; it needs, per alarm per pixel column, whether anything was standing and the
+          worst severity. That is a <code>width_bucket</code> and a <code>GROUP BY</code>, and it
+          makes the payload constant no matter how wide the window is. Below a threshold the client
+          fetches real intervals and draws them exactly; above it, buckets.
+        </li>
+        <li>
+          <strong>The Pareto never needs rows at all.</strong> Ranking by standing time and by count
+          is <code>SUM(LEAST(deactivated_at, :t1) - GREATEST(created_at, :t0))</code> grouped by
+          <code>alarm_uid</code>. The table view should be one query returning a few dozen rows,
+          not a client-side reduction over everything loaded.
+        </li>
+      </ul>
+      <p>
+        The grouping stays client-side on purpose: the tree lives in <code>AlarmConfig.path</code>,
+        which is configuration, not data. Merging pre-bucketed leaves up the tree is cheap — it is
+        merging raw intervals every frame that was expensive, and that is now cached.
+      </p>
+    </section>
+
+    <section>
+      <h2>How it is built</h2>
+
+      <h3>The tree is the alarm definitions</h3>
+      <p>
+        Every leaf is one alarm, so the leaf is already a diagnosis — not “Multivac stopped” but
+        <em>film reel empty</em>, <em>seal temperature out of band</em>, <em>vacuum not reached</em>.
+        Group rows are the path above it and nest as deep as the definitions do. Expand Line 3 to
+        get Multivac, expand Multivac to get what was actually wrong.
+      </p>
+      <p>
+        The one thing <code>AlarmConfig</code> is missing for this is the path. It has
+        <code>uid</code>, <code>key</code>, <code>title</code>, <code>description</code> and
+        <code>rules</code>, and nothing that says where an alarm sits. Adding it there rather than
+        in the asset means the hierarchy is a property of the alarm system — the alarm list, the
+        beacon and this timeline all group the same way, and configuring an alarm is the only place
+        you say where it belongs:
+      </p>
+      <pre>class AlarmConfig {
+  final String uid;
+  final String? key;
+  final String title;
+  final String description;
+  final List&lt;AlarmRule&gt; rules;
+
+  /// Where this alarm sits in the tree. ["Line 3", "Multivac"]
+  final List&lt;String&gt; path;          // new
+
+  /// True: this alarm IS the node at [path] — the branch's own signal.
+  /// False: it is a diagnosis leaf underneath that node.
+  final bool bindToPath;            // new
+}</pre>
+
+      <h3>Colour is severity, straight from AlarmColors</h3>
+      <p>
+        <code>error</code> Solarized red, <code>warning</code> signal yellow, <code>info</code>
+        signal green — the same three the banner, the list cards and the beacon use, and identical
+        in both themes on purpose (ISA-18.2). A group bar takes <strong>the worst severity active
+        during that interval</strong>, so a line lane goes red the moment any error underneath it
+        stands, and the filter chips are the same severity filter the alarm page already has.
+      </p>
+      <p>
+        Two things to watch on a floor. Green normally means running, and here a green bar means an
+        info alarm was standing — the lane ground stays neutral grey so nothing reads as “green =
+        healthy”, but if info alarms turn out to be common this is the first thing that will look
+        wrong. And signal yellow is weak against the light theme’s pale surfaces; it is legible,
+        but a warning reads quieter there than it does on dark. Both are inherited from
+        <code>AlarmColors</code> deliberately — fixing them here would mean this asset disagreeing
+        with the banner and the beacon, which is worse.
+      </p>
+
+      <h3>A live alarm is a bar with no right edge</h3>
+      <p>
+        <code>AlarmMan._addToDb</code> only fires from <code>_removeActiveAlarm</code>, so a row
+        reaches <code>alarm_history</code> <strong>when the alarm clears</strong>. Read only the
+        table and the one alarm an operator is standing in front of is the one stop missing from
+        the chart. So the timeline unions two sources the way
+        <code>alarmHistoryEntries(history, active)</code> already does for the history list: closed
+        intervals from the database, open intervals from the live <code>activeAlarms()</code>
+        stream. Open ones run to the live edge, pulse, and say <em>ongoing</em> instead of an end
+        time — the clock above is real, so watch one grow.
+      </p>
+
+      <h3>Short activations stay visible</h3>
+      <p>
+        Over a five-hour window a forty-second alarm is a fifth of a pixel. Bars clamp to a 3&nbsp;px
+        minimum and grow a hairline tick above and below at the clamp, so a chattering alarm reads
+        as a comb rather than vanishing. That comb is usually the finding.
+      </p>
+
+      <h3>The table answers “what should I fix”</h3>
+      <p>
+        Rank by total standing time to find what is expensive, or click <strong>Count</strong> to
+        rank by frequency and find what is chronic — a twenty-minute seal fault and eighty
+        thirty-second film jams cost the same and are fixed completely differently. The share column
+        carries a cumulative marker so the 80/20 point is visible. Rank by alarm, by group, by
+        severity, or list every activation; a row is a way back into the timeline.
+      </p>
+
       <h3>Not-scheduled is not downtime</h3>
       <p>
-        The hatched band is unscheduled time (the 12:00 break). It is excluded from both the
-        downtime totals and the availability figure, so the numbers in the label column mean what
-        a production manager expects them to mean.
-      </p>
-      <h3>The table answers “what should I fix”, the timeline answers “what happened”</h3>
-      <p>
-        Switch to <strong>Table</strong> and you get a Pareto of the same window: rank by total lost
-        time to find what is expensive, or click <strong>Stops</strong> to rank by frequency and find
-        what is chronic. These give different answers, and the gap between them is usually the
-        interesting part — one 40-minute seal fault costs the same as eighty 30-second micro-stops,
-        but you fix them in completely different ways. The share column carries a cumulative marker
-        so the 80/20 point is visible without doing arithmetic.
-      </p>
-      <p>
-        Four rollups: <strong>Machine &amp; cause</strong> (the actionable pair — “Multivac, blocked”),
-        <strong>Machine</strong>, <strong>Cause</strong>, and <strong>Every stop</strong> as a raw
-        chronological log. The table always reflects the visible time window and the reason filter,
-        so panning the timeline re-ranks it. A row is a way back in: click one and it jumps to the
-        timeline with that machine expanded, or centres the event.
-      </p>
-      <h3>It degrades by height, not by width</h3>
-      <p>
-        Dropped on a page the asset can be anything from a 300&nbsp;px strip to full screen. At
-        strip height it drops the brush, the detail row and the per-row statistics and keeps
-        group lanes only — still a legible “which line is losing time”. Grab the corner handle
-        above and shrink it.
+        The hatched band is unscheduled time (the 12:00 break), excluded from the totals and from
+        the clear percentage. It degrades by height too: at strip size the asset drops the brush,
+        the detail row and the statistics and keeps top-level groups only.
       </p>
     </section>
 
     <section>
-      <h2>What SVN actually has today</h2>
-      <p>
-        Checked against the live plant key mapping (1556 keys, snapshot 11 Aug 2026) and the
-        collector config, rather than assumed.
-      </p>
-      <h3>The history already exists — and it is not the alarm system</h3>
-      <p>
-        <strong>91 drive structs are collected whole, every 5 seconds, with one-year retention</strong>
-        — <code>CVS01.CN01.FD01</code> and its siblings, each carrying <code>p_stat_State</code>,
-        <code>p_stat_Error</code> and <code>p_stat_LastFault</code>. That is a machine state
-        timeline for most of the plant, already accumulating, with no new plumbing.
-      </p>
-      <p>
-        <code>alarm_history</code> is the opposite story. The live plant’s
-        <code>alarm_man_config</code> is <code>{"alarms":[]}</code> — <strong>zero alarms
-        configured</strong> — and the station backup has <code>historyToDb: false</code>, so nothing
-        is being written there at all. The 39 alarms in the older backup belong to the previous
-        <code>Line1.Motor1</code> topology, not this one. <strong>The asset must read equipment
-        state, not alarms.</strong> The alarm link stays in the design as an enrichment for the
-        detail row — when a fault interval coincides with an activation, name it — but it cannot be
-        the source, or v1 renders an empty timeline.
-      </p>
-      <h3>Grouping is already in the key names</h3>
-      <p>
-        <code>CVS01.CN01.FD01</code> is system · device · drive, and the whole live namespace is
-        shaped that way (<code>CVS01–03</code>, <code>SPB01–03</code>, <code>BER02/03</code>,
-        <code>STM02/03</code>, <code>Baader1–10</code>). So the tree can be derived from the key
-        convention with an explicit override for the cases it gets wrong, rather than hand-built
-        from nothing.
-      </p>
-      <h3>The resolution floor is 5 seconds</h3>
-      <p>
-        Collection is periodic sampling, so stop edges quantise to ±5&nbsp;s and anything shorter
-        can fall between samples. The micro-stop comb above still earns its keep — a 20-second stop
-        is four samples — but it only becomes fully honest if those keys move to change-of-value.
-        The collector already supports that: <code>sample_interval_us: null</code> inserts on every
-        subscription update, which for a state enum means one row per transition. That is a per-key
-        config change, not code.
-      </p>
-      <h3>Volume is the real constraint</h3>
-      <p>
-        91 drives × 5&nbsp;s × one year is on the order of half a billion rows, each holding a whole
-        struct. The asset has to query a bounded window and fold rows into intervals server-side;
-        pulling a shift of raw samples into the widget will not work.
-      </p>
-    </section>
-
-    <section>
-      <h2>What is still genuinely open</h2>
+      <h2>What this needs from the alarm system</h2>
       <div class="q">
-        <h3>Which stops impact the line?</h3>
+        <h3>Alarms have to be defined</h3>
         <p>
-          There is no system-level run bit in the live namespace — <code>CVS01</code> has no keys of
-          its own, only <code>CN01…CN39</code> beneath it. So the rollup really must be a union of
-          children, and something has to say which children count. Most likely a per-child flag in
-          the asset config, defaulting to on.
+          The live plant’s <code>alarm_man_config</code> was <code>{"alarms":[]}</code> in the
+          11 Aug prefs export, and the station backup has
+          <code>alarm_man_local_config.historyToDb: false</code>. Neither is an architectural
+          problem — they are settings — but the timeline is exactly as good as the alarm
+          definitions behind it, and it shows nothing until they exist. The 39 alarms in the older
+          backup are all machine-level (“Line 2 Motor 1 Fault”); the diagnosis-level alarms this
+          design is built around — film reel empty, out of strap, blank magazine empty — are new
+          definitions against the PLC tags.
         </p>
+        <h3>History has to be switched on, in exactly one place</h3>
         <p>
-          It also decides what the table means. Right now the Pareto ranks <em>machine</em> downtime
-          regardless of line impact, which is why a weigher can sit at the top of the list while the
-          line it belongs to shows 95% availability. That is honest but it is not the same question
-          as “what cost us the most product”. Once the impact flag exists the table should probably
-          offer both — machine downtime and line-impacting downtime — rather than silently picking one.
+          <code>historyToDb</code> is a device-local preference, so if two stations have it on the
+          same activation is written twice, and if none do the timeline only ever shows what is
+          live. There is also no backfill: history starts the day it is enabled.
         </p>
-        <h3>How does a state value become a reason?</h3>
+        <h3>Which severities count as a stop?</h3>
         <p>
-          The six reasons above have to be read off <code>p_stat_State</code> and its neighbours.
-          The enum lives in the PLC source (<code>~/Projects/sildarvinnsla</code>), so this is a
-          mapping to be read rather than invented — but starved and blocked in particular may need
-          the <code>PX01</code> photocells and <code>Jam</code> bits, not just the drive state.
+          The level ladder is severity, not stopped-versus-running — “air cabinet is off” is an info
+          alarm and may not have stopped anything. The severity chips currently stand in for that
+          decision, which is why the statistics say <em>alarm-clear</em> rather than availability.
+          If a stop is a real distinct property, it belongs next to <code>path</code> on
+          <code>AlarmConfig</code> as a flag, not inferred from the level.
         </p>
       </div>
     </section>
@@ -645,121 +825,160 @@ const R = rng(20260829);
 
 const DAY = new Date(2026,7,29,0,0,0).getTime();
 const H = 3600e3, M = 60e3;
-const T0 = DAY + 6*H;          // period start 06:00
-const T1 = DAY + 18*H;         // period end   18:00
-const NOW = DAY + 14*H + 22*M; // "now"
+const T0 = DAY + 6*H;
+const T1 = DAY + 18*H;
+let   NOW = DAY + 14*H + 22*M;
 const UNSCHED = [[DAY+12*H, DAY+12*H+30*M]];
 
-const REASONS = {
-  fault:    {label:"Fault / trip",  short:"Fault",    css:"--st-fault"},
-  manual:   {label:"Operator stop", short:"Operator", css:"--st-manual"},
-  cleaning: {label:"Cleaning",      short:"Clean",    css:"--st-clean"},
-  starved:  {label:"Starved",       short:"Starved",  css:"--st-starved"},
-  blocked:  {label:"Blocked",       short:"Blocked",  css:"--st-blocked"},
-  unknown:  {label:"Unclassified",  short:"Unknown",  css:"--st-unknown"}
+const LEVELS = {
+  error:   {label:"Error",   css:"--al-error",   rank:3},
+  warning: {label:"Warning", css:"--al-warning", rank:2},
+  info:    {label:"Info",    css:"--al-info",    rank:1}
 };
-const ALARMS = {
-  fault: [
-    ["Drive fault — ATV320 tripped","AL-0114"],
-    ["Emergency stop pulled","AL-0031"],
-    ["Motor overload, thermal trip","AL-0207"],
-    ["Guard door opened while running","AL-0088"],
-    ["Air pressure below minimum","AL-0142"],
-    ["Sealing temperature out of band","AL-0176"]
-  ]
-};
+const worst = (a,b)=> LEVELS[a].rank >= LEVELS[b].rank ? a : b;
 
-const GROUPS = [
-  {name:"Line 1 · Filleting", scope:"ST101", kids:[
-    {name:"Baader 581",        rate:5, impacts:true},
-    {name:"Baader 51",         rate:4, impacts:true},
-    {name:"Grader CN04",       rate:3, impacts:true},
-    {name:"Trim table",        rate:2, impacts:false}
-  ]},
-  {name:"Line 2 · Freezing", scope:"ST201", kids:[
-    {name:"Freezer infeed CN12", rate:3, impacts:true},
-    {name:"Plate freezer A",     rate:2, impacts:true},
-    {name:"Plate freezer B",     rate:2, impacts:true},
-    {name:"Outfeed CN21",        rate:4, impacts:true}
-  ]},
-  {name:"Line 3 · Packing", scope:"ST301", kids:[
-    {name:"Multivac",        rate:7, impacts:true},
-    {name:"SpeedBatcher",    rate:5, impacts:true},
-    {name:"Box erector BER01", rate:6, impacts:true},
-    {name:"Afak SL-15-3",    rate:4, impacts:true},
-    {name:"Strapex",         rate:3, impacts:false}
-  ]},
-  {name:"Weighers · M2200", scope:"10.104.29.71-78", kids:[
-    {name:"Weigher 1", rate:2, impacts:false},
-    {name:"Weigher 3", rate:3, impacts:false},
-    {name:"Weigher 6", rate:2, impacts:true}
-  ]}
+/* One entry per alarm definition. `path` is the proposed AlarmConfig.path. */
+let n = 0;
+const uid = ()=> "AL-"+String(++n*7 % 900 + 100).padStart(4,"0");
+const A = (path,title,level,desc,rate,dur)=>({path,title,level,desc,rate,dur,uid:uid()});
+/* `bind` = the alarm IS that node, not a child of it. For a machine with no
+   fine-grained diagnosis alarms yet, this is the whole story it can tell. */
+const B = (path,title,level,desc,rate,dur)=>({...A(path,title,level,desc,rate,dur),bind:true});
+
+const ALARM_DEFS = [
+  A(["Line 1 · Filleting","Baader 581"],"Drive fault — ATV320 tripped","error","Drive reported a fault and stopped the machine.",3,[2,14]),
+  A(["Line 1 · Filleting","Baader 581"],"Guard door opened while running","warning","A guard was opened with the machine in auto.",3,[1,5]),
+  A(["Line 1 · Filleting","Baader 51"],"Drive fault — ATV320 tripped","error","Drive reported a fault and stopped the machine.",2,[2,12]),
+  A(["Line 1 · Filleting","Grader CN04"],"Conveyor not in place","error","Conveyor section is not latched in its running position.",2,[3,16]),
+  A(["Line 1 · Filleting"],"Line stopped from panel","warning","Operator pressed stop on the line panel.",2,[2,9]),
+
+  A(["Line 2 · Freezing","Freezer infeed CN12"],"Drive fault — ATV320 tripped","error","Drive reported a fault and stopped the machine.",3,[2,13]),
+  A(["Line 2 · Freezing","Freezer infeed CN12"],"Mover timeout","info","The mover did not reach its end position in time.",4,[0.4,2]),
+  A(["Line 2 · Freezing","Plate freezer A"],"Cycle overrun","warning","Freezing cycle ran past its expected duration.",2,[4,18]),
+  A(["Line 2 · Freezing","Plate freezer B"],"Hydraulic pressure low","error","Pack pressure fell below the working minimum.",2,[3,15]),
+  A(["Line 2 · Freezing","Outfeed CN21"],"Conveyor not in place","error","Conveyor section is not latched in its running position.",2,[2,11]),
+
+  B(["Line 3 · Packing","Multivac"],"Multivac stopped","error","The machine is not running and no finer alarm matched.",3,[1,9]),
+  A(["Line 3 · Packing","Multivac"],"Film reel empty","error","The upper film reel ran out and the machine stopped.",4,[3,16]),
+  A(["Line 3 · Packing","Multivac"],"Film tracking error","warning","Film has walked off its guides.",5,[0.5,4]),
+  A(["Line 3 · Packing","Multivac"],"Seal temperature out of band","error","Sealing bar left its temperature window.",3,[4,20]),
+  A(["Line 3 · Packing","Multivac"],"Vacuum not reached","warning","Chamber did not pull down to setpoint within the cycle.",5,[0.4,3]),
+  A(["Line 3 · Packing","Multivac"],"Guard door opened while running","warning","A guard was opened with the machine in auto.",3,[1,6]),
+  A(["Line 3 · Packing","SpeedBatcher"],"Emergency active","info","An emergency circuit is open.",2,[1,7]),
+  A(["Line 3 · Packing","SpeedBatcher"],"Checkweigher tripped","warning","Checkweigher rejected out of tolerance and halted the feed.",4,[0.4,3]),
+  A(["Line 3 · Packing","SpeedBatcher"],"Disconnected","error","The HMI lost its connection to the batcher.",1,[2,9]),
+  A(["Line 3 · Packing","Box erector BER01"],"Blank magazine empty","error","The carton blank magazine ran out.",3,[2,11]),
+  A(["Line 3 · Packing","Box erector BER01"],"Glue temperature low","warning","Glue pot below working temperature.",2,[3,12]),
+  /* no diagnosis alarms exist for the strapper yet — one alarm bound to the
+     branch is all it can say, and the timeline still shows it stopping */
+  B(["Line 3 · Packing","Afak SL-15-3"],"Strapper stopped","error","The strapper is not running. No diagnosis alarm is configured for it.",4,[1,11]),
+
+  A(["Infrastructure","EtherCAT"],"Device not in operational state","error","A slave dropped out of OP.",1,[2,10]),
+  A(["Infrastructure","EtherCAT"],"Link error","warning","Link errors counted on a segment.",3,[0.4,3]),
+  A(["Infrastructure","EtherCAT"],"Watchdog triggered","warning","A watchdog expired on the bus.",2,[0.5,4]),
+  A(["Infrastructure","Air"],"+UH1.71 Pressure missing","error","Compressed air below the working minimum.",2,[2,12]),
+  A(["Infrastructure","Air"],"+UH1.71 Air cabinet is off","info","The air cabinet is switched off.",2,[5,20]),
+  A(["Infrastructure","Cabinets"],"Door cabinet +UH1.01 open","warning","A cabinet door is standing open.",2,[2,14]),
+  A(["Infrastructure","Cabinets"],"+UH1.01 2-2-TA1 fuse tripped","error","A fuse tripped in the cabinet.",1,[4,18])
 ];
 
-let uid = 0;
-function makeStops(kid){
-  const out=[];
-  const n = Math.round(kid.rate*1.5) + Math.floor(R()*4);
-  for(let i=0;i<n;i++){
-    const start = T0 + R()*(NOW-T0-2*M);
-    const roll = R();
-    let reason, dur;
-    if(roll<0.30){ reason="fault";    dur=(1+R()*11)*M; }
-    else if(roll<0.46){ reason="manual";  dur=(2+R()*7)*M; }
-    else if(roll<0.68){ reason="starved"; dur=(0.3+R()*2.7)*M; }
-    else if(roll<0.86){ reason="blocked"; dur=(0.3+R()*2.2)*M; }
-    else if(roll<0.93){ reason="cleaning";dur=(5+R()*9)*M; }
-    else { reason="unknown"; dur=(0.2+R()*1.3)*M; }
-    if(R()<0.35) dur = (0.15+R()*0.65)*M;   // the micro-stop tail
-    const end = Math.min(start+dur, NOW);
-    if(end-start < 8e3) continue;
-    const inUnsched = UNSCHED.some(u=>start>=u[0]&&start<u[1]);
-    if(inUnsched) continue;
-    const al = reason==="fault" ? ALARMS.fault[Math.floor(R()*ALARMS.fault.length)] : null;
-    out.push({
-      id:"s"+(uid++), machine:kid.name, reason, start, end,
-      impacts: kid.impacts && reason!=="starved" ? true : (kid.impacts && R()<0.5),
-      alarm: al
-    });
+/* activations: closed intervals plus a handful still standing */
+let aid = 0;
+ALARM_DEFS.forEach((def,i)=>{
+  const acts=[];
+  const count = def.rate + Math.floor(R()*3);
+  for(let k=0;k<count;k++){
+    const start = T0 + R()*(NOW - T0 - 2*M);
+    let d = (def.dur[0] + R()*(def.dur[1]-def.dur[0]))*M;
+    if(R()<0.32) d = (0.15 + R()*0.7)*M;            // the chattering tail
+    if(UNSCHED.some(u=>start>=u[0] && start<u[1])) continue;
+    const end = start + d;
+    if(end > NOW - 30e3) continue;
+    acts.push({id:"a"+(aid++), def, start, end, live:false});
   }
-  return out.sort((a,b)=>a.start-b.start);
-}
-
-const ROWS=[];
-GROUPS.forEach((g,gi)=>{
-  const kids = g.kids.map(k=>({...k, stops:makeStops(k)}));
-  g.kids = kids;   // GROUPS and ROWS must share one set of kid objects
-  ROWS.push({kind:"group", id:"g"+gi, name:g.name, scope:g.scope, kids});
-  kids.forEach((k,ki)=>ROWS.push({kind:"child", id:"g"+gi+"c"+ki, parent:"g"+gi, name:k.name, kid:k}));
+  // four alarms are standing right now
+  if(i===10 || i===13 || i===23 || i===26){
+    acts.push({id:"a"+(aid++), def, start: NOW - (1 + R()*9)*M, end:null, live:true});
+  }
+  def.activations = acts.sort((a,b)=>a.start-b.start);
 });
+
+/* ---------- build the tree from the paths ---------- */
+const ROOT = {name:"", depth:-1, children:[], alarms:[], bound:null, id:"root"};
+function nodeFor(path){
+  let cur = ROOT;
+  path.forEach((seg,i)=>{
+    let next = cur.children.find(c=>c.name===seg);
+    if(!next){
+      next = {name:seg, depth:i, children:[], alarms:[], bound:null, id:cur.id+"/"+seg, parent:cur};
+      cur.children.push(next);
+    }
+    cur = next;
+  });
+  return cur;
+}
+ALARM_DEFS.forEach(def=>{
+  const node = nodeFor(def.path);
+  if(def.bind) node.bound = def;      // the node's own signal
+  else node.alarms.push(def);         // a diagnosis underneath it
+});
+
+/* flatten to display rows: a node, then its subtree, then its own alarms */
+const ROWS=[];
+(function flatten(node){
+  node.children.forEach(child=>{
+    ROWS.push({kind:"node", id:child.id, name:child.name, depth:child.depth, node:child,
+               parentId:node.id==="root"?null:node.id});
+    // A branch with an alarm of its own AND children gets that alarm as its
+    // first child row too — otherwise the branch lane shows intervals nothing
+    // underneath it explains, and expanding would reveal less than it hides.
+    if(child.bound && (child.children.length || child.alarms.length)){
+      ROWS.push({kind:"alarm", id:child.id+"::"+child.bound.uid, name:child.bound.title,
+                 depth:child.depth+1, def:child.bound, parentId:child.id, isBound:true});
+    }
+    flatten(child);
+    child.alarms.forEach(def=>{
+      ROWS.push({kind:"alarm", id:child.id+"::"+def.uid, name:def.title, depth:child.depth+1,
+                 def, parentId:child.id});
+    });
+  });
+})(ROOT);
+
+/* a node's own alarm plus every alarm anywhere beneath it */
+function subtreeAlarms(node){
+  const out = node.bound ? [node.bound, ...node.alarms] : [...node.alarms];
+  node.children.forEach(c=>out.push(...subtreeAlarms(c)));
+  return out;
+}
+/* does this node have anything to reveal when expanded? */
+const hasChildren = node => node.children.length > 0 || node.alarms.length > 0;
 
 /* ---------- state ---------- */
 const state = {
-  t0: T0 + 1.5*H,
-  t1: T0 + 6.5*H,
-  open: new Set(["g2"]),
-  reasons: new Set(Object.keys(REASONS)),
+  t0: NOW - 2.6*H,
+  t1: NOW + 0.4*H,
+  open: new Set(),
+  levels: new Set(Object.keys(LEVELS)),
   selected: null,
   view: "timeline",
-  groupBy: "cause",
+  groupBy: "alarm",
   sort: {key:"total", dir:-1}
 };
 const MIN_SPAN = 4*M;
-
-/* machine -> owning line, for the table's context column */
-const LINE_OF = {};
-GROUPS.forEach(g=>g.kids.forEach(k=>{ LINE_OF[k.name] = g.name; }));
+// open Line 3 down to Multivac, so the drill-down is the first thing you see
+ROWS.filter(r=>r.kind==="node" && (r.name.startsWith("Line 3") || r.name==="Multivac"))
+    .forEach(r=>state.open.add(r.id));
 
 /* ---------- helpers ---------- */
 const el = id=>document.getElementById(id);
 const pad = n=>String(n).padStart(2,"0");
-function hhmm(t){ const d=new Date(t); return pad(d.getHours())+":"+pad(d.getMinutes()); }
-function hhmmss(t){ const d=new Date(t); return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds()); }
+const hhmm = t=>{const d=new Date(t);return pad(d.getHours())+":"+pad(d.getMinutes());};
+const hhmmss = t=>{const d=new Date(t);return hhmm(t)+":"+pad(d.getSeconds());};
 function dur(ms){
   const s=Math.round(ms/1000);
   if(s<60) return s+"s";
-  const m=Math.floor(s/60), r=s%60;
-  if(m<60) return m+"m "+pad(r)+"s";
+  const m=Math.floor(s/60);
+  if(m<60) return m+"m "+pad(s%60)+"s";
   return Math.floor(m/60)+"h "+pad(m%60)+"m";
 }
 function durShort(ms){
@@ -767,159 +986,338 @@ function durShort(ms){
   if(m<60) return m+"m";
   return Math.floor(m/60)+"h "+pad(m%60)+"m";
 }
-function overlap(a0,a1,b0,b1){ return Math.max(0, Math.min(a1,b1)-Math.max(a0,b0)); }
+const overlap=(a0,a1,b0,b1)=>Math.max(0, Math.min(a1,b1)-Math.max(a0,b0));
+const unschedIn=(a,b)=>UNSCHED.reduce((n,u)=>n+overlap(a,b,u[0],u[1]),0);
+const endOf = act => act.end === null ? NOW : act.end;
 
-/* Stops the line cannot be blamed for are blended toward the lane, so a fault
-   always out-shouts a starve at the same size. ISA-101: attention is a budget. */
-const QUIET = new Set(["starved","blocked","unknown"]);
-function barColor(reason){
-  const c = "var("+REASONS[reason].css+")";
-  return QUIET.has(reason) ? "color-mix(in srgb, "+c+" 62%, var(--lane))" : c;
-}
-
-function mergeIntervals(list){
-  if(!list.length) return [];
-  const s=list.slice().sort((a,b)=>a.start-b.start), out=[{...s[0]}];
+/* union of intervals, each merged one carrying the worst severity inside it */
+function mergeWithLevel(acts){
+  if(!acts.length) return [];
+  const s = acts.map(a=>({start:a.start, end:endOf(a), level:a.def.level, live:a.live}))
+                .sort((x,y)=>x.start-y.start);
+  const out=[{...s[0], n:1}];
   for(let i=1;i<s.length;i++){
-    const last=out[out.length-1];
-    if(s[i].start<=last.end) last.end=Math.max(last.end,s[i].end);
-    else out.push({...s[i]});
+    const last=out[out.length-1], iv=s[i];
+    if(iv.start<=last.end){
+      last.end=Math.max(last.end,iv.end);
+      last.level=worst(last.level,iv.level);
+      last.live=last.live||iv.live;
+      last.n++;
+    } else out.push({...iv, n:1});
   }
   return out;
 }
 
-/* stops for a row, honouring the reason filter */
-function stopsOf(row){
-  if(row.kind==="child") return row.kid.stops.filter(s=>state.reasons.has(s.reason));
-  const all=[];
-  row.kids.forEach(k=>k.stops.forEach(s=>{
-    if(s.impacts && state.reasons.has(s.reason)) all.push(s);
-  }));
-  return mergeIntervals(all).map((iv,i)=>({
-    id:row.id+"r"+i, machine:row.name, reason:"rollup", start:iv.start, end:iv.end, rollup:true
-  }));
+/* ------------------------------------------------------------------ *
+ * Interval cache.
+ *
+ * A row's intervals are a pure function of (its subtree's activations,
+ * the severity filter) — panning and zooming cannot change them. So they
+ * are merged ONCE per filter change, not once per frame, and kept sorted
+ * and disjoint so the visible slice is two binary searches away.
+ * Prefix sums make the window statistics O(log n) instead of O(n).
+ *
+ * A live interval is always the last one and always ends at NOW, so it is
+ * left out of the prefix sums and added back at read time.
+ * ------------------------------------------------------------------ */
+const cache = new Map();
+let cacheKey = null;
+
+function computeIntervals(row){
+  let ivs;
+  if(row.kind==="alarm"){
+    ivs = state.levels.has(row.def.level)
+      ? row.def.activations.map(a=>({
+          id:a.id, start:a.start, end:a.end, live:a.live,
+          level:row.def.level, count:1, rollup:false, act:a, def:row.def
+        }))
+      : [];
+  } else {
+    const acts=[];
+    subtreeAlarms(row.node).forEach(def=>{
+      if(state.levels.has(def.level)) acts.push(...def.activations);
+    });
+    ivs = mergeWithLevel(acts).map((iv,i)=>({
+      id:row.id+"#"+i, start:iv.start, end:iv.live?null:iv.end, live:iv.live,
+      level:iv.level, count:iv.n, rollup:true, node:row.node
+    }));
+  }
+  const prefix=new Float64Array(ivs.length+1);   // scheduled ms
+  const cprefix=new Float64Array(ivs.length+1);  // activation counts
+  for(let i=0;i<ivs.length;i++){
+    const e = ivs[i].live ? ivs[i].start : ivs[i].end;
+    prefix[i+1]  = prefix[i] + (e-ivs[i].start) - unschedIn(ivs[i].start,e);
+    cprefix[i+1] = cprefix[i] + ivs[i].count;
+  }
+  return {ivs, prefix, cprefix};
+}
+function intervalsFor(row){
+  const key=[...state.levels].sort().join(",");
+  if(key!==cacheKey){ cache.clear(); cacheKey=key; }
+  let v=cache.get(row.id);
+  if(!v){ v=computeIntervals(row); cache.set(row.id,v); }
+  return v;
+}
+const ivEnd = iv => iv.live ? NOW : iv.end;
+
+/* first index whose end is past t — ends are increasing, the list is disjoint */
+function firstEndAfter(ivs,t){
+  let lo=0,hi=ivs.length;
+  while(lo<hi){ const m=(lo+hi)>>1; if(ivEnd(ivs[m])>t) hi=m; else lo=m+1; }
+  return lo;
+}
+/* last index whose start is before t */
+function lastStartBefore(ivs,t){
+  let lo=0,hi=ivs.length;
+  while(lo<hi){ const m=(lo+hi)>>1; if(ivs[m].start<t) lo=m+1; else hi=m; }
+  return lo-1;
 }
 
-function visibleRows(){
-  return ROWS.filter(r=>r.kind==="group" || state.open.has(r.parent));
+function windowStats(c,t0,t1){
+  const {ivs,prefix,cprefix}=c;
+  if(!ivs.length) return {total:0,count:0,live:false};
+  const lo=firstEndAfter(ivs,t0), hi=lastStartBefore(ivs,t1);
+  if(hi<lo) return {total:0,count:0,live:false};
+  let total=0;
+  // everything strictly between the two edge intervals is fully inside the
+  // window (the list is disjoint and sorted), so it comes from the prefix sum
+  if(hi-lo>=2) total += prefix[hi]-prefix[lo+1];
+  const edges = lo===hi ? [lo] : [lo,hi];
+  for(const i of edges){
+    const s=Math.max(ivs[i].start,t0), e=Math.min(ivEnd(ivs[i]),t1);
+    if(e>s) total += (e-s)-unschedIn(s,e);
+  }
+  return {total, count:cprefix[hi+1]-cprefix[lo], live:ivs[hi].live};
 }
 
-function unschedIn(a,b){ return UNSCHED.reduce((n,u)=>n+overlap(a,b,u[0],u[1]),0); }
+/* Visible slice in pixel space. Intervals closer together than a pixel are
+   coalesced into one run, so the number of elements touched is bounded by the
+   lane's width rather than by how much history is loaded. */
+function visibleRuns(c,t0,t1,w){
+  const {ivs}=c, runs=[];
+  if(!ivs.length||w<=0) return runs;
+  const lo=firstEndAfter(ivs,t0), hi=lastStartBefore(ivs,t1);
+  if(hi<lo) return runs;
+  const k=w/(t1-t0);
+  let cur=null;
+  for(let i=lo;i<=hi;i++){
+    const iv=ivs[i];
+    const x1=(iv.start-t0)*k;
+    let x2=(ivEnd(iv)-t0)*k;
+    if(x2-x1<1.5) x2=x1+1.5;
+    if(cur && x1<=cur.x2+1){
+      cur.x2=Math.max(cur.x2,x2);
+      cur.level=worst(cur.level,iv.level);
+      cur.live=cur.live||iv.live;
+      cur.n+=iv.count; cur.merged++;
+      continue;
+    }
+    cur={x1,x2,level:iv.level,live:iv.live,n:iv.count,merged:1,iv};
+    runs.push(cur);
+  }
+  return runs;
+}
 
-/* ---------- build DOM ---------- */
-const bodyEl = el("bodyEl"), axisEl = el("axis"), tipEl = el("tip");
-const rowEls = new Map();
-
-const CARET = '<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M3 1.5 L6.5 4.5 L3 7.5 Z" fill="currentColor"/></svg>';
+/* ---------- DOM ---------- */
+const bodyEl=el("bodyEl"), axisEl=el("axis"), tipEl=el("tip");
+const rowEls=new Map();
+const CARET='<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M3 1.5 L6.5 4.5 L3 7.5 Z" fill="currentColor"/></svg>';
 
 ROWS.forEach(row=>{
   const r=document.createElement("div");
-  r.className = "row "+(row.kind==="child"?"child":"group");
-  r.dataset.id = row.id;
+  r.className="row "+(row.kind==="alarm"?"leaf":"group");
+  r.style.setProperty("--d", row.depth);
 
   const lab=document.createElement("div"); lab.className="label";
-  if(row.kind==="group"){
+  if(row.kind==="node" && hasChildren(row.node)){
     const tw=document.createElement("button");
     tw.type="button"; tw.className="tw"; tw.innerHTML=CARET;
     tw.setAttribute("aria-expanded","false");
-    tw.setAttribute("aria-label","Expand "+row.name);
     tw.addEventListener("click",()=>{
       if(state.open.has(row.id)) state.open.delete(row.id); else state.open.add(row.id);
       render();
     });
     lab.appendChild(tw);
   } else {
-    const sp=document.createElement("span"); sp.style.cssText="width:16px;flex:none"; lab.appendChild(sp);
+    const sp=document.createElement("span"); sp.className="spacer"; lab.appendChild(sp);
   }
   const tx=document.createElement("div"); tx.className="ltext";
-  const nm=document.createElement("div"); nm.className="lname"; nm.textContent=row.name;
+  const nm=document.createElement("div"); nm.className="lname";
+  if(row.kind==="alarm"){
+    // the branch's own alarm keeps the ring, so it reads as the same thing
+    // the branch row above it is marked with
+    nm.innerHTML=(row.isBound
+        ? '<span class="bnd" style="border-color:var('+LEVELS[row.def.level].css+')"></span>'
+        : '<span class="lvl" style="background:var('+LEVELS[row.def.level].css+')"></span>')+
+      '<span class="nm">'+row.name+'</span>';
+    nm.title=row.def.description;
+  } else if(row.node.bound){
+    // a hollow ring, not a filled square: this node carries its own alarm
+    nm.innerHTML='<span class="bnd" style="border-color:var('+LEVELS[row.node.bound.level].css+')"></span>'+
+                 '<span class="nm">'+row.name+'</span>';
+    nm.title=row.node.bound.title+" — "+row.node.bound.description;
+  } else nm.textContent=row.name;
   const st=document.createElement("div"); st.className="lstat";
   tx.appendChild(nm); tx.appendChild(st); lab.appendChild(tx);
 
   const lane=document.createElement("div"); lane.className="lane";
-  const gl=document.createElement("div"); gl.className="grid-lines";
-  const bands=document.createElement("div"); bands.className="grid-lines";
-  lane.appendChild(bands); lane.appendChild(gl);
-
   r.appendChild(lab); r.appendChild(lane);
   bodyEl.appendChild(r);
-  rowEls.set(row.id,{r,lane,gl,bands,st,tw:lab.querySelector(".tw")});
+  // pool: bar elements are created once and re-positioned, never rebuilt
+  // `shown` must start matching the DOM (visible), or the first render skips
+  // the write that hides collapsed rows
+  rowEls.set(row.id,{r,lane,st,tw:lab.querySelector(".tw"),pool:[],shown:true});
 });
 
-/* legend */
+/* O(depth) visibility instead of an O(rows) lookup per row per frame */
+const ROW_BY_ID = new Map(ROWS.map(r=>[r.id,r]));
+ROWS.forEach(r=>{ r.parent = r.parentId ? ROW_BY_ID.get(r.parentId) : null; });
+function rowVisibleFast(row){
+  for(let p=row.parent; p; p=p.parent) if(!state.open.has(p.id)) return false;
+  return true;
+}
+
+/* severity chips — the same filter the alarm page uses, worst first */
 const legendEl=el("legend");
-Object.entries(REASONS).forEach(([k,v])=>{
+const chipEls={};
+["error","warning","info"].forEach(k=>{
   const b=document.createElement("button");
   b.type="button"; b.className="chip"; b.setAttribute("aria-pressed","true");
-  b.innerHTML='<span class="sw" style="background:var('+v.css+')"></span><span class="lb">'+v.short+'</span>';
-  b.title="Show / hide "+v.label;
+  b.innerHTML='<span class="sw" style="background:var('+LEVELS[k].css+')"></span>'+
+              '<span class="lb">'+LEVELS[k].label+'</span> <span class="n"></span>';
+  b.title="Show / hide "+LEVELS[k].label.toLowerCase()+" alarms";
   b.addEventListener("click",()=>{
-    if(state.reasons.has(k)) state.reasons.delete(k); else state.reasons.add(k);
-    b.setAttribute("aria-pressed", state.reasons.has(k)?"true":"false");
+    if(state.levels.has(k)) state.levels.delete(k); else state.levels.add(k);
+    b.setAttribute("aria-pressed", state.levels.has(k)?"true":"false");
     render();
   });
   legendEl.appendChild(b);
+  chipEls[k]=b.querySelector(".n");
 });
 
 /* ---------- rendering ---------- */
 function niceStep(span){
-  const targets=[1,2,5,10,15,30,60,120,180,360,720].map(m=>m*M);
-  for(const t of targets) if(span/t <= 9) return t;
+  for(const t of [1,2,5,10,15,30,60,120,180,360,720].map(m=>m*M)) if(span/t<=9) return t;
   return 24*H;
 }
-
 function renderAxis(){
   const span=state.t1-state.t0, step=niceStep(span);
   axisEl.innerHTML="";
-  const first=Math.ceil(state.t0/step)*step;
   const marks=[];
-  for(let t=first;t<=state.t1;t+=step){
+  for(let t=Math.ceil(state.t0/step)*step; t<=state.t1; t+=step){
     const pct=(t-state.t0)/span*100;
     const d=document.createElement("div");
-    const isHour = (t-DAY) % H === 0;
+    const isHour=(t-DAY)%H===0;
     d.className="tick"+(isHour?" major":"");
-    d.style.left=pct+"%";
-    d.textContent = step<H && !isHour ? hhmm(t) : hhmm(t);
+    d.style.left=pct+"%"; d.textContent=hhmm(t);
     axisEl.appendChild(d);
-    marks.push({t,pct,major:isHour});
+    marks.push({pct,major:isHour});
   }
   return marks;
 }
-
-function renderBands(holder,span){
-  holder.innerHTML="";
+/* Gridlines, hatch and the future dim span every lane, so they are one pooled
+   overlay for the whole body rather than eleven elements per row per frame. */
+const chromeEl=el("chrome"), chromePool=[];
+let chromeUsed=0;
+function takeChrome(cls){
+  let d=chromePool[chromeUsed];
+  if(!d){ d=document.createElement("div"); chromeEl.appendChild(d); chromePool[chromeUsed]=d; }
+  if(d._cls!==cls){ d.className=cls; d._cls=cls; }
+  if(d._hidden){ d.style.display=""; d._hidden=false; }
+  chromeUsed++;
+  return d;
+}
+function paintChrome(marks,span){
+  chromeUsed=0;
+  marks.forEach(m=>{ takeChrome("gl"+(m.major?" major":"")).style.left=m.pct+"%"; });
   UNSCHED.forEach(u=>{
     const a=Math.max(u[0],state.t0), b=Math.min(u[1],state.t1);
     if(b<=a) return;
-    const d=document.createElement("div"); d.className="band unscheduled";
+    const d=takeChrome("band unscheduled");
     d.style.left=((a-state.t0)/span*100)+"%";
     d.style.width=((b-a)/span*100)+"%";
-    holder.appendChild(d);
   });
   if(NOW<state.t1){
     const a=Math.max(NOW,state.t0);
-    const d=document.createElement("div"); d.className="band future";
-    d.style.left=((a-state.t0)/span*100)+"%";
-    d.style.width=((state.t1-a)/span*100)+"%";
-    holder.appendChild(d);
-    if(NOW>state.t0){
-      const n=document.createElement("div"); n.className="nowline";
-      n.style.left=((NOW-state.t0)/span*100)+"%";
-      holder.appendChild(n);
-    }
+    const f=takeChrome("band future");
+    f.style.left=((a-state.t0)/span*100)+"%";
+    f.style.width=((state.t1-a)/span*100)+"%";
+    if(NOW>state.t0) takeChrome("nowline").style.left=((NOW-state.t0)/span*100)+"%";
   }
+  for(let i=chromeUsed;i<chromePool.length;i++){
+    if(!chromePool[i]._hidden){ chromePool[i].style.display="none"; chromePool[i]._hidden=true; }
+  }
+}
+
+/* count activations of one alarm inside the window, without walking them all */
+function countIn(acts,t0,t1){
+  if(!acts.length) return 0;
+  const lo=firstEndAfter(acts,t0), hi=lastStartBefore(acts,t1);
+  return hi<lo?0:hi-lo+1;
+}
+const LIVE_TOTAL = ALARM_DEFS.reduce((n,d)=>n+d.activations.filter(a=>a.live).length,0);
+
+/* Bars are created once per row and re-positioned. Nothing is torn down on a
+   pan frame, and `transform` moves them without a layout pass. */
+function paintRow(ui,row,runs){
+  const pool=ui.pool, isRoll=row.kind==="node";
+  const selId=state.selected&&state.selected.id;
+  for(let i=0;i<runs.length;i++){
+    let d=pool[i];
+    if(!d){ d=document.createElement("div"); ui.lane.appendChild(d); pool[i]=d; }
+    const r=runs[i], w=r.x2-r.x1;
+    let cls="bar "+(isRoll?"rollup":"leafbar");
+    if(r.live) cls+=" live";
+    if(w<3.5) cls+=" thin";
+    if(selId && r.merged===1 && r.iv.id===selId) cls+=" sel";
+    if(d._cls!==cls){ d.className=cls; d._cls=cls; }
+    const bg="var("+LEVELS[r.level].css+")";
+    if(d._bg!==bg){ d.style.background=bg; d._bg=bg; }
+    d.style.transform="translate("+r.x1.toFixed(1)+"px,-50%)";
+    d.style.width=w.toFixed(1)+"px";
+    if(d._hidden){ d.style.display=""; d._hidden=false; }
+    d._run=r; d._row=row;
+  }
+  for(let i=runs.length;i<pool.length;i++){
+    if(!pool[i]._hidden){ pool[i].style.display="none"; pool[i]._hidden=true; }
+  }
+}
+
+/* One layout read per frame, taken before any style write — reading each
+   lane's width after writing to it is what turns a pan into layout thrash. */
+let laneWidth=700;
+function measure(){
+  const l=bodyEl.querySelector(".lane");
+  if(l && l.clientWidth) laneWidth=l.clientWidth;
+}
+
+let rafPending=false;
+function scheduleRender(){
+  if(rafPending) return;
+  rafPending=true;
+  requestAnimationFrame(()=>{ rafPending=false; render(); });
 }
 
 function render(){
   const span=state.t1-state.t0;
   const marks=renderAxis();
+  paintChrome(marks,span);
 
-  visibleRows(); // no-op, keeps intent explicit
+  const counts={error:0,warning:0,info:0};
+  ALARM_DEFS.forEach(def=>{ counts[def.level]+=countIn(def.activations,state.t0,state.t1); });
+  Object.keys(chipEls).forEach(k=>{
+    const v=String(counts[k]);
+    if(chipEls[k].textContent!==v) chipEls[k].textContent=v;
+  });
+
+  const winEnd=Math.min(state.t1,NOW);
+  const sched=Math.max(0,winEnd-state.t0)-unschedIn(state.t0,winEnd);
+
   ROWS.forEach(row=>{
     const ui=rowEls.get(row.id);
-    const shown = row.kind==="group" || state.open.has(row.parent);
-    ui.r.style.display = shown ? "" : "none";
-    if(row.kind==="group"){
+    const shown=rowVisibleFast(row);
+    if(shown!==ui.shown){ ui.r.style.display=shown?"":"none"; ui.shown=shown; }
+    if(row.kind==="node" && ui.tw){
       const open=state.open.has(row.id);
       ui.r.classList.toggle("open",open);
       ui.tw.setAttribute("aria-expanded", open?"true":"false");
@@ -927,312 +1325,92 @@ function render(){
     }
     if(!shown) return;
 
-    renderBands(ui.bands,span);
-    ui.gl.innerHTML="";
-    marks.forEach(m=>{
-      const g=document.createElement("div");
-      g.className="gl"+(m.major?" major":"");
-      g.style.left=m.pct+"%";
-      ui.gl.appendChild(g);
-    });
+    const c=intervalsFor(row);
+    const s=windowStats(c,state.t0,state.t1);
+    const clear=sched>0?Math.max(0,(sched-s.total)/sched*100):100;
+    const txt=(s.live?'<span class="on">● now</span> · ':"")+
+      (row.kind==="node"
+        ? "<b>"+durShort(s.total)+"</b> · "+s.count+"× · "+clear.toFixed(1)+"% clear"
+        : "<b>"+durShort(s.total)+"</b> · "+s.count+"×");
+    if(ui.st._t!==txt){ ui.st.innerHTML=txt; ui.st._t=txt; }
 
-    const stops=stopsOf(row);
-
-    // stats over the visible window, excluding unscheduled time
-    let down=0,count=0;
-    stops.forEach(s=>{
-      const o=overlap(s.start,s.end,state.t0,state.t1);
-      if(o>0){ down+=o-unschedIn(Math.max(s.start,state.t0),Math.min(s.end,state.t1)); count++; }
-    });
-    const winEnd=Math.min(state.t1,NOW);
-    const sched=Math.max(0,winEnd-state.t0)-unschedIn(state.t0,winEnd);
-    const avail=sched>0 ? Math.max(0,(sched-down)/sched*100) : 100;
-    ui.st.innerHTML = row.kind==="group"
-      ? "<b>"+durShort(down)+"</b> · "+count+"× · "+avail.toFixed(1)+"%"
-      : "<b>"+durShort(down)+"</b> · "+count+"×";
-
-    // bars
-    ui.lane.querySelectorAll(".bar").forEach(b=>b.remove());
-    const laneW = ui.lane.clientWidth || 700;
-    stops.forEach(s=>{
-      if(s.end<state.t0 || s.start>state.t1) return;
-      const b=document.createElement("div");
-      const isRoll = row.kind==="group";
-      b.className="bar "+(isRoll?"rollup":"leaf");
-      const left=(s.start-state.t0)/span*100;
-      const w=(s.end-s.start)/span*100;
-      b.style.left=left+"%";
-      b.style.width=w+"%";
-      // the rollup slab is deliberately heavier than any leaf bar, so "the line
-      // was down" never reads as just another grey starve
-      b.style.background = isRoll
-        ? "color-mix(in srgb, var(--ink) 62%, transparent)"
-        : barColor(s.reason);
-      if(w/100*laneW < 3.5) b.classList.add("thin");
-      if(state.selected && state.selected.id===s.id) b.classList.add("sel");
-      b._stop=s; b._row=row;
-      ui.lane.appendChild(b);
-    });
+    paintRow(ui,row,visibleRuns(c,state.t0,state.t1,laneWidth));
   });
 
   renderBrush();
-  el("clock").textContent = hhmm(state.t0)+" – "+hhmm(state.t1)+"  ·  "+durShort(span);
+  const clock=(LIVE_TOTAL?'<span class="live-dot"></span>'+LIVE_TOTAL+" standing · ":"")+
+    hhmm(state.t0)+" – "+hhmm(state.t1)+" · "+durShort(span);
+  const ce=el("clock");
+  if(ce._t!==clock){ ce.innerHTML=clock; ce._t=clock; }
   renderDetail();
   if(state.view==="table") renderTable();
 }
 
-/* ---------- table / pareto ---------- */
-
-/* every leaf stop clipped to the window, honouring the reason filter */
-function windowStops(){
-  const out=[];
-  GROUPS.forEach(g=>g.kids.forEach(k=>k.stops.forEach(s=>{
-    if(!state.reasons.has(s.reason)) return;
-    const a=Math.max(s.start,state.t0), b=Math.min(s.end,state.t1);
-    if(b<=a) return;
-    const eff=(b-a)-unschedIn(a,b);
-    if(eff<=0) return;
-    out.push({stop:s, eff});
-  })));
-  return out;
-}
-
-const SORTS = {
-  total:  {label:"Total",   get:r=>r.total},
-  count:  {label:"Stops",   get:r=>r.count},
-  longest:{label:"Longest", get:r=>r.longest},
-  avg:    {label:"Average", get:r=>r.total/r.count},
-  time:   {label:"Time",    get:r=>r.start}
-};
-
-function aggregate(){
-  const rows=new Map();
-  windowStops().forEach(({stop,eff})=>{
-    let key, what, sub, reason;
-    if(state.groupBy==="cause"){ key=stop.machine+"|"+stop.reason; what=stop.machine; sub=LINE_OF[stop.machine]; reason=stop.reason; }
-    else if(state.groupBy==="machine"){ key=stop.machine; what=stop.machine; sub=LINE_OF[stop.machine]; reason=null; }
-    else { key=stop.reason; what=REASONS[stop.reason].label; sub=null; reason=stop.reason; }
-    let r=rows.get(key);
-    if(!r){ r={key,what,sub,reason,count:0,total:0,longest:0,machine:stop.machine}; rows.set(key,r); }
-    r.count++; r.total+=eff; r.longest=Math.max(r.longest,eff);
-  });
-  return [...rows.values()];
-}
-
-function eventRows(){
-  return windowStops().map(({stop,eff})=>({
-    key:stop.id, what:stop.machine, sub:LINE_OF[stop.machine], reason:stop.reason,
-    count:1, total:eff, longest:eff, start:stop.start, stop
-  }));
-}
-
-function sortRows(list){
-  const s=SORTS[state.sort.key] || SORTS.total;
-  return list.sort((a,b)=>{
-    const d=(s.get(a)-s.get(b))*state.sort.dir;
-    return d!==0 ? d : (b.total-a.total);
-  });
-}
-
-function th(key,label,cls){
-  const active = state.sort.key===key;
-  const arw = active ? (state.sort.dir<0?"▼":"▲") : "";
-  return '<th class="sortable '+(cls||"")+'" data-sort="'+key+'" tabindex="0" '+
-         'aria-sort="'+(active?(state.sort.dir<0?"descending":"ascending"):"none")+'">'+
-         label+' <span class="arw">'+arw+'</span></th>';
-}
-
-function renderTable(){
-  const isEvents = state.groupBy==="events";
-  let rows = isEvents ? eventRows() : aggregate();
-  const grand = rows.reduce((n,r)=>n+r.total,0);
-  const stops = rows.reduce((n,r)=>n+r.count,0);
-  const OFFERED = isEvents ? ["time","total"] : ["count","total","longest","avg"];
-  if(!OFFERED.includes(state.sort.key)) state.sort={key:isEvents?"time":"total",dir:-1};
-  rows = sortRows(rows);
-
-  el("tabletot").textContent =
-    stops+" stops · "+durShort(grand)+" lost · "+hhmm(state.t0)+"–"+hhmm(state.t1);
-
-  const head = el("ptHead"), body = el("ptBody");
-  const showCum = state.sort.key==="total" && state.sort.dir<0 && !isEvents;
-
-  head.innerHTML = "<tr>" + (
-    isEvents
-      ? '<th class="num">#</th>' + th("time","Started") +
-        '<th>Machine</th><th>Cause</th>' + th("total","Duration","num") +
-        '<th class="opt">Line</th><th class="opt">Alarm</th>'
-      : '<th class="num">#</th>' +
-        (state.groupBy==="reason" ? '<th>Cause</th>' : '<th>Machine</th>') +
-        (state.groupBy==="cause" ? '<th>Cause</th>' : '') +
-        (state.groupBy!=="reason" ? '<th class="opt">Line</th>' : '') +
-        th("count","Stops","num") + th("total","Total","num") +
-        '<th>Share of lost time</th>' +
-        th("longest","Longest","num opt") + th("avg","Average","num opt")
-  ) + "</tr>";
-
-  if(!rows.length){
-    body.innerHTML = '<tr><td colspan="9"><div class="tempty">No stops in this window with the current filter.</div></td></tr>';
-    return;
-  }
-
-  let cum=0;
-  body.innerHTML = rows.slice(0,200).map((r,i)=>{
-    const swatch = r.reason
-      ? '<span class="rzn"><span class="sw" style="background:var('+REASONS[r.reason].css+')"></span>'+REASONS[r.reason].label+'</span>'
-      : '';
-    const share = grand ? r.total/grand*100 : 0;
-    cum += share;
-    const color = r.reason ? "var("+REASONS[r.reason].css+")" : "color-mix(in srgb,var(--ink) 40%, transparent)";
-
-    if(isEvents){
-      return '<tr data-key="'+r.key+'" tabindex="0">'+
-        '<td class="rank num">'+(i+1)+'</td>'+
-        '<td class="num">'+hhmmss(r.start)+'</td>'+
-        '<td class="what">'+r.what+'</td>'+
-        '<td>'+swatch+'</td>'+
-        '<td class="num">'+dur(r.total)+'</td>'+
-        '<td class="sub opt">'+(r.sub||"")+'</td>'+
-        '<td class="sub opt">'+(r.stop.alarm?r.stop.alarm[1]:"—")+'</td>'+
-      '</tr>';
-    }
-    return '<tr data-key="'+r.key+'" tabindex="0">'+
-      '<td class="rank num">'+(i+1)+'</td>'+
-      '<td class="what">'+r.what+'</td>'+
-      (state.groupBy==="cause" ? '<td>'+swatch+'</td>' : '')+
-      (state.groupBy!=="reason" ? '<td class="sub opt">'+(r.sub||"")+'</td>' : '')+
-      '<td class="num">'+r.count+'</td>'+
-      '<td class="num">'+durShort(r.total)+'</td>'+
-      '<td class="sharecell"><div class="shrow"><div class="sharebar">'+
-        '<i style="width:'+share.toFixed(2)+'%;background:'+color+'"></i>'+
-        (showCum?'<u style="left:'+Math.min(100,cum).toFixed(2)+'%"></u>':'')+
-      '</div><span class="cum">'+share.toFixed(1)+'%'+
-        (showCum?' · Σ'+Math.min(100,cum).toFixed(0)+'%':'')+'</span></div></td>'+
-      '<td class="num opt">'+durShort(r.longest)+'</td>'+
-      '<td class="num opt">'+dur(r.total/r.count)+'</td>'+
-    '</tr>';
-  }).join("");
-}
-
-/* sorting */
-el("ptHead").addEventListener("click",e=>{
-  const h=e.target.closest("th[data-sort]"); if(!h) return;
-  const k=h.dataset.sort;
-  if(state.sort.key===k) state.sort.dir*=-1; else state.sort={key:k,dir:-1};
-  renderTable();
-});
-el("ptHead").addEventListener("keydown",e=>{
-  if(e.key!=="Enter" && e.key!==" ") return;
-  const h=e.target.closest("th[data-sort]"); if(!h) return;
-  e.preventDefault(); h.click();
-});
-
-/* a table row is a way back into the timeline */
-el("ptBody").addEventListener("click",e=>{
-  const tr=e.target.closest("tr[data-key]"); if(!tr) return;
-  jumpTo(tr.dataset.key);
-});
-el("ptBody").addEventListener("keydown",e=>{
-  if(e.key!=="Enter") return;
-  const tr=e.target.closest("tr[data-key]"); if(!tr) return;
-  jumpTo(tr.dataset.key);
-});
-
-function jumpTo(key){
-  if(state.groupBy==="events"){
-    let found=null;
-    GROUPS.forEach(g=>g.kids.forEach(k=>k.stops.forEach(s=>{ if(s.id===key) found=s; })));
-    if(!found) return;
-    const span=Math.max(MIN_SPAN, Math.min((found.end-found.start)*8, T1-T0));
-    const mid=(found.start+found.end)/2;
-    clampView(mid-span/2, mid+span/2);
-    state.selected=found;
-    openFor(found.machine);
-  } else {
-    const machine = state.groupBy==="reason" ? null : key.split("|")[0];
-    if(machine) openFor(machine); else GROUPS.forEach((g,i)=>state.open.add("g"+i));
-  }
-  setView("timeline");
-}
-function openFor(machine){
-  GROUPS.forEach((g,i)=>{ if(g.kids.some(k=>k.name===machine)) state.open.add("g"+i); });
-  requestAnimationFrame(()=>{
-    const row=[...rowEls.entries()].find(([,ui])=>ui.r.querySelector(".lname") &&
-      ui.r.querySelector(".lname").textContent===machine);
-    if(row) row[1].r.scrollIntoView({block:"nearest",behavior:"smooth"});
-  });
-}
-
 /* ---------- brush ---------- */
 const trackEl=el("track"), winEl=el("win"), shadeL=el("shadeL"), shadeR=el("shadeR");
-(function buildBrushTicks(){
+let brushBuilt=false;
+function buildBrush(){
+  trackEl.querySelectorAll(".tick-b,.band").forEach(e=>e.remove());
   const period=T1-T0;
   const all=[];
-  ROWS.filter(r=>r.kind==="group").forEach(g=>{
-    g.kids.forEach(k=>k.stops.forEach(s=>{ if(s.impacts) all.push(s); }));
-  });
-  mergeIntervals(all).forEach(iv=>{
+  ALARM_DEFS.forEach(def=>all.push(...def.activations));
+  mergeWithLevel(all).forEach(iv=>{
     const d=document.createElement("div");
     d.className="tick-b";
     d.style.left=((iv.start-T0)/period*100)+"%";
     d.style.width=((iv.end-iv.start)/period*100)+"%";
-    d.style.background="color-mix(in srgb, var(--ink) 34%, transparent)";
+    d.style.background="var("+LEVELS[iv.level].css+")";
     trackEl.insertBefore(d,shadeL);
   });
   const fd=document.createElement("div");
   fd.className="band future";
-  fd.style.left=((NOW-T0)/(T1-T0)*100)+"%";
-  fd.style.right="0";
+  fd.style.left=((NOW-T0)/period*100)+"%"; fd.style.right="0";
   trackEl.insertBefore(fd,shadeL);
-})();
-
+  brushBuilt=true;
+}
 function renderBrush(){
+  if(!brushBuilt) buildBrush();
   const period=T1-T0;
   const l=(state.t0-T0)/period*100, r=(state.t1-T0)/period*100;
   winEl.style.left=l+"%"; winEl.style.width=(r-l)+"%";
   shadeL.style.left="0"; shadeL.style.width=Math.max(0,l)+"%";
   shadeR.style.left=r+"%"; shadeR.style.width=Math.max(0,100-r)+"%";
 }
-
 function clampView(t0,t1){
-  let span=Math.max(MIN_SPAN,Math.min(t1-t0,T1-T0));
-  if(t0<T0){ t0=T0; t1=T0+span; }
-  if(t1>T1){ t1=T1; t0=T1-span; }
+  const span=Math.max(MIN_SPAN,Math.min(t1-t0,T1-T0));
+  if(t0<T0){ t0=T0; }
+  if(t0+span>T1){ t0=T1-span; }
   state.t0=t0; state.t1=t0+span;
 }
 
-/* brush drag */
 let bdrag=null;
 trackEl.addEventListener("pointerdown",e=>{
   const rect=trackEl.getBoundingClientRect();
   const grip=e.target.dataset && e.target.dataset.grip;
   if(grip) bdrag={mode:grip,rect};
   else if(e.target===winEl) bdrag={mode:"move",rect,anchor:(e.clientX-rect.left)/rect.width*(T1-T0)+T0-state.t0};
-  else {
-    const t=(e.clientX-rect.left)/rect.width*(T1-T0)+T0;
-    const span=state.t1-state.t0;
+  else{
+    const t=(e.clientX-rect.left)/rect.width*(T1-T0)+T0, span=state.t1-state.t0;
     clampView(t-span/2,t+span/2); render();
     bdrag={mode:"move",rect,anchor:span/2};
   }
-  trackEl.setPointerCapture(e.pointerId);
-  e.preventDefault();
+  trackEl.setPointerCapture(e.pointerId); e.preventDefault();
 });
 trackEl.addEventListener("pointermove",e=>{
   if(!bdrag) return;
   const t=(e.clientX-bdrag.rect.left)/bdrag.rect.width*(T1-T0)+T0;
   if(bdrag.mode==="move"){ const span=state.t1-state.t0; clampView(t-bdrag.anchor,t-bdrag.anchor+span); }
-  else if(bdrag.mode==="l"){ const t0=Math.min(t,state.t1-MIN_SPAN); clampView(t0,state.t1); }
-  else { const t1=Math.max(t,state.t0+MIN_SPAN); clampView(state.t0,t1); }
-  render();
+  else if(bdrag.mode==="l"){ clampView(Math.min(t,state.t1-MIN_SPAN),state.t1); }
+  else clampView(state.t0,Math.max(t,state.t0+MIN_SPAN));
+  scheduleRender();
 });
 ["pointerup","pointercancel"].forEach(ev=>trackEl.addEventListener(ev,()=>{bdrag=null;}));
 
-/* ---------- pan / zoom on the lanes ---------- */
+/* ---------- pan / zoom ---------- */
 let pdrag=null, moved=false;
 bodyEl.addEventListener("pointerdown",e=>{
   const lane=e.target.closest(".lane"); if(!lane) return;
-  pdrag={x:e.clientX,w:lane.clientWidth,t0:state.t0,t1:state.t1};
-  moved=false;
+  pdrag={x:e.clientX,w:lane.clientWidth,t0:state.t0,t1:state.t1}; moved=false;
   bodyEl.setPointerCapture(e.pointerId);
 });
 bodyEl.addEventListener("pointermove",e=>{
@@ -1240,115 +1418,278 @@ bodyEl.addEventListener("pointermove",e=>{
   const dx=e.clientX-pdrag.x;
   if(Math.abs(dx)>3) moved=true;
   const span=pdrag.t1-pdrag.t0;
-  const dt=-dx/pdrag.w*span;
-  clampView(pdrag.t0+dt,pdrag.t1+dt);
-  render();
+  clampView(pdrag.t0-dx/pdrag.w*span, pdrag.t1-dx/pdrag.w*span);
+  scheduleRender();
 });
 ["pointerup","pointercancel"].forEach(ev=>bodyEl.addEventListener(ev,()=>{pdrag=null;}));
-
 bodyEl.addEventListener("wheel",e=>{
-  const lane=e.target.closest(".lane");
-  if(!lane) return;
-  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)){
-    e.preventDefault();
-    const span=state.t1-state.t0;
-    const dt=e.deltaX/lane.clientWidth*span;
-    clampView(state.t0+dt,state.t1+dt); render(); return;
-  }
+  const lane=e.target.closest(".lane"); if(!lane) return;
   e.preventDefault();
+  const span=state.t1-state.t0;
+  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)){
+    const dt=e.deltaX/lane.clientWidth*span;
+    clampView(state.t0+dt,state.t1+dt); scheduleRender(); return;
+  }
   const rect=lane.getBoundingClientRect();
   const frac=(e.clientX-rect.left)/rect.width;
-  const span=state.t1-state.t0;
-  const k=Math.exp(e.deltaY*0.0015);
-  const nspan=Math.max(MIN_SPAN,Math.min(span*k,T1-T0));
+  const nspan=Math.max(MIN_SPAN,Math.min(span*Math.exp(e.deltaY*0.0015),T1-T0));
   const anchor=state.t0+frac*span;
   clampView(anchor-frac*nspan, anchor-frac*nspan+nspan);
-  render();
+  scheduleRender();
 },{passive:false});
 
 /* ---------- tooltip + selection ---------- */
 bodyEl.addEventListener("pointerover",e=>{
-  const b=e.target.closest(".bar"); if(!b) return;
-  const s=b._stop;
-  const label = s.rollup ? "Line down" : REASONS[s.reason].label;
-  const sw = s.rollup ? "" : '<span class="sw" style="background:var('+REASONS[s.reason].css+')"></span> ';
+  const el2=e.target.closest(".bar"); if(!el2||!el2._run) return;
+  const r=el2._run, b=r.iv;
+  if(r.merged>1){
+    tipEl.innerHTML='<div class="t-who">'+r.n+' activations</div>'+
+      '<div class="t-path">too close together to separate at this zoom</div>'+
+      '<div class="t-row"><span>worst</span><span>'+LEVELS[r.level].label+'</span></div>'+
+      '<div class="t-row"><span>click</span><span>to zoom in</span></div>';
+    tipEl.classList.add("on"); return;
+  }
+  const title=b.rollup?b.node.name:b.def.title;
+  const path =b.rollup?(b.count+" activation"+(b.count===1?"":"s")):b.def.path.join(" › ");
   tipEl.innerHTML =
-    '<div class="t-who">'+s.machine+'</div>'+
-    '<div class="t-row"><span>'+label+'</span><span></span></div>'+
-    '<div class="t-row"><span>start</span><span>'+hhmmss(s.start)+'</span></div>'+
-    '<div class="t-row"><span>duration</span><span>'+dur(s.end-s.start)+'</span></div>'+
-    (s.alarm?'<div class="t-row"><span>alarm</span><span>'+s.alarm[1]+'</span></div>':'');
+    '<div class="t-who">'+title+'</div>'+
+    '<div class="t-path">'+path+'</div>'+
+    '<div class="t-row"><span>severity</span><span>'+LEVELS[b.level].label+'</span></div>'+
+    '<div class="t-row"><span>start</span><span>'+hhmmss(b.start)+'</span></div>'+
+    '<div class="t-row"><span>'+(b.live?"standing":"duration")+'</span><span'+
+      (b.live?' class="t-live"':'')+'>'+dur(ivEnd(b)-b.start)+(b.live?" · ongoing":"")+'</span></div>'+
+    (b.rollup?'':'<div class="t-row"><span>uid</span><span>'+b.def.uid+'</span></div>');
   tipEl.classList.add("on");
 });
 bodyEl.addEventListener("pointermove",e=>{
   if(!tipEl.classList.contains("on")) return;
-  const pad=14;
-  let x=e.clientX+pad, y=e.clientY+pad;
-  const w=tipEl.offsetWidth, h=tipEl.offsetHeight;
-  if(x+w>window.innerWidth-8) x=e.clientX-w-pad;
-  if(y+h>window.innerHeight-8) y=e.clientY-h-pad;
+  const p=14, w=tipEl.offsetWidth, h=tipEl.offsetHeight;
+  let x=e.clientX+p, y=e.clientY+p;
+  if(x+w>window.innerWidth-8) x=e.clientX-w-p;
+  if(y+h>window.innerHeight-8) y=e.clientY-h-p;
   tipEl.style.left=x+"px"; tipEl.style.top=y+"px";
 });
-bodyEl.addEventListener("pointerout",e=>{
-  if(e.target.closest(".bar")) tipEl.classList.remove("on");
-});
+bodyEl.addEventListener("pointerout",e=>{ if(e.target.closest(".bar")) tipEl.classList.remove("on"); });
 bodyEl.addEventListener("click",e=>{
-  const b=e.target.closest(".bar");
-  if(!b || moved) return;
-  state.selected = b._stop;
+  const el2=e.target.closest(".bar");
+  if(!el2||moved||!el2._run) return;
+  const r=el2._run;
+  if(r.merged>1){
+    // a coalesced comb: zoom into it rather than pretending to select one
+    const span=Math.max(MIN_SPAN,(r.x2-r.x1)/laneWidth*(state.t1-state.t0)*3);
+    const mid=state.t0+(r.x1+r.x2)/2/laneWidth*(state.t1-state.t0);
+    clampView(mid-span/2,mid+span/2);
+  } else state.selected=r.iv;
   render();
 });
 
 function renderDetail(){
-  const d=el("detail"), s=state.selected;
-  if(!s){ d.innerHTML='<span class="empty">Select a stop to inspect it.</span>'; return; }
-  const isRoll=!!s.rollup;
-  const chip = isRoll
-    ? '<span class="rchip"><span class="sw" style="background:color-mix(in srgb,var(--ink) 46%,transparent)"></span>Line down</span>'
-    : '<span class="rchip"><span class="sw" style="background:var('+REASONS[s.reason].css+')"></span>'+REASONS[s.reason].label+'</span>';
-  d.innerHTML =
-    '<span class="who">'+s.machine+'</span>'+chip+
-    '<dl>'+
-      '<div><dt>Start</dt><dd>'+hhmmss(s.start)+'</dd></div>'+
-      '<div><dt>End</dt><dd>'+(s.end>=NOW?"ongoing":hhmmss(s.end))+'</dd></div>'+
-      '<div><dt>Duration</dt><dd>'+dur(s.end-s.start)+'</dd></div>'+
-      (isRoll?'':'<div><dt>Impacts line</dt><dd>'+(s.impacts?"yes":"no")+'</dd></div>')+
-    '</dl>'+
-    (s.alarm
-      ? '<span class="alarmref">'+s.alarm[0]+' <span class="uid">'+s.alarm[1]+'</span></span>'
-      : (isRoll?'':'<span class="alarmref" style="opacity:.55">no alarm linked</span>'));
+  const d=el("detail"), b=state.selected;
+  if(!b){ d.innerHTML='<span class="empty">Select an activation to inspect it.</span>'; return; }
+  const chip='<span class="lchip"><span class="sw" style="background:var('+LEVELS[b.level].css+')"></span>'+
+             LEVELS[b.level].label+'</span>';
+  if(b.rollup){
+    d.innerHTML='<span class="who">'+b.node.name+'</span>'+chip+
+      '<dl><div><dt>From</dt><dd>'+hhmmss(b.start)+'</dd></div>'+
+      '<div><dt>To</dt><dd'+(b.live?' class="ongoing"':'')+'>'+(b.live?"ongoing":hhmmss(b.end))+'</dd></div>'+
+      '<div><dt>Length</dt><dd>'+dur(ivEnd(b)-b.start)+'</dd></div>'+
+      '<div><dt>Alarms in it</dt><dd>'+b.count+'</dd></div></dl>'+
+      '<span class="uid">expand the group to see which</span>';
+    return;
+  }
+  d.innerHTML='<span class="who">'+b.def.title+'</span>'+
+    '<span class="path">'+b.def.path.join(" › ")+'</span>'+chip+
+    '<dl><div><dt>Activated</dt><dd>'+hhmmss(b.start)+'</dd></div>'+
+    '<div><dt>Cleared</dt><dd'+(b.live?' class="ongoing"':'')+'>'+(b.live?"still standing":hhmmss(b.end))+'</dd></div>'+
+    '<div><dt>Duration</dt><dd>'+dur(ivEnd(b)-b.start)+'</dd></div></dl>'+
+    '<span class="uid">'+b.def.uid+'</span>';
 }
 
-/* ---------- view + grouping controls ---------- */
+/* ---------- table ---------- */
+function windowActivations(){
+  const out=[];
+  ALARM_DEFS.forEach(def=>{
+    if(!state.levels.has(def.level)) return;
+    def.activations.forEach(a=>{
+      const s=Math.max(a.start,state.t0), e2=Math.min(endOf(a),state.t1);
+      if(e2<=s) return;
+      const eff=(e2-s)-unschedIn(s,e2);
+      if(eff<=0) return;
+      out.push({def, act:a, eff});
+    });
+  });
+  return out;
+}
+const SORTS={
+  total:{get:r=>r.total}, count:{get:r=>r.count},
+  longest:{get:r=>r.longest}, avg:{get:r=>r.total/r.count},
+  time:{get:r=>r.start}
+};
+function aggregate(){
+  const rows=new Map();
+  windowActivations().forEach(({def,act,eff})=>{
+    let key,what,sub,level;
+    if(state.groupBy==="alarm"){ key=def.uid; what=def.title; sub=def.path.join(" › "); level=def.level; }
+    else if(state.groupBy==="node"){ key=def.path.join("/"); what=def.path[def.path.length-1]; sub=def.path.slice(0,-1).join(" › "); level=def.level; }
+    else { key=def.level; what=LEVELS[def.level].label; sub=null; level=def.level; }
+    let r=rows.get(key);
+    if(!r){ r={key,what,sub,level,count:0,total:0,longest:0,live:false,def}; rows.set(key,r); }
+    r.count++; r.total+=eff; r.longest=Math.max(r.longest,eff);
+    r.live=r.live||act.live;
+    if(state.groupBy!=="level") r.level=worst(r.level,def.level);
+  });
+  return [...rows.values()];
+}
+function eventRows(){
+  return windowActivations().map(({def,act,eff})=>({
+    key:act.id, what:def.title, sub:def.path.join(" › "), level:def.level,
+    count:1, total:eff, longest:eff, start:act.start, live:act.live, act, def
+  }));
+}
+function sortRows(list){
+  const s=SORTS[state.sort.key]||SORTS.total;
+  return list.sort((a,b)=>{
+    const d=(s.get(a)-s.get(b))*state.sort.dir;
+    return d!==0?d:(b.total-a.total);
+  });
+}
+function th(key,label,cls){
+  const on=state.sort.key===key;
+  return '<th class="sortable '+(cls||"")+'" data-sort="'+key+'" tabindex="0" aria-sort="'+
+    (on?(state.sort.dir<0?"descending":"ascending"):"none")+'">'+label+
+    ' <span class="arw">'+(on?(state.sort.dir<0?"▼":"▲"):"")+'</span></th>';
+}
+function renderTable(){
+  const isEvents=state.groupBy==="events";
+  let rows=isEvents?eventRows():aggregate();
+  const grand=rows.reduce((n,r)=>n+r.total,0);
+  const total=rows.reduce((n,r)=>n+r.count,0);
+  const offered=isEvents?["time","total"]:["count","total","longest","avg"];
+  if(!offered.includes(state.sort.key)) state.sort={key:isEvents?"time":"total",dir:-1};
+  rows=sortRows(rows);
+
+  el("tabletot").textContent =
+    total+" activations · "+durShort(grand)+" standing · "+hhmm(state.t0)+"–"+hhmm(state.t1);
+
+  const showCum = state.sort.key==="total" && state.sort.dir<0 && !isEvents;
+  el("ptHead").innerHTML="<tr>"+(isEvents
+    ? '<th class="num">#</th>'+th("time","Activated")+'<th>Alarm</th><th>Severity</th>'+
+      th("total","Duration","num")+'<th class="opt">Group</th>'
+    : '<th class="num">#</th>'+
+      (state.groupBy==="level"?'<th>Severity</th>':'<th>'+(state.groupBy==="alarm"?"Alarm":"Group")+'</th>')+
+      (state.groupBy!=="level"?'<th>Severity</th><th class="opt">Path</th>':'')+
+      th("count","Count","num")+th("total","Total","num")+
+      '<th>Share of standing time</th>'+
+      th("longest","Longest","num opt")+th("avg","Average","num opt")
+  )+"</tr>";
+
+  const body=el("ptBody");
+  if(!rows.length){
+    body.innerHTML='<tr><td colspan="9"><div class="tempty">No activations in this window at the selected severities.</div></td></tr>';
+    return;
+  }
+  let cum=0;
+  body.innerHTML=rows.slice(0,200).map((r,i)=>{
+    const sev='<span class="lz"><span class="sw" style="background:var('+LEVELS[r.level].css+')"></span>'+
+              LEVELS[r.level].label+'</span>';
+    const share=grand?r.total/grand*100:0; cum+=share;
+    const color="var("+LEVELS[r.level].css+")";
+    if(isEvents){
+      return '<tr data-key="'+r.key+'" tabindex="0">'+
+        '<td class="rank num">'+(i+1)+'</td>'+
+        '<td class="num">'+hhmmss(r.start)+'</td>'+
+        '<td class="what">'+r.what+'</td><td>'+sev+'</td>'+
+        '<td class="num'+(r.live?" live":"")+'">'+dur(r.total)+(r.live?" ·":"")+'</td>'+
+        '<td class="sub opt">'+(r.sub||"")+'</td></tr>';
+    }
+    return '<tr data-key="'+r.key+'" tabindex="0">'+
+      '<td class="rank num">'+(i+1)+'</td>'+
+      '<td class="what">'+r.what+(r.live?' <span class="live">●</span>':'')+'</td>'+
+      (state.groupBy!=="level"?'<td>'+sev+'</td><td class="sub opt">'+(r.sub||"")+'</td>':'')+
+      '<td class="num">'+r.count+'</td>'+
+      '<td class="num">'+durShort(r.total)+'</td>'+
+      '<td class="sharecell"><div class="shrow"><div class="sharebar">'+
+        '<i style="width:'+share.toFixed(2)+'%;background:'+color+'"></i>'+
+        (showCum?'<u style="left:'+Math.min(100,cum).toFixed(2)+'%"></u>':'')+
+      '</div><span class="cum">'+share.toFixed(1)+'%'+(showCum?' · Σ'+Math.min(100,cum).toFixed(0)+'%':'')+
+      '</span></div></td>'+
+      '<td class="num opt">'+durShort(r.longest)+'</td>'+
+      '<td class="num opt">'+dur(r.total/r.count)+'</td></tr>';
+  }).join("");
+}
+
+el("ptHead").addEventListener("click",e=>{
+  const h=e.target.closest("th[data-sort]"); if(!h) return;
+  const k=h.dataset.sort;
+  if(state.sort.key===k) state.sort.dir*=-1; else state.sort={key:k,dir:-1};
+  renderTable();
+});
+el("ptHead").addEventListener("keydown",e=>{
+  if(e.key!=="Enter"&&e.key!==" ") return;
+  const h=e.target.closest("th[data-sort]"); if(!h) return;
+  e.preventDefault(); h.click();
+});
+el("ptBody").addEventListener("click",e=>{
+  const tr=e.target.closest("tr[data-key]"); if(tr) jumpTo(tr.dataset.key);
+});
+el("ptBody").addEventListener("keydown",e=>{
+  if(e.key!=="Enter") return;
+  const tr=e.target.closest("tr[data-key]"); if(tr) jumpTo(tr.dataset.key);
+});
+
+function openPath(path){
+  let id="root";
+  path.forEach(seg=>{ id=id+"/"+seg; state.open.add(id); });
+}
+function jumpTo(key){
+  if(state.groupBy==="events"){
+    let found=null, fdef=null;
+    ALARM_DEFS.forEach(def=>def.activations.forEach(a=>{ if(a.id===key){found=a;fdef=def;} }));
+    if(!found) return;
+    const span=Math.max(MIN_SPAN,Math.min((endOf(found)-found.start)*8,T1-T0));
+    const mid=(found.start+endOf(found))/2;
+    clampView(mid-span/2,mid+span/2);
+    openPath(fdef.path);
+    state.selected={id:found.id};
+  } else if(state.groupBy==="alarm"){
+    const def=ALARM_DEFS.find(d=>d.uid===key);
+    if(def) openPath(def.path);
+  } else if(state.groupBy==="node"){
+    openPath(key.split("/"));
+  } else {
+    ROWS.filter(r=>r.kind==="node").forEach(r=>state.open.add(r.id));
+  }
+  setView("timeline");
+}
+
+/* ---------- controls ---------- */
 function setView(v){
   state.view=v;
   el("asset").dataset.view=v;
   document.querySelectorAll(".hd [data-view]").forEach(b=>
-    b.setAttribute("aria-pressed", b.dataset.view===v ? "true":"false"));
+    b.setAttribute("aria-pressed", b.dataset.view===v?"true":"false"));
   render();
 }
 document.querySelectorAll(".hd [data-view]").forEach(b=>
   b.addEventListener("click",()=>setView(b.dataset.view)));
-
 document.querySelectorAll("[data-group]").forEach(b=>{
   b.addEventListener("click",()=>{
     document.querySelectorAll("[data-group]").forEach(x=>x.setAttribute("aria-pressed","false"));
     b.setAttribute("aria-pressed","true");
     state.groupBy=b.dataset.group;
-    state.sort = b.dataset.group==="events" ? {key:"time",dir:-1} : {key:"total",dir:-1};
+    state.sort = b.dataset.group==="events"?{key:"time",dir:-1}:{key:"total",dir:-1};
     renderTable();
   });
 });
 
-/* ---------- size + theme controls ---------- */
 const assetEl=el("asset"), stageEl=el("stage");
 document.querySelectorAll("[data-size]").forEach(btn=>{
   btn.addEventListener("click",()=>{
     document.querySelectorAll("[data-size]").forEach(b=>b.setAttribute("aria-pressed","false"));
     btn.setAttribute("aria-pressed","true");
     const s=btn.dataset.size;
-    assetEl.style.height = s==="full" ? "520px" : s==="half" ? "300px" : "150px";
-    assetEl.style.width  = s==="strip" ? "560px" : "100%";
+    assetEl.style.height = s==="full"?"540px":s==="half"?"300px":"150px";
+    assetEl.style.width  = s==="strip"?"560px":"100%";
     requestAnimationFrame(render);
   });
 });
@@ -1356,24 +1697,31 @@ document.querySelectorAll("[data-force]").forEach(btn=>{
   btn.addEventListener("click",()=>{
     document.querySelectorAll("[data-force]").forEach(b=>b.setAttribute("aria-pressed","false"));
     btn.setAttribute("aria-pressed","true");
-    const f=btn.dataset.force;
-    if(f) stageEl.dataset.force=f; else delete stageEl.dataset.force;
+    if(btn.dataset.force) stageEl.dataset.force=btn.dataset.force; else delete stageEl.dataset.force;
   });
 });
 
-const ro=new ResizeObserver(entries=>{
+new ResizeObserver(entries=>{
   for(const en of entries){
     const h=en.contentRect.height, w=en.contentRect.width;
     assetEl.classList.toggle("sz-s", h<260);
-    assetEl.classList.toggle("sz-m", h>=260 && h<420);
-    assetEl.classList.toggle("w-md", w<1060);
-    assetEl.classList.toggle("narrow", w<640);
-    if(h<260){ state.open.clear(); }
+    assetEl.classList.toggle("w-md", w<1080);
+    assetEl.classList.toggle("narrow", w<680);
+    if(h<260) state.open.clear();
   }
+  measure();
   render();
-});
-ro.observe(assetEl);
+}).observe(assetEl);
 
+/* the live edge really is live — standing alarms keep growing */
+setInterval(()=>{
+  NOW += 1000;
+  // the live tick only moves the right edge of open intervals — repaint,
+  // never refetch and never re-merge
+  if(state.t1 > NOW - 5*M) scheduleRender();
+}, 1000);
+
+measure();
 render();
 })();
 </script>
