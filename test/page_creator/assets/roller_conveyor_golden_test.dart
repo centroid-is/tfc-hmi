@@ -1,11 +1,24 @@
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/theme.dart';
 
 const _key = Key('roller_conveyor_golden');
+
+/// Real glyphs instead of Ahem boxes, so the row labels in the golden are
+/// readable. Registered as 'roboto-mono' because that is the family the app
+/// theme asks for — see `conveyor_drive_status_golden_test.dart`.
+Future<void> loadRealFont() async {
+  final data = File('lib/fonts/roboto-mono/RobotoMono-Regular.ttf')
+      .readAsBytesSync()
+      .buffer
+      .asByteData();
+  final loader = FontLoader('roboto-mono')..addFont(Future.value(data));
+  await loader.load();
+}
 
 /// One straight roller belt per equipment state, a turned roller belt, and
 /// the two wagon variants (solid band and roller) — everything the new
@@ -125,6 +138,7 @@ Widget buildRollerScenario(ThemeData theme) {
 void main() {
   group('Roller conveyor and wagon golden tests',
       skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
+    setUpAll(loadRealFont);
     final cases = <String, ThemeData>{
       'solarized_light': solarized().$1,
       'solarized_dark': solarized().$2,
