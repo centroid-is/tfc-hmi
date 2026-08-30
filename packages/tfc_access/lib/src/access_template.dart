@@ -159,3 +159,201 @@ class AccessTemplate {
   @override
   String toString() => 'AccessTemplate($name, ${encodeRules(rules)})';
 }
+
+/// Whether a [TagBindingResolver] has been told what the bindings are.
+///
+/// **[neverLoaded] answers null, exactly like a snapshot that loaded and found
+/// nothing — and the two are still different values.** Both halves of that
+/// matter, and they pull in opposite directions:
+///
+/// *Why [neverLoaded] is permissive.* A conservative floor cannot work here.
+/// This object does not know which keys exist — the key universe lives in
+/// `stateMan.keyMappings`, which this package cannot see — so "strict until
+/// loaded" has no way to be strict about the right things. It would refuse
+/// every write on a panel that is merely still booting, and on a station with
+/// no database it would refuse them for ever. That is an outage, not a
+/// safeguard, and it is the failure spec §7b's fail-open rule exists to avoid.
+///
+/// *Why the states are nevertheless distinct.* If "nobody has told me yet" and
+/// "nothing is bound" were the same value, a station where the load never
+/// happened would be byte-identical, from every screen, to one that is
+/// deliberately unconfigured — every bound key silently unrestricted, and every
+/// test still green. So the distinction is carried by
+/// [TagBindingResolver.state] rather than by the answers: plan 04-05 uses it to
+/// force the load, and 04-08 renders "bindings not loaded" rather than "no keys
+/// bound".
+enum TagBindingSnapshotState {
+  /// [TagBindingResolver.setSnapshot] has never been called.
+  neverLoaded,
+
+  /// A snapshot is in memory and is as fresh as the last load made it.
+  loaded,
+
+  /// A snapshot is in memory and a later load failed against it.
+  ///
+  /// The answers are unchanged — see [TagBindingResolver.markStale]. This says
+  /// only that they are older than they should be.
+  stale,
+}
+
+/// The live answer to "what does writing this member of this key require?".
+///
+/// Holds a snapshot of `{key -> template name}` and `{template name ->
+/// template}` and answers `(key, member)` from memory. [groupFor] is shaped as
+/// a [TagBindingLookup] and is handed to `AccessPolicy(tagBindings: ...)`.
+///
+/// **Why this is mutable, and must stay mutable.** `accessPolicyProvider`
+/// (`lib/providers/access_policy.dart`) is `keepAlive` and deliberately pure —
+/// it holds no connection and nothing can invalidate it — and
+/// `stateManProvider` **reads** it once and holds the resulting
+/// `GuardedStateMan` for the life of the panel. If a template edit rebuilt the
+/// policy it would rebuild `stateManProvider` and drop every OPC UA connection
+/// on the station. So the policy captures one callback on one long-lived
+/// object, and a template edit replaces this object's snapshot instead of
+/// replacing this object. Making this an immutable value and rebuilding the
+/// policy on every edit is the change that must not happen; the
+/// `identical(before, after)` test in `test/access_template_test.dart` is what
+/// says so out loud (T-04-05).
+///
+/// **[groupFor] is synchronous by signature, and that is load-bearing.** Spec
+/// §7b argued for tap-time resolution *from* the binding already being loaded
+/// as `keyMappings.nodes[key]`; the 2026-08-30 ruling moved the binding to its
+/// own `users`-gated table, because `key_mappings` is `configure`-classified and
+/// a binding is authorization data. The synchronous requirement did not move —
+/// the prompt still appears when a control is **tapped**, not when a write
+/// fails — so what used to be free now has to be made true here: the bindings
+/// are loaded once into this snapshot and answered from memory. An `await`
+/// anywhere in this chain would pass every functional test and silently end
+/// tap-time elevation.
+///
+/// **Deliberately no broadcast mechanism, no notifier and no listener list.**
+/// The snapshot's consumers are a Riverpod provider (04-05) and the guard's
+/// callback; a second notification path inside a pure-Dart value holder is how
+/// two sources for one truth start.
+class TagBindingResolver {
+  Map<String, String> _keyToTemplate = const <String, String>{};
+  Map<String, AccessTemplate> _templates = const <String, AccessTemplate>{};
+  TagBindingSnapshotState _state = TagBindingSnapshotState.neverLoaded;
+
+  /// Whether the snapshot has been loaded, and how fresh it is.
+  ///
+  /// See [TagBindingSnapshotState] — this is the only thing that distinguishes
+  /// "nobody has told me yet" from "nothing is bound".
+  TagBindingSnapshotState get state => _state;
+
+  /// Replace both halves of the snapshot atomically and move [state] to
+  /// [TagBindingSnapshotState.loaded].
+  ///
+  /// Both maps are **copied**: the caller is 04-03's store handing over what it
+  /// just read, and a write-path decision must not move when somebody else
+  /// mutates the map they passed.
+  ///
+  /// The two halves come from two tables — `access_template` and
+  /// `access_key_binding` — and are set together on purpose. Applying one
+  /// without the other would leave a window in which every binding dangles.
+  void setSnapshot({
+    required Map<String, String> keyToTemplate,
+    required Map<String, AccessTemplate> templates,
+  }) {
+    _keyToTemplate = Map<String, String>.unmodifiable(keyToTemplate);
+    _templates = Map<String, AccessTemplate>.unmodifiable(templates);
+    _state = TagBindingSnapshotState.loaded;
+  }
+
+  /// Record that a reload failed against the snapshot already in memory.
+  ///
+  /// **Changes no answer.** A load that fails keeps answering from what it
+  /// already has (04-05's T-04-26) — dropping the snapshot on a failed refresh
+  /// would unrestrict every bound key on the plant the moment the database
+  /// blinked. Marking it stale is what makes that keep-the-previous-snapshot
+  /// rule real rather than cosmetic: the answers survive and a caller can still
+  /// see that they are older than they should be.
+  ///
+  /// A no-op on a [TagBindingSnapshotState.neverLoaded] resolver — there is
+  /// nothing to be stale about, and moving it to [TagBindingSnapshotState.stale]
+  /// would claim a snapshot that does not exist.
+  void markStale() {
+    if (_state == TagBindingSnapshotState.neverLoaded) return;
+    _state = TagBindingSnapshotState.stale;
+  }
+
+  /// The group required to write [member] of [key], or **null for
+  /// unrestricted**. Assignable to [TagBindingLookup] with no adapter.
+  ///
+  /// A [member] of null asks about the whole key.
+  ///
+  /// **A dangling binding — a key naming a template that has no row — answers
+  /// null.** This is the fail-open half again, and it is a decision rather than
+  /// an oversight: from here, a key naming a template somebody deleted is
+  /// indistinguishable from a key nobody ever bound, and spec §7b says the
+  /// second is unrestricted. Answering "locked" instead would mean a row
+  /// removed in `psql` silently freezes a conveyor, with no screen able to
+  /// explain why.
+  ///
+  /// Plan 04-03 is what makes a dangling binding unlikely — the template delete
+  /// is blocked while keys still reference it (spec §7d). This is the belt to
+  /// that pair of braces, for the row somebody removes by hand, and
+  /// [unboundKeys] is what surfaces it (T-04-03).
+  AccessGroup? groupFor(String key, String? member) {
+    final templateName = _keyToTemplate[key];
+    if (templateName == null) return null;
+    final template = _templates[templateName];
+    if (template == null) return null;
+    return template.groupFor(member);
+  }
+
+  /// The template bound to [key], or null when nothing is bound **or** the
+  /// bound name has no row. Both gaps read the same from here; see [groupFor].
+  AccessTemplate? templateForKey(String key) {
+    final templateName = _keyToTemplate[key];
+    if (templateName == null) return null;
+    return _templates[templateName];
+  }
+
+  /// Every key naming [templateName], in sorted order.
+  ///
+  /// The in-memory answer the key repository renders. Insertion-ordered, built
+  /// from a sorted list, so iteration is stable and a rebuilt list does not
+  /// reshuffle under the reader.
+  ///
+  /// **This is not the answer that blocks a template delete.** 04-03's store has
+  /// a method of the same name that reads `access_key_binding` directly, because
+  /// a delete must not decide on a snapshot that may be a second stale. This one
+  /// is for rendering.
+  ///
+  /// Answers for a dangling name too — a key bound to a template that no longer
+  /// exists is still a key naming it, and hiding it here would hide the gap.
+  Set<String> keysBoundTo(String templateName) {
+    final matches = <String>[
+      for (final entry in _keyToTemplate.entries)
+        if (entry.value == templateName) entry.key,
+    ]..sort();
+    return Set<String>.unmodifiable(matches);
+  }
+
+  /// Every key in [keys], **in the order given**, that has no binding or is
+  /// bound to a template that does not exist.
+  ///
+  /// Both are gaps and both must surface: a key nobody bound is the fail-open
+  /// hole spec §7b makes visible instead of closing, and a dangling binding is
+  /// the same hole wearing a template name.
+  ///
+  /// The key universe is passed in rather than held because it still comes from
+  /// `stateMan.keyMappings`, which this pure-Dart package cannot see. Note the
+  /// asymmetry the 2026-08-30 ruling created: the **bindings** moved to a table
+  /// and the **keys** did not, so a binding row can now outlive the key it
+  /// names. Such an orphan never appears here — nobody passes that key — and
+  /// showing it is 04-08's surface, not this class's to clean up.
+  Iterable<String> unboundKeys(Iterable<String> keys) =>
+      keys.where((key) => templateForKey(key) == null);
+
+  /// How many keys carry a binding row, dangling ones included.
+  ///
+  /// Counts what the table says rather than what resolves. A summary that
+  /// quietly excluded the dangling rows would hide exactly the gap the key
+  /// repository exists to make visible.
+  int get boundKeyCount => _keyToTemplate.length;
+
+  /// How many templates the snapshot knows.
+  int get templateCount => _templates.length;
+}
