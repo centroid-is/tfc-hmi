@@ -27,7 +27,7 @@ Future<void> loadRealFont() async {
 Widget buildRollerScenario(ThemeData theme) {
   const beltSize = Size(240, 24);
   const turnSize = Size(200, 120);
-  const wagonSize = Size(240, 60);
+  const wagonSize = Size(240, 110);
 
   Widget belt(Size size, ConveyorPainter painter) => SizedBox.fromSize(
         size: size,
@@ -139,7 +139,40 @@ Widget buildRollerScenario(ThemeData theme) {
                           onRails: true,
                           railInk: theme.colorScheme.onSurface,
                           wagonPosition: 0.25,
-                          wagonFraction: 0.4,
+                          chassisColor: states.green,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('wagon, left safety edge tripped',
+                          style: theme.textTheme.bodySmall),
+                      belt(
+                        wagonSize,
+                        ConveyorPainter(
+                          color: states.green,
+                          batches: const {},
+                          angle: 0,
+                          onRails: true,
+                          railInk: theme.colorScheme.onSurface,
+                          chassisColor: states.grey,
+                          safetyLeftActive: true,
+                          safetyColor: states.red,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('wagon, belt along rails',
+                          style: theme.textTheme.bodySmall),
+                      belt(
+                        wagonSize,
+                        ConveyorPainter(
+                          color: states.green,
+                          batches: const {},
+                          angle: 0,
+                          style: ConveyorStyle.roller,
+                          onRails: true,
+                          railInk: theme.colorScheme.onSurface,
+                          wagonFraction: 0.5,
+                          straightBeltWidth: 44,
+                          wagonBeltAcross: false,
                           chassisColor: states.green,
                         ),
                       ),
@@ -166,6 +199,10 @@ void main() {
     for (final entry in cases.entries) {
       testWidgets('roller belts and wagons under ${entry.key}',
           (tester) async {
+        // The wagon column is taller than the default 800x600 test surface.
+        tester.view.physicalSize = const Size(1200, 1000);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
         await tester.pumpWidget(buildRollerScenario(entry.value));
         await expectLater(
           find.byKey(_key),

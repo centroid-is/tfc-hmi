@@ -111,11 +111,20 @@ void main() {
       expect(painter.hitTest(bumper), isTrue);
     });
 
-    test('an explicit band stays centred in the box with rails', () {
+    test('the belt stands across the track, full box height', () {
+      final railed = wagonAt(0.5);
+      final bounds = railed.hitShape()!.getBounds();
+      expect(bounds.top, closeTo(0, 0.01));
+      expect(bounds.height, closeTo(size.height, 0.01));
+    });
+
+    test('an explicit belt width sets the wagon footprint on rails', () {
       final railed = wagonAt(0.5, band: 40);
       final bounds = railed.hitShape()!.getBounds();
-      expect(bounds.center.dy, closeTo(size.height / 2, 0.01));
-      expect(bounds.height, closeTo(40, 0.01));
+      expect(bounds.height, closeTo(size.height, 0.01));
+      expect(bounds.center.dx, closeTo(size.width / 2, 0.01));
+      // Footprint = belt width + a bumper each side (0.35 of the width).
+      expect(bounds.width, closeTo(40 + 2 * 40 * 0.35, 0.01));
     });
 
     test('wagon keys round-trip through JSON', () {
@@ -123,13 +132,40 @@ void main() {
           onRails: true,
           positionKey: 'AREA01.WAG01.position',
           wagonMotorKey: 'AREA01.WAG01.motor',
+          beltAlongRails: true,
+          safetyLeftKey: 'AREA01.WAG01.edgeL',
+          safetyRightKey: 'AREA01.WAG01.edgeR',
           wagonLength: 0.3);
       final restored = ConveyorConfig.fromJson(config.toJson());
       expect(restored.positionKey, 'AREA01.WAG01.position');
       expect(restored.wagonMotorKey, 'AREA01.WAG01.motor');
+      expect(restored.beltAlongRails, isTrue);
+      expect(restored.safetyLeftKey, 'AREA01.WAG01.edgeL');
+      expect(restored.safetyRightKey, 'AREA01.WAG01.edgeR');
       expect(restored.wagonLength, 0.3);
       expect(restored.effectiveWagonLength, 0.3);
-      expect(ConveyorConfig().effectiveWagonLength, 0.4);
+      expect(ConveyorConfig().effectiveWagonLength, 0.25);
+    });
+
+    test('a belt along the rails is a horizontal band on the chassis', () {
+      const size = Size(240, 100);
+      final along = ConveyorPainter(
+        color: Colors.grey,
+        batches: const {},
+        angle: 0,
+        paintSize: size,
+        onRails: true,
+        wagonPosition: 0.5,
+        wagonFraction: 0.5,
+        straightBeltWidth: 40,
+        wagonBeltAcross: false,
+      );
+      final belt = along.beltRect(size);
+      // Footprint from the wagon fraction (the explicit width is the band's
+      // cross dimension here), band centred vertically.
+      expect(belt.width, closeTo(size.width * 0.5, 0.01));
+      expect(belt.height, closeTo(40, 0.01));
+      expect(belt.center.dy, closeTo(size.height / 2, 0.01));
     });
   });
 }

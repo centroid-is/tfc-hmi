@@ -1070,11 +1070,26 @@ class ConveyorConfig extends BaseAsset {
   /// wagon down the track. Only read while [railsActive].
   String? wagonMotorKey;
 
-  /// Wagon length as a fraction of the box width, when [positionKey] drives
-  /// it along the rail. Null falls back to [_defaultWagonLength].
+  /// Lay the wagon's belt along the rails instead of across them. Default
+  /// (null/false) is across — the classic transfer wagon handing off
+  /// sideways; along suits a shuttle that conveys in its own travel
+  /// direction.
+  bool? beltAlongRails;
+
+  /// Plain BOOL keys for the safety edges on the wagon's two moving sides —
+  /// true while that edge is pressed. Idle they draw nothing; tripped, the
+  /// bumper on that side lights up in fault red. Only read while
+  /// [railsActive]. Left/right are in the asset's own frame, before its
+  /// rotation or the page mirror — the same convention the geometry uses.
+  String? safetyLeftKey;
+  String? safetyRightKey;
+
+  /// The wagon's footprint along the rail run, as a fraction of the box
+  /// width. The belt conveys across the rails, so this is the belt's width.
+  /// Null falls back to [_defaultWagonLength].
   double? wagonLength;
 
-  static const _defaultWagonLength = 0.4;
+  static const _defaultWagonLength = 0.25;
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   double get effectiveWagonLength =>
@@ -1165,6 +1180,9 @@ class ConveyorConfig extends BaseAsset {
       this.onRails,
       this.positionKey,
       this.wagonMotorKey,
+      this.beltAlongRails,
+      this.safetyLeftKey,
+      this.safetyRightKey,
       this.wagonLength,
       this.beltThickness,
       List<ChildGateEntry>? gates,
@@ -1233,6 +1251,9 @@ class RollerConveyorConfig extends ConveyorConfig {
       super.onRails,
       super.positionKey,
       super.wagonMotorKey,
+      super.beltAlongRails,
+      super.safetyLeftKey,
+      super.safetyRightKey,
       super.wagonLength,
       super.beltThickness,
       super.gates,
@@ -1393,6 +1414,17 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
         ],
         if (widget.config.onRails ?? false) ...[
           const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Belt along rails:'),
+              const SizedBox(width: 8),
+              Checkbox(
+                  value: widget.config.beltAlongRails ?? false,
+                  onChanged: (val) =>
+                      setState(() => widget.config.beltAlongRails = val)),
+            ],
+          ),
+          const SizedBox(height: 8),
           KeyField(
             initialValue: widget.config.positionKey,
             onChanged: (val) =>
@@ -1407,9 +1439,23 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             label: 'Wagon motor key (traverse drive)',
           ),
           const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.safetyLeftKey,
+            onChanged: (val) =>
+                setState(() => widget.config.safetyLeftKey = val),
+            label: 'Safety edge key, left (true = pressed)',
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.safetyRightKey,
+            onChanged: (val) =>
+                setState(() => widget.config.safetyRightKey = val),
+            label: 'Safety edge key, right (true = pressed)',
+          ),
+          const SizedBox(height: 8),
           NumberSlider(
             labelAbove: true,
-            label: 'Wagon length',
+            label: 'Wagon width along rails',
             min: 0.05,
             max: 1.0,
             divisions: 95,
@@ -2064,6 +2110,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
       if (widget.config.railsActive && _bound(widget.config.wagonMotorKey))
         (label: 'wagonMotor', key: widget.config.wagonMotorKey!,
             optional: true),
+      if (widget.config.railsActive && _bound(widget.config.safetyLeftKey))
+        (label: 'safetyLeft', key: widget.config.safetyLeftKey!,
+            optional: true),
+      if (widget.config.railsActive && _bound(widget.config.safetyRightKey))
+        (label: 'safetyRight', key: widget.config.safetyRightKey!,
+            optional: true),
     ];
 
     // If no streams are configured, show error state
@@ -2170,6 +2222,17 @@ class _ConveyorState extends ConsumerState<Conveyor>
               driveStateColor(states, readDriveState(dynValue['wagonMotor']));
         }
 
+        // A safety edge only ever claims to be pressed on an honest true —
+        // an unreadable or missing value stays quiet rather than crying
+        // wolf on every stream hiccup.
+        bool edgePressed(String label) {
+          try {
+            return dynValue[label]?.asBool ?? false;
+          } catch (_) {
+            return false;
+          }
+        }
+
         final hasMainKey = _bound(widget.config.key);
         final hasMotorKey =
             widget.config.railsActive && _bound(widget.config.wagonMotorKey);
@@ -2179,6 +2242,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
           frequency: freq,
           wagonPosition: wagonPosition,
           chassisColor: chassisColor,
+          safetyLeftActive: edgePressed('safetyLeft'),
+          safetyRightActive: edgePressed('safetyRight'),
           onBeltTap: hasMainKey
               ? () => _showDrivePane(context, widget.config.key!,
                   subtitle: 'Conveyor', icon: Icons.conveyor_belt)
@@ -2311,6 +2376,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
     VoidCallback? onMotorTap,
     double? wagonPosition,
     Color? chassisColor,
+    bool safetyLeftActive = false,
+    bool safetyRightActive = false,
   }) {
     // Layering, outer → inner:
     //   LayoutRotatedBox → GestureDetector → LayoutBuilder → CustomPaint
@@ -2336,7 +2403,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
             onBeltTap: onBeltTap,
             onMotorTap: onMotorTap,
             wagonPosition: wagonPosition,
-            chassisColor: chassisColor),
+            chassisColor: chassisColor,
+            safetyLeftActive: safetyLeftActive,
+            safetyRightActive: safetyRightActive),
       ),
     );
   }
@@ -2376,6 +2445,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
     VoidCallback? onMotorTap,
     double? wagonPosition,
     Color? chassisColor,
+    bool safetyLeftActive = false,
+    bool safetyRightActive = false,
   }) {
     // The geometry must be built for the box the belt is actually painted
     // into. `AssetStack` lays assets out with tight constraints from the page
@@ -2447,6 +2518,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
       wagonPosition: wagonPosition,
       wagonFraction: widget.config.effectiveWagonLength,
       chassisColor: chassisColor,
+      safetyLeftActive: safetyLeftActive,
+      safetyRightActive: safetyRightActive,
+      safetyColor: HmiStateColors.of(context).red,
+      wagonBeltAcross: !(widget.config.beltAlongRails ?? false),
     );
     // The belt's own outline, published for the mark the plant view draws
     // while this conveyor's pane is open. Not a shape built to be drawn
@@ -3249,6 +3324,20 @@ class ConveyorPainter extends CustomPainter {
   /// neutral hardware — no motor bound, nothing to claim about it.
   final Color? chassisColor;
 
+  /// Whether each of the wagon's safety edges is pressed. An idle edge
+  /// draws nothing at all; a tripped one lights its bumper in [safetyColor].
+  final bool safetyLeftActive;
+  final bool safetyRightActive;
+
+  /// Colour of a tripped safety edge — the theme's fault red, handed in by
+  /// the widget because the painter has no theme access.
+  final Color safetyColor;
+
+  /// Whether the wagon's belt stands across the rails (the classic
+  /// transfer wagon) or lies along them (a shuttle conveying in its own
+  /// travel direction).
+  final bool wagonBeltAcross;
+
   ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
@@ -3267,8 +3356,18 @@ class ConveyorPainter extends CustomPainter {
       this.onRails = false,
       this.railInk = Colors.black,
       this.wagonPosition,
-      this.wagonFraction = 0.4,
-      this.chassisColor});
+      this.wagonFraction = 0.25,
+      this.chassisColor,
+      this.safetyLeftActive = false,
+      this.safetyRightActive = false,
+      this.safetyColor = const Color(0xFFD32F2F),
+      this.wagonBeltAcross = true});
+
+  /// Extra canvas rotation in effect while overlays draw — π/2 while the
+  /// wagon's belt is painted in its rotated frame, zero otherwise. The
+  /// overlay text counter-rotates by this on top of the asset's own angle,
+  /// so a frequency figure on a wagon reads upright like everywhere else.
+  double _overlayExtraRotation = 0;
 
   /// Undoes the outer mirror after the counter-rotation, so overlay text
   /// paints upright. The canvas at that point carries mirror ∘ rotate ∘
@@ -3368,15 +3467,31 @@ class ConveyorPainter extends CustomPainter {
       return;
     }
     // Top view, like every other mimic asset: the box is the rail run, the
-    // track spans all of it behind the belt, and the wagon — always a
-    // fraction of the box, or it would hide its own track — sits on top at
-    // its position. Nothing grows the asset: the box the user drew still
-    // bounds all of the ink.
+    // track spans all of it, and the wagon rides it with its belt turned
+    // perpendicular — the wagon travels along the rails, the belt conveys
+    // across them, which is what a transfer wagon is for. Nothing grows
+    // the asset: the box the user drew still bounds all of the ink.
     final span = _beltSpan(size);
-    final band = straightBeltWidth;
     if (onRails) {
-      _paintTrack(canvas, size, band ?? size.height);
-      _paintChassis(canvas, size, span, band ?? size.height);
+      _paintTrack(canvas, size);
+      _paintChassis(canvas, size, span);
+      canvas.save();
+      if (wagonBeltAcross) {
+        // Rotate the belt's frame 90° so its band runs the box height at
+        // the wagon's position: belt travel maps to screen-down.
+        canvas.translate(span.x0 + span.width, 0);
+        canvas.rotate(pi / 2);
+        _overlayExtraRotation = pi / 2;
+        _paintStraightBelt(canvas, Size(size.height, span.width));
+        _overlayExtraRotation = 0;
+      } else {
+        // Along the rails: an ordinary horizontal band riding the chassis.
+        final band = straightBeltWidth ?? size.height;
+        canvas.translate(span.x0, (size.height - band) / 2);
+        _paintStraightBelt(canvas, Size(span.width, band));
+      }
+      canvas.restore();
+      return;
     }
     // An explicit belt width paints the belt as a band centred in the box
     // rather than filling it, so a straight belt can be set to the same width
@@ -3385,6 +3500,7 @@ class ConveyorPainter extends CustomPainter {
     // wider than the box paints over the box edge rather than being trimmed
     // back to it: the width is set in screen units and must not move when the
     // box does.
+    final band = straightBeltWidth;
     canvas.save();
     canvas.translate(span.x0, band == null ? 0 : (size.height - band) / 2);
     _paintStraightBelt(canvas, Size(span.width, band ?? size.height));
@@ -3392,25 +3508,35 @@ class ConveyorPainter extends CustomPainter {
   }
 
   /// Horizontal span the belt occupies inside the box: the whole box, or —
-  /// on rails — [wagonFraction] of it, slid along the track by
+  /// on rails — the wagon's footprint along the track, slid by
   /// [wagonPosition] so 0 parks flush left and 1 flush right. A wagon with
-  /// no position binding parks mid-rail.
+  /// no position binding parks mid-rail. On rails the belt runs across the
+  /// track, so this span is the belt's *width*: an explicit
+  /// [straightBeltWidth] sets it, else [wagonFraction] of the box.
   ({double x0, double width}) _beltSpan(Size size) {
     if (!onRails) return (x0: 0.0, width: size.width);
-    final w = size.width * wagonFraction.clamp(0.05, 1.0);
+    // An explicit belt width only shapes the footprint when the belt
+    // stands across the rails; along them it is the band's cross
+    // dimension, and the footprint is the wagon fraction either way.
+    final w = (wagonBeltAcross ? straightBeltWidth : null) ??
+        size.width * wagonFraction.clamp(0.05, 1.0);
     // Travel is inset by the chassis bumpers, so at 0% and 100% it is the
     // chassis that sits flush with the box edge — the box still bounds all
     // of the wagon's ink at every position.
-    final overhang = _chassisOverhang(straightBeltWidth ?? size.height, w);
+    final overhang = _chassisOverhang(size, w);
     final travel = max(size.width - w - 2 * overhang, 0.0);
     final pos = (wagonPosition ?? 0.5).clamp(0.0, 1.0);
     return (x0: overhang + pos * travel, width: w);
   }
 
   /// The belt band's rectangle in the box — what a tap has to land on to
-  /// mean the belt drive rather than the wagon motor.
+  /// mean the belt drive rather than the wagon motor. On rails the belt
+  /// stands across the track: a vertical band the full box height.
   Rect beltRect(Size size) {
     final span = _beltSpan(size);
+    if (onRails && wagonBeltAcross) {
+      return Rect.fromLTWH(span.x0, 0, span.width, size.height);
+    }
     final band = straightBeltWidth ?? size.height;
     return Rect.fromLTWH(
         span.x0, (size.height - band) / 2, span.width, band);
@@ -3421,7 +3547,7 @@ class ConveyorPainter extends CustomPainter {
   Rect wagonRect(Size size) {
     final belt = beltRect(size);
     if (!onRails) return belt;
-    final overhang = _chassisOverhang(belt.height, belt.width);
+    final overhang = _chassisOverhang(size, belt.width);
     return Rect.fromLTRB(
         belt.left - overhang, belt.top, belt.right + overhang, belt.bottom);
   }
@@ -3442,20 +3568,24 @@ class ConveyorPainter extends CustomPainter {
   /// does not scale with the box.
   static const _borderWidth = 2.0;
 
-  /// How far the wagon's chassis sticks out past each end of the belt, as a
-  /// fraction of the belt's cross dimension — the bumpers of the top view.
-  /// Also the tap target for the wagon motor's pane, so it is capped against
-  /// the wagon length rather than allowed to swallow a short wagon.
-  static double _chassisOverhang(double beltHeight, double wagonWidth) =>
-      min(beltHeight * 0.35, wagonWidth * 0.2);
+  /// How far the wagon's chassis sticks out past the belt on each side,
+  /// along the rails — the bumpers of the top view. Also the tap target for
+  /// the wagon motor's pane, so it is capped against the rail run rather
+  /// than allowed to swallow it.
+  static double _chassisOverhang(Size size, double wagonWidth) =>
+      min(wagonWidth * 0.35, size.width * 0.1);
 
-  /// Roller spacing along the belt, as a fraction of the belt width. Each
-  /// roller bar is a bit over half its pitch, so roughly balanced bar/gap.
-  static const _rollerPitchFactor = 0.55;
+  /// Roller spacing along the belt, as a fraction of the belt width. The
+  /// bars take most of their pitch — real rollers sit nearly touching, and
+  /// the thin dark gaps between them are what sells the texture.
+  static const _rollerPitchFactor = 0.42;
+
+  /// Fraction of the pitch each roller bar occupies; the rest is gap.
+  static const _rollerBarFactor = 0.78;
 
   /// How far each roller stops short of the belt edge, as a fraction of the
   /// belt width — the strip left over reads as the conveyor's side frames.
-  static const _rollerEndInset = 0.14;
+  static const _rollerEndInset = 0.10;
 
   /// What the band is filled with before anything is drawn on it. The roller
   /// style moves the state colour onto the rollers, so its bed is the same
@@ -3536,23 +3666,28 @@ class ConveyorPainter extends CustomPainter {
     final rect = Rect.fromCenter(
         center: Offset.zero, width: bar, height: length + bar);
     final rrect = RRect.fromRectAndRadius(rect, Radius.circular(bar / 2));
-    final crest = Color.lerp(color, Colors.white, 0.35)!;
-    final edge = Color.lerp(color, Colors.black, 0.30)!;
+    // A cylinder under a light that is somewhere, not everywhere: the
+    // specular crest sits off-centre and the far side rolls away darker
+    // than the near side. Symmetric shading is what made these read as
+    // striped paint rather than steel.
+    final highlight = Color.lerp(color, Colors.white, 0.55)!;
+    final near = Color.lerp(color, Colors.black, 0.25)!;
+    final far = Color.lerp(color, Colors.black, 0.45)!;
     canvas.drawRRect(
         rrect,
         Paint()
           ..shader = LinearGradient(
             begin: Alignment.centerLeft,
             end: Alignment.centerRight,
-            colors: [edge, crest, edge],
-            stops: const [0.0, 0.45, 1.0],
+            colors: [near, highlight, color, far],
+            stops: const [0.0, 0.25, 0.6, 1.0],
           ).createShader(rect));
     // A hairline seats the roller into the bed — without it the gradient's
     // dark edge dissolves into the darkened fill next to it.
     canvas.drawRRect(
         rrect,
         Paint()
-          ..color = Colors.black.withValues(alpha: 0.35)
+          ..color = Colors.black.withValues(alpha: 0.25)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1);
   }
@@ -3561,7 +3696,7 @@ class ConveyorPainter extends CustomPainter {
   /// stay clean, over the darkened bed [_paintStraightBelt] laid down.
   void _paintStraightRollers(Canvas canvas, Size size, RRect band) {
     final pitch = max(size.height * _rollerPitchFactor, 4.0);
-    final bar = pitch * 0.55;
+    final bar = pitch * _rollerBarFactor;
     final len = size.height * (1 - 2 * _rollerEndInset) - bar;
     if (len <= 0) return;
     canvas.save();
@@ -3584,7 +3719,7 @@ class ConveyorPainter extends CustomPainter {
       Canvas canvas, ConveyorPathGeometry g, Path outline) {
     final w = g.beltWidth;
     final pitch = max(w * _rollerPitchFactor, 4.0);
-    final bar = pitch * 0.55;
+    final bar = pitch * _rollerBarFactor;
     final len = w * (1 - 2 * _rollerEndInset) - bar;
     if (len <= 0) return;
     final length = g.length;
@@ -3602,20 +3737,25 @@ class ConveyorPainter extends CustomPainter {
     canvas.restore();
   }
 
-  /// The wagon's chassis: the frame the belt is mounted on, visible as
-  /// bumpers past both ends of the belt in the top view. Carries the
-  /// traverse drive's state colour — the one part of the drawing that
-  /// answers for the motor that moves the wagon, and the tap target for
-  /// its pane.
-  void _paintChassis(Canvas canvas, Size size,
-      ({double x0, double width}) span, double beltHeight) {
-    final overhang = _chassisOverhang(beltHeight, span.width);
+  /// Fraction of the box height the wagon's carriage frame spans. The belt
+  /// runs the full height; the carriage sits under its middle, wide enough
+  /// to reach both rails and stick out as bumpers along them.
+  static const _chassisHeightFraction = 0.45;
+
+  /// The wagon's chassis: the carriage the belt is mounted on, riding the
+  /// rails under the belt's middle and sticking out as bumpers on both
+  /// sides along the track. Carries the traverse drive's state colour —
+  /// the one part of the drawing that answers for the motor that moves
+  /// the wagon, and the tap target for its pane.
+  void _paintChassis(
+      Canvas canvas, Size size, ({double x0, double width}) span) {
+    final overhang = _chassisOverhang(size, span.width);
     if (overhang <= 0.5) return;
-    final top = (size.height - beltHeight) / 2;
-    final rect = Rect.fromLTWH(span.x0 - overhang, top + beltHeight * 0.1,
-        span.width + 2 * overhang, beltHeight * 0.8);
+    final chassisH = size.height * _chassisHeightFraction;
+    final rect = Rect.fromLTWH(span.x0 - overhang,
+        (size.height - chassisH) / 2, span.width + 2 * overhang, chassisH);
     final rrect =
-        RRect.fromRectAndRadius(rect, Radius.circular(beltHeight * 0.12));
+        RRect.fromRectAndRadius(rect, Radius.circular(chassisH * 0.15));
     canvas.drawRRect(
         rrect, Paint()..color = chassisColor ?? Colors.grey.shade600);
     canvas.drawRRect(
@@ -3624,39 +3764,57 @@ class ConveyorPainter extends CustomPainter {
           ..color = Colors.black
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.5);
-  }
 
-  /// The track seen from above: two rails running the full box width with
-  /// sleepers crossing beneath them, centred on the same line the belt band
-  /// is. The wagon paints over the stretch it occupies; the rest of the
-  /// track stays visible on either side, which is what says "this belt
-  /// travels". Neutral ink — the track is floor, not equipment state, so it
-  /// never takes a colour.
-  void _paintTrack(Canvas canvas, Size size, double beltHeight) {
-    if (size.width <= 0 || beltHeight <= 2) return;
-    final cy = size.height / 2;
-    // Gauge narrower than the wagon, like the real thing: the wagon body
-    // overhangs its bogies, so the rails emerge from under the belt's edges.
-    final gauge = beltHeight * 0.55;
-    final railWidth = max(beltHeight * 0.06, 1.5);
-
-    // Sleepers first, so the rails lie on top of them. Slightly faded —
-    // they are one layer further from the eye than the rails.
-    final sleeperLen = beltHeight * 0.85;
-    final sleeper = Paint()
-      ..color = railInk.withValues(alpha: 0.5)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = max(railWidth * 0.9, 1.0);
-    final spacing = max(beltHeight * 0.45, 6.0);
-    for (var x = spacing / 2; x < size.width; x += spacing) {
-      canvas.drawLine(Offset(x, cy - sleeperLen / 2),
-          Offset(x, cy + sleeperLen / 2), sleeper);
+    // Safety edges: nothing at all while idle — a tripped edge lights its
+    // whole bumper with a glow around it, so a small mark still cannot be
+    // missed. Saturated red is allowed here by the house rule: a pressed
+    // safety edge is exactly the fault-class signal that may shout.
+    void trippedEdge(bool leftSide) {
+      final radius = Radius.circular(chassisH * 0.15);
+      final strip = leftSide
+          ? RRect.fromRectAndCorners(
+              Rect.fromLTWH(rect.left, rect.top, overhang, chassisH),
+              topLeft: radius,
+              bottomLeft: radius)
+          : RRect.fromRectAndCorners(
+              Rect.fromLTWH(
+                  rect.right - overhang, rect.top, overhang, chassisH),
+              topRight: radius,
+              bottomRight: radius);
+      canvas.drawRRect(
+          strip,
+          Paint()
+            ..color = safetyColor.withValues(alpha: 0.55)
+            ..maskFilter =
+                MaskFilter.blur(BlurStyle.normal, max(chassisH * 0.15, 2)));
+      canvas.drawRRect(strip, Paint()..color = safetyColor);
+      canvas.drawRRect(
+          strip,
+          Paint()
+            ..color = Colors.black
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1);
     }
 
+    if (safetyLeftActive) trippedEdge(true);
+    if (safetyRightActive) trippedEdge(false);
+  }
+
+  /// The track seen from above: two plain rails running the full box
+  /// width, under the wagon's carriage. No sleepers — two clean lines read
+  /// as a track at mimic scale without turning into visual noise. Neutral
+  /// ink — the track is floor, not equipment state, so it never takes a
+  /// colour.
+  void _paintTrack(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 2) return;
+    final cy = size.height / 2;
+    final chassisH = size.height * _chassisHeightFraction;
+    // Gauge inside the carriage's reach, so the rails visibly carry it.
+    final gauge = chassisH * 0.6;
     final rail = Paint()
       ..color = railInk
       ..style = PaintingStyle.stroke
-      ..strokeWidth = railWidth;
+      ..strokeWidth = max(chassisH * 0.07, 1.5);
     for (final y in [cy - gauge / 2, cy + gauge / 2]) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), rail);
     }
@@ -3777,7 +3935,7 @@ class ConveyorPainter extends CustomPainter {
     final center = _overlayCenter(size);
     canvas.translate(center.dx, center.dy);
     // Counter-rotate
-    canvas.rotate(-angle * pi / 180);
+    canvas.rotate(-angle * pi / 180 - _overlayExtraRotation);
     _counterMirror(canvas);
     // Draw exclamation mark centered at (0,0)
     final textPainter = TextPainter(
@@ -3851,7 +4009,7 @@ class ConveyorPainter extends CustomPainter {
     canvas.save();
     final center = _overlayCenter(size);
     canvas.translate(center.dx, center.dy);
-    canvas.rotate(-angle * pi / 180);
+    canvas.rotate(-angle * pi / 180 - _overlayExtraRotation);
     _counterMirror(canvas);
     final textPainter = TextPainter(
       text: TextSpan(
@@ -3889,6 +4047,10 @@ class ConveyorPainter extends CustomPainter {
       oldDelegate.wagonPosition != wagonPosition ||
       oldDelegate.wagonFraction != wagonFraction ||
       oldDelegate.chassisColor != chassisColor ||
+      oldDelegate.safetyLeftActive != safetyLeftActive ||
+      oldDelegate.safetyRightActive != safetyRightActive ||
+      oldDelegate.safetyColor != safetyColor ||
+      oldDelegate.wagonBeltAcross != wagonBeltAcross ||
       // Geometry is rebuilt each frame when turns are configured, so curved
       // conveyors repaint on every rebuild (needed for batch animation).
       !identical(oldDelegate.geometry, geometry);
