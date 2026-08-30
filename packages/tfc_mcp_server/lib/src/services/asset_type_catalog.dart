@@ -301,6 +301,38 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'SectionButtonConfig',
+      displayName: 'Section Button',
+      category: 'Interactive Controls',
+      description:
+          'A round power button for one or more plant sections (FB_Section '
+          'instances). The face takes the section state colour — green in '
+          'auto, blue cleaning, grey stopped, yellow when it is not allowed '
+          'to start, grey with an exclamation mark when it cannot be read — '
+          'and splits along a diagonal when the sections behind it disagree. '
+          'A tap opens a pane that starts, cleans and stops them and counts '
+          'how long they have been that way.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'sections',
+            type: 'List<SectionRef>',
+            description:
+                'The FB_Section instances this button drives. Each entry has '
+                '"key" (the ST_Section_HMI struct, carrying p_cmd_Start / '
+                'p_cmd_StartClean / p_cmd_Stop and p_stat_xEnabled / '
+                'p_stat_xCleanEnabled / p_stat_xPermissive), an optional '
+                '"label" naming it in the pane list (e.g. ST101), and an '
+                'optional "hold_reason" shown behind "Allowed to start" '
+                'saying what holds that section, in operator words. The same '
+                'line on several PLCs belongs behind one button.',
+            required: true),
+        AssetPropertyInfo(
+            name: 'label',
+            type: 'String',
+            description: 'Button name shown as the pane title'),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'OptionVariableConfig',
       displayName: 'Option Variable',
       category: 'Interactive Controls',

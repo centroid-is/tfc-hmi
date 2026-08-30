@@ -21,6 +21,7 @@ import 'icon.dart';
 import 'image.dart';
 import 'table.dart';
 import 'start_stop_button.dart';
+import 'section_button.dart';
 import 'aircab.dart';
 import 'checklists.dart';
 import 'elcab.dart';
@@ -80,6 +81,7 @@ class AssetRegistry {
     ImageConfig: ImageConfig.fromJson,
     TableAssetConfig: TableAssetConfig.fromJson,
     StartStopPillButtonConfig: StartStopPillButtonConfig.fromJson,
+    SectionButtonConfig: SectionButtonConfig.fromJson,
     AirCabConfig: AirCabConfig.fromJson,
     ChecklistsConfig: ChecklistsConfig.fromJson,
     ElCabConfig: ElCabConfig.fromJson,
@@ -130,6 +132,7 @@ class AssetRegistry {
     ImageConfig: ImageConfig.preview,
     DrawnBoxConfig: DrawnBoxConfig.preview,
     StartStopPillButtonConfig: StartStopPillButtonConfig.preview,
+    SectionButtonConfig: SectionButtonConfig.preview,
     AirCabConfig: AirCabConfig.preview,
     ChecklistsConfig: ChecklistsConfig.preview,
     ElCabConfig: ElCabConfig.preview,

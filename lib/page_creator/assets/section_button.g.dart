@@ -1,0 +1,59 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+
+part of 'section_button.dart';
+
+// **************************************************************************
+// JsonSerializableGenerator
+// **************************************************************************
+
+SectionRef _$SectionRefFromJson(Map<String, dynamic> json) => SectionRef(
+      key: json['key'] as String,
+      label: json['label'] as String?,
+      holdReason: json['holdReason'] as String?,
+    );
+
+Map<String, dynamic> _$SectionRefToJson(SectionRef instance) =>
+    <String, dynamic>{
+      'key': instance.key,
+      'label': instance.label,
+      'holdReason': instance.holdReason,
+    };
+
+SectionButtonConfig _$SectionButtonConfigFromJson(Map<String, dynamic> json) =>
+    SectionButtonConfig(
+      sections: (json['sections'] as List<dynamic>?)
+              ?.map((e) => SectionRef.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      label: json['label'] as String?,
+    )
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?;
+
+Map<String, dynamic> _$SectionButtonConfigToJson(
+        SectionButtonConfig instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
+      'sections': instance.sections.map((e) => e.toJson()).toList(),
+      'label': instance.label,
+    };
+
+const _$TextPosEnumMap = {
+  TextPos.above: 'above',
+  TextPos.below: 'below',
+  TextPos.left: 'left',
+  TextPos.right: 'right',
+  TextPos.inside: 'inside',
+};
