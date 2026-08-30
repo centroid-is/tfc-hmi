@@ -247,6 +247,16 @@ class TfcMcpServer {
         );
       }
       if (toggles.configEnabled) {
+        // Beside the other write tools and under the same pairing
+        // registerAlarmWriteTools uses: the proposals toggle carries it, and
+        // configEnabled is what put the read half -- which these validate
+        // against -- on the registry in the first place.
+        registerAccessTemplateWriteTools(
+          registry: registry,
+          service: accessTemplateService,
+          riskGate: riskGate,
+          proposalService: proposalService,
+        );
         registerKeyMappingWriteTools(
           registry,
           configService: configService,

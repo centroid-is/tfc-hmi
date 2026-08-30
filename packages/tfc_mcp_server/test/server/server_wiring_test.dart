@@ -66,14 +66,14 @@ void main() {
       );
     }
 
-    test('1. All 27 expected tools are registered', () async {
+    test('1. All 31 expected tools are registered', () async {
       final server = createWiredServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 27 expected tools (18 read + 9 write)
+        // All 31 expected tools (18 read + 13 write)
         expect(toolNames, containsAll([
           // Read tools
           'ping',
@@ -104,9 +104,13 @@ void main() {
           'propose_page',
           'propose_asset',
           'update_asset',
+          'create_access_template',
+          'update_access_template',
+          'delete_access_template',
+          'bind_key_access_template',
         ]));
 
-        expect(toolNames, hasLength(27));
+        expect(toolNames, hasLength(31));
       } finally {
         await client.close();
       }
@@ -197,8 +201,8 @@ void main() {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 27 tools are registered (drawing tools always present)
-        expect(toolNames, hasLength(27));
+        // All 31 tools are registered (drawing tools always present)
+        expect(toolNames, hasLength(31));
         expect(toolNames, contains('search_drawings'));
         expect(toolNames, contains('get_drawing_page'));
       } finally {

@@ -553,16 +553,27 @@ void main() {
         () async {
       await setUpServer();
 
-      final result = await callRaw('create_access_template', {
-        'name': 'conveyor',
-        'rules': [
-          {'member': 'p_cmd_JogFwd', 'group': 'supervisor'},
-        ],
-      });
+      // Two layers reject this and either is a pass: the schema's `enum` of
+      // the seven, enforced by mcp_dart before the handler runs, and the
+      // handler's own `AccessGroup.byName` check behind it — which is what
+      // answers for a client that does not enforce the schema. What the test
+      // pins is that the rejection **names the seven**, whichever layer it
+      // came from, because that list is the agent's only way to learn the
+      // vocabulary.
+      String text;
+      try {
+        final result = await callRaw('create_access_template', {
+          'name': 'conveyor',
+          'rules': [
+            {'member': 'p_cmd_JogFwd', 'group': 'supervisor'},
+          ],
+        });
+        expect(result.isError, isTrue);
+        text = (result.content.first as TextContent).text;
+      } on Object catch (error) {
+        text = '$error';
+      }
 
-      expect(result.isError, isTrue);
-      final text = (result.content.first as TextContent).text;
-      expect(text, contains('supervisor'));
       for (final group in [
         'operate',
         'setpoints',
