@@ -30,7 +30,10 @@
 /// the same word once.
 library;
 
+import 'package:drift/drift.dart';
+import 'package:logger/logger.dart';
 import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/database_drift.dart';
 
 /// The permission the audit trail route requires.
 ///
@@ -314,7 +317,7 @@ class AuditQuery {
     String keyPrefix = '',
     this.who,
     Iterable<String> groupNames = const [],
-    this.includeAuth = true,
+    this.includeAuth = false,
     this.outcome = AuditOutcomeFilter.any,
     this.limit = kAuditTrailRowLimit,
   })  : keyPrefix = keyPrefix.trim(),
@@ -337,6 +340,12 @@ class AuditQuery {
   final List<String> groupNames;
 
   /// Whether `surface = 'auth'` rows are OR'd in.
+  ///
+  /// Defaults to false here and to true on [AuditTrailFilters], which is not an
+  /// inconsistency: a bare `AuditQuery()` names no groups either, and the two
+  /// defaults together mean *no group constraint at all* — every row. Defaulting
+  /// it to true would make `AuditQuery()` mean "auth rows only", which is a
+  /// surprising thing for a query nobody constrained to return.
   final bool includeAuth;
 
   /// Allowed, denied, or both.
@@ -375,6 +384,152 @@ class AuditQuery {
       'before: $before, keyPrefix: "$keyPrefix", who: $who, '
       'groups: $groupNames, auth: $includeAuth, outcome: ${outcome.name}, '
       'limit: $limit)';
+}
+
+/// The `surface` value every authentication row carries.
+///
+/// `AccessSurface` enumerates the three *write* surfaces and has no `auth`
+/// member; the value is fixed by the four named constructors on `AuditRecord`,
+/// which are the only writers of an auth row. 05-02's `isAuthEntry` keys on the
+/// same string, and the auth invariant test seeds all four constructors and
+/// checks both columns, so the two cannot drift apart.
+const String _auditAuthSurface = 'auth';
+
+/// Reads of `audit_entry`, and nothing else.
+///
+/// Ungated and unaudited, on the precedent `access_template_store.dart` sets for
+/// its own reads: looking at the trail is not an authorization change, and a row
+/// per render would bury the writes that matter — here it would bury them under
+/// rows recording that somebody looked. The enforcement is the route gate; see
+/// [kAuditTrailGroup].
+///
+/// **This object cannot deny and cannot record.** It takes no session, no sink,
+/// no station and no denial callback. It has no `into`, no `update` and no
+/// `delete`. The trail's append-only property is enforced by there being nowhere
+/// to write it from, and a source-text test in
+/// `test/core/audit_trail_store_test.dart` keeps that trivially checkable rather
+/// than merely true today.
+class AuditTrailStore {
+  AuditTrailStore({required AppDatabase db, Logger? logger})
+      : _db = db,
+        _logger = logger ?? Logger();
+
+  final AppDatabase _db;
+
+  /// This store's own diagnostic logger. Held for symmetry with the other
+  /// stores and for the diagnostics a future failure path will want; nothing
+  /// here swallows an error, so nothing here logs one yet.
+  // ignore: unused_field
+  final Logger _logger;
+
+  /// The newest rows matching [query], newest first, at most [AuditQuery.limit]
+  /// of them.
+  ///
+  /// One statement. Every filter is a `WHERE` clause applied **before** the
+  /// `LIMIT`, so a count of denials is a count of the table's denials and not of
+  /// the loaded page's — filtering the already-loaded rows in memory would show
+  /// three denials while the table held three hundred.
+  ///
+  /// Ties on `at` resolve by `id DESC`. A struct write puts one row per changed
+  /// member at the same instant, so without the tiebreak two runs of the same
+  /// query could return the same rows in different orders and the page would
+  /// reshuffle under the operator.
+  ///
+  /// ## The group predicate, and why auth rows get their own leg
+  ///
+  /// Auth rows carry an **empty** `group_required` — signing in is not gated on
+  /// a group — so a bare `group_required IN (...)` would drop every sign-in from
+  /// the page. CONTEXT rejected a separate auth tab precisely so that
+  /// interleaving preserves the question "who signed in right before this
+  /// write", which is what makes the extra clause worth having; 05-05 then
+  /// renders an explicit auth chip rather than leaving the leg un-controllable.
+  ///
+  /// The leg keys on `surface = 'auth'` rather than on `group_required = ''`.
+  /// 05-02's `isAuthEntry` uses that predicate and three widgets call it; two
+  /// definitions of "auth row" that happen to agree today are a defect waiting
+  /// for the first row that breaks the coincidence.
+  ///
+  /// ## Empty selection means no constraint
+  ///
+  /// With [AuditQuery.groupNames] empty **and** [AuditQuery.includeAuth] false,
+  /// no group predicate is emitted at all and every row matches. That is
+  /// CONTEXT's locked decision, in its words: *"empty selection = no constraint.
+  /// Identical to `AlarmLevelFilterChips`."* It reads backwards on first
+  /// encounter — deselecting everything shows everything — which is exactly why
+  /// it is written down here rather than left for somebody to "fix".
+  ///
+  /// The default state is unaffected, because the default is not empty:
+  /// [kAuditTrailDefaultGroupNames] names the six non-`operate` groups and the
+  /// auth flag is on, so the `operate` exclusion survives the rule intact.
+  ///
+  /// ## The key prefix and LIKE
+  ///
+  /// `%` and `_` typed by an operator act as LIKE wildcards. That widens the
+  /// match and never narrows it, and it can never reach a row the group filter
+  /// excluded, because the prefix clause is `AND`ed with every other one. The
+  /// alternative — a hand-rolled `ESCAPE` clause — diverges between SQLite and
+  /// Postgres, so this shape was chosen rather than overlooked.
+  ///
+  /// Every value in every clause reaches the database as a bound variable:
+  /// nothing in this file interpolates a value into SQL, so a prefix of
+  /// `x' OR 1=1 --` returns rows or no rows and never changes the shape of the
+  /// statement.
+  Future<List<AuditEntryData>> entries(AuditQuery query) {
+    final statement = _db.select(_db.auditEntry)
+      ..where((t) {
+        Expression<bool>? predicate;
+        void and(Expression<bool> clause) {
+          predicate = predicate == null ? clause : predicate! & clause;
+        }
+
+        final window = query.window;
+        if (window != null) {
+          and(t.at.isBiggerOrEqualValue(window.start));
+          and(t.at.isSmallerOrEqualValue(window.end));
+        }
+
+        final before = query.before;
+        if (before != null) {
+          and(t.at.isSmallerThanValue(before));
+        }
+
+        if (query.keyPrefix.isNotEmpty) {
+          and(t.itemKey.like('${query.keyPrefix}%'));
+        }
+
+        final who = query.who;
+        if (who != null) {
+          and(t.who.equals(who));
+        }
+
+        switch (query.outcome) {
+          case AuditOutcomeFilter.allowedOnly:
+            and(t.allowed.equals(true));
+          case AuditOutcomeFilter.deniedOnly:
+            and(t.allowed.equals(false));
+          case AuditOutcomeFilter.any:
+            break;
+        }
+
+        final groupLegs = <Expression<bool>>[
+          if (query.groupNames.isNotEmpty)
+            t.groupRequired.isIn(query.groupNames),
+          if (query.includeAuth) t.surface.equals(_auditAuthSurface),
+        ];
+        if (groupLegs.isNotEmpty) {
+          and(groupLegs.reduce((a, b) => a | b));
+        }
+
+        return predicate ?? const Constant(true);
+      })
+      ..orderBy([
+        (t) => OrderingTerm(expression: t.at, mode: OrderingMode.desc),
+        (t) => OrderingTerm(expression: t.id, mode: OrderingMode.desc),
+      ])
+      ..limit(query.limit);
+
+    return statement.get();
+  }
 }
 
 /// Element-wise list equality, so the two value types above do not need a
