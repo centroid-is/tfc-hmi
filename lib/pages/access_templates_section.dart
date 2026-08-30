@@ -44,8 +44,32 @@
 /// exactly why the prohibition is written down rather than assumed. Spec §7d
 /// says block rather than silently unbind, and a bulk re-point after a rename
 /// is the same silent change with a friendlier label. Binding is per key, on
-/// the key's own card, one at a time (04-08).
+/// the key's own card, one at a time (04-08) — or in bulk, from an agent's
+/// proposal, which is the next paragraph.
+///
+/// ## It is also where an agent's proposal is approved
+///
+/// Spec §7c gives templates a second front end: MCP tools that let an agent
+/// sweep a plant's bindings in one pass. Those tools write **nothing** —
+/// `tfc_mcp_server` has no session and cannot know who is standing at the
+/// panel — so they emit proposals, and this section is where a person applies
+/// one. It applies them through the same [AccessTemplateStore] as everything
+/// else on this card, with `origin: 'mcp'` and with `who` taken from the live
+/// session, so:
+///
+///  * an approver without `users` is refused exactly as they are refused at
+///    the create button, and the refusal leaves an `allowed: false` row,
+///  * the row names the **approving human**, never the agent. There is no
+///    parameter through which the proposal could say otherwise, and the
+///    proposal's own `operator_id` is never read,
+///  * a `bind` proposal goes through [AccessTemplateStore.bind] like every
+///    other binding write. Since the 2026-08-30 ruling there is no second
+///    path and no second gate — an earlier draft routed bindings through the
+///    `configure`-gated key-mapping blob and would have inherited its weaker
+///    gate.
 library;
+
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -53,6 +77,7 @@ import 'package:tfc_access/tfc_access.dart';
 
 import '../core/access_template_store.dart';
 import '../providers/access_templates.dart';
+import '../providers/proposal_state.dart';
 import '../providers/state_man.dart';
 import '../widgets/panes/pane_chrome.dart';
 import '../widgets/panes/standard_dialog.dart';
@@ -190,6 +215,33 @@ const String kAccessTemplateMemberExistsNote =
 const String kAccessTemplateGroupRequiredNote =
     'Choose the permission this member needs.';
 
+/// The `AuditRecord.origin` every row applied from an accepted proposal
+/// carries: `origin: 'mcp'`.
+///
+/// It is the **only** thing this file tells the store about where the change
+/// came from, and that asymmetry is the point of T-04-14. `who` comes from
+/// the session the store reads at the moment of the write; there is no
+/// parameter through which a caller — or a proposal — could name somebody
+/// else. A trail in which an agent could write the approver's name would be
+/// worse than no trail, because it would be believed.
+const String kAccessTemplateMcpOrigin = 'mcp';
+
+/// The store refused the delete because keys are still bound (spec §7d).
+///
+/// The list is read at the **accept**, from the store's own query, not from
+/// the `bound_keys` the proposal carried: a key bound between the sweep and
+/// the approval must still stop the delete (T-04-54).
+String kAccessTemplateProposalBlockedNote(String name, List<String> keys) =>
+    'The proposal to delete "$name" was not applied: ${_count(keys.length,
+        'key')} still bound to it (${keys.join(', ')}). Bind them elsewhere, '
+    'or clear them, and press Accept again.';
+
+/// One proposal in the batch could not be applied for a reason that is not a
+/// refusal and not the delete block — a name that appeared underneath us, a
+/// database that went away mid-write.
+String kAccessTemplateProposalFailedNote(Object error) =>
+    'A proposal could not be applied and is still pending: $error';
+
 /// A member name as a person should read it.
 String memberLabel(String member) =>
     member == kWholeKeyMember ? kWholeKeyMemberLabel : member;
@@ -317,15 +369,369 @@ class _AccessTemplatesSectionState
   /// reads as a list that ends where it was cut.
   final ScrollController _listController = ScrollController();
 
+  // ---- The proposal batch (spec §7c) --------------------------------------
+
+  /// The staged `access_template` proposals, decoded, and their ids, in step.
+  ///
+  /// A batch rather than one at a time, and the batch shape is the whole
+  /// point: an agent sweeping a plant produces one `bind` proposal carrying
+  /// forty bindings, and any number of template proposals beside it. One
+  /// Accept applies the lot.
+  final List<Map<String, dynamic>> _proposed = [];
+  final List<int> _proposalIds = [];
+
+  /// The banner's callback slots, captured when publishing.
+  ///
+  /// Held rather than re-read, for the reason `_KeyMappingsSection` records
+  /// one file over: riverpod forbids `ref` inside `dispose()`, and these are
+  /// plain (non-autoDispose) `StateProvider`s whose controllers outlive this
+  /// State.
+  StateController<Future<void> Function()?>? _commitSlot;
+  StateController<Future<void> Function()?>? _discardSlot;
+
+  /// The provider container, taken while this section is still alive.
+  ///
+  /// The banner outlives this widget: it is published once and stays up while
+  /// the operator navigates, so by the time Accept is pressed this State can
+  /// be deactivated or disposed and `ref` throws before any work happens. The
+  /// **container** rather than the values read out of it, so each press reads
+  /// today's store and today's session rather than the ones that were current
+  /// when the proposal was staged — which matters more here than anywhere
+  /// else in this file, because the session is what the gate reads.
+  ProviderContainer? _container;
+
+  /// Context-derived, so there is no container to re-read them from. Same
+  /// trade `_KeyMappingsSection` records: a theme switched between staging and
+  /// accepting tints one snackbar with the old scheme's red, which is cheaper
+  /// than an ancestor lookup off a dead element.
+  ScaffoldMessengerState? _messengerHandle;
+  Color? _errorColourHandle;
+
+  ScaffoldMessengerState? get _messenger {
+    final handle = _messengerHandle;
+    if (handle != null) return handle;
+    return mounted ? ScaffoldMessenger.maybeOf(context) : null;
+  }
+
+  Color? get _errorColour {
+    final handle = _errorColourHandle;
+    if (handle != null) return handle;
+    return mounted ? Theme.of(context).colorScheme.error : null;
+  }
+
+  /// Tells the operator something, from a path that may have outlived the
+  /// page. Silent when there is no messenger to tell — better than throwing
+  /// out of the middle of an accept.
+  void _report(String message, {bool error = true}) {
+    _messenger?.showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: error ? _errorColour : null,
+    ));
+  }
+
   @override
   void dispose() {
+    // The banner holds these closures over this State; left set they would
+    // fire into a disposed State after navigating away. After this frame, not
+    // during it, and only if the slot still holds *our* closure — a section
+    // that replaced us has already published its own.
+    final commitSlot = _commitSlot;
+    final discardSlot = _discardSlot;
+    final commit = _commitProposals;
+    final discard = _discardProposals;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (commitSlot != null &&
+          commitSlot.mounted &&
+          commitSlot.state == commit) {
+        commitSlot.state = null;
+      }
+      if (discardSlot != null &&
+          discardSlot.mounted &&
+          discardSlot.state == discard) {
+        discardSlot.state = null;
+      }
+    });
     _listController.dispose();
     super.dispose();
   }
 
+  /// Stages every pending `access_template` proposal, once there is a store
+  /// to apply them into.
+  ///
+  /// **Nothing is staged without a store**, and that is the same decision the
+  /// no-database branch below makes about the create control: a station with
+  /// no reachable database has no table to apply a proposal into, so offering
+  /// an Accept that can only fail would be a control that teaches the
+  /// operator to press it twice. The proposals stay pending, and the card one
+  /// line down already says why in words.
+  ///
+  /// Safe to re-enter: ids already staged are skipped, so a proposal landing
+  /// after the first joins the batch instead of replacing it. Returns how many
+  /// were newly staged.
+  int _stageProposals(AccessTemplateStore? store) {
+    if (store == null) return 0;
+    var added = 0;
+    try {
+      final state = ref.read(proposalStateProvider);
+      for (final p in state.proposals) {
+        if (p.proposalType != 'access_template') continue;
+        if (_proposalIds.contains(p.id)) continue;
+        final decoded = _decodeProposal(p.proposalJson);
+        if (decoded == null) continue;
+        _proposed.add(decoded);
+        _proposalIds.add(p.id);
+        added++;
+      }
+    } on Object {
+      // Provider unavailable (tests) — nothing to stage.
+      return added;
+    }
+    if (added > 0) _publishProposalCallbacks();
+    return added;
+  }
+
+  /// The proposal JSON, or null when it is not one this section can apply.
+  ///
+  /// Ignored rather than reported, exactly as `_stageRoutedProposal` ignores a
+  /// malformed one: a proposal nobody can read is not something the operator
+  /// can act on, and one bad entry must not take the rest of the batch with
+  /// it. What is checked is only what the apply below needs — a create,
+  /// update or delete needs a name; a bind needs a list.
+  Map<String, dynamic>? _decodeProposal(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded['_proposal_type'] != 'access_template') return null;
+      switch (decoded['_op']) {
+        case 'create':
+        case 'update':
+        case 'delete':
+          return decoded['name'] is String ? decoded : null;
+        case 'bind':
+          return decoded['bindings'] is List ? decoded : null;
+        default:
+          return null;
+      }
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Hands the banner the commit/discard actions for this batch.
+  ///
+  /// One Accept for the whole batch, in the one place the app acts on
+  /// proposals. Note that the key-mapping section on this same page publishes
+  /// into the same two slots; with batches of both kinds pending, the last
+  /// publisher owns the buttons and the other batch stays pending until it
+  /// republishes. That is the shape the slots already had — `dispose` above
+  /// guards against clearing somebody else's closure for the same reason.
+  void _publishProposalCallbacks() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final commitSlot = ref.read(proposalCommitProvider.notifier);
+      commitSlot.state = _commitProposals;
+      _commitSlot = commitSlot;
+      final discardSlot = ref.read(proposalDiscardProvider.notifier);
+      discardSlot.state = _discardProposals;
+      _discardSlot = discardSlot;
+      // Taken here, where `ref` and `context` are known good, because the
+      // callbacks above can be invoked long after this section is gone.
+      _container = ProviderScope.containerOf(context, listen: false);
+      _messengerHandle = ScaffoldMessenger.maybeOf(context);
+      _errorColourHandle = Theme.of(context).colorScheme.error;
+    });
+  }
+
+  /// Applies the staged batch through the store, then marks what landed.
+  ///
+  /// Each proposal is applied on its own and keeps its own fate. A refusal or
+  /// a blocked delete leaves **that** proposal pending and lets the rest
+  /// through, because a sweep is a list of independent changes and failing all
+  /// forty because one template is still bound would be the wrong answer to
+  /// the wrong question.
+  Future<void> _commitProposals() async {
+    final container = _container;
+    if (container == null || _proposed.isEmpty) return;
+
+    final AccessTemplateStore? store;
+    try {
+      store = await container.read(accessTemplateStoreProvider.future);
+    } on Object catch (error) {
+      _report(kAccessTemplateProposalFailedNote(error));
+      return;
+    }
+    if (store == null) {
+      _report(kAccessTemplatesNoDatabaseNote);
+      return;
+    }
+
+    final applied = <int>[];
+    final keptProposals = <Map<String, dynamic>>[];
+    final keptIds = <int>[];
+    for (var i = 0; i < _proposed.length; i++) {
+      try {
+        await _applyProposal(store, _proposed[i]);
+        applied.add(_proposalIds[i]);
+        continue;
+      } on AccessDenied {
+        // Swallowed: see the note at [_write]. The store's `onDenied` has
+        // already put the shared prompt naming `users` on screen, and a
+        // message of this file's own would be two things saying one thing.
+      } on TemplateInUseException catch (e) {
+        _report(
+            kAccessTemplateProposalBlockedNote(e.templateName, e.boundKeys));
+      } on Object catch (error) {
+        _report(kAccessTemplateProposalFailedNote(error));
+      }
+      keptProposals.add(_proposed[i]);
+      keptIds.add(_proposalIds[i]);
+    }
+
+    // 04-05: nothing else notices a write. One invalidate for the batch.
+    if (applied.isNotEmpty) container.invalidate(accessTemplatesProvider);
+
+    // Only after the writes have landed: marking a proposal accepted drops it
+    // from the queue, so doing it first would lose one whose write failed.
+    //
+    // Unlike `_KeyMappingsSection`, an applied proposal is dropped from the
+    // batch even if marking it accepted throws. There the whole batch is one
+    // idempotent save and pressing Accept again is free; here a re-applied
+    // create throws `TemplateExistsException` and a re-applied bind writes a
+    // second audit row for a change that did not happen.
+    final notifier = container.read(proposalStateProvider.notifier);
+    var unmarked = 0;
+    for (final id in applied) {
+      try {
+        await notifier.acceptProposal(id);
+      } on Object {
+        unmarked++;
+      }
+    }
+    if (unmarked > 0) {
+      _report('$unmarked change(s) were applied but could not be marked '
+          'accepted. They are done; the banner may still list them.');
+    }
+
+    _replaceBatch(keptProposals, keptIds);
+  }
+
+  /// Drops the whole batch without touching either table.
+  Future<void> _discardProposals() async {
+    final container = _container;
+    if (container == null) return;
+    final notifier = container.read(proposalStateProvider.notifier);
+    var failed = 0;
+    for (final id in _proposalIds) {
+      try {
+        await notifier.rejectProposal(id);
+      } on Object {
+        failed++;
+      }
+    }
+    if (failed > 0) {
+      _report('$failed of ${_proposalIds.length} proposals could not be '
+          'marked rejected. Press Reject again.');
+    }
+    _replaceBatch(const [], const []);
+  }
+
+  /// Leaves [proposals] staged and takes the banner's buttons away when the
+  /// batch is empty.
+  ///
+  /// The lists are replaced before the `mounted` check rather than after: a
+  /// section that has gone away still has to stop offering an Accept for
+  /// changes that are already applied.
+  void _replaceBatch(
+      List<Map<String, dynamic>> proposals, List<int> ids) {
+    _proposed
+      ..clear()
+      ..addAll(proposals);
+    _proposalIds
+      ..clear()
+      ..addAll(ids);
+    if (_proposed.isEmpty) {
+      _commitSlot?.state = null;
+      _discardSlot?.state = null;
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// One proposal, through the one store, with `origin: 'mcp'`.
+  ///
+  /// Every branch passes [kAccessTemplateMcpOrigin] and nothing else about
+  /// provenance. `who` is the store's business and is read from the live
+  /// session there — the proposal's own `operator_id` is deliberately not
+  /// looked at anywhere in this file.
+  Future<void> _applyProposal(
+      AccessTemplateStore store, Map<String, dynamic> proposal) async {
+    final reason = proposal['reason'] is String
+        ? proposal['reason'] as String
+        : null;
+    switch (proposal['_op']) {
+      case 'create':
+        await store.create(_templateOf(proposal),
+            origin: kAccessTemplateMcpOrigin, reason: reason);
+      case 'update':
+        await store.update(_templateOf(proposal),
+            origin: kAccessTemplateMcpOrigin, reason: reason);
+      case 'delete':
+        await store.delete(proposal['name'] as String,
+            origin: kAccessTemplateMcpOrigin, reason: reason);
+      case 'bind':
+        for (final entry in proposal['bindings'] as List) {
+          if (entry is! Map) continue;
+          final key = entry['key'];
+          if (key is! String || key.isEmpty) continue;
+          final template = entry['template'];
+          if (template is String && template.isNotEmpty) {
+            await store.bind(key, template,
+                origin: kAccessTemplateMcpOrigin, reason: reason);
+          } else {
+            try {
+              await store.unbind(key,
+                  origin: kAccessTemplateMcpOrigin, reason: reason);
+            } on BindingNotFoundException {
+              // The end state the proposal asked for, already reached. The
+              // store throws rather than writing a row claiming a change that
+              // did not happen, which is right; from here it is a no-op, and
+              // failing the whole sweep over it would leave thirty-nine real
+              // bindings unapplied.
+            }
+          }
+        }
+      default:
+        // Unreachable: `_decodeProposal` refuses anything else.
+        break;
+    }
+  }
+
+  /// The template a create or update proposal describes.
+  ///
+  /// The rules go through `AccessTemplate.decodeRules`, the same forgiving
+  /// decoder the store reads rows with: a group name this build does not know
+  /// costs that one rule rather than the whole proposal. That direction is
+  /// fail-open, and it is the same judgement the rest of the phase makes —
+  /// see the decoder's own note.
+  AccessTemplate _templateOf(Map<String, dynamic> proposal) => AccessTemplate(
+        name: proposal['name'] as String,
+        rules: AccessTemplate.decodeRules(
+            jsonEncode(proposal['rules'] ?? const <String, String>{})),
+      );
+
   @override
   Widget build(BuildContext context) {
     final storeAsync = ref.watch(accessTemplateStoreProvider);
+
+    // A proposal arriving while this page is open joins the batch. No
+    // "already showing one" guard: a sweep can land in pieces.
+    ref.listen<ProposalState>(proposalStateProvider, (previous, next) {
+      if (_stageProposals(storeAsync.valueOrNull) > 0) setState(() {});
+    });
+
+    // Staged from build rather than from initState, because there is nothing
+    // to apply a proposal *into* until the store has resolved — and it
+    // resolves a frame or more after this section first appears.
+    _stageProposals(storeAsync.valueOrNull);
 
     // Nothing while the database handle resolves. Not a spinner: this section
     // is one card on a page the operator came to for something else, and a
