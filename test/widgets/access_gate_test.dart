@@ -944,7 +944,7 @@ class _CountingChildState extends State<_CountingChild> {
 }
 
 /// The top-level menu [BaseScaffold] renders its navigation bar from. Gated
-/// routes live under Advanced, the way the six real ones do.
+/// routes live under Advanced, the way the seven real ones do.
 void _registerAppMenu() {
   final registry = RouteRegistry();
   registry.menuItems.clear();

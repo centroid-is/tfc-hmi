@@ -75,14 +75,19 @@ void main() {
       expect(policy.groupForRoute('/alarms'), AccessGroup.operate);
     });
 
-    test('carries all six raised routes, not an empty map', () {
+    test('carries all seven raised routes, not an empty map', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final policy = container.read(accessPolicyProvider);
 
-      expect(kRaisedRoutes, hasLength(6));
+      // Seven since plan 03-14 raised '/advanced/knowledge-base'; the length
+      // is asserted so an empty or truncated map fails here rather than
+      // showing up as a route that quietly opens.
+      expect(kRaisedRoutes, hasLength(7));
       expect(
           policy.groupForRoute('/advanced/page-editor'), AccessGroup.configure);
+      expect(policy.groupForRoute('/advanced/knowledge-base'),
+          AccessGroup.configure);
       expect(policy.groupForRoute(kServerConfigRoute), AccessGroup.administer);
     });
 

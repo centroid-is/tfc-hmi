@@ -213,13 +213,15 @@ whatever the site uses for change control, because the HMI cannot.
 
 ### The database-outage rule, and the cost it accepts
 
-Route gating (Phase 2) raises six routes above `operate`. One of them behaves
+Route gating raises seven routes above `operate` — Phase 2's six, plus
+`/advanced/knowledge-base`, which plan 03-14 raised to `configure` once the
+write-path sweep found three write surfaces behind it. One of them behaves
 differently while the database is down, and a deployer has to know it in both
 directions — it is invisible until the day it matters.
 
 > Whenever this station has no usable access repository — never configured, or
 > configured and unreachable — `/advanced/server-config` opens without a
-> sign-in. The other five raised routes stay locked in both cases. The reason
+> sign-in. The other six raised routes stay locked in both cases. The reason
 > is that with no repository no sign-in can succeed, so denying Server Config
 > would turn a mistyped Postgres IP into an on-site recovery.
 >

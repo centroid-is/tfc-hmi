@@ -94,7 +94,7 @@ void main() {
 
     test('declareRouteGroup works for a path with no builder here', () {
       // The app's live route table is Beamer's, not this registry, so the
-      // six raised routes are declared without ever registering a builder.
+      // seven raised routes are declared without ever registering a builder.
       registry.declareRouteGroup(
           '/advanced/server-config', AccessGroup.administer);
 
@@ -128,7 +128,7 @@ void main() {
     });
 
     test('registering a builder with no group keeps a declared group', () {
-      // Order matters: the six are declared at startup, and a page could be
+      // Order matters: the seven are declared at startup, and a page could be
       // registered for the same path afterwards. A builder that says nothing
       // about groups must not silently unlock the route.
       registry.declareRouteGroup(
