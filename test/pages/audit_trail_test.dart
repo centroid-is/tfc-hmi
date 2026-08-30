@@ -142,6 +142,30 @@ class _FakeStore extends Fake implements AuditTrailStore {
 }
 
 
+/// A store that answers a **full** first page and a short second one.
+///
+/// `Load more` only appears when the first result reached the cap, so a paging
+/// fixture has to hand back exactly [kAuditTrailRowLimit] rows for the opening
+/// query and fewer for the page that follows it — which is also what ends the
+/// sequence.
+_FakeStore _pagingStore({int second = 4}) => _FakeStore(
+      answer: (query) => query.before == null
+          ? _rows(kAuditTrailRowLimit)
+          : _rows(second, from: kAuditTrailRowLimit + 1),
+    );
+
+/// How many action tiles the list has actually built.
+///
+/// The list is virtualised, so this is *not* the number of actions the page
+/// holds. It is the right number to compare against itself across a rebuild —
+/// which is what the double-append guard needs — and the wrong one to compare
+/// against a page size.
+int _builtTiles(WidgetTester tester) => tester
+    .widgetList<AuditActionTile>(
+      find.byType(AuditActionTile, skipOffstage: false),
+    )
+    .length;
+
 /// A host whose `setState` rebuilds [AuditTrailBody] without replacing its
 /// `State`.
 ///
@@ -671,6 +695,293 @@ void main() {
       final source = _pageSourceWithoutComments();
       expect(source, isNot(contains('.where(')));
       expect(source, isNot(contains('.sort(')));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 3 — Load more and Refresh
+  // -------------------------------------------------------------------------
+
+  group('AuditTrailBody — Load more', () {
+    testWidgets('is absent when the result did not reach the cap',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+      expect(
+        find.byKey(kAuditTrailLoadMoreKey),
+        findsNothing,
+        reason: 'a short result has nothing more to load',
+      );
+    });
+
+    testWidgets('is present when the result reached the cap', (tester) async {
+      await _pumpBody(tester, store: _pagingStore());
+      expect(find.byKey(kAuditTrailLoadMoreKey), findsOneWidget);
+    });
+
+    testWidgets('asks for rows strictly older than the oldest one on screen',
+        (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      final firstPageOldest = _rows(kAuditTrailRowLimit).last.at;
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(store.recorded, hasLength(2));
+      expect(
+        store.recorded.last.before,
+        firstPageOldest,
+        reason: 'the cursor is the oldest row the first page returned',
+      );
+    });
+
+    testWidgets('keeps the window the first page was answered over',
+        (tester) async {
+      // Re-reading the clock here would move the window's *start* forward by
+      // however long the page had been open, and the rows between the old
+      // start and the new one are exactly the oldest ones — the ones Load more
+      // was tapped to see.
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(store.recorded.last.window, store.recorded.first.window);
+    });
+
+    testWidgets('changes neither the filters nor the search field',
+        (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(store.recorded.last.keyPrefix, store.recorded.first.keyPrefix);
+      expect(store.recorded.last.who, store.recorded.first.who);
+      expect(store.recorded.last.groupNames, store.recorded.first.groupNames);
+      expect(store.recorded.last.outcome, store.recorded.first.outcome);
+    });
+
+    testWidgets('appends the older page beneath what is already on screen',
+        (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      final summaryBefore = auditTrailResultSummary(
+        count: kAuditTrailRowLimit,
+        filters: const AuditTrailFilters(),
+      );
+      expect(find.text(summaryBefore), findsOneWidget);
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text(auditTrailResultSummary(
+          count: kAuditTrailRowLimit + 4,
+          filters: const AuditTrailFilters(),
+        )),
+        findsOneWidget,
+        reason: 'the second page is added to the first, not shown instead of '
+            'it — build watches a list of queries and concatenates their '
+            'actions in order',
+      );
+    });
+
+    testWidgets('does not scroll the list back to the top', (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      await tester.drag(find.byKey(kAuditTrailListKey), const Offset(0, -400));
+      await tester.pump();
+      final offsetBefore =
+          tester.widget<ListView>(find.byKey(kAuditTrailListKey))
+              .controller
+              ?.offset;
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      final offsetAfter =
+          tester.widget<ListView>(find.byKey(kAuditTrailListKey))
+              .controller
+              ?.offset;
+      expect(offsetAfter, offsetBefore);
+    });
+
+    testWidgets('a short second page ends the sequence', (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.byKey(kAuditTrailLoadMoreKey),
+        findsNothing,
+        reason: 'the page that came back short is the last one there is',
+      );
+    });
+
+    testWidgets('a second Load more appends a third query', (tester) async {
+      // Every page full, so the sequence never ends on its own.
+      final store = _FakeStore(
+        answer: (_) => _rows(kAuditTrailRowLimit),
+      );
+      await _pumpBody(tester, store: store);
+
+      for (var tap = 0; tap < 2; tap++) {
+        await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+        await tester.pump();
+        await tester.pump();
+      }
+
+      expect(store.recorded, hasLength(3));
+      expect(store.recorded[1].before, isNotNull);
+      expect(store.recorded[2].before, isNotNull);
+    });
+
+    testWidgets('rebuilds after a Load more do not double the rows',
+        (tester) async {
+      // T-05-68. The accumulation is a list of *queries* held in State, not a
+      // row buffer appended to from inside `build` — rows appended during
+      // `build` would be appended again on every frame.
+      final store = _pagingStore();
+      await _pumpBody(
+        tester,
+        store: store,
+        freezeClock: false,
+        child: const _RebuildHost(),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+      final builtAfterLoadMore = _builtTiles(tester);
+
+      final host = tester.state<_RebuildHostState>(find.byType(_RebuildHost));
+      host.bump();
+      await tester.pump(const Duration(seconds: 1));
+      host.bump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(_builtTiles(tester), builtAfterLoadMore);
+      expect(
+        find.text(auditTrailResultSummary(
+          count: kAuditTrailRowLimit + 4,
+          filters: const AuditTrailFilters(),
+        )),
+        findsOneWidget,
+        reason: 'two more rebuilds must not add the second page again',
+      );
+    });
+
+    testWidgets('changing a filter afterwards resets the accumulation',
+        (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'CN04');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      await tester.pump();
+
+      final searched = const AuditTrailFilters(keyPrefix: 'CN04');
+      expect(
+        find.text(auditTrailResultSummary(
+          count: kAuditTrailRowLimit,
+          filters: searched,
+        )),
+        findsOneWidget,
+        reason: 'a filter change that kept the old pages would show rows the '
+            'new filter excludes',
+      );
+      expect(store.recorded.last.before, isNull);
+    });
+  });
+
+  group('AuditTrailBody — Refresh', () {
+    testWidgets('re-asks the database rather than answering from cache',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+      expect(store.recorded, hasLength(1));
+
+      await tester.tap(find.byKey(kAuditTrailRefreshKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        store.recorded,
+        hasLength(2),
+        reason: 'under a clock that has not moved the freshly resolved query '
+            'equals the old one, so the invalidate is what makes the round '
+            'trip happen',
+      );
+    });
+
+    testWidgets('resets the accumulation to a single page', (tester) async {
+      final store = _pagingStore();
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.byKey(kAuditTrailRefreshKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text(auditTrailResultSummary(
+          count: kAuditTrailRowLimit,
+          filters: const AuditTrailFilters(),
+        )),
+        findsOneWidget,
+        reason: 'a refresh that kept the old pages would show stale rows above '
+            'fresh ones with no boundary between them',
+      );
+      expect(store.recorded.last.before, isNull);
+    });
+
+    testWidgets('changes no filter', (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailRefreshKey));
+      await tester.pump();
+      await tester.pump();
+
+      expect(store.recorded.last.keyPrefix, store.recorded.first.keyPrefix);
+      expect(store.recorded.last.groupNames, store.recorded.first.groupNames);
+    });
+  });
+
+  group('AuditTrailBody — nothing moves on its own', () {
+    test('the page starts no timer, holds no scroll listener and subscribes '
+        'to nothing', () {
+      // T-05-66. CONTEXT's ruling: the page refreshes on open and on an
+      // explicit control, and a self-scrolling audit list is unreadable. A
+      // scroll-position listener that pre-fetched would be infinite scroll
+      // wearing a button's clothes.
+      final source = _pageSourceWithoutComments();
+      expect(source, isNot(contains('Timer')));
+      expect(source, isNot(contains('ScrollController')));
+      expect(source, isNot(contains('.listen(')));
+      expect(source, isNot(contains('addPostFrameCallback')));
     });
   });
 }
