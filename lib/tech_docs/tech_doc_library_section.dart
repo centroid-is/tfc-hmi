@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tfc_dart/core/preferences.dart' show PreferencesApi;
 import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
@@ -21,6 +21,9 @@ import '../plc/plc_detail_panel.dart';
 import '../providers/mcp_bridge.dart'
     show isMcpChatAvailable, isMcpWriteEnabled;
 import '../providers/plc.dart';
+// The adapter below has no `ref`, so it calls the factory. Importing the
+// provider file is what keeps it inside spec §6's one-construction-site rule.
+import '../providers/preferences.dart' show createDeviceLocalPreferences;
 import '../providers/scaffold_messenger_key.dart';
 import '../providers/tech_doc.dart';
 import 'tech_doc_audit.dart';
@@ -1157,7 +1160,7 @@ Then provide a summary of what this PLC code controls and how it is structured.'
 
 /// Adapter from SharedPreferences to [PrefsReader] for deleteAndCleanAssets.
 class _SharedPrefsReader implements PrefsReader {
-  final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
+  final PreferencesApi _prefs = createDeviceLocalPreferences();
 
   @override
   Future<String?> getString(String key) async {

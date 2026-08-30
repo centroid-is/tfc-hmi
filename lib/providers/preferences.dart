@@ -12,6 +12,21 @@ import 'database.dart';
 
 part 'preferences.g.dart';
 
+/// The one place a device-local preferences store is constructed.
+///
+/// Spec §6 asks for this: a feature that news up its own store writes past
+/// both guards and the type system will not object.
+/// `scripts/check-preferences-construction.sh` fails the build for a
+/// construction anywhere else. Where a `ref` is available, read
+/// [localPreferencesProvider] instead of calling this — the two answer the
+/// same physical store, but the provider is overridable in a test and this is
+/// not.
+///
+/// Returns a fresh wrapper each call. That is safe because the wrapper holds
+/// no state of its own; the values live on the platform channel behind it.
+PreferencesApi createDeviceLocalPreferences() =>
+    SharedPreferencesWrapper(SharedPreferencesAsync());
+
 /// The shared configuration store, **guarded**.
 ///
 /// Every caller in the app already reads this provider, so wrapping the value
@@ -20,7 +35,7 @@ part 'preferences.g.dart';
 @Riverpod(keepAlive: true)
 Future<Preferences> preferences(Ref ref) async {
   final db = await ref.watch(databaseProvider.future);
-  final localCache = SharedPreferencesWrapper(SharedPreferencesAsync());
+  final localCache = createDeviceLocalPreferences();
 
   final inner = await Preferences.create(db: db, localCache: localCache);
 
@@ -87,6 +102,8 @@ Future<Preferences> systemPreferences(Ref ref) async {
 /// **Deliberately unguarded, and it must stay that way.** The session itself
 /// is stored through here (`access.dart`'s `_persist`), so putting a check in
 /// front of it would need a session to read the session.
+/// Built from [createDeviceLocalPreferences] rather than constructing its own,
+/// so the provider and the factory cannot answer different stores.
 final localPreferencesProvider = Provider<PreferencesApi>(
-  (ref) => SharedPreferencesWrapper(SharedPreferencesAsync()),
+  (ref) => createDeviceLocalPreferences(),
 );
