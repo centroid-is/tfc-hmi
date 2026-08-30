@@ -18,18 +18,26 @@
 /// every plan in the phase.
 ///
 /// Exactly two plans of Phase 4 edit this file: 04-01 (which creates it and
-/// exports the config) and 04-08 (which adds the client itself). Every other
-/// plan imports internals.
+/// exports the config) and 04-08 (which adds the client itself). Phase 5 adds
+/// one more, 05-07, and the third export it brings is here for the same reason
+/// the second one is: an embedder genuinely **constructs** a
+/// [HoldToRunController], the way it constructs a [RemoteStateMan]. A jog
+/// button is a thing an application builds; it is not a seam inside a
+/// connection.
 ///
 /// What is here, and nothing else:
 ///
-///  * [ClientConfig] — the deadlines, the backoff window, the staleness horizon.
+///  * [ClientConfig] — the deadlines, the backoff window, the staleness
+///    horizon, and the hold-to-run cadence the controller is handed.
 ///  * [RemoteStateMan] — the `StateManApi` an embedder holds, plus
 ///    `defaultPageSubscription`, the name its constructor keys are filed under.
 ///  * [LinkState] — the four-state connection indicator an operator-facing
 ///    health line renders. The supervisor that owns the state machine is not
 ///    exported with it: a caller reads where the link is, it does not drive the
 ///    reconnect loop.
+///  * [HoldToRunController] — one hold-to-run button, with its release
+///    triggers injected so the Flutter binding above it stays a documented
+///    pattern rather than a widget this pure-Dart package cannot import.
 ///
 /// Deliberately absent, and each for the same reason — an embedder constructs a
 /// client and reads values from it, it does not reach into a connection:
@@ -44,4 +52,5 @@ library;
 
 export 'src/client_config.dart';
 export 'src/connection_supervisor.dart' show LinkState;
+export 'src/hold_to_run_controller.dart';
 export 'src/remote_state_man.dart';
