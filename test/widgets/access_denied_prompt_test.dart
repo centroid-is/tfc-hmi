@@ -1021,10 +1021,11 @@ const Set<String> _kOtherWriteReceivers = {
 /// [kUncaughtAccessDeniedWriteSites] silently stops meaning anything — the
 /// same failure the `isNotEmpty` guard one level up exists to prevent.
 ///
-/// Why the split exists at all: plan 04-11 drives the unhandled count to
+/// Why the split exists at all: plan 04-11 took the unhandled count to
 /// **zero**, and a single number that must be both zero and non-empty is a
 /// contradiction. So the scan proves the walk still works and the count is the
-/// residual.
+/// residual. At zero the scan is the half that still means something — it is
+/// what would catch a derivation that had quietly stopped finding anything.
 ///
 /// | File | Why its `.write(` is handled |
 /// |---|---|
