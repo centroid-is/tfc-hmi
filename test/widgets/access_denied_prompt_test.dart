@@ -15,6 +15,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:beamer/beamer.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -102,9 +103,9 @@ List<Override> _accessOverrides({AccessSession? session}) => [
 /// What plan 04-10's converted call sites decide from: one key bound to a
 /// one-rule template, and somewhere for the refusal's audit row to go.
 ///
-/// The rule is on [kWholeKeyMember], because the three converted sites these
-/// drive — `number.dart`, `start_stop_button.dart` — write scalar keys and name
-/// no member.
+/// The rule is on [kWholeKeyMember], because the two converted sites these
+/// drive — `number.dart` and `start_stop_button.dart` — write scalar keys and
+/// name no member.
 List<Override> _tagOverrides({
   required String key,
   required AccessGroup group,
@@ -788,7 +789,10 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(StartStopPillButton).first);
+      // The run segment by its own icon, not the pill's centre: the centre of
+      // a two-segment pill is the boundary between run and stop, and only
+      // `cmd/run` is bound here.
+      await tester.tap(find.byIcon(FontAwesomeIcons.play.data));
       await tester.pumpAndSettle();
 
       expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);

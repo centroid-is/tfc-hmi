@@ -49,12 +49,10 @@ import 'panes/standard_dialog.dart';
 /// checked rather than assumed.
 ///
 /// **What this number means, in the terms the phase agreed and no softer.**
-/// At these call sites `AccessDenied` is not handled. At some of them —
-/// `number.dart:473`, `conveyor.dart:2394`, the `advantys_stb.dart` and
-/// `beckhoff.dart` force grids — it escapes as an unhandled asynchronous
-/// error. At the rest — `start_stop_button.dart:184`, `button.dart`,
-/// `section_button.dart`, `conveyor_gate.dart` — a bare `catch (e)` swallows
-/// it into a log line, or, in `sensor.dart:773` and `schneider.dart:303`,
+/// At these call sites `AccessDenied` is not handled. At some of them — the
+/// `advantys_stb.dart` and `beckhoff.dart` force grids — it escapes as an
+/// unhandled asynchronous error. At the rest — `button.dart`,
+/// `section_button.dart` — a bare `catch (e)` swallows it into a log line or
 /// renders its developer string into a snackbar. **None of those is a
 /// handling**: not one of them tells the operator what permission was missing
 /// or offers a way through, which is why they are all counted here.
@@ -64,7 +62,27 @@ import 'panes/standard_dialog.dart';
 /// tap-time elevation is what removes the throw from the operator's path, by
 /// never issuing a write that will be refused. This number is expected to fall
 /// to zero there, and the test above is what makes that visible.
-const int kUncaughtAccessDeniedWriteSites = 31;
+///
+/// **2026-08-30, plan 04-10: 31 -> 22.** Nine sites moved onto
+/// `writeTag` (`tag_access_guard.dart`), which owns the `.write(` call, so
+/// their files no longer appear in the walk at all:
+///
+/// | File | Sites | Member passed |
+/// |---|---|---|
+/// | `conveyor.dart` | 1 | the pane's `write(field, …)` field |
+/// | `sensor.dart` | 1 | the `ST_Sensor_HMI` member being set |
+/// | `schneider.dart` | 1 | the parameter the edit changed |
+/// | `recipes.dart` | 2 | none — both replace a whole line or the whole array |
+/// | `number.dart` | 1 | none — a scalar key |
+/// | `start_stop_button.dart` | 1 | none — a command BOOL |
+/// | `analog_box.dart` | 1 | none — a scalar setpoint |
+/// | `conveyor_gate.dart` | 1 | none — a force BOOL |
+///
+/// The number was **re-derived by running the walk**, not by subtracting nine.
+/// Plan 04-11 takes the twenty-two that remain: the two force grids
+/// (`advantys_stb.dart`, `beckhoff.dart`) and the two button assets
+/// (`button.dart`, `section_button.dart`).
+const int kUncaughtAccessDeniedWriteSites = 22;
 
 /// The headline, kept at the top of the file so tests assert against the
 /// string the widget renders rather than one they supply — the
