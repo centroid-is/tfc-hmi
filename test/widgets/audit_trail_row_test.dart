@@ -336,4 +336,195 @@ void main() {
       expect(source, contains('HmiStateColors.of('));
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Auth rows
+  // -------------------------------------------------------------------------
+
+  group('AuditEntryLine, auth rows', () {
+    /// An auth row as `audit.dart`'s named constructors write one: the event in
+    /// `itemKey`, an empty `groupRequired`, and no values.
+    AuditEntryData authRow({
+      String itemKey = 'login',
+      bool allowed = true,
+    }) =>
+        _row(
+          surface: 'auth',
+          itemKey: itemKey,
+          groupRequired: '',
+          oldValue: null,
+          newValue: null,
+          allowed: allowed,
+        );
+
+    testWidgets('render the event name in the item slot', (tester) async {
+      for (final event in const [
+        'login',
+        'login.failed',
+        'logout',
+        'session.timeout',
+      ]) {
+        await _pump(tester, AuditEntryLine(row: authRow(itemKey: event)));
+        expect(find.text(event), findsOneWidget);
+      }
+    });
+
+    testWidgets('render no transition at all — not an empty one, not two em '
+        'dashes, nothing', (tester) async {
+      await _pump(tester, AuditEntryLine(row: authRow()));
+
+      expect(
+        find.textContaining(kAuditTransitionArrow),
+        findsNothing,
+        reason: 'audit.dart withholds values on auth rows on purpose, because '
+            'a trail that leaks credentials is worse than no trail; rendering '
+            'an empty transition would invite somebody to populate it',
+      );
+      expect(
+        _renderedText(tester).where((t) => t.contains(kAuditValueMissing)),
+        isEmpty,
+      );
+    });
+
+    testWidgets('a login is marked in HmiStateColors.orange', (tester) async {
+      await _pump(tester, AuditEntryLine(row: authRow()));
+
+      expect(find.byKey(kAuditAuthMarkKey), findsOneWidget);
+      final mark = tester.widget<ColoredBox>(find.byKey(kAuditAuthMarkKey));
+      expect(
+        mark.color,
+        _colours(tester).orange,
+        reason: 'orange already means an elevated session in '
+            'AccessStatusAction, so the page reuses an established meaning '
+            'rather than adding a colour',
+      );
+    });
+
+    testWidgets('a logout and a session timeout carry no colour',
+        (tester) async {
+      for (final event in const ['logout', 'session.timeout']) {
+        await _pump(tester, AuditEntryLine(row: authRow(itemKey: event)));
+
+        expect(find.byKey(kAuditAuthMarkKey), findsNothing);
+        expect(find.byKey(kAuditDenialMarkKey), findsNothing);
+        expect(find.byKey(kAuditMarkPlaceholderKey), findsOneWidget);
+        final palette = _colours(tester);
+        final painted = _coloursIn(tester, find.byType(AuditEntryLine));
+        expect(painted, isNot(contains(palette.orange)));
+        expect(painted, isNot(contains(palette.red)));
+      }
+    });
+
+    testWidgets(
+        'a login.failed is red and not orange — it is a denial like any '
+        'other, and red beats orange when both would apply', (tester) async {
+      await _pump(
+        tester,
+        AuditEntryLine(row: authRow(itemKey: 'login.failed', allowed: false)),
+      );
+
+      expect(find.byKey(kAuditAuthMarkKey), findsNothing);
+      final mark = tester.widget<ColoredBox>(find.byKey(kAuditDenialMarkKey));
+      final palette = _colours(tester);
+      expect(mark.color, palette.red);
+      expect(mark.color, isNot(palette.orange));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The origin chip
+  // -------------------------------------------------------------------------
+
+  group('auditOriginLabel', () {
+    test('names the default origin once, so the chip and the row agree', () {
+      expect(kAuditOriginDefault, 'operator');
+    });
+
+    test('labels the two origins this build knows about', () {
+      expect(auditOriginLabel('system'), isNotEmpty);
+      expect(auditOriginLabel('mcp'), isNotEmpty);
+    });
+
+    test(
+        'returns anything else verbatim rather than switching on three '
+        'literals', () {
+      expect(
+          auditOriginLabel('kubernetes-operator-9'), 'kubernetes-operator-9');
+      expect(auditOriginLabel(''), '');
+    });
+  });
+
+  group('AuditEntryLine, the origin chip', () {
+    testWidgets('an operator origin renders no chip', (tester) async {
+      await _pump(
+          tester, AuditEntryLine(row: _row(origin: kAuditOriginDefault)));
+
+      expect(find.byKey(kAuditOriginChipKey), findsNothing);
+    });
+
+    testWidgets('a system origin renders one inline on the collapsed row',
+        (tester) async {
+      await _pump(tester, AuditEntryLine(row: _row(origin: 'system')));
+
+      expect(
+        find.byKey(kAuditOriginChipKey),
+        findsOneWidget,
+        reason: 'twelve system rows per database reconnect must be '
+            'identifiable without opening twelve rows',
+      );
+    });
+
+    testWidgets('an origin from a newer build renders as itself',
+        (tester) async {
+      await _pump(
+        tester,
+        AuditEntryLine(row: _row(origin: 'kubernetes-operator-9')),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(kAuditOriginChipKey), findsOneWidget);
+      expect(
+        find.text('kubernetes-operator-9'),
+        findsOneWidget,
+        reason: 'origin is a plain text column with a default, so a station '
+            'running a newer build writes words this one has never heard of; '
+            'an exhaustive switch here would be a page that breaks on an '
+            'upgrade',
+      );
+      expect(find.text(kAuditOriginDefault), findsNothing);
+    });
+
+    testWidgets('the chip is decoration only and never red or orange',
+        (tester) async {
+      await _pump(tester, AuditEntryLine(row: _row(origin: 'system')));
+
+      final palette = _colours(tester);
+      final painted = _coloursIn(tester, find.byKey(kAuditOriginChipKey));
+      expect(painted, isNot(contains(palette.red)));
+      expect(painted, isNot(contains(palette.orange)));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The auth predicate, asserted on the source
+  // -------------------------------------------------------------------------
+
+  group('the auth predicate', () {
+    test('is isAuthEntry, not a literal', () {
+      final source = File('lib/widgets/audit_trail_row.dart')
+          .readAsLinesSync()
+          .where((line) => !RegExp(r'^\s*//').hasMatch(line))
+          .join('\n');
+
+      expect(source, contains('isAuthEntry('));
+      expect(
+        source.contains("'auth'"),
+        isFalse,
+        reason: 'three copies of a string literal is three places to typo it, '
+            'and a typo here renders a login as a write with an empty '
+            'transition instead of failing loudly',
+      );
+    });
+  });
+
 }
