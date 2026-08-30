@@ -6,6 +6,12 @@
 // that matter — the ring keeps the shape, stands the same distance off it all
 // the way round, and moves the edge of a hole into the hole — are properties
 // of the geometry, not of any one conveyor.
+//
+// And then cutting that ring into the dashes that crawl round it. Those are
+// geometry too: a dash pattern that fits the ring exactly, painted runs that
+// lie on the ring and nowhere else, and a phase that returns the picture it
+// started from — which is the whole of what makes the crawl look continuous
+// rather than like a ring being redrawn.
 import 'dart:math' as math;
 
 import 'package:flutter/rendering.dart';
@@ -168,17 +174,167 @@ void main() {
       );
     });
 
+    test('repaints as the dashes move, and when the style changes', () {
+      final contours = <List<Offset>>[
+        [Offset.zero, const Offset(1, 1), const Offset(0, 1)]
+      ];
+      final painter = HitBoundaryPainter(contours: contours);
+
+      expect(
+        painter.shouldRepaint(
+            HitBoundaryPainter(contours: contours, phase: 0.25)),
+        isTrue,
+        reason: 'the crawl is nothing but a changing phase',
+      );
+      expect(
+        painter.shouldRepaint(HitBoundaryPainter(
+            contours: contours, style: HitBoundaryStyle.brisk)),
+        isTrue,
+      );
+    });
+
     test('the two tones are far enough apart to carry any background', () {
       // W3C technique C40: two colours at least 9:1 apart guarantee that one
-      // of them clears 3:1 against whatever solid colour they land on. This
-      // ring lands on state fills as often as on the page, so the guarantee
-      // is the point of there being two.
+      // of them clears 3:1 against whatever solid colour they land on. The
+      // ring lands on state fills as often as on the page. The halo no longer
+      // surrounds the ink — under `twoTone` it alternates with it along the
+      // same line — but it is the same guarantee and the same pair.
       double luminance(Color c) => c.withValues(alpha: 1).computeLuminance();
       final ink = luminance(HitBoundaryPainter.defaultInk);
       final halo = luminance(HitBoundaryPainter.defaultHalo);
       final contrast =
           (math.max(ink, halo) + 0.05) / (math.min(ink, halo) + 0.05);
       expect(contrast, greaterThan(9));
+    });
+  });
+
+  group('fitDashes', () {
+    test('scales the pattern so a whole number of it fits the ring', () {
+      // 100 wants ten 6+4s and gets them.
+      expect(fitDashes(100, dash: 6, gap: 4), (dash: 6.0, gap: 4.0));
+
+      // 93 does not. Nine periods is the nearest fit, so every dash and every
+      // gap gives by the same fraction rather than one runt taking all of it.
+      final fitted = fitDashes(93, dash: 6, gap: 4);
+      expect(93 / (fitted.dash + fitted.gap), closeTo(9, 1e-9));
+      expect(fitted.dash / fitted.gap, closeTo(6 / 4, 1e-9),
+          reason: 'the pattern keeps its proportions');
+    });
+
+    test('a ring too short for one period still gets one', () {
+      final fitted = fitDashes(3, dash: 6, gap: 4);
+      expect(fitted.dash + fitted.gap, closeTo(3, 1e-9));
+    });
+
+    test('leaves a degenerate ring alone', () {
+      expect(fitDashes(0, dash: 6, gap: 4), (dash: 6.0, gap: 4.0));
+    });
+  });
+
+  group('dashRing', () {
+    /// A square, walked corner to corner — perimeter 400.
+    List<Offset> square([double side = 100]) => [
+          Offset.zero,
+          Offset(side, 0),
+          Offset(side, side),
+          Offset(0, side),
+        ];
+
+    double runLength(List<Offset> run) {
+      var length = 0.0;
+      for (var i = 1; i < run.length; i++) {
+        length += (run[i] - run[i - 1]).distance;
+      }
+      return length;
+    }
+
+    test('cuts the ring into runs of the length asked for', () {
+      final runs = dashRing(square(), dash: 6, gap: 4);
+      expect(runs, hasLength(40), reason: '400 / (6 + 4)');
+      for (final run in runs) {
+        expect(runLength(run), closeTo(6, 1e-6));
+      }
+    });
+
+    test('every run lies on the ring it was cut from', () {
+      // The dashes are the outline, not an approximation drawn near it: a run
+      // that left the ring would be a second opinion about the asset's shape,
+      // which is the thing this whole file exists to prevent.
+      final ring = square();
+      for (final run in dashRing(ring, dash: 6, gap: 4, phase: 3.7)) {
+        for (final point in run) {
+          final onEdge = (point.dy.abs() < 1e-6 || (point.dy - 100).abs() < 1e-6)
+                  && point.dx >= -1e-6 && point.dx <= 100 + 1e-6 ||
+              (point.dx.abs() < 1e-6 || (point.dx - 100).abs() < 1e-6) &&
+                  point.dy >= -1e-6 && point.dy <= 100 + 1e-6;
+          expect(onEdge, isTrue, reason: '$point is off the square');
+        }
+      }
+    });
+
+    test('a run turns the corner rather than cutting it', () {
+      // A dash straddling a corner keeps the corner point, so it bends with
+      // the ring. Cutting straight across would round every corner of every
+      // marked asset by however long a dash is.
+      final ring = square();
+      // Phase 0 puts a dash boundary on the corner at 100; 97 lands a dash
+      // across it.
+      final runs = dashRing(ring, dash: 6, gap: 4, phase: -97);
+      final turning = runs.where((r) => r.length > 2).toList();
+      expect(turning, isNotEmpty);
+      expect(
+        turning.any((r) => r.any((p) => (p - const Offset(100, 0)).distance < 1e-6)),
+        isTrue,
+      );
+    });
+
+    test('one whole period of phase is the same picture again', () {
+      // What makes the crawl read as a ring of dashes moving rather than as a
+      // ring being redrawn — and what lets the animation loop.
+      String shape(List<List<Offset>> runs) => runs
+          .map((r) => r
+              .map((p) => '${p.dx.toStringAsFixed(4)},${p.dy.toStringAsFixed(4)}')
+              .join(';'))
+          .join('|');
+
+      final ring = square();
+      expect(
+        shape(dashRing(ring, dash: 6, gap: 4, phase: 10)),
+        shape(dashRing(ring, dash: 6, gap: 4, phase: 0)),
+      );
+      // Half a period along, every dash sits where its own gap was.
+      expect(
+        shape(dashRing(ring, dash: 6, gap: 4, phase: 5)),
+        isNot(shape(dashRing(ring, dash: 6, gap: 4, phase: 0))),
+      );
+    });
+
+    test('the dashes and their gaps tile the ring without overlapping', () {
+      // The two-tone arrangement: the light runs are the same pattern slid on
+      // by one dash, so together the two cover the ring exactly once.
+      final ring = square();
+      final dashes = dashRing(ring, dash: 6, gap: 4, phase: 2);
+      final gaps = dashRing(ring, dash: 4, gap: 6, phase: 2 - 6);
+      final covered = dashes.fold(0.0, (sum, r) => sum + runLength(r)) +
+          gaps.fold(0.0, (sum, r) => sum + runLength(r));
+      expect(covered, closeTo(400, 1e-4));
+    });
+
+    test('a pattern with no gap is the whole closed ring', () {
+      final runs = dashRing(square(), dash: 6, gap: 0);
+      expect(runs, hasLength(1));
+      expect(runLength(runs.single), closeTo(400, 1e-6));
+    });
+
+    test('nothing to cut gives nothing', () {
+      expect(dashRing(const [Offset.zero], dash: 6, gap: 4), isEmpty);
+      expect(dashRing(square(), dash: 0, gap: 4), isEmpty);
+      expect(
+        dashRing(const [Offset.zero, Offset.zero, Offset.zero],
+            dash: 6, gap: 4),
+        isEmpty,
+        reason: 'a ring of no length',
+      );
     });
   });
 }

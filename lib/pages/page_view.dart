@@ -850,10 +850,21 @@ class _OpenPaneMark extends StatefulWidget {
   State<_OpenPaneMark> createState() => _OpenPaneMarkState();
 }
 
-class _OpenPaneMarkState extends State<_OpenPaneMark> {
+class _OpenPaneMarkState extends State<_OpenPaneMark>
+    with SingleTickerProviderStateMixin {
   /// How far off the asset the outline stands, in logical pixels. Enough to
   /// read as a mark around the thing rather than a line drawn on it.
   static const double _standoff = 4;
+
+  /// Drives the crawl. Repeating, so it is only ever allowed to run while
+  /// there is actually a ring on screen — a ticker that never stops is a
+  /// frame scheduled forever on a mimic that is otherwise idle, and it leaves
+  /// every `pumpAndSettle` in reach of this widget waiting on it.
+  ///
+  /// Built in `initState` rather than lazily: a page where no pane is ever
+  /// opened never reads it, and a `late final` initialiser first run from
+  /// `dispose` asks for a `TickerMode` that is no longer there to ask.
+  late final AnimationController _march;
 
   /// The asset being marked, and where it sits. Both kept after the pane
   /// closes so the mark has something to fade OUT of — dropping them would
@@ -875,6 +886,10 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
   @override
   void initState() {
     super.initState();
+    _march = AnimationController(
+      vsync: this,
+      duration: HitBoundaryStyle.selection.period,
+    );
     SidePaneHost.subject.addListener(_onSubjectChanged);
     _sync(notify: false);
   }
@@ -890,7 +905,23 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
   @override
   void dispose() {
     SidePaneHost.subject.removeListener(_onSubjectChanged);
+    _march.dispose();
     super.dispose();
+  }
+
+  /// Runs the crawl only while a traced ring is showing.
+  void _driveMarch() {
+    final wanted = _shown && _answered;
+    if (wanted == _march.isAnimating) return;
+    if (wanted) {
+      _march.repeat();
+    } else {
+      // Stopped and rewound rather than just stopped: the ring fades out over
+      // 180ms and comes back somewhere else entirely, so where the dashes had
+      // got to on the last asset means nothing on the next one.
+      _march.stop();
+      _march.value = 0;
+    }
   }
 
   void _onSubjectChanged() {
@@ -925,6 +956,7 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
     } else {
       apply();
     }
+    _driveMarch();
     if (shown && !_answered) _scheduleLookup();
   }
 
@@ -953,6 +985,7 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
       _outline = outline;
       _answered = true;
     });
+    _driveMarch();
   }
 
   /// What to outline, in canvas coordinates, stood off from the asset.
@@ -1027,9 +1060,15 @@ class _OpenPaneMarkState extends State<_OpenPaneMark> {
           // before the pane has finished leaving.
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOut,
-          child: CustomPaint(
-            key: openPaneMarkKey,
-            painter: HitBoundaryPainter(contours: outline ?? const []),
+          child: AnimatedBuilder(
+            animation: _march,
+            builder: (context, _) => CustomPaint(
+              key: openPaneMarkKey,
+              painter: HitBoundaryPainter(
+                contours: outline ?? const [],
+                phase: _march.value,
+              ),
+            ),
           ),
         ),
       ),
