@@ -527,12 +527,22 @@ void main() {
               'the system write path: ${expected.difference(found)}');
     });
 
-    test('the two files another plan owns are named with an owner', () {
+    test('anything still owed names the plan that owns it, and no stale owner '
+        'marker is left behind', () {
       final code = File('lib/providers/access_policy.dart').readAsStringSync();
+      // While a file is owed the cap test's expected set is narrowed by it, so
+      // the reason and the owner have to be in the source or the narrowing is
+      // invisible.
       for (final owed in kSystemWriteCallSitesOwed) {
         expect(code, contains(owed));
+        expect(code, contains(RegExp(r'TODO\(\d\d-\d\d\)')),
+            reason: 'an owed entry must name the plan that closes it');
       }
-      expect(code, contains('TODO(03-09)'));
+      // 03-09 routed both files 03-06 left owed. The marker outliving the
+      // thing it marked is how an allow-list stops meaning anything.
+      expect(kSystemWriteCallSitesOwed, isEmpty,
+          reason: 'collector.dart and mcp_bridge.dart are routed as of 03-09');
+      expect(code, isNot(contains('TODO(03-09)')));
     });
   });
 

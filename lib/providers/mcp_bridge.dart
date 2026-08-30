@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessDenied;
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         AlarmReader,
@@ -27,7 +28,8 @@ import 'alarm.dart';
 import 'database.dart' show databaseProvider;
 import 'page_manager.dart' show pageManagerProvider;
 import 'plc.dart' show plcCodeIndexProvider;
-import 'preferences.dart' show localPreferencesProvider, preferencesProvider;
+import 'preferences.dart'
+    show localPreferencesProvider, systemPreferencesProvider;
 import 'proposal.dart' show describeProposalFeedback;
 import 'proposal_state.dart'
     show
@@ -109,15 +111,46 @@ final mcpConfigMigrationProvider = FutureProvider<void>((ref) async {
     // into the device store — the migration must re-run at that moment
     // to delete the stale mcp.config row before the next sync. It is
     // idempotent, so re-running on every reconnect is safe.
+    // systemPreferencesProvider watches preferencesProvider, so this keeps
+    // that property rather than trading it for the escape.
     //
     // The timeout keeps the device-local MCP config independent of
     // database health: if preferencesProvider stalls (e.g. a half-open
     // connection), the config loads anyway and the migration re-runs
     // when the provider eventually emits.
+    //
+    // The **system** view of the shared store, not the ordinary one. This
+    // runs at boot with nobody signed in and calls `shared.remove(...)` once
+    // for `mcp.config` and once for each legacy key, all of which need
+    // `administer` under the `mcp.` prefix rule. Through the checked path
+    // every one of those is refused, the `catch` below swallows it, and the
+    // stale shared row this migration exists to delete survives forever —
+    // behind a log line that reads like a database outage. `systemWrites`
+    // skips the denial, not the audit: each removal still lands in the trail
+    // marked `origin: 'system'`.
+    //
+    // `local` stays `localPreferencesProvider` and stays unguarded. Widening
+    // that store into the guard to make the two sides symmetric would put an
+    // audit row on every `poke()` — one per pointer-down, per plan 01-07's
+    // note — which is a conversation about throttling the persist, not a
+    // change to make in passing.
     final shared = await ref
-        .watch(preferencesProvider.future)
+        .watch(systemPreferencesProvider.future)
         .timeout(const Duration(seconds: 15));
     await migrateMcpConfigToDeviceLocal(shared: shared, local: local);
+  } on AccessDenied catch (e) {
+    // Not an outage. Reaching here means the migration was routed back
+    // through the checked path, and no session at boot can satisfy
+    // `administer` — so the stale shared row will never be deleted and the
+    // device config will be overwritten by it on the next sync. That is a
+    // defect in this app's access policy wiring, and it is deliberately not
+    // phrased like the sentence below.
+    io.stderr.writeln(
+        'MCP config migration REFUSED: writing "${e.itemKey}" needs the '
+        '${e.required.name} group, and nobody is signed in at boot. '
+        'This is a defect in the access policy wiring, not a database '
+        'outage: the migration must take systemPreferencesProvider. The '
+        'stale shared mcp.config row has NOT been removed.');
   } catch (e) {
     // Shared preferences unavailable — the local store is authoritative
     // anyway; migration re-runs when preferencesProvider recovers.

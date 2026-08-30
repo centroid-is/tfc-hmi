@@ -117,7 +117,7 @@ void reportAccessDenial(Ref ref, AccessDenied denial) {
 /// | `lib/providers/alarm.dart` | the empty `alarm_man_config` `AlarmMan.create` would otherwise write |
 /// | `lib/page_creator/assets/recipes.dart` | the empty recipe list written on the **read** path, when an asset is opened |
 /// | `lib/providers/collector.dart` | the default `collector_config`, and the carry-over of a config still only on the device |
-/// | `lib/providers/mcp_bridge.dart` | the config migration's removal of the stale `mcp.config` row — **owed** |
+/// | `lib/providers/mcp_bridge.dart` | the config migration's removal of the stale shared `mcp.config` row, at boot with nobody signed in |
 const List<String> kSystemWriteCallSites = [
   'lib/providers/preferences.dart',
   'lib/providers/state_man.dart',
@@ -125,23 +125,21 @@ const List<String> kSystemWriteCallSites = [
   'lib/providers/alarm.dart',
   'lib/page_creator/assets/recipes.dart',
   'lib/providers/collector.dart',
-  // TODO(03-09): `mcpConfigMigrationProvider` removes the stale `mcp.config`
-  // row from the **shared** store at boot, with nobody signed in, against an
-  // `administer` prefix rule. It is inside a `try`/`catch`, so it does not
-  // fail boot — but it does fire `onDenied`, which means a denial prompt on a
-  // cold boot until plan 03-09 routes it. Plan 03-09 owns the file.
   'lib/providers/mcp_bridge.dart',
 ];
 
 /// The entries of [kSystemWriteCallSites] that do not use the path **yet**.
 ///
-/// The cap test's expected set is [kSystemWriteCallSites] minus this one, so
-/// the two owed files can be declared with their reasons without the test
-/// failing today, and closing one is a two-line edit here that the test then
-/// enforces. Plan 03-11's gate catches the mismatch if neither happens.
-const List<String> kSystemWriteCallSitesOwed = [
-  'lib/providers/mcp_bridge.dart',
-];
+/// The cap test's expected set is [kSystemWriteCallSites] minus this one, so a
+/// file can be declared with its reason before it is routed without the test
+/// failing meanwhile, and closing it is a one-line deletion here that the test
+/// then enforces. Plan 03-11's gate catches the mismatch if it never happens.
+///
+/// **Empty since 03-09**, which routed the two 03-06 left here. It stays as a
+/// declared, tested-empty mechanism rather than being deleted: the next plan
+/// that needs to land a call site and its routing separately has somewhere
+/// honest to say so, instead of quietly widening the allow-list.
+const List<String> kSystemWriteCallSitesOwed = <String>[];
 
 /// The session a guard resolves on while [accessSessionProvider] is still
 /// loading, or has errored.
