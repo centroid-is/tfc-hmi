@@ -200,6 +200,35 @@ void main() {
     });
   });
 
+  group('WriteStatusParams', () {
+    test('round-trips the ids it was asked about', () {
+      final p = WriteStatusParams(const ['01ONE', '01TWO']);
+      expect(p.toJson(), {
+        'cmds': ['01ONE', '01TWO'],
+      });
+      expect(WriteStatusParams.fromJson(viaJson(p.toJson())).cmds,
+          ['01ONE', '01TWO']);
+    });
+
+    test('a non-string cmd is refused at decode, not at iteration', () {
+      // 05-REVIEW IN-03. `(json['cmds'] as List).cast<String>()` is a lazy
+      // view: it decodes without complaint and throws later, wherever the
+      // list is first walked — outside the decoder's try, which is exactly
+      // the shape this package's tolerant decoders are built against.
+      final decoded =
+          jsonDecode('{"cmds":["01ONE",7]}') as Map<String, Object?>;
+      expect(() => WriteStatusParams.fromJson(decoded), throwsFormatException,
+          reason: 'the frame was accepted and the failure deferred to '
+              'whoever iterates the list next');
+    });
+
+    test('a cmds that is not a list at all is refused', () {
+      expect(() => WriteStatusParams.fromJson(const {'cmds': '01ONE'}),
+          throwsFormatException);
+      expect(() => WriteStatusParams.fromJson(const {}), throwsFormatException);
+    });
+  });
+
   group('HoldTickParams', () {
     test('round-trips through the slim wire keys', () {
       final t = HoldTickParams(key: 'ST101.CN01.jog', counter: 42);

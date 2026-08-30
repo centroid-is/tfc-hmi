@@ -553,12 +553,37 @@ final class HoldTickParams {
   Map<String, Object?> toJson() => {'k': key, 'n': counter};
 }
 
+/// The re-query frame: which commands the caller wants an answer about.
+///
+/// Built by `RemoteStateMan.writeStatus`. The gateway decodes `cmds` by hand
+/// because its refusals are part of its contract — an empty list, a list over
+/// `maxKeysPerSubscribe`, a `cmds` that is not a list at all each carry their
+/// own `INVALID_PARAMS` message — and routing that through a DTO would trade
+/// those sentences for a `FormatException`.
 final class WriteStatusParams {
   final List<String> cmds;
   const WriteStatusParams(this.cmds);
 
-  factory WriteStatusParams.fromJson(Map<String, Object?> json) =>
-      WriteStatusParams((json['cmds'] as List).cast<String>());
+  /// **Eager, and refusing** (05-REVIEW IN-03). `(json['cmds'] as List)
+  /// .cast<String>()` is a *lazy* view: a non-string element throws at
+  /// iteration, which happens outside whatever `try` the decoder was called
+  /// under — the exact shape `WriteResult.fromJson`'s tolerance is built
+  /// against. Every element is checked here, where the failure is a decode
+  /// failure and can be answered as one.
+  factory WriteStatusParams.fromJson(Map<String, Object?> json) {
+    final raw = json['cmds'];
+    if (raw is! List) {
+      throw FormatException('writeStatus params carry no "cmds" list: $raw');
+    }
+    final cmds = <String>[];
+    for (final entry in raw) {
+      if (entry is! String) {
+        throw FormatException('a writeStatus cmd is not a string: $entry');
+      }
+      cmds.add(entry);
+    }
+    return WriteStatusParams(cmds);
+  }
 
   Map<String, Object?> toJson() => {'cmds': cmds};
 }

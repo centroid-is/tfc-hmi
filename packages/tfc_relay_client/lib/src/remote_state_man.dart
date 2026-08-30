@@ -555,13 +555,25 @@ final class RemoteStateMan implements StateManApi {
     try {
       final raw = await _request(
         Methods.write,
-        {
-          'cmd': id,
-          'key': key,
-          'value': sanitizedValue.value,
-          if (expect != null) 'expect': sanitizedExpect.value,
-          if (hold) 'hold': true,
-        },
+        // Through the shared DTO rather than a map literal (05-REVIEW IN-02).
+        // The server decodes with `WriteParams.fromJson`; a hand-rolled
+        // literal at this end meant the two halves of one wire shape were
+        // kept in step by the test suite alone, which is the drift the shared
+        // protocol package exists to prevent — and it left the DTO's `hold`
+        // serialization with no production caller at all.
+        //
+        // The values handed over are the sanitized ones, so the factory's
+        // non-finite refusal cannot fire here: a non-finite `expect` was
+        // already refused above with the message this path owes the caller,
+        // and a non-finite `value` is deliberately sent as null and marked
+        // bad-quality locally (`_markNonFinite`).
+        WriteParams(
+          cmd: id,
+          key: key,
+          value: sanitizedValue.value,
+          expect: sanitizedExpect.value,
+          hold: hold,
+        ).toJson(),
         deadline: config.writeDeadline,
         onSend: () {
           dispatched = true;
@@ -804,7 +816,8 @@ final class RemoteStateMan implements StateManApi {
   Future<List<WriteResult>> writeStatus(List<String> cmds) async {
     if (cmds.isEmpty) return const <WriteResult>[];
     _record(_writeStatusQueries, cmds);
-    final raw = _asJson(await _request(Methods.writeStatus, {'cmds': cmds}));
+    final raw = _asJson(
+        await _request(Methods.writeStatus, WriteStatusParams(cmds).toJson()));
     final results = raw['results'];
     return [
       for (var i = 0; i < cmds.length; i++)
