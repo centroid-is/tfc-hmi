@@ -277,12 +277,19 @@ void _registerUpdateAlarm({
             (existing['rules'] as List<dynamic>).cast<Map<String, dynamic>>();
       }
 
-      // Build the updated proposal
+      // Build the updated proposal.
+      //
+      // Accepting this replaces the stored alarm with what is here, so every
+      // field the alarm had has to survive the trip even when no tool can
+      // edit it. `path`/`bindToPath` are the alarm's place in the tree;
+      // dropping them would silently re-home the alarm at the root.
       final proposal = <String, dynamic>{
         'uid': alarmUid,
         'title': newTitle,
         'description': newDescription,
         'rules': newRules,
+        'path': existing['path'] ?? const <String>[],
+        'bindToPath': existing['bindToPath'] ?? false,
       };
       if (newKey != null) {
         proposal['key'] = newKey;

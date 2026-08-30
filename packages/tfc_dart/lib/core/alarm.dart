@@ -73,6 +73,31 @@ class AlarmConfig {
   final String description;
   final List<AlarmRule> rules;
 
+  /// Where this alarm sits in the alarm tree, outermost group first —
+  /// `['Line 3', 'Multivac']`. Empty puts it at the root.
+  ///
+  /// The grouping belongs here rather than on any one screen because it is a
+  /// property of the plant, not of a page: the stop timeline, and anything
+  /// else that wants to roll alarms up, read the same paths, and configuring
+  /// an alarm stays the single place its home is decided.
+  ///
+  /// Contrast [AlarmVisibilityConfig.announceInNavigation], which is on the
+  /// beacon asset because *where* an alarm announces genuinely is a per-page
+  /// presentation choice.
+  @JsonKey(defaultValue: <String>[])
+  final List<String> path;
+
+  /// True when this alarm *is* the node at [path] rather than a diagnosis
+  /// underneath it.
+  ///
+  /// This is the coarse "the machine stopped" signal for equipment that has
+  /// no finer alarms yet. A node may carry a bound alarm and children at the
+  /// same time, in which case the bound one accounts for whatever the
+  /// diagnoses underneath do not explain — so adding a diagnosis later is a
+  /// new alarm definition, not a restructuring.
+  @JsonKey(defaultValue: false)
+  final bool bindToPath;
+
   // Navigation announcement lives on the Alarm beacon asset
   // (`AlarmVisibilityConfig.announceInNavigation`), not here: an alarm is a
   // plant-wide fact, where it announces is a per-page presentation choice,
@@ -86,11 +111,13 @@ class AlarmConfig {
     required this.title,
     required this.description,
     required this.rules,
+    this.path = const [],
+    this.bindToPath = false,
   });
 
   @override
   String toString() {
-    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, rules: $rules)';
+    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, path: $path, bindToPath: $bindToPath, rules: $rules)';
   }
 
   /// Drift row constructor for the `Alarm` table — alarm configuration is
@@ -120,6 +147,8 @@ class AlarmConfig {
       key: copy.key,
       title: copy.title,
       description: copy.description,
+      path: List<String>.from(copy.path),
+      bindToPath: copy.bindToPath,
       rules: copy.rules.map((e) => AlarmRule.from(e)).toList(),
     );
   }

@@ -165,6 +165,8 @@ void main() {
       required String title,
       required String description,
       List<Map<String, dynamic>> rules = const [],
+      List<String>? path,
+      bool? bindToPath,
     }) =>
         {
           'uid': uid,
@@ -172,6 +174,8 @@ void main() {
           'title': title,
           'description': description,
           'rules': rules,
+          if (path != null) 'path': path,
+          if (bindToPath != null) 'bindToPath': bindToPath,
         };
 
     /// Reads back the stored alarm config, to prove a tool did not write it.
@@ -370,6 +374,69 @@ void main() {
         expect(json['title'], equals('New Title'));
         expect(json['description'], equals('New description'));
         expect(json['uid'], equals('alarm-1'));
+      });
+
+      test('an update keeps the alarm where it sits in the tree', () async {
+        // AlarmConfig.path/bindToPath place an alarm in the alarm tree, and
+        // accepting an update proposal replaces the stored alarm with the
+        // proposal wholesale. No tool edits the path, so if the proposal did
+        // not carry it, renaming an alarm would silently re-home it at the
+        // root and empty out whatever grouped by it.
+        await setupWithAutoConfirm();
+
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Film reel empty',
+            description: 'The upper film reel ran out',
+            path: ['Line 3', 'Multivac'],
+          ),
+          alarmJson(
+            uid: 'alarm-2',
+            title: 'Multivac stopped',
+            description: 'No finer alarm matched',
+            path: ['Line 3', 'Multivac'],
+            bindToPath: true,
+          ),
+        ]);
+
+        final renamed = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-1',
+          'title': 'Film reel ran out',
+        });
+        final leaf =
+            jsonDecode((renamed.content.first as TextContent).text)
+                as Map<String, dynamic>;
+        expect(leaf['title'], equals('Film reel ran out'));
+        expect(leaf['path'], equals(['Line 3', 'Multivac']));
+        expect(leaf['bindToPath'], isFalse);
+
+        final bound = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-2',
+          'description': 'Nothing finer matched',
+        });
+        final boundJson =
+            jsonDecode((bound.content.first as TextContent).text)
+                as Map<String, dynamic>;
+        expect(boundJson['path'], equals(['Line 3', 'Multivac']));
+        expect(boundJson['bindToPath'], isTrue);
+      });
+
+      test('an alarm with no path proposes an empty one, not a missing one',
+          () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(uid: 'rootish', title: 'T', description: 'D'),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'rootish',
+          'title': 'T2',
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['path'], isEmpty);
+        expect(json['bindToPath'], isFalse);
       });
 
       test('an alarm that exists only in preferences can be updated',
