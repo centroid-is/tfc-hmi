@@ -141,6 +141,37 @@ class _FakeStore extends Fake implements AuditTrailStore {
   Future<List<String>> distinctWho() async => whoOptions;
 }
 
+
+/// A host whose `setState` rebuilds [AuditTrailBody] without replacing its
+/// `State`.
+///
+/// A bare `tester.pump()` does not rebuild a widget whose own state has not
+/// changed, so a stability test written that way passes identically under the
+/// correct and the defective design. This host makes the rebuild happen for
+/// real.
+class _RebuildHost extends StatefulWidget {
+  const _RebuildHost();
+
+  @override
+  State<_RebuildHost> createState() => _RebuildHostState();
+}
+
+class _RebuildHostState extends State<_RebuildHost> {
+  /// Forces one more `AuditTrailBody.build`.
+  void bump() => setState(() {});
+
+  @override
+  Widget build(BuildContext context) {
+    // Deliberately not `const`, and deliberately unkeyed. Flutter short-circuits
+    // a child's rebuild when the new widget is `identical` to the old one, so a
+    // const instance would make this host inert; a *changing* key would go the
+    // other way and replace the `State` outright, which would legitimately
+    // issue a second query and hide the defect behind a false positive.
+    // ignore: prefer_const_constructors
+    return AuditTrailBody();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -157,11 +188,9 @@ Future<void> _pumpBody(
   WidgetTester tester, {
   required AuditTrailStore? store,
   bool freezeClock = true,
-  Widget Function(Widget body)? wrap,
+  Widget child = const AuditTrailBody(),
 }) async {
   final (light, _) = muted();
-  Widget body = const AuditTrailBody();
-  if (wrap != null) body = wrap(body);
 
   final app = ProviderScope(
     overrides: [
@@ -169,7 +198,7 @@ Future<void> _pumpBody(
     ],
     child: MaterialApp(
       theme: light,
-      home: Scaffold(body: body),
+      home: Scaffold(body: child),
     ),
   );
 
@@ -402,6 +431,218 @@ void main() {
       // three-way branch.
       final source = _pageSourceWithoutComments();
       expect(source, isNot(contains('Colors.')));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 2 — the list, the filter wiring, and the search that escapes the
+  // window
+  // -------------------------------------------------------------------------
+
+  group('AuditTrailBody — the opening query', () {
+    testWidgets('spans exactly seven days back from now and asks for 500 rows',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+
+      expect(store.recorded, hasLength(1));
+      final window = store.recorded.single.window;
+      expect(window, isNotNull);
+      expect(
+        window!.end.difference(window.start),
+        const Duration(days: 7),
+        reason: 'the default is the last seven days, capped at 500 rows — '
+            'whichever bound is reached first',
+      );
+      expect(window.end, _now);
+      expect(store.recorded.single.limit, kAuditTrailRowLimit);
+    });
+
+    testWidgets('is issued on arrival, without waiting for a filter change',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(1));
+      await _pumpBody(tester, store: store);
+      expect(store.recorded, isNotEmpty);
+    });
+
+    testWidgets('excludes operate and says so on screen', (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(1));
+      await _pumpBody(tester, store: store);
+
+      expect(store.recorded.single.groupNames, isNot(contains('operate')));
+      expect(find.text(kAuditTrailOperateNote), findsOneWidget);
+    });
+  });
+
+  group('AuditTrailBody — the search that reaches the whole table', () {
+    testWidgets('a typed key prefix drops the time bound entirely',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(2));
+      await _pumpBody(tester, store: store);
+
+      await tester.enterText(find.byType(TextField), 'CN04');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+
+      final issued = store.recorded.last;
+      expect(issued.keyPrefix, 'CN04');
+      expect(
+        issued.window,
+        isNull,
+        reason: 'searching must answer "has anyone ever written this key", '
+            'not "did anyone this week" — a search that silently covered only '
+            'the default window would be a wrong answer that looks like a '
+            'right one',
+      );
+      expect(
+        issued.limit,
+        kAuditTrailRowLimit,
+        reason: 'the search escapes the time bound and never the row cap',
+      );
+    });
+
+    testWidgets('a chosen who drops the time bound too', (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(2), whoOptions: ['jon']);
+      await _pumpBody(tester, store: store);
+
+      await tester.tap(find.byKey(kAuditTrailWhoDropdownKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('jon').last);
+      await tester.pumpAndSettle();
+
+      final issued = store.recorded.last;
+      expect(issued.who, 'jon');
+      expect(issued.window, isNull);
+      expect(issued.limit, kAuditTrailRowLimit);
+    });
+  });
+
+  group('AuditTrailBody — query stability', () {
+    testWidgets('two rebuilds that change no filter issue one query, not three',
+        (tester) async {
+      // T-05-67, which is T-05-21 at the page layer. `clock.now()` called
+      // inside `build` moves `window.end` by microseconds every frame, so
+      // `AuditQuery ==` goes false, the autoDispose family swaps instances and
+      // the page hits the database on every frame it paints.
+      //
+      // Run under the **live** clock on purpose: a frozen clock hides precisely
+      // this defect, because a frozen `now` makes the recomputed query equal to
+      // the old one and the family answers from cache.
+      final store = _FakeStore(answer: (_) => _rows(2));
+      await _pumpBody(
+        tester,
+        store: store,
+        freezeClock: false,
+        child: const _RebuildHost(),
+      );
+
+      final host = tester.state<_RebuildHostState>(find.byType(_RebuildHost));
+      host.bump();
+      await tester.pump();
+      host.bump();
+      await tester.pump();
+
+      final body =
+          tester.state<AuditTrailBodyState>(find.byType(AuditTrailBody));
+      expect(
+        body.buildCount,
+        greaterThanOrEqualTo(3),
+        reason: 'a stability test that failed to trigger any rebuild would '
+            'pass vacuously',
+      );
+      expect(
+        store.recorded,
+        hasLength(1),
+        reason: 'the resolved AuditQuery lives in State; a rebuild that '
+            'changes no filter must watch the identical value and cost no '
+            'round trip (T-05-67)',
+      );
+    });
+  });
+
+  group('AuditTrailBody — the list', () {
+    testWidgets('virtualises: a 500-action result builds far fewer tiles',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(kAuditTrailRowLimit));
+      await _pumpBody(tester, store: store);
+
+      final built = tester
+          .widgetList<AuditActionTile>(
+            find.byType(AuditActionTile, skipOffstage: false),
+          )
+          .length;
+      expect(
+        built,
+        lessThan(50),
+        reason: 'building 500 expandable tiles in one frame is T-05-64',
+      );
+      expect(built, greaterThan(0));
+    });
+
+    testWidgets('uses no itemExtent — the tiles expand', (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+
+      final list = tester.widget<ListView>(find.byKey(kAuditTrailListKey));
+      expect(list.itemExtent, isNull);
+      expect(list.prototypeItem, isNull);
+    });
+  });
+
+  group('AuditTrailBody — the result line', () {
+    testWidgets('states the row count and the window it counted over',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+
+      expect(
+        find.text(auditTrailResultSummary(
+          count: 3,
+          filters: const AuditTrailFilters(),
+        )),
+        findsOneWidget,
+        reason: 'a count without the window that produced it is a number '
+            'somebody will quote',
+      );
+    });
+
+    testWidgets('says All time once the query escaped the seven-day bound',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(2));
+      await _pumpBody(tester, store: store);
+
+      await tester.enterText(find.byType(TextField), 'CN04');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+
+      expect(find.textContaining(kAuditTrailWholeTableLabel), findsOneWidget);
+    });
+  });
+
+  group('AuditTrailBody — the row cap', () {
+    testWidgets('says it is showing the newest 500 when the cap was reached',
+        (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(kAuditTrailRowLimit));
+      await _pumpBody(tester, store: store);
+      expect(find.byKey(kAuditTrailLimitNoteKey), findsOneWidget);
+      expect(find.text(kAuditTrailLimitNote), findsOneWidget);
+    });
+
+    testWidgets('says nothing of the sort on a short result', (tester) async {
+      final store = _FakeStore(answer: (_) => _rows(3));
+      await _pumpBody(tester, store: store);
+      expect(find.byKey(kAuditTrailLimitNoteKey), findsNothing);
+    });
+  });
+
+  group('AuditTrailBody — nothing is filtered in memory', () {
+    test('the page holds no client-side filter or sort', () {
+      // Every filter is pushed into SQL and applied in `WHERE` before `LIMIT`.
+      // Filtering the already-loaded rows would show three denials while the
+      // table held three hundred.
+      final source = _pageSourceWithoutComments();
+      expect(source, isNot(contains('.where(')));
+      expect(source, isNot(contains('.sort(')));
     });
   });
 }
