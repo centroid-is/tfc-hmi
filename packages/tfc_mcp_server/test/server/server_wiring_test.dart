@@ -73,7 +73,7 @@ void main() {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 27 expected tools (17 read + 9 write + proposal status)
+        // All 27 expected tools (18 read + 9 write)
         expect(toolNames, containsAll([
           // Read tools
           'ping',
@@ -81,7 +81,6 @@ void main() {
           'get_tag_value',
           'list_alarms',
           'get_alarm_detail',
-          'get_alarm_tree',
           'query_alarm_history',
           'list_pages',
           'list_assets',
@@ -93,6 +92,8 @@ void main() {
           'get_drawing_page',
           'query_trend_data',
           'diagnose_asset',
+          'list_access_templates',
+          'list_unbound_keys',
           // Write tools
           'create_alarm',
           'update_alarm',
@@ -105,7 +106,7 @@ void main() {
           'update_asset',
         ]));
 
-        expect(toolNames, hasLength(26));
+        expect(toolNames, hasLength(27));
       } finally {
         await client.close();
       }
@@ -196,8 +197,8 @@ void main() {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 26 tools are registered (drawing tools always present)
-        expect(toolNames, hasLength(26));
+        // All 27 tools are registered (drawing tools always present)
+        expect(toolNames, hasLength(27));
         expect(toolNames, contains('search_drawings'));
         expect(toolNames, contains('get_drawing_page'));
       } finally {

@@ -23,6 +23,7 @@ import 'resources/history_resource.dart';
 import 'resources/plc_code_index_resource.dart';
 import 'resources/knowledge_resource.dart';
 import 'resources/tech_docs_resource.dart';
+import 'services/access_template_service.dart';
 import 'services/alarm_context_service.dart';
 import 'services/alarm_service.dart';
 import 'services/config_service.dart';
@@ -37,6 +38,7 @@ import 'expression/expression_validator.dart';
 import 'safety/elicitation_risk_gate.dart';
 import 'services/proposal_feedback_bus.dart';
 import 'services/proposal_service.dart';
+import 'tools/access_template_tools.dart';
 import 'tools/alarm_tools.dart';
 import 'tools/alarm_tree_tools.dart';
 import 'tools/alarm_write_tools.dart';
@@ -154,6 +156,7 @@ class TfcMcpServer {
         : null;
 
     // Create trend and context services (Phase 7)
+    final accessTemplateService = AccessTemplateService(_database);
     final trendService = TrendService(_database);
     final alarmContextService = AlarmContextService(
       alarmService: alarmService,
@@ -183,6 +186,15 @@ class TfcMcpServer {
     if (toggles.configEnabled) {
       registerConfigTools(registry, configService);
       registerAssetTypeCatalogTools(registry);
+      // Templates are configuration to *read* and authorization to *change*,
+      // so the two halves are gated differently: the reads ride with the
+      // other config reads here, and the four proposal tools land under
+      // `proposalsEnabled` below.
+      registerAccessTemplateTools(
+        registry: registry,
+        service: accessTemplateService,
+        configService: configService,
+      );
     }
     if (toggles.drawingsEnabled) {
       registerDrawingTools(registry, drawingService);
