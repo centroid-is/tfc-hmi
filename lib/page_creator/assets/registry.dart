@@ -37,6 +37,7 @@ import 'connection_info.dart';
 import 'drawing_viewer.dart';
 import 'third_party.dart';
 import 'alarm_visibility.dart';
+import 'rtsp_camera.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -91,6 +92,7 @@ class AssetRegistry {
     DrawingViewerConfig: DrawingViewerConfig.fromJson,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.fromJson,
     AlarmVisibilityConfig: AlarmVisibilityConfig.fromJson,
+    RtspCameraConfig: RtspCameraConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -145,6 +147,7 @@ class AssetRegistry {
     if (kKnowledgeEnabled) DrawingViewerConfig: DrawingViewerConfig.preview,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.preview,
     AlarmVisibilityConfig: AlarmVisibilityConfig.preview,
+    RtspCameraConfig: RtspCameraConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(
