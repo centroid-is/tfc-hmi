@@ -107,6 +107,9 @@ const String kAuditTrailLimitNote =
     'Showing the newest $kAuditTrailRowLimit entries. Narrow the range or the '
     'filters to see further back.';
 
+/// The explicit paging action. A button, never a scroll position.
+const String kAuditTrailLoadMoreLabel = 'Load more';
+
 // ---------------------------------------------------------------------------
 // The keys
 // ---------------------------------------------------------------------------
@@ -138,6 +141,9 @@ const Key kAuditTrailEmptyClearFiltersKey =
 
 /// The line carrying [kAuditTrailLimitNote].
 const Key kAuditTrailLimitNoteKey = ValueKey<String>('audit-trail-limit-note');
+
+/// The `Load more` button. Present only while the newest page came back full.
+const Key kAuditTrailLoadMoreKey = ValueKey<String>('audit-trail-load-more');
 
 // ---------------------------------------------------------------------------
 // The page
@@ -239,11 +245,75 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
   /// the freshly resolved query equals the old one and the family would answer
   /// from cache. The invalidate is what makes the round trip happen; the reset
   /// is what stops the accumulated older pages surviving it.
+  ///
+  /// The invalidation names the queries that are about to be watched rather
+  /// than the whole family. Invalidating the family would also re-execute the
+  /// `Load more` pages this reset has just discarded — they are still alive
+  /// until the rebuild drops them, so a whole-family invalidate spends a
+  /// database round trip on rows nobody will ever see, and leaves the last
+  /// statement the page issued being one for a page it had already thrown
+  /// away.
   void _refresh() {
+    final fresh = _firstPageOnly(_filters);
     setState(() {
-      _pages = _firstPageOnly(_filters);
+      _pages = fresh;
     });
-    ref.invalidate(auditTrailEntriesProvider);
+    for (final query in fresh) {
+      ref.invalidate(auditTrailEntriesProvider(query));
+    }
+  }
+
+  /// Append one page of strictly older rows.
+  ///
+  /// **A button, and never infinite scroll.** CONTEXT rules it explicitly, and
+  /// the reason underneath the ruling is that an audit list which loads as you
+  /// scroll never has a stable position to read a row off — the thing you were
+  /// looking at moves while you look at it. The 500-row cap exists to be
+  /// *visible* rather than to be worked around silently, so the note above this
+  /// button says the number and this button is the only way past it. A
+  /// scroll-position listener that pre-fetched would be infinite scroll wearing
+  /// a button's clothes, and the comment-stripped grep in the test file forbids
+  /// the listener it would need (T-05-66).
+  ///
+  /// It appends a **query** to [_pages]. Nothing appends rows anywhere: `build`
+  /// watches every element and concatenates their actions in order, so the
+  /// newly fetched actions arrive beneath what is already on screen, the list
+  /// does not reset to the top, and a rebuild that adds no page leaves the row
+  /// count exactly where it was. Appending rows inside `build` would append
+  /// them again on every frame (T-05-68).
+  ///
+  /// The cursor lives inside the last element of [_pages] rather than in a
+  /// free-standing `_before` field, which is the only place it could go stale
+  /// without also going unwatched.
+  ///
+  /// **The window is carried over from the head query rather than re-derived
+  /// from the clock.** Re-reading the clock here would move the window's
+  /// *start* forward by however long the page had been open, and the rows
+  /// between the old start and the new one are exactly the oldest ones — the
+  /// ones this button was tapped to see. A page left open for an hour would
+  /// silently skip an hour of history, which is the same class of
+  /// wrong-answer-that-looks-right the whole-table search escape exists to
+  /// prevent. Everything else is carried through untouched too, so paging
+  /// narrows the window the filters produced rather than replacing the rule
+  /// that produced it.
+  void _loadMore(DateTime? oldestAt) {
+    if (oldestAt == null) return;
+    final head = _pages.first;
+    setState(() {
+      _pages = <AuditQuery>[
+        ..._pages,
+        AuditQuery(
+          window: head.window,
+          before: oldestAt,
+          keyPrefix: head.keyPrefix,
+          who: head.who,
+          groupNames: head.groupNames,
+          includeAuth: head.includeAuth,
+          outcome: head.outcome,
+          limit: head.limit,
+        ),
+      ];
+    });
   }
 
   @override
@@ -295,6 +365,11 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
     final rowCount =
         resolved.fold<int>(0, (sum, result) => sum + result.rowCount);
     final tail = resolved.last;
+    // True while a `Load more` page is still in flight. The button is disabled
+    // rather than hidden for its duration, so it does not flicker out from
+    // under the finger that just tapped it and a second tap cannot append the
+    // same cursor twice.
+    final pending = pages.any((page) => !page.hasValue);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -320,7 +395,10 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
           Expanded(child: _empty(context))
         else
           Expanded(child: _list(actions)),
-        if (actions.isNotEmpty && tail.reachedLimit) _limitNote(context),
+        if (actions.isNotEmpty && tail.reachedLimit) ...[
+          _limitNote(context),
+          _loadMoreButton(pending ? null : tail.oldestAt),
+        ],
       ],
     );
   }
@@ -428,4 +506,18 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
       ),
     );
   }
+
+  /// The only way past the cap, and it is a tap.
+  Widget _loadMoreButton(DateTime? oldestAt) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: kAuditTrailLoadMoreKey,
+            onPressed: oldestAt == null ? null : () => _loadMore(oldestAt),
+            icon: const Icon(Icons.expand_more, size: 16),
+            label: const Text(kAuditTrailLoadMoreLabel),
+          ),
+        ),
+      );
 }
