@@ -823,6 +823,60 @@ void main() {
       expect(answers.map((a) => a.cmd).toList(), ['01ONE', '01TWO', '01THREE']);
       expect(answers.every((a) => a is WriteApplied), isTrue);
     });
+
+    test('an entry about another command is not an answer about this one',
+        () async {
+      // 05-REVIEW WR-01. Positional alignment is the interface's promise
+      // (`state_man_api.dart`: "element i answers cmds[i]"), and the caller
+      // has no other way to know which command it is being told about. The
+      // absent and the undecodable cases were hardened in 04-REVIEW deviation
+      // 4; this is the shifted one — a version-skewed build, a batching bug, a
+      // peer that is not the gateway. The hazard is precise: `not_received` is
+      // the one verdict in the system that licenses a second movement of a
+      // machine, and read against the wrong command it invites a re-send of
+      // one that may well have actuated.
+      final gateway = await statusGateway((cmds) => [
+            // Both entries are perfectly well-formed. They are about the
+            // wrong commands, which no amount of decoding can detect.
+            const WriteNotReceived('01TWO').toJson(),
+            applied('01ONE', 7),
+          ]);
+      final client = _client(
+        Uri.parse('ws://127.0.0.1:${gateway.port}'),
+        config: _config(write: _writeDeadline),
+        keys: const {_seededKey},
+      );
+      await _until('the link', () => client.isReady);
+
+      final answers =
+          await client.writeStatus(const ['01ONE', '01TWO']).timeout(_recovery);
+
+      expect(answers, hasLength(2),
+          reason: 'a mismatched entry was dropped rather than substituted, '
+              'which shifts every later answer onto the wrong command — the '
+              'failure the absent case was hardened against');
+      expect(answers[0].cmd, '01ONE',
+          reason: 'the answer at position 0 is about ${answers[0].cmd}, so the '
+              'caller pairing it with cmds[0] is reading a verdict about some '
+              'other command');
+      expect(answers[0].isSafeToResend, isFalse,
+          reason: 'the gateway put a not_received about 01TWO at 01ONE\'s '
+              'position and the client passed it on as an answer about 01ONE. '
+              'That is a re-send offered for a command that may already have '
+              'moved the machine');
+      expect(answers[0], isA<WriteUnknown>(),
+          reason: 'an entry about a different command rules nothing out about '
+              'this one, and unknown is what "nothing can be ruled out" is '
+              'spelled as');
+      expect(answers[1].cmd, '01TWO');
+      expect(answers[1], isA<WriteUnknown>(),
+          reason: 'the applied entry at position 1 is about 01ONE; taken as an '
+              'answer about 01TWO it would tell an operator a write landed '
+              'that nobody has heard about');
+      expect(client.complaints, isNotEmpty,
+          reason: 'a gateway answering out of order is a real fault and the '
+              'only trace of it would be two commands quietly going unknown');
+    });
   });
 
   group('the hold-to-run path', () {

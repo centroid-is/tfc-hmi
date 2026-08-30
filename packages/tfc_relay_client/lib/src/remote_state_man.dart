@@ -783,7 +783,8 @@ final class RemoteStateMan implements StateManApi {
   /// (`debugWriteStatusQueries`).
   ///
   /// **Every element answers the command at the same index**, including the
-  /// ones nothing legible came back for: a malformed entry becomes a
+  /// ones nothing legible came back for: a malformed entry — or one that
+  /// decodes cleanly but is about a different command — becomes a
   /// [WriteUnknown] about the command it was asked under rather than being
   /// dropped, because dropping it would shift every later answer onto the
   /// wrong command — and one of those answers could be the `not_received`
@@ -812,9 +813,33 @@ final class RemoteStateMan implements StateManApi {
   }
 
   /// One entry of a `writeStatus` answer, decoded or accounted for.
+  ///
+  /// An entry that decodes cleanly but carries a different `cmd` is treated
+  /// exactly as one that did not decode (05-REVIEW WR-01). Positional
+  /// alignment is the interface's promise and the caller has no other way to
+  /// know which command it is being told about, so an entry about some other
+  /// command is not an answer about this one — however well-formed it is.
   WriteResult _answerFor(String cmd, Object? entry) {
     try {
-      return WriteResult.fromJson(_asJson(entry));
+      final decoded = WriteResult.fromJson(_asJson(entry));
+      if (decoded.cmd != cmd) {
+        // Substituted in place, never dropped: dropping shifts every later
+        // answer onto the wrong command, which is the failure 04-REVIEW
+        // deviation 4 hardened the *absent* case against. And the verdict
+        // that must not survive a shift is `not_received` — the one outcome
+        // in this system that licenses a second movement of a machine.
+        _supervisor.resync.complaints.add(
+            'a writeStatus entry at the position asked for "$cmd" answered '
+            'about "${decoded.cmd}" instead; it was discarded rather than '
+            'reported against the wrong command');
+        return WriteUnknown(
+            cmd,
+            const WriteReason('misaligned_result:writeStatus',
+                message: 'the gateway answered this position about a '
+                    'different command, so nothing about this one can be '
+                    'ruled out'));
+      }
+      return decoded;
     } catch (error) {
       // One entry, not the batch (04-REVIEW WR-03). Decoding the whole list at
       // once was letting a malformed entry at index 0 discard the settled
