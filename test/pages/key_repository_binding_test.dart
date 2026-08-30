@@ -25,6 +25,7 @@
 /// through the same `GuardedPreferences` the station runs.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -503,6 +504,285 @@ void main() {
               '`_onImport`. A binding is a row in a `users`-gated table, not a '
               'field in a `configure`-gated blob — a third site here would be '
               'the 2026-08-30 ruling undone.');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 2 — the keys nobody bound
+  // -------------------------------------------------------------------------
+
+  /// The header count, by the text it actually renders.
+  String countText(WidgetTester tester) =>
+      tester.widget<Text>(find.byKey(kUnboundKeysCountKey)).data!;
+
+  Future<void> toggleUnboundFilter(WidgetTester tester) async {
+    await tester.ensureVisible(find.byKey(kUnboundKeysFilterKey));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(kUnboundKeysFilterKey));
+    await tester.pumpAndSettle();
+  }
+
+  group('unbound keys are findable', () {
+    testWidgets('the count reports bound, unbound and dangling together',
+        (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.create(_recipes());
+      await seed.bind(_keyA, 'conveyor');
+      await seed.bind(_keyB, 'recipes');
+      await seed.unbind(_keyB);
+      // _keyB is unbound; _keyC gets a binding whose template is then removed
+      // by hand, so it is a gap wearing a template name.
+      await seed.bind(_keyC, 'recipes');
+      await db.customStatement(
+          "DELETE FROM access_template WHERE name = 'recipes'");
+
+      await tester
+          .pumpWidget(await host(keyMappings: _keys([_keyA, _keyB, _keyC])));
+      await tester.pumpAndSettle();
+
+      expect(countText(tester), kUnboundKeysCount(2, 3),
+          reason: 'the dangling key counts as unbound, because it is');
+    });
+
+    testWidgets('the all-bound wording and the no-templates wording are '
+        'different, explicit sentences', (tester) async {
+      // Nothing exists at all — the shipped state, and the one the wording
+      // must not paint as a fault.
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+      expect(countText(tester), kUnboundKeysNoTemplates(2));
+
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_keyA, 'conveyor');
+      await seed.bind(_keyB, 'conveyor');
+
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+      expect(countText(tester), kUnboundKeysAllBound(2));
+
+      expect(kUnboundKeysNoTemplates(2), isNot(kUnboundKeysAllBound(2)));
+      expect(kUnboundKeysNoTemplates(2), isNot(kUnboundKeysCount(0, 2)),
+          reason: '"nothing is configured" and "nothing is left to do" are '
+              'different claims, and a bare 0 reads as "not computed"');
+    });
+
+    testWidgets('the filter shows exactly the keys unboundKeys names',
+        (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_keyA, 'conveyor');
+      await seed.bind(_keyC, 'gone');
+
+      const all = [_keyA, _keyB, _keyC];
+      await tester.pumpWidget(await host(keyMappings: _keys(all)));
+      await tester.pumpAndSettle();
+
+      await toggleUnboundFilter(tester);
+
+      // One definition, checked: whatever the resolver says is unbound is
+      // exactly what the list shows. A second predicate here is how the filter
+      // and the guard start disagreeing (T-04-46).
+      final expected = resolver.unboundKeys(all).toSet();
+      expect(expected, {_keyB, _keyC},
+          reason: 'the dangling binding is one of them');
+      for (final key in all) {
+        expect(find.text(key),
+            expected.contains(key) ? findsOneWidget : findsNothing,
+            reason: '$key');
+      }
+    });
+
+    testWidgets('the filter composes with the search rather than replacing it',
+        (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind('ST101.PUMP', 'conveyor');
+
+      await tester.pumpWidget(await host(
+          keyMappings: _keys([_keyA, _keyB, 'ST101.PUMP', 'ST201.PUMP'])));
+      await tester.pumpAndSettle();
+
+      await toggleUnboundFilter(tester);
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Search keys...'), 'pump');
+      await tester.pumpAndSettle();
+
+      expect(find.text('ST201.PUMP'), findsOneWidget,
+          reason: 'matches the search and is unbound');
+      expect(find.text('ST101.PUMP'), findsNothing,
+          reason: 'matches the search but is bound');
+      expect(find.text(_keyA), findsNothing,
+          reason: 'unbound but does not match the search');
+    });
+
+    testWidgets('turning the filter off brings the bound keys back',
+        (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_keyA, 'conveyor');
+
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+
+      await toggleUnboundFilter(tester);
+      expect(find.text(_keyA), findsNothing);
+      await toggleUnboundFilter(tester);
+      expect(find.text(_keyA), findsOneWidget);
+    });
+
+    testWidgets('binding a key from its card moves the count, with no reload',
+        (tester) async {
+      await seeder().create(_conveyor());
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+      expect(countText(tester), kUnboundKeysCount(2, 2));
+
+      await expand(tester, _keyA);
+      await choose(tester, _keyA, 'conveyor');
+
+      expect(countText(tester), kUnboundKeysCount(1, 2),
+          reason: 'the write, the invalidate and the count are one path');
+    });
+
+    testWidgets('with no database there is no count and no filter',
+        (tester) async {
+      await tester.pumpWidget(
+          await host(keyMappings: _keys([_keyA]), noDatabase: true));
+      await tester.pumpAndSettle();
+
+      // Not a second copy of "this station has no database" — the templates
+      // section below says it once, and a number nobody can compute must not
+      // be rendered as a zero.
+      expect(find.byKey(kUnboundKeysCountKey), findsNothing);
+      expect(find.byKey(kUnboundKeysFilterKey), findsNothing);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 2 — the closure, in two halves
+  // -------------------------------------------------------------------------
+
+  group('no configure-grade path reaches a binding', () {
+    /// One binding, and the session the ruling exists for.
+    Future<Map<String, String>> seedOneBinding() async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_keyA, 'conveyor');
+      session = _configureOnly();
+      return seed.bindings();
+    }
+
+    testWidgets('(a) the page\'s own Save leaves the table byte-unchanged',
+        (tester) async {
+      final before = await seedOneBinding();
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+
+      // A real edit, so Save actually writes.
+      await tester.tap(find.text('Add Key'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Key Mappings'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Key mappings saved successfully!'), findsOneWidget,
+          reason: 'the save has to succeed, or this asserts nothing');
+      expect(await bindings(), before);
+    });
+
+    testWidgets('(b) confirm-and-import leaves the table byte-unchanged, '
+        'including the row it orphaned', (tester) async {
+      final before = await seedOneBinding();
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+
+      // A file that does **not** contain _keyA, so importing it orphans the
+      // binding row rather than leaving it merely untouched.
+      final file = File('${tmp.path}/km.json')
+        ..writeAsStringSync(jsonEncode(_keys(['ST301.NEW']).toJson()));
+      (FilePicker.platform as _FakePicker).pickPath = file.path;
+
+      await tester.ensureVisible(find.text('Import'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Import'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Import').hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(await bindings(), before,
+          reason: 'an import that removed the key must not remove its binding '
+              'either: silently unbinding is the failure spec §7d forbids on '
+              'delete, and the orphan is what Task 2\'s surface reports');
+    });
+
+    testWidgets('(c) a preferences write of an arbitrary key leaves the table '
+        'byte-unchanged', (tester) async {
+      final before = await seedOneBinding();
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA])));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(KeyRepositoryContent)));
+      final guarded = await container.read(preferencesProvider.future);
+      // A key this session is *allowed* to write — `page_editor_data` is
+      // `configure` in `kPrefAccessRules`. A denied write proving nothing
+      // happened would be the weaker test; this one succeeds and still cannot
+      // reach the binding.
+      await guarded.setString('page_editor_data', '{"pages":[]}');
+      expect(await guarded.getString('page_editor_data'), '{"pages":[]}');
+
+      expect(await bindings(), before);
+    });
+
+    test('the structural half: the binding table is named in one file',
+        () async {
+      final offenders = <String>[];
+      for (final entity in Directory('lib').listSync(recursive: true)) {
+        if (entity is! File || !entity.path.endsWith('.dart')) continue;
+        // Comment lines are stripped before the search. Prose *about* the
+        // table is not a path *to* it — three files explain the ruling in
+        // their doc comments — and a mechanical gate that a reader has to
+        // classify by hand stops being mechanical.
+        final code = entity
+            .readAsLinesSync()
+            .where((line) => !line.trimLeft().startsWith('//'))
+            .join('\n');
+        if (code.contains('access_key_binding')) offenders.add(entity.path);
+      }
+
+      expect(offenders, ['lib/core/access_template_store.dart'],
+          reason: 'The 2026-08-30 ruling moved bindings out of the '
+              '`configure`-classified key-mapping blob and into their own '
+              'table so that no `configure`-grade path could reach them. '
+              'Driving three named paths pins three paths; this is what '
+              'closes the set — a fourth cannot be added without naming the '
+              'table, and naming it fails here.\n'
+              '\n'
+              'What it does NOT cover: a caller reaching the table through '
+              'Drift\'s generated accessor (`accessKeyBindingTable`) rather '
+              'than the literal string. That is why 04-03 keeps the store\'s '
+              'own `key_mappings|CASCADE` grep, and why this is one half of a '
+              'pair rather than a single test.');
+    });
+
+    test('no bulk-bind action exists anywhere in lib/', () async {
+      // Spec §7b: "Binding is explicit, per key, always. No inference from
+      // asset type, no pattern matching on key names." A "bind all" control is
+      // that inference one dialog removed. The bulk path is the MCP tools,
+      // where an agent proposes explicit per-key bindings and a human holding
+      // `users` approves them.
+      final bulk = RegExp(
+          r'bindAll|bindMany|bindEvery|bindByPattern|bindMatching|autoBind',
+          caseSensitive: false);
+      final offenders = <String>[];
+      for (final entity in Directory('lib').listSync(recursive: true)) {
+        if (entity is! File || !entity.path.endsWith('.dart')) continue;
+        if (bulk.hasMatch(entity.readAsStringSync())) offenders.add(entity.path);
+      }
+      expect(offenders, isEmpty);
     });
   });
 }
