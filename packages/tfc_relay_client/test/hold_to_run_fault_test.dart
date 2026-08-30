@@ -152,15 +152,30 @@ void main() {
       // the instant of the cut, because a pulse already on the wire when the
       // blackhole came on may still land — what must never happen is another
       // one afterwards.
+      //
+      // **It settles at 0, not at the last counter value it received, and the
+      // difference is measured rather than assumed.** The plan expected a
+      // freeze; what the gateway actually does is stop hearing from the
+      // session and tear it down, and `ValueHandlers.releaseAllHolds` then
+      // releases the hold *it* was holding — which writes the 0 (T-05-20). So
+      // two independent mechanisms stop this machine, the panel's and the
+      // gateway's, and 0 is the stronger of the two answers. What is asserted
+      // is therefore the property both satisfy and neither may break: after
+      // the link died the counter never advances again.
       await Future<void>.delayed(_settle);
       final frozen = fixture.served.read(_key)?.asInt;
       expect(frozen, isNotNull,
           reason: 'the tag has no reading at all, so the comparison below is '
               'between two nulls');
-      expect(frozen, greaterThanOrEqualTo(_pulsesBeforeTheCut),
-          reason: 'the counter never got as far as $_pulsesBeforeTheCut at the '
-              'plant, so "it stopped" is a statement about a hold that was '
-              'barely fed');
+      expect(frozen, anyOf(0, greaterThanOrEqualTo(_pulsesBeforeTheCut)),
+          reason: 'the tag settled at $frozen, which is neither the released 0 '
+              'nor a counter that had got anywhere. Something put an '
+              'intermediate value on a deadman tag after the link died');
+      expect(fixture.client.debugHoldTicksSent,
+          greaterThanOrEqualTo(_pulsesBeforeTheCut),
+          reason: 'this client offered fewer than $_pulsesBeforeTheCut pulses '
+              'to the link in the whole case, so "and then it stopped" is a '
+              'statement about a hold that was barely fed');
       final pulsesAtTheCut = fixture.client.debugHoldTicksSent;
 
       await Future<void>.delayed(_quiet);
