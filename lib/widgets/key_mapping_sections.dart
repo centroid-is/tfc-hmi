@@ -10,6 +10,9 @@ import 'package:tfc_dart/core/database.dart';
 import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import 'package:jbtm/src/m2400_fields.dart'
     show M2400Field, WeigherStatus, expectedFields;
+import 'package:tfc_access/tfc_access.dart' show AccessDenied;
+import '../core/access_template_store.dart';
+import '../providers/access_templates.dart';
 import '../providers/state_man.dart';
 import '../pages/key_repository.dart' show ModbusConfigListExt;
 import 'opcua_array_index_field.dart';
@@ -1161,5 +1164,370 @@ class _CollectionConfigSectionState extends State<CollectionConfigSection> {
         ),
       ),
     );
+  }
+}
+
+// ===================== Access Template Section =====================
+//
+// Spec §7b: "Binding is explicit, per key, always. No inference from asset
+// type, no pattern matching on key names." This is where that one explicit act
+// happens — one key, one dropdown, one row.
+//
+// ## Why this control writes immediately, alone among the fields on this card
+//
+// Every other control on a key card edits part of one JSON blob that the page
+// saves as a unit, behind `configure`. A binding is not part of that blob: the
+// 2026-08-30 ruling moved bindings into their own `users`-gated table
+// precisely because the key-mapping preference is `configure`-classified, and
+// leaving them in the blob meant somebody who can edit a page could re-scope
+// who may write what — through this page's own import card, or through the raw
+// preferences editor.
+//
+// So batching a binding into the blob's Save would leave exactly two shapes,
+// both wrong: a `users` check on Save, which would refuse ordinary key editing
+// to every engineer who does not hold it; or a binding write that skips the
+// check, which is the hole the ruling closed. Writing straight through the
+// store, at the moment the choice is made, is the only shape that keeps both
+// gates honest — and it is why `_hasUnsavedChanges` never moves for a binding.
+
+/// The section's label.
+const String kKeyAccessTemplateLabel = 'Access template';
+
+/// The "nothing governs this key" entry. Named for what it *means* rather than
+/// "None" alone, which reads as an omission instead of a state.
+const String kKeyAccessTemplateNoneLabel = 'None — unrestricted';
+
+/// A bound name with no template row behind it.
+///
+/// The name is still shown, because it is the thing that has to be fixed, and
+/// it is marked rather than offered: an ordinary binding and a gap must not
+/// read alike (T-04-03).
+String kKeyAccessTemplateMissingLabel(String name) =>
+    '$name — no such template';
+
+/// No database, which is **not** "no templates".
+///
+/// The same distinction `kAccessTemplatesNoDatabaseNote` draws one card down: a
+/// station that was never configured and one whose Postgres will not answer are
+/// the same resolved null from here, and the next step is the same either way.
+const String kKeyAccessTemplateNoDatabaseNote =
+    'Bindings live in the database, and this station has no reachable one — so '
+    'this is "cannot tell you", not "nothing is bound". The connection is set '
+    'up in Server Config.';
+
+/// A database that answered, with no templates in it. A different claim.
+const String kKeyAccessTemplateNoTemplatesNote =
+    'No templates exist yet, so there is nothing to bind this key to. Create '
+    'one in Access templates, below.';
+
+/// What an unbound key costs, said on the key it costs it on.
+const String kKeyAccessTemplateUnboundNote =
+    'Nothing governs this key: every member is writable by anybody who can '
+    'reach the control.';
+
+/// What a bound key means.
+String kKeyAccessTemplateBoundNote(String name) =>
+    'Writes to this key need whatever "$name" says the member needs.';
+
+/// A dangling binding, in words. Fail-open, and therefore silent without this.
+const String kKeyAccessTemplateMissingNote =
+    'This key names a template that no longer exists, which resolves to no '
+    'restriction at all. Bind it to one that does, or clear it.';
+
+/// The collapsed card's badge for a key nobody bound.
+///
+/// Shown only when there is something to bind to — see [KeyBindingBadge].
+const String kKeyBindingUnboundBadge = 'Unbound';
+
+/// The collapsed card's badge for a dangling binding.
+const String kKeyBindingMissingBadge = 'Binding missing';
+
+/// One key's template dropdown.
+Key kKeyAccessTemplateDropdownKey(String keyName) =>
+    Key('key-access-template-$keyName');
+
+/// One option inside one key's dropdown.
+///
+/// Keyed per key as well as per template because a `DropdownButton` keeps every
+/// item in the tree (in an `IndexedStack`) whether the menu is open or not, so
+/// options shared by several cards would be indistinguishable. Same reasoning
+/// as `kAccessTemplateRuleGroupOptionKey`.
+Key kKeyAccessTemplateOptionKey(String keyName, String? template) =>
+    Key('key-access-template-$keyName-${template ?? '<none>'}');
+
+/// One key's collapsed-card binding badge.
+Key kKeyBindingBadgeKey(String keyName) => Key('key-binding-badge-$keyName');
+
+/// What every key card needs to know about bindings, computed **once** for the
+/// whole list rather than watched per card.
+///
+/// The key list is lazy, so a per-card `ref.watch` would only cost the cards on
+/// screen — but the section header needs the same values for its unbound count,
+/// and two readers of one truth is how a filter starts disagreeing with a
+/// badge. One object, built in the key section's `build`, handed down.
+@immutable
+class KeyBindingView {
+  const KeyBindingView({
+    required this.store,
+    required this.templateNames,
+    required this.loaded,
+  });
+
+  /// Nothing is known yet. Neither "no database" nor "no templates" is true so
+  /// far, and claiming either would be a guess.
+  static const KeyBindingView loading =
+      KeyBindingView(store: null, templateNames: [], loaded: false);
+
+  /// The `users`-gated store, or null when this station has no database.
+  final AccessTemplateStore? store;
+
+  /// The templates that actually exist, by name, in the order the loader
+  /// returned them.
+  final List<String> templateNames;
+
+  /// Whether the store handle has resolved at all.
+  final bool loaded;
+
+  /// Whether there is a table to read and to write.
+  bool get available => loaded && store != null;
+
+  /// Whether [name] names a template that exists.
+  bool exists(String? name) => name != null && templateNames.contains(name);
+}
+
+/// The collapsed card's one-glance answer to "what governs this key?".
+///
+/// **Nothing here is painted like a fault.** An unbound key is the shipped
+/// default — spec §7b: "The system therefore ships gating nothing and becomes
+/// stricter only as keys are bound" — so this is information, in the muted
+/// `onSurfaceVariant` the locks and the prompts already use, and not a red
+/// badge that would train an operator to ignore a page full of them.
+///
+/// It draws **nothing at all** in two cases, and both are deliberate:
+///
+///  * the station has no database — "cannot tell you" must not render as
+///    "unbound", which is a claim this station cannot make;
+///  * no template exists yet — with nothing to bind to, an "Unbound" badge on
+///    every one of two thousand cards is noise. The shipped state is reported
+///    once, by the section header's count, in words that say it is the default
+///    and not a fault.
+class KeyBindingBadge extends StatelessWidget {
+  const KeyBindingBadge({
+    super.key,
+    required this.keyName,
+    required this.bindings,
+    required this.boundTemplate,
+  });
+
+  final String keyName;
+  final KeyBindingView bindings;
+
+  /// The raw name in the table, dangling or not.
+  final String? boundTemplate;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!bindings.available) return const SizedBox.shrink();
+    final bound = boundTemplate;
+    if (bound == null && bindings.templateNames.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = Theme.of(context);
+    final missing = bound != null && !bindings.exists(bound);
+    final label = bound == null
+        ? kKeyBindingUnboundBadge
+        : (missing ? kKeyBindingMissingBadge : bound);
+
+    return Container(
+      key: kKeyBindingBadgeKey(keyName),
+      constraints: const BoxConstraints(maxWidth: 160),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      margin: const EdgeInsets.only(right: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          // A gap reads differently from an ordinary binding without becoming
+          // an alarm: same colour, italic. Spec §7b's visibility requirement,
+          // not §8's.
+          fontStyle: missing ? FontStyle.italic : FontStyle.normal,
+        ),
+      ),
+    );
+  }
+}
+
+/// The per-key binding control: a dropdown of the templates that exist, plus
+/// "None", writing straight through [AccessTemplateStore].
+///
+/// **Never disabled.** A session without `users` opens it, picks an entry and
+/// gets the shared prompt naming the group — the same posture every other
+/// control in this milestone takes. Disabling it would hide the boundary
+/// instead of explaining it.
+class KeyAccessTemplateSection extends ConsumerWidget {
+  const KeyAccessTemplateSection({
+    super.key,
+    required this.keyName,
+    required this.bindings,
+    required this.boundTemplate,
+  });
+
+  final String keyName;
+  final KeyBindingView bindings;
+
+  /// The raw name in the table, dangling or not.
+  final String? boundTemplate;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Nothing while the database handle resolves — not a spinner, and not the
+    // no-database line, which would flash on every station that has one.
+    if (!bindings.loaded) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final store = bindings.store;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const FaIcon(FontAwesomeIcons.lock, size: 14),
+              const SizedBox(width: 8),
+              Text(kKeyAccessTemplateLabel, style: theme.textTheme.titleSmall),
+              // The dropdown appears when there is something to *say*, not only
+              // when there is something to pick: a key still naming a template
+              // somebody deleted has to be showable and clearable even on a
+              // station where no template is left at all.
+              if (store != null &&
+                  (bindings.templateNames.isNotEmpty ||
+                      boundTemplate != null)) ...[
+                const Spacer(),
+                _dropdown(context, ref, store),
+              ],
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _note(store),
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The one line under the label. Every branch is a different claim, and no
+  /// two of them are the same sentence.
+  String _note(AccessTemplateStore? store) {
+    if (store == null) return kKeyAccessTemplateNoDatabaseNote;
+    final bound = boundTemplate;
+    // What the table says about *this key* comes first. A dangling binding on
+    // a station whose last template was deleted would otherwise be reported as
+    // "no templates exist yet", which is true and beside the point: the row is
+    // still there and it is the thing to fix.
+    if (bound != null) {
+      return bindings.exists(bound)
+          ? kKeyAccessTemplateBoundNote(bound)
+          : kKeyAccessTemplateMissingNote;
+    }
+    if (bindings.templateNames.isEmpty) {
+      return kKeyAccessTemplateNoTemplatesNote;
+    }
+    return kKeyAccessTemplateUnboundNote;
+  }
+
+  Widget _dropdown(
+      BuildContext context, WidgetRef ref, AccessTemplateStore store) {
+    final bound = boundTemplate;
+    final dangling = bound != null && !bindings.exists(bound);
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 240),
+      child: DropdownButton<String?>(
+        key: kKeyAccessTemplateDropdownKey(keyName),
+        value: bound,
+        isDense: true,
+        isExpanded: true,
+        underline: const SizedBox.shrink(),
+        items: [
+          DropdownMenuItem<String?>(
+            key: kKeyAccessTemplateOptionKey(keyName, null),
+            value: null,
+            child: const Text(kKeyAccessTemplateNoneLabel,
+                overflow: TextOverflow.ellipsis),
+          ),
+          // The dangling name gets an entry of its own so the control can show
+          // what the table actually says. Without it the dropdown would fall
+          // back to "None", which is a different claim and the wrong one:
+          // nobody chose None, and the row is still there.
+          if (dangling)
+            DropdownMenuItem<String?>(
+              key: kKeyAccessTemplateOptionKey(keyName, bound),
+              value: bound,
+              child: Text(kKeyAccessTemplateMissingLabel(bound),
+                  overflow: TextOverflow.ellipsis),
+            ),
+          for (final name in bindings.templateNames)
+            DropdownMenuItem<String?>(
+              key: kKeyAccessTemplateOptionKey(keyName, name),
+              value: name,
+              child: Text(name, overflow: TextOverflow.ellipsis),
+            ),
+        ],
+        onChanged: (next) =>
+            _choose(ref, store, next, ScaffoldMessenger.maybeOf(context)),
+      ),
+    );
+  }
+
+  /// One choice, one gated write, one refresh.
+  ///
+  /// `AccessDenied` is swallowed on purpose. [AccessTemplateStore] calls
+  /// `onDenied` before it throws, which publishes onto `accessDenialsProvider`,
+  /// which `AccessDeniedPrompt` is already listening to — so by the time this
+  /// catch runs the prompt naming `users` is on screen, and a message of this
+  /// widget's own would be two things saying one thing. Nothing moved, so
+  /// nothing is refreshed and the dropdown keeps showing the unchanged value.
+  ///
+  /// The same paragraph `access_templates_section.dart`'s `_write` carries; the
+  /// two are separate because that file edits templates from a page and this
+  /// edits one binding from a widget library, and merging them would mean
+  /// importing a page into `lib/widgets`.
+  Future<void> _choose(
+    WidgetRef ref,
+    AccessTemplateStore store,
+    String? next,
+    ScaffoldMessengerState? messenger,
+  ) async {
+    if (next == boundTemplate) return;
+    try {
+      if (next == null) {
+        await store.unbind(keyName);
+      } else {
+        await store.bind(keyName, next);
+      }
+    } on AccessDenied {
+      return;
+    } on Object catch (error) {
+      // Not an authorization event — a template deleted underneath us, a
+      // database that went away mid-write. Say what happened rather than
+      // leaving a control that appears to have done nothing.
+      messenger?.showSnackBar(SnackBar(content: Text('$error')));
+      return;
+    }
+    // 04-05 left exactly one refresh trigger for both tables, and there is no
+    // listener that would notice otherwise.
+    ref.invalidate(accessTemplatesProvider);
   }
 }

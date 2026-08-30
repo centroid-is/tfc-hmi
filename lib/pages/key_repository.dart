@@ -20,10 +20,13 @@ import 'package:jbtm/src/m2400.dart' show M2400RecordType;
 import '../widgets/fuzzy_search_bar.dart';
 import '../widgets/bit_mask_grid.dart';
 import '../widgets/key_mapping_sections.dart';
+import '../providers/access_templates.dart';
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
 import 'access_templates_section.dart';
+import 'package:tfc_access/tfc_access.dart'
+    show AccessTemplate, TagBindingResolver;
 
 /// Extension to find a [ModbusConfig] by server alias without nullable cast.
 extension ModbusConfigListExt on List<ModbusConfig> {
@@ -245,6 +248,17 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   List<String> _serverAliases = const [];
   List<String> _jbtmServerAliases = const [];
   List<String> _modbusServerAliases = const [];
+
+  /// What the cards and the header need to know about bindings, refreshed at
+  /// the top of every [build] from three providers. Not a derived cache — it is
+  /// this frame's answer, and it costs three provider reads however many keys
+  /// the repository holds.
+  KeyBindingView _bindings = KeyBindingView.loading;
+
+  /// The live snapshot behind [_bindings]. Held so [_buildCard] can ask which
+  /// template name a key carries — including a dangling one, which
+  /// `templateForKey` cannot report because it answers null for both gaps.
+  TagBindingResolver? _resolver;
 
   /// Coalesces the per-key status updates produced by [_probeKeys] into at
   /// most one rebuild per 250 ms.
@@ -1058,6 +1072,22 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       if (_stageKeyMappingProposals() > 0) setState(() {});
     });
 
+    // Bindings, watched **once** for the whole list rather than per card, and
+    // before the early returns below so this widget's provider dependencies do
+    // not change shape between builds. The count in the header, the badge on
+    // each card and the filter all read this one object; see [KeyBindingView].
+    final storeAsync = ref.watch(accessTemplateStoreProvider);
+    final templatesAsync = ref.watch(accessTemplatesProvider);
+    _resolver = ref.watch(tagBindingResolverProvider);
+    _bindings = KeyBindingView(
+      store: storeAsync.valueOrNull,
+      templateNames: [
+        for (final t in templatesAsync.valueOrNull ?? const <AccessTemplate>[])
+          t.name,
+      ],
+      loaded: storeAsync.hasValue || storeAsync.hasError,
+    );
+
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -1319,6 +1349,11 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       key: cardKey,
       keyName: row.key,
       entry: row.entry,
+      bindings: _bindings,
+      // The raw name, not the resolved template: a key naming a template that
+      // no longer exists must render as a gap rather than as unbound, and
+      // `templateForKey` answers null for both.
+      boundTemplate: _resolver?.boundTemplateName(row.key),
       serverAliases: _serverAliases,
       jbtmServerAliases: _jbtmServerAliases,
       modbusServerAliases: _modbusServerAliases,
@@ -1389,6 +1424,14 @@ class _KeyMappingCard extends StatefulWidget {
   final List<String> jbtmServerAliases;
   final List<String> modbusServerAliases;
   final List<ModbusConfig> modbusConfigs;
+
+  /// The store, the template names and whether any of it has loaded. Handed
+  /// down rather than watched here so the header's count and this card's badge
+  /// cannot disagree — see [KeyBindingView].
+  final KeyBindingView bindings;
+
+  /// The template name in `access_key_binding` for this key, dangling or not.
+  final String? boundTemplate;
   final Function(KeyMappingEntry) onUpdate;
   final Function(String) onRename;
   final VoidCallback onCopy;
@@ -1414,6 +1457,8 @@ class _KeyMappingCard extends StatefulWidget {
     required this.jbtmServerAliases,
     required this.modbusServerAliases,
     required this.modbusConfigs,
+    required this.bindings,
+    required this.boundTemplate,
     required this.onUpdate,
     required this.onRename,
     required this.onCopy,
@@ -1613,6 +1658,13 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // What governs this key, at a glance, on the collapsed card. Draws
+        // nothing when there is nothing to say — see [KeyBindingBadge].
+        KeyBindingBadge(
+          keyName: widget.keyName,
+          bindings: widget.bindings,
+          boundTemplate: widget.boundTemplate,
+        ),
         if (chip != null) ...[
           chip,
           const SizedBox(width: 8),
@@ -1858,6 +1910,16 @@ class _KeyMappingCardState extends State<_KeyMappingCard> {
                   keyName: widget.keyName,
                   onToggle: _toggleCollect,
                   onChanged: _updateCollectEntry,
+                ),
+                // Who may write this key. Last, and its own block: everything
+                // above is how the key is *read* from the plant, and this is
+                // the only control on the card that does not go through Save —
+                // it writes the `users`-gated table the moment it is chosen.
+                // The reasoning is at the section itself.
+                KeyAccessTemplateSection(
+                  keyName: widget.keyName,
+                  bindings: widget.bindings,
+                  boundTemplate: widget.boundTemplate,
                 ),
               ],
             ),

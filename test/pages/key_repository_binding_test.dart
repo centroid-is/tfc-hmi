@@ -242,8 +242,13 @@ void main() {
     KeyMappings? keyMappings,
     bool noDatabase = false,
   }) async {
-    final inner = prefs =
-        await createTestPreferences(keyMappings: keyMappings ?? _keys([]));
+    final inner = prefs = await createTestPreferences(
+      keyMappings: keyMappings ?? _keys([]),
+      // The fixture keys name `main_server`, so the config has to know it —
+      // otherwise the card's server dropdown holds a value with no matching
+      // item and asserts before any of this file's claims are reached.
+      stateManConfig: sampleStateManConfig(),
+    );
     return ProviderScope(
       overrides: [
         // The **guarded** wrapper, not the raw store: the closure test's third

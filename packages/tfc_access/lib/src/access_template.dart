@@ -302,6 +302,21 @@ class TagBindingResolver {
     return template.groupFor(member);
   }
 
+  /// The template **name** [key] names, or null when nothing is bound.
+  ///
+  /// Unlike [templateForKey] this answers for a **dangling** binding too: the
+  /// name is in the table, the row it names is not. From [templateForKey] the
+  /// two gaps are the same null, which is right for the write path — spec §7b
+  /// says both are unrestricted — and wrong for a screen, because "nobody
+  /// bound this" and "somebody bound this to a template that has since gone"
+  /// need different words and different fixes.
+  ///
+  /// So this is a **rendering** accessor and nothing else. It must not become
+  /// an input to [groupFor]: answering "locked" for a name with no rules would
+  /// mean a row removed in `psql` silently freezes a conveyor, with no screen
+  /// able to explain why (see [groupFor]'s own note).
+  String? boundTemplateName(String key) => _keyToTemplate[key];
+
   /// The template bound to [key], or null when nothing is bound **or** the
   /// bound name has no row. Both gaps read the same from here; see [groupFor].
   AccessTemplate? templateForKey(String key) {
