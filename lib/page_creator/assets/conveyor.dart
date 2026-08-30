@@ -21,7 +21,7 @@ import '../../widgets/state_value_builder.dart';
 import '../../widgets/panes/setpoint_field.dart';
 import 'auger_conveyor_painter.dart';
 import 'helper/atv320_diagnostics.dart';
-import 'sensor.dart' show SensorFbState;
+import 'sensor.dart' show SensorConfig, SensorFbPane, SensorFbState;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 import '../../theme.dart';
@@ -2243,6 +2243,16 @@ class _ConveyorState extends ConsumerState<Conveyor>
         final hasMainKey = _bound(widget.config.key);
         final hasMotorKey =
             widget.config.railsActive && _bound(widget.config.wagonMotorKey);
+        // Every wagon binding is optional — an unbound edge or motor draws
+        // nothing extra and its tap zone simply is not there.
+        final leftEdgeKey =
+            widget.config.railsActive && _bound(widget.config.safetyLeftKey)
+                ? widget.config.safetyLeftKey
+                : null;
+        final rightEdgeKey =
+            widget.config.railsActive && _bound(widget.config.safetyRightKey)
+                ? widget.config.safetyRightKey
+                : null;
         return _buildConveyorVisual(
           context,
           color,
@@ -2258,6 +2268,13 @@ class _ConveyorState extends ConsumerState<Conveyor>
           onMotorTap: hasMotorKey
               ? () => _showDrivePane(context, widget.config.wagonMotorKey!,
                   subtitle: 'Wagon drive', icon: Icons.swap_horiz)
+              : null,
+          onLeftEdgeTap: leftEdgeKey != null
+              ? () => _showSafetyEdgePane(context, leftEdgeKey, side: 'left')
+              : null,
+          onRightEdgeTap: rightEdgeKey != null
+              ? () =>
+                  _showSafetyEdgePane(context, rightEdgeKey, side: 'right')
               : null,
         );
       },
@@ -2381,6 +2398,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
     double? frequency,
     VoidCallback? onBeltTap,
     VoidCallback? onMotorTap,
+    VoidCallback? onLeftEdgeTap,
+    VoidCallback? onRightEdgeTap,
     double? wagonPosition,
     Color? chassisColor,
     bool safetyLeftActive = false,
@@ -2409,6 +2428,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
             frequency: frequency,
             onBeltTap: onBeltTap,
             onMotorTap: onMotorTap,
+            onLeftEdgeTap: onLeftEdgeTap,
+            onRightEdgeTap: onRightEdgeTap,
             wagonPosition: wagonPosition,
             chassisColor: chassisColor,
             safetyLeftActive: safetyLeftActive,
@@ -2423,16 +2444,39 @@ class _ConveyorState extends ConsumerState<Conveyor>
   /// No `behavior:` on purpose — deferring to the child leaves
   /// [ConveyorPainter.hitTest] the final word, which is what keeps the empty
   /// corners of a turned belt's box (and the bare track beside a wagon)
-  /// inert. Within the hit shape, a tap on the chassis bumpers goes to the
-  /// wagon's traverse motor and a tap on the belt to the belt drive —
-  /// whichever of the two is actually bound answers for the whole wagon.
-  Widget _withTapTargets(Widget child, ConveyorPainter painter, Size size,
-      VoidCallback? onBeltTap, VoidCallback? onMotorTap) {
-    if (onBeltTap == null && onMotorTap == null) return child;
+  /// inert. Within the hit shape, the wagon answers by zone: a bumper's
+  /// outer strip goes to its safety edge, the rest of the bumper to the
+  /// traverse motor, the belt to the belt drive — and whatever is actually
+  /// bound answers for the zones that are not.
+  Widget _withTapTargets(
+      Widget child, ConveyorPainter painter, Size size,
+      {VoidCallback? onBeltTap,
+      VoidCallback? onMotorTap,
+      VoidCallback? onLeftEdgeTap,
+      VoidCallback? onRightEdgeTap}) {
+    if (onBeltTap == null &&
+        onMotorTap == null &&
+        onLeftEdgeTap == null &&
+        onRightEdgeTap == null) {
+      return child;
+    }
     final beltArea = painter.beltRect(size);
     return GestureDetector(
       onTapUp: (details) {
-        if (onMotorTap != null && !beltArea.contains(details.localPosition)) {
+        final p = details.localPosition;
+        if (onLeftEdgeTap != null &&
+            (painter.safetyEdgeRect(size, left: true)?.contains(p) ??
+                false)) {
+          onLeftEdgeTap();
+          return;
+        }
+        if (onRightEdgeTap != null &&
+            (painter.safetyEdgeRect(size, left: false)?.contains(p) ??
+                false)) {
+          onRightEdgeTap();
+          return;
+        }
+        if (onMotorTap != null && !beltArea.contains(p)) {
           onMotorTap();
           return;
         }
@@ -2450,6 +2494,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
     double? frequency,
     VoidCallback? onBeltTap,
     VoidCallback? onMotorTap,
+    VoidCallback? onLeftEdgeTap,
+    VoidCallback? onRightEdgeTap,
     double? wagonPosition,
     Color? chassisColor,
     bool safetyLeftActive = false,
@@ -2565,7 +2611,11 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
-    return _withTapTargets(content, painter, paintSize, onBeltTap, onMotorTap);
+    return _withTapTargets(content, painter, paintSize,
+        onBeltTap: onBeltTap,
+        onMotorTap: onMotorTap,
+        onLeftEdgeTap: onLeftEdgeTap,
+        onRightEdgeTap: onRightEdgeTap);
   }
 
   Widget _positionedChildGate(
@@ -2664,11 +2714,75 @@ class _ConveyorState extends ConsumerState<Conveyor>
   String _paneIdFor(String driveKey) =>
       'conveyor:${identityHashCode(widget.config)}:$driveKey';
 
-  /// Every drive key this conveyor may have opened a pane for.
+  /// Every key this conveyor may have opened a pane for.
   Iterable<String> get _paneDriveKeys => [
         widget.config.key,
         widget.config.wagonMotorKey,
+        widget.config.safetyLeftKey,
+        widget.config.safetyRightKey,
       ].whereType<String>().where((k) => k.isNotEmpty);
+
+  /// Opens the pane for one of the wagon's safety edges. An `FB_Sensor`
+  /// struct gets the sensor asset's own FB pane — same rows, same
+  /// setpoints, one implementation — and a plain BOOL a minimal
+  /// pressed/clear card.
+  void _showSafetyEdgePane(BuildContext context, String edgeKey,
+      {required String side}) {
+    final title = 'Safety edge · $side';
+    SidePane simple(PaneStatus status, String detail) => SidePane(
+          title: title,
+          subtitle: 'Wagon',
+          icon: Icons.sensors,
+          status: status,
+          child: PaneBody(
+            sections: [
+              PaneBodySection.status(
+                title: 'Signal',
+                child: PaneDetailRow(label: 'Edge', value: detail),
+              ),
+            ],
+          ),
+        );
+    showSidePane(
+      context: context,
+      id: _paneIdFor(edgeKey),
+      builder: (paneContext) => StateManValueBuilder(
+        keyName: edgeKey,
+        waiting: (_) =>
+            simple(const PaneStatus.unknown('Connecting'), 'connecting'),
+        error: (_, error) =>
+            simple(const PaneStatus.fault('Error'), error.toString()),
+        builder: (context, stateMan, dynValue) {
+          final fb = SensorFbState.tryParse(dynValue);
+          if (fb == null) {
+            final pressed = readSafetyEdge(dynValue);
+            return simple(
+                pressed
+                    ? const PaneStatus.fault('Pressed')
+                    : const PaneStatus.stopped('Clear'),
+                pressed ? 'pressed' : 'clear');
+          }
+          return SensorFbPane(
+            config: SensorConfig(detectionKey: edgeKey, tag: title),
+            state: fb,
+            subtitleOverride: 'Safety edge · FB_Sensor',
+            // Copy-on-write like every other pane here: clone, set one
+            // member, write the whole struct back.
+            onWrite: (field, value) {
+              final messenger = ScaffoldMessenger.maybeOf(context);
+              final newValue = DynamicValue.from(dynValue);
+              newValue[field] = value;
+              stateMan.write(edgeKey, newValue).catchError((Object e) {
+                messenger?.showSnackBar(
+                  SnackBar(content: Text('Write to $edgeKey failed: $e')),
+                );
+              });
+            },
+          );
+        },
+      ),
+    );
+  }
 
   /// Opens the operator pane for one of this conveyor's drives — the belt
   /// drive, or the wagon's traverse motor, which is the same `FB_ATV320`
@@ -3554,9 +3668,33 @@ class ConveyorPainter extends CustomPainter {
   Rect wagonRect(Size size) {
     final belt = beltRect(size);
     if (!onRails) return belt;
-    final overhang = _chassisOverhang(size, belt.width);
-    return Rect.fromLTRB(
-        belt.left - overhang, belt.top, belt.right + overhang, belt.bottom);
+    // Union, not an inflation of the belt: with the belt along the rails a
+    // thin band can be shorter than the carriage under it.
+    return belt.expandToInclude(_chassisRect(size));
+  }
+
+  /// The carriage frame's rectangle — shared by the chassis painter and the
+  /// safety-edge tap zones so what is drawn and what answers a tap cannot
+  /// come apart.
+  Rect _chassisRect(Size size) {
+    final span = _beltSpan(size);
+    final overhang = _chassisOverhang(size, span.width);
+    final chassisH = size.height * _chassisHeightFraction;
+    return Rect.fromLTWH(span.x0 - overhang, (size.height - chassisH) / 2,
+        span.width + 2 * overhang, chassisH);
+  }
+
+  /// The tap zone of one safety edge: the outer bumper strip of the
+  /// carriage on that side — exactly the area a tripped edge lights up.
+  /// Null off the rails.
+  Rect? safetyEdgeRect(Size size, {required bool left}) {
+    if (!onRails) return null;
+    final chassis = _chassisRect(size);
+    final overhang = _chassisOverhang(size, _beltSpan(size).width);
+    return left
+        ? Rect.fromLTWH(chassis.left, chassis.top, overhang, chassis.height)
+        : Rect.fromLTWH(chassis.right - overhang, chassis.top, overhang,
+            chassis.height);
   }
 
   /// Rounding of the belt's two ends, as a fraction of the belt width.
@@ -3758,9 +3896,8 @@ class ConveyorPainter extends CustomPainter {
       Canvas canvas, Size size, ({double x0, double width}) span) {
     final overhang = _chassisOverhang(size, span.width);
     if (overhang <= 0.5) return;
-    final chassisH = size.height * _chassisHeightFraction;
-    final rect = Rect.fromLTWH(span.x0 - overhang,
-        (size.height - chassisH) / 2, span.width + 2 * overhang, chassisH);
+    final rect = _chassisRect(size);
+    final chassisH = rect.height;
     final rrect =
         RRect.fromRectAndRadius(rect, Radius.circular(chassisH * 0.15));
     canvas.drawRRect(

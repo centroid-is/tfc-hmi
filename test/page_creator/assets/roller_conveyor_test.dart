@@ -151,6 +151,23 @@ void main() {
       expect(ConveyorConfig().effectiveWagonLength, 0.25);
     });
 
+    test('safety-edge tap zones are the bumper strips, not the belt', () {
+      final painter = wagonAt(0.5);
+      final leftZone = painter.safetyEdgeRect(size, left: true)!;
+      final rightZone = painter.safetyEdgeRect(size, left: false)!;
+      final belt = painter.beltRect(size);
+      final wagon = painter.wagonRect(size);
+      // Each zone sits on its own side of the belt, inside the wagon.
+      expect(leftZone.right, lessThanOrEqualTo(belt.left + 0.01));
+      expect(rightZone.left, greaterThanOrEqualTo(belt.right - 0.01));
+      expect(wagon.contains(leftZone.center), isTrue);
+      expect(wagon.contains(rightZone.center), isTrue);
+      // Off the rails there is no edge to tap.
+      final flat = ConveyorPainter(
+          color: Colors.grey, batches: const {}, angle: 0, paintSize: size);
+      expect(flat.safetyEdgeRect(size, left: true), isNull);
+    });
+
     test('readSafetyEdge accepts a plain BOOL and an FB_Sensor struct', () {
       DynamicValue edge({required bool output, required bool fault}) =>
           DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({

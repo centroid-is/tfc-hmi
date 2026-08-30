@@ -898,12 +898,18 @@ class SensorFbPane extends StatelessWidget {
   /// can supply a canned, provider-free preview.
   final Widget? trendTile;
 
+  /// Replaces the kind-derived subtitle. The conveyor reuses this pane for
+  /// a wagon's safety edges, where "redLight · FB_Sensor" would name a
+  /// glyph the asset does not draw.
+  final String? subtitleOverride;
+
   const SensorFbPane({
     super.key,
     required this.config,
     required this.state,
     required this.onWrite,
     this.trendTile,
+    this.subtitleOverride,
   });
 
   @override
@@ -916,7 +922,7 @@ class SensorFbPane extends StatelessWidget {
       // The tag names the pane — key strings are wiring, not something an
       // operator reads (same convention as the 3rd-party pane).
       title: tagged ? config.tag! : 'Sensor',
-      subtitle: '${config.kind.name} · FB_Sensor',
+      subtitle: subtitleOverride ?? '${config.kind.name} · FB_Sensor',
       icon: Icons.sensors,
       // Fault outranks detection: with neither contact reporting, "clear"
       // would be a guess. Matches the glyph, which goes grey on the same
