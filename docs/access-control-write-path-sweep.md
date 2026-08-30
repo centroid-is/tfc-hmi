@@ -22,7 +22,15 @@ matched by **file and call**, not by line number — line numbers move on every
 edit, and a check that fails on reformatting gets deleted rather than fixed.
 
 **Sweep run: 2026-08-29**, over `lib`, `centroid-hmi/lib`, `demo` and
-`packages/*/lib`, excluding `test`, `build` and `.dart_tool`. The script's own
+`packages/*/lib`, excluding `test`, `build` and `.dart_tool`.
+**Re-run: 2026-08-30** by plan 03-12, against the tree seven plans later. The
+per-section hit counts in the headings below carry both numbers where they
+differ; every new hit has a row, one row was found to have been missing since
+the first run (§4.1 F), and no row was left stale. From that re-run onwards the
+comparison is a test — `test/core/phase_03_coverage_test.dart` runs the script
+and reconciles its hits against this document's table rows in **both**
+directions, by file, so a write path added after today fails a suite rather
+than waiting to be read about. The script's own
 header records its two output conventions: comment-only lines are dropped (a
 comment is not a call, which is why `centroid-hmi/lib/main.dart:449` quoting
 `adb.deleteHistoryView` in a note is not a site), and hits inside generated
@@ -54,28 +62,37 @@ no row is blank and no row says "probably".
 Where a file carries many calls of one shape, the row names the shape and lists
 the lines, because that is how plan 03-12 compares — by file and call.
 
-### 2.1 Named Drift write helpers on `AppDatabase` (script §1 — 44 hits)
+### 2.1 Named Drift write helpers on `AppDatabase` (script §1 — 44 hits at the 2026-08-29 run, 54 at the 2026-08-30 re-run)
+
+The ten new hits are plan 03-10's guard, which declares the same five method
+names and delegates to them. That is the shape a guard has, and it is why the
+count going **up** is the expected outcome of closing a bypass rather than a
+regression.
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
-| `lib/pages/history_view.dart:1108` | `adb.deleteHistoryView(v.id)` | `history_view` + cascades | delete-view button `:722` on `/advanced/history-view` (**not** raised) | `guarded by 03-10` |
-| `lib/pages/history_view.dart:1127` | `dbWrap.db.addHistoryViewPeriod(...)` | `history_view_period` | save-period control on the same page | `guarded by 03-10` |
-| `lib/pages/history_view.dart:1165` | `dbWrap.db.deleteHistoryViewPeriod(p.id)` | `history_view_period` | delete-period button `:1074` | `guarded by 03-10` |
-| `lib/pages/history_view.dart:1281` | `adb.createHistoryView(...)` | `history_view` | save-as control | `guarded by 03-10` |
-| `lib/pages/history_view.dart:1329` | `adb.updateHistoryView(...)` | `history_view` | save control | `guarded by 03-10` |
+| `lib/pages/history_view.dart:1155` | `store.deleteHistoryView(v.id)` | `history_view` + cascades | delete-view button on `/advanced/history-view` (**not** raised) | `guarded by 03-10` |
+| `lib/pages/history_view.dart:1192` | `store.addHistoryViewPeriod(...)` | `history_view_period` | save-period control on the same page | `guarded by 03-10` |
+| `lib/pages/history_view.dart:1237` | `store.deleteHistoryViewPeriod(p.id)` | `history_view_period` | delete-period button | `guarded by 03-10` |
+| `lib/pages/history_view.dart:1359` | `store.createHistoryView(...)` | `history_view` | save-as control | `guarded by 03-10` |
+| `lib/pages/history_view.dart:1411` | `store.updateHistoryView(...)` | `history_view` | save control | `guarded by 03-10` |
+| `lib/core/guarded_history_views.dart:127-179` | the same five names on `HistoryViewStore`, each delegating to `_db.<name>` | `history_view`, `history_view_period` | `historyViewStoreProvider`, from the five controls above | `correct as-is` — this **is** the guard; the check and the row happen here and the delegation below them |
 | `packages/tfc_dart/lib/core/database_drift.dart:698, 742, 785, 845, 855, 898, 1116` | the seven method **declarations** | — | — | `correct as-is` (this is the API section 1 searches for; declaring it is not calling it) |
 | `packages/tfc_dart/lib/core/database_drift.dart:424-427, 466-476, 506-508` | `m.createTable(<table>)` | schema | drift `Migrator` inside `onUpgrade`/`onCreate` | `not widget-reachable` — a different method of the same name on `Migrator`, called only by drift's migration callback at database open |
 | `packages/tfc_mcp_server/lib/src/database/server_database.dart:356-397` | `m.createTable(<table>)` | schema | same, for the MCP server's own database | `not widget-reachable` — same reason |
 | `packages/tfc_dart/lib/core/database.dart:930` | `db.updateRetentionPolicy(tableName, retention)` | timescale policy | `Database._applyRetentionPolicy` ← `registerRetentionPolicy` ← `Collector` (`collector.dart:216`) | `not widget-reachable` — no widget calls it; the widget-reachable input is the `collector_config` key, which `03-09` guards |
 | `packages/tfc_dart/lib/core/database.dart:1715, 1738` | `db.createTable(tableName, ...)` | timeseries tables | `Database` creating a table on first insert | `not widget-reachable` — driven by a sample arriving, not by a control |
 
-**Both accessors are present.** `:1108` uses `adb`, `:1165` uses `dbWrap.db`.
-The script finds both because section 1 searches the *method names*, not a
-receiver spelling — the exact mistake `.planning/phases/02-route-gating/deferred-items.md`
-§4 names. Spec §6 lists two of these five; all five are here, and plan 03-10
-moves all five.
+**Both accessors were present, and both moved.** At the first run `:1108` used
+`adb` and `:1165` used `dbWrap.db`; the script found both because section 1
+searches the *method names*, not a receiver spelling — the exact mistake
+`.planning/phases/02-route-gating/deferred-items.md` §4 names. Spec §6 listed
+two of these five; all five were here, and plan 03-10 moved all five onto
+`store.`, which is why every line number in this block changed between the two
+runs and none of the calls did. **This is the reason the reconciliation is by
+file and call rather than by line.**
 
-### 2.2 Raw Drift statement API (script §2 — 116 hits)
+### 2.2 Raw Drift statement API (script §2 — 116 hits at the 2026-08-29 run, 113 at the 2026-08-30 re-run)
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
@@ -94,8 +111,8 @@ moves all five.
 | `packages/tfc_dart/lib/core/alarm.dart:341` | `db.customInsert(r'''...''')` | alarm history | `AlarmMan` recording an alarm transition | `not widget-reachable` — driven by a PLC transition; the operator-facing ack path writes nothing here |
 | `packages/tfc_mcp_server/lib/src/database/server_database.dart:376-389` | `customStatement(...)` | schema | migration callback | `not widget-reachable` — same as 2.1 |
 | `lib/core/secure_storage/macos.dart:123, 152, 172`, `lib/core/secure_storage/other.dart:29`, `packages/tfc_dart/lib/core/secure_storage/linux.dart:52` | `_storage.delete(key:)` / `_legacy.delete(key:)` | OS keychain | the `MySecureStorage` implementations | `left open: secure storage is outside both guards` — see §3.4 |
-| `lib/pages/ip_settings.dart:303, 916` | `connection.delete()`, `connection.update(settings)` | NetworkManager | `/advanced/ip-settings` | `route-gated (Phase 2)` — `kRaisedRoutes` raises it to `administer` |
-| `lib/pages/ip_settings.dart:453` | `_tracker.update(...)` | — | in-memory traffic-rate tracker | `not widget-reachable` — not a store; a false positive of a deliberately broad grep, recorded rather than filtered away |
+| `lib/pages/ip_settings.dart:408, 1127` | `connection.delete()`, `connection.update(updatedSettings)` | NetworkManager | `/advanced/ip-settings` | `route-gated (Phase 2)` — `kRaisedRoutes` raises it to `administer` |
+| `lib/pages/ip_settings.dart:588` | `_tracker.update(...)` | — | in-memory traffic-rate tracker | `not widget-reachable` — not a store; a false positive of a deliberately broad grep, recorded rather than filtered away |
 | `packages/centroidx_upgrader/lib/src/manager_launcher.dart:170` | `staged.delete()` | filesystem | cleanup of a failed staging write; see 2.7 | `left open: the update path is ungated` — see §3.5 |
 | `packages/tfc_dart/lib/core/state_man.dart:2175` | `wrapper.client.delete()` | — | OPC UA client teardown | `not widget-reachable` — not a store; disposes a connection |
 
@@ -104,7 +121,7 @@ three MCP index classes and the audit stores: every other hit is either the
 store's own implementation, a migration, or a `.delete(`/`.update(` on
 something that is not a database at all.
 
-### 2.3 `AppDatabase` handles and the `.db` accessor (script §3 — 60 hits, plus 176 collapsed in `database_drift.g.dart`)
+### 2.3 `AppDatabase` handles and the `.db` accessor (script §3 — 60 hits at the 2026-08-29 run, 55 at the 2026-08-30 re-run, plus 176 collapsed in `database_drift.g.dart` at both)
 
 This section exists to catch a *new accessor spelling* the first time it
 appears. It found no handle that is not already covered by 2.1 or 2.2. Rows
@@ -120,14 +137,20 @@ here are therefore grouped by what the handle is used for.
 | `lib/pages/server_config.dart:3209, 3224, 3258` | `ServerConfigDb.fetch(db.db)` / `publish(db.db, ...)` | `flutter_preferences` | `/advanced/server-config` | `guarded by 03-08` — and `route-gated (Phase 2)` besides |
 | `lib/page_creator/assets/graph.dart:820-821`, `lib/page_creator/assets/helper/timeseries_notify_mixin.dart:189-191` | `db.db.enableNotificationChannel(...)`, `listenToChannel(...)` | LISTEN/NOTIFY | graph assets | `not widget-reachable` as a write — `enableNotificationChannel` issues DDL for a notify channel, not a data write; noted here rather than left silent |
 | `lib/widgets/panes/database_stats_pane.dart:74, 86` | `db.db.config`, `db.db.customSelect(...)` | reads | the database stats pane | `left open: read permissions are deferred` |
-| `packages/tfc_dart/lib/core/preferences.dart:250, 465, 556`, `preferences_watch.dart:59-77`, `alarm.dart:338, 362`, `database.dart:512-580`, `access_repository.dart:98-100`, `drift_audit_sink.dart:53` | `final db = ...!.db`, `AppDatabase db` fields | handles | core machinery | `correct as-is` — the stores holding their own handle |
+| `packages/tfc_dart/lib/core/preferences.dart:250, 465, 556`, `packages/tfc_dart/lib/core/preferences_watch.dart:59, 75, 77`, `packages/tfc_dart/lib/core/alarm.dart:338, 362`, `packages/tfc_dart/lib/core/database.dart:512-580`, `packages/tfc_dart/lib/core/access/access_repository.dart:98-100`, `packages/tfc_dart/lib/core/access/drift_audit_sink.dart:53` | `final db = ...!.db`, `AppDatabase db` fields | handles | core machinery | `correct as-is` — the stores holding their own handle |
+| `lib/core/guarded_history_views.dart:85, 98` | `required AppDatabase db`, `final AppDatabase _db` | `AppDatabase` | `historyViewStoreProvider` | `correct as-is` — the handle 2.1's guard delegates through; the check happens above it |
 | `packages/tfc_dart/lib/core/database_drift.g.dart` (176 occurrences) | generated `_$AppDatabase` boilerplate | — | drift codegen | `not widget-reachable` — regenerated from `database_drift.dart`, which is searched above; collapsed by the script and counted |
 
-**No accessor spelling other than `adb`, `dbWrap.db`, `db.db`, `dbWrapper.db`,
-`_tsDb!.db`, `database!.db` and `preferences.database!.db` appears anywhere in
-the tree.** All seven are covered above. That is the claim this section is for.
+**Seven accessor spellings at the 2026-08-29 run — `adb`, `dbWrap.db`,
+`db.db`, `dbWrapper.db`, `_tsDb!.db`, `database!.db` and
+`preferences.database!.db` — and an eighth at the 2026-08-30 re-run:
+`HistoryViewStore._db` (`lib/core/guarded_history_views.dart:98`).** All eight
+are covered above. The eighth is a guard this phase added rather than a store
+this phase missed, which is the distinction this section exists to make
+visible: a new spelling is reported either way, and the reader decides which
+kind it is.
 
-### 2.4 `SharedPreferencesAsync()` constructed rather than injected (script §4 — 12 hits)
+### 2.4 `SharedPreferencesAsync()` constructed rather than injected (script §4 — 12 hits at the 2026-08-29 run, **1** at the 2026-08-30 re-run)
 
 Spec §6 names **one** of these. There were twelve, in eight files, and nine of
 the twelve were outside `lib/providers/` — the directory the spec's own CI check
@@ -171,7 +194,7 @@ that arithmetic is the whole content of the two rows.
 | `lib/providers/theme.dart:15, 22, 44, 51` | `await SharedPreferences.getInstance()` | device-local | the theme and colour-scheme notifiers | `left open: device-local UI state, and inside \`lib/providers/\`` — see §3.6. Passes the check on the **directory** rule, not an allow-list entry; a copy of these four lines anywhere else fails the build |
 | `lib/pages/dbus_login.dart:124, 141` | `await SharedPreferences.getInstance()` | device-local | the D-Bus login form | `left open: spec §2 excludes changing this file` — see §3.7. The **one** allow-list entry in the check, carrying that reason inline. Removing the entry makes the build fail on these two lines, which is how the entry was confirmed to be doing work |
 
-### 2.6 Secure storage (script §6 — 33 hits)
+### 2.6 Secure storage (script §6 — 33 hits at the 2026-08-29 run, 35 at the 2026-08-30 re-run)
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
@@ -179,7 +202,8 @@ that arithmetic is the whole content of the two rows.
 | `packages/tfc_dart/lib/core/database.dart:214-215, 226` | `SecureStorage.getInstance().write(key: _configLocation, ...)` | OS keychain | `DatabaseConfig` persistence, from `/advanced/server-config` and `/advanced/preferences` | `route-gated (Phase 2)` — both routes are `administer`; the store itself stays outside the guards, see §3.4 |
 | `packages/tfc_dart/lib/core/preferences.dart:205` | `secureStorage.write(key: key, value: value)` | OS keychain | `Preferences.setString(..., secret: true)` | `correct as-is` — inside the object `GuardedPreferences` wraps, so the check happens above it |
 | `lib/core/secure_storage/macos.dart:118, 139, 144`, `lib/core/secure_storage/other.dart:24`, `packages/tfc_dart/lib/core/secure_storage/linux.dart:47` | `_storage.write(key:, value:)` | OS keychain | the platform implementations behind `MySecureStorage` | `left open: secure storage is outside both guards` — see §3.4 |
-| `packages/tfc_dart/lib/core/secure_storage/secure_storage.dart:10-30`, `interface.dart:1`, `packages/tfc_dart/lib/tfc_dart_core.dart:22`, `centroid-hmi/lib/main.dart:244` | the singleton, the interface, the barrel export of the interface, and the one `setInstance` at boot | — | — | `not widget-reachable` — type declarations, an export line, and one boot-time platform selection; no key is written |
+| `packages/tfc_dart/lib/core/secure_storage/secure_storage.dart:10-30`, `packages/tfc_dart/lib/core/secure_storage/interface.dart:1`, `packages/tfc_dart/lib/tfc_dart_core.dart:22`, `centroid-hmi/lib/main.dart:244` | the singleton, the interface, the barrel export of the interface, and the one `setInstance` at boot | — | — | `not widget-reachable` — type declarations, an export line, and one boot-time platform selection; no key is written |
+| `packages/tfc_dart/lib/core/access/guarded_preferences.dart:436, 650` | `MySecureStorage get secureStorage => _inner.secureStorage` | — | anything holding the guarded object | `left open: secure storage is outside both guards` — the same hole as §3.4, reached through the decorator's own forwarding getter. Two hits because the checked path and `systemWrites` each forward it |
 
 ### 2.7 File writes (script §7 — 3 hits)
 
@@ -192,19 +216,20 @@ that arithmetic is the whole content of the two rows.
 **Nothing further found** in this section: three file writes in the whole tree,
 all three identified, two of them already behind a raised route.
 
-### 2.8 D-Bus — network and hostname (script §8 — 31 hits)
+### 2.8 D-Bus — network and hostname (script §8 — 31 hits at the 2026-08-29 run, 34 at the 2026-08-30 re-run)
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
 | `lib/pages/ip_settings.dart:263, 919-925, 1107-1125` | `activateConnection`, `deactivateConnection`, `addAndActivateConnection`, `settings.addConnection` | NetworkManager over D-Bus | `/advanced/ip-settings` | `route-gated (Phase 2)` — spec §6 bypass 3, gated at the route with the D-Bus call itself deliberately untouched |
 | `lib/pages/ip_settings.dart:39, 68, 84, 399, 819, 1048` | `NetworkManagerClient` fields and construction | — | the same page | `route-gated (Phase 2)` |
 | `lib/pages/about_linux.dart:98` | `nm.NetworkManagerClient(bus: ...)` | — | `/advanced/about-linux` (read-only page) | `not widget-reachable` as a write — the client is constructed to *read* device state; no write member is called in that file |
+| `lib/core/network_manager_ops.dart:86, 107` | `client.settings.addConnection(settings)`, `client.activateConnection(device:, connection:)` | NetworkManager over D-Bus | `lib/pages/ip_settings.dart:10` — the **only** importer in the tree (`grep -rn network_manager_ops lib centroid-hmi/lib`), so `/advanced/ip-settings` | `route-gated (Phase 2)` — the same verdict as the rows above it, reached one file deeper. **This row was missing from the 2026-08-29 run and is the 2026-08-30 re-run's one genuine finding — see §4.1 F** |
 | `lib/widgets/tfc_operations.dart:22, 24, 69` | `_operationMode.callSetMode('running' \| 'stopped' \| 'cleaning')` | `is.centroid.OperationMode` over D-Bus | `OperationModeAppBarLeftWidgetProvider`, which **nothing in the repository constructs** — `globalAppBarLeftWidgetProvider` (`lib/widgets/base_scaffold.dart:36`) defaults to null and is never overridden | `left open: unwired today, and start/stop is an operator action by design` — see §3.8 |
 | `lib/dbus/generated/hostname1.dart:290-356` | `callSetHostname`, `callSetStaticHostname`, `callSetPrettyHostname`, `callSetIconName`, `callSetChassis`, `callSetDeployment`, `callSetLocation` | systemd-hostnamed | **no caller anywhere in the tree** | `not widget-reachable` — generated D-Bus bindings with zero call sites; a grep for each name outside this file returns nothing |
 | `lib/dbus/generated/login1.dart:1140-1563` | `callSetUserLinger`, `callSetRebootParameter`, `callSetRebootToFirmwareSetup`, `callSetRebootToBootLoaderMenu`, `callSetRebootToBootLoaderEntry`, `callSetWallMessage` | systemd-logind | **no caller anywhere in the tree** | `not widget-reachable` — same |
 | `lib/dbus/generated/operations.dart:88` | `callSetMode` declaration | — | the binding `tfc_operations.dart` calls | `correct as-is` — a generated binding; the call site is the row above |
 
-### 2.9 Writes through the injected preferences interface (script §9 — 76 + 17 hits)
+### 2.9 Writes through the injected preferences interface (script §9 — 76 + 17 hits at the 2026-08-29 run, 89 + 18 at the 2026-08-30 re-run)
 
 These are **not bypasses**. They are the surface plan 03-01 classifies, and the
 reason they are enumerated is that neither a construction search nor a Drift
@@ -236,6 +261,10 @@ in §5.
 | `lib/widgets/panes/color_picker_dialog.dart:70` | `createDeviceLocalPreferences().setStringList(prefsKey, ...)` | device-local | confirming a colour anywhere in the app | construction `enforced by 03-11`; the write stays on the deliberately unguarded device-local store |
 | `lib/core/preferences.dart:54-84` | `_prefs.set*/remove/clear(key)` | device-local | `SharedPreferencesWrapper` | `correct as-is` — delegation with the caller's key |
 | `packages/tfc_dart/lib/core/preferences.dart:344-413, 485-493, 524-532, 565-585` | `_memoryCache.set*`, `localCache?.set*`, `cache.set*` | in-memory and device-local caches | inside `Preferences` | `correct as-is` — the cache fan-out below the guard |
+| `lib/providers/alarm.dart:28` | `systemPrefs.setString('alarm_man_config', ...)` | preferences | `alarmManProvider` at boot, writing the empty default | `guarded by 03-06` — routed through `systemWrites`, and one of the seven sites `kSystemWriteCallSites` names. New since the 2026-08-29 run |
+| `packages/tfc_dart/lib/core/access/guarded_preferences.dart:335, 348, 361, 373, 385` | the five checked `set*` members, each delegating to `_inner.set*` | preferences | every caller of `preferencesProvider` | `correct as-is` — this **is** the guard; the check and the row happen above the delegation |
+| `packages/tfc_dart/lib/core/access/guarded_preferences.dart:532, 545, 558, 570, 582` | the same five members on `systemWrites`, with the session check skipped | preferences | the boot defaults of §3.9 | `left open: the deliberately unchecked write path` — §2.10 and §3.9 price it; this row is the file and line it lives at |
+| `lib/core/guarded_knowledge_stores.dart:660` | `GuardedPrefsReader.setString` delegating to `_inner.setString(key, value)` | device-local | the Knowledge Base page's delete-document cleanup | `guarded by 03-13` — `configure` plus one audit row. The store it writes through is unchanged and is the device-local one; see this phase's `deferred-items.md` §4 |
 | `packages/tfc_dart/lib/core/state_man.dart:442` | `prefs.setString(configKey, ..., secret: true, saveToDb: false)` | secure store | `StateManConfig.fromPrefs` at boot when the key is absent | `guarded by 03-06` — routed through `systemWrites` |
 | `packages/tfc_dart/lib/core/state_man.dart:450` | `prefs.setString(configKey, ...)` | secure store | `StateManConfig.toPrefs`, behind a control | `guarded by 03-06` |
 | `packages/tfc_dart/lib/core/state_man.dart:626` | `prefs.setString('key_mappings', ...)` | preferences | key-mapping save | `guarded by 03-06` |
@@ -524,6 +553,29 @@ the accepted cost.
 `lib/widgets/tfc_operations.dart:22, 24, 69`. Writes nothing today because
 nothing constructs its provider. Owner: none. Priced in §3.8.
 
+**F. A NetworkManager write helper the first run did not have a row for.**
+`lib/core/network_manager_ops.dart:86` (`client.settings.addConnection`) and
+`:107` (`client.activateConnection`). Found by plan 03-12's re-run, comparing
+the script's hits against this document's rows **by file** in both directions —
+the first mechanical reconciliation this document has had.
+
+**It is not a sixth bypass class.** The file's only importer anywhere in the
+tree is `lib/pages/ip_settings.dart:10`, so every one of these calls is reached
+from `/advanced/ip-settings`, which `kRaisedRoutes` raises to `administer`. The
+verdict is `route-gated (Phase 2)`, identical to the `ip_settings.dart` rows in
+§2.8 that this document already carried.
+
+**It is still a finding, and the useful kind.** The file was committed on
+2026-08-27 (`ae4c60fa`, the ip-settings bond fix) — *before* the 2026-08-29
+sweep, not after it. So the first run's grep found these lines and the human
+writing §2.8 did not give them a row: the section listed the page and missed
+the helper the page calls. That is the §6-fourth-bypass failure in miniature,
+and it says something about this document rather than about the tree: **a
+verdict list assembled by reading is a list with holes in it, and only the
+mechanical both-directions comparison finds them.** `test/core/phase_03_coverage_test.dart`
+is that comparison, and it now fails on the next such omission instead of
+waiting for somebody to notice.
+
 ### 4.2 Beyond §6's list, but already owned
 
 **D. Nine further `SharedPreferencesAsync()` constructions outside
@@ -573,6 +625,33 @@ Recorded so a later phase does not repeat the search or, worse, assume it:
 - **The preference key inventory (script §9).** Every key expression resolves to
   a rule in `kPrefAccessRules`; **no key the app writes rests on the
   `administer` default.** See §5.
+
+### 4.3a What the 2026-08-30 re-run found
+
+Recorded as a result rather than as a reassurance, because an unrecorded
+negative gets assumed next time rather than trusted.
+
+The re-run's hits were reconciled against this document's table rows by file,
+in both directions. Seven files carried hits with no row:
+
+| File | Hits | What it turned out to be |
+|---|---|---|
+| `lib/core/guarded_history_views.dart` | 12 | plan 03-10's guard — new, and the shape a closed bypass has |
+| `packages/tfc_dart/lib/core/access/guarded_preferences.dart` | 12 | plan 03-05's guard — new; its two holes were already priced in §2.10 without a file and line, and now have one |
+| `lib/core/network_manager_ops.dart` | 7 | **the one genuine finding — §4.1 F.** Pre-dated the first run and had no row |
+| `packages/tfc_dart/lib/core/preferences_watch.dart` | 3 | already covered in 2.3, but named by bare filename; now a full path |
+| `packages/tfc_dart/lib/core/secure_storage/interface.dart` | 1 | same — 2.6 named it by bare filename |
+| `lib/providers/alarm.dart` | 1 | plan 03-06's seventh system-write site — new |
+| `lib/core/guarded_knowledge_stores.dart` | 1 | plan 03-13's guard — new |
+
+In the reverse direction **one** row had no hit —
+`packages/tfc_dart/lib/core/database_drift.g.dart`, which the script collapses
+to a counted `[generated]` line by design and therefore never emits as a
+`file:line` hit. No row was stale.
+
+**Beyond finding F, nothing further found.** No new write surface, no new
+accessor spelling that is not a guard this phase added, and no site whose
+verdict this document cannot state.
 
 ### 4.4 What §5 checked and did not find
 
