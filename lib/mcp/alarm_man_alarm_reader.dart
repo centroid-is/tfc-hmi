@@ -29,6 +29,10 @@ class AlarmManAlarmReader implements AlarmReader {
         'title': alarm.title,
         'description': alarm.description,
         'rules': alarm.rules.map((r) => r.toJson()).toList(),
+        // Where the alarm sits in the alarm tree. The copilot needs this to
+        // answer "what is under Line 3" and to place a new alarm sensibly.
+        'group': List<String>.from(alarm.group),
+        'bindToGroup': alarm.bindToGroup,
       };
     }).toList();
   }

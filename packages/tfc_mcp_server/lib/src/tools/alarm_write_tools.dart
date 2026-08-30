@@ -101,6 +101,21 @@ void _registerCreateAlarm({
           description:
               'Optional alarm key (e.g., "pump3.overcurrent")',
         ),
+        'group': JsonSchema.array(
+          description: 'Where the alarm sits in the alarm tree, outermost '
+              'first -- ["Line 3", "Multivac"] puts it in Multivac, which is '
+              'in Line 3. Call get_alarm_tree first to reuse the names that '
+              'already exist rather than inventing near-duplicates. Omit or '
+              'pass [] to leave it ungrouped.',
+          items: JsonSchema.string(),
+        ),
+        'bind_to_group': JsonSchema.boolean(
+          description: 'True when this alarm IS the group named by `group` '
+              'rather than one alarm inside it -- the coarse "this machine '
+              'stopped" signal for equipment with no finer alarms yet. '
+              'Only one alarm per group can be bound.',
+          defaultValue: false,
+        ),
         'rules': JsonSchema.array(
           description: 'Alarm rules with severity and expression',
           items: JsonSchema.object(
@@ -128,6 +143,12 @@ void _registerCreateAlarm({
       final title = arguments['title'] as String;
       final description = arguments['description'] as String;
       final key = arguments['key'] as String?;
+      final group = (arguments['group'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList() ??
+          const <String>[];
+      final bindToGroup = arguments['bind_to_group'] as bool? ?? false;
       final rawRules = arguments['rules'] as List<dynamic>;
 
       // Validate all expressions before building proposal
@@ -150,6 +171,10 @@ void _registerCreateAlarm({
         'title': title,
         'description': description,
         'rules': rules,
+        'group': group,
+        // Binding to the root is meaningless -- there is no group to be --
+        // so it is dropped rather than stored as a flag that does nothing.
+        'bindToGroup': bindToGroup && group.isNotEmpty,
       };
       if (key != null) {
         proposal['key'] = key;
@@ -160,6 +185,9 @@ void _registerCreateAlarm({
         'title': title,
         'description': description,
         if (key != null) 'key': key,
+        if (group.isNotEmpty) 'group': group.join(' > '),
+        if (bindToGroup && group.isNotEmpty)
+          'bindToGroup': 'this alarm IS the group',
         'rules': rules
             .map((r) =>
                 '${r['level']}: ${r['expression']['value']['formula']}')
@@ -209,6 +237,17 @@ void _registerUpdateAlarm({
         'key': JsonSchema.string(
           description: 'Updated alarm key',
         ),
+        'group': JsonSchema.array(
+          description: 'Move the alarm to this place in the alarm tree, '
+              'outermost first -- ["Line 3", "Multivac"]. Call '
+              'get_alarm_tree first to reuse names that already exist. '
+              'Pass [] to move it to the root. Omit to leave it where it is.',
+          items: JsonSchema.string(),
+        ),
+        'bind_to_group': JsonSchema.boolean(
+          description: 'True when this alarm IS its group rather than one '
+              'alarm inside it. Omit to leave unchanged.',
+        ),
         'rules': JsonSchema.array(
           description: 'Updated alarm rules (replaces all existing rules)',
           items: JsonSchema.object(
@@ -253,6 +292,21 @@ void _registerUpdateAlarm({
       final newKey =
           arguments['key'] as String? ?? existing['key'] as String?;
 
+      // Omitted means "leave where it is"; [] means "move to the root".
+      final existingGroup = (existing['group'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const <String>[];
+      final newGroup = arguments.containsKey('group') &&
+              arguments['group'] != null
+          ? (arguments['group'] as List<dynamic>)
+              .map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList()
+          : existingGroup;
+      final newBindToGroup = arguments['bind_to_group'] as bool? ??
+          (existing['bindToGroup'] as bool? ?? false);
+
       List<Map<String, dynamic>> newRules;
       if (arguments.containsKey('rules') && arguments['rules'] != null) {
         final rawRules = arguments['rules'] as List<dynamic>;
@@ -277,12 +331,20 @@ void _registerUpdateAlarm({
             (existing['rules'] as List<dynamic>).cast<Map<String, dynamic>>();
       }
 
-      // Build the updated proposal
+      // Build the updated proposal.
+      //
+      // Accepting this replaces the stored alarm with what is here, so every
+      // field the alarm had has to survive the trip. `group`/`bindToGroup`
+      // are the alarm's place in the tree; dropping them would silently
+      // re-home the alarm at the root.
       final proposal = <String, dynamic>{
         'uid': alarmUid,
         'title': newTitle,
         'description': newDescription,
         'rules': newRules,
+        'group': newGroup,
+        // Binding to the root is meaningless -- there is no group to be.
+        'bindToGroup': newBindToGroup && newGroup.isNotEmpty,
       };
       if (newKey != null) {
         proposal['key'] = newKey;
@@ -296,6 +358,14 @@ void _registerUpdateAlarm({
       if (newDescription != existing['description']) {
         changes['description'] =
             '${existing['description']} -> $newDescription';
+      }
+      if (!_sameGroup(newGroup, existingGroup)) {
+        changes['group'] = '${_groupLabel(existingGroup)} -> '
+            '${_groupLabel(newGroup)}';
+      }
+      if (newBindToGroup != (existing['bindToGroup'] as bool? ?? false)) {
+        changes['bindToGroup'] =
+            '${existing['bindToGroup'] ?? false} -> $newBindToGroup';
       }
       if (newKey != existing['key']) {
         changes['key'] = '${existing['key']} -> $newKey';
@@ -397,6 +467,8 @@ void _registerDeleteAlarm({
         'title': title,
         'description': existing['description'],
         'rules': existing['rules'],
+        'group': existing['group'] ?? const <String>[],
+        'bindToGroup': existing['bindToGroup'] ?? false,
       };
       if (existing['key'] != null) {
         proposal['key'] = existing['key'];
@@ -410,3 +482,17 @@ void _registerDeleteAlarm({
     },
   );
 }
+
+
+/// Whether two alarm-tree addresses name the same group.
+bool _sameGroup(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// An alarm-tree address as an operator reads it in a confirmation diff.
+String _groupLabel(List<String> group) =>
+    group.isEmpty ? '(ungrouped)' : group.join(' > ');

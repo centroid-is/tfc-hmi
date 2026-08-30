@@ -1,0 +1,1851 @@
+<meta charset="utf-8">
+<title>Stop Analysis Timeline</title>
+<style>
+/* ------------------------------------------------------------------ *
+ * Surfaces come from lib/theme.dart (MutedColors, ISA-101).
+ * Bar colours come from AlarmColors — identical in both themes on
+ * purpose (ISA-18.2), so severity never depends on the operator's scheme.
+ * ------------------------------------------------------------------ */
+:root{
+  color-scheme: light dark;
+
+  --l-ground:#E3E5E7; --l-surface:#ECEDEE; --l-lane:#DEE1E3; --l-lane-alt:#D7DBDE;
+  --l-ink:#3C3F41;    --l-hair:#C6CBCE;    --l-accent:#4A6572;
+  --l-shadow:rgba(30,38,42,.13);
+
+  --d-ground:#1A1D1F; --d-surface:#232628; --d-lane:#2C3033; --d-lane-alt:#31363A;
+  --d-ink:#C2C7CB;    --d-hair:#3B4145;    --d-accent:#7FA3B8;
+  --d-shadow:rgba(0,0,0,.45);
+
+  --ground:var(--l-ground);   --surface:var(--l-surface);
+  --lane:var(--l-lane);       --lane-alt:var(--l-lane-alt);
+  --ink:var(--l-ink);         --hair:var(--l-hair);
+  --accent:var(--l-accent);   --shadow:var(--l-shadow);
+  --ink-mid:color-mix(in srgb, var(--l-ink) 64%, transparent);
+  --ink-dim:color-mix(in srgb, var(--l-ink) 45%, transparent);
+
+  /* AlarmColors — signalGreen / signalYellow / Solarized red */
+  --al-info:#00E676;
+  --al-warning:#FFEA00;
+  --al-error:#DC322F;
+  --al-on:#0A0F0C;
+
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Roboto Mono",monospace;
+
+  --labelw:236px;
+  --r:3px;
+}
+/* --ink-mid / --ink-dim resolve where they are declared, so every block that
+   remaps --ink must remap them too or they keep the other theme's value. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:var(--d-ground); --surface:var(--d-surface);
+    --lane:var(--d-lane);     --lane-alt:var(--d-lane-alt);
+    --ink:var(--d-ink);       --hair:var(--d-hair);
+    --accent:var(--d-accent); --shadow:var(--d-shadow);
+    --ink-mid:color-mix(in srgb, var(--d-ink) 64%, transparent);
+    --ink-dim:color-mix(in srgb, var(--d-ink) 40%, transparent);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:var(--d-ground); --surface:var(--d-surface);
+  --lane:var(--d-lane);     --lane-alt:var(--d-lane-alt);
+  --ink:var(--d-ink);       --hair:var(--d-hair);
+  --accent:var(--d-accent); --shadow:var(--d-shadow);
+  --ink-mid:color-mix(in srgb, var(--d-ink) 64%, transparent);
+  --ink-dim:color-mix(in srgb, var(--d-ink) 40%, transparent);
+}
+.stage[data-force="light"]{
+  --ground:var(--l-ground); --surface:var(--l-surface);
+  --lane:var(--l-lane);     --lane-alt:var(--l-lane-alt);
+  --ink:var(--l-ink);       --hair:var(--l-hair);
+  --accent:var(--l-accent); --shadow:var(--l-shadow);
+  --ink-mid:color-mix(in srgb, var(--l-ink) 64%, transparent);
+  --ink-dim:color-mix(in srgb, var(--l-ink) 45%, transparent);
+}
+.stage[data-force="dark"]{
+  --ground:var(--d-ground); --surface:var(--d-surface);
+  --lane:var(--d-lane);     --lane-alt:var(--d-lane-alt);
+  --ink:var(--d-ink);       --hair:var(--d-hair);
+  --accent:var(--d-accent); --shadow:var(--d-shadow);
+  --ink-mid:color-mix(in srgb, var(--d-ink) 64%, transparent);
+  --ink-dim:color-mix(in srgb, var(--d-ink) 40%, transparent);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--ui);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:40px 24px 96px;display:flex;flex-direction:column;gap:28px}
+/* `color` resolves where it is declared — re-declare inside the stage or the
+   forced-theme preview inherits the document theme's ink. */
+.stage{color:var(--ink)}
+
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-dim);margin:0}
+h1{font-size:clamp(28px,4vw,40px);line-height:1.1;margin:6px 0 0;font-weight:620;letter-spacing:-.02em;text-wrap:balance}
+.lede{margin:0;max-width:66ch;color:var(--ink-mid);font-size:16px}
+
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.seg{display:flex;border:1px solid var(--hair);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+.seg button{
+  font:inherit;font-size:12px;font-family:var(--mono);letter-spacing:.04em;
+  padding:6px 11px;border:0;background:transparent;color:var(--ink-mid);cursor:pointer;
+  border-right:1px solid var(--hair);
+}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.hint{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-left:auto}
+.cfg-lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim)}
+.emptyscope{
+  padding:26px 14px;text-align:center;color:var(--ink-dim);
+  font-family:var(--mono);font-size:11px;
+}
+
+.canvas{
+  background:var(--ground);
+  background-image:radial-gradient(color-mix(in srgb,var(--ink) 14%,transparent) 1px,transparent 1px);
+  background-size:16px 16px;
+  border:1px solid var(--hair);border-radius:var(--r);padding:22px;display:flex;justify-content:center;
+}
+
+/* ---------------- the asset ---------------- */
+.asset{
+  --rowh:38px; --rowh-leaf:32px;
+  width:100%;max-width:1000px;height:540px;min-height:120px;min-width:300px;
+  resize:both;overflow:hidden;
+  background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);
+  box-shadow:0 1px 3px var(--shadow),0 8px 24px -12px var(--shadow);
+  display:grid;grid-template-rows:auto 1fr auto auto;
+  font-size:13px;position:relative;
+}
+.main{display:grid;grid-template-rows:auto 1fr;min-height:0;overflow:hidden;position:relative}
+.asset[data-view="table"] .main{grid-template-rows:1fr}
+/* Gridlines, the unscheduled hatch and the future dim are vertical and span
+   every lane, so they are ONE overlay over the whole body — not 11 elements
+   per row rebuilt on every pan frame. */
+.chrome{position:absolute;top:26px;left:var(--labelw);right:0;bottom:0;pointer-events:none;overflow:hidden}
+.asset[data-view="table"] .chrome{display:none}
+
+.hd{display:flex;align-items:center;gap:14px;padding:9px 12px;border-bottom:1px solid var(--hair)}
+.hd h2{margin:0;font-size:13px;font-weight:640;white-space:nowrap}
+.hd .scope{font-family:var(--mono);font-size:11px;color:var(--ink-dim);white-space:nowrap}
+.legend{display:flex;gap:4px}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;
+  padding:3px 7px 3px 5px;border-radius:2px;border:1px solid transparent;
+  background:transparent;color:var(--ink-mid);cursor:pointer;white-space:nowrap;
+}
+.chip:hover{border-color:var(--hair)}
+.chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.chip .sw{width:9px;height:9px;border-radius:1px;flex:none}
+.chip[aria-pressed="false"]{opacity:.34}
+.chip .n{color:var(--ink-dim);font-variant-numeric:tabular-nums}
+.hd .clock{
+  margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink-mid);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.hd .live-dot{
+  display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--al-error);
+  margin-right:5px;vertical-align:1px;animation:pulse 2s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+.axisrow{display:grid;grid-template-columns:var(--labelw) 1fr;border-bottom:1px solid var(--hair)}
+.axis-corner{
+  border-right:1px solid var(--hair);font-family:var(--mono);font-size:9.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim);
+  display:flex;align-items:flex-end;padding:0 0 5px 12px;
+}
+.axis{position:relative;height:26px;overflow:hidden}
+.tick{position:absolute;bottom:4px;transform:translateX(-50%);white-space:nowrap;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-mid);font-variant-numeric:tabular-nums}
+.tick.major{color:var(--ink);font-weight:600}
+
+.body{
+  overflow-y:auto;overflow-x:hidden;position:relative;overscroll-behavior:contain;min-height:0;
+  background:linear-gradient(to right,
+    var(--surface) 0 var(--labelw),
+    var(--hair) var(--labelw) calc(var(--labelw) + 1px),
+    var(--lane) calc(var(--labelw) + 1px) 100%);
+}
+.row{display:grid;grid-template-columns:var(--labelw) 1fr;height:var(--rowh);
+  border-bottom:1px solid color-mix(in srgb,var(--hair) 55%,transparent)}
+.row.leaf{height:var(--rowh-leaf)}
+
+.label{
+  border-right:1px solid var(--hair);display:flex;align-items:center;gap:5px;
+  padding:0 8px 0 calc(6px + var(--d) * 15px);min-width:0;background:var(--surface);
+}
+.tw{
+  flex:none;width:15px;height:15px;border:0;background:transparent;padding:0;cursor:pointer;
+  color:var(--ink-mid);display:grid;place-items:center;border-radius:2px;
+}
+.tw:hover{background:var(--lane)}
+.tw:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tw svg{transition:transform .16s ease}
+.row.open .tw svg{transform:rotate(90deg)}
+.spacer{width:15px;flex:none}
+.ltext{min-width:0;display:flex;flex-direction:column;justify-content:center;line-height:1.25}
+.lname{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  display:flex;align-items:center;gap:6px}
+.lname .nm{overflow:hidden;text-overflow:ellipsis}
+.row.leaf .lname{font-weight:450;font-size:12px;color:var(--ink-mid)}
+.row.leaf .lvl{width:7px;height:7px;border-radius:1px;flex:none}
+/* hollow ring = this branch has an alarm bound to it, not just children */
+.bnd{width:8px;height:8px;border-radius:50%;border:1.5px solid;flex:none;background:transparent}
+.lstat{
+  font-family:var(--mono);font-size:10px;color:var(--ink-dim);
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.lstat b{font-weight:600;color:var(--ink-mid)}
+.lstat .on{color:var(--al-error);font-weight:600}
+
+.lane{position:relative;background:var(--lane);overflow:hidden}
+.row.leaf .lane{background:var(--lane-alt)}
+.overlay{position:absolute;inset:0;pointer-events:none}
+.gl{position:absolute;top:0;bottom:0;width:1px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.gl.major{background:color-mix(in srgb,var(--ink) 15%,transparent)}
+
+/* left stays 0 and JS writes the full transform — moving a bar must not cost
+   a layout pass */
+.bar{position:absolute;top:50%;left:0;border-radius:1px;cursor:pointer;will-change:transform}
+.bar.rollup{height:17px}
+.bar.leafbar{height:10px}
+.bar:hover{filter:brightness(1.15);box-shadow:0 0 0 1px var(--surface),0 0 0 2px var(--accent)}
+.bar.sel{box-shadow:0 0 0 1px var(--surface),0 0 0 2px var(--accent)}
+.bar.thin::after{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:inherit;opacity:.55}
+/* an activation with no deactivation time: it is happening now */
+.bar.live{border-radius:1px 0 0 1px}
+.bar.live::before{
+  content:"";position:absolute;right:-1px;top:-3px;bottom:-3px;width:2px;
+  background:inherit;animation:pulse 1.4s ease-in-out infinite;
+}
+
+.band{position:absolute;top:0;bottom:0;pointer-events:none}
+.band.unscheduled{
+  background:repeating-linear-gradient(-45deg,transparent 0 5px,
+    color-mix(in srgb,var(--ink) 9%,transparent) 5px 6px);
+}
+.band.future{background:color-mix(in srgb,var(--surface) 62%,transparent)}
+.nowline{position:absolute;top:0;bottom:0;width:1px;background:var(--ink-mid);pointer-events:none}
+
+.brush{display:grid;grid-template-columns:var(--labelw) 1fr;border-top:1px solid var(--hair);height:38px}
+.brush-lbl{
+  border-right:1px solid var(--hair);display:flex;align-items:center;padding-left:12px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim);
+}
+.track{position:relative;background:var(--lane);cursor:crosshair;touch-action:none}
+.tick-b{position:absolute;top:8px;height:22px;min-width:2px;border-radius:1px;opacity:.9}
+.window{
+  position:absolute;top:0;bottom:0;border:1px solid var(--accent);
+  background:color-mix(in srgb,var(--accent) 16%,transparent);cursor:grab;touch-action:none;
+}
+.window:active{cursor:grabbing}
+.window .grip{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize}
+.window .grip.l{left:-4px} .window .grip.r{right:-4px}
+.window .grip::before{
+  content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:2px;height:14px;background:var(--accent);border-radius:1px;
+}
+.shade{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--surface) 55%,transparent);pointer-events:none}
+
+.detail{
+  border-top:1px solid var(--hair);padding:8px 12px;display:flex;align-items:center;
+  gap:16px;flex-wrap:wrap;min-height:46px;font-family:var(--mono);font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--ink-mid);
+}
+.detail .empty{color:var(--ink-dim)}
+.detail .who{font-family:var(--ui);font-size:13px;font-weight:620;color:var(--ink)}
+.detail .path{color:var(--ink-dim)}
+.detail dl{display:flex;gap:16px;margin:0;flex-wrap:wrap}
+.detail dt{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);margin:0}
+.detail dd{margin:0;color:var(--ink)}
+.detail dd.ongoing{color:var(--al-error);font-weight:600}
+.detail .uid{
+  display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair);
+  border-radius:2px;padding:3px 7px;color:var(--ink-dim);
+}
+.lchip{display:inline-flex;align-items:center;gap:5px;color:var(--ink)}
+.lchip .sw{width:9px;height:9px;border-radius:1px}
+
+.tip{
+  position:fixed;z-index:20;pointer-events:none;opacity:0;transition:opacity .1s ease;
+  background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);
+  box-shadow:0 6px 20px -6px var(--shadow);padding:7px 9px;min-width:180px;
+  font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--ink-mid);
+}
+.tip.on{opacity:1}
+.tip .t-who{font-family:var(--ui);font-size:12.5px;font-weight:620;color:var(--ink);margin-bottom:1px}
+.tip .t-path{font-size:10px;color:var(--ink-dim);margin-bottom:4px}
+.tip .t-row{display:flex;justify-content:space-between;gap:14px}
+.tip .t-row span:last-child{color:var(--ink)}
+.tip .t-live{color:var(--al-error);font-weight:600}
+
+/* ---------------- table ---------------- */
+.viewseg{display:flex;border:1px solid var(--hair);border-radius:2px;overflow:hidden;flex:none}
+.viewseg button{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;padding:3px 9px;
+  border:0;border-right:1px solid var(--hair);background:transparent;color:var(--ink-mid);cursor:pointer;
+}
+.viewseg button:last-child{border-right:0}
+.viewseg button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+.viewseg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+.tablewrap{display:none;grid-template-rows:auto 1fr;min-height:0}
+.asset[data-view="table"] .tablewrap{display:grid}
+.asset[data-view="table"] .body,.asset[data-view="table"] .axisrow{display:none}
+.tscroll{overflow:auto;min-height:0;overscroll-behavior:contain}
+.tbar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:6px 12px;border-bottom:1px solid var(--hair);background:var(--surface);
+}
+.tbar .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-dim)}
+.tbar .tot{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--ink-mid);font-variant-numeric:tabular-nums}
+
+table.pareto{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
+table.pareto th{
+  position:sticky;top:0;z-index:2;background:var(--surface);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-dim);font-weight:500;text-align:left;white-space:nowrap;
+  padding:6px 10px;border-bottom:1px solid var(--hair);
+}
+table.pareto th.num{text-align:right}
+table.pareto th.sortable{cursor:pointer;user-select:none}
+table.pareto th.sortable:hover{color:var(--ink)}
+table.pareto th[aria-sort]:not([aria-sort="none"]){color:var(--ink)}
+table.pareto th .arw{opacity:.55;font-size:8px}
+table.pareto td{
+  padding:0 10px;height:30px;border-bottom:1px solid color-mix(in srgb,var(--hair) 55%,transparent);
+  vertical-align:middle;white-space:nowrap;
+}
+table.pareto td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+table.pareto tbody tr{cursor:pointer}
+table.pareto tbody tr:hover td{background:var(--lane)}
+table.pareto tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+td.rank{font-family:var(--mono);color:var(--ink-dim);width:1%;font-variant-numeric:tabular-nums}
+td.what{font-weight:560;max-width:230px;overflow:hidden;text-overflow:ellipsis}
+td.sub{color:var(--ink-mid);font-weight:400;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+td.live{color:var(--al-error);font-weight:600}
+.lz{display:inline-flex;align-items:center;gap:6px;color:var(--ink-mid);font-family:var(--mono);font-size:10.5px}
+.lz .sw{width:8px;height:8px;border-radius:1px;flex:none}
+.sharecell{width:210px}
+.shrow{display:flex;align-items:center;gap:9px}
+.sharebar{position:relative;flex:1;min-width:0;height:10px;background:var(--lane);border-radius:1px}
+.sharebar i{position:absolute;left:0;top:0;bottom:0;display:block;border-radius:1px}
+.sharebar u{position:absolute;top:-3px;bottom:-3px;width:1px;background:color-mix(in srgb,var(--ink) 50%,transparent)}
+.cum{flex:none;width:80px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+.tempty{padding:28px 12px;text-align:center;color:var(--ink-dim);font-family:var(--mono);font-size:11px}
+.asset.narrow table.pareto .opt{display:none}
+
+/* size-responsive */
+.asset.w-md .hd .scope{display:none}
+.asset.narrow{--labelw:150px}
+.asset.narrow .legend .chip .lb{display:none}
+.asset.sz-s{--rowh:26px;--rowh-leaf:24px;--labelw:150px}
+.asset.sz-s .brush,.asset.sz-s .detail,.asset.sz-s .legend,.asset.sz-s .viewseg{display:none}
+.asset.sz-s .lstat{display:none}
+.asset.sz-s .bar.rollup{height:13px}
+.asset.sz-s .bar.leafbar{height:8px}
+
+/* ---------------- notes ---------------- */
+.notes{display:flex;flex-direction:column;gap:26px;max-width:74ch}
+.notes h2{
+  font-size:12px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-dim);margin:0 0 10px;padding-bottom:7px;border-bottom:1px solid var(--hair);font-weight:500;
+}
+.notes h3{font-size:15px;margin:18px 0 4px;font-weight:620}
+.notes p{margin:0 0 10px;color:var(--ink-mid)}
+.notes ul{margin:0 0 10px;padding-left:19px;color:var(--ink-mid)}
+.notes li{margin-bottom:5px}
+.notes strong{color:var(--ink);font-weight:620}
+.notes code{font-family:var(--mono);font-size:.88em;background:var(--lane);padding:1px 4px;border-radius:2px;color:var(--ink)}
+pre{
+  font-family:var(--mono);font-size:12px;line-height:1.5;background:var(--lane);
+  border:1px solid var(--hair);border-radius:var(--r);padding:12px 14px;overflow-x:auto;margin:0 0 10px;
+}
+.q{border-left:2px solid var(--accent);padding-left:14px}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important;animation:none !important}
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">CentroidX · page asset · design review</p>
+    <h1>Stop Analysis Timeline</h1>
+    <p class="lede">
+      The alarm system on a time axis. The tree is the alarm definitions, nested as deep as you
+      configure them, so you can go from “Line 3 was down” to “Multivac” to “film reel empty”.
+      Bars are alarm activations coloured by severity; an alarm standing right now runs to the live
+      edge and keeps growing. Drag to pan, scroll to zoom, or switch to <b>Table</b> for a Pareto of
+      the same window.
+    </p>
+  </header>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Asset size">
+      <button type="button" data-size="full" aria-pressed="true">Full</button>
+      <button type="button" data-size="half" aria-pressed="false">Half</button>
+      <button type="button" data-size="strip" aria-pressed="false">Strip</button>
+    </div>
+    <div class="seg" role="group" aria-label="Preview theme">
+      <button type="button" data-force="" aria-pressed="true">Auto</button>
+      <button type="button" data-force="light" aria-pressed="false">Light</button>
+      <button type="button" data-force="dark" aria-pressed="false">Dark</button>
+    </div>
+    <span class="hint">the asset has a live resize handle in its bottom-right corner</span>
+  </div>
+
+  <div class="controls">
+    <span class="cfg-lbl">Asset config · path</span>
+    <div class="seg" role="group" aria-label="Alarm tree path this asset shows">
+      <button type="button" data-scope="all" aria-pressed="true">Whole plant</button>
+      <button type="button" data-scope="lines" aria-pressed="false">Lines 1 + 2</button>
+      <button type="button" data-scope="l3" aria-pressed="false">Line 3 · Packing</button>
+      <button type="button" data-scope="mv" aria-pressed="false">Line 3 › Multivac</button>
+    </div>
+    <span class="hint" id="scopeEcho"></span>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="canvas">
+      <section class="asset" id="asset" data-view="timeline" aria-label="Stop analysis timeline">
+        <div class="hd">
+          <h2>Stop analysis</h2>
+          <span class="scope">Alarm groups · packing hall</span>
+          <div class="viewseg" role="group" aria-label="View">
+            <button type="button" data-view="timeline" aria-pressed="true">Timeline</button>
+            <button type="button" data-view="table" aria-pressed="false">Table</button>
+          </div>
+          <div class="legend" id="legend"></div>
+          <span class="clock" id="clock"></span>
+        </div>
+
+        <div class="main">
+          <div class="axisrow">
+            <div class="axis-corner">Alarm group</div>
+            <div class="axis" id="axis"></div>
+          </div>
+
+          <div class="body" id="bodyEl"></div>
+          <div class="chrome" id="chrome"></div>
+
+          <div class="tablewrap">
+            <div class="tbar">
+              <span class="lbl">Rank by</span>
+              <div class="viewseg" role="group" aria-label="Grouping">
+                <button type="button" data-group="alarm" aria-pressed="true">Alarm</button>
+                <button type="button" data-group="node" aria-pressed="false">Group</button>
+                <button type="button" data-group="level" aria-pressed="false">Severity</button>
+                <button type="button" data-group="events" aria-pressed="false">Every activation</button>
+              </div>
+              <span class="tot" id="tabletot"></span>
+            </div>
+            <div class="tscroll">
+              <table class="pareto"><thead id="ptHead"></thead><tbody id="ptBody"></tbody></table>
+            </div>
+          </div>
+        </div>
+
+        <div class="brush">
+          <div class="brush-lbl">Fri 29 Aug</div>
+          <div class="track" id="track">
+            <div class="shade" id="shadeL"></div>
+            <div class="shade" id="shadeR"></div>
+            <div class="window" id="win">
+              <div class="grip l" data-grip="l"></div>
+              <div class="grip r" data-grip="r"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail" id="detail"><span class="empty">Select an activation to inspect it.</span></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+  <div class="notes">
+    <section>
+      <h2>Architecture</h2>
+      <p>
+        Three new pieces, and they sit on top of the alarm system rather than beside it. The one
+        thing that is not obvious: <strong>the intervals come from two places and have to be
+        unioned</strong>, because a row only reaches <code>alarm_history</code> when the alarm
+        clears.
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 740 664" role="img" width="740"
+             aria-label="Data flow: PLC to StateMan to AlarmMan, which forks into a live activeAlarms stream and, on clear, rows written to alarm_history; both feed a new StopIntervalSource, then a new AlarmTree grouped by AlarmConfig.path, then the new StopTimelineAsset.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g fill="none" stroke="currentColor" stroke-width="1"
+             font-family="ui-monospace,Menlo,monospace">
+
+            <rect x="285" y="12" width="170" height="38" rx="3"/>
+            <text x="370" y="36" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">PLC · OPC UA</text>
+
+            <rect x="285" y="92" width="170" height="38" rx="3"/>
+            <text x="370" y="116" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">StateMan</text>
+
+            <rect x="225" y="172" width="290" height="54" rx="3"/>
+            <text x="370" y="194" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">AlarmMan</text>
+            <text x="370" y="212" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">evaluates AlarmRule per AlarmConfig</text>
+
+            <rect x="470" y="300" width="200" height="48" rx="3"/>
+            <text x="570" y="321" font-size="12" text-anchor="middle" fill="currentColor" stroke="none">alarm_history</text>
+            <text x="570" y="338" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">postgres · closed only</text>
+
+            <rect x="195" y="408" width="350" height="52" rx="3" style="stroke:var(--accent)" stroke-width="1.6"/>
+            <text x="370" y="430" font-size="12" text-anchor="middle" stroke="none" style="fill:var(--accent)">StopIntervalSource</text>
+            <text x="370" y="448" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">open ∪ closed, one interval model</text>
+
+            <rect x="195" y="498" width="350" height="52" rx="3" style="stroke:var(--accent)" stroke-width="1.6"/>
+            <text x="370" y="520" font-size="12" text-anchor="middle" stroke="none" style="fill:var(--accent)">AlarmTree</text>
+            <text x="370" y="538" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">nested by AlarmConfig.path / bindToPath</text>
+
+            <rect x="195" y="588" width="350" height="52" rx="3" style="stroke:var(--accent)" stroke-width="1.6"/>
+            <text x="370" y="610" font-size="12" text-anchor="middle" stroke="none" style="fill:var(--accent)">StopTimelineAsset</text>
+            <text x="370" y="628" font-size="10.5" text-anchor="middle" fill="currentColor" stroke="none" opacity=".65">lanes · rollup · pareto table</text>
+
+            <line x1="370" y1="50"  x2="370" y2="88"  marker-end="url(#ar)"/>
+            <line x1="370" y1="130" x2="370" y2="168" marker-end="url(#ar)"/>
+            <line x1="270" y1="226" x2="270" y2="404" marker-end="url(#ar)"/>
+            <polyline points="470,226 470,268 620,268 620,296" marker-end="url(#ar)"/>
+            <polyline points="520,348 520,380 440,380 440,404" marker-end="url(#ar)"/>
+            <line x1="370" y1="460" x2="370" y2="494" marker-end="url(#ar)"/>
+            <line x1="370" y1="550" x2="370" y2="584" marker-end="url(#ar)"/>
+
+            <g fill="currentColor" stroke="none" font-size="10.5">
+              <text x="380" y="74">subscriptions by key</text>
+              <text x="380" y="154">values</text>
+              <text x="258" y="300" text-anchor="end">activeAlarms()</text>
+              <text x="258" y="315" text-anchor="end" opacity=".65">open — no end yet</text>
+              <text x="630" y="256">on clear</text>
+              <text x="630" y="271" opacity=".65">closed interval</text>
+              <text x="480" y="374" text-anchor="middle">windowed query</text>
+            </g>
+            <g stroke="none" font-size="9" letter-spacing="1.2" style="fill:var(--accent)">
+              <text x="537" y="423" text-anchor="end">NEW</text>
+              <text x="537" y="513" text-anchor="end">NEW</text>
+              <text x="537" y="603" text-anchor="end">NEW</text>
+            </g>
+          </g>
+        </svg>
+        <figcaption>
+          The union is the load-bearing part: without the live <code>activeAlarms()</code> leg, the
+          one stop an operator is standing in front of is the only one missing from the chart.
+        </figcaption>
+      </figure>
+
+      <h3>An alarm can be a leaf or the branch itself</h3>
+      <p>
+        A leaf is a diagnosis — <em>film reel empty</em>. But where no diagnosis alarm exists yet,
+        an alarm binds to the branch and <em>is</em> that machine’s signal. Both can be true at
+        once: Multivac has a coarse alarm of its own <em>and</em> finer ones underneath, so
+        anything the fine alarms don’t explain still shows up. Adding a diagnosis later is a new
+        alarm definition, not a restructuring.
+      </p>
+
+      <figure>
+        <svg viewBox="0 0 740 344" role="img" width="740"
+             aria-label="Tree of alarm definitions. Line 3 Packing contains Multivac, which has a bound alarm of its own plus three diagnosis alarms; Box erector BER01 has no bound alarm and two diagnosis alarms; Afak SL-15-3 has a bound alarm and no children. Each row's lane draws the union of its own alarm and everything beneath it."
+             font-family="ui-monospace,Menlo,monospace">
+          <g stroke="currentColor" opacity=".28" stroke-width="1">
+            <line x1="414" y1="30" x2="414" y2="322"/>
+            <line x1="28"  y1="64" x2="28"  y2="296"/>
+            <line x1="52"  y1="94" x2="52"  y2="176"/>
+            <line x1="52"  y1="214" x2="52" y2="266"/>
+            <line x1="28" y1="86"  x2="40" y2="86"/>
+            <line x1="52" y1="116" x2="64" y2="116"/>
+            <line x1="52" y1="146" x2="64" y2="146"/>
+            <line x1="52" y1="176" x2="64" y2="176"/>
+            <line x1="28" y1="206" x2="40" y2="206"/>
+            <line x1="52" y1="236" x2="64" y2="236"/>
+            <line x1="52" y1="266" x2="64" y2="266"/>
+            <line x1="28" y1="296" x2="40" y2="296"/>
+          </g>
+          <g fill="currentColor" stroke="none" font-size="9.5" letter-spacing="1.4" opacity=".55">
+            <text x="16" y="22">ALARM DEFINITIONS</text>
+            <text x="430" y="22">WHAT THAT ROW’S LANE DRAWS</text>
+          </g>
+
+          <circle cx="46"  cy="86"  r="4.5" fill="none" stroke="#DC322F" stroke-width="1.6"/>
+          <circle cx="46"  cy="296" r="4.5" fill="none" stroke="#DC322F" stroke-width="1.6"/>
+          <rect x="66" y="112" width="7" height="7" fill="#DC322F"/>
+          <rect x="66" y="142" width="7" height="7" fill="#DC322F"/>
+          <rect x="66" y="172" width="7" height="7" fill="#FFEA00"/>
+          <rect x="66" y="232" width="7" height="7" fill="#DC322F"/>
+          <rect x="66" y="262" width="7" height="7" fill="#FFEA00"/>
+
+          <g fill="currentColor" stroke="none" font-size="12">
+            <text x="16" y="60" font-weight="600">Line 3 · Packing</text>
+            <text x="58" y="90" font-weight="600">Multivac</text>
+            <text x="80" y="119" opacity=".72">Film reel empty</text>
+            <text x="80" y="149" opacity=".72">Seal temperature out of band</text>
+            <text x="80" y="179" opacity=".72">Vacuum not reached</text>
+            <text x="58" y="210" font-weight="600">Box erector BER01</text>
+            <text x="80" y="239" opacity=".72">Blank magazine empty</text>
+            <text x="80" y="269" opacity=".72">Glue temperature low</text>
+            <text x="58" y="300" font-weight="600">Afak SL-15-3</text>
+          </g>
+
+          <g fill="currentColor" stroke="none" font-size="11" opacity=".75">
+            <text x="430" y="60">everything beneath it</text>
+            <text x="430" y="90">its own alarm ∪ the three below</text>
+            <text x="430" y="119">this alarm only</text>
+            <text x="430" y="149">this alarm only</text>
+            <text x="430" y="179">this alarm only</text>
+            <text x="430" y="210">the two below — it has no alarm of its own</text>
+            <text x="430" y="239">this alarm only</text>
+            <text x="430" y="269">this alarm only</text>
+            <text x="430" y="300">its own alarm — nothing beneath it yet</text>
+          </g>
+
+          <g font-size="10.5" fill="currentColor" stroke="none" opacity=".6">
+            <text x="16" y="336">
+              <tspan font-size="13">○</tspan> alarm bound to the branch
+              <tspan dx="18" font-size="13">▪</tspan> alarm as a leaf
+            </text>
+          </g>
+        </svg>
+        <figcaption>
+          Multivac shows the mixed case: a coarse alarm on the branch catches what the three
+          diagnoses underneath do not explain. When a branch has both, its own alarm also appears
+          as the first row beneath it, so expanding never reveals less than the branch lane showed.
+        </figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Making it fast</h2>
+      <p>
+        The first version of this mockup took <strong>51&nbsp;ms per pan frame</strong> with 45 rows
+        and 62 bars — about 19&nbsp;fps on a dataset small enough to be a rounding error. It is now
+        <strong>0.2&nbsp;ms</strong> for the same frame with a forced layout included. Four things
+        were wrong, and all four have direct Flutter equivalents.
+      </p>
+      <ul>
+        <li>
+          <strong>It re-merged every rollup on every frame.</strong> A node’s intervals are a pure
+          function of its subtree and the severity filter — panning cannot change them. They are now
+          merged once per filter change and cached. This is the big one.
+        </li>
+        <li>
+          <strong>It walked every interval to find the visible ones.</strong> The cached lists are
+          sorted and disjoint, so the visible slice is two binary searches, and the window
+          statistics come from a prefix sum in <code>O(log n)</code> instead of a full scan.
+        </li>
+        <li>
+          <strong>It tore down and rebuilt the DOM.</strong> Bars are created once and re-positioned
+          with <code>transform</code>; gridlines, the hatch and the future dim became one pooled
+          overlay for the whole body instead of eleven elements per row. In Flutter this is the
+          difference between rebuilding a widget subtree and repainting a <code>CustomPainter</code>
+          — and the lanes should be a painter, exactly like the conveyor and elevator assets already
+          are.
+        </li>
+        <li>
+          <strong>It read <code>clientWidth</code> inside the write loop</strong>, forcing a
+          synchronous layout per row per frame. One measurement is taken before any write.
+        </li>
+      </ul>
+      <p>
+        Two more things keep it flat as data grows: intervals closer together than a pixel are
+        <strong>coalesced into one run</strong>, so the number of elements touched is bounded by the
+        lane’s width rather than by how much history is loaded; and pan, zoom and the live tick are
+        coalesced to one frame. Honest caveat — this was measured on a few hundred activations. The
+        merge and the coalescing loop are still linear in <em>loaded</em> intervals, which is why the
+        window a query loads matters as much as the drawing.
+      </p>
+
+      <h3>What the database should do</h3>
+      <p>
+        More than it does now, and it is well placed to — unlike the drive-struct history, an alarm
+        activation <em>already is</em> an interval, one row, no folding of samples required.
+      </p>
+      <ul>
+        <li>
+          <strong>Insert on activate, update on clear.</strong> Today <code>_addToDb</code> only
+          fires from <code>_removeActiveAlarm</code>, and <code>deactivated_at</code> is written as
+          an empty string cast to timestamp. If the row were inserted on activation with a NULL
+          deactivation and updated when it clears, the database could answer “what is standing”
+          too — the two-source union in the diagram above collapses into one query, and the live
+          stream becomes a refresh trigger rather than a second source of truth. Small change to
+          <code>AlarmMan</code>, large simplification everywhere downstream.
+        </li>
+        <li>
+          <strong>Index the interval, not the timestamp.</strong> Every query here is a range
+          overlap — <code>created_at &lt; :t1 AND (deactivated_at IS NULL OR deactivated_at &gt; :t0)</code>
+          — which is a GiST index on <code>tstzrange(created_at, deactivated_at)</code>, not a btree
+          on <code>created_at</code>.
+        </li>
+        <li>
+          <strong>Bucket wide windows in SQL.</strong> A month view does not need fifty thousand
+          intervals; it needs, per alarm per pixel column, whether anything was standing and the
+          worst severity. That is a <code>width_bucket</code> and a <code>GROUP BY</code>, and it
+          makes the payload constant no matter how wide the window is. Below a threshold the client
+          fetches real intervals and draws them exactly; above it, buckets.
+        </li>
+        <li>
+          <strong>The Pareto never needs rows at all.</strong> Ranking by standing time and by count
+          is <code>SUM(LEAST(deactivated_at, :t1) - GREATEST(created_at, :t0))</code> grouped by
+          <code>alarm_uid</code>. The table view should be one query returning a few dozen rows,
+          not a client-side reduction over everything loaded.
+        </li>
+      </ul>
+      <p>
+        The grouping stays client-side on purpose: the tree lives in <code>AlarmConfig.path</code>,
+        which is configuration, not data. Merging pre-bucketed leaves up the tree is cheap — it is
+        merging raw intervals every frame that was expensive, and that is now cached.
+      </p>
+    </section>
+
+    <section>
+      <h2>How it is built</h2>
+
+      <h3>The tree is the alarm definitions</h3>
+      <p>
+        Every leaf is one alarm, so the leaf is already a diagnosis — not “Multivac stopped” but
+        <em>film reel empty</em>, <em>seal temperature out of band</em>, <em>vacuum not reached</em>.
+        Group rows are the path above it and nest as deep as the definitions do. Expand Line 3 to
+        get Multivac, expand Multivac to get what was actually wrong.
+      </p>
+      <p>
+        The one thing <code>AlarmConfig</code> is missing for this is the path. It has
+        <code>uid</code>, <code>key</code>, <code>title</code>, <code>description</code> and
+        <code>rules</code>, and nothing that says where an alarm sits. Adding it there rather than
+        in the asset means the hierarchy is a property of the alarm system — the alarm list, the
+        beacon and this timeline all group the same way, and configuring an alarm is the only place
+        you say where it belongs:
+      </p>
+      <pre>class AlarmConfig {
+  final String uid;
+  final String? key;
+  final String title;
+  final String description;
+  final List&lt;AlarmRule&gt; rules;
+
+  /// Where this alarm sits in the tree. ["Line 3", "Multivac"]
+  final List&lt;String&gt; path;          // new
+
+  /// True: this alarm IS the node at [path] — the branch's own signal.
+  /// False: it is a diagnosis leaf underneath that node.
+  final bool bindToPath;            // new
+}</pre>
+
+      <h3>The asset’s whole configuration is a path</h3>
+      <p>
+        Because the tree comes from the alarm definitions, the asset has almost nothing left to
+        configure: it picks which part of that tree to show. Try the
+        <strong>Asset config · path</strong> switch above the mockup — the same asset becomes a
+        plant overview, a two-line comparison, or a Multivac-only panel, and the chosen node is
+        re-indented to sit at the top. Severity colours, what a leaf means, how deep it nests: none
+        of that is the asset’s to decide, so a page can never drift out of step with the alarm
+        system.
+      </p>
+      <pre>class StopTimelineConfig {
+  /// Which subtrees to draw. [] is the whole plant.
+  /// [["Line 3", "Multivac"]] is a Multivac-only panel.
+  final List&lt;List&lt;String&gt;&gt; paths;
+}</pre>
+      <p>
+        A <em>list</em> rather than one path, because “Line 1 and Line 2 but not Infrastructure” is
+        an obvious thing to want on a line-comparison page and there is otherwise no way to say it.
+        And because a path is matched by name, renaming a segment in the alarm definitions orphans
+        any asset pointing at it — so an unmatched path says <em>no alarms are defined under
+        this path</em> rather than rendering a convincing empty chart.
+      </p>
+
+      <h3>Colour is severity, straight from AlarmColors</h3>
+      <p>
+        <code>error</code> Solarized red, <code>warning</code> signal yellow, <code>info</code>
+        signal green — the same three the banner, the list cards and the beacon use, and identical
+        in both themes on purpose (ISA-18.2). A group bar takes <strong>the worst severity active
+        during that interval</strong>, so a line lane goes red the moment any error underneath it
+        stands, and the filter chips are the same severity filter the alarm page already has.
+      </p>
+      <p>
+        Two things to watch on a floor. Green normally means running, and here a green bar means an
+        info alarm was standing — the lane ground stays neutral grey so nothing reads as “green =
+        healthy”, but if info alarms turn out to be common this is the first thing that will look
+        wrong. And signal yellow is weak against the light theme’s pale surfaces; it is legible,
+        but a warning reads quieter there than it does on dark. Both are inherited from
+        <code>AlarmColors</code> deliberately — fixing them here would mean this asset disagreeing
+        with the banner and the beacon, which is worse.
+      </p>
+
+      <h3>A live alarm is a bar with no right edge</h3>
+      <p>
+        <code>AlarmMan._addToDb</code> only fires from <code>_removeActiveAlarm</code>, so a row
+        reaches <code>alarm_history</code> <strong>when the alarm clears</strong>. Read only the
+        table and the one alarm an operator is standing in front of is the one stop missing from
+        the chart. So the timeline unions two sources the way
+        <code>alarmHistoryEntries(history, active)</code> already does for the history list: closed
+        intervals from the database, open intervals from the live <code>activeAlarms()</code>
+        stream. Open ones run to the live edge, pulse, and say <em>ongoing</em> instead of an end
+        time — the clock above is real, so watch one grow.
+      </p>
+
+      <h3>Short activations stay visible</h3>
+      <p>
+        Over a five-hour window a forty-second alarm is a fifth of a pixel. Bars clamp to a 3&nbsp;px
+        minimum and grow a hairline tick above and below at the clamp, so a chattering alarm reads
+        as a comb rather than vanishing. That comb is usually the finding.
+      </p>
+
+      <h3>The table answers “what should I fix”</h3>
+      <p>
+        Rank by total standing time to find what is expensive, or click <strong>Count</strong> to
+        rank by frequency and find what is chronic — a twenty-minute seal fault and eighty
+        thirty-second film jams cost the same and are fixed completely differently. The share column
+        carries a cumulative marker so the 80/20 point is visible. Rank by alarm, by group, by
+        severity, or list every activation; a row is a way back into the timeline.
+      </p>
+
+      <h3>Not-scheduled is not downtime</h3>
+      <p>
+        The hatched band is unscheduled time (the 12:00 break), excluded from the totals and from
+        the clear percentage. It degrades by height too: at strip size the asset drops the brush,
+        the detail row and the statistics and keeps top-level groups only.
+      </p>
+    </section>
+
+    <section>
+      <h2>What this needs from the alarm system</h2>
+      <div class="q">
+        <h3>Alarms have to be defined</h3>
+        <p>
+          The live plant’s <code>alarm_man_config</code> was <code>{"alarms":[]}</code> in the
+          11 Aug prefs export, and the station backup has
+          <code>alarm_man_local_config.historyToDb: false</code>. Neither is an architectural
+          problem — they are settings — but the timeline is exactly as good as the alarm
+          definitions behind it, and it shows nothing until they exist. The 39 alarms in the older
+          backup are all machine-level (“Line 2 Motor 1 Fault”); the diagnosis-level alarms this
+          design is built around — film reel empty, out of strap, blank magazine empty — are new
+          definitions against the PLC tags.
+        </p>
+        <h3>History has to be switched on, in exactly one place</h3>
+        <p>
+          <code>historyToDb</code> is a device-local preference, so if two stations have it on the
+          same activation is written twice, and if none do the timeline only ever shows what is
+          live. There is also no backfill: history starts the day it is enabled.
+        </p>
+        <h3>Which severities count as a stop?</h3>
+        <p>
+          The level ladder is severity, not stopped-versus-running — “air cabinet is off” is an info
+          alarm and may not have stopped anything. The severity chips currently stand in for that
+          decision, which is why the statistics say <em>alarm-clear</em> rather than availability.
+          If a stop is a real distinct property, it belongs next to <code>path</code> on
+          <code>AlarmConfig</code> as a flag, not inferred from the level.
+        </p>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------- deterministic sample data ---------- */
+function rng(seed){ let s=seed>>>0; return function(){ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+const R = rng(20260829);
+
+const DAY = new Date(2026,7,29,0,0,0).getTime();
+const H = 3600e3, M = 60e3;
+const T0 = DAY + 6*H;
+const T1 = DAY + 18*H;
+let   NOW = DAY + 14*H + 22*M;
+const UNSCHED = [[DAY+12*H, DAY+12*H+30*M]];
+
+const LEVELS = {
+  error:   {label:"Error",   css:"--al-error",   rank:3},
+  warning: {label:"Warning", css:"--al-warning", rank:2},
+  info:    {label:"Info",    css:"--al-info",    rank:1}
+};
+const worst = (a,b)=> LEVELS[a].rank >= LEVELS[b].rank ? a : b;
+
+/* One entry per alarm definition. `path` is the proposed AlarmConfig.path. */
+let n = 0;
+const uid = ()=> "AL-"+String(++n*7 % 900 + 100).padStart(4,"0");
+const A = (path,title,level,desc,rate,dur)=>({path,title,level,desc,rate,dur,uid:uid()});
+/* `bind` = the alarm IS that node, not a child of it. For a machine with no
+   fine-grained diagnosis alarms yet, this is the whole story it can tell. */
+const B = (path,title,level,desc,rate,dur)=>({...A(path,title,level,desc,rate,dur),bind:true});
+
+const ALARM_DEFS = [
+  A(["Line 1 · Filleting","Baader 581"],"Drive fault — ATV320 tripped","error","Drive reported a fault and stopped the machine.",3,[2,14]),
+  A(["Line 1 · Filleting","Baader 581"],"Guard door opened while running","warning","A guard was opened with the machine in auto.",3,[1,5]),
+  A(["Line 1 · Filleting","Baader 51"],"Drive fault — ATV320 tripped","error","Drive reported a fault and stopped the machine.",2,[2,12]),
+  A(["Line 1 · Filleting","Grader CN04"],"Conveyor not in place","error","Conveyor section is not latched in its running position.",2,[3,16]),
+  A(["Line 1 · Filleting"],"Line stopped from panel","warning","Operator pressed stop on the line panel.",2,[2,9]),
+
+  A(["Line 2 · Freezing","Freezer infeed CN12"],"Drive fault — ATV320 tripped","error","Drive reported a fault and stopped the machine.",3,[2,13]),
+  A(["Line 2 · Freezing","Freezer infeed CN12"],"Mover timeout","info","The mover did not reach its end position in time.",4,[0.4,2]),
+  A(["Line 2 · Freezing","Plate freezer A"],"Cycle overrun","warning","Freezing cycle ran past its expected duration.",2,[4,18]),
+  A(["Line 2 · Freezing","Plate freezer B"],"Hydraulic pressure low","error","Pack pressure fell below the working minimum.",2,[3,15]),
+  A(["Line 2 · Freezing","Outfeed CN21"],"Conveyor not in place","error","Conveyor section is not latched in its running position.",2,[2,11]),
+
+  B(["Line 3 · Packing","Multivac"],"Multivac stopped","error","The machine is not running and no finer alarm matched.",3,[1,9]),
+  A(["Line 3 · Packing","Multivac"],"Film reel empty","error","The upper film reel ran out and the machine stopped.",4,[3,16]),
+  A(["Line 3 · Packing","Multivac"],"Film tracking error","warning","Film has walked off its guides.",5,[0.5,4]),
+  A(["Line 3 · Packing","Multivac"],"Seal temperature out of band","error","Sealing bar left its temperature window.",3,[4,20]),
+  A(["Line 3 · Packing","Multivac"],"Vacuum not reached","warning","Chamber did not pull down to setpoint within the cycle.",5,[0.4,3]),
+  A(["Line 3 · Packing","Multivac"],"Guard door opened while running","warning","A guard was opened with the machine in auto.",3,[1,6]),
+  A(["Line 3 · Packing","SpeedBatcher"],"Emergency active","info","An emergency circuit is open.",2,[1,7]),
+  A(["Line 3 · Packing","SpeedBatcher"],"Checkweigher tripped","warning","Checkweigher rejected out of tolerance and halted the feed.",4,[0.4,3]),
+  A(["Line 3 · Packing","SpeedBatcher"],"Disconnected","error","The HMI lost its connection to the batcher.",1,[2,9]),
+  A(["Line 3 · Packing","Box erector BER01"],"Blank magazine empty","error","The carton blank magazine ran out.",3,[2,11]),
+  A(["Line 3 · Packing","Box erector BER01"],"Glue temperature low","warning","Glue pot below working temperature.",2,[3,12]),
+  /* no diagnosis alarms exist for the strapper yet — one alarm bound to the
+     branch is all it can say, and the timeline still shows it stopping */
+  B(["Line 3 · Packing","Afak SL-15-3"],"Strapper stopped","error","The strapper is not running. No diagnosis alarm is configured for it.",4,[1,11]),
+
+  A(["Infrastructure","EtherCAT"],"Device not in operational state","error","A slave dropped out of OP.",1,[2,10]),
+  A(["Infrastructure","EtherCAT"],"Link error","warning","Link errors counted on a segment.",3,[0.4,3]),
+  A(["Infrastructure","EtherCAT"],"Watchdog triggered","warning","A watchdog expired on the bus.",2,[0.5,4]),
+  A(["Infrastructure","Air"],"+UH1.71 Pressure missing","error","Compressed air below the working minimum.",2,[2,12]),
+  A(["Infrastructure","Air"],"+UH1.71 Air cabinet is off","info","The air cabinet is switched off.",2,[5,20]),
+  A(["Infrastructure","Cabinets"],"Door cabinet +UH1.01 open","warning","A cabinet door is standing open.",2,[2,14]),
+  A(["Infrastructure","Cabinets"],"+UH1.01 2-2-TA1 fuse tripped","error","A fuse tripped in the cabinet.",1,[4,18])
+];
+
+/* activations: closed intervals plus a handful still standing */
+let aid = 0;
+ALARM_DEFS.forEach((def,i)=>{
+  const acts=[];
+  const count = def.rate + Math.floor(R()*3);
+  for(let k=0;k<count;k++){
+    const start = T0 + R()*(NOW - T0 - 2*M);
+    let d = (def.dur[0] + R()*(def.dur[1]-def.dur[0]))*M;
+    if(R()<0.32) d = (0.15 + R()*0.7)*M;            // the chattering tail
+    if(UNSCHED.some(u=>start>=u[0] && start<u[1])) continue;
+    const end = start + d;
+    if(end > NOW - 30e3) continue;
+    acts.push({id:"a"+(aid++), def, start, end, live:false});
+  }
+  // four alarms are standing right now
+  if(i===10 || i===13 || i===23 || i===26){
+    acts.push({id:"a"+(aid++), def, start: NOW - (1 + R()*9)*M, end:null, live:true});
+  }
+  def.activations = acts.sort((a,b)=>a.start-b.start);
+});
+
+/* ---------- build the tree from the paths ---------- */
+const ROOT = {name:"", depth:-1, children:[], alarms:[], bound:null, id:"root"};
+function nodeFor(path){
+  let cur = ROOT;
+  path.forEach((seg,i)=>{
+    let next = cur.children.find(c=>c.name===seg);
+    if(!next){
+      next = {name:seg, depth:i, children:[], alarms:[], bound:null, id:cur.id+"/"+seg, parent:cur};
+      cur.children.push(next);
+    }
+    cur = next;
+  });
+  return cur;
+}
+ALARM_DEFS.forEach(def=>{
+  const node = nodeFor(def.path);
+  if(def.bind) node.bound = def;      // the node's own signal
+  else node.alarms.push(def);         // a diagnosis underneath it
+});
+
+/* flatten to display rows: a node, then its subtree, then its own alarms */
+const ROWS=[];
+(function flatten(node){
+  node.children.forEach(child=>{
+    const segs=child.id.split("/").slice(1);
+    ROWS.push({kind:"node", id:child.id, name:child.name, depth:child.depth, node:child,
+               parentId:node.id==="root"?null:node.id, segs});
+    // A branch with an alarm of its own AND children gets that alarm as its
+    // first child row too — otherwise the branch lane shows intervals nothing
+    // underneath it explains, and expanding would reveal less than it hides.
+    if(child.bound && (child.children.length || child.alarms.length)){
+      ROWS.push({kind:"alarm", id:child.id+"::"+child.bound.uid, name:child.bound.title,
+                 depth:child.depth+1, def:child.bound, parentId:child.id, isBound:true, segs});
+    }
+    flatten(child);
+    child.alarms.forEach(def=>{
+      ROWS.push({kind:"alarm", id:child.id+"::"+def.uid, name:def.title, depth:child.depth+1,
+                 def, parentId:child.id, segs});
+    });
+  });
+})(ROOT);
+
+/* a node's own alarm plus every alarm anywhere beneath it */
+function subtreeAlarms(node){
+  const out = node.bound ? [node.bound, ...node.alarms] : [...node.alarms];
+  node.children.forEach(c=>out.push(...subtreeAlarms(c)));
+  return out;
+}
+/* does this node have anything to reveal when expanded? */
+const hasChildren = node => node.children.length > 0 || node.alarms.length > 0;
+
+/* ---------- state ---------- */
+const state = {
+  t0: NOW - 2.6*H,
+  t1: NOW + 0.4*H,
+  open: new Set(),
+  levels: new Set(Object.keys(LEVELS)),
+  selected: null,
+  view: "timeline",
+  roots: [],
+  groupBy: "alarm",
+  sort: {key:"total", dir:-1}
+};
+const MIN_SPAN = 4*M;
+// open Line 3 down to Multivac, so the drill-down is the first thing you see
+ROWS.filter(r=>r.kind==="node" && (r.name.startsWith("Line 3") || r.name==="Multivac"))
+    .forEach(r=>state.open.add(r.id));
+
+/* ---------- helpers ---------- */
+const el = id=>document.getElementById(id);
+const pad = n=>String(n).padStart(2,"0");
+const hhmm = t=>{const d=new Date(t);return pad(d.getHours())+":"+pad(d.getMinutes());};
+const hhmmss = t=>{const d=new Date(t);return hhmm(t)+":"+pad(d.getSeconds());};
+function dur(ms){
+  const s=Math.round(ms/1000);
+  if(s<60) return s+"s";
+  const m=Math.floor(s/60);
+  if(m<60) return m+"m "+pad(s%60)+"s";
+  return Math.floor(m/60)+"h "+pad(m%60)+"m";
+}
+function durShort(ms){
+  const m=Math.round(ms/60000);
+  if(m<60) return m+"m";
+  return Math.floor(m/60)+"h "+pad(m%60)+"m";
+}
+const overlap=(a0,a1,b0,b1)=>Math.max(0, Math.min(a1,b1)-Math.max(a0,b0));
+const unschedIn=(a,b)=>UNSCHED.reduce((n,u)=>n+overlap(a,b,u[0],u[1]),0);
+const endOf = act => act.end === null ? NOW : act.end;
+
+/* union of intervals, each merged one carrying the worst severity inside it */
+function mergeWithLevel(acts){
+  if(!acts.length) return [];
+  const s = acts.map(a=>({start:a.start, end:endOf(a), level:a.def.level, live:a.live}))
+                .sort((x,y)=>x.start-y.start);
+  const out=[{...s[0], n:1}];
+  for(let i=1;i<s.length;i++){
+    const last=out[out.length-1], iv=s[i];
+    if(iv.start<=last.end){
+      last.end=Math.max(last.end,iv.end);
+      last.level=worst(last.level,iv.level);
+      last.live=last.live||iv.live;
+      last.n++;
+    } else out.push({...iv, n:1});
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Interval cache.
+ *
+ * A row's intervals are a pure function of (its subtree's activations,
+ * the severity filter) — panning and zooming cannot change them. So they
+ * are merged ONCE per filter change, not once per frame, and kept sorted
+ * and disjoint so the visible slice is two binary searches away.
+ * Prefix sums make the window statistics O(log n) instead of O(n).
+ *
+ * A live interval is always the last one and always ends at NOW, so it is
+ * left out of the prefix sums and added back at read time.
+ * ------------------------------------------------------------------ */
+const cache = new Map();
+let cacheKey = null;
+
+function computeIntervals(row){
+  let ivs;
+  if(row.kind==="alarm"){
+    ivs = state.levels.has(row.def.level)
+      ? row.def.activations.map(a=>({
+          id:a.id, start:a.start, end:a.end, live:a.live,
+          level:row.def.level, count:1, rollup:false, act:a, def:row.def
+        }))
+      : [];
+  } else {
+    const acts=[];
+    subtreeAlarms(row.node).forEach(def=>{
+      if(state.levels.has(def.level)) acts.push(...def.activations);
+    });
+    ivs = mergeWithLevel(acts).map((iv,i)=>({
+      id:row.id+"#"+i, start:iv.start, end:iv.live?null:iv.end, live:iv.live,
+      level:iv.level, count:iv.n, rollup:true, node:row.node
+    }));
+  }
+  const prefix=new Float64Array(ivs.length+1);   // scheduled ms
+  const cprefix=new Float64Array(ivs.length+1);  // activation counts
+  for(let i=0;i<ivs.length;i++){
+    const e = ivs[i].live ? ivs[i].start : ivs[i].end;
+    prefix[i+1]  = prefix[i] + (e-ivs[i].start) - unschedIn(ivs[i].start,e);
+    cprefix[i+1] = cprefix[i] + ivs[i].count;
+  }
+  return {ivs, prefix, cprefix};
+}
+function intervalsFor(row){
+  const key=[...state.levels].sort().join(",");
+  if(key!==cacheKey){ cache.clear(); cacheKey=key; }
+  let v=cache.get(row.id);
+  if(!v){ v=computeIntervals(row); cache.set(row.id,v); }
+  return v;
+}
+const ivEnd = iv => iv.live ? NOW : iv.end;
+
+/* first index whose end is past t — ends are increasing, the list is disjoint */
+function firstEndAfter(ivs,t){
+  let lo=0,hi=ivs.length;
+  while(lo<hi){ const m=(lo+hi)>>1; if(ivEnd(ivs[m])>t) hi=m; else lo=m+1; }
+  return lo;
+}
+/* last index whose start is before t */
+function lastStartBefore(ivs,t){
+  let lo=0,hi=ivs.length;
+  while(lo<hi){ const m=(lo+hi)>>1; if(ivs[m].start<t) lo=m+1; else hi=m; }
+  return lo-1;
+}
+
+function windowStats(c,t0,t1){
+  const {ivs,prefix,cprefix}=c;
+  if(!ivs.length) return {total:0,count:0,live:false};
+  const lo=firstEndAfter(ivs,t0), hi=lastStartBefore(ivs,t1);
+  if(hi<lo) return {total:0,count:0,live:false};
+  let total=0;
+  // everything strictly between the two edge intervals is fully inside the
+  // window (the list is disjoint and sorted), so it comes from the prefix sum
+  if(hi-lo>=2) total += prefix[hi]-prefix[lo+1];
+  const edges = lo===hi ? [lo] : [lo,hi];
+  for(const i of edges){
+    const s=Math.max(ivs[i].start,t0), e=Math.min(ivEnd(ivs[i]),t1);
+    if(e>s) total += (e-s)-unschedIn(s,e);
+  }
+  return {total, count:cprefix[hi+1]-cprefix[lo], live:ivs[hi].live};
+}
+
+/* Visible slice in pixel space. Intervals closer together than a pixel are
+   coalesced into one run, so the number of elements touched is bounded by the
+   lane's width rather than by how much history is loaded. */
+function visibleRuns(c,t0,t1,w){
+  const {ivs}=c, runs=[];
+  if(!ivs.length||w<=0) return runs;
+  const lo=firstEndAfter(ivs,t0), hi=lastStartBefore(ivs,t1);
+  if(hi<lo) return runs;
+  const k=w/(t1-t0);
+  let cur=null;
+  for(let i=lo;i<=hi;i++){
+    const iv=ivs[i];
+    const x1=(iv.start-t0)*k;
+    let x2=(ivEnd(iv)-t0)*k;
+    if(x2-x1<1.5) x2=x1+1.5;
+    if(cur && x1<=cur.x2+1){
+      cur.x2=Math.max(cur.x2,x2);
+      cur.level=worst(cur.level,iv.level);
+      cur.live=cur.live||iv.live;
+      cur.n+=iv.count; cur.merged++;
+      continue;
+    }
+    cur={x1,x2,level:iv.level,live:iv.live,n:iv.count,merged:1,iv};
+    runs.push(cur);
+  }
+  return runs;
+}
+
+/* ---------- DOM ---------- */
+const bodyEl=el("bodyEl"), axisEl=el("axis"), tipEl=el("tip");
+const rowEls=new Map();
+const CARET='<svg width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M3 1.5 L6.5 4.5 L3 7.5 Z" fill="currentColor"/></svg>';
+
+ROWS.forEach(row=>{
+  const r=document.createElement("div");
+  r.className="row "+(row.kind==="alarm"?"leaf":"group");
+  r.style.setProperty("--d", row.depth);
+
+  const lab=document.createElement("div"); lab.className="label";
+  if(row.kind==="node" && hasChildren(row.node)){
+    const tw=document.createElement("button");
+    tw.type="button"; tw.className="tw"; tw.innerHTML=CARET;
+    tw.setAttribute("aria-expanded","false");
+    tw.addEventListener("click",()=>{
+      if(state.open.has(row.id)) state.open.delete(row.id); else state.open.add(row.id);
+      render();
+    });
+    lab.appendChild(tw);
+  } else {
+    const sp=document.createElement("span"); sp.className="spacer"; lab.appendChild(sp);
+  }
+  const tx=document.createElement("div"); tx.className="ltext";
+  const nm=document.createElement("div"); nm.className="lname";
+  if(row.kind==="alarm"){
+    // the branch's own alarm keeps the ring, so it reads as the same thing
+    // the branch row above it is marked with
+    nm.innerHTML=(row.isBound
+        ? '<span class="bnd" style="border-color:var('+LEVELS[row.def.level].css+')"></span>'
+        : '<span class="lvl" style="background:var('+LEVELS[row.def.level].css+')"></span>')+
+      '<span class="nm">'+row.name+'</span>';
+    nm.title=row.def.description;
+  } else if(row.node.bound){
+    // a hollow ring, not a filled square: this node carries its own alarm
+    nm.innerHTML='<span class="bnd" style="border-color:var('+LEVELS[row.node.bound.level].css+')"></span>'+
+                 '<span class="nm">'+row.name+'</span>';
+    nm.title=row.node.bound.title+" — "+row.node.bound.description;
+  } else nm.textContent=row.name;
+  const st=document.createElement("div"); st.className="lstat";
+  tx.appendChild(nm); tx.appendChild(st); lab.appendChild(tx);
+
+  const lane=document.createElement("div"); lane.className="lane";
+  r.appendChild(lab); r.appendChild(lane);
+  bodyEl.appendChild(r);
+  // pool: bar elements are created once and re-positioned, never rebuilt
+  // `shown` must start matching the DOM (visible), or the first render skips
+  // the write that hides collapsed rows
+  rowEls.set(row.id,{r,lane,st,tw:lab.querySelector(".tw"),pool:[],shown:true});
+});
+
+/* O(depth) visibility instead of an O(rows) lookup per row per frame */
+const ROW_BY_ID = new Map(ROWS.map(r=>[r.id,r]));
+ROWS.forEach(r=>{ r.parent = r.parentId ? ROW_BY_ID.get(r.parentId) : null; });
+
+/* ------------------------------------------------------------------ *
+ * Scope — the asset's entire configuration.
+ *
+ * A list of paths into the alarm tree. Everything at or under one of them
+ * is drawn, re-indented so the chosen node sits at the top level. An empty
+ * list is the whole plant. Nothing else about the tree is the asset's to
+ * decide; it all comes from the alarm definitions.
+ * ------------------------------------------------------------------ */
+function applyScope(roots){
+  state.roots = roots;
+  ROWS.forEach(row=>{
+    let match = null;
+    if(!roots.length) match = [];
+    else for(const r of roots){
+      if(r.length<=row.segs.length && r.every((seg,i)=>row.segs[i]===seg)){ match=r; break; }
+    }
+    row.inScope = match !== null;
+    row.dispDepth = row.inScope ? row.depth - Math.max(0, match.length-1) : 0;
+    if(row.inScope) row.scopeRootId = match.length ? "root/"+match.join("/") : null;
+  });
+  // a parent outside the scope is not a parent for visibility purposes
+  ROWS.forEach(row=>{
+    row.scopeParent = (row.inScope && row.parent && row.parent.inScope && row.id!==row.scopeRootId)
+      ? row.parent : null;
+  });
+  ROWS.forEach(row=>{
+    const ui=rowEls.get(row.id);
+    if(ui) ui.r.style.setProperty("--d", row.dispDepth);
+  });
+  // open the chosen roots so the asset shows something on arrival
+  roots.forEach(r=>{ let id="root"; r.forEach(seg=>{ id+="/"+seg; state.open.add(id); }); });
+}
+function rowVisibleFast(row){
+  if(!row.inScope) return false;
+  for(let p=row.scopeParent; p; p=p.scopeParent) if(!state.open.has(p.id)) return false;
+  return true;
+}
+
+/* severity chips — the same filter the alarm page uses, worst first */
+const legendEl=el("legend");
+const chipEls={};
+["error","warning","info"].forEach(k=>{
+  const b=document.createElement("button");
+  b.type="button"; b.className="chip"; b.setAttribute("aria-pressed","true");
+  b.innerHTML='<span class="sw" style="background:var('+LEVELS[k].css+')"></span>'+
+              '<span class="lb">'+LEVELS[k].label+'</span> <span class="n"></span>';
+  b.title="Show / hide "+LEVELS[k].label.toLowerCase()+" alarms";
+  b.addEventListener("click",()=>{
+    if(state.levels.has(k)) state.levels.delete(k); else state.levels.add(k);
+    b.setAttribute("aria-pressed", state.levels.has(k)?"true":"false");
+    render();
+  });
+  legendEl.appendChild(b);
+  chipEls[k]=b.querySelector(".n");
+});
+
+/* ---------- rendering ---------- */
+function niceStep(span){
+  for(const t of [1,2,5,10,15,30,60,120,180,360,720].map(m=>m*M)) if(span/t<=9) return t;
+  return 24*H;
+}
+function renderAxis(){
+  const span=state.t1-state.t0, step=niceStep(span);
+  axisEl.innerHTML="";
+  const marks=[];
+  for(let t=Math.ceil(state.t0/step)*step; t<=state.t1; t+=step){
+    const pct=(t-state.t0)/span*100;
+    const d=document.createElement("div");
+    const isHour=(t-DAY)%H===0;
+    d.className="tick"+(isHour?" major":"");
+    d.style.left=pct+"%"; d.textContent=hhmm(t);
+    axisEl.appendChild(d);
+    marks.push({pct,major:isHour});
+  }
+  return marks;
+}
+/* Gridlines, hatch and the future dim span every lane, so they are one pooled
+   overlay for the whole body rather than eleven elements per row per frame. */
+const chromeEl=el("chrome"), chromePool=[];
+let chromeUsed=0;
+function takeChrome(cls){
+  let d=chromePool[chromeUsed];
+  if(!d){ d=document.createElement("div"); chromeEl.appendChild(d); chromePool[chromeUsed]=d; }
+  if(d._cls!==cls){ d.className=cls; d._cls=cls; }
+  if(d._hidden){ d.style.display=""; d._hidden=false; }
+  chromeUsed++;
+  return d;
+}
+function paintChrome(marks,span){
+  chromeUsed=0;
+  marks.forEach(m=>{ takeChrome("gl"+(m.major?" major":"")).style.left=m.pct+"%"; });
+  UNSCHED.forEach(u=>{
+    const a=Math.max(u[0],state.t0), b=Math.min(u[1],state.t1);
+    if(b<=a) return;
+    const d=takeChrome("band unscheduled");
+    d.style.left=((a-state.t0)/span*100)+"%";
+    d.style.width=((b-a)/span*100)+"%";
+  });
+  if(NOW<state.t1){
+    const a=Math.max(NOW,state.t0);
+    const f=takeChrome("band future");
+    f.style.left=((a-state.t0)/span*100)+"%";
+    f.style.width=((state.t1-a)/span*100)+"%";
+    if(NOW>state.t0) takeChrome("nowline").style.left=((NOW-state.t0)/span*100)+"%";
+  }
+  for(let i=chromeUsed;i<chromePool.length;i++){
+    if(!chromePool[i]._hidden){ chromePool[i].style.display="none"; chromePool[i]._hidden=true; }
+  }
+}
+
+/* is this alarm definition inside the asset's configured path? */
+function defInScope(def){
+  const r=state.roots;
+  if(!r.length) return true;
+  return r.some(root=>root.length<=def.path.length && root.every((seg,i)=>def.path[i]===seg));
+}
+
+/* count activations of one alarm inside the window, without walking them all */
+function countIn(acts,t0,t1){
+  if(!acts.length) return 0;
+  const lo=firstEndAfter(acts,t0), hi=lastStartBefore(acts,t1);
+  return hi<lo?0:hi-lo+1;
+}
+const LIVE_TOTAL = ALARM_DEFS.reduce((n,d)=>n+d.activations.filter(a=>a.live).length,0);
+
+/* Bars are created once per row and re-positioned. Nothing is torn down on a
+   pan frame, and `transform` moves them without a layout pass. */
+function paintRow(ui,row,runs){
+  const pool=ui.pool, isRoll=row.kind==="node";
+  const selId=state.selected&&state.selected.id;
+  for(let i=0;i<runs.length;i++){
+    let d=pool[i];
+    if(!d){ d=document.createElement("div"); ui.lane.appendChild(d); pool[i]=d; }
+    const r=runs[i], w=r.x2-r.x1;
+    let cls="bar "+(isRoll?"rollup":"leafbar");
+    if(r.live) cls+=" live";
+    if(w<3.5) cls+=" thin";
+    if(selId && r.merged===1 && r.iv.id===selId) cls+=" sel";
+    if(d._cls!==cls){ d.className=cls; d._cls=cls; }
+    const bg="var("+LEVELS[r.level].css+")";
+    if(d._bg!==bg){ d.style.background=bg; d._bg=bg; }
+    d.style.transform="translate("+r.x1.toFixed(1)+"px,-50%)";
+    d.style.width=w.toFixed(1)+"px";
+    if(d._hidden){ d.style.display=""; d._hidden=false; }
+    d._run=r; d._row=row;
+  }
+  for(let i=runs.length;i<pool.length;i++){
+    if(!pool[i]._hidden){ pool[i].style.display="none"; pool[i]._hidden=true; }
+  }
+}
+
+/* One layout read per frame, taken before any style write — reading each
+   lane's width after writing to it is what turns a pan into layout thrash. */
+let laneWidth=700;
+function measure(){
+  const l=bodyEl.querySelector(".lane");
+  if(l && l.clientWidth) laneWidth=l.clientWidth;
+}
+
+let rafPending=false;
+function scheduleRender(){
+  if(rafPending) return;
+  rafPending=true;
+  requestAnimationFrame(()=>{ rafPending=false; render(); });
+}
+
+function render(){
+  const span=state.t1-state.t0;
+  const marks=renderAxis();
+  paintChrome(marks,span);
+
+  const counts={error:0,warning:0,info:0};
+  ALARM_DEFS.forEach(def=>{
+    if(defInScope(def)) counts[def.level]+=countIn(def.activations,state.t0,state.t1);
+  });
+  Object.keys(chipEls).forEach(k=>{
+    const v=String(counts[k]);
+    if(chipEls[k].textContent!==v) chipEls[k].textContent=v;
+  });
+
+  const winEnd=Math.min(state.t1,NOW);
+  const sched=Math.max(0,winEnd-state.t0)-unschedIn(state.t0,winEnd);
+
+  // A configured path matches nothing when a segment has been renamed in the
+  // alarm definitions. Say so — a silently blank asset looks like a dead page.
+  const anyScoped = ROWS.some(r=>r.inScope);
+  let empty = bodyEl.querySelector(".emptyscope");
+  if(!anyScoped){
+    if(!empty){
+      empty=document.createElement("div");
+      empty.className="emptyscope";
+      bodyEl.appendChild(empty);
+    }
+    empty.textContent="No alarms are defined under "+
+      state.roots.map(p=>p.join(" › ")).join(" or ")+".";
+    empty.style.display="";
+  } else if(empty) empty.style.display="none";
+
+  ROWS.forEach(row=>{
+    const ui=rowEls.get(row.id);
+    const shown=rowVisibleFast(row);
+    if(shown!==ui.shown){ ui.r.style.display=shown?"":"none"; ui.shown=shown; }
+    if(row.kind==="node" && ui.tw){
+      const open=state.open.has(row.id);
+      ui.r.classList.toggle("open",open);
+      ui.tw.setAttribute("aria-expanded", open?"true":"false");
+      ui.tw.setAttribute("aria-label",(open?"Collapse ":"Expand ")+row.name);
+    }
+    if(!shown) return;
+
+    const c=intervalsFor(row);
+    const s=windowStats(c,state.t0,state.t1);
+    const clear=sched>0?Math.max(0,(sched-s.total)/sched*100):100;
+    const txt=(s.live?'<span class="on">● now</span> · ':"")+
+      (row.kind==="node"
+        ? "<b>"+durShort(s.total)+"</b> · "+s.count+"× · "+clear.toFixed(1)+"% clear"
+        : "<b>"+durShort(s.total)+"</b> · "+s.count+"×");
+    if(ui.st._t!==txt){ ui.st.innerHTML=txt; ui.st._t=txt; }
+
+    paintRow(ui,row,visibleRuns(c,state.t0,state.t1,laneWidth));
+  });
+
+  renderBrush();
+  const clock=(LIVE_TOTAL?'<span class="live-dot"></span>'+LIVE_TOTAL+" standing · ":"")+
+    hhmm(state.t0)+" – "+hhmm(state.t1)+" · "+durShort(span);
+  const ce=el("clock");
+  if(ce._t!==clock){ ce.innerHTML=clock; ce._t=clock; }
+  renderDetail();
+  if(state.view==="table") renderTable();
+}
+
+/* ---------- brush ---------- */
+const trackEl=el("track"), winEl=el("win"), shadeL=el("shadeL"), shadeR=el("shadeR");
+let brushBuilt=false;
+function buildBrush(){
+  trackEl.querySelectorAll(".tick-b,.band").forEach(e=>e.remove());
+  const period=T1-T0;
+  const all=[];
+  ALARM_DEFS.forEach(def=>{ if(defInScope(def)) all.push(...def.activations); });
+  mergeWithLevel(all).forEach(iv=>{
+    const d=document.createElement("div");
+    d.className="tick-b";
+    d.style.left=((iv.start-T0)/period*100)+"%";
+    d.style.width=((iv.end-iv.start)/period*100)+"%";
+    d.style.background="var("+LEVELS[iv.level].css+")";
+    trackEl.insertBefore(d,shadeL);
+  });
+  const fd=document.createElement("div");
+  fd.className="band future";
+  fd.style.left=((NOW-T0)/period*100)+"%"; fd.style.right="0";
+  trackEl.insertBefore(fd,shadeL);
+  brushBuilt=true;
+}
+function renderBrush(){
+  if(!brushBuilt) buildBrush();
+  const period=T1-T0;
+  const l=(state.t0-T0)/period*100, r=(state.t1-T0)/period*100;
+  winEl.style.left=l+"%"; winEl.style.width=(r-l)+"%";
+  shadeL.style.left="0"; shadeL.style.width=Math.max(0,l)+"%";
+  shadeR.style.left=r+"%"; shadeR.style.width=Math.max(0,100-r)+"%";
+}
+function clampView(t0,t1){
+  const span=Math.max(MIN_SPAN,Math.min(t1-t0,T1-T0));
+  if(t0<T0){ t0=T0; }
+  if(t0+span>T1){ t0=T1-span; }
+  state.t0=t0; state.t1=t0+span;
+}
+
+let bdrag=null;
+trackEl.addEventListener("pointerdown",e=>{
+  const rect=trackEl.getBoundingClientRect();
+  const grip=e.target.dataset && e.target.dataset.grip;
+  if(grip) bdrag={mode:grip,rect};
+  else if(e.target===winEl) bdrag={mode:"move",rect,anchor:(e.clientX-rect.left)/rect.width*(T1-T0)+T0-state.t0};
+  else{
+    const t=(e.clientX-rect.left)/rect.width*(T1-T0)+T0, span=state.t1-state.t0;
+    clampView(t-span/2,t+span/2); render();
+    bdrag={mode:"move",rect,anchor:span/2};
+  }
+  trackEl.setPointerCapture(e.pointerId); e.preventDefault();
+});
+trackEl.addEventListener("pointermove",e=>{
+  if(!bdrag) return;
+  const t=(e.clientX-bdrag.rect.left)/bdrag.rect.width*(T1-T0)+T0;
+  if(bdrag.mode==="move"){ const span=state.t1-state.t0; clampView(t-bdrag.anchor,t-bdrag.anchor+span); }
+  else if(bdrag.mode==="l"){ clampView(Math.min(t,state.t1-MIN_SPAN),state.t1); }
+  else clampView(state.t0,Math.max(t,state.t0+MIN_SPAN));
+  scheduleRender();
+});
+["pointerup","pointercancel"].forEach(ev=>trackEl.addEventListener(ev,()=>{bdrag=null;}));
+
+/* ---------- pan / zoom ---------- */
+let pdrag=null, moved=false;
+bodyEl.addEventListener("pointerdown",e=>{
+  const lane=e.target.closest(".lane"); if(!lane) return;
+  pdrag={x:e.clientX,w:lane.clientWidth,t0:state.t0,t1:state.t1}; moved=false;
+  bodyEl.setPointerCapture(e.pointerId);
+});
+bodyEl.addEventListener("pointermove",e=>{
+  if(!pdrag) return;
+  const dx=e.clientX-pdrag.x;
+  if(Math.abs(dx)>3) moved=true;
+  const span=pdrag.t1-pdrag.t0;
+  clampView(pdrag.t0-dx/pdrag.w*span, pdrag.t1-dx/pdrag.w*span);
+  scheduleRender();
+});
+["pointerup","pointercancel"].forEach(ev=>bodyEl.addEventListener(ev,()=>{pdrag=null;}));
+bodyEl.addEventListener("wheel",e=>{
+  const lane=e.target.closest(".lane"); if(!lane) return;
+  e.preventDefault();
+  const span=state.t1-state.t0;
+  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)){
+    const dt=e.deltaX/lane.clientWidth*span;
+    clampView(state.t0+dt,state.t1+dt); scheduleRender(); return;
+  }
+  const rect=lane.getBoundingClientRect();
+  const frac=(e.clientX-rect.left)/rect.width;
+  const nspan=Math.max(MIN_SPAN,Math.min(span*Math.exp(e.deltaY*0.0015),T1-T0));
+  const anchor=state.t0+frac*span;
+  clampView(anchor-frac*nspan, anchor-frac*nspan+nspan);
+  scheduleRender();
+},{passive:false});
+
+/* ---------- tooltip + selection ---------- */
+bodyEl.addEventListener("pointerover",e=>{
+  const el2=e.target.closest(".bar"); if(!el2||!el2._run) return;
+  const r=el2._run, b=r.iv;
+  if(r.merged>1){
+    tipEl.innerHTML='<div class="t-who">'+r.n+' activations</div>'+
+      '<div class="t-path">too close together to separate at this zoom</div>'+
+      '<div class="t-row"><span>worst</span><span>'+LEVELS[r.level].label+'</span></div>'+
+      '<div class="t-row"><span>click</span><span>to zoom in</span></div>';
+    tipEl.classList.add("on"); return;
+  }
+  const title=b.rollup?b.node.name:b.def.title;
+  const path =b.rollup?(b.count+" activation"+(b.count===1?"":"s")):b.def.path.join(" › ");
+  tipEl.innerHTML =
+    '<div class="t-who">'+title+'</div>'+
+    '<div class="t-path">'+path+'</div>'+
+    '<div class="t-row"><span>severity</span><span>'+LEVELS[b.level].label+'</span></div>'+
+    '<div class="t-row"><span>start</span><span>'+hhmmss(b.start)+'</span></div>'+
+    '<div class="t-row"><span>'+(b.live?"standing":"duration")+'</span><span'+
+      (b.live?' class="t-live"':'')+'>'+dur(ivEnd(b)-b.start)+(b.live?" · ongoing":"")+'</span></div>'+
+    (b.rollup?'':'<div class="t-row"><span>uid</span><span>'+b.def.uid+'</span></div>');
+  tipEl.classList.add("on");
+});
+bodyEl.addEventListener("pointermove",e=>{
+  if(!tipEl.classList.contains("on")) return;
+  const p=14, w=tipEl.offsetWidth, h=tipEl.offsetHeight;
+  let x=e.clientX+p, y=e.clientY+p;
+  if(x+w>window.innerWidth-8) x=e.clientX-w-p;
+  if(y+h>window.innerHeight-8) y=e.clientY-h-p;
+  tipEl.style.left=x+"px"; tipEl.style.top=y+"px";
+});
+bodyEl.addEventListener("pointerout",e=>{ if(e.target.closest(".bar")) tipEl.classList.remove("on"); });
+bodyEl.addEventListener("click",e=>{
+  const el2=e.target.closest(".bar");
+  if(!el2||moved||!el2._run) return;
+  const r=el2._run;
+  if(r.merged>1){
+    // a coalesced comb: zoom into it rather than pretending to select one
+    const span=Math.max(MIN_SPAN,(r.x2-r.x1)/laneWidth*(state.t1-state.t0)*3);
+    const mid=state.t0+(r.x1+r.x2)/2/laneWidth*(state.t1-state.t0);
+    clampView(mid-span/2,mid+span/2);
+  } else state.selected=r.iv;
+  render();
+});
+
+function renderDetail(){
+  const d=el("detail"), b=state.selected;
+  if(!b){ d.innerHTML='<span class="empty">Select an activation to inspect it.</span>'; return; }
+  const chip='<span class="lchip"><span class="sw" style="background:var('+LEVELS[b.level].css+')"></span>'+
+             LEVELS[b.level].label+'</span>';
+  if(b.rollup){
+    d.innerHTML='<span class="who">'+b.node.name+'</span>'+chip+
+      '<dl><div><dt>From</dt><dd>'+hhmmss(b.start)+'</dd></div>'+
+      '<div><dt>To</dt><dd'+(b.live?' class="ongoing"':'')+'>'+(b.live?"ongoing":hhmmss(b.end))+'</dd></div>'+
+      '<div><dt>Length</dt><dd>'+dur(ivEnd(b)-b.start)+'</dd></div>'+
+      '<div><dt>Alarms in it</dt><dd>'+b.count+'</dd></div></dl>'+
+      '<span class="uid">expand the group to see which</span>';
+    return;
+  }
+  d.innerHTML='<span class="who">'+b.def.title+'</span>'+
+    '<span class="path">'+b.def.path.join(" › ")+'</span>'+chip+
+    '<dl><div><dt>Activated</dt><dd>'+hhmmss(b.start)+'</dd></div>'+
+    '<div><dt>Cleared</dt><dd'+(b.live?' class="ongoing"':'')+'>'+(b.live?"still standing":hhmmss(b.end))+'</dd></div>'+
+    '<div><dt>Duration</dt><dd>'+dur(ivEnd(b)-b.start)+'</dd></div></dl>'+
+    '<span class="uid">'+b.def.uid+'</span>';
+}
+
+/* ---------- table ---------- */
+function windowActivations(){
+  const out=[];
+  ALARM_DEFS.forEach(def=>{
+    if(!state.levels.has(def.level) || !defInScope(def)) return;
+    def.activations.forEach(a=>{
+      const s=Math.max(a.start,state.t0), e2=Math.min(endOf(a),state.t1);
+      if(e2<=s) return;
+      const eff=(e2-s)-unschedIn(s,e2);
+      if(eff<=0) return;
+      out.push({def, act:a, eff});
+    });
+  });
+  return out;
+}
+const SORTS={
+  total:{get:r=>r.total}, count:{get:r=>r.count},
+  longest:{get:r=>r.longest}, avg:{get:r=>r.total/r.count},
+  time:{get:r=>r.start}
+};
+function aggregate(){
+  const rows=new Map();
+  windowActivations().forEach(({def,act,eff})=>{
+    let key,what,sub,level;
+    if(state.groupBy==="alarm"){ key=def.uid; what=def.title; sub=def.path.join(" › "); level=def.level; }
+    else if(state.groupBy==="node"){ key=def.path.join("/"); what=def.path[def.path.length-1]; sub=def.path.slice(0,-1).join(" › "); level=def.level; }
+    else { key=def.level; what=LEVELS[def.level].label; sub=null; level=def.level; }
+    let r=rows.get(key);
+    if(!r){ r={key,what,sub,level,count:0,total:0,longest:0,live:false,def}; rows.set(key,r); }
+    r.count++; r.total+=eff; r.longest=Math.max(r.longest,eff);
+    r.live=r.live||act.live;
+    if(state.groupBy!=="level") r.level=worst(r.level,def.level);
+  });
+  return [...rows.values()];
+}
+function eventRows(){
+  return windowActivations().map(({def,act,eff})=>({
+    key:act.id, what:def.title, sub:def.path.join(" › "), level:def.level,
+    count:1, total:eff, longest:eff, start:act.start, live:act.live, act, def
+  }));
+}
+function sortRows(list){
+  const s=SORTS[state.sort.key]||SORTS.total;
+  return list.sort((a,b)=>{
+    const d=(s.get(a)-s.get(b))*state.sort.dir;
+    return d!==0?d:(b.total-a.total);
+  });
+}
+function th(key,label,cls){
+  const on=state.sort.key===key;
+  return '<th class="sortable '+(cls||"")+'" data-sort="'+key+'" tabindex="0" aria-sort="'+
+    (on?(state.sort.dir<0?"descending":"ascending"):"none")+'">'+label+
+    ' <span class="arw">'+(on?(state.sort.dir<0?"▼":"▲"):"")+'</span></th>';
+}
+function renderTable(){
+  const isEvents=state.groupBy==="events";
+  let rows=isEvents?eventRows():aggregate();
+  const grand=rows.reduce((n,r)=>n+r.total,0);
+  const total=rows.reduce((n,r)=>n+r.count,0);
+  const offered=isEvents?["time","total"]:["count","total","longest","avg"];
+  if(!offered.includes(state.sort.key)) state.sort={key:isEvents?"time":"total",dir:-1};
+  rows=sortRows(rows);
+
+  el("tabletot").textContent =
+    total+" activations · "+durShort(grand)+" standing · "+hhmm(state.t0)+"–"+hhmm(state.t1);
+
+  const showCum = state.sort.key==="total" && state.sort.dir<0 && !isEvents;
+  el("ptHead").innerHTML="<tr>"+(isEvents
+    ? '<th class="num">#</th>'+th("time","Activated")+'<th>Alarm</th><th>Severity</th>'+
+      th("total","Duration","num")+'<th class="opt">Group</th>'
+    : '<th class="num">#</th>'+
+      (state.groupBy==="level"?'<th>Severity</th>':'<th>'+(state.groupBy==="alarm"?"Alarm":"Group")+'</th>')+
+      (state.groupBy!=="level"?'<th>Severity</th><th class="opt">Path</th>':'')+
+      th("count","Count","num")+th("total","Total","num")+
+      '<th>Share of standing time</th>'+
+      th("longest","Longest","num opt")+th("avg","Average","num opt")
+  )+"</tr>";
+
+  const body=el("ptBody");
+  if(!rows.length){
+    body.innerHTML='<tr><td colspan="9"><div class="tempty">No activations in this window at the selected severities.</div></td></tr>';
+    return;
+  }
+  let cum=0;
+  body.innerHTML=rows.slice(0,200).map((r,i)=>{
+    const sev='<span class="lz"><span class="sw" style="background:var('+LEVELS[r.level].css+')"></span>'+
+              LEVELS[r.level].label+'</span>';
+    const share=grand?r.total/grand*100:0; cum+=share;
+    const color="var("+LEVELS[r.level].css+")";
+    if(isEvents){
+      return '<tr data-key="'+r.key+'" tabindex="0">'+
+        '<td class="rank num">'+(i+1)+'</td>'+
+        '<td class="num">'+hhmmss(r.start)+'</td>'+
+        '<td class="what">'+r.what+'</td><td>'+sev+'</td>'+
+        '<td class="num'+(r.live?" live":"")+'">'+dur(r.total)+(r.live?" ·":"")+'</td>'+
+        '<td class="sub opt">'+(r.sub||"")+'</td></tr>';
+    }
+    return '<tr data-key="'+r.key+'" tabindex="0">'+
+      '<td class="rank num">'+(i+1)+'</td>'+
+      '<td class="what">'+r.what+(r.live?' <span class="live">●</span>':'')+'</td>'+
+      (state.groupBy!=="level"?'<td>'+sev+'</td><td class="sub opt">'+(r.sub||"")+'</td>':'')+
+      '<td class="num">'+r.count+'</td>'+
+      '<td class="num">'+durShort(r.total)+'</td>'+
+      '<td class="sharecell"><div class="shrow"><div class="sharebar">'+
+        '<i style="width:'+share.toFixed(2)+'%;background:'+color+'"></i>'+
+        (showCum?'<u style="left:'+Math.min(100,cum).toFixed(2)+'%"></u>':'')+
+      '</div><span class="cum">'+share.toFixed(1)+'%'+(showCum?' · Σ'+Math.min(100,cum).toFixed(0)+'%':'')+
+      '</span></div></td>'+
+      '<td class="num opt">'+durShort(r.longest)+'</td>'+
+      '<td class="num opt">'+dur(r.total/r.count)+'</td></tr>';
+  }).join("");
+}
+
+el("ptHead").addEventListener("click",e=>{
+  const h=e.target.closest("th[data-sort]"); if(!h) return;
+  const k=h.dataset.sort;
+  if(state.sort.key===k) state.sort.dir*=-1; else state.sort={key:k,dir:-1};
+  renderTable();
+});
+el("ptHead").addEventListener("keydown",e=>{
+  if(e.key!=="Enter"&&e.key!==" ") return;
+  const h=e.target.closest("th[data-sort]"); if(!h) return;
+  e.preventDefault(); h.click();
+});
+el("ptBody").addEventListener("click",e=>{
+  const tr=e.target.closest("tr[data-key]"); if(tr) jumpTo(tr.dataset.key);
+});
+el("ptBody").addEventListener("keydown",e=>{
+  if(e.key!=="Enter") return;
+  const tr=e.target.closest("tr[data-key]"); if(tr) jumpTo(tr.dataset.key);
+});
+
+function openPath(path){
+  let id="root";
+  path.forEach(seg=>{ id=id+"/"+seg; state.open.add(id); });
+}
+function jumpTo(key){
+  if(state.groupBy==="events"){
+    let found=null, fdef=null;
+    ALARM_DEFS.forEach(def=>def.activations.forEach(a=>{ if(a.id===key){found=a;fdef=def;} }));
+    if(!found) return;
+    const span=Math.max(MIN_SPAN,Math.min((endOf(found)-found.start)*8,T1-T0));
+    const mid=(found.start+endOf(found))/2;
+    clampView(mid-span/2,mid+span/2);
+    openPath(fdef.path);
+    state.selected={id:found.id};
+  } else if(state.groupBy==="alarm"){
+    const def=ALARM_DEFS.find(d=>d.uid===key);
+    if(def) openPath(def.path);
+  } else if(state.groupBy==="node"){
+    openPath(key.split("/"));
+  } else {
+    ROWS.filter(r=>r.kind==="node").forEach(r=>state.open.add(r.id));
+  }
+  setView("timeline");
+}
+
+/* ---------- controls ---------- */
+function setView(v){
+  state.view=v;
+  el("asset").dataset.view=v;
+  document.querySelectorAll(".hd [data-view]").forEach(b=>
+    b.setAttribute("aria-pressed", b.dataset.view===v?"true":"false"));
+  render();
+}
+document.querySelectorAll(".hd [data-view]").forEach(b=>
+  b.addEventListener("click",()=>setView(b.dataset.view)));
+document.querySelectorAll("[data-group]").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("[data-group]").forEach(x=>x.setAttribute("aria-pressed","false"));
+    b.setAttribute("aria-pressed","true");
+    state.groupBy=b.dataset.group;
+    state.sort = b.dataset.group==="events"?{key:"time",dir:-1}:{key:"total",dir:-1};
+    renderTable();
+  });
+});
+
+const SCOPES = {
+  all:   [],
+  lines: [["Line 1 · Filleting"],["Line 2 · Freezing"]],
+  l3:    [["Line 3 · Packing"]],
+  mv:    [["Line 3 · Packing","Multivac"]]
+};
+document.querySelectorAll("[data-scope]").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll("[data-scope]").forEach(b=>b.setAttribute("aria-pressed","false"));
+    btn.setAttribute("aria-pressed","true");
+    applyScope(SCOPES[btn.dataset.scope]);
+    echoScope();
+    brushBuilt=false;   // the overview strip is scoped too
+    render();
+  });
+});
+function echoScope(){
+  const r=state.roots;
+  el("scopeEcho").textContent = r.length
+    ? "path: "+r.map(p=>JSON.stringify(p)).join(" + ")
+    : "path: [] — the whole alarm tree";
+}
+
+const assetEl=el("asset"), stageEl=el("stage");
+document.querySelectorAll("[data-size]").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll("[data-size]").forEach(b=>b.setAttribute("aria-pressed","false"));
+    btn.setAttribute("aria-pressed","true");
+    const s=btn.dataset.size;
+    assetEl.style.height = s==="full"?"540px":s==="half"?"300px":"150px";
+    assetEl.style.width  = s==="strip"?"560px":"100%";
+    requestAnimationFrame(render);
+  });
+});
+document.querySelectorAll("[data-force]").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll("[data-force]").forEach(b=>b.setAttribute("aria-pressed","false"));
+    btn.setAttribute("aria-pressed","true");
+    if(btn.dataset.force) stageEl.dataset.force=btn.dataset.force; else delete stageEl.dataset.force;
+  });
+});
+
+new ResizeObserver(entries=>{
+  for(const en of entries){
+    const h=en.contentRect.height, w=en.contentRect.width;
+    assetEl.classList.toggle("sz-s", h<260);
+    assetEl.classList.toggle("w-md", w<1080);
+    assetEl.classList.toggle("narrow", w<680);
+    if(h<260) state.open.clear();
+  }
+  measure();
+  render();
+}).observe(assetEl);
+
+/* the live edge really is live — standing alarms keep growing */
+setInterval(()=>{
+  NOW += 1000;
+  // the live tick only moves the right edge of open intervals — repaint,
+  // never refetch and never re-merge
+  if(state.t1 > NOW - 5*M) scheduleRender();
+}, 1000);
+
+applyScope(state.roots);
+echoScope();
+measure();
+render();
+})();
+</script>

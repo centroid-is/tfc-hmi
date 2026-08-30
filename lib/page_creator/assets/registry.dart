@@ -38,6 +38,7 @@ import 'drawing_viewer.dart';
 import 'third_party.dart';
 import 'alarm_visibility.dart';
 import 'rtsp_camera.dart';
+import 'stop_timeline.dart';
 
 class AssetRegistry {
   static final Logger _log = Logger();
@@ -94,6 +95,7 @@ class AssetRegistry {
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.fromJson,
     AlarmVisibilityConfig: AlarmVisibilityConfig.fromJson,
     RtspCameraConfig: RtspCameraConfig.fromJson,
+    StopTimelineConfig: StopTimelineConfig.fromJson,
   };
 
   static final Map<Type, Asset Function()> defaultFactories = {
@@ -150,6 +152,7 @@ class AssetRegistry {
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.preview,
     AlarmVisibilityConfig: AlarmVisibilityConfig.preview,
     RtspCameraConfig: RtspCameraConfig.preview,
+    StopTimelineConfig: StopTimelineConfig.preview,
   };
 
   static void registerFromJsonFactory<T extends Asset>(

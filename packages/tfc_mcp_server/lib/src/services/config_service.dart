@@ -317,6 +317,14 @@ class ConfigService implements KeyMappingLookup {
         'title': alarm['title'] as String? ?? '',
         'description': alarm['description'] as String? ?? '',
         'rules': alarm['rules'] is List ? alarm['rules'] as List : const [],
+        // Where the alarm sits in the alarm tree. Projected because an
+        // update proposal rebuilds the alarm from this map -- leaving these
+        // out would quietly move the alarm back to the root the first time
+        // anyone edited its title.
+        'group': alarm['group'] is List
+            ? (alarm['group'] as List).whereType<String>().toList()
+            : const <String>[],
+        'bindToGroup': alarm['bindToGroup'] as bool? ?? false,
       };
     });
   }

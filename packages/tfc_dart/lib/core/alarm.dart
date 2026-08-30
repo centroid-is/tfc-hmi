@@ -73,6 +73,32 @@ class AlarmConfig {
   final String description;
   final List<AlarmRule> rules;
 
+  /// The group this alarm belongs to, read outermost first — the way a
+  /// package name is read. `['Line 3', 'Multivac']` means the alarm sits in
+  /// Multivac, which sits in Line 3. Empty puts it at the root.
+  ///
+  /// The grouping belongs here rather than on any one screen because it is a
+  /// property of the plant, not of a page: the stop timeline, and anything
+  /// else that rolls alarms up, read the same groups, and configuring an
+  /// alarm stays the single place its home is decided.
+  ///
+  /// Contrast [AlarmVisibilityConfig.announceInNavigation], which is on the
+  /// beacon asset because *where* an alarm announces genuinely is a per-page
+  /// presentation choice.
+  @JsonKey(defaultValue: <String>[])
+  final List<String> group;
+
+  /// True when this alarm *is* the group named by [group], rather than one
+  /// alarm inside it.
+  ///
+  /// This is the coarse "the machine stopped" signal for equipment that has
+  /// no finer alarms yet. A group may have a bound alarm and members at the
+  /// same time, in which case the bound one accounts for whatever the
+  /// diagnoses inside it do not explain — so adding a diagnosis later is a
+  /// new alarm definition, not a restructuring.
+  @JsonKey(defaultValue: false)
+  final bool bindToGroup;
+
   // Navigation announcement lives on the Alarm beacon asset
   // (`AlarmVisibilityConfig.announceInNavigation`), not here: an alarm is a
   // plant-wide fact, where it announces is a per-page presentation choice,
@@ -86,11 +112,13 @@ class AlarmConfig {
     required this.title,
     required this.description,
     required this.rules,
+    this.group = const [],
+    this.bindToGroup = false,
   });
 
   @override
   String toString() {
-    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, rules: $rules)';
+    return 'AlarmConfig(uid: $uid, key: $key, title: $title, description: $description, group: $group, bindToGroup: $bindToGroup, rules: $rules)';
   }
 
   /// Drift row constructor for the `Alarm` table — alarm configuration is
@@ -120,6 +148,8 @@ class AlarmConfig {
       key: copy.key,
       title: copy.title,
       description: copy.description,
+      group: List<String>.from(copy.group),
+      bindToGroup: copy.bindToGroup,
       rules: copy.rules.map((e) => AlarmRule.from(e)).toList(),
     );
   }

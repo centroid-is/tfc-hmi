@@ -95,6 +95,14 @@ void _registerGetAlarmDetail(
         buffer.writeln('Key: ${detail['key']}');
       }
       buffer.writeln('Description: ${detail['description']}');
+      final group = (detail['group'] as List?)?.whereType<String>().toList();
+      buffer.writeln('Group: ${group == null || group.isEmpty
+          ? '(ungrouped)'
+          : group.join(' > ')}');
+      if (detail['bindToGroup'] == true) {
+        buffer.writeln(
+            'This alarm IS the group above, not one alarm inside it.');
+      }
       buffer.writeln('Rules: ${detail['rules']}');
 
       return CallToolResult(

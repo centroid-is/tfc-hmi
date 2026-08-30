@@ -9,6 +9,7 @@
 abstract class AlarmReader {
   /// All alarm configurations as maps.
   ///
-  /// Each map typically contains keys: uid, key, title, description, rules.
+  /// Each map typically contains keys: uid, key, title, description, rules,
+  /// group (the alarm tree address, outermost first) and bindToGroup.
   List<Map<String, dynamic>> get alarmConfigs;
 }

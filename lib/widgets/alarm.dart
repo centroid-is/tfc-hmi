@@ -382,6 +382,88 @@ class _ListAlarmsState extends ConsumerState<ListAlarms> {
   }
 }
 
+/// The separator between group segments as an operator types them.
+///
+/// A slash, because that is how everyone already writes a hierarchy, and it
+/// is one of the few characters unlikely to appear inside a machine name.
+const alarmGroupSeparator = '/';
+
+/// Splits what the operator typed into an [AlarmConfig.group] address.
+///
+/// Blank segments are dropped rather than becoming groups with no name, so
+/// trailing separators and double slashes are forgiving instead of corrupting
+/// the tree.
+List<String> parseAlarmGroup(String text) => text
+    .split(alarmGroupSeparator)
+    .map((e) => e.trim())
+    .where((e) => e.isNotEmpty)
+    .toList();
+
+/// Renders an [AlarmConfig.group] the way the field expects it back.
+String formatAlarmGroup(List<String> group) =>
+    group.join(' $alarmGroupSeparator ');
+
+/// Where an alarm sits in the tree, with completion over the groups that
+/// already exist.
+class _GroupField extends StatelessWidget {
+  const _GroupField({
+    required this.value,
+    required this.editable,
+    required this.suggestions,
+    required this.onChanged,
+  });
+
+  final String value;
+  final bool editable;
+  final List<String> suggestions;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final parsed = parseAlarmGroup(value);
+    final helper = parsed.isEmpty
+        ? 'Ungrouped — sits at the top of the alarm tree'
+        : 'In ${parsed.join(' › ')}';
+
+    return Autocomplete<String>(
+      initialValue: TextEditingValue(text: value),
+      optionsBuilder: (editing) {
+        final typed = editing.text.trim().toLowerCase();
+        if (!editable) return const Iterable<String>.empty();
+        if (typed.isEmpty) return suggestions;
+        return suggestions
+            .where((e) => e.toLowerCase().contains(typed));
+      },
+      onSelected: onChanged,
+      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+        return TextFormField(
+          key: const ValueKey('alarm-form-group'),
+          controller: controller,
+          focusNode: focusNode,
+          enabled: editable,
+          decoration: InputDecoration(
+            labelText: 'Group',
+            hintText: 'Line 3 $alarmGroupSeparator Multivac',
+            helperText: helper,
+            suffixIcon: editable && controller.text.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear),
+                    tooltip: 'Ungroup',
+                    onPressed: () {
+                      controller.clear();
+                      onChanged('');
+                    },
+                  )
+                : null,
+          ),
+          onChanged: onChanged,
+          onFieldSubmitted: (_) => onSubmitted(),
+        );
+      },
+    );
+  }
+}
+
 class AlarmForm extends ConsumerStatefulWidget {
   final AlarmConfig? initialConfig;
   final void Function(AlarmConfig)? onSubmit;
@@ -405,6 +487,8 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
   late String _title;
   late String _description;
   late List<AlarmRule> _rules;
+  late String _group;
+  late bool _bindToGroup;
 
   @override
   void initState() {
@@ -412,6 +496,26 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
     _title = widget.initialConfig?.title ?? '';
     _description = widget.initialConfig?.description ?? '';
     _rules = widget.initialConfig?.rules.toList() ?? [];
+    _group = formatAlarmGroup(widget.initialConfig?.group ?? const []);
+    _bindToGroup = widget.initialConfig?.bindToGroup ?? false;
+  }
+
+  /// Groups that already exist, so the operator picks an existing name
+  /// instead of inventing "Line3" beside "Line 3" and splitting a machine's
+  /// history in two.
+  List<String> _knownGroups() {
+    final man = ref.watch(alarmManProvider).valueOrNull;
+    if (man == null) return const [];
+    final seen = <String>{};
+    for (final alarm in man.alarms) {
+      final group = alarm.config.group;
+      // every prefix is a real group someone could file under
+      for (var i = 1; i <= group.length; i++) {
+        seen.add(formatAlarmGroup(group.sublist(0, i)));
+      }
+    }
+    final out = seen.where((e) => e.isNotEmpty).toList()..sort();
+    return out;
   }
 
   // Add a method to check if all expressions are valid
@@ -445,6 +549,30 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
               maxLines: null,
               keyboardType: TextInputType.multiline,
               enabled: widget.editable,
+            ),
+            const SizedBox(height: 16),
+            _GroupField(
+              value: _group,
+              editable: widget.editable,
+              suggestions: _knownGroups(),
+              onChanged: (v) => setState(() {
+                _group = v;
+                // Binding to nothing is meaningless, so clearing the group
+                // clears the flag rather than leaving it set but inert.
+                if (parseAlarmGroup(v).isEmpty) _bindToGroup = false;
+              }),
+            ),
+            SwitchListTile(
+              key: const ValueKey('alarm-form-bind-to-group'),
+              title: const Text('This alarm is the group itself'),
+              subtitle: const Text(
+                  'For equipment with no finer alarms yet — the coarse '
+                  '“this machine stopped” signal, rather than one alarm '
+                  'inside the group.'),
+              value: _bindToGroup,
+              onChanged: widget.editable && parseAlarmGroup(_group).isNotEmpty
+                  ? (v) => setState(() => _bindToGroup = v)
+                  : null,
             ),
             const SizedBox(height: 16),
             ..._rules.asMap().entries.map((entry) {
@@ -548,6 +676,7 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                     ? null
                     : () {
                         if (_formKey.currentState?.validate() ?? false) {
+                          final group = parseAlarmGroup(_group);
                           final config = AlarmConfig(
                             uid: widget.initialConfig?.uid ??
                                 UniqueKey().toString(),
@@ -555,6 +684,8 @@ class _AlarmFormState extends ConsumerState<AlarmForm> {
                             title: _title,
                             description: _description,
                             rules: _rules,
+                            group: group,
+                            bindToGroup: _bindToGroup && group.isNotEmpty,
                           );
                           widget.onSubmit?.call(config);
                         }
