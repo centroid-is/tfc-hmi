@@ -679,13 +679,34 @@ void main() {
   });
 
   group('the residual, counted', () {
+    test('_kHandledWriteSites is non-empty and every path exists', () {
+      // An exclusion set that has quietly emptied — a file renamed, a helper
+      // moved — would widen the count back out without anything failing. So
+      // the set is asserted to have members and the members are asserted to
+      // exist, which makes a rename loud.
+      expect(_kHandledWriteSites, isNotEmpty);
+      for (final path in _kHandledWriteSites) {
+        expect(File(path).existsSync(), isTrue,
+            reason: '$path is excluded from the count but is not on disk');
+      }
+    });
+
     test('kUncaughtAccessDeniedWriteSites matches the tree', () {
       final sites = _stateManWriteSites();
 
+      // The scan and the count are two numbers, and this is where they part.
+      // The scan still walks the whole tree, so `isNotEmpty` still has
+      // something to find; the count is the **residual** after the handled
+      // sites come off. One number cannot be both zero (04-11's target) and
+      // non-empty (this guard), which is why the split exists at all.
       expect(sites, isNotEmpty,
           reason: 'a walk that finds nothing would pass vacuously');
+      expect(sites.map((s) => s.file), contains('lib/widgets/tag_access_guard.dart'),
+          reason: 'the walk must still see the handled helper; an exclusion '
+              'that works by the walk missing the file proves nothing');
+
       expect(
-        sites.length,
+        _unhandledWriteSites().length,
         kUncaughtAccessDeniedWriteSites,
         reason: 'the doc comment beside the constant carries the command that '
             'produced it; re-run it and update both together',
@@ -697,7 +718,10 @@ void main() {
       // is checked, not assumed: no file holding one of them mentions
       // `AccessDenied` at all, so no `on AccessDenied` clause and no
       // `catchError` that inspects the type can be hiding in any of them.
-      final files = _stateManWriteSites().map((s) => s.file).toSet();
+      //
+      // Over the **unhandled** set, because `tag_access_guard.dart` mentioning
+      // `AccessDenied` is exactly what its handling consists of.
+      final files = _unhandledWriteSites().map((s) => s.file).toSet();
       final handling = <String>[
         for (final file in files)
           if (File(file).readAsStringSync().contains('AccessDenied')) file,
@@ -755,6 +779,27 @@ const Set<String> _kOtherWriteReceivers = {
   '_legacy',
 };
 
+/// The files whose `StateMan` `.write(` is **already** resolved and shown.
+///
+/// **This is not "files we have decided not to count".** It is "files where
+/// the refusal is settled before the write is issued and put in front of the
+/// operator". A file joins this set by containing that mechanism, never by
+/// being inconvenient. Adding an entry without the mechanism is how
+/// [kUncaughtAccessDeniedWriteSites] silently stops meaning anything — the
+/// same failure the `isNotEmpty` guard one level up exists to prevent.
+///
+/// Why the split exists at all: plan 04-11 drives the unhandled count to
+/// **zero**, and a single number that must be both zero and non-empty is a
+/// contradiction. So the scan proves the walk still works and the count is the
+/// residual.
+///
+/// | File | Why its `.write(` is handled |
+/// |---|---|
+/// | `lib/widgets/tag_access_guard.dart` | `writeTag`'s own call, reached only after `guardTagWrite` has resolved the permission; a refusal there is prompted and recorded rather than thrown, so there is nothing at this site for a caller to let past |
+const Set<String> _kHandledWriteSites = {
+  'lib/widgets/tag_access_guard.dart',
+};
+
 final RegExp _writeCall = RegExp(r'([A-Za-z_][A-Za-z0-9_.]*)\.write\(');
 
 /// One `StateMan` write call site: the file it is in and the receiver.
@@ -783,6 +828,12 @@ String _stripComments(String source) {
       .where((line) => !line.trimLeft().startsWith('//'))
       .join('\n');
 }
+
+/// The residual: every `StateMan` write site whose refusal is still
+/// unresolved. This is what [kUncaughtAccessDeniedWriteSites] counts.
+List<_WriteSite> _unhandledWriteSites() => _stateManWriteSites()
+    .where((s) => !_kHandledWriteSites.contains(s.file))
+    .toList();
 
 List<_WriteSite> _stateManWriteSites() {
   final sites = <_WriteSite>[];
