@@ -313,6 +313,24 @@ void main() {
   /// The binding table, read straight back.
   Future<Map<String, String>> bindings() => seeder().bindings();
 
+  /// Taps something whose handler does **real** file I/O.
+  ///
+  /// `dart:io`'s async reads never complete inside a widget test's fake-async
+  /// zone, so a plain `tap` + `pumpAndSettle` on the import or export button
+  /// returns before the file has been touched — and, because no frame is
+  /// scheduled in the meantime, `pumpAndSettle` returns after a single pump
+  /// having settled nothing. Both halves of the import/export card have to be
+  /// driven end to end here, so the tap happens inside [WidgetTester.runAsync]
+  /// where the real event loop runs.
+  Future<void> tapWithIo(WidgetTester tester, Finder target) async {
+    await tester.runAsync(() async {
+      await tester.tap(target);
+      await tester.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pumpAndSettle();
+  }
+
   /// The one [Text] inside [key]'s badge.
   String badgeText(WidgetTester tester, String key) => tester
       .widget<Text>(find
@@ -545,14 +563,19 @@ void main() {
           reason: 'the dangling key counts as unbound, because it is');
     });
 
-    testWidgets('the all-bound wording and the no-templates wording are '
-        'different, explicit sentences', (tester) async {
-      // Nothing exists at all — the shipped state, and the one the wording
-      // must not paint as a fault.
+    testWidgets('the shipped state — no templates — is stated as the default '
+        'rather than rendered as a zero', (tester) async {
       await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
       await tester.pumpAndSettle();
-      expect(countText(tester), kUnboundKeysNoTemplates(2));
 
+      expect(countText(tester), kUnboundKeysNoTemplates(2));
+      expect(kUnboundKeysNoTemplates(2), isNot(kUnboundKeysCount(2, 2)),
+          reason: '"nothing is configured yet" and "two keys were forgotten" '
+              'are different claims and only one is true on a fresh station');
+    });
+
+    testWidgets('with every key bound the count says so in words',
+        (tester) async {
       final seed = seeder();
       await seed.create(_conveyor());
       await seed.bind(_keyA, 'conveyor');
@@ -560,20 +583,24 @@ void main() {
 
       await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
       await tester.pumpAndSettle();
-      expect(countText(tester), kUnboundKeysAllBound(2));
 
-      expect(kUnboundKeysNoTemplates(2), isNot(kUnboundKeysAllBound(2)));
-      expect(kUnboundKeysNoTemplates(2), isNot(kUnboundKeysCount(0, 2)),
-          reason: '"nothing is configured" and "nothing is left to do" are '
-              'different claims, and a bare 0 reads as "not computed"');
+      expect(countText(tester), kUnboundKeysAllBound(2));
+      expect(kUnboundKeysAllBound(2), isNot(kUnboundKeysCount(0, 2)),
+          reason: 'a bare 0 reads as "not computed"');
+      expect(kUnboundKeysAllBound(2), isNot(kUnboundKeysNoTemplates(2)));
     });
 
     testWidgets('the filter shows exactly the keys unboundKeys names',
         (tester) async {
       final seed = seeder();
       await seed.create(_conveyor());
+      await seed.create(_recipes());
       await seed.bind(_keyA, 'conveyor');
-      await seed.bind(_keyC, 'gone');
+      await seed.bind(_keyC, 'recipes');
+      // `bind` refuses a name with no row, so the dangling case is made the
+      // way it actually happens: somebody removes the template in `psql`.
+      await db.customStatement(
+          "DELETE FROM access_template WHERE name = 'recipes'");
 
       const all = [_keyA, _keyB, _keyC];
       await tester.pumpWidget(await host(keyMappings: _keys(all)));
@@ -707,10 +734,9 @@ void main() {
 
       await tester.ensureVisible(find.text('Import'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Import'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Import').hitTestable());
-      await tester.pumpAndSettle();
+      await tapWithIo(tester, find.text('Import'));
+      await tapWithIo(
+          tester, find.widgetWithText(TextButton, 'Import').hitTestable());
 
       expect(await bindings(), before,
           reason: 'an import that removed the key must not remove its binding '

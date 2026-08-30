@@ -44,11 +44,74 @@ enum _KeyStatus { ok, error, serverDisconnected, serverDisabled }
 /// Everything on this page that is not the key list: the database banner, the
 /// key section's own header and save row, the access-templates section and the
 /// import/export card. Measured at 800x600.
+///
+/// **Measured on a station with no database**, which is the case the tests and
+/// the goldens run. 04-08 re-measured the other end and left the number alone,
+/// on purpose:
+///
+/// | State | Chrome |
+/// |---|---|
+/// | no database (this constant) | 516 |
+/// | database, one template | 592 |
+/// | database, templates list at its 168 px cap | 696 |
+///
+/// The unbound count row is ~30 px of that, and it renders only when there is
+/// a database — so the no-database figure is unchanged by 04-08 and the
+/// goldens do not move. The worst case, 696, is still **below**
+/// `minContentHeight` (516 + 264 = 780), so the fallback gives the column
+/// enough room and the key list is squeezed to one card rather than
+/// overflowing. Verified by measurement at 800x600 with ten templates.
+///
+/// Raising the constant to cover 696 would push `minContentHeight` to ~960 and
+/// engage the whole-page fallback on panels that lay out directly today, which
+/// is a worse trade than a short list on a window nobody runs the plant from.
 const double kKeyRepositoryChromeHeight = 516;
 
 /// Three key cards. Below this the list is not worth showing and the page
 /// scrolls as a whole instead.
 const double kKeyRepositoryMinKeyListHeight = 264;
+
+// ---------------------------------------------------------------------------
+// The unbound-key surface — spec §7b's honesty requirement.
+//
+// The design is fail-open on purpose: an unbound key is unrestricted, and so
+// is a member no bound template mentions. **Nothing enforces that somebody
+// remembered.** §7b's answer is that "enforcement is replaced by visibility …
+// A key that should have been restricted must not stay open with no signal
+// that someone forgot", and this count and this filter are that signal.
+//
+// **It is a working tool, not a compliance score.** The shipped state is zero
+// templates and every key unbound, and that is correct by design — §7b: "The
+// system therefore ships gating nothing and becomes stricter only as keys are
+// bound." So there is no red, no warning glyph and no badge that reads as a
+// defect: a station painted amber on the day it was commissioned teaches an
+// operator to ignore the number, which costs exactly the case this exists for
+// — somebody bound forty keys and forgot the forty-first. What the wording has
+// to do is make the number **findable and true**, and say plainly which of the
+// three states it is in, because a bare `0` reads as "not computed".
+// ---------------------------------------------------------------------------
+
+/// Some keys are bound and some are not — the only case with a fraction in it.
+String kUnboundKeysCount(int unbound, int total) =>
+    'No template governs $unbound of the $total keys here.';
+
+/// Every key is bound. Said in words rather than as a zero.
+String kUnboundKeysAllBound(int total) =>
+    'Every one of the $total keys here is bound to a template.';
+
+/// The shipped state. Named as the default, not as a fault.
+String kUnboundKeysNoTemplates(int total) =>
+    'No templates exist yet, so none of the $total keys here is gated — that '
+    'is the shipped default, not a fault.';
+
+/// The filter chip beside the count.
+const String kUnboundKeysFilterLabel = 'Unbound only';
+
+/// The count line, so a test reads the sentence the page renders.
+const Key kUnboundKeysCountKey = Key('key-repository-unbound-count');
+
+/// The filter chip.
+const Key kUnboundKeysFilterKey = Key('key-repository-unbound-filter');
 
 /// ` @ st101` for a named server, nothing for an unnamed one.
 ///
@@ -260,6 +323,31 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   /// `templateForKey` cannot report because it answers null for both gaps.
   TagBindingResolver? _resolver;
 
+  /// This station's keys that no template governs — **`unboundKeys`'s answer
+  /// and nothing else**.
+  ///
+  /// One definition, shared with the write path, so the filter cannot show a
+  /// key the guard treats as bound (T-04-46). It includes a dangling binding,
+  /// because a key naming a template that no longer exists resolves to no
+  /// restriction at all and is therefore exactly as open as a key nobody
+  /// touched.
+  Set<String> _unbound = const {};
+
+  /// Whether the list is showing only [_unbound].
+  bool _unboundOnly = false;
+
+  // Identity tokens for [_refreshUnbound]. The templates list is a fresh
+  // instance on every load — `accessTemplatesProvider` re-reads **both**
+  // tables and returns a new list — so a new instance means a new snapshot,
+  // bindings included, even when the set of templates is unchanged.
+  List<AccessTemplate>? _unboundCacheTemplates;
+  List<_KeyRow>? _unboundCacheRows;
+
+  /// The unbound filter applied to [_searchFiltered], and the search result it
+  /// was computed from.
+  List<_KeyRow>? _unboundFilterCache;
+  List<_KeyRow>? _unboundFilterSource;
+
   /// Coalesces the per-key status updates produced by [_probeKeys] into at
   /// most one rebuild per 250 ms.
   Timer? _statusFlushTimer;
@@ -460,6 +548,37 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     _rowsCache = null;
     _filterCache = null;
     _filterCacheQuery = null;
+    _unboundCacheRows = null;
+    _unboundFilterCache = null;
+    _unboundFilterSource = null;
+  }
+
+  /// Recomputes [_unbound], but only when the key list or the snapshot behind
+  /// it actually moved.
+  ///
+  /// Called once at the top of [build]. Both guards are identity checks, which
+  /// is what keeps this off the per-frame path: `_rows` is a cache dropped by
+  /// [_invalidateDerived], and [templates] is a fresh list on every load of
+  /// `accessTemplatesProvider`. So scrolling, typing in the search box and
+  /// every repaint in between cost one `identical` each — not a walk of a
+  /// repository with thousands of keys (T-04-48).
+  void _refreshUnbound(List<AccessTemplate>? templates) {
+    final rows = _rows;
+    if (identical(rows, _unboundCacheRows) &&
+        identical(templates, _unboundCacheTemplates)) {
+      return;
+    }
+    _unboundCacheRows = rows;
+    _unboundCacheTemplates = templates;
+    final resolver = _resolver;
+    // With no resolver at all nothing can be bound, which is the same answer
+    // `unboundKeys` gives for an empty snapshot — spelled out rather than
+    // relying on it, because the two agreeing is the whole claim.
+    _unbound = resolver == null
+        ? {for (final row in rows) row.key}
+        : resolver.unboundKeys([for (final row in rows) row.key]).toSet();
+    _unboundFilterCache = null;
+    _unboundFilterSource = null;
   }
 
   /// Stages every pending `key_mapping` proposal in one batch.
@@ -1032,7 +1151,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     ];
   }
 
-  List<_KeyRow> get _filteredEntries {
+  List<_KeyRow> get _searchFiltered {
     final rows = _rows;
     if (_searchQuery.isEmpty) return rows;
     if (_filterCache != null && _filterCacheQuery == _searchQuery) {
@@ -1046,6 +1165,27 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     }
     _filterCacheQuery = _searchQuery;
     return _filterCache = rankedItems(scored);
+  }
+
+  /// The search result, then the unbound filter on top of it.
+  ///
+  /// Composed rather than alternative: an engineer sweeping the conveyors
+  /// wants "the CN keys nobody bound", not a choice between the two. The
+  /// predicate rides inside the existing cache path — a second list rebuilt
+  /// per frame is what made this page crawl before, and the comment at
+  /// `KeyRepositoryContent.build` says so.
+  List<_KeyRow> get _filteredEntries {
+    final searched = _searchFiltered;
+    if (!_unboundOnly) return searched;
+    if (_unboundFilterCache != null &&
+        identical(_unboundFilterSource, searched)) {
+      return _unboundFilterCache!;
+    }
+    _unboundFilterSource = searched;
+    return _unboundFilterCache = [
+      for (final row in searched)
+        if (_unbound.contains(row.key)) row,
+    ];
   }
 
   /// The three server-alias lists used to be getters that rebuilt on every
@@ -1087,6 +1227,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       ],
       loaded: storeAsync.hasValue || storeAsync.hasError,
     );
+    _refreshUnbound(templatesAsync.valueOrNull);
 
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -1280,6 +1421,14 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                       );
                     },
                   ),
+                  // The unbound count and its filter, on their own line under
+                  // the header. Absent when there is no database, deliberately:
+                  // the access-templates section below already says that once,
+                  // and a number nobody can compute must not be rendered as a
+                  // zero. Absent with no keys, because "0 of 0" is not a fact
+                  // about anything.
+                  if (_bindings.available && _rows.isNotEmpty)
+                    _buildUnboundHeader(context),
                   const SizedBox(height: 16),
                   // Key list. Both branches scroll themselves and build lazily —
                   // only the cards on screen exist, so a repository with thousands
@@ -1287,7 +1436,10 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
                   Expanded(
                     child: filtered.isEmpty
                         ? const _EmptyKeysWidget()
-                        : _searchQuery.isEmpty
+                        // Reorder needs the rendered list to be the whole map
+                        // in map order, which neither a search nor the unbound
+                        // filter leaves true.
+                        : (_searchQuery.isEmpty && !_unboundOnly)
                             ? ReorderableListView.builder(
                                 scrollController: _listController,
                                 buildDefaultDragHandles: false,
@@ -1334,6 +1486,56 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
           ),
         ),
       ],
+    );
+  }
+
+  /// The unbound count and its filter.
+  ///
+  /// Three sentences, one per state, and never a bare number — see the note at
+  /// [kUnboundKeysCount]. Nothing here is coloured as a fault: this is the
+  /// muted `onSurfaceVariant` the locks and the prompts use, because the
+  /// shipped state is "no templates, every key unbound" and painting that
+  /// amber would train the operator to ignore the one station-day where it
+  /// matters.
+  Widget _buildUnboundHeader(BuildContext context) {
+    final theme = Theme.of(context);
+    final total = _rows.length;
+    final unbound = _unbound.length;
+    final text = _bindings.templateNames.isEmpty
+        ? kUnboundKeysNoTemplates(total)
+        : unbound == 0
+            ? kUnboundKeysAllBound(total)
+            : kUnboundKeysCount(unbound, total);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              text,
+              key: kUnboundKeysCountKey,
+              // No maxLines: this line is the one thing on the page that says
+              // the plant has a gap, and clipping it would be the failure it
+              // exists to prevent.
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilterChip(
+            key: kUnboundKeysFilterKey,
+            label: const Text(kUnboundKeysFilterLabel),
+            selected: _unboundOnly,
+            visualDensity: VisualDensity.compact,
+            onSelected: (selected) => setState(() {
+              _unboundOnly = selected;
+              _unboundFilterCache = null;
+              _unboundFilterSource = null;
+            }),
+          ),
+        ],
+      ),
     );
   }
 
