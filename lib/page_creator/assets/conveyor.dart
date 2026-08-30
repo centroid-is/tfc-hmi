@@ -21,6 +21,7 @@ import '../../widgets/state_value_builder.dart';
 import '../../widgets/panes/setpoint_field.dart';
 import 'auger_conveyor_painter.dart';
 import 'helper/atv320_diagnostics.dart';
+import 'sensor.dart' show SensorConfig, SensorFbPane, SensorFbState;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 import '../../theme.dart';
@@ -853,6 +854,18 @@ class ConveyorColorPaletteConfig extends BaseAsset {
   Map<String, dynamic> toJson() => _$ConveyorColorPaletteConfigToJson(this);
 }
 
+/// How the belt itself is drawn. The logic around it — keys, drive-state
+/// colours, batches, turns, gates, the operator pane — is identical for
+/// every style; only the band's rendering differs.
+enum ConveyorStyle {
+  /// The classic solid band.
+  box,
+
+  /// A roller conveyor: rollers across the belt on a darker bed. The state
+  /// colour moves onto the rollers, so the colour vocabulary is unchanged.
+  roller,
+}
+
 /// How a conveyor's drive reads.
 ///
 /// [running] is the boolean-driven equivalent of [auto]: the belt is moving,
@@ -898,6 +911,45 @@ DriveState readDriveState(DynamicValue? value) {
 /// Whether [state] means the belt is moving.
 bool driveStateIsMoving(DriveState state) =>
     state == DriveState.auto || state == DriveState.running;
+
+/// Reads a safety-edge value, whether it is an `ST_Sensor_HMI` struct (an
+/// FB_Sensor over OPC UA) or a plain BOOL.
+///
+/// A struct answers with its debounced output — and a faulted sensor also
+/// reads as pressed: a safety edge whose sensor is broken must fail safe,
+/// not quietly disarm. A plain bool answers with itself. Anything else is
+/// not pressed — the edge only claims a press it can stand behind.
+bool readSafetyEdge(DynamicValue? value) {
+  if (value == null) return false;
+  final fb = SensorFbState.tryParse(value);
+  if (fb != null) return fb.output || fb.fault;
+  if (value.value is bool) return value.value as bool;
+  return false;
+}
+
+/// Maps a decoded [DriveState] onto the themed equipment-state colours —
+/// the one vocabulary every conveyor-drawn drive answers in, belt and
+/// wagon traverse motor alike.
+Color driveStateColor(HmiStateColors states, DriveState state) {
+  switch (state) {
+    case DriveState.fault:
+      return states.red;
+    case DriveState.stopped:
+      return states.grey;
+    case DriveState.auto:
+    // A boolean-driven drive looks the same as a struct-driven one in
+    // auto. Giving it a colour of its own would say something about the
+    // drive that the bit does not carry.
+    case DriveState.running:
+      return states.green;
+    case DriveState.manual:
+      return states.yellow;
+    case DriveState.clean:
+      return states.blue;
+    case DriveState.unknown:
+      return states.violet;
+  }
+}
 
 class ConveyorColorPalette extends StatelessWidget {
   final ConveyorColorPaletteConfig config;
@@ -1016,6 +1068,64 @@ class ConveyorConfig extends BaseAsset {
   String? augerRpmKey;
   AugerOpenEnd? augerOpenEnd;
 
+  /// Draws the belt as a wagon on rails: wheels and a rail under the band,
+  /// for shuttle conveyors that travel on a track. Straight belts only — a
+  /// turned belt has no single underside to put wheels on.
+  bool? onRails;
+
+  /// PLC key emitting the wagon's raw 0..100% position along the rail —
+  /// same convention as the elevator's position key. 0% is the left end of
+  /// the box (before the asset's own rotation/mirror). Only read while
+  /// [railsActive]; without it the wagon parks mid-rail.
+  String? positionKey;
+
+  /// Drive key of the traverse motor — the one that moves the wagon along
+  /// the rail, as opposed to [key] which runs the belt on it. Same
+  /// `FB_ATV320` struct decode: its state colours the wagon's chassis, and
+  /// tapping the chassis opens its pane, where the jog buttons drive the
+  /// wagon down the track. Only read while [railsActive].
+  String? wagonMotorKey;
+
+  /// Lay the wagon's belt along the rails instead of across them. Default
+  /// (null/false) is across — the classic transfer wagon handing off
+  /// sideways; along suits a shuttle that conveys in its own travel
+  /// direction.
+  bool? beltAlongRails;
+
+  /// Keys for the safety edges on the wagon's two moving sides — a plain
+  /// BOOL (true = pressed) or an `FB_Sensor` HMI struct, decoded by
+  /// [readSafetyEdge] (a faulted sensor reads as pressed — fail safe).
+  /// Idle they draw nothing; tripped, the bumper on that side lights up in
+  /// fault red. Only read while [railsActive]. Left/right are in the
+  /// asset's own frame, before its rotation or the page mirror — the same
+  /// convention the geometry uses.
+  String? safetyLeftKey;
+  String? safetyRightKey;
+
+  /// The wagon's footprint along the rail run, as a fraction of the box
+  /// width. The belt conveys across the rails, so this is the belt's width.
+  /// Null falls back to [_defaultWagonLength].
+  double? wagonLength;
+
+  static const _defaultWagonLength = 0.25;
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  double get effectiveWagonLength =>
+      (wagonLength ?? _defaultWagonLength).clamp(0.05, 1.0);
+
+  /// Which band renderer this asset paints with. Fixed per asset type — the
+  /// roller variant overrides it — so it is not stored in the page JSON;
+  /// `asset_name` already decides it.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  ConveyorStyle get style => ConveyorStyle.box;
+
+  /// Whether the wagon undercarriage is actually drawn: [onRails] is set and
+  /// nothing that replaces the straight band (turns, the auger renderer) is
+  /// in effect.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  bool get railsActive =>
+      (onRails ?? false) && turns.isEmpty && !(showAuger ?? false);
+
   @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
   List<ChildGateEntry> gates;
 
@@ -1085,6 +1195,13 @@ class ConveyorConfig extends BaseAsset {
       this.showAuger,
       this.augerRpmKey,
       this.augerOpenEnd,
+      this.onRails,
+      this.positionKey,
+      this.wagonMotorKey,
+      this.beltAlongRails,
+      this.safetyLeftKey,
+      this.safetyRightKey,
+      this.wagonLength,
       this.beltThickness,
       List<ChildGateEntry>? gates,
       List<ConveyorTurnEntry>? turns})
@@ -1115,6 +1232,57 @@ class ConveyorConfig extends BaseAsset {
   factory ConveyorConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ConveyorConfigToJson(this);
+}
+
+/// A conveyor drawn as rollers instead of a solid band.
+///
+/// Only the paint differs: every key binding, the drive-state colour
+/// vocabulary, batches, turns, gates and the operator pane are
+/// [ConveyorConfig]'s, inherited unchanged — so the two asset types stay in
+/// step by construction rather than by parallel maintenance.
+@JsonSerializable(explicitToJson: true)
+class RollerConveyorConfig extends ConveyorConfig {
+  @override
+  String get displayName => 'Roller Conveyor';
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<String> get searchKeywords => const ['roller', 'rollers'];
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  ConveyorStyle get style => ConveyorStyle.roller;
+
+  RollerConveyorConfig(
+      {super.key,
+      super.batchesKey,
+      super.frequencyKey,
+      super.tripKey,
+      super.runningKey,
+      super.simulateBatches,
+      super.bidirectional,
+      super.reverseDirection,
+      super.showFrequency,
+      super.showAuger,
+      super.augerRpmKey,
+      super.augerOpenEnd,
+      super.onRails,
+      super.positionKey,
+      super.wagonMotorKey,
+      super.beltAlongRails,
+      super.safetyLeftKey,
+      super.safetyRightKey,
+      super.wagonLength,
+      super.beltThickness,
+      super.gates,
+      super.turns});
+
+  RollerConveyorConfig.preview() : super.preview();
+
+  factory RollerConveyorConfig.fromJson(Map<String, dynamic> json) =>
+      _$RollerConveyorConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$RollerConveyorConfigToJson(this);
 }
 
 class _ConveyorConfigContent extends StatefulWidget {
@@ -1244,6 +1412,78 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                     setState(() => widget.config.showFrequency = val)),
           ],
         ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('On rails (wagon):'),
+            const SizedBox(width: 8),
+            Checkbox(
+                value: widget.config.onRails ?? false,
+                onChanged: (val) =>
+                    setState(() => widget.config.onRails = val)),
+          ],
+        ),
+        if ((widget.config.onRails ?? false) &&
+            !widget.config.railsActive) ...[
+          Text(
+              'Rails are hidden while turns or the auger renderer are '
+              'configured — a wagon is a straight belt.',
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
+        if (widget.config.onRails ?? false) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Text('Belt along rails:'),
+              const SizedBox(width: 8),
+              Checkbox(
+                  value: widget.config.beltAlongRails ?? false,
+                  onChanged: (val) =>
+                      setState(() => widget.config.beltAlongRails = val)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.positionKey,
+            onChanged: (val) =>
+                setState(() => widget.config.positionKey = val),
+            label: 'Wagon position key (0-100%)',
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.wagonMotorKey,
+            onChanged: (val) =>
+                setState(() => widget.config.wagonMotorKey = val),
+            label: 'Wagon motor key (traverse drive)',
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.safetyLeftKey,
+            onChanged: (val) =>
+                setState(() => widget.config.safetyLeftKey = val),
+            label: 'Safety edge key, left (BOOL or FB_Sensor)',
+          ),
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.safetyRightKey,
+            onChanged: (val) =>
+                setState(() => widget.config.safetyRightKey = val),
+            label: 'Safety edge key, right (BOOL or FB_Sensor)',
+          ),
+          const SizedBox(height: 8),
+          NumberSlider(
+            labelAbove: true,
+            label: 'Wagon width along rails',
+            min: 0.05,
+            max: 1.0,
+            divisions: 95,
+            displayScale: 100,
+            suffix: '% of box',
+            value: widget.config.effectiveWagonLength,
+            onChanged: (v) =>
+                setState(() => widget.config.wagonLength = v),
+          ),
+        ],
         const SizedBox(height: 8),
         Row(
           children: [
@@ -1766,7 +2006,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
   void dispose() {
     // A docked pane outlives the route that opened it, so a page change must
     // not leave this conveyor's pane behind.
-    closeSidePane(id: _paneId, immediate: true);
+    for (final driveKey in _paneDriveKeys) {
+      closeSidePane(id: _paneIdFor(driveKey), immediate: true);
+    }
     _augerAnimationTimer?.cancel();
     _augerPhase.dispose();
     _simulateBatchesTimer?.cancel();
@@ -1826,24 +2068,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
         reading = readDriveState(runningValue);
       }
       if (reading != DriveState.unknown) {
-        switch (reading) {
-          case DriveState.fault:
-            return states.red;
-          case DriveState.stopped:
-            return states.grey;
-          case DriveState.auto:
-          // A boolean-driven belt looks the same as a struct-driven one in
-          // auto. Giving it a colour of its own would say something about the
-          // belt that the bit does not carry.
-          case DriveState.running:
-            return states.green;
-          case DriveState.manual:
-            return states.yellow;
-          case DriveState.clean:
-            return states.blue;
-          case DriveState.unknown:
-            return states.violet;
-        }
+        return driveStateColor(states, reading);
       }
       if (driveValue != null) return states.violet;
 
@@ -1898,11 +2123,23 @@ class _ConveyorState extends ConsumerState<Conveyor>
         (label: 'trip', key: widget.config.tripKey!, optional: true),
       if (_bound(widget.config.augerRpmKey))
         (label: 'augerRpm', key: widget.config.augerRpmKey!, optional: true),
+      if (widget.config.railsActive && _bound(widget.config.positionKey))
+        (label: 'position', key: widget.config.positionKey!, optional: true),
+      if (widget.config.railsActive && _bound(widget.config.wagonMotorKey))
+        (label: 'wagonMotor', key: widget.config.wagonMotorKey!,
+            optional: true),
+      if (widget.config.railsActive && _bound(widget.config.safetyLeftKey))
+        (label: 'safetyLeft', key: widget.config.safetyLeftKey!,
+            optional: true),
+      if (widget.config.railsActive && _bound(widget.config.safetyRightKey))
+        (label: 'safetyRight', key: widget.config.safetyRightKey!,
+            optional: true),
     ];
 
     // If no streams are configured, show error state
     if (bindings.isEmpty) {
-      return _buildConveyorVisual(context, states.grey, true);
+      return _buildConveyorVisual(context, states.grey,
+          showExclamation: true);
     }
 
     // One shared stream per key, held by [keyStreamProvider] rather than by
@@ -1922,10 +2159,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
               'Error fetching dynamic values, error: ${snapshot.error}',
             );
           }
-          return _buildConveyorVisual(context, states.grey, true);
+          return _buildConveyorVisual(context, states.grey,
+          showExclamation: true);
         }
         if (!snapshot.hasData) {
-          return _buildConveyorVisual(context, states.grey, true);
+          return _buildConveyorVisual(context, states.grey,
+          showExclamation: true);
         }
         _errorGate.recovered();
 
@@ -1975,14 +2214,68 @@ class _ConveyorState extends ConsumerState<Conveyor>
           _updateBatches(dynValue['batches']!);
         }
 
-        final hasMainKey =
-            widget.config.key != null && widget.config.key!.isNotEmpty;
+        // Wagon position: raw 0..100% like the elevator's position key,
+        // normalised to 0..1 along the rail. While the key is bound the box
+        // is the rail run and the belt is a wagon on it — parked mid-rail
+        // until the PLC answers, so a stream hiccup moves the wagon rather
+        // than reshaping the asset between wagon and full-length belt.
+        double? wagonPosition;
+        if (widget.config.railsActive && _bound(widget.config.positionKey)) {
+          wagonPosition = 0.5;
+          final pos = dynValue['position'];
+          if (pos != null) {
+            try {
+              wagonPosition = pos.asDouble.clamp(0.0, 100.0) / 100.0;
+            } catch (_) {}
+          }
+        }
+
+        // The traverse motor answers on the chassis, in the same colour
+        // vocabulary as the belt. An unreadable value is violet — the same
+        // "no information" the belt shows — not a guess.
+        Color? chassisColor;
+        if (widget.config.railsActive &&
+            _bound(widget.config.wagonMotorKey)) {
+          chassisColor =
+              driveStateColor(states, readDriveState(dynValue['wagonMotor']));
+        }
+
+        final hasMainKey = _bound(widget.config.key);
+        final hasMotorKey =
+            widget.config.railsActive && _bound(widget.config.wagonMotorKey);
+        // Every wagon binding is optional — an unbound edge or motor draws
+        // nothing extra and its tap zone simply is not there.
+        final leftEdgeKey =
+            widget.config.railsActive && _bound(widget.config.safetyLeftKey)
+                ? widget.config.safetyLeftKey
+                : null;
+        final rightEdgeKey =
+            widget.config.railsActive && _bound(widget.config.safetyRightKey)
+                ? widget.config.safetyRightKey
+                : null;
         return _buildConveyorVisual(
           context,
           color,
-          null,
-          freq,
-          hasMainKey ? () => _showDetailsPane(context) : null,
+          frequency: freq,
+          wagonPosition: wagonPosition,
+          chassisColor: chassisColor,
+          safetyLeftActive: readSafetyEdge(dynValue['safetyLeft']),
+          safetyRightActive: readSafetyEdge(dynValue['safetyRight']),
+          onBeltTap: hasMainKey
+              ? () => _showDrivePane(context, widget.config.key!,
+                  subtitle: 'Conveyor', icon: Icons.conveyor_belt)
+              : null,
+          onMotorTap: hasMotorKey
+              ? () => _showDrivePane(context, widget.config.wagonMotorKey!,
+                  subtitle: 'Wagon drive', icon: Icons.swap_horiz)
+              : null,
+          onLeftEdgeTap: leftEdgeKey != null
+              ? () => _showSafetyEdgePane(context, leftEdgeKey, side: 'left')
+              : null,
+          onRightEdgeTap: rightEdgeKey != null
+              ? () =>
+                  _showSafetyEdgePane(context, rightEdgeKey, side: 'right')
+              : null,
         );
       },
     );
@@ -2100,11 +2393,18 @@ class _ConveyorState extends ConsumerState<Conveyor>
 
   Widget _buildConveyorVisual(
     BuildContext context,
-    Color color, [
+    Color color, {
     bool? showExclamation,
     double? frequency,
-    VoidCallback? onTap,
-  ]) {
+    VoidCallback? onBeltTap,
+    VoidCallback? onMotorTap,
+    VoidCallback? onLeftEdgeTap,
+    VoidCallback? onRightEdgeTap,
+    double? wagonPosition,
+    Color? chassisColor,
+    bool safetyLeftActive = false,
+    bool safetyRightActive = false,
+  }) {
     // Layering, outer → inner:
     //   LayoutRotatedBox → GestureDetector → LayoutBuilder → CustomPaint
     //
@@ -2121,34 +2421,86 @@ class _ConveyorState extends ConsumerState<Conveyor>
     // answers. Same arrangement as `SensorState._buildPaint`.
     return LayoutRotatedBox(
       angle: (widget.config.coordinates.angle ?? 0.0) * pi / 180,
-      child: _withTapTarget(
-        onTap,
-        LayoutBuilder(
-          builder: (context, constraints) => _buildConveyorVisualSized(
-              context, constraints, color, showExclamation, frequency),
-        ),
+      child: LayoutBuilder(
+        builder: (context, constraints) => _buildConveyorVisualSized(
+            context, constraints, color,
+            showExclamation: showExclamation,
+            frequency: frequency,
+            onBeltTap: onBeltTap,
+            onMotorTap: onMotorTap,
+            onLeftEdgeTap: onLeftEdgeTap,
+            onRightEdgeTap: onRightEdgeTap,
+            wagonPosition: wagonPosition,
+            chassisColor: chassisColor,
+            safetyLeftActive: safetyLeftActive,
+            safetyRightActive: safetyRightActive),
       ),
     );
   }
 
-  /// Wraps the belt in its tap target, or leaves it alone when there is no
-  /// main key to open a pane for.
+  /// Wraps the drawn conveyor in its tap target(s), or leaves it alone when
+  /// there is no pane to open.
   ///
   /// No `behavior:` on purpose — deferring to the child leaves
   /// [ConveyorPainter.hitTest] the final word, which is what keeps the empty
-  /// corners of a turned belt's box inert.
-  Widget _withTapTarget(VoidCallback? onTap, Widget child) {
-    if (onTap == null) return child;
-    return GestureDetector(onTap: onTap, child: child);
+  /// corners of a turned belt's box (and the bare track beside a wagon)
+  /// inert. Within the hit shape, the wagon answers by zone: a bumper's
+  /// outer strip goes to its safety edge, the rest of the bumper to the
+  /// traverse motor, the belt to the belt drive — and whatever is actually
+  /// bound answers for the zones that are not.
+  Widget _withTapTargets(
+      Widget child, ConveyorPainter painter, Size size,
+      {VoidCallback? onBeltTap,
+      VoidCallback? onMotorTap,
+      VoidCallback? onLeftEdgeTap,
+      VoidCallback? onRightEdgeTap}) {
+    if (onBeltTap == null &&
+        onMotorTap == null &&
+        onLeftEdgeTap == null &&
+        onRightEdgeTap == null) {
+      return child;
+    }
+    final beltArea = painter.beltRect(size);
+    return GestureDetector(
+      onTapUp: (details) {
+        final p = details.localPosition;
+        if (onLeftEdgeTap != null &&
+            (painter.safetyEdgeRect(size, left: true)?.contains(p) ??
+                false)) {
+          onLeftEdgeTap();
+          return;
+        }
+        if (onRightEdgeTap != null &&
+            (painter.safetyEdgeRect(size, left: false)?.contains(p) ??
+                false)) {
+          onRightEdgeTap();
+          return;
+        }
+        if (onMotorTap != null && !beltArea.contains(p)) {
+          onMotorTap();
+          return;
+        }
+        (onBeltTap ?? onMotorTap)?.call();
+      },
+      child: child,
+    );
   }
 
   Widget _buildConveyorVisualSized(
     BuildContext context,
     BoxConstraints constraints,
-    Color color,
+    Color color, {
     bool? showExclamation,
     double? frequency,
-  ) {
+    VoidCallback? onBeltTap,
+    VoidCallback? onMotorTap,
+    VoidCallback? onLeftEdgeTap,
+    VoidCallback? onRightEdgeTap,
+    double? wagonPosition,
+    Color? chassisColor,
+    bool safetyLeftActive = false,
+    bool safetyRightActive = false,
+  }) {
     // The geometry must be built for the box the belt is actually painted
     // into. `AssetStack` lays assets out with tight constraints from the page
     // canvas — the same rectangle the editor draws the selection box from —
@@ -2163,7 +2515,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     final paintSize = constraints.constrain(requestedSize);
 
     if (widget.config.showAuger ?? false) {
-      return CustomPaint(
+      final auger = CustomPaint(
         size: paintSize,
         painter: AugerConveyorPainter(
           stateColor: color,
@@ -2172,6 +2524,10 @@ class _ConveyorState extends ConsumerState<Conveyor>
           openEnd: widget.config.augerOpenEnd,
         ),
       );
+      // No wagon on an auger — the belt drive answers for all of it.
+      return onBeltTap == null
+          ? auger
+          : GestureDetector(onTap: onBeltTap, child: auger);
     }
 
     // An explicit canvas-relative belt width wins over the box-relative
@@ -2209,6 +2565,16 @@ class _ConveyorState extends ConsumerState<Conveyor>
       mirrorY: mirror?.yMirror ?? false,
       straightBeltWidth: beltWidth,
       paintSize: paintSize,
+      style: widget.config.style,
+      onRails: widget.config.railsActive,
+      railInk: Theme.of(context).colorScheme.onSurface,
+      wagonPosition: wagonPosition,
+      wagonFraction: widget.config.effectiveWagonLength,
+      chassisColor: chassisColor,
+      safetyLeftActive: safetyLeftActive,
+      safetyRightActive: safetyRightActive,
+      safetyColor: HmiStateColors.of(context).red,
+      wagonBeltAcross: !(widget.config.beltAlongRails ?? false),
     );
     // The belt's own outline, published for the mark the plant view draws
     // while this conveyor's pane is open. Not a shape built to be drawn
@@ -2245,7 +2611,11 @@ class _ConveyorState extends ConsumerState<Conveyor>
       );
     }
 
-    return content;
+    return _withTapTargets(content, painter, paintSize,
+        onBeltTap: onBeltTap,
+        onMotorTap: onMotorTap,
+        onLeftEdgeTap: onLeftEdgeTap,
+        onRightEdgeTap: onRightEdgeTap);
   }
 
   Widget _positionedChildGate(
@@ -2325,9 +2695,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
         child: child,
       );
     } else {
+      // Measured from the box bottom, which with rails is not the band
+      // bottom — the undercarriage sits between them.
+      final bottomInset = conveyorSize.height - bandInset - beltHeight;
       return Positioned(
         left: xCenter - gateSize / 2,
-        bottom: bandInset - outsideOverhang,
+        bottom: bottomInset - outsideOverhang,
         width: gateSize,
         height: gateSize,
         child: child,
@@ -2335,11 +2708,86 @@ class _ConveyorState extends ConsumerState<Conveyor>
     }
   }
 
-  /// Identity of this conveyor's docked pane. Tapping the same conveyor
-  /// twice toggles it; tapping another device replaces it.
-  String get _paneId => 'conveyor:${identityHashCode(widget.config)}';
+  /// Identity of one of this conveyor's docked panes — it can own two, one
+  /// per drive (belt and wagon traverse motor). Tapping the same drive
+  /// twice toggles its pane; tapping another device replaces it.
+  String _paneIdFor(String driveKey) =>
+      'conveyor:${identityHashCode(widget.config)}:$driveKey';
 
-  /// Opens the operator pane for this conveyor.
+  /// Every key this conveyor may have opened a pane for.
+  Iterable<String> get _paneDriveKeys => [
+        widget.config.key,
+        widget.config.wagonMotorKey,
+        widget.config.safetyLeftKey,
+        widget.config.safetyRightKey,
+      ].whereType<String>().where((k) => k.isNotEmpty);
+
+  /// Opens the pane for one of the wagon's safety edges. An `FB_Sensor`
+  /// struct gets the sensor asset's own FB pane — same rows, same
+  /// setpoints, one implementation — and a plain BOOL a minimal
+  /// pressed/clear card.
+  void _showSafetyEdgePane(BuildContext context, String edgeKey,
+      {required String side}) {
+    final title = 'Safety edge · $side';
+    SidePane simple(PaneStatus status, String detail) => SidePane(
+          title: title,
+          subtitle: 'Wagon',
+          icon: Icons.sensors,
+          status: status,
+          child: PaneBody(
+            sections: [
+              PaneBodySection.status(
+                title: 'Signal',
+                child: PaneDetailRow(label: 'Edge', value: detail),
+              ),
+            ],
+          ),
+        );
+    showSidePane(
+      context: context,
+      id: _paneIdFor(edgeKey),
+      builder: (paneContext) => StateManValueBuilder(
+        keyName: edgeKey,
+        waiting: (_) =>
+            simple(const PaneStatus.unknown('Connecting'), 'connecting'),
+        error: (_, error) =>
+            simple(const PaneStatus.fault('Error'), error.toString()),
+        builder: (context, stateMan, dynValue) {
+          final fb = SensorFbState.tryParse(dynValue);
+          if (fb == null) {
+            final pressed = readSafetyEdge(dynValue);
+            return simple(
+                pressed
+                    ? const PaneStatus.fault('Pressed')
+                    : const PaneStatus.stopped('Clear'),
+                pressed ? 'pressed' : 'clear');
+          }
+          return SensorFbPane(
+            config: SensorConfig(detectionKey: edgeKey, tag: title),
+            state: fb,
+            subtitleOverride: 'Safety edge · FB_Sensor',
+            // Copy-on-write like every other pane here: clone, set one
+            // member, write the whole struct back.
+            onWrite: (field, value) {
+              final messenger = ScaffoldMessenger.maybeOf(context);
+              final newValue = DynamicValue.from(dynValue);
+              newValue[field] = value;
+              stateMan.write(edgeKey, newValue).catchError((Object e) {
+                messenger?.showSnackBar(
+                  SnackBar(content: Text('Write to $edgeKey failed: $e')),
+                );
+              });
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  /// Opens the operator pane for one of this conveyor's drives — the belt
+  /// drive, or the wagon's traverse motor, which is the same `FB_ATV320`
+  /// face: on the traverse motor the jog buttons drive the wagon down the
+  /// track.
   ///
   /// Since Plan 260811 this is a non-modal [SidePane] rather than an
   /// `AlertDialog`. It matters more here than anywhere else: jogging a belt
@@ -2354,19 +2802,20 @@ class _ConveyorState extends ConsumerState<Conveyor>
   /// The subscription lives in a `StreamBuilder` inside the pane body, so it
   /// is released when the pane closes — same lifetime contract as the dialog
   /// it replaces.
-  void _showDetailsPane(BuildContext context) {
+  void _showDrivePane(BuildContext context, String driveKey,
+      {required String subtitle, required IconData icon}) {
     showSidePane(
       context: context,
-      id: _paneId,
+      id: _paneIdFor(driveKey),
       // One subscription for the life of the pane: see StateManValueBuilder
       // for why the stream must not be built inline (tapping a setpoint field
       // rebuilt the pane, which re-subscribed and threw the keystrokes away).
       builder: (paneContext) => StateManValueBuilder(
-        keyName: widget.config.key!,
+        keyName: driveKey,
         waiting: (_) => SidePane(
-          title: widget.config.key!,
-          subtitle: 'Conveyor',
-          icon: Icons.conveyor_belt,
+          title: driveKey,
+          subtitle: subtitle,
+          icon: icon,
           status: const PaneStatus.unknown('Connecting'),
           child: const Padding(
             padding: EdgeInsets.all(32),
@@ -2374,9 +2823,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
           ),
         ),
         error: (_, error) => SidePane(
-          title: widget.config.key!,
-          subtitle: 'Conveyor',
-          icon: Icons.conveyor_belt,
+          title: driveKey,
+          subtitle: subtitle,
+          icon: icon,
           status: const PaneStatus.fault('Error'),
           child: PaneSection(
             title: 'Subscription failed',
@@ -2391,7 +2840,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
             void write(String field, Object? value) {
               final newValue = DynamicValue.from(dynValue);
               newValue[field] = value;
-              stateMan.write(widget.config.key!, newValue);
+              stateMan.write(driveKey, newValue);
             }
 
             final jogFwd = dynValue['p_stat_JogFwd'].asBool;
@@ -2422,9 +2871,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
             final faultIsLive = driveState.severity == Atv320Severity.fault;
 
             return SidePane(
-              title: widget.config.key!,
-              subtitle: 'Conveyor',
-              icon: Icons.conveyor_belt,
+              title: driveKey,
+              subtitle: subtitle,
+              icon: icon,
               // A faulted or safety-stopped drive outranks the frequency
               // reading: a belt sitting at 0 Hz because it tripped must not
               // present itself as a healthy 'Stopped'.
@@ -2543,15 +2992,15 @@ class _ConveyorState extends ConsumerState<Conveyor>
                       // fields below it have to fit on the same screen.
                       height: 100,
                       preview: _ConveyorStatsGraphLoader(
-                        keyName: widget.config.key!,
+                        keyName: driveKey,
                         showButtons: false,
                         compact: true,
                         xSpan: const Duration(minutes: 5),
                       ),
-                      expandedTitle: '${widget.config.key!} — trend',
+                      expandedTitle: '$driveKey — trend',
                       expandedSize: const Size(820, 520),
                       expandedBuilder: (context) => _ConveyorStatsGraphLoader(
-                        keyName: widget.config.key!,
+                        keyName: driveKey,
                         xSpan: const Duration(minutes: 30),
                       ),
                     ),
@@ -2969,6 +3418,47 @@ class ConveyorPainter extends CustomPainter {
   /// straight band inside the box; null keeps the whole box tappable.
   final Size? paintSize;
 
+  /// Which band renderer to use — see [ConveyorStyle].
+  final ConveyorStyle style;
+
+  /// Draws a wagon undercarriage (wheels on a rail) under the belt, which
+  /// then occupies only the box above it. Straight belts only; the caller
+  /// gates this on [ConveyorConfig.railsActive].
+  final bool onRails;
+
+  /// Ink for the rail, sleepers and wheel rims. The belt's own border stays
+  /// black in every theme because it outlines a filled band; the track is
+  /// bare lines on the page background, so it has to take the theme's
+  /// foreground or it disappears on a dark page.
+  final Color railInk;
+
+  /// Live wagon position along the rail, 0..1 (0 = left end of the box),
+  /// or null for a wagon with no position binding — which spans the whole
+  /// box like an ordinary belt. Only meaningful with [onRails].
+  final double? wagonPosition;
+
+  /// Length of a position-driven wagon as a fraction of the box width.
+  final double wagonFraction;
+
+  /// State colour of the wagon's traverse drive, painted on the chassis
+  /// that peeks out past both ends of the belt. Null draws the chassis as
+  /// neutral hardware — no motor bound, nothing to claim about it.
+  final Color? chassisColor;
+
+  /// Whether each of the wagon's safety edges is pressed. An idle edge
+  /// draws nothing at all; a tripped one lights its bumper in [safetyColor].
+  final bool safetyLeftActive;
+  final bool safetyRightActive;
+
+  /// Colour of a tripped safety edge — the theme's fault red, handed in by
+  /// the widget because the painter has no theme access.
+  final Color safetyColor;
+
+  /// Whether the wagon's belt stands across the rails (the classic
+  /// transfer wagon) or lies along them (a shuttle conveying in its own
+  /// travel direction).
+  final bool wagonBeltAcross;
+
   ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
@@ -2982,7 +3472,23 @@ class ConveyorPainter extends CustomPainter {
       this.mirrorX = false,
       this.mirrorY = false,
       this.straightBeltWidth,
-      this.paintSize});
+      this.paintSize,
+      this.style = ConveyorStyle.box,
+      this.onRails = false,
+      this.railInk = Colors.black,
+      this.wagonPosition,
+      this.wagonFraction = 0.25,
+      this.chassisColor,
+      this.safetyLeftActive = false,
+      this.safetyRightActive = false,
+      this.safetyColor = const Color(0xFFD32F2F),
+      this.wagonBeltAcross = true});
+
+  /// Extra canvas rotation in effect while overlays draw — π/2 while the
+  /// wagon's belt is painted in its rotated frame, zero otherwise. The
+  /// overlay text counter-rotates by this on top of the asset's own angle,
+  /// so a frequency figure on a wagon reads upright like everywhere else.
+  double _overlayExtraRotation = 0;
 
   /// Undoes the outer mirror after the counter-rotation, so overlay text
   /// paints upright. The canvas at that point carries mirror ∘ rotate ∘
@@ -3016,7 +3522,8 @@ class ConveyorPainter extends CustomPainter {
   /// resolving a turned belt's outline costs about as much again as the
   /// geometry it comes from, and a page of belts rebuilds on every drag tick.
   bool get hasHitShape =>
-      geometry != null || (straightBeltWidth != null && paintSize != null);
+      geometry != null ||
+      (paintSize != null && (straightBeltWidth != null || onRails));
 
   Path? hitShape() {
     if (!_hitOutlineResolved) {
@@ -3029,11 +3536,15 @@ class ConveyorPainter extends CustomPainter {
   Path? _buildHitOutline() {
     final g = geometry;
     if (g == null) {
-      final band = straightBeltWidth;
       final size = paintSize;
-      if (band == null || size == null) return null;
-      final rect =
-          Rect.fromLTWH(0, (size.height - band) / 2, size.width, band);
+      if (size == null) return null;
+      // A wagon is a band even without an explicit width: the belt is a
+      // fraction of the box, and the tap target — chassis bumpers included —
+      // has to ride along the rail with it. Only the empty track beside it
+      // falls through.
+      final band = straightBeltWidth ?? (onRails ? size.height : null);
+      if (band == null) return null;
+      final rect = onRails ? wagonRect(size) : beltRect(size);
       return Path()
         ..addRRect(RRect.fromRectAndRadius(
           rect,
@@ -3076,6 +3587,33 @@ class ConveyorPainter extends CustomPainter {
       _paintTurnedBelt(canvas, size);
       return;
     }
+    // Top view, like every other mimic asset: the box is the rail run, the
+    // track spans all of it, and the wagon rides it with its belt turned
+    // perpendicular — the wagon travels along the rails, the belt conveys
+    // across them, which is what a transfer wagon is for. Nothing grows
+    // the asset: the box the user drew still bounds all of the ink.
+    final span = _beltSpan(size);
+    if (onRails) {
+      _paintTrack(canvas, size);
+      _paintChassis(canvas, size, span);
+      canvas.save();
+      if (wagonBeltAcross) {
+        // Rotate the belt's frame 90° so its band runs the box height at
+        // the wagon's position: belt travel maps to screen-down.
+        canvas.translate(span.x0 + span.width, 0);
+        canvas.rotate(pi / 2);
+        _overlayExtraRotation = pi / 2;
+        _paintStraightBelt(canvas, Size(size.height, span.width));
+        _overlayExtraRotation = 0;
+      } else {
+        // Along the rails: an ordinary horizontal band riding the chassis.
+        final band = straightBeltWidth ?? size.height;
+        canvas.translate(span.x0, (size.height - band) / 2);
+        _paintStraightBelt(canvas, Size(span.width, band));
+      }
+      canvas.restore();
+      return;
+    }
     // An explicit belt width paints the belt as a band centred in the box
     // rather than filling it, so a straight belt can be set to the same width
     // as a turned one. Everything below is box-relative, so resizing the box
@@ -3084,14 +3622,79 @@ class ConveyorPainter extends CustomPainter {
     // back to it: the width is set in screen units and must not move when the
     // box does.
     final band = straightBeltWidth;
-    if (band != null) {
-      canvas.save();
-      canvas.translate(0, (size.height - band) / 2);
-      _paintStraightBelt(canvas, Size(size.width, band));
-      canvas.restore();
-      return;
+    canvas.save();
+    canvas.translate(span.x0, band == null ? 0 : (size.height - band) / 2);
+    _paintStraightBelt(canvas, Size(span.width, band ?? size.height));
+    canvas.restore();
+  }
+
+  /// Horizontal span the belt occupies inside the box: the whole box, or —
+  /// on rails — the wagon's footprint along the track, slid by
+  /// [wagonPosition] so 0 parks flush left and 1 flush right. A wagon with
+  /// no position binding parks mid-rail. On rails the belt runs across the
+  /// track, so this span is the belt's *width*: an explicit
+  /// [straightBeltWidth] sets it, else [wagonFraction] of the box.
+  ({double x0, double width}) _beltSpan(Size size) {
+    if (!onRails) return (x0: 0.0, width: size.width);
+    // An explicit belt width only shapes the footprint when the belt
+    // stands across the rails; along them it is the band's cross
+    // dimension, and the footprint is the wagon fraction either way.
+    final w = (wagonBeltAcross ? straightBeltWidth : null) ??
+        size.width * wagonFraction.clamp(0.05, 1.0);
+    // Travel is inset by the chassis bumpers, so at 0% and 100% it is the
+    // chassis that sits flush with the box edge — the box still bounds all
+    // of the wagon's ink at every position.
+    final overhang = _chassisOverhang(size, w);
+    final travel = max(size.width - w - 2 * overhang, 0.0);
+    final pos = (wagonPosition ?? 0.5).clamp(0.0, 1.0);
+    return (x0: overhang + pos * travel, width: w);
+  }
+
+  /// The belt band's rectangle in the box — what a tap has to land on to
+  /// mean the belt drive rather than the wagon motor. On rails the belt
+  /// stands across the track: a vertical band the full box height.
+  Rect beltRect(Size size) {
+    final span = _beltSpan(size);
+    if (onRails && wagonBeltAcross) {
+      return Rect.fromLTWH(span.x0, 0, span.width, size.height);
     }
-    _paintStraightBelt(canvas, size);
+    final band = straightBeltWidth ?? size.height;
+    return Rect.fromLTWH(
+        span.x0, (size.height - band) / 2, span.width, band);
+  }
+
+  /// The whole wagon — belt plus chassis bumpers. This is the tap target
+  /// and the pane-mark outline for a belt on rails.
+  Rect wagonRect(Size size) {
+    final belt = beltRect(size);
+    if (!onRails) return belt;
+    // Union, not an inflation of the belt: with the belt along the rails a
+    // thin band can be shorter than the carriage under it.
+    return belt.expandToInclude(_chassisRect(size));
+  }
+
+  /// The carriage frame's rectangle — shared by the chassis painter and the
+  /// safety-edge tap zones so what is drawn and what answers a tap cannot
+  /// come apart.
+  Rect _chassisRect(Size size) {
+    final span = _beltSpan(size);
+    final overhang = _chassisOverhang(size, span.width);
+    final chassisH = size.height * _chassisHeightFraction;
+    return Rect.fromLTWH(span.x0 - overhang, (size.height - chassisH) / 2,
+        span.width + 2 * overhang, chassisH);
+  }
+
+  /// The tap zone of one safety edge: the outer bumper strip of the
+  /// carriage on that side — exactly the area a tripped edge lights up.
+  /// Null off the rails.
+  Rect? safetyEdgeRect(Size size, {required bool left}) {
+    if (!onRails) return null;
+    final chassis = _chassisRect(size);
+    final overhang = _chassisOverhang(size, _beltSpan(size).width);
+    return left
+        ? Rect.fromLTWH(chassis.left, chassis.top, overhang, chassis.height)
+        : Rect.fromLTWH(chassis.right - overhang, chassis.top, overhang,
+            chassis.height);
   }
 
   /// Rounding of the belt's two ends, as a fraction of the belt width.
@@ -3110,15 +3713,45 @@ class ConveyorPainter extends CustomPainter {
   /// does not scale with the box.
   static const _borderWidth = 2.0;
 
+  /// How far the wagon's chassis sticks out past the belt on each side,
+  /// along the rails — the bumpers of the top view. Also the tap target for
+  /// the wagon motor's pane, so it is capped against the rail run rather
+  /// than allowed to swallow it.
+  static double _chassisOverhang(Size size, double wagonWidth) =>
+      min(wagonWidth * 0.35, size.width * 0.1);
+
+  /// Roller spacing along the belt, as a fraction of the belt width. The
+  /// bars take most of their pitch — real rollers sit nearly touching, and
+  /// the thin dark gaps between them are what sells the texture.
+  static const _rollerPitchFactor = 0.42;
+
+  /// Fraction of the pitch each roller bar occupies; the rest is gap.
+  static const _rollerBarFactor = 0.78;
+
+  /// How far each roller stops short of the belt edge, as a fraction of the
+  /// belt width — the strip left over reads as the conveyor's side frames.
+  static const _rollerEndInset = 0.10;
+
+  /// What the band is filled with before anything is drawn on it. The roller
+  /// style moves the state colour onto the rollers, so its bed is the same
+  /// colour darkened — the state stays legible at a glance either way.
+  Color get _bandFillColor => style == ConveyorStyle.roller
+      ? Color.lerp(color, Colors.black, 0.45)!
+      : color;
+
   void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final borderRadius = Radius.circular(size.shortestSide * _endRadiusFactor);
     final rrect = RRect.fromRectAndRadius(rect, borderRadius);
 
     final paint = Paint()
-      ..color = color
+      ..color = _bandFillColor
       ..style = PaintingStyle.fill;
     canvas.drawRRect(rrect, paint);
+
+    if (style == ConveyorStyle.roller) {
+      _paintStraightRollers(canvas, size, rrect);
+    }
 
     final border = Paint()
       ..color = Colors.black
@@ -3164,6 +3797,171 @@ class ConveyorPainter extends CustomPainter {
 
     _drawDirectionArrow(canvas, size);
     _drawFrequency(canvas, size);
+  }
+
+  /// One roller: a capsule shaded like a lit cylinder — light crest along
+  /// the middle falling off to dark edges — so the belt reads as a row of
+  /// metal rollers rather than painted stripes. The crest and the edges are
+  /// lerps of the state colour itself, so the equipment-state vocabulary is
+  /// untouched: a red roller is still unambiguously red.
+  ///
+  /// Drawn centred on the origin with its axis along y; the caller
+  /// translates (and for turned belts rotates) the canvas into place.
+  void _paintRollerBar(Canvas canvas, double bar, double length) {
+    final rect = Rect.fromCenter(
+        center: Offset.zero, width: bar, height: length + bar);
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(bar / 2));
+    // A cylinder under a light that is somewhere, not everywhere: the
+    // specular crest sits off-centre and the far side rolls away darker
+    // than the near side. Symmetric shading is what made these read as
+    // striped paint rather than steel.
+    final highlight = Color.lerp(color, Colors.white, 0.55)!;
+    final near = Color.lerp(color, Colors.black, 0.25)!;
+    final far = Color.lerp(color, Colors.black, 0.45)!;
+    canvas.drawRRect(
+        rrect,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [near, highlight, color, far],
+            stops: const [0.0, 0.25, 0.6, 1.0],
+          ).createShader(rect));
+    // A hairline seats the roller into the bed — without it the gradient's
+    // dark edge dissolves into the darkened fill next to it.
+    canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.25)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1);
+  }
+
+  /// Rollers across a straight belt, clipped to the band so the rounded ends
+  /// stay clean, over the darkened bed [_paintStraightBelt] laid down.
+  void _paintStraightRollers(Canvas canvas, Size size, RRect band) {
+    final pitch = max(size.height * _rollerPitchFactor, 4.0);
+    final bar = pitch * _rollerBarFactor;
+    final len = size.height * (1 - 2 * _rollerEndInset) - bar;
+    if (len <= 0) return;
+    canvas.save();
+    canvas.clipRRect(band);
+    // Start half a pitch in so the first roller clears the rounded end, and
+    // step from there — the last one may be clipped, which is fine: rollers
+    // are a texture, not counted objects.
+    for (var x = pitch / 2; x <= size.width - pitch / 4; x += pitch) {
+      canvas.save();
+      canvas.translate(x, size.height / 2);
+      _paintRollerBar(canvas, bar, len);
+      canvas.restore();
+    }
+    canvas.restore();
+  }
+
+  /// Rollers along a turned belt: same cylinders as the straight version,
+  /// but each sits perpendicular to the centerline's travel at its station.
+  void _paintTurnedRollers(
+      Canvas canvas, ConveyorPathGeometry g, Path outline) {
+    final w = g.beltWidth;
+    final pitch = max(w * _rollerPitchFactor, 4.0);
+    final bar = pitch * _rollerBarFactor;
+    final len = w * (1 - 2 * _rollerEndInset) - bar;
+    if (len <= 0) return;
+    final length = g.length;
+    if (length <= 0) return;
+    canvas.save();
+    canvas.clipPath(outline);
+    for (var d = pitch / 2; d <= length - pitch / 4; d += pitch) {
+      final t = g.tangentAt(d / length);
+      canvas.save();
+      canvas.translate(t.position.dx, t.position.dy);
+      canvas.rotate(atan2(t.vector.dy, t.vector.dx));
+      _paintRollerBar(canvas, bar, len);
+      canvas.restore();
+    }
+    canvas.restore();
+  }
+
+  /// Fraction of the box height the wagon's carriage frame spans. The belt
+  /// runs the full height; the carriage sits under its middle, wide enough
+  /// to reach both rails and stick out as bumpers along them.
+  static const _chassisHeightFraction = 0.45;
+
+  /// The wagon's chassis: the carriage the belt is mounted on, riding the
+  /// rails under the belt's middle and sticking out as bumpers on both
+  /// sides along the track. Carries the traverse drive's state colour —
+  /// the one part of the drawing that answers for the motor that moves
+  /// the wagon, and the tap target for its pane.
+  void _paintChassis(
+      Canvas canvas, Size size, ({double x0, double width}) span) {
+    final overhang = _chassisOverhang(size, span.width);
+    if (overhang <= 0.5) return;
+    final rect = _chassisRect(size);
+    final chassisH = rect.height;
+    final rrect =
+        RRect.fromRectAndRadius(rect, Radius.circular(chassisH * 0.15));
+    canvas.drawRRect(
+        rrect, Paint()..color = chassisColor ?? Colors.grey.shade600);
+    canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = Colors.black
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5);
+
+    // Safety edges: nothing at all while idle — a tripped edge lights its
+    // whole bumper with a glow around it, so a small mark still cannot be
+    // missed. Saturated red is allowed here by the house rule: a pressed
+    // safety edge is exactly the fault-class signal that may shout.
+    void trippedEdge(bool leftSide) {
+      final radius = Radius.circular(chassisH * 0.15);
+      final strip = leftSide
+          ? RRect.fromRectAndCorners(
+              Rect.fromLTWH(rect.left, rect.top, overhang, chassisH),
+              topLeft: radius,
+              bottomLeft: radius)
+          : RRect.fromRectAndCorners(
+              Rect.fromLTWH(
+                  rect.right - overhang, rect.top, overhang, chassisH),
+              topRight: radius,
+              bottomRight: radius);
+      canvas.drawRRect(
+          strip,
+          Paint()
+            ..color = safetyColor.withValues(alpha: 0.55)
+            ..maskFilter =
+                MaskFilter.blur(BlurStyle.normal, max(chassisH * 0.15, 2)));
+      canvas.drawRRect(strip, Paint()..color = safetyColor);
+      canvas.drawRRect(
+          strip,
+          Paint()
+            ..color = Colors.black
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1);
+    }
+
+    if (safetyLeftActive) trippedEdge(true);
+    if (safetyRightActive) trippedEdge(false);
+  }
+
+  /// The track seen from above: two plain rails running the full box
+  /// width, under the wagon's carriage. No sleepers — two clean lines read
+  /// as a track at mimic scale without turning into visual noise. Neutral
+  /// ink — the track is floor, not equipment state, so it never takes a
+  /// colour.
+  void _paintTrack(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 2) return;
+    final cy = size.height / 2;
+    final chassisH = size.height * _chassisHeightFraction;
+    // Gauge inside the carriage's reach, so the rails visibly carry it.
+    final gauge = chassisH * 0.6;
+    final rail = Paint()
+      ..color = railInk
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = max(chassisH * 0.07, 1.5);
+    for (final y in [cy - gauge / 2, cy + gauge / 2]) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), rail);
+    }
   }
 
   /// Fills a band along the centerline and outlines it with [border].
@@ -3216,11 +4014,26 @@ class ConveyorPainter extends CustomPainter {
       ..color = Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = _borderWidth;
-    _paintBand(canvas, g, 0, 1,
-        width: g.beltWidth,
-        radius: g.beltWidth * _endRadiusFactor,
-        fill: color,
-        border: border);
+    // The outline is resolved here rather than through [_paintBand] because
+    // the rollers have to land between the fill and the border — and where
+    // there is no outline (belt too wide for its bend) the stroked fallback
+    // has no honest geometry to space rollers along, so it stays a plain
+    // band in every style.
+    final outline = g.bandOutline(0, 1,
+        width: g.beltWidth, radius: g.beltWidth * _endRadiusFactor);
+    if (outline != null) {
+      canvas.drawPath(outline, Paint()..color = _bandFillColor);
+      if (style == ConveyorStyle.roller) {
+        _paintTurnedRollers(canvas, g, outline);
+      }
+      canvas.drawPath(outline, border);
+    } else {
+      _paintBand(canvas, g, 0, 1,
+          width: g.beltWidth,
+          radius: g.beltWidth * _endRadiusFactor,
+          fill: _bandFillColor,
+          border: border);
+    }
 
     if (showExclamation) {
       _drawExclamation(canvas, size);
@@ -3266,7 +4079,7 @@ class ConveyorPainter extends CustomPainter {
     final center = _overlayCenter(size);
     canvas.translate(center.dx, center.dy);
     // Counter-rotate
-    canvas.rotate(-angle * pi / 180);
+    canvas.rotate(-angle * pi / 180 - _overlayExtraRotation);
     _counterMirror(canvas);
     // Draw exclamation mark centered at (0,0)
     final textPainter = TextPainter(
@@ -3340,7 +4153,7 @@ class ConveyorPainter extends CustomPainter {
     canvas.save();
     final center = _overlayCenter(size);
     canvas.translate(center.dx, center.dy);
-    canvas.rotate(-angle * pi / 180);
+    canvas.rotate(-angle * pi / 180 - _overlayExtraRotation);
     _counterMirror(canvas);
     final textPainter = TextPainter(
       text: TextSpan(
@@ -3372,6 +4185,16 @@ class ConveyorPainter extends CustomPainter {
       oldDelegate.mirrorX != mirrorX ||
       oldDelegate.mirrorY != mirrorY ||
       oldDelegate.straightBeltWidth != straightBeltWidth ||
+      oldDelegate.style != style ||
+      oldDelegate.onRails != onRails ||
+      oldDelegate.railInk != railInk ||
+      oldDelegate.wagonPosition != wagonPosition ||
+      oldDelegate.wagonFraction != wagonFraction ||
+      oldDelegate.chassisColor != chassisColor ||
+      oldDelegate.safetyLeftActive != safetyLeftActive ||
+      oldDelegate.safetyRightActive != safetyRightActive ||
+      oldDelegate.safetyColor != safetyColor ||
+      oldDelegate.wagonBeltAcross != wagonBeltAcross ||
       // Geometry is rebuilt each frame when turns are configured, so curved
       // conveyors repaint on every rebuild (needed for batch animation).
       !identical(oldDelegate.geometry, geometry);

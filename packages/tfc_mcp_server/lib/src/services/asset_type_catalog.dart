@@ -641,6 +641,23 @@ class AssetTypeCatalog {
       ],
     ),
     AssetTypeInfo(
+      assetName: 'RollerConveyorConfig',
+      displayName: 'Roller Conveyor',
+      category: 'Visualization',
+      description:
+          'A conveyor drawn as shaded rollers instead of a solid band. '
+          'Same bindings and behaviour as ConveyorConfig (drive state '
+          'colours, batches, turns, gates, wagon-on-rails); only the '
+          'painter differs.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'key',
+            type: 'String',
+            description: 'Drive struct or boolean tag key for the belt',
+            required: true),
+      ],
+    ),
+    AssetTypeInfo(
       assetName: 'ConveyorColorPaletteConfig',
       displayName: 'Conveyor Palette',
       category: 'Visualization',

@@ -69,6 +69,13 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       augerRpmKey: json['augerRpmKey'] as String?,
       augerOpenEnd:
           $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
+      onRails: json['onRails'] as bool?,
+      positionKey: json['positionKey'] as String?,
+      wagonMotorKey: json['wagonMotorKey'] as String?,
+      beltAlongRails: json['beltAlongRails'] as bool?,
+      safetyLeftKey: json['safetyLeftKey'] as String?,
+      safetyRightKey: json['safetyRightKey'] as String?,
+      wagonLength: (json['wagonLength'] as num?)?.toDouble(),
       beltThickness: (json['beltThickness'] as num?)?.toDouble(),
       gates: _gatesFromJson(json['gates'] as List?),
       turns: (json['turns'] as List<dynamic>?)
@@ -106,6 +113,13 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'showAuger': instance.showAuger,
       'augerRpmKey': instance.augerRpmKey,
       'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
+      'onRails': instance.onRails,
+      'positionKey': instance.positionKey,
+      'wagonMotorKey': instance.wagonMotorKey,
+      'beltAlongRails': instance.beltAlongRails,
+      'safetyLeftKey': instance.safetyLeftKey,
+      'safetyRightKey': instance.safetyRightKey,
+      'wagonLength': instance.wagonLength,
       'gates': _gatesToJson(instance.gates),
       'turns': instance.turns.map((e) => e.toJson()).toList(),
       'beltThickness': instance.beltThickness,
@@ -116,3 +130,77 @@ const _$AugerOpenEndEnumMap = {
   AugerOpenEnd.left: 'left',
   AugerOpenEnd.right: 'right',
 };
+
+RollerConveyorConfig _$RollerConveyorConfigFromJson(
+        Map<String, dynamic> json) =>
+    RollerConveyorConfig(
+      key: json['key'] as String?,
+      batchesKey: json['batchesKey'] as String?,
+      frequencyKey: json['frequencyKey'] as String?,
+      tripKey: json['tripKey'] as String?,
+      runningKey: json['runningKey'] as String?,
+      simulateBatches: json['simulateBatches'] as bool?,
+      bidirectional: json['bidirectional'] as bool?,
+      reverseDirection: json['reverseDirection'] as bool?,
+      showFrequency: json['showFrequency'] as bool?,
+      showAuger: json['showAuger'] as bool?,
+      augerRpmKey: json['augerRpmKey'] as String?,
+      augerOpenEnd:
+          $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
+      onRails: json['onRails'] as bool?,
+      positionKey: json['positionKey'] as String?,
+      wagonMotorKey: json['wagonMotorKey'] as String?,
+      beltAlongRails: json['beltAlongRails'] as bool?,
+      safetyLeftKey: json['safetyLeftKey'] as String?,
+      safetyRightKey: json['safetyRightKey'] as String?,
+      wagonLength: (json['wagonLength'] as num?)?.toDouble(),
+      beltThickness: (json['beltThickness'] as num?)?.toDouble(),
+      gates: _gatesFromJson(json['gates'] as List?),
+      turns: (json['turns'] as List<dynamic>?)
+          ?.map((e) => ConveyorTurnEntry.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    )
+      ..variant = json['asset_name'] as String
+      ..coordinates =
+          Coordinates.fromJson(json['coordinates'] as Map<String, dynamic>)
+      ..size = RelativeSize.fromJson(json['size'] as Map<String, dynamic>)
+      ..text = json['text'] as String?
+      ..textPos = $enumDecodeNullable(_$TextPosEnumMap, json['textPos'])
+      ..techDocId = (json['techDocId'] as num?)?.toInt()
+      ..plcAssetKey = json['plcAssetKey'] as String?
+      ..beltWidthRelative = (json['beltWidthRelative'] as num?)?.toDouble();
+
+Map<String, dynamic> _$RollerConveyorConfigToJson(
+        RollerConveyorConfig instance) =>
+    <String, dynamic>{
+      'asset_name': instance.variant,
+      'coordinates': instance.coordinates.toJson(),
+      'size': instance.size.toJson(),
+      'text': instance.text,
+      'textPos': _$TextPosEnumMap[instance.textPos],
+      'techDocId': instance.techDocId,
+      'plcAssetKey': instance.plcAssetKey,
+      'key': instance.key,
+      'batchesKey': instance.batchesKey,
+      'frequencyKey': instance.frequencyKey,
+      'tripKey': instance.tripKey,
+      'runningKey': instance.runningKey,
+      'simulateBatches': instance.simulateBatches,
+      'bidirectional': instance.bidirectional,
+      'reverseDirection': instance.reverseDirection,
+      'showFrequency': instance.showFrequency,
+      'showAuger': instance.showAuger,
+      'augerRpmKey': instance.augerRpmKey,
+      'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
+      'onRails': instance.onRails,
+      'positionKey': instance.positionKey,
+      'wagonMotorKey': instance.wagonMotorKey,
+      'beltAlongRails': instance.beltAlongRails,
+      'safetyLeftKey': instance.safetyLeftKey,
+      'safetyRightKey': instance.safetyRightKey,
+      'wagonLength': instance.wagonLength,
+      'gates': _gatesToJson(instance.gates),
+      'turns': instance.turns.map((e) => e.toJson()).toList(),
+      'beltThickness': instance.beltThickness,
+      'beltWidthRelative': instance.beltWidthRelative,
+    };
