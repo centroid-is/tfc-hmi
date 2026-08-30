@@ -1615,7 +1615,19 @@ class StructStatusGroup {
   /// glance the grouping was for.
   ///
   /// Longest rather than first: if a machine is out of both bottoms and lids,
-  /// the one that has been waiting longer is the one that stopped it.
+  /// the one that has been waiting longer is the one that stopped it. First-in-
+  /// display-order would show bottoms' four minutes while product had been
+  /// starved an hour; the most RECENT would answer "what just changed" and hide
+  /// that the line has been down all morning.
+  ///
+  /// Known to be a LOWER BOUND, deliberately. The group stays lit while the
+  /// cause hands over between children — out of bottoms for 30 min, that
+  /// clears, out of lids for the next 40 — and the longest single child then
+  /// reads 40 against 70 minutes of actual trouble. Timing the GROUP's own lit
+  /// state would be exact, but only the HMI could do it, and that clock starts
+  /// when the page loads: an hour-old starve would report as seconds after any
+  /// reload. Understating is the safe direction for a number someone acts on;
+  /// overstating is not.
   Duration? summaryDurationOf(DynamicValue? status) {
     Duration? worst;
     for (final c in children) {
