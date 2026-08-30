@@ -113,6 +113,33 @@ const Key kUnboundKeysCountKey = Key('key-repository-unbound-count');
 /// The filter chip.
 const Key kUnboundKeysFilterKey = Key('key-repository-unbound-filter');
 
+// ---------------------------------------------------------------------------
+// What a key-mapping file does not carry.
+//
+// Since the 2026-08-30 ruling a key map is key mappings and nothing else: the
+// bindings live in their own `users`-gated table. That is a real trap for a
+// workflow engineers actually use — export from ST101, import on ST201 — and
+// the file has nothing in it to say anything was dropped. So both halves of
+// the card say it, before it matters, and each one names where to fix it. A
+// disclosure that only says "not included" leaves somebody stuck; one that
+// says where to go is a working instruction.
+// ---------------------------------------------------------------------------
+
+/// Shown in the import confirmation, **before** the import runs.
+const String kKeyMappingsImportBindingsNote =
+    'Access bindings are not in this file. The bindings already on this '
+    'station are left exactly as they are, and every key arriving from the '
+    'file is unbound — unrestricted — until somebody binds it. Bind them on '
+    'each key\'s card below, or have an agent sweep them with '
+    'list_unbound_keys.';
+
+/// Shown in the export result, so a file handed to another station is not
+/// assumed to carry what it does not.
+const String kKeyMappingsExportBindingsNote =
+    'Key mappings only — access bindings are not in the file. A station that '
+    'imports it gets every key unbound until somebody binds it there, on the '
+    'key\'s card or over MCP with bind_key_access_template.';
+
 /// ` @ st101` for a named server, nothing for an unnamed one.
 ///
 /// Shared by the proposal card and the saved-key rows so a mapping reads the
@@ -2199,6 +2226,24 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
   }
 
   Future<void> _onExport(BuildContext context, WidgetRef ref) async {
+    // ---------------------------------------------------------------------
+    // Decided, 04-08: this file carries **no** access bindings, and there is
+    // no "also export bindings" option, no second file and no bindings section
+    // in the JSON. Written here because the omission looks like one.
+    //
+    // The reason is the 2026-08-30 ruling itself. An export/import pair that
+    // carried bindings would put an authorization write behind this card —
+    // which is `configure`-gated, on a `configure`-gated route — and then make
+    // it portable between stations. That is precisely the path the ruling
+    // closed, re-opened in file form. A binding has to be written by something
+    // that checks `users` and leaves an audit row naming a person; a JSON file
+    // dropped through a file picker is neither.
+    //
+    // The supported way to move bindings between stations is the MCP sweep:
+    // `list_access_templates` and `bind_key_access_template`, which propose,
+    // are approved by somebody holding `users`, and land in the trail with
+    // `origin: 'mcp'`. That is named in the copy below, not only here.
+    // ---------------------------------------------------------------------
     try {
       final prefs = await ref.read(preferencesProvider.future);
       final keyMappings = await KeyMappings.fromPrefs(prefs);
@@ -2226,7 +2271,31 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Key mappings exported to ${file.path}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Key mappings exported to ${file.path}',
+                // The path is the one line here that may be elided: it can be
+                // arbitrarily long, and letting it wrap without limit would
+                // push the disclosure below off the strip — which is the line
+                // that matters.
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                kKeyMappingsExportBindingsNote,
+                // Pinned rather than left to the default so a later change to
+                // the copy fails the height assertion instead of silently
+                // ellipsising the sentence that says what the file does not
+                // contain.
+                maxLines: 6,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
           backgroundColor: Colors.green,
         ),
       );
@@ -2256,12 +2325,18 @@ class _KeyMappingsImportExportCard extends ConsumerWidget {
 
       if (!context.mounted) return;
 
-      // Confirm overwrite
+      // Confirm overwrite — and say, before it runs, what the file does not
+      // carry. The bindings are untouched by everything below: this path holds
+      // `configure`, a binding needs `users`, and clearing them "to stay
+      // consistent" would be the silent unbind spec §7d forbids on a delete.
+      // A row whose key the import removes is left orphaned on purpose; the
+      // unbound count above is where it shows up.
       final confirm = await showConfirmDialog(
         context: context,
         title: 'Import key mappings',
         message: 'This will overwrite all existing key mappings with '
-            '${imported.nodes.length} imported keys. Continue?',
+            '${imported.nodes.length} imported keys. Continue?'
+            '\n\n$kKeyMappingsImportBindingsNote',
         confirmLabel: 'Import',
         destructive: true,
       );
