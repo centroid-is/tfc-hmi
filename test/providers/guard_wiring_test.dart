@@ -91,7 +91,14 @@ void main() {
       expect(policy.groupForRoute(kServerConfigRoute), AccessGroup.administer);
     });
 
-    test('binds no tag, so groupForTag answers null for every key', () {
+    test('answers null for every key until a snapshot loads', () {
+      // Extended by 04-05, not relaxed. This used to say "binds no tag": the
+      // policy carried no lookup, and null was the shipped state. It now
+      // carries one — the resolver's `groupFor` — and the resolver is empty
+      // until `accessTemplatesProvider` fills it, so null is still the answer
+      // here. `access_templates_test.dart` covers the loaded case; what
+      // belongs in this file is that a bare container, with nothing loaded,
+      // still gates nothing rather than throwing or locking the plant.
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final policy = container.read(accessPolicyProvider);
@@ -141,9 +148,26 @@ void main() {
           reason: 'every use of accessSessionProvider here must be a '
               'ref.read at write time, never a watch at a provider build');
 
-      // And the policy provider itself depends on nothing at all.
+      // And the policy provider reads exactly one thing: the resolver, which
+      // itself has no dependencies and therefore never rebuilds.
+      //
+      // Extended by 04-05 rather than relaxed. This used to assert
+      // `const AccessPolicy(routes: kRaisedRoutes)` — the policy carried no
+      // tag lookup at all — and Phase 4 supplies one. The property the
+      // original assertion was protecting is *not* "the policy is const"; it
+      // is "nothing this provider reads can be invalidated". So the exact
+      // shape of the line is pinned, and the two ways of breaking that
+      // property are named: a `watch` of the resolver, or any reference to the
+      // loader.
       expect(code, contains('AccessPolicy accessPolicy(Ref ref) =>'));
-      expect(code, contains('const AccessPolicy(routes: kRaisedRoutes)'));
+      expect(code, contains('routes: kRaisedRoutes'));
+      expect(
+          code, contains('tagBindings: ref.read(tagBindingResolverProvider)'));
+      expect(code, isNot(contains('ref.watch(tagBindingResolverProvider)')));
+      expect(code, isNot(contains('accessTemplatesProvider')),
+          reason: 'a dependency on the loader would rebuild the policy on '
+              'every template edit, rebuild stateManProvider, and drop every '
+              'OPC UA connection on the panel');
       expect(code, contains('accessDenialsProvider'));
     });
   });
