@@ -215,6 +215,41 @@ const Duration _recovery = Duration(seconds: 5);
 /// shape a poll cannot establish.
 const Duration _settle = Duration(milliseconds: 400);
 
+/// The freshness deadline the three F6/F7 recovery arms run with.
+///
+/// Lowered deliberately and greppably, the way `faultClientConfig` lowers the
+/// deadline floor. A `writeStatus` re-query goes out on *entry* to `ready` and
+/// nowhere else (`remote_state_man.dart`, `_onLinkState`), so an arm about the
+/// recovery needs the client to have genuinely left `ready` first — and under
+/// a blackhole the socket never closes, so the watchdog noticing the silence
+/// is the only thing that takes it out. The production number is 3 s and is
+/// not what these arms are about.
+const Duration _noticeTheSilence = Duration(milliseconds: 500);
+
+/// The budget for "the panel came back **after an outage it sat through**".
+///
+/// Wider than [_recovery], and measured rather than guessed: driven at 5 s, the
+/// applied-while-down arm timed out on the reconnect once and completed in
+/// under a second on the next run, which is a budget sitting on top of a
+/// distribution rather than clear of it. Every dial attempted while the
+/// blackhole is still on costs a full control deadline before it fails, and
+/// each failure draws the next window from `[0, min(2 s, 40 ms x 2^n)]` — so a
+/// client that spent two or three attempts inside the outage can legitimately
+/// be most of five seconds from its next attempt at the moment the link comes
+/// back.
+///
+/// A liveness budget, never a latency measurement: nothing here asserts the
+/// reconnect was *fast*, only that a panel whose link returned does come back
+/// on its own. `_recovery`'s doc makes the same distinction, and this is the
+/// same argument with more attempts behind it.
+const Duration _outageRecovery = Duration(seconds: 15);
+
+/// The write and control deadline those same arms run with.
+///
+/// Short enough that a write into a swallowed link resolves inside the case's
+/// own budget rather than outliving the outage it is supposed to be measuring.
+const Duration _shortWrite = Duration(milliseconds: 400);
+
 /// The one-way delay F13 imposes. A round trip therefore costs twice this.
 const Duration _f13Latency = Duration(milliseconds: 100);
 
@@ -569,6 +604,7 @@ void main() {
       expect(answered, isA<WriteUnknown>(),
           reason: 'the write is parked at the plant: nobody knows yet, and '
               'that is the honest answer');
+      expect(answered.isSafeToResend, isFalse, reason: 'a write parked at the plant is the one an operator must never be offered a re-send button for: the ram may already be moving');
       expect(fixture.client.debugUnresolvedCmds, contains(outcome.cmd),
           reason: 'an unknown answer settles nothing, so the command stays '
               'held for the next entry to ready to ask about again');
@@ -576,6 +612,277 @@ void main() {
       // Released after the assertions so the plant does not carry a stalled
       // write into teardown.
       fixture.served.releaseWrites();
+    });
+
+    test('F6/F7: a write that landed while the link was down comes back '
+        'applied, and resolves exactly once', () async {
+      // **05-RESEARCH §E.2 gap 2.** The case above only ever reaches the arm
+      // where the write is still parked at the plant, so the re-query answers
+      // `unknown` and settles nothing. The other half — the write actually
+      // *landed* during the outage — is the one that exercises
+      // `RemoteStateMan._settle` end to end: the command leaving the
+      // unresolved set, the readback adopted, and the late outcome going out
+      // on `onWriteResolved` so that an operator who was told "unknown",
+      // walked out to look at the machine and came back is told what
+      // happened. Nothing drove that path before this arm.
+      final fixture = await faultFixture(
+        keys: const {_key},
+        withProxy: true,
+        config: faultClientConfig(
+          write: _shortWrite,
+          control: _shortWrite,
+          freshness: _noticeTheSilence,
+        ),
+        seed: (plant) => plant.setValue(_key, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      final resolved = <WriteResult>[];
+      final watching = fixture.client.onWriteResolved.listen(resolved.add);
+      addTearDown(watching.cancel);
+
+      // Stalled at the plant, so the outage lands with the write genuinely
+      // upstream rather than before it left.
+      fixture.served.stallWrites();
+      final pending = fixture.client.write(_key, 1500);
+      await until('the write to reach the plant',
+          () => fixture.served.writesInFlight > 0,
+          budget: _recovery);
+
+      // A blackhole rather than a kill: both directions swallowed keeps the
+      // link down for exactly as long as this case says, which is what makes
+      // the ordering below deterministic instead of a race between the plant
+      // being released and the client reconnecting.
+      fixture.proxy.blackhole();
+      final outcome = await pending.timeout(_recovery);
+      expect(outcome, isA<WriteUnknown>(),
+          reason: 'the write came back $outcome with the link swallowed under '
+              'it; nobody could know yet');
+      expect(fixture.client.debugUnresolvedCmds, contains(outcome.cmd),
+          reason: 'the command was not held for re-query, so the resolution '
+              'this case is about could never be asked for');
+
+      // And now it lands, with nobody able to hear about it.
+      fixture.served.releaseWrites();
+      await until('the plant to take the write during the outage',
+          () => fixture.served.writesInFlight == 0,
+          budget: _recovery);
+      expect(fixture.client.read(_key)?.value, isNot(1500),
+          reason: 'the client already shows the new value, so the link was '
+              'not actually down and the resolution below would be a '
+              'subscription update wearing a re-query\'s clothes');
+
+      // **The client has to have genuinely left `ready`**, and this wait is
+      // not a tidiness: the re-query goes out on *entry* to ready and nowhere
+      // else. Lifting the blackhole before the watchdog had noticed the
+      // silence left the client where it already was, no transition happened,
+      // and the recovery this arm is about never ran — measured, the first
+      // time this case was driven.
+      await until('the client to notice the link went silent',
+          () => !fixture.client.isReady,
+          budget: _recovery);
+
+      fixture.proxy.blackhole(enabled: false);
+      await until('the reconnect', () => fixture.client.isReady,
+          budget: _outageRecovery);
+      await until(
+          'the re-query to come back with an answer about ${outcome.cmd}',
+          () => fixture.client.debugWriteStatusAnswers
+              .any((result) => result.cmd == outcome.cmd),
+          budget: _outageRecovery);
+
+      final answered = fixture.client.debugWriteStatusAnswers
+          .firstWhere((result) => result.cmd == outcome.cmd);
+      expect(answered, isA<WriteApplied>(),
+          reason: 'the write reached the device and the device took it, and '
+              'the re-query answered $answered. An operator who was shown '
+              '"unknown" and is now shown anything other than "applied" has '
+              'been told the machine may not have moved when it did');
+      expect(answered.isSafeToResend, isFalse,
+          reason: 'a write that has already been applied is not re-send-safe. '
+              'Offering the button again here is the second stroke of a ram '
+              'the operator commanded once');
+      // **What this arm does not force.** The reconnect's own snapshot carries
+      // the plant's current reading too, so the store showing 1500 does not
+      // isolate `_adoptReadback` from the resync — the same shape 04-REVIEW
+      // WR-01 recorded rather than pretended away. What it does isolate is
+      // everything below: one emission, and the command settled.
+      expect(fixture.client.read(_key)?.value, 1500,
+          reason: 'the resolution never reached the store, so the mimic still '
+              'shows the setpoint the operator typed over');
+      expect(resolved.where((result) => result.cmd == outcome.cmd), hasLength(1),
+          reason: 'the late outcome went out '
+              '${resolved.where((r) => r.cmd == outcome.cmd).length} times. '
+              'Zero means the operator is never told how the unknown ended; '
+              'more than one means the panel raises the same resolution twice '
+              'and the second one reads as a new event');
+      expect(fixture.client.debugUnresolvedCmds, isNot(contains(outcome.cmd)),
+          reason: 'the command stayed unresolved after an established answer, '
+              'so it is re-queried on every reconnect for the rest of the '
+              'shift');
+      expect(fixture.client.debugWritesSent, 1,
+          reason: 'the recovery re-actuated the plant. It asks what became of '
+              'the command; it never repeats it');
+    });
+
+    test('F6/F7: an answer of not_received settles the command, and is the '
+        'only re-send-safe verdict', () async {
+      // **05-RESEARCH §E.2 gap 3.** The server side has this
+      // (`value_handlers_test.dart:423-431`); nothing exercised the *client's*
+      // handling of a `not_received` answer arriving from a re-query. It is
+      // not `WriteUnknown`, so it falls through to `_settle` — and it is the
+      // one verdict the re-send-safe getter is true for, which makes this the
+      // arm where being wrong sends an operator back to a button.
+      final fixture = await faultFixture(
+        keys: const {_key},
+        withProxy: true,
+        config: faultClientConfig(
+          write: _shortWrite,
+          control: _shortWrite,
+          freshness: _noticeTheSilence,
+        ),
+        seed: (plant) => plant.setValue(_key, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      final resolved = <WriteResult>[];
+      final watching = fixture.client.onWriteResolved.listen(resolved.add);
+      addTearDown(watching.cancel);
+
+      // Swallowed on the way *out*, before the gateway sees a byte of it —
+      // the only way a `not_received` is earned honestly. The command is
+      // freshly minted, datable, after the outcome log's own start and inside
+      // its TTL, which is the positive evidence the gateway requires
+      // (`value_handlers.dart:_statusOf`).
+      fixture.proxy.blackhole();
+      final outcome = await fixture.client.write(_key, 1500).timeout(_recovery);
+
+      expect(outcome, isA<WriteUnknown>(),
+          reason: 'the write came back $outcome into a swallowed link');
+      expect(fixture.client.debugWritesSent, 1,
+          reason: 'the frame never left this client, so the gateway has '
+              'nothing to have an opinion about and the answer below would be '
+              'unremarkable');
+      expect(fixture.served.upstreamWriteAttempts(outcome.cmd), 0,
+          reason: 'the plant recorded an attempt for a command the link '
+              'swallowed, so this case is not about a write that never '
+              'arrived');
+      expect(fixture.client.debugUnresolvedCmds, contains(outcome.cmd),
+          reason: 'an unknown that is not held for re-query is an unknown '
+              'nobody will ever establish');
+
+      // As in the arm above: the re-query goes out on entry to `ready`, so the
+      // client has to have left it first.
+      await until('the client to notice the link went silent',
+          () => !fixture.client.isReady,
+          budget: _recovery);
+
+      fixture.proxy.blackhole(enabled: false);
+      await until('the reconnect', () => fixture.client.isReady,
+          budget: _outageRecovery);
+      await until(
+          'the re-query to come back with an answer about ${outcome.cmd}',
+          () => fixture.client.debugWriteStatusAnswers
+              .any((result) => result.cmd == outcome.cmd),
+          budget: _outageRecovery);
+
+      final answered = fixture.client.debugWriteStatusAnswers
+          .firstWhere((result) => result.cmd == outcome.cmd);
+      expect(answered, isA<WriteNotReceived>(),
+          reason: 'the gateway answered $answered about a command it demonstrably '
+              'never saw. "Unknown" here is merely unhelpful; anything that '
+              'settles the command as having happened would be a lie about a '
+              'machine');
+      expect(answered.isSafeToResend, isTrue,
+          reason: 'this is the one verdict that licenses offering the button '
+              'again, and it is only safe because the gateway had to date the '
+              'command against its own clock to reach it');
+      expect(fixture.client.debugUnresolvedCmds, isNot(contains(outcome.cmd)),
+          reason: 'never-received is an established answer and must settle the '
+              'command; leaving it unresolved re-asks a question the gateway '
+              'has already answered, on every reconnect, forever');
+      expect(resolved.where((result) => result.cmd == outcome.cmd), hasLength(1),
+          reason: 'the operator was shown "unknown" and is owed the '
+              'resolution exactly once');
+      expect(fixture.client.debugWritesSent, 1,
+          reason: 'the client re-sent the write on learning it was never '
+              'received. Re-send-safe is a statement about what an operator '
+              'may be offered, never about what this client does on its own — '
+              'that distinction is the whole of WRT-03');
+      expect(fixture.served.upstreamWriteAttempts(outcome.cmd), 0,
+          reason: 'the plant was actuated by the recovery');
+    });
+
+    test('F6/F7: a refusal over a socket means the plant was untouched',
+        () async {
+      // **05-RESEARCH §E.2 gap 4, and the direct answer to the CONTEXT threat
+      // flag.** The gateway proves this at the handler
+      // (`value_handlers_test.dart:355-370`, `upstreamWriteAttempts`
+      // unchanged); nothing proved it over a real socket. The claim being
+      // judged is the standing ruling that `INVALID_PARAMS` on the write path
+      // means definitively no effect — because a refusal that might have
+      // actuated is a button an operator presses twice.
+      final fixture = await faultFixture(
+        keys: const {_key},
+        withProxy: true,
+        seed: (plant) => plant.setValue(_key, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      final cmd = newUlid();
+      final first = await fixture.client
+          .write(_key, 1500, cmd: cmd)
+          .timeout(_recovery);
+      expect(first, isA<WriteApplied>(),
+          reason: 'the first write under this id came back $first, so the '
+              'collision below would be a collision with nothing');
+      expect(fixture.served.upstreamWriteAttempts(cmd), 1,
+          reason: 'the plant did not record the first write under the id the '
+              'client minted, so the count this case reads afterwards is not '
+              'about this command');
+
+      // The same id, a different value: two different operator intents under
+      // one action id, which 05-03 deliberately keeps a refusal rather than
+      // folding into the replay window (D-P5-B).
+      final second = await fixture.client
+          .write(_key, 1600, cmd: cmd)
+          .timeout(_recovery);
+
+      expect(second, isA<WriteRejected>(),
+          reason: 'a duplicate-id collision came back as $second. Rejected is '
+              'the only honest mapping: the gateway raised before it touched '
+              'the plant, so this is the one refusal that carries a guarantee '
+              'about the machine');
+      expect((second as WriteRejected).reason.kind, FailureKind.serverRefused);
+      expect(second.isSafeToResend, isFalse,
+          reason: 'a refusal is not a licence to re-send. The defect is in the '
+              'caller — two different writes under one id — and repeating it '
+              'under a fresh id is an operator decision about a machine, never '
+              'this client\'s');
+      expect(second.reason.message, contains('nothing was sent'),
+          reason: 'the sentence that reaches the operator is what makes the '
+              'refusal actionable, and "nothing was sent" is the part that '
+              'stops them pressing again to be sure. Got: '
+              '${second.reason.message}');
+      expect(fixture.served.upstreamWriteAttempts(cmd), 1,
+          reason: 'the plant recorded '
+              '${fixture.served.upstreamWriteAttempts(cmd)} attempts for this '
+              'command. The second frame was refused before the gateway '
+              'crossed into the plant, so anything above 1 means '
+              'INVALID_PARAMS on the write path does not mean "no effect" — '
+              'and every refusal this client has ever reported as definitive '
+              'stops being one');
+      expect(fixture.served.read(_key)?.value, 1500,
+          reason: 'the tag carries the refused value, so the second write '
+              'reached the device after all');
+      expect(fixture.client.debugWritesSent, 2,
+          reason: 'the second frame never left, so the refusal was this '
+              'client\'s local duplicate-id guard rather than the gateway\'s '
+              '— and the property this case exists to prove is about the '
+              'gateway');
+      expect(fixture.client.debugUnresolvedCmds, isNot(contains(cmd)),
+          reason: 'a refusal is an established answer; holding it for re-query '
+              'asks the gateway forever about a write it already refused');
     });
 
     test('F13: a slow link is slow, not down', () async {
