@@ -60,6 +60,14 @@ class StoredServerConfig {
 /// see a stale snapshot, for the reason in the paragraph above. Those are two
 /// different requirements and they point at two different paths; making the
 /// class symmetric would break whichever half it was made to match.
+///
+/// One consequence to know before reading [fetch] and worrying: [publish] now
+/// populates the very caches [fetch] refuses to consult, because
+/// `Preferences.setString` writes the memory cache and the device-local cache
+/// on its way to the row. That does not make [fetch]'s direct select
+/// redundant — those caches only ever hold what *this* client wrote, and the
+/// config worth importing is the one *another* client wrote. The row remains
+/// the only shared copy, and it remains the one [fetch] reads.
 class ServerConfigDb {
   ServerConfigDb._();
 
