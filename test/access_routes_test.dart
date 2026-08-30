@@ -1,4 +1,4 @@
-/// The six raised routes. This map is the entire blast radius of route
+/// The seven raised routes. This map is the entire blast radius of route
 /// gating: a path that is missing from it, or spelled differently from
 /// `centroid-hmi/lib/main.dart`, is a route that silently stays open.
 library;
@@ -23,27 +23,36 @@ void main() {
   });
 
   group('kRaisedRoutes', () {
-    test('names exactly the six routes, each with its group', () {
+    test('names exactly the seven routes, each with its group', () {
       // Spelled literally rather than derived, so that a change to the map
       // has to be made twice on purpose.
       expect(kRaisedRoutes, {
         '/advanced/page-editor': AccessGroup.configure,
         '/advanced/alarm-editor': AccessGroup.configure,
         '/advanced/key-repository': AccessGroup.configure,
+        '/advanced/knowledge-base': AccessGroup.configure,
         '/advanced/server-config': AccessGroup.administer,
         '/advanced/ip-settings': AccessGroup.administer,
         '/advanced/preferences': AccessGroup.administer,
       });
     });
 
-    test('has exactly six entries', () {
-      expect(kRaisedRoutes, hasLength(6));
+    test('has exactly seven entries', () {
+      expect(kRaisedRoutes, hasLength(7));
     });
 
     test('the three editors need configure', () {
       expect(kRaisedRoutes['/advanced/page-editor'], AccessGroup.configure);
       expect(kRaisedRoutes['/advanced/alarm-editor'], AccessGroup.configure);
       expect(kRaisedRoutes['/advanced/key-repository'], AccessGroup.configure);
+    });
+
+    test('the knowledge base needs configure', () {
+      // Not a read surface: docs/access-control-write-path-sweep.md §3.1
+      // found three raw-Drift index classes behind this page, one of whose
+      // callers rewrites `page_editor_data` — the key the configure-gated
+      // page editor saves. It takes the same group the page editor takes.
+      expect(kRaisedRoutes['/advanced/knowledge-base'], AccessGroup.configure);
     });
 
     test('the three station-configuration routes need administer', () {
@@ -104,7 +113,7 @@ void main() {
   });
 
   group('installRaisedRoutes', () {
-    test('declares each of the six into the registry', () {
+    test('declares each of the seven into the registry', () {
       installRaisedRoutes();
 
       kRaisedRoutes.forEach((path, group) {
