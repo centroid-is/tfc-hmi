@@ -60,6 +60,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
+import '../core/audit_trail_grouping.dart';
 import '../theme.dart';
 import 'base_scaffold.dart' show formatTimestamp;
 
@@ -99,6 +100,55 @@ const Key kAuditDenialMarkKey = Key('audit-denial-mark');
 /// would have to re-find it on each one, which costs far more than the space it
 /// saves.
 const Key kAuditMarkPlaceholderKey = Key('audit-mark-placeholder');
+
+/// The leading bar on a sign-in.
+///
+/// Orange, because orange already means an elevated session in
+/// `AccessStatusAction` — the page is reusing an established meaning rather
+/// than adding a colour.
+const Key kAuditAuthMarkKey = Key('audit-auth-mark');
+
+/// The `itemKey` of a successful sign-in, one of the four the named
+/// constructors in `packages/tfc_access/lib/src/audit.dart` pin.
+///
+/// Named because it is the only auth event this widget treats differently from
+/// the other three, and an exact comparison is what keeps `login.failed` out of
+/// it.
+const String kAuditAuthLoginItemKey = 'login';
+
+/// The inline origin chip. Absent on a hand-made write.
+const Key kAuditOriginChipKey = Key('audit-origin-chip');
+
+/// The `origin` a hand-made write carries, and the only one that renders no
+/// chip.
+///
+/// `AuditEntry.origin` defaults to this in the schema
+/// (`database_drift.dart`), on purpose: an unmarked future machine caller lands
+/// *in* the trail loudly rather than escaping it silently.
+const String kAuditOriginDefault = 'operator';
+
+/// The widest an origin chip is allowed to get before it ellipsises.
+const double kAuditOriginChipMaxWidth = 140;
+
+/// A human label for an [AuditEntry.origin], or the string itself.
+///
+/// **The vocabulary is not closed and this function must not pretend it is.**
+/// The only two origins written anywhere in this codebase today are
+/// `kAuditOriginDefault` and `'system'`
+/// (`packages/tfc_dart/lib/core/access/guarded_preferences.dart`). `'mcp'` is
+/// *planned* — `lib/core/access_template_store.dart` records that 04-09 will
+/// pass it — and nothing writes it yet, so it is listed here for the day it
+/// starts rather than because it exists. `origin` is a plain `TextColumn` with
+/// a default, several SVN stations write to one database, and a station running
+/// a newer build will write a word this one has never heard of. An exhaustive
+/// switch here would be a page that breaks on an upgrade, so anything
+/// unrecognised comes back verbatim and the operator reads what the database
+/// actually holds.
+String auditOriginLabel(String origin) => switch (origin) {
+      'system' => 'system',
+      'mcp' => 'MCP',
+      _ => origin,
+    };
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -157,6 +207,14 @@ class AuditEntryLine extends StatelessWidget {
       '${row.oldValue ?? kAuditValueMissing} $kAuditTransitionArrow '
       '${row.newValue ?? kAuditValueMissing}';
 
+  /// True when this row records an authentication event rather than a write.
+  ///
+  /// The predicate, never the string. `isAuthEntry` is asked here, in the
+  /// filter bar and in the golden fixture, and three copies of a literal would
+  /// be three places to typo it — a typo that renders a login as a write with
+  /// an empty transition instead of failing loudly.
+  bool get _isAuth => isAuthEntry(row);
+
   /// The mark slot.
   ///
   /// Only fault red may be saturated in this repo, and a fully coloured list
@@ -165,6 +223,11 @@ class AuditEntryLine extends StatelessWidget {
   /// green one. That is the whole ruling: a page of allowed writes has exactly
   /// as much red in it as it has denials, which is what makes one glance down
   /// the list enough to find the refusals.
+  ///
+  /// Red is asked first, so a `login.failed` — which is a refusal like any
+  /// other, with `allowed` false — is marked red rather than orange. Red beats
+  /// orange when both would apply: the sign-in did not happen, and that is the
+  /// more urgent of the two facts.
   Widget _mark(BuildContext context) {
     if (!row.allowed) {
       return SizedBox(
@@ -177,10 +240,57 @@ class AuditEntryLine extends StatelessWidget {
       );
     }
 
+    if (_isAuth && row.itemKey == kAuditAuthLoginItemKey) {
+      return SizedBox(
+        width: kAuditMarkWidth,
+        height: kAuditMarkHeight,
+        child: ColoredBox(
+          key: kAuditAuthMarkKey,
+          color: HmiStateColors.of(context).orange,
+        ),
+      );
+    }
+
     return const SizedBox(
       key: kAuditMarkPlaceholderKey,
       width: kAuditMarkWidth,
       height: kAuditMarkHeight,
+    );
+  }
+
+  /// The inline origin chip, or nothing at all on a hand-made write.
+  ///
+  /// `station`, `actionId` and `reason` belong in the expanded detail; the
+  /// origin is the one exception, because twelve `system` rows land in the trail
+  /// on every database reconnect and picking them out must not cost twelve
+  /// taps.
+  ///
+  /// Decoration only: it carries the scheme's own container colour and never a
+  /// state colour, so it cannot compete with the red that means refused.
+  Widget _originChip(BuildContext context) {
+    if (row.origin == kAuditOriginDefault) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: kAuditColumnGap),
+      child: ConstrainedBox(
+        constraints:
+            const BoxConstraints(maxWidth: kAuditOriginChipMaxWidth),
+        child: Container(
+          key: kAuditOriginChipKey,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            auditOriginLabel(row.origin),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall,
+          ),
+        ),
+      ),
     );
   }
 
@@ -226,16 +336,25 @@ class AuditEntryLine extends StatelessWidget {
               style: primary,
             ),
           ),
-          const SizedBox(width: kAuditColumnGap),
-          Expanded(
-            flex: 2,
-            child: Text(
-              _transitionLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: primary,
+          // No transition on an auth row — not an empty one, not two em
+          // dashes, nothing. `audit.dart` withholds `oldValue` and `newValue`
+          // on auth rows deliberately, because a trail that leaks credentials
+          // is worse than no trail. Rendering an empty transition here would
+          // leave a slot on screen and invite somebody to "fix" it by filling
+          // it in.
+          if (!_isAuth) ...[
+            const SizedBox(width: kAuditColumnGap),
+            Expanded(
+              flex: 2,
+              child: Text(
+                _transitionLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: primary,
+              ),
             ),
-          ),
+          ],
+          _originChip(context),
         ],
       ),
     );
