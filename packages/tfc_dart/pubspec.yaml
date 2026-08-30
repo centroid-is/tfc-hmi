@@ -31,7 +31,7 @@ dependencies:
   amplify_secure_storage_dart: ^0.5.6
 
   # OPC UA
-  open62541: ^1.5.7+2
+  open62541: ^1.5.7+3
 
   # JBTM (M2400 device protocol types)
   jbtm:
@@ -48,14 +48,6 @@ dependencies:
   basic_utils: ^5.7.0
 
 dependency_overrides:
-  # open62541 dev branch: session-recreate freeze fix (open62541_dart#91) +
-  # orphaned-monitored-item fix (open62541_dart#92) + worker-isolate stderr-crash fix (open62541_dart#97), not yet in a pub release.
-  # Head of `dev` on open62541_dart, 2026-08-30. SHA-pinned like postgres below
-  # (pubspec.lock is gitignored). Remove once these ship to pub.
-  open62541:
-    git:
-      url: https://github.com/centroid-is/open62541_dart.git
-      ref: 6a34f3482f6c9c2e51c4dc78e5625e4a3b38021e
   postgres:
     git:
       url: https://github.com/centroid-is/postgresql-dart.git
