@@ -314,6 +314,288 @@ void main() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Task 2 — the search field, its debounce, the who dropdown, the outcome
+  // -------------------------------------------------------------------------
+  group('AuditPrefixField', () {
+    testWidgets('six keystrokes inside the window emit one filter change '
+        'carrying the final text', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditPrefixField(filters: filters, onChanged: onChanged),
+      );
+
+      for (final text in ['C', 'CN', 'CN0', 'CN04', 'CN04.', 'CN04.p']) {
+        await tester.enterText(find.byType(TextField), text);
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(
+        log,
+        isEmpty,
+        reason: 'Nothing is emitted while the operator is still typing: every '
+            'emission here becomes a query over the whole audit_entry table.',
+      );
+
+      await tester.pump(kAuditTrailSearchDebounce);
+      expect(log, hasLength(1));
+      expect(log.single.keyPrefix, 'CN04.p');
+
+      // No further pump is needed for correctness; this one would fail with a
+      // pending-timer error if the debounce were periodic rather than one-shot.
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('a keystroke after the window emits a second change',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditPrefixField(filters: filters, onChanged: onChanged),
+      );
+
+      await tester.enterText(find.byType(TextField), 'CN');
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(log, hasLength(1));
+
+      await tester.enterText(find.byType(TextField), 'CN04');
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(log, hasLength(2));
+      expect(log.last.keyPrefix, 'CN04');
+    });
+
+    testWidgets('dispose cancels a pending debounce', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditPrefixField(filters: filters, onChanged: onChanged),
+      );
+
+      await tester.enterText(find.byType(TextField), 'CN');
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final (light, _) = muted();
+      await tester.pumpWidget(
+        MaterialApp(theme: light, home: const Scaffold(body: SizedBox())),
+      );
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(
+        log,
+        isEmpty,
+        reason: 'A timer that outlives its widget fires into a dead element '
+            'and, in this repo, has broken unrelated widget tests.',
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('leading and trailing whitespace is trimmed away',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditPrefixField(filters: filters, onChanged: onChanged),
+      );
+
+      await tester.enterText(find.byType(TextField), '  CN04  ');
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(
+        log.single.keyPrefix,
+        'CN04',
+        reason: 'A stray space would otherwise become a LIKE " CN04%" that '
+            'matches nothing, and would also flip isSearching, dropping the '
+            'seven-day bound for a search that can never hit.',
+      );
+    });
+
+    testWidgets('the hint names what the field searches', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditPrefixField(filters: filters, onChanged: onChanged),
+      );
+
+      expect(find.text(kAuditTrailPrefixHint), findsOneWidget);
+    });
+  });
+
+  group('AuditWhoDropdown', () {
+    testWidgets('the first entry is Anyone, bound to null', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) => AuditWhoDropdown(
+          filters: filters,
+          options: const ['ada', 'jon'],
+          onChanged: onChanged,
+        ),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailWhoDropdownKey));
+      await tester.pumpAndSettle();
+
+      final items = tester
+          .widget<DropdownButton<String?>>(find.byKey(kAuditTrailWhoDropdownKey))
+          .items!;
+      expect(items.first.value, isNull);
+      expect((items.first.child as Text).data, kAuditTrailAnyoneLabel);
+      expect(items.skip(1).map((item) => item.value), ['ada', 'jon']);
+    });
+
+    testWidgets('selecting Anyone clears who', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        initial: const AuditTrailFilters(who: 'jon'),
+        log: log,
+        builder: (filters, onChanged) => AuditWhoDropdown(
+          filters: filters,
+          options: const ['ada', 'jon'],
+          onChanged: onChanged,
+        ),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailWhoDropdownKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kAuditTrailAnyoneLabel).last);
+      await tester.pumpAndSettle();
+
+      expect(log.single.who, isNull);
+    });
+
+    testWidgets('the options are a parameter, so the bar pumps without a '
+        'database or a provider', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) => AuditWhoDropdown(
+          filters: filters,
+          options: const ['ada', 'jon'],
+          onChanged: onChanged,
+        ),
+      );
+
+      // There is no ProviderScope anywhere above this widget: reading one would
+      // have thrown before this line.
+      await tester.tap(find.byKey(kAuditTrailWhoDropdownKey));
+      await tester.pumpAndSettle();
+      expect(find.text('ada'), findsOneWidget);
+      expect(find.text('jon'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a who absent from the options renders Anyone and does not '
+        'throw', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        initial: const AuditTrailFilters(who: 'ghost'),
+        log: log,
+        builder: (filters, onChanged) => AuditWhoDropdown(
+          filters: filters,
+          options: const ['jon'],
+          onChanged: onChanged,
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.text(kAuditTrailAnyoneLabel),
+        findsOneWidget,
+        reason: 'The options come from SELECT DISTINCT who over the whole '
+            'table, and a filter can outlive the row set that suggested it. '
+            'DropdownButton asserts on a value with no matching item, so the '
+            'fallback is the difference between a stale filter and a crash.',
+      );
+      expect(find.text('ghost'), findsNothing);
+    });
+
+    testWidgets('choosing a person sets who and changes nothing else',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) => AuditWhoDropdown(
+          filters: filters,
+          options: const ['ada', 'jon'],
+          onChanged: onChanged,
+        ),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailWhoDropdownKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ada').last);
+      await tester.pumpAndSettle();
+
+      expect(log.single.who, 'ada');
+      expect(log.single.keyPrefix, isEmpty);
+      expect(log.single.groupNames, kAuditTrailDefaultGroupNames);
+      expect(log.single.outcome, AuditOutcomeFilter.any);
+    });
+  });
+
+  group('AuditOutcomeSegments', () {
+    testWidgets('three labelled segments, no selected icon, any by default',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditOutcomeSegments(filters: filters, onChanged: onChanged),
+      );
+
+      final button = tester.widget<SegmentedButton<AuditOutcomeFilter>>(
+        find.byKey(kAuditTrailOutcomeKey),
+      );
+      expect(button.segments.map((segment) => segment.value),
+          AuditOutcomeFilter.values);
+      expect(button.showSelectedIcon, isFalse);
+      expect(button.selected, {AuditOutcomeFilter.any});
+      expect(find.text(kAuditTrailOutcomeAnyLabel), findsOneWidget);
+      expect(find.text(kAuditTrailOutcomeAllowedLabel), findsOneWidget);
+      expect(find.text(kAuditTrailOutcomeDeniedLabel), findsOneWidget);
+    });
+
+    testWidgets('selecting Denied emits deniedOnly and changes nothing else',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        initial: const AuditTrailFilters(
+          keyPrefix: 'CN04',
+          who: 'jon',
+          groupNames: ['setpoints'],
+        ),
+        log: log,
+        builder: (filters, onChanged) =>
+            AuditOutcomeSegments(filters: filters, onChanged: onChanged),
+      );
+
+      await tester.tap(find.text(kAuditTrailOutcomeDeniedLabel));
+      await tester.pumpAndSettle();
+
+      expect(log.single.outcome, AuditOutcomeFilter.deniedOnly);
+      expect(log.single.keyPrefix, 'CN04');
+      expect(log.single.who, 'jon');
+      expect(log.single.groupNames, ['setpoints']);
+    });
+  });
+
   group('the colour convention', () {
     test('the source names no raw palette colour', () {
       final source =
@@ -325,6 +607,38 @@ void main() {
             'HmiStateColors — and never from the Material palette. The grep '
             'is literal, so the offending spelling must not appear anywhere '
             'in the file, comments included.',
+      );
+    });
+  });
+
+  group('the timer convention', () {
+    test('nothing in the file is periodic', () {
+      final source =
+          File('lib/widgets/audit_trail_filters.dart').readAsStringSync();
+      final code = source
+          .split('\n')
+          .where((line) => !line.trimLeft().startsWith('//'))
+          .join('\n');
+      expect(
+        code.contains('Timer.periodic'),
+        isFalse,
+        reason: 'CONTEXT: there is no timer on this page — it refreshes on '
+            'open and on an explicit action. The one Timer here is a keystroke '
+            'debounce, one-shot and cancelled in dispose. An always-on '
+            'periodic timer in this repo has broken unrelated widget tests, '
+            'and any future live-update work must be listener-gated instead: '
+            'started in onListen, stopped in onCancel.',
+      );
+    });
+
+    test('the debounce is cancelled on replacement and in dispose', () {
+      final source =
+          File('lib/widgets/audit_trail_filters.dart').readAsStringSync();
+      expect(
+        '_debounce?.cancel()'.allMatches(source).length,
+        greaterThanOrEqualTo(2),
+        reason: 'One cancel replaces the previous timer so six keystrokes are '
+            'one query; one in dispose so the last one dies with the widget.',
       );
     });
   });
