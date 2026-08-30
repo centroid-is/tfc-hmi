@@ -242,14 +242,21 @@ void main() {
   Future<Widget> host({
     KeyMappings? keyMappings,
     bool noDatabase = false,
+    bool reusePrefs = false,
   }) async {
-    final inner = prefs = await createTestPreferences(
-      keyMappings: keyMappings ?? _keys([]),
-      // The fixture keys name `main_server`, so the config has to know it —
-      // otherwise the card's server dropdown holds a value with no matching
-      // item and asserts before any of this file's claims are reached.
-      stateManConfig: sampleStateManConfig(),
-    );
+    // Re-mounting the page over the **same** preferences is how the import
+    // tests see what the operator sees on coming back to it: the import card
+    // writes the blob, and the key section has never reloaded itself.
+    final inner = prefs = reusePrefs && prefs != null
+        ? prefs!
+        : await createTestPreferences(
+            keyMappings: keyMappings ?? _keys([]),
+            // The fixture keys name `main_server`, so the config has to know
+            // it — otherwise the card's server dropdown holds a value with no
+            // matching item and asserts before any of this file's claims are
+            // reached.
+            stateManConfig: sampleStateManConfig(),
+          );
     return ProviderScope(
       overrides: [
         // The **guarded** wrapper, not the raw store: the closure test's third
@@ -809,6 +816,139 @@ void main() {
         if (bulk.hasMatch(entity.readAsStringSync())) offenders.add(entity.path);
       }
       expect(offenders, isEmpty);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 3 — an exported key map carries no bindings, and says so
+  // -------------------------------------------------------------------------
+
+  group('the import/export card discloses what the file does not carry', () {
+    testWidgets('the import confirmation says it before the import runs, '
+        'un-ellipsised', (tester) async {
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA])));
+      await tester.pumpAndSettle();
+
+      final file = File('${tmp.path}/km.json')
+        ..writeAsStringSync(jsonEncode(_keys(['ST301.NEW']).toJson()));
+      (FilePicker.platform as _FakePicker).pickPath = file.path;
+
+      await tester.ensureVisible(find.text('Import'));
+      await tester.pumpAndSettle();
+      await tapWithIo(tester, find.text('Import'));
+
+      final body = find.textContaining(kKeyMappingsImportBindingsNote);
+      expect(body, findsOneWidget,
+          reason: 'the disclosure comes before the button, not after it');
+      // `find.text` passing is not the same as the line being readable.
+      expectUnclipped(tester, body);
+      expect(tester.getRect(body).bottom,
+          lessThanOrEqualTo(tester.getRect(find.byType(Dialog).first).bottom),
+          reason: 'the whole message has to be inside the dialog, not merely '
+              'un-ellipsised inside a box that is itself cut off');
+    });
+
+    testWidgets('the export result says the same, un-ellipsised',
+        (tester) async {
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA])));
+      await tester.pumpAndSettle();
+      (FilePicker.platform as _FakePicker).savePath = '${tmp.path}/out.json';
+
+      await tester.ensureVisible(find.text('Export'));
+      await tester.pumpAndSettle();
+      await tapWithIo(tester, find.text('Export'));
+
+      final line = find.text(kKeyMappingsExportBindingsNote);
+      expect(line, findsOneWidget);
+      // The snackbar is the likelier ellipsis of the two: one fixed-width
+      // strip with no room to grow sideways.
+      expectUnclipped(tester, line);
+    });
+
+    testWidgets('the exported file carries no bindings key', (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_keyA, 'conveyor');
+
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA])));
+      await tester.pumpAndSettle();
+      final out = '${tmp.path}/out.json';
+      (FilePicker.platform as _FakePicker).savePath = out;
+
+      await tester.ensureVisible(find.text('Export'));
+      await tester.pumpAndSettle();
+      await tapWithIo(tester, find.text('Export'));
+
+      final written =
+          jsonDecode(File(out).readAsStringSync()) as Map<String, dynamic>;
+      expect(written.keys.toList(), KeyMappings(nodes: {}).toJson().keys.toList(),
+          reason: 'the file\'s top-level shape is exactly what it was before '
+              'this phase. An export/import pair that carried bindings would '
+              'put an authorization write behind a `configure`-gated card, in '
+              'portable form — the path the 2026-08-30 ruling closed.');
+      expect(File(out).readAsStringSync(), isNot(contains('conveyor')),
+          reason: 'the bound template\'s name is nowhere in the file');
+    });
+
+    testWidgets('after an import the unbound count agrees with what the '
+        'disclosure promised', (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_keyA, 'conveyor');
+
+      await tester.pumpWidget(await host(keyMappings: _keys([_keyA, _keyB])));
+      await tester.pumpAndSettle();
+      expect(countText(tester), kUnboundKeysCount(1, 2));
+
+      // Three keys, none of them the one that was bound.
+      final file = File('${tmp.path}/km.json')
+        ..writeAsStringSync(jsonEncode(
+            _keys(['ST301.A', 'ST301.B', 'ST301.C']).toJson()));
+      (FilePicker.platform as _FakePicker).pickPath = file.path;
+
+      await tester.ensureVisible(find.text('Import'));
+      await tester.pumpAndSettle();
+      await tapWithIo(tester, find.text('Import'));
+      await tapWithIo(
+          tester, find.widgetWithText(TextButton, 'Import').hitTestable());
+
+      // The page does not reload its own key list after an import (it never
+      // has), so this is what the operator sees on coming back to it.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(await host(reusePrefs: true));
+      await tester.pumpAndSettle();
+
+      expect(countText(tester), kUnboundKeysCount(3, 3),
+          reason: 'every key that arrived from the file is unbound, which is '
+              'exactly what the confirmation said would happen');
+      expect(await bindings(), {_keyA: 'conveyor'},
+          reason: 'and the row for the key the import removed is still there — '
+              'orphaned, surfaced, never silently deleted');
+    });
+
+    test('the decision not to export bindings is written at _onExport, with '
+        'its reasoning', () {
+      final source = File('lib/pages/key_repository.dart').readAsStringSync();
+      final start = source.indexOf('Future<void> _onExport');
+      final end = source.indexOf('Future<void> _onImport');
+      expect(start, isNonNegative);
+      expect(end, greaterThan(start));
+      final body = source.substring(start, end);
+
+      for (final phrase in [
+        // what was decided
+        'bindings',
+        // why: the gate the card sits behind, and the one a binding needs
+        'configure',
+        'users',
+        // and where the supported path is instead
+        'bind_key_access_template',
+      ]) {
+        expect(body, contains(phrase),
+            reason: 'the next person who thinks "we should round-trip the '
+                'whole configuration" has to find the answer here rather than '
+                'the omission. Missing: "$phrase".');
+      }
     });
   });
 }
