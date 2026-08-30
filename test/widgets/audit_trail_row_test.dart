@@ -17,6 +17,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/core/audit_trail_grouping.dart';
 import 'package:tfc/theme.dart' show HmiStateColors, muted;
 import 'package:tfc/widgets/audit_trail_row.dart';
 import 'package:tfc_dart/core/database_drift.dart';
@@ -67,6 +68,22 @@ AuditEntryData _row({
       origin: origin,
       actionId: actionId,
       reason: reason,
+    );
+
+/// One human action over [rows].
+///
+/// [totalRowCount] defaults to what the rows themselves say, which is the
+/// "the companion count query was not run" case — the honest degradation
+/// `groupAuditRows` documents. A test that is about a partly filtered action
+/// names a bigger number.
+AuditAction _action({
+  required List<AuditEntryData> rows,
+  int? totalRowCount,
+}) =>
+    AuditAction(
+      actionId: _actionId,
+      rows: rows,
+      totalRowCount: totalRowCount ?? rows.length,
     );
 
 /// Pumps [child] under the muted light theme at a width a 1080p panel would
@@ -523,6 +540,299 @@ void main() {
         reason: 'three copies of a string literal is three places to typo it, '
             'and a typo here renders a login as a write with an empty '
             'transition instead of failing loudly',
+      );
+    });
+  });
+
+
+  // -------------------------------------------------------------------------
+  // AuditActionTile: one human action
+  // -------------------------------------------------------------------------
+
+  group('AuditActionTile, the single-row case', () {
+    testWidgets('renders a plain line and no ExpansionTile — most rows are '
+        'single writes and an expander on every one is noise', (tester) async {
+      await _pump(tester, AuditActionTile(action: _action(rows: [_row()])));
+
+      expect(find.byType(ExpansionTile), findsNothing);
+      expect(find.byType(AuditEntryLine), findsOneWidget);
+    });
+
+    testWidgets('renders no tap affordance either', (tester) async {
+      await _pump(tester, AuditActionTile(action: _action(rows: [_row()])));
+
+      final tile = find.byType(AuditActionTile);
+      expect(
+        find.descendant(of: tile, matching: find.byType(InkWell)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: tile, matching: find.byType(GestureDetector)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: tile, matching: find.byType(ListTile)),
+        findsNothing,
+      );
+    });
+  });
+
+  group('AuditActionTile, the parent header', () {
+    testWidgets('carries the key, who, the time, N members changed and the '
+        'strictest group required', (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(rows: [
+            _row(member: 'p_cfg.Freq'),
+            _row(id: 2, member: 'p_cfg.Ramp'),
+          ]),
+        ),
+      );
+
+      expect(find.text('ST101.CN04.p_cfg'), findsOneWidget);
+      expect(find.textContaining('jon'), findsWidgets);
+      expect(find.text('30-08-2026 14:05:09'), findsOneWidget);
+      expect(find.text(kAuditMembersChangedLabel(2)), findsOneWidget);
+      expect(find.text('setpoints'), findsOneWidget);
+    });
+
+    testWidgets('repeats no value transition — the members have different '
+        'ones', (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(rows: [
+            _row(member: 'p_cfg.Freq'),
+            _row(id: 2, member: 'p_cfg.Ramp', oldValue: '1', newValue: '2'),
+          ]),
+        ),
+      );
+
+      expect(find.textContaining(kAuditTransitionArrow), findsNothing);
+    });
+
+    testWidgets('counts totalRowCount rather than the rows that survived the '
+        'filters', (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(
+            rows: [_row(), _row(id: 2), _row(id: 3)],
+            totalRowCount: 9,
+          ),
+        ),
+      );
+
+      expect(
+        find.text(kAuditMembersChangedLabel(9)),
+        findsOneWidget,
+        reason: 'the sentence is about what the person did, not about what '
+            'survived the filters; the hidden-members line reconciles the two',
+      );
+      expect(find.text(kAuditMembersChangedLabel(3)), findsNothing);
+    });
+  });
+
+  group('AuditActionTile, expanding', () {
+    testWidgets('a two-row action renders exactly one expander, and tapping '
+        'it reveals both lines', (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(rows: [
+            _row(member: 'p_cfg.Freq'),
+            _row(id: 2, member: 'p_cfg.Ramp'),
+          ]),
+        ),
+      );
+
+      expect(find.byType(ExpansionTile), findsOneWidget);
+      expect(find.byType(AuditEntryLine), findsNothing);
+
+      await tester.tap(find.byType(ExpansionTile));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AuditEntryLine), findsNWidgets(2));
+    });
+
+    testWidgets('renders one line per child, in the order AuditAction.rows '
+        'holds them', (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(rows: [
+            _row(member: 'first'),
+            _row(id: 2, member: 'second'),
+            _row(id: 3, member: 'third'),
+          ]),
+        ),
+      );
+
+      await tester.tap(find.byType(ExpansionTile));
+      await tester.pumpAndSettle();
+
+      final members = tester
+          .widgetList<AuditEntryLine>(find.byType(AuditEntryLine))
+          .map((line) => line.row.member)
+          .toList();
+      expect(members, ['first', 'second', 'third']);
+    });
+
+    testWidgets('a complete multi-row action arrives collapsed — nothing was '
+        'removed, so there is nothing the operator needs told', (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(rows: [_row(), _row(id: 2)]),
+        ),
+      );
+
+      expect(find.byType(ExpansionTile), findsOneWidget);
+      expect(
+        find.byType(AuditEntryLine),
+        findsNothing,
+        reason: 'isPartial decides the initial state, not the row count',
+      );
+    });
+  });
+
+  group('AuditActionTile, a partly filtered action', () {
+    AuditAction partial() => _action(
+          rows: [
+            _row(member: 'first'),
+            _row(id: 2, member: 'second'),
+            _row(id: 3, member: 'third'),
+          ],
+          totalRowCount: 9,
+        );
+
+    testWidgets('states how many members the filters hid, and arrives already '
+        'expanded on the children the operator searched for', (tester) async {
+      await _pump(tester, AuditActionTile(action: partial()));
+
+      expect(find.text('6 of 9 members hidden by filters'), findsOneWidget);
+      expect(find.byKey(kAuditHiddenMembersKey), findsOneWidget);
+      expect(
+        find.byType(AuditEntryLine),
+        findsNWidgets(3),
+        reason: 'the operator filtered for those children; making them tap '
+            'again to see the row they searched for is what the clause exists '
+            'to prevent',
+      );
+    });
+
+    testWidgets('states it whether the tile is open or shut', (tester) async {
+      await _pump(tester, AuditActionTile(action: partial()));
+
+      await tester.tap(find.byType(ExpansionTile));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AuditEntryLine), findsNothing);
+      expect(
+        find.byKey(kAuditHiddenMembersKey),
+        findsOneWidget,
+        reason: 'a partial group that does not say it is partial is a false '
+            'record',
+      );
+    });
+
+    testWidgets('leaves expanding and collapsing under the operator afterwards',
+        (tester) async {
+      await _pump(tester, AuditActionTile(action: partial()));
+
+      await tester.tap(find.byType(ExpansionTile));
+      await tester.pumpAndSettle();
+      expect(find.byType(AuditEntryLine), findsNothing);
+
+      await tester.tap(find.byType(ExpansionTile));
+      await tester.pumpAndSettle();
+      expect(find.byType(AuditEntryLine), findsNWidgets(3));
+    });
+
+    testWidgets('a single visible row with hidden siblings still gets an '
+        'expander, because the hidden-members line has to live somewhere',
+        (tester) async {
+      await _pump(
+        tester,
+        AuditActionTile(
+          action: _action(rows: [_row()], totalRowCount: 9),
+        ),
+      );
+
+      expect(find.byType(ExpansionTile), findsOneWidget);
+      expect(find.text('8 of 9 members hidden by filters'), findsOneWidget);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The expanded detail
+  // -------------------------------------------------------------------------
+
+  group('the expanded detail', () {
+    AuditAction detailed({String? reason}) => _action(
+          rows: [
+            _row(station: 'HMI-PANEL-2', origin: 'system', reason: reason),
+          ],
+          totalRowCount: 9,
+        );
+
+    testWidgets('exposes the station, the origin, the actionId and the reason',
+        (tester) async {
+      await _pump(tester, AuditActionTile(action: detailed(reason: 'recipe')));
+
+      expect(find.textContaining('HMI-PANEL-2'), findsWidgets);
+      expect(find.textContaining('system'), findsWidgets);
+      expect(find.textContaining(_actionId), findsWidgets);
+      expect(find.textContaining('recipe'), findsWidgets);
+    });
+
+    testWidgets('renders the reason through a plain capped Text', (tester) async {
+      await _pump(tester, AuditActionTile(action: detailed(reason: 'recipe')));
+
+      final reason = tester.widget<Text>(find.byKey(kAuditReasonKey));
+      expect(reason.maxLines, isNotNull);
+      expect(reason.overflow, TextOverflow.ellipsis);
+    });
+
+    testWidgets('renders no reason slot at all when the column is null or '
+        'empty', (tester) async {
+      await _pump(tester, AuditActionTile(action: detailed()));
+      expect(find.byKey(kAuditReasonKey), findsNothing);
+
+      await _pump(tester, AuditActionTile(action: detailed(reason: '')));
+      expect(find.byKey(kAuditReasonKey), findsNothing);
+    });
+
+    testWidgets('a two-thousand-character reason leaves the tile exactly as '
+        'tall as a short one', (tester) async {
+      await _pump(tester, AuditActionTile(action: detailed(reason: 'recipe')));
+      final short = tester.getSize(find.byType(AuditActionTile));
+
+      await _pump(
+        tester,
+        AuditActionTile(action: detailed(reason: 'x' * 2000)),
+      );
+      final long = tester.getSize(find.byType(AuditActionTile));
+
+      expect(tester.takeException(), isNull);
+      expect(long.height, short.height);
+    });
+  });
+
+  group('the reason is text and nothing else', () {
+    test('no markup-interpreting widget appears in the row file', () {
+      final source = File('lib/widgets/audit_trail_row.dart')
+          .readAsLinesSync()
+          .where((line) => !RegExp(r'^\s*//').hasMatch(line))
+          .join('\n');
+
+      expect(
+        RegExp(r'RichText|Markdown|Html\(|Text\.rich').hasMatch(source),
+        isFalse,
+        reason: 'reason is operator-typed free text stored verbatim; routing '
+            'it through a rich-text or markdown widget would turn a '
+            'justification field into a rendering surface',
       );
     });
   });
