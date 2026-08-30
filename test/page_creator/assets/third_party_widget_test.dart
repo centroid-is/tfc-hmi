@@ -12,7 +12,7 @@ import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/theme.dart'
-    show AppColorScheme, HmiColorRole, MutedColors, themesForScheme;
+    show AppColorScheme, HmiColorRole, HmiStateColors, MutedColors, themesForScheme;
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/providers/database.dart' show databaseProvider;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -497,7 +497,7 @@ void main() {
       // struct" and "one per bit". A kind in both would render two Status
       // sections and hold both sets of subscriptions open -- the machine
       // showing its handshake twice, in two vocabularies.
-      for (final kind in kStructStatusBits.keys) {
+      for (final kind in ThirdPartyEquipmentKind.values.where(isStructBacked)) {
         expect(kEquipmentStatusBits[kind], isNull,
             reason: '${kind.name} is struct-backed; it must not also have a '
                 'suffix list');
@@ -774,7 +774,7 @@ void main() {
     // have migrated in three PRs, so a kind now moves itself between this loop
     // and the struct one below instead of waiting on someone to retype a name.
     for (final kind in ThirdPartyEquipmentKind.values
-        .where((k) => !kStructStatusBits.containsKey(k))) {
+        .where((k) => !isStructBacked(k))) {
       testWidgets(
           'a leftover status key on ${kind.name} holds no struct subscription',
           (tester) async {
@@ -801,7 +801,7 @@ void main() {
     // per diode, so a struct kind must hoist the struct AND open no per-bit
     // keys. Both the strapper (#356) and the Multivac (#368) crossed over
     // with nothing asserting they landed.
-    for (final kind in kStructStatusBits.keys) {
+    for (final kind in ThirdPartyEquipmentKind.values.where(isStructBacked)) {
       testWidgets('${kind.name} hoists the struct and no per-bit keys',
           (tester) async {
         final config = ThirdPartyEquipmentConfig(
@@ -920,7 +920,9 @@ void main() {
 
         // A struct kind reads members of one node; the rest read separate
         // bools under a prefix, and the label says which it is.
-        final label = kStructStatusBits.containsKey(kind)
+        // Grouped kinds are struct-backed too -- the box erector reads one
+        // node like the rest, it just draws the members as groups.
+        final label = isStructBacked(kind)
             ? 'Status Struct Key'
             : 'Status Key Prefix';
         final field = find.widgetWithText(TextField, label);
@@ -938,11 +940,13 @@ void main() {
       }
     });
 
-    testWidgets('the prefix help text spells out the suffixes the pane appends',
+    testWidgets('a struct kind help text names the members one node feeds',
         (tester) async {
-      // The box erector is the remaining prefix-backed kind (the fish aligner
-      // moved to the struct system alongside the Multivac), so it is the one
-      // whose editor still shows the appended-suffix help text.
+      // The box erector was the last prefix-backed kind; the enhanced BER0n FB
+      // moved it onto the struct system, so every kind now reads one node and
+      // the editor help text names its members rather than listing appended
+      // suffixes. kEquipmentStatusBits is empty, so no kind exercises the old
+      // prefix help text any more — the struct branch is what all kinds show.
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.boxErector,
       );
@@ -951,12 +955,14 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      for (final bit
-          in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!) {
-        expect(find.textContaining('.${bit.suffix}'), findsOneWidget,
-            reason: 'The operator types a prefix; the help text is the only '
-                'place that says what gets appended to it.');
+      // One help text Text carries every struct member, comma-joined.
+      for (final member in structMembersOf(ThirdPartyEquipmentKind.boxErector)) {
+        expect(find.textContaining(member), findsOneWidget,
+            reason: 'the struct help text must name every member the one '
+                'subscription feeds.');
       }
+      expect(find.textContaining('.WaitingFrustration'), findsNothing,
+          reason: 'the box erector no longer appends prefix suffixes.');
     });
   });
 
@@ -1164,6 +1170,40 @@ void main() {
           reason: 'a key with no value is the grey `!`, not off');
     });
   });
+
+  group('Box erector manual mode colour', () {
+    testWidgets('is the SAME colour a belt in manual gets, in every scheme',
+        (tester) async {
+      // Not "a yellow" -- THE yellow. `conveyor.dart` maps DriveState.manual to
+      // `HmiStateColors.of(context).yellow` and prints it in the belt legend,
+      // so this diode must resolve to the IDENTICAL Color, per scheme. If the
+      // two ever diverge, a machine under manual control looks like one thing
+      // on a belt and another on a pane, which is the whole reason the colour
+      // was chosen.
+      final manualGroup =
+          boxErectorStatusGroups.firstWhere((g) => g.label == 'In manual');
+
+      for (final scheme in AppColorScheme.values) {
+        for (final theme in [
+          themesForScheme(scheme).$1,
+          themesForScheme(scheme).$2,
+        ]) {
+          await tester.pumpWidget(MaterialApp(
+            theme: theme,
+            home: Builder(builder: (context) {
+              expect(
+                manualGroup.onRole.resolve(context),
+                HmiStateColors.of(context).yellow,
+                reason: 'manual diode must be the scheme yellow ($scheme)',
+              );
+              return const SizedBox();
+            }),
+          ));
+        }
+      }
+    });
+  });
+
 }
 
 /// Hands out one controllable stream per subscribed key, so tests can both

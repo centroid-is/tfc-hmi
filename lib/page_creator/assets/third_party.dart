@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/converter/color_converter.dart';
-import 'package:tfc/theme.dart' show HmiColorRole;
+import 'package:tfc/theme.dart' show HmiColorRole, HmiStateColors;
 
 import '../../providers/state_man.dart';
 import '../../widgets/panes/color_picker_dialog.dart';
@@ -16,7 +16,12 @@ import 'package:tfc/widgets/number_slider.dart';
 import 'common.dart';
 import 'conveyor.dart' show ConveyorConfig;
 import 'led.dart' show LEDPainter, LEDType;
-import 'graph.dart' show GraphAssetConfig;
+import 'package:tfc_dart/core/collector.dart' show CollectEntry, Collector;
+import 'package:tfc_dart/core/database.dart' show TimeseriesData;
+import '../../providers/collector.dart';
+import '../../widgets/graph.dart';
+import 'graph.dart' show GraphAssetConfig, extractSeriesMemberValue;
+import 'sensor.dart' show SensorConfig, kSensorTrendCompactPadding;
 import 'number.dart' show NumberConfig, NumberWidget, showNumberGraphDialog;
 import 'ratio_number.dart'
     show
@@ -26,7 +31,7 @@ import 'ratio_number.dart'
         showRatioAnalysisDialog;
 import '../../widgets/duration_field.dart';
 import 'registry.dart';
-import 'sensor.dart' show SensorConfig;
+
 import 'third_party_painter.dart';
 
 part 'third_party.g.dart';
@@ -602,7 +607,29 @@ class StructStatusBit {
   /// same way `sensor.dart` resolves its active/inactive colours.
   final HmiColorRole onRole;
 
-  const StructStatusBit(this.member, this.label, this.onRole);
+  /// Optional `TIME` member showing HOW LONG this condition has been true,
+  /// rendered beside the label as "4m 12s".
+  ///
+  /// The difference between a two-second blip and a four-minute starve is the
+  /// whole question when a line is limping, and a lamp cannot express it.
+  final String? durationMember;
+
+  /// Light the diode when the member is FALSE.
+  ///
+  /// For permits inside a fault group: `q_xOutfeedPermitted` being OFF is the
+  /// problem, and a group summary that lights on "any child true" would
+  /// otherwise report a healthy permit as a fault.
+  final bool invert;
+
+  const StructStatusBit(this.member, this.label, this.onRole,
+      {this.durationMember, this.invert = false});
+
+  /// This bit's value with [invert] applied — what the diode should show.
+  bool? valueIn(DynamicValue? status) {
+    final raw = structStatusBitOf(status, member);
+    if (raw == null) return null;
+    return invert ? !raw : raw;
+  }
 
   /// [label] with the machine name filled in, sentence-cased — see
   /// [fillMachineLabel], which every bit type shares.
@@ -775,7 +802,7 @@ const List<StructStatusBit> multivacStatusBits = [
   StructStatusBit('p_stat_DropRequestFeedback', 'Fish waiting to drop to {m}',
       HmiColorRole.yellow),
   StructStatusBit(
-      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
+      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.green),
 ];
 
 /// The batch aligner's (vodlari) handshake, published exactly like the
@@ -808,8 +835,160 @@ const List<StructStatusBit> fishAlignerStatusBits = [
   StructStatusBit('p_stat_DropRequestFeedback', 'Fish waiting to drop to {m}',
       HmiColorRole.yellow),
   StructStatusBit(
-      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.blue),
+      'p_stat_DropFinished', 'Drop to {m} is complete', HmiColorRole.green),
 ];
+
+/// The box erector's handshake, as published by the line-1 box-erector FB the
+/// PLC now exposes at `ns=4;s=BER0n.BER0n`. The permits that used to be flat
+/// globals (`BERnn.xPermitBottomInfeed`/`xPermitBlockInfeed`/`xPermitOutfeed`
+/// plus `WaitingFrustration`, read via the prefix-plus-suffix list this kind
+/// carried in [kEquipmentStatusBits]) are gone: the FB was greatly enhanced and
+/// its whole rich status arrives as one struct node, at one subscription. Same
+/// move the strapping line and the Multivac made — see [strappingLineStatusBits]
+/// and [multivacStatusBits].
+///
+/// UNLIKE those two, the members sit DIRECTLY under the node as `p_stat_*` with
+/// NO `.hmi` wrapper (the strapper is `STM01.STM01.hmi`, this is `BER01.BER01`),
+/// so [ThirdPartyEquipmentConfig.statusKey] points straight at `BER0n.BER0n`.
+///
+/// The FB carries 59 members — per-drive run bits, raw `xAlm*` latches, waiting
+/// timers, an error count/id, and PX sensors. This is deliberately NOT all of
+/// them: it is a curated OPERATOR pane answering "why has product stopped
+/// moving", not a diagnostics dump. The per-drive running bits, the raw alarm
+/// bits, the timers/counters and the PX sensors are covered by the alarms and
+/// the error count elsewhere, and would only bury the rows that matter.
+///
+/// Ordered fault-first, exactly like [strappingLineStatusBits]: the three red
+/// rows that say something is WRONG lead — the machine is holding up the line,
+/// the estop is out, a drive has faulted — then the amber "waiting for X" cycle
+/// rows, then the green ready/running rows, then the one mode row. A glance
+/// down the column reads the same as every other machine's pane.
+///
+/// The one mode row follows the conveyor's drive-state legend rather than
+/// inventing a scheme: `DriveState.manual` is `states.yellow` there, printed in
+/// the belt legend, so manual is yellow here too.
+///
+/// `p_stat_WaitingFrustration` keeps the strapper's exact "{m} is stopping the
+/// line" wording and red-first placement: everything upstream is ready and the
+/// erector is what is holding the line up.
+///
+/// BER02/BER03 are still the OLD flat FB today, so under struct mode their pane
+/// reads the grey `!` until the PLC rolls this FB onto those lines — the same
+/// pre-wire pattern used across this project when a kind migrates ahead of the
+/// PLC.
+/// The box erector's Status section: one row per thing that can stop the line,
+/// each opening onto the detail behind it.
+///
+/// Grouped rather than flat because the pane has to do two things at once —
+/// be readable at a glance and be able to say exactly what is wrong. Eleven
+/// flat rows did the first badly and the second only for the signals that
+/// happened to be listed; these six reach seventeen, including the drive and
+/// pusher alarms that were not shown at all.
+///
+/// Wording is the machine's job, not the PLC's: `p_stat_xAlmDriveM102` becomes
+/// "Outfeed belt faulted", because an operator walks to a belt, not to a tag.
+/// The unit letters (U1..U5) stay out of the label and live in the FB's own
+/// descriptions for whoever is holding a wiring diagram.
+///
+/// Detail labels are kept SHORT enough not to wrap: a two-line child row in an
+/// opened group turns eight drives into sixteen lines of text and undoes the
+/// reduction the grouping bought. "Faulted" is the drive reporting itself not
+/// ready; "stalled" is the drive saying ready while its motion sensor sees
+/// nothing for 5 s -- different faults, and an operator checks different
+/// things for each.
+const List<StructStatusGroup> boxErectorStatusGroups = [
+  // First and red: the FB raises this after 15 s of running, permitted out,
+  // not ready for product, and NOT starved of bottoms or lids -- i.e. stopped
+  // for a reason none of the rows below explain. It is the catch-all, so it
+  // leads; if it is lit and everything under it is dark, the machine is stuck
+  // on something this pane cannot name.
+  StructStatusGroup('Holding up the line', HmiColorRole.red,
+      summaryMember: 'p_stat_WaitingFrustration'),
+
+  // Two different e-stop facts the pane used to conflate: the button, from the
+  // process word, and the KM1 contactor chain, from the alarm word. They should
+  // move together; a chain fault with no button pressed is a real failure.
+  StructStatusGroup('Emergency stop', HmiColorRole.red, children: [
+    StructStatusBit('p_stat_xEstopActive', 'Stop button pressed',
+        HmiColorRole.red),
+    StructStatusBit('p_stat_xAlmEstop', 'Safety chain fault', HmiColorRole.red),
+  ]),
+
+  // The summary is the Saia's OWN roll-up (`p_stat_xDriveError` off the process
+  // word), not "any child lit": disagreeing with the machine about whether its
+  // drives are healthy would be us second-guessing it. The children are the
+  // alarm word's per-drive bits -- five "not ready" and three "not turning",
+  // which are different faults (a drive can be ready and still not move).
+  StructStatusGroup('Drives', HmiColorRole.red,
+      summaryMember: 'p_stat_xDriveError',
+      children: [
+        StructStatusBit('p_stat_xAlmDriveM101', 'Carton belt faulted',
+            HmiColorRole.red),
+        StructStatusBit('p_stat_xAlmDriveM102', 'Outfeed belt faulted',
+            HmiColorRole.red),
+        StructStatusBit('p_stat_xAlmDriveM103', 'Bag belt faulted',
+            HmiColorRole.red),
+        StructStatusBit(
+            'p_stat_xAlmDriveM104', 'Mover faulted', HmiColorRole.red),
+        StructStatusBit('p_stat_xAlmDriveM105', 'Supply belt faulted',
+            HmiColorRole.red),
+        StructStatusBit('p_stat_xAlmMotionM101', 'Carton belt stalled',
+            HmiColorRole.red),
+        StructStatusBit('p_stat_xAlmMotionM102', 'Outfeed belt stalled',
+            HmiColorRole.red),
+        StructStatusBit('p_stat_xAlmMotionM103', 'Bag belt stalled',
+            HmiColorRole.red),
+      ]),
+
+  // Starved. Each child carries HOW LONG, which is the whole question when a
+  // line is limping: two seconds is the machine breathing, four minutes is
+  // someone not feeding it. The FB times each stretch itself
+  // (`TON_NoBottoms.ET` and friends), so this is its number, not ours.
+  StructStatusGroup('Out of material', HmiColorRole.yellow, children: [
+    StructStatusBit('p_stat_xWaitingBottoms', 'No box bottoms',
+        HmiColorRole.yellow, durationMember: 'p_stat_tNoBottomsFor'),
+    StructStatusBit('p_stat_xWaitingLids', 'No lids', HmiColorRole.yellow,
+        durationMember: 'p_stat_tNoLidsFor'),
+    StructStatusBit('p_stat_xWaitingProduct', 'No product', HmiColorRole.yellow,
+        durationMember: 'p_stat_tWaitingProductFor'),
+  ]),
+
+  // Product cannot leave. Three rows for what is nearly one question, kept
+  // apart because they come from different places and DISAGREEING IS THE
+  // FINDING: `p_stat_xExtNotReady` is the Saia's own interlock input, while the
+  // permit is `q_xOutfeedPermitted` -- which the FB passes straight through
+  // from `STM01.STM01.q_xInfeedPermitted`, so it is the strapper's own word.
+  // If the strapper says "send" and the Saia still says "not ready", the
+  // interlock between them is broken, and only showing both reveals it.
+  //
+  // The permit is INVERTED: it lighting when ON would report a healthy line as
+  // a fault, and would light this group's summary.
+  StructStatusGroup("Can't send on", HmiColorRole.yellow, children: [
+    StructStatusBit(
+        'p_stat_xOutputBlocked', 'Outfeed full', HmiColorRole.yellow),
+    StructStatusBit('p_stat_xExtNotReady', 'Next machine not ready',
+        HmiColorRole.yellow),
+    StructStatusBit('q_xOutfeedPermitted', 'Strapper permit off',
+        HmiColorRole.yellow,
+        invert: true),
+  ]),
+
+  // New in the FB and never shown before: the pusher's end sensors have not
+  // seen it for 10 s, so it is jammed, miswired or the sensor has failed.
+  StructStatusGroup('Pusher', HmiColorRole.red, children: [
+    StructStatusBit('p_stat_xAlmPusherFrontSensor', 'Front sensor blind',
+        HmiColorRole.red),
+    StructStatusBit('p_stat_xAlmPusherRearSensor', 'Rear sensor blind',
+        HmiColorRole.red),
+  ]),
+
+  // The conveyor's yellow, and no children -- there is nothing to break down.
+  // Auto is the normal case and says nothing; transport is lit during normal
+  // running and would be noise on a pane about stoppages.
+  StructStatusGroup('In manual', HmiColorRole.yellow,
+      summaryMember: 'p_stat_xModeManual'),
+];
+
 
 /// The kinds whose [ThirdPartyEquipmentConfig.statusKey] names a struct node
 /// rather than a key prefix, and the members each draws.
@@ -817,12 +996,263 @@ const List<StructStatusBit> fishAlignerStatusBits = [
 /// A kind belongs in exactly one of this map and [kEquipmentStatusBits];
 /// membership here means one subscription for the whole handshake instead of
 /// one per bit.
+/// Whether the box erector's Modbus link to the Saia machine is healthy.
+///
+/// `null` when the member is absent — BER02/BER03 on the old flat FB, or a
+/// struct not yet received — which must NOT gate anything: an unknown link is
+/// not a failed one.
+///
+/// This bit is the validity of every other row on the pane. `FB_BER01ScadaPoll`
+/// polls a Saia PCD3.M3160 over Modbus TCP and decodes its alarm word (R998)
+/// and process word (R1000) UNCONDITIONALLY:
+///
+///     p_stat_xAlmEstop   := p_stat_dwAlarmWord.1;
+///     p_stat_xModeManual := p_stat_dwProcessWord.1;
+///
+/// Those words are only written on a successful read, so when the link drops
+/// every decoded bit FREEZES at its last value. Nothing upstream notices:
+/// `p_stat_xComOk` falls after a 2 s TOF and our own OPC UA subscription to
+/// ST101 stays perfectly healthy, so the pane would keep receiving values and
+/// keep showing a confident "Running" for a machine we have lost contact with.
+/// Hence the gate — the same "unknown beats a stale latch" rule the run stream
+/// already follows.
+bool? boxErectorCommsOf(DynamicValue? status) {
+  const member = 'p_stat_xModbusHealthy';
+  if (status == null || !status.contains(member)) return null;
+  return status[member].asBool;
+}
+
+/// The throughput member the box erector FB publishes: finished cartons per
+/// minute, counted off the S104 outfeed sensor's rising edge.
+///
+/// A DOTTED PATH, not a bare name. `bpmCartonsOut` is an `FB_BPM` INSTANCE, not
+/// a scalar — its OPC UA surface is the `hmi : ST_BPM` member inside it, which
+/// carries five rolling averages (`avgBPM1Minute` through `avgBPM60Minute`).
+/// Reading `bpmCartonsOut` itself yields a struct, so a scalar read of it would
+/// render "—" forever while looking exactly like a PLC that had not been rolled
+/// out. Verified against `ST101/ST101/BER/FB_BER01ScadaPoll.TcPOU` and
+/// `SVNCoreComponents/BatchLines/FB_BPM.TcPOU`.
+///
+/// The 1-minute average, because the row is labelled "cartons per minute" and
+/// an operator watching a line wants the rate NOW; the longer averages are
+/// there if a calmer trace is ever wanted.
+const String kBoxErectorBpmMember = 'bpmCartonsOut.hmi.avgBPM1Minute';
+
+/// Series name for the box erector's throughput trend, fixed so the pane
+/// preview and the floating chart read as the same chart — mirrors
+/// `kSensorTrendSeries` / `kConveyorFreqSeries`.
+const String kBoxErectorBpmSeries = 'Cartons/min';
+
+const Map<String, Color> boxErectorBpmColors = {
+  kBoxErectorBpmSeries: Color.fromARGB(255, 38, 139, 210),
+};
+
+/// Whether the throughput trend can be drawn for this key.
+///
+/// The struct arrives on ONE subscription, so the live figure is free — it is
+/// already in the status value. History is not: charting needs the collector to
+/// have been told to pick [kBoxErectorBpmMember] out of the struct into its own
+/// column (`sample_members`). Without that the table has rows but no series,
+/// which would draw an empty chart rather than no chart.
+bool boxErectorBpmTrendAvailable(CollectEntry? collect) =>
+    collect?.sampleMembers?.contains(kBoxErectorBpmMember) ?? false;
+
+/// Reads the throughput out of the status struct, degrading to null.
+///
+/// Same defensive shape as [structStatusBitOf] and for the same reason:
+/// `DynamicValue.operator[]` THROWS on a missing member, and this member is
+/// unverified, so a struct without it must render "—" rather than take the
+/// pane down.
+///
+/// Deliberately NOT `asDouble`. That getter is `_parseDouble(value) ?? 0.0`, so
+/// a member carrying anything non-numeric comes back as **0.0** — which on this
+/// pane reads as "0 cartons a minute", i.e. the machine has stopped. A wrong
+/// member name would then look like a genuine production halt rather than a
+/// configuration error. Only an actual number is a number here; everything else
+/// is unknown and renders "—".
+double? boxErectorBpmOf(DynamicValue? status) {
+  var cur = status;
+  // Same walk as [structStatusBitOf]: `contains` guards every segment, because
+  // `operator[]` THROWS on a missing member and this path is three deep.
+  for (final segment in structMemberPath(kBoxErectorBpmMember)) {
+    if (cur == null || !cur.contains(segment)) return null;
+    cur = cur[segment];
+  }
+  final raw = cur?.value;
+  return raw is num ? raw.toDouble() : null;
+}
+
+/// The box erector's throughput over time, off the collector's stored rows.
+///
+/// Numeric rather than the sensor trend's boolean axis: this is a rate, so the
+/// y axis carries a unit and starts at zero — a cartons/min plot that autoscales
+/// its floor makes a small dip look like a stoppage.
+class BoxErectorBpmGraph extends ConsumerWidget {
+  final Collector? collector;
+  final String keyName;
+
+  /// Pan/zoom/now buttons. Off in the pane preview, on in the floating chart.
+  final bool showButtons;
+
+  final Duration xSpan;
+
+  /// Drops the axis units/labels — the small pane preview has no room and the
+  /// tile caption names the chart instead.
+  final bool compact;
+
+  const BoxErectorBpmGraph({
+    required this.collector,
+    required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 15),
+    this.compact = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder<List<TimeseriesData<dynamic>>>(
+      stream: collector?.collectStream(keyName, since: const Duration(hours: 2)),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(child: Text('No data'));
+        }
+
+        final data = <Map<String, dynamic>>[
+          for (final sample in snapshot.data!)
+            if (extractSeriesMemberValue(sample.value, kBoxErectorBpmMember)
+                case final num y)
+              {
+                'x': sample.time.millisecondsSinceEpoch.toDouble(),
+                'y': y,
+                's': kBoxErectorBpmSeries,
+              },
+        ];
+        if (data.isEmpty) {
+          // Rows exist but carry no such member — the collector is storing the
+          // struct without picking this field out. Say so rather than draw an
+          // empty frame.
+          return const Center(child: Text('Not collected'));
+        }
+
+        final graphConfig = GraphConfig(
+          type: GraphType.timeseries,
+          xAxis: GraphAxisConfig(unit: compact ? '' : 'Time'),
+          // Floor pinned at zero: this is a rate, and a chart that rescales its
+          // baseline turns a small dip into an apparent stoppage.
+          yAxis: GraphAxisConfig(unit: compact ? '' : 'Cartons/min', min: 0),
+          xSpan: xSpan,
+          legend: false,
+        );
+
+        final theme = compact
+            ? (Theme.of(context).brightness == Brightness.dark
+                ? darkChartTheme(padding: kSensorTrendCompactPadding)
+                : lightChartTheme(padding: kSensorTrendCompactPadding))
+            : ref.watch(chartThemeNotifierProvider);
+
+        return Graph(
+          config: graphConfig,
+          data: data,
+          showButtons: showButtons,
+          categoryColors: boxErectorBpmColors,
+          chartTheme: theme,
+          redraw: () {},
+        ).build(context);
+      },
+    );
+  }
+}
+
+/// Resolves the collector for [BoxErectorBpmGraph] — mirrors
+/// `SensorTrendGraphLoader`.
+class BoxErectorBpmGraphLoader extends ConsumerWidget {
+  final String keyName;
+  final bool showButtons;
+  final Duration xSpan;
+  final bool compact;
+
+  const BoxErectorBpmGraphLoader({
+    required this.keyName,
+    this.showButtons = true,
+    this.xSpan = const Duration(minutes: 15),
+    this.compact = false,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Collector?>(
+      future: ref.watch(collectorProvider.future),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return BoxErectorBpmGraph(
+          collector: snapshot.data,
+          keyName: keyName,
+          showButtons: showButtons,
+          xSpan: xSpan,
+          compact: compact,
+        );
+      },
+    );
+  }
+}
+
+/// One colour vocabulary across every machine, so a glance down any Status
+/// column means the same thing:
+///
+///   RED    -- something is wrong. Reserved for the frustration/fault rows.
+///   YELLOW -- waiting on something; the cycle is stalled but healthy.
+///   GREEN  -- yes, now. Every PERMIT is green, on every machine.
+///   BLUE   -- a deliberate non-production state. Cleaning, and only that.
+///
+/// GREEN covers the whole "this is fine, it happened" side: a permit, a machine
+/// running, and a hand-over that completed. `p_stat_DropFinished` was blue for a
+/// while on the reading that a finished drop is its own kind of event; it is
+/// simply good news, and good news is green.
+///
+/// The green rule is the load-bearing one and was arrived at the hard way: the
+/// box erector's outfeed permit used to be blue, on a "blue the outfeed side"
+/// comment that the code never actually kept (the strapping line's
+/// `p_stat_OutfeedPermitted` was already green), so the column did NOT read the
+/// same across machines -- the only thing that rule was for. See #382.
 const Map<ThirdPartyEquipmentKind, List<StructStatusBit>> kStructStatusBits = {
   ThirdPartyEquipmentKind.multivac: multivacStatusBits,
   ThirdPartyEquipmentKind.speedBatcher: speedBatcherStatusBits,
   ThirdPartyEquipmentKind.strappingLine: strappingLineStatusBits,
   ThirdPartyEquipmentKind.fishAligner: fishAlignerStatusBits,
 };
+
+/// The kinds whose Status section is GROUPED — a summary row per cause, each
+/// opening onto its detail — rather than one flat diode per bit.
+///
+/// A kind belongs to this map or [kStructStatusBits], never both. Both are
+/// struct-backed and read one node at one subscription; the difference is only
+/// how many signals the machine publishes. Four bits read fine as a flat list;
+/// the box erector's seventeen do not.
+const Map<ThirdPartyEquipmentKind, List<StructStatusGroup>>
+    kStructStatusGroups = {
+  ThirdPartyEquipmentKind.boxErector: boxErectorStatusGroups,
+};
+
+/// Whether this kind reads its whole handshake from one struct node, flat or
+/// grouped. The routing question everywhere except the Status section itself.
+bool isStructBacked(ThirdPartyEquipmentKind kind) =>
+    kStructStatusBits.containsKey(kind) || kStructStatusGroups.containsKey(kind);
+
+/// Every member this kind's Status section reads, flat or grouped, in display
+/// order — for the editor's help text and for tests.
+List<String> structMembersOf(ThirdPartyEquipmentKind kind) => [
+      for (final b in kStructStatusBits[kind] ?? const <StructStatusBit>[])
+        b.member,
+      for (final g in kStructStatusGroups[kind] ?? const <StructStatusGroup>[])
+        ...[
+          if (g.summaryMember case final m?) m,
+          for (final c in g.children) c.member,
+        ],
+    ];
 
 /// The machine's name as it reads inside a diode label.
 ///
@@ -867,65 +1297,26 @@ class EquipmentStatusBit {
   String labelFor(String machine) => fillMachineLabel(label, machine);
 }
 
-/// The diodes each kind shows, in display order.
+/// The prefix-backed kinds and the diodes each shows, in display order.
 ///
-/// Hardcoded, like [speedBatcherStatusBits]: every box erector on the site
-/// exposes the same three permits plus the red frustration bit, every strapper
-/// the same two. What differs per machine is only which line it is on, and that
-/// is the prefix.
+/// Now EMPTY: every third-party machine on the site has been wrapped in a
+/// function block that publishes its whole handshake as one struct, so all of
+/// them read out of [kStructStatusBits] at one subscription each. The box
+/// erector was the last holdout — its permits used to be flat globals
+/// (`BERnn.xPermitBottomInfeed`/`xPermitBlockInfeed`/`xPermitOutfeed` plus
+/// `WaitingFrustration`) read via the prefix-plus-suffix vocabulary once kept
+/// here; the enhanced line-1 FB at `ns=4;s=BER0n.BER0n` retired those, and the
+/// kind moved to [boxErectorStatusBits] alongside the strapper, the Multivac
+/// and the batch aligner.
+///
+/// The map, the [EquipmentStatusBit] class and every routing site that keys off
+/// it are kept intact rather than deleted: this is the shape a kind falls back
+/// to whenever the PLC has NOT yet wrapped a machine in an `hmi`/struct FB, and
+/// a future prefix-only device would land here again with a single line. The
+/// routing already handles an empty map — a kind absent from both maps simply
+/// draws no Status section.
 const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
-    kEquipmentStatusBits = {
-  // One vocabulary across every machine, in the order product moves through it.
-  // "Permit infeed/outfeed" is the PLC's language, not the floor's: an operator
-  // asks whether a machine can take the next one and whether it can pass it on.
-  //
-  // Each machine is named for what it actually receives -- a box, a box bottom,
-  // fish -- because that is what the operator is looking at when they ask why
-  // it stopped.
-  //
-  //   Ready for <thing>     -- can accept another one now  (i_xDropOk / permit infeed)
-  //   Way out clear         -- allowed to send onward      (permit outfeed)
-  //   Fish waiting to drop  -- the conveyor before it is asking to drop  (i_xDropRequest)
-  //   Drop complete         -- that hand-over finished     (q_xDropFinished)
-  //   Waiting to release    -- a batch has been held at the door too long
-  //                            (TON_waitingFrustration)
-  //
-  // Waiting to release is first and red because it is the only one that says
-  // something is wrong rather than describing where in the cycle the machine
-  // is. Note the direction: the batch is upstream, ready, and NOT being taken
-  // -- the machine named on this pane is the one refusing it, not the one
-  // waiting. The three below explain why.
-  //
-  // The question an operator opens this pane to answer is "why has product
-  // stopped moving", and these say it directly: either it cannot take another
-  // one, or it cannot send the one it has.
-  //
-  // Green means "yes, now" for every permit on every machine -- both of the
-  // strapper's, both infeeds here and the outfeed below. Red is reserved for
-  // WaitingFrustration, the one bit that says something is wrong, and
-  // amber/blue mark the Multivac's handshake PROGRESSION (waiting to drop,
-  // drop complete) rather than permission.
-  //
-  // This outfeed used to be blue, on a "blue the outfeed side" rule that the
-  // code never actually kept: the strapping line's `p_stat_OutfeedPermitted`
-  // was green, so the column did NOT read the same across machines, which is
-  // the only thing the rule was for.
-  // The strapping line and the Multivac are NOT here: each is now wrapped in an
-  // FB that publishes its whole handshake as one struct (`ST_StrappingLine_HMI`
-  // / `SP_Packing_HMI`), so both live in [kStructStatusBits] and cost one
-  // subscription rather than one per permit.
-  ThirdPartyEquipmentKind.boxErector: [
-    EquipmentStatusBit('WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
-    EquipmentStatusBit('PermitBottomInfeed', '{m} is ready for box bottom', HmiColorRole.green),
-    EquipmentStatusBit('PermitBlockInfeed', '{m} is ready for block', HmiColorRole.green),
-    EquipmentStatusBit('PermitOutfeed', '{m} may send boxes on', HmiColorRole.green),
-  ],
-  // The Multivac and the batch aligner are NOT here: the PLC wraps each in an
-  // `hmi` member (`SPB0n.multivac.hmi` and `SPB0n.packing.hmi`, both
-  // `SP_Packing_HMI` structs), so their handshakes live in [kStructStatusBits]
-  // as [multivacStatusBits] / [fishAlignerStatusBits] at one subscription each
-  // rather than one per permit -- the same move the strapping line made.
-};
+    kEquipmentStatusBits = {};
 
 /// The Status section body for the non-SpeedBatcher kinds.
 ///
@@ -1125,6 +1516,331 @@ PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
       return const PaneStatus.stopped();
     case null:
       return fallback;
+  }
+}
+
+/// The banner shown above everything when the Modbus link is down.
+///
+/// Says what is wrong AND what it means for the rest of the pane, because a
+/// bare "no link" leaves the operator to work out whether the rows below are
+/// live. They are not: see [boxErectorCommsOf] for why every bit freezes rather
+/// than going stale. The diodes below are already forced to the grey `!`, so
+/// this explains a pane that has visibly gone blank.
+///
+/// Fault red — the one place this file uses a saturated colour, which is the
+/// repo rule (only fault red may be saturated), and this qualifies: the pane is
+/// not reporting the machine any more.
+///
+/// A top-level widget rather than a method on the state, for the same reason
+/// [StructStatusDiodes] is one: a golden has to be able to render it without a
+/// `StateMan`.
+class CommsLostBanner extends StatelessWidget {
+  const CommsLostBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final red = HmiStateColors.of(context).red;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.12),
+        border: Border.all(color: red),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.link_off, size: 18, color: red),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'No Modbus link to the machine',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(color: red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Nothing below is live — the box erector stopped answering '
+                  'and these values are the last it sent.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One collapsible group of status bits: a summary row that can be opened.
+///
+/// The pane has to do two things that pull against each other — stay short
+/// enough to read at a glance, and be able to say EXACTLY what is wrong. A flat
+/// list does one or the other. A group answers the glance ("Drives") and holds
+/// the detail one tap away ("U1 carton conveyor not ready").
+///
+/// The summary diode lights when ANY child does, so a collapsed group never
+/// hides a fault. [summaryMember] overrides that with the machine's own
+/// roll-up bit where it publishes one — the box erector's `p_stat_xDriveError`
+/// is the Saia's own view of its five drives, and disagreeing with it would be
+/// us second-guessing the machine.
+class StructStatusGroup {
+  final String label;
+  final HmiColorRole onRole;
+
+  /// The machine's own roll-up bit, if it publishes one. Null derives the
+  /// summary from [children].
+  final String? summaryMember;
+
+  /// Detail rows, shown when the group is opened. Empty makes this a plain
+  /// row with no disclosure — some conditions have nothing to break down.
+  final List<StructStatusBit> children;
+
+  const StructStatusGroup(this.label, this.onRole,
+      {this.summaryMember, this.children = const []});
+
+  String labelFor(String machine) => fillMachineLabel(label, machine);
+
+  /// The longest time any lit child has been waiting, or null.
+  ///
+  /// Put on the SUMMARY row as well as the child, so a collapsed pane still
+  /// says "4m 12s" — the number is most of the value here, and needing to open
+  /// a drawer to learn a line has been starved for four minutes defeats the
+  /// glance the grouping was for.
+  ///
+  /// Longest rather than first: if a machine is out of both bottoms and lids,
+  /// the one that has been waiting longer is the one that stopped it. First-in-
+  /// display-order would show bottoms' four minutes while product had been
+  /// starved an hour; the most RECENT would answer "what just changed" and hide
+  /// that the line has been down all morning.
+  ///
+  /// Known to be a LOWER BOUND, deliberately. The group stays lit while the
+  /// cause hands over between children — out of bottoms for 30 min, that
+  /// clears, out of lids for the next 40 — and the longest single child then
+  /// reads 40 against 70 minutes of actual trouble. Timing the GROUP's own lit
+  /// state would be exact, but only the HMI could do it, and that clock starts
+  /// when the page loads: an hour-old starve would report as seconds after any
+  /// reload. Understating is the safe direction for a number someone acts on;
+  /// overstating is not.
+  Duration? summaryDurationOf(DynamicValue? status) {
+    Duration? worst;
+    for (final c in children) {
+      if (c.durationMember == null || c.valueIn(status) != true) continue;
+      final held = structDurationOf(status, c.durationMember!);
+      if (held == null) continue;
+      if (worst == null || held > worst) worst = held;
+    }
+    return worst;
+  }
+
+  /// Lit / off / unknown for the summary diode.
+  ///
+  /// Unknown only when EVERYTHING is unknown: one readable child that is off
+  /// means the group is genuinely off, and a group that greyed out because a
+  /// single member was missing would hide the children that do work.
+  bool? summaryOf(DynamicValue? status) {
+    if (summaryMember case final m?) return structStatusBitOf(status, m);
+    if (children.isEmpty) return null;
+    var sawFalse = false;
+    for (final c in children) {
+      switch (c.valueIn(status)) {
+        case true:
+          return true;
+        case false:
+          sawFalse = true;
+        case null:
+          break;
+      }
+    }
+    return sawFalse ? false : null;
+  }
+}
+
+/// Reads a `TIME` member as a [Duration], degrading to null.
+///
+/// TwinCAT `TIME` crosses OPC UA as a millisecond count. Guarded the same way
+/// as every other member read — `operator[]` throws on a missing one.
+Duration? structDurationOf(DynamicValue? status, String member) {
+  var cur = status;
+  for (final segment in structMemberPath(member)) {
+    if (cur == null || !cur.contains(segment)) return null;
+    cur = cur[segment];
+  }
+  final raw = cur?.value;
+  return raw is num ? Duration(milliseconds: raw.round()) : null;
+}
+
+/// A duration as an operator reads it aloud: "45s", "4m 12s", "1h 03m".
+///
+/// Two units at most. The exact seconds of a two-hour starve are noise; the
+/// seconds of a 45-second one are the whole point.
+String formatStatusDuration(Duration d) {
+  if (d.inHours > 0) {
+    return '${d.inHours}h ${(d.inMinutes % 60).toString().padLeft(2, '0')}m';
+  }
+  if (d.inMinutes > 0) return '${d.inMinutes}m ${d.inSeconds % 60}s';
+  return '${d.inSeconds}s';
+}
+
+/// The Status section for a kind whose bits are grouped by cause.
+///
+/// Collapsed, one row per thing that can stop the line. Opened, the detail
+/// under it. See [StructStatusGroup] for why both.
+///
+/// Expansion state lives here rather than in the parent because it is pure view
+/// state — which drawer an operator happens to have open says nothing about the
+/// machine, and hoisting it would make the pane's rebuild path carry it.
+class GroupedStatusDiodes extends StatefulWidget {
+  const GroupedStatusDiodes({
+    super.key,
+    required this.groups,
+    required this.status,
+    required this.machine,
+  });
+
+  final List<StructStatusGroup> groups;
+  final DynamicValue? status;
+  final String machine;
+
+  @override
+  State<GroupedStatusDiodes> createState() => _GroupedStatusDiodesState();
+}
+
+class _GroupedStatusDiodesState extends State<GroupedStatusDiodes> {
+  final _open = <String>{};
+
+  Widget _diode(BuildContext context, bool? value, HmiColorRole role,
+      {double size = 22}) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: LEDPainter(
+          color: switch (value) {
+            null => null,
+            true => role.resolve(context),
+            false => Colors.white,
+          },
+          ledType: LEDType.circle,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final group in widget.groups) ...[
+          Builder(builder: (context) {
+            final lit = group.summaryOf(widget.status);
+            final expandable = group.children.isNotEmpty;
+            final open = _open.contains(group.label);
+            final row = PaneDetailRow(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              label: group.labelFor(widget.machine),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (group.summaryDurationOf(widget.status) case final held?)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(
+                        formatStatusDuration(held),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                  _diode(context, lit, group.onRole),
+                  // A fixed-width slot either way, so the diodes line up in one
+                  // column whether or not a row can be opened.
+                  SizedBox(
+                    width: 24,
+                    child: expandable
+                        ? Icon(
+                            open ? Icons.expand_more : Icons.chevron_right,
+                            size: 18,
+                            color: theme.textTheme.bodySmall?.color,
+                          )
+                        : null,
+                  ),
+                ],
+              ),
+            );
+            if (!expandable) return row;
+            return InkWell(
+              onTap: () => setState(() {
+                if (!_open.remove(group.label)) _open.add(group.label);
+              }),
+              child: row,
+            );
+          }),
+          if (_open.contains(group.label))
+            Padding(
+              // Indented so the detail reads as belonging to the row above.
+              padding: const EdgeInsets.only(left: 16, bottom: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final bit in group.children)
+                    Builder(builder: (context) {
+                      final value = bit.valueIn(widget.status);
+                      final held = bit.durationMember == null
+                          ? null
+                          : structDurationOf(
+                              widget.status, bit.durationMember!);
+                      // NOT a PaneDetailRow. That splits 4:5 label:value,
+                      // which suits a row whose value is a number but wastes
+                      // half the width here — a detail row needs only a 16 px
+                      // diode and maybe a duration, while its label is the
+                      // longest text in the section. At 4:5 every drive name
+                      // wrapped to two lines, turning eight drives into
+                      // sixteen lines and undoing the reduction grouping
+                      // bought. The label takes the slack instead.
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Text(bit.labelFor(widget.machine),
+                                  style: theme.textTheme.bodyMedium),
+                            ),
+                            if (held != null && value == true)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 8),
+                                child: Text(
+                                  formatStatusDuration(held),
+                                  style: theme.textTheme.bodySmall,
+                                ),
+                              ),
+                            const SizedBox(width: 8),
+                            // Smaller than the summary diode: these are the
+                            // detail, and equal weight would make an opened
+                            // group compete with the rows around it.
+                            _diode(context, value, bit.onRole, size: 16),
+                            // Keeps the detail diodes centred under the summary
+                            // diode above them: 3 px for the size difference,
+                            // 24 for the chevron slot.
+                            const SizedBox(width: 27),
+                          ],
+                        ),
+                      );
+                    }),
+                ],
+              ),
+            ),
+        ],
+      ],
+    );
   }
 }
 
@@ -1458,6 +2174,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   final ValueNotifier<DynamicValue?> _statusRaw =
       ValueNotifier<DynamicValue?>(null);
 
+  /// The collector settings for the hoisted status key, or null when the key is
+  /// not collected. Drives whether the pane offers a Trend section at all —
+  /// resolved once per hoist rather than per build, since it comes from the
+  /// key mappings and only changes when the key does.
+  final ValueNotifier<CollectEntry?> _statusCollect =
+      ValueNotifier<CollectEntry?>(null);
+
   /// Latest value per status-bit suffix, for the kinds whose diodes come from
   /// separate keys rather than one struct. Held here rather than in the pane
   /// because the pane lives in an overlay and is torn down and rebuilt every
@@ -1500,7 +2223,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// on a config switched to another kind must not hold a PLC subscription
   /// open for a section the pane no longer shows.
   String get _wantedStatusKey =>
-      kStructStatusBits.containsKey(widget.config.kind)
+      isStructBacked(widget.config.kind)
           ? widget.config.statusKey
           : '';
 
@@ -1532,7 +2255,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     // holds, so it must open no per-bit subscriptions at all -- otherwise a
     // strapper would cost three keys instead of the struct's one, and the two
     // sections would both try to render.
-    final bits = kStructStatusBits.containsKey(widget.config.kind)
+    final bits = isStructBacked(widget.config.kind)
         ? null
         : kEquipmentStatusBits[widget.config.kind];
     final prefix = widget.config.statusKey;
@@ -1657,6 +2380,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     _statusSub?.cancel();
     _statusSub = null;
     _statusRaw.value = null;
+    _statusCollect.value = null;
     if (key.isEmpty) {
       _statusStream = null;
       return;
@@ -1671,6 +2395,18 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // Same honesty rule as the run stream: unknown beats a stale latch.
       onError: (Object _) => _statusRaw.value = null,
     );
+
+    // Resolved off the same StateMan, for the Trend section's availability.
+    // unawaited + catchError rather than bare: a fire-and-forget future with no
+    // handler takes the zone down if the provider errors, and a pane that
+    // cannot say whether a key is collected should simply offer no trend.
+    unawaited(ref
+        .read(stateManProvider.future)
+        .then((sm) {
+          if (!mounted || _hoistedStatusKey != key) return;
+          _statusCollect.value = sm.keyMappings.nodes[key]?.collect;
+        })
+        .catchError((Object _) => _statusCollect.value = null));
   }
 
   /// Test-only window onto the hoisted stream identity, so the stream
@@ -1702,6 +2438,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     _raw.dispose();
     _statusSub?.cancel();
     _statusRaw.dispose();
+    _statusCollect.dispose();
     for (final sub in _bitSubs.values) {
       sub.cancel();
     }
@@ -1773,7 +2510,8 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // the body's ValueListenableBuilder stays on `_raw` alone.
       builder: (context) => ListenableBuilder(
         listenable: Listenable.merge(
-            [_raw, _statusRaw, _statusBits, _extraStatusBits, _acceptWindow]),
+            [_raw, _statusRaw, _statusCollect, _statusBits, _extraStatusBits,
+              _acceptWindow]),
         builder: (context, _) => _paneFor(context, _isRunning, weights),
       ),
     );
@@ -1811,9 +2549,21 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   Widget? _statusSection(BuildContext context) {
     final config = widget.config;
     final rows = <Widget>[];
-    if (kStructStatusBits[config.kind] case final structBits?) {
+    // A dead Modbus link makes every bit below a stale latch rather than a
+    // reading, so they are shown as UNKNOWN. Feeding null in does exactly that
+    // through the existing degrade-to-`!` path -- no separate "stale" mode to
+    // keep in step with the normal one.
+    final commsDown = boxErectorCommsOf(_statusRaw.value) == false;
+    final status = commsDown ? null : _statusRaw.value;
+    if (kStructStatusGroups[config.kind] case final groups?) {
+      rows.add(GroupedStatusDiodes(
+        groups: groups,
+        status: status,
+        machine: equipmentShortName(config.kind),
+      ));
+    } else if (kStructStatusBits[config.kind] case final structBits?) {
       rows.add(StructStatusDiodes(
-        status: _statusRaw.value,
+        status: status,
         bits: structBits,
         machine: equipmentShortName(config.kind),
       ));
@@ -1822,6 +2572,21 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
         bits: prefixBits,
         values: _statusBits.value,
         machine: equipmentShortName(config.kind),
+      ));
+    }
+    // The throughput figure, above the diodes: it is the one number on this
+    // pane that says whether the machine is actually producing, and a rate
+    // reads better as a value than as a lit dot. Only the box erector's FB
+    // publishes it, and only when the member is present -- "--" while the PLC
+    // has not been rolled, never 0, which is a real throughput meaning stopped.
+    if (config.kind == ThirdPartyEquipmentKind.boxErector) {
+      final bpm = boxErectorBpmOf(status);
+      rows.add(PaneDetailRow(
+        label: 'Cartons per minute',
+        child: Text(
+          bpm == null ? '—' : bpm.toStringAsFixed(0),
+          style: Theme.of(context).textTheme.bodyLarge,
+        ),
       ));
     }
     if (config.extraBits.isNotEmpty) {
@@ -1843,6 +2608,46 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     );
   }
 
+  /// The pane's Trend section: the box erector's throughput over time.
+  ///
+  /// Null for every other kind, and null for a box erector whose key is not
+  /// being collected with [kBoxErectorBpmMember] picked out — the live figure
+  /// costs nothing (it rides the struct subscription the diodes already need)
+  /// but history has to have been stored, so an uncollected machine gets no
+  /// section rather than an empty chart.
+  ///
+  /// Placed after Status to match the house section order
+  /// (status -> trend -> manual -> setpoints) that [PaneSectionSlot] defines.
+  /// This pane still composes raw [PaneSection]s rather than a [PaneBody], so
+  /// the order is positional here; converting it is a separate change.
+  Widget? _trendSection(BuildContext context) {
+    final config = widget.config;
+    if (config.kind != ThirdPartyEquipmentKind.boxErector) return null;
+    if (config.statusKey.isEmpty) return null;
+    if (!boxErectorBpmTrendAvailable(_statusCollect.value)) return null;
+
+    final key = config.statusKey;
+    return PaneSection(
+      title: 'Trend',
+      child: PaneGraphTile(
+        // Same height as the sensor's tile: enough for the trace plus the time
+        // row without the two printing over each other.
+        height: 84,
+        preview: BoxErectorBpmGraphLoader(
+          keyName: key,
+          showButtons: false,
+          compact: true,
+          xSpan: const Duration(minutes: 15),
+        ),
+        expandedTitle: 'Cartons per minute',
+        expandedBuilder: (context) => BoxErectorBpmGraphLoader(
+          keyName: key,
+          xSpan: const Duration(hours: 1),
+        ),
+      ),
+    );
+  }
+
   Widget _paneFor(
       BuildContext context, bool? isRunning, List<NumberConfig> weights) {
     final config = widget.config;
@@ -1860,6 +2665,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // "Cleaning", which the run key would misreport as Stopped.
       status = speedBatcherPaneStatus(_statusRaw.value, status);
     }
+    // A dead Modbus link outranks EVERYTHING, including the run key: that key
+    // is a member of the same frozen struct, so "Running" here would be the
+    // last thing the machine said before we lost it, not what it is doing.
+    final commsDown = boxErectorCommsOf(_statusRaw.value) == false;
+    if (commsDown) status = const PaneStatus.unknown('No link');
 
     // The scaffolded accept-rate readouts, in checkweigher order. Surfaced
     // as LIVE figures in the pane — the operator opens it to read the
@@ -1889,6 +2699,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (commsDown) const CommsLostBanner(),
           PaneSection(
             title: 'Equipment',
             child: Column(
@@ -2008,6 +2819,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
             ),
           ),
           if (_statusSection(context) case final section?) section,
+          if (_trendSection(context) case final section?) section,
           if (config.notes != null && config.notes!.isNotEmpty)
             PaneSection(
               title: 'Notes',
@@ -2388,7 +3200,7 @@ class _ThirdPartyEquipmentConfigEditorState
             // read separate bools, so their key is a prefix and the help text
             // spells out the suffixes the pane appends.
             KeyField(
-              label: kStructStatusBits.containsKey(config.kind)
+              label: isStructBacked(config.kind)
                   ? 'Status Struct Key'
                   : 'Status Key Prefix',
               initialValue: config.statusKey,
@@ -2396,9 +3208,9 @@ class _ThirdPartyEquipmentConfigEditorState
             ),
             const SizedBox(height: 4),
             Text(
-              kStructStatusBits.containsKey(config.kind)
+              isStructBacked(config.kind)
                   ? 'Struct with the '
-                      '${kStructStatusBits[config.kind]!.map((b) => b.member).join(', ')} '
+                      '${structMembersOf(config.kind).join(', ')} '
                       'members — one subscription feeds every diode in the side '
                       'pane\'s Status section.'
                   : 'Feeds the diodes in the side pane\'s Status section: '
