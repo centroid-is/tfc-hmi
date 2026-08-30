@@ -78,10 +78,14 @@ void main() {
       }
     });
 
-    test('schema version is 6', () async {
+    // The version pin moves with the schema even though this file is about
+    // v6's tables: `schemaVersion` is a property of the database, not of the
+    // migration this suite covers. v7 (`access_template`,
+    // `access_key_binding`) is covered by `access_template_table_test.dart`.
+    test('schema version is 7', () async {
       final db = AppDatabase.inMemoryForTest();
       addTearDown(() => db.close());
-      expect(db.schemaVersion, 6);
+      expect(db.schemaVersion, 7);
     });
 
     test('seeds exactly four roles', () async {
@@ -252,14 +256,17 @@ void main() {
       }
     });
 
-    test('leaves schema version at 6', () async {
+    test('leaves schema version at the current version', () async {
       await makeV5Database();
       final db = await reopen();
       addTearDown(() => db.close());
 
       final row =
           await db.customSelect('PRAGMA user_version').getSingle();
-      expect(row.read<int>('user_version'), 6);
+      expect(row.read<int>('user_version'), 7,
+          reason: 'a v5 database opens straight to the current version — '
+              'onUpgrade(5, 7) runs the from < 6 branch this suite covers and '
+              'the from < 7 branch after it');
     });
   });
 

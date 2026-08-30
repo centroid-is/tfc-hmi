@@ -178,6 +178,98 @@ class AuditEntry extends Table {
   TextColumn get reason => text().nullable()();
 }
 
+// ---------------------------------------------------------------------------
+// Access template tables (schema v7). See docs/access-control-spec.md §7b.
+// ---------------------------------------------------------------------------
+
+/// A named set of rules mapping a struct member — or the whole key — to an
+/// `AccessGroup`. Drift stores it as `access_template`.
+///
+/// Rules rather than one group per key, because one conveyor key carries both
+/// `p_cmd_JogFwd` and `p_cfg_ManualFreq` through a single
+/// `stateMan.write(key, wholeStruct)`: a group per *asset* cannot separate
+/// jogging from changing drive frequency, and a group per *member* can.
+///
+/// The repo ships **no** rows. The user creates the templates, and only four
+/// assets write structs at all — `conveyor`, `schneider`, `sensor`, `recipes`.
+class AccessTemplateTable extends Table {
+  /// Spelled out rather than derived. Drift does **not** strip a trailing
+  /// `Table` from the class name — `PlcCodeBlockTable` reads
+  /// `plc_code_block` because `mcp_tables.dart:40` overrides this getter, and
+  /// without the override the generated name here would be
+  /// `access_template_table`, which is not what the Postgres DDL below
+  /// creates. The `Table` suffix on the class stays: `AccessTemplate` is
+  /// `tfc_access`'s value type and this file imports that package.
+  @override
+  String get tableName => 'access_template';
+
+  @override
+  Set<Column> get primaryKey => {name};
+
+  /// The user-facing template name, and the value an
+  /// [AccessKeyBindingTable] row points at.
+  ///
+  /// The name is the primary key rather than a surrogate id for the same
+  /// reason [AppRole]'s is: it is what a person types into the key repository
+  /// and what the binding carries, so a rename is a visible operation rather
+  /// than an invisible one.
+  TextColumn get name => text()();
+
+  /// JSON object of member name -> `AccessGroup` name, written by
+  /// `AccessTemplate.encodeRules()` and read back by
+  /// `AccessTemplate.decodeRules()`. An empty member name means the whole key.
+  ///
+  /// A member no rule mentions is **unrestricted** — tags fail open, which is
+  /// why the key repository has to make unbound keys findable at a glance:
+  /// visibility is what replaces enforcement here.
+  TextColumn get rules => text()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+}
+
+/// One key bound to one template. Drift stores it as `access_key_binding`.
+///
+/// **This is deliberately not a field on `KeyMappingEntry`** (ruled
+/// 2026-08-30, reversing the shape spec §7b implies). `key_mappings` is
+/// classified `configure` by `kPrefAccessRules`, so a binding living in that
+/// blob would be authorization data behind a `configure` gate: anybody able to
+/// edit a page could re-scope who may write what, through the key repository's
+/// import card or the raw preferences editor. Templates are behind `users`
+/// precisely to prevent that, and the binding is the other half of the same
+/// decision — its own table makes the gate true of the data and not only of
+/// the button.
+///
+/// §7b's synchronous-resolution requirement survives the move: the prompt has
+/// to appear when a control is *tapped*, with no await, so these rows are
+/// loaded into the same in-memory snapshot the templates are.
+class AccessKeyBindingTable extends Table {
+  /// See [AccessTemplateTable.tableName]: explicit, because drift would
+  /// otherwise generate `access_key_binding_table`.
+  @override
+  String get tableName => 'access_key_binding';
+
+  @override
+  Set<Column> get primaryKey => {keyName};
+
+  /// The `keyMappings` key this binding is for, and the primary key — so a
+  /// key **cannot be bound twice**. "Explicit, per key, always" made
+  /// structural rather than left to a caller to uphold.
+  TextColumn get keyName => text()();
+
+  /// The [AccessTemplateTable.name] this key resolves through, matched by name
+  /// and carrying **no foreign key**.
+  ///
+  /// That is deliberate. The resolver treats a binding naming a missing
+  /// template as *unbound* and the key repository surfaces it, whereas a
+  /// database-level constraint would make a template delete fail with a driver
+  /// error rather than with `TemplateInUseException`'s named list of the keys
+  /// still bound — and on Postgres it would make the delete's outcome depend
+  /// on which station happened to run the migration.
+  TextColumn get templateName => text()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+}
+
 /// Saved History Views (name + keys)
 class HistoryView extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -247,6 +339,9 @@ class HistoryViewPeriod extends Table {
   AppRole,
   AppUser,
   AuditEntry,
+  // Access template tables (schema v7):
+  AccessTemplateTable,
+  AccessKeyBindingTable,
 ])
 class AppDatabase extends _$AppDatabase implements McpDatabase {
   final DatabaseConfig config;
@@ -353,7 +448,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   }
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   /// The `audit_entry` indexes, created outside Drift because Drift's
   /// `@TableIndex` cannot express `DESC` and every one of these is a
@@ -384,6 +479,32 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   /// copied into each arm.
   Future<void> _createAuditIndexes(Migrator m) async {
     for (final stmt in _auditIndexStatements) {
+      await m.database.customStatement(stmt);
+    }
+  }
+
+  /// The `access_key_binding` index.
+  ///
+  /// `keysBoundTo` runs on every template delete — it is what produces the
+  /// named key list a delete is blocked with — and again on every render of
+  /// the key repository's bound-key counts, which is a per-template query on
+  /// a page that lists every template. Without the index both are table scans.
+  ///
+  /// `IF NOT EXISTS` on both backends, for the same reason
+  /// [_auditIndexStatements] uses it: several SVN stations share one database
+  /// and each of them opens it.
+  static const List<String> _accessBindingIndexStatements = [
+    'CREATE INDEX IF NOT EXISTS idx_access_key_binding_template_name '
+        'ON access_key_binding (template_name)',
+  ];
+
+  /// Create the [_accessBindingIndexStatements] indexes.
+  ///
+  /// Called from `onCreate` and from the `from < 7` upgrade branch, on both
+  /// backends — the statements are identical on each, so they live in one
+  /// place rather than being copied into both arms.
+  Future<void> _createAccessBindingIndexes(Migrator m) async {
+    for (final stmt in _accessBindingIndexStatements) {
       await m.database.customStatement(stmt);
     }
   }
@@ -429,6 +550,7 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
         onCreate: (m) async {
           await m.createAll();
           await _createAuditIndexes(m);
+          await _createAccessBindingIndexes(m);
           await _seedAccessRoles();
         },
         onUpgrade: (m, from, to) async {
@@ -541,6 +663,45 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
             }
             await _createAuditIndexes(m);
             await _seedAccessRoles();
+          }
+          // Schema v7: access templates and the bindings that point keys at
+          // them. Both tables in one branch — there is no state in which one
+          // exists and the other does not, because a binding without a
+          // template table to read is a key that resolves to nothing and a
+          // template nothing can bind to is inert.
+          //
+          // Neither `_seedAccessRoles()` nor `_createAuditIndexes()` is called
+          // here: they belong to `from < 6`, and re-running the seed from a
+          // later branch is how an edited role gets reset back to its seeded
+          // group set under an operator who never touched it.
+          if (from < 7) {
+            if (native) {
+              await m.createTable(accessTemplateTable);
+              await m.createTable(accessKeyBindingTable);
+            } else {
+              // PostgreSQL: raw `IF NOT EXISTS` DDL rather than
+              // `m.createTable`, following the v5 and v6 branches above and
+              // not the spec's simplification that `m.createTable` covers both
+              // backends. Several SVN stations share one Postgres database and
+              // every one of them runs this branch when it opens, so it has to
+              // be safe to run twice — otherwise the second station aborts the
+              // migration and leaves the database half-upgraded.
+              //
+              // Datetimes are TEXT on both backends, as in the v6 arm: this
+              // database sets `DriftDatabaseOptions(storeDateTimeAsText: true)`
+              // and the root `build.yaml` sets
+              // `store_date_time_values_as_text: true`.
+              //
+              // `template_name` has no `REFERENCES access_template(name)`, and
+              // that is the one place this DDL deliberately differs from what
+              // a reader would expect: see [AccessKeyBindingTable.templateName]
+              // for why a dangling binding has to be storable.
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS access_template (name TEXT PRIMARY KEY, rules TEXT NOT NULL, updated_at TEXT NOT NULL)');
+              await m.database.customStatement(
+                  'CREATE TABLE IF NOT EXISTS access_key_binding (key_name TEXT PRIMARY KEY, template_name TEXT NOT NULL, updated_at TEXT NOT NULL)');
+            }
+            await _createAccessBindingIndexes(m);
           }
         },
       );

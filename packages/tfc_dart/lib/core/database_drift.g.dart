@@ -7875,6 +7875,511 @@ class AuditEntryCompanion extends UpdateCompanion<AuditEntryData> {
   }
 }
 
+class $AccessTemplateTableTable extends AccessTemplateTable
+    with TableInfo<$AccessTemplateTableTable, AccessTemplateTableData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AccessTemplateTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _rulesMeta = const VerificationMeta('rules');
+  @override
+  late final GeneratedColumn<String> rules = GeneratedColumn<String>(
+      'rules', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [name, rules, updatedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'access_template';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<AccessTemplateTableData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('rules')) {
+      context.handle(
+          _rulesMeta, rules.isAcceptableOrUnknown(data['rules']!, _rulesMeta));
+    } else if (isInserting) {
+      context.missing(_rulesMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {name};
+  @override
+  AccessTemplateTableData map(Map<String, dynamic> data,
+      {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AccessTemplateTableData(
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      rules: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}rules'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at'])!,
+    );
+  }
+
+  @override
+  $AccessTemplateTableTable createAlias(String alias) {
+    return $AccessTemplateTableTable(attachedDatabase, alias);
+  }
+}
+
+class AccessTemplateTableData extends DataClass
+    implements Insertable<AccessTemplateTableData> {
+  /// The user-facing template name, and the value an
+  /// [AccessKeyBindingTable] row points at.
+  ///
+  /// The name is the primary key rather than a surrogate id for the same
+  /// reason [AppRole]'s is: it is what a person types into the key repository
+  /// and what the binding carries, so a rename is a visible operation rather
+  /// than an invisible one.
+  final String name;
+
+  /// JSON object of member name -> `AccessGroup` name, written by
+  /// `AccessTemplate.encodeRules()` and read back by
+  /// `AccessTemplate.decodeRules()`. An empty member name means the whole key.
+  ///
+  /// A member no rule mentions is **unrestricted** — tags fail open, which is
+  /// why the key repository has to make unbound keys findable at a glance:
+  /// visibility is what replaces enforcement here.
+  final String rules;
+  final DateTime updatedAt;
+  const AccessTemplateTableData(
+      {required this.name, required this.rules, required this.updatedAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['name'] = Variable<String>(name);
+    map['rules'] = Variable<String>(rules);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  AccessTemplateTableCompanion toCompanion(bool nullToAbsent) {
+    return AccessTemplateTableCompanion(
+      name: Value(name),
+      rules: Value(rules),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory AccessTemplateTableData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AccessTemplateTableData(
+      name: serializer.fromJson<String>(json['name']),
+      rules: serializer.fromJson<String>(json['rules']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'name': serializer.toJson<String>(name),
+      'rules': serializer.toJson<String>(rules),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  AccessTemplateTableData copyWith(
+          {String? name, String? rules, DateTime? updatedAt}) =>
+      AccessTemplateTableData(
+        name: name ?? this.name,
+        rules: rules ?? this.rules,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+  AccessTemplateTableData copyWithCompanion(AccessTemplateTableCompanion data) {
+    return AccessTemplateTableData(
+      name: data.name.present ? data.name.value : this.name,
+      rules: data.rules.present ? data.rules.value : this.rules,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AccessTemplateTableData(')
+          ..write('name: $name, ')
+          ..write('rules: $rules, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(name, rules, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AccessTemplateTableData &&
+          other.name == this.name &&
+          other.rules == this.rules &&
+          other.updatedAt == this.updatedAt);
+}
+
+class AccessTemplateTableCompanion
+    extends UpdateCompanion<AccessTemplateTableData> {
+  final Value<String> name;
+  final Value<String> rules;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const AccessTemplateTableCompanion({
+    this.name = const Value.absent(),
+    this.rules = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AccessTemplateTableCompanion.insert({
+    required String name,
+    required String rules,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  })  : name = Value(name),
+        rules = Value(rules),
+        updatedAt = Value(updatedAt);
+  static Insertable<AccessTemplateTableData> custom({
+    Expression<String>? name,
+    Expression<String>? rules,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (name != null) 'name': name,
+      if (rules != null) 'rules': rules,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AccessTemplateTableCompanion copyWith(
+      {Value<String>? name,
+      Value<String>? rules,
+      Value<DateTime>? updatedAt,
+      Value<int>? rowid}) {
+    return AccessTemplateTableCompanion(
+      name: name ?? this.name,
+      rules: rules ?? this.rules,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (rules.present) {
+      map['rules'] = Variable<String>(rules.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AccessTemplateTableCompanion(')
+          ..write('name: $name, ')
+          ..write('rules: $rules, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AccessKeyBindingTableTable extends AccessKeyBindingTable
+    with TableInfo<$AccessKeyBindingTableTable, AccessKeyBindingTableData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AccessKeyBindingTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _keyNameMeta =
+      const VerificationMeta('keyName');
+  @override
+  late final GeneratedColumn<String> keyName = GeneratedColumn<String>(
+      'key_name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _templateNameMeta =
+      const VerificationMeta('templateName');
+  @override
+  late final GeneratedColumn<String> templateName = GeneratedColumn<String>(
+      'template_name', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [keyName, templateName, updatedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'access_key_binding';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<AccessKeyBindingTableData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('key_name')) {
+      context.handle(_keyNameMeta,
+          keyName.isAcceptableOrUnknown(data['key_name']!, _keyNameMeta));
+    } else if (isInserting) {
+      context.missing(_keyNameMeta);
+    }
+    if (data.containsKey('template_name')) {
+      context.handle(
+          _templateNameMeta,
+          templateName.isAcceptableOrUnknown(
+              data['template_name']!, _templateNameMeta));
+    } else if (isInserting) {
+      context.missing(_templateNameMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {keyName};
+  @override
+  AccessKeyBindingTableData map(Map<String, dynamic> data,
+      {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AccessKeyBindingTableData(
+      keyName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}key_name'])!,
+      templateName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}template_name'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at'])!,
+    );
+  }
+
+  @override
+  $AccessKeyBindingTableTable createAlias(String alias) {
+    return $AccessKeyBindingTableTable(attachedDatabase, alias);
+  }
+}
+
+class AccessKeyBindingTableData extends DataClass
+    implements Insertable<AccessKeyBindingTableData> {
+  /// The `keyMappings` key this binding is for, and the primary key — so a
+  /// key **cannot be bound twice**. "Explicit, per key, always" made
+  /// structural rather than left to a caller to uphold.
+  final String keyName;
+
+  /// The [AccessTemplateTable.name] this key resolves through, matched by name
+  /// and carrying **no foreign key**.
+  ///
+  /// That is deliberate. The resolver treats a binding naming a missing
+  /// template as *unbound* and the key repository surfaces it, whereas a
+  /// database-level constraint would make a template delete fail with a driver
+  /// error rather than with `TemplateInUseException`'s named list of the keys
+  /// still bound — and on Postgres it would make the delete's outcome depend
+  /// on which station happened to run the migration.
+  final String templateName;
+  final DateTime updatedAt;
+  const AccessKeyBindingTableData(
+      {required this.keyName,
+      required this.templateName,
+      required this.updatedAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['key_name'] = Variable<String>(keyName);
+    map['template_name'] = Variable<String>(templateName);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  AccessKeyBindingTableCompanion toCompanion(bool nullToAbsent) {
+    return AccessKeyBindingTableCompanion(
+      keyName: Value(keyName),
+      templateName: Value(templateName),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory AccessKeyBindingTableData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AccessKeyBindingTableData(
+      keyName: serializer.fromJson<String>(json['keyName']),
+      templateName: serializer.fromJson<String>(json['templateName']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'keyName': serializer.toJson<String>(keyName),
+      'templateName': serializer.toJson<String>(templateName),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  AccessKeyBindingTableData copyWith(
+          {String? keyName, String? templateName, DateTime? updatedAt}) =>
+      AccessKeyBindingTableData(
+        keyName: keyName ?? this.keyName,
+        templateName: templateName ?? this.templateName,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+  AccessKeyBindingTableData copyWithCompanion(
+      AccessKeyBindingTableCompanion data) {
+    return AccessKeyBindingTableData(
+      keyName: data.keyName.present ? data.keyName.value : this.keyName,
+      templateName: data.templateName.present
+          ? data.templateName.value
+          : this.templateName,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AccessKeyBindingTableData(')
+          ..write('keyName: $keyName, ')
+          ..write('templateName: $templateName, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(keyName, templateName, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AccessKeyBindingTableData &&
+          other.keyName == this.keyName &&
+          other.templateName == this.templateName &&
+          other.updatedAt == this.updatedAt);
+}
+
+class AccessKeyBindingTableCompanion
+    extends UpdateCompanion<AccessKeyBindingTableData> {
+  final Value<String> keyName;
+  final Value<String> templateName;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const AccessKeyBindingTableCompanion({
+    this.keyName = const Value.absent(),
+    this.templateName = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AccessKeyBindingTableCompanion.insert({
+    required String keyName,
+    required String templateName,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  })  : keyName = Value(keyName),
+        templateName = Value(templateName),
+        updatedAt = Value(updatedAt);
+  static Insertable<AccessKeyBindingTableData> custom({
+    Expression<String>? keyName,
+    Expression<String>? templateName,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (keyName != null) 'key_name': keyName,
+      if (templateName != null) 'template_name': templateName,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AccessKeyBindingTableCompanion copyWith(
+      {Value<String>? keyName,
+      Value<String>? templateName,
+      Value<DateTime>? updatedAt,
+      Value<int>? rowid}) {
+    return AccessKeyBindingTableCompanion(
+      keyName: keyName ?? this.keyName,
+      templateName: templateName ?? this.templateName,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (keyName.present) {
+      map['key_name'] = Variable<String>(keyName.value);
+    }
+    if (templateName.present) {
+      map['template_name'] = Variable<String>(templateName.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AccessKeyBindingTableCompanion(')
+          ..write('keyName: $keyName, ')
+          ..write('templateName: $templateName, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -7909,6 +8414,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $AppRoleTable appRole = $AppRoleTable(this);
   late final $AppUserTable appUser = $AppUserTable(this);
   late final $AuditEntryTable auditEntry = $AuditEntryTable(this);
+  late final $AccessTemplateTableTable accessTemplateTable =
+      $AccessTemplateTableTable(this);
+  late final $AccessKeyBindingTableTable accessKeyBindingTable =
+      $AccessKeyBindingTableTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -7934,7 +8443,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         plcBlockCallTable,
         appRole,
         appUser,
-        auditEntry
+        auditEntry,
+        accessTemplateTable,
+        accessKeyBindingTable
       ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
@@ -14075,6 +14586,305 @@ typedef $$AuditEntryTableProcessedTableManager = ProcessedTableManager<
     ),
     AuditEntryData,
     PrefetchHooks Function()>;
+typedef $$AccessTemplateTableTableCreateCompanionBuilder
+    = AccessTemplateTableCompanion Function({
+  required String name,
+  required String rules,
+  required DateTime updatedAt,
+  Value<int> rowid,
+});
+typedef $$AccessTemplateTableTableUpdateCompanionBuilder
+    = AccessTemplateTableCompanion Function({
+  Value<String> name,
+  Value<String> rules,
+  Value<DateTime> updatedAt,
+  Value<int> rowid,
+});
+
+class $$AccessTemplateTableTableFilterComposer
+    extends Composer<_$AppDatabase, $AccessTemplateTableTable> {
+  $$AccessTemplateTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get rules => $composableBuilder(
+      column: $table.rules, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$AccessTemplateTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $AccessTemplateTableTable> {
+  $$AccessTemplateTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get rules => $composableBuilder(
+      column: $table.rules, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AccessTemplateTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AccessTemplateTableTable> {
+  $$AccessTemplateTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get rules =>
+      $composableBuilder(column: $table.rules, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$AccessTemplateTableTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AccessTemplateTableTable,
+    AccessTemplateTableData,
+    $$AccessTemplateTableTableFilterComposer,
+    $$AccessTemplateTableTableOrderingComposer,
+    $$AccessTemplateTableTableAnnotationComposer,
+    $$AccessTemplateTableTableCreateCompanionBuilder,
+    $$AccessTemplateTableTableUpdateCompanionBuilder,
+    (
+      AccessTemplateTableData,
+      BaseReferences<_$AppDatabase, $AccessTemplateTableTable,
+          AccessTemplateTableData>
+    ),
+    AccessTemplateTableData,
+    PrefetchHooks Function()> {
+  $$AccessTemplateTableTableTableManager(
+      _$AppDatabase db, $AccessTemplateTableTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AccessTemplateTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AccessTemplateTableTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AccessTemplateTableTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> name = const Value.absent(),
+            Value<String> rules = const Value.absent(),
+            Value<DateTime> updatedAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AccessTemplateTableCompanion(
+            name: name,
+            rules: rules,
+            updatedAt: updatedAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String name,
+            required String rules,
+            required DateTime updatedAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AccessTemplateTableCompanion.insert(
+            name: name,
+            rules: rules,
+            updatedAt: updatedAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AccessTemplateTableTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $AccessTemplateTableTable,
+    AccessTemplateTableData,
+    $$AccessTemplateTableTableFilterComposer,
+    $$AccessTemplateTableTableOrderingComposer,
+    $$AccessTemplateTableTableAnnotationComposer,
+    $$AccessTemplateTableTableCreateCompanionBuilder,
+    $$AccessTemplateTableTableUpdateCompanionBuilder,
+    (
+      AccessTemplateTableData,
+      BaseReferences<_$AppDatabase, $AccessTemplateTableTable,
+          AccessTemplateTableData>
+    ),
+    AccessTemplateTableData,
+    PrefetchHooks Function()>;
+typedef $$AccessKeyBindingTableTableCreateCompanionBuilder
+    = AccessKeyBindingTableCompanion Function({
+  required String keyName,
+  required String templateName,
+  required DateTime updatedAt,
+  Value<int> rowid,
+});
+typedef $$AccessKeyBindingTableTableUpdateCompanionBuilder
+    = AccessKeyBindingTableCompanion Function({
+  Value<String> keyName,
+  Value<String> templateName,
+  Value<DateTime> updatedAt,
+  Value<int> rowid,
+});
+
+class $$AccessKeyBindingTableTableFilterComposer
+    extends Composer<_$AppDatabase, $AccessKeyBindingTableTable> {
+  $$AccessKeyBindingTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get keyName => $composableBuilder(
+      column: $table.keyName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get templateName => $composableBuilder(
+      column: $table.templateName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$AccessKeyBindingTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $AccessKeyBindingTableTable> {
+  $$AccessKeyBindingTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get keyName => $composableBuilder(
+      column: $table.keyName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get templateName => $composableBuilder(
+      column: $table.templateName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AccessKeyBindingTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AccessKeyBindingTableTable> {
+  $$AccessKeyBindingTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get keyName =>
+      $composableBuilder(column: $table.keyName, builder: (column) => column);
+
+  GeneratedColumn<String> get templateName => $composableBuilder(
+      column: $table.templateName, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$AccessKeyBindingTableTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $AccessKeyBindingTableTable,
+    AccessKeyBindingTableData,
+    $$AccessKeyBindingTableTableFilterComposer,
+    $$AccessKeyBindingTableTableOrderingComposer,
+    $$AccessKeyBindingTableTableAnnotationComposer,
+    $$AccessKeyBindingTableTableCreateCompanionBuilder,
+    $$AccessKeyBindingTableTableUpdateCompanionBuilder,
+    (
+      AccessKeyBindingTableData,
+      BaseReferences<_$AppDatabase, $AccessKeyBindingTableTable,
+          AccessKeyBindingTableData>
+    ),
+    AccessKeyBindingTableData,
+    PrefetchHooks Function()> {
+  $$AccessKeyBindingTableTableTableManager(
+      _$AppDatabase db, $AccessKeyBindingTableTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AccessKeyBindingTableTableFilterComposer(
+                  $db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AccessKeyBindingTableTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AccessKeyBindingTableTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> keyName = const Value.absent(),
+            Value<String> templateName = const Value.absent(),
+            Value<DateTime> updatedAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AccessKeyBindingTableCompanion(
+            keyName: keyName,
+            templateName: templateName,
+            updatedAt: updatedAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String keyName,
+            required String templateName,
+            required DateTime updatedAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AccessKeyBindingTableCompanion.insert(
+            keyName: keyName,
+            templateName: templateName,
+            updatedAt: updatedAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AccessKeyBindingTableTableProcessedTableManager
+    = ProcessedTableManager<
+        _$AppDatabase,
+        $AccessKeyBindingTableTable,
+        AccessKeyBindingTableData,
+        $$AccessKeyBindingTableTableFilterComposer,
+        $$AccessKeyBindingTableTableOrderingComposer,
+        $$AccessKeyBindingTableTableAnnotationComposer,
+        $$AccessKeyBindingTableTableCreateCompanionBuilder,
+        $$AccessKeyBindingTableTableUpdateCompanionBuilder,
+        (
+          AccessKeyBindingTableData,
+          BaseReferences<_$AppDatabase, $AccessKeyBindingTableTable,
+              AccessKeyBindingTableData>
+        ),
+        AccessKeyBindingTableData,
+        PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -14121,4 +14931,8 @@ class $AppDatabaseManager {
       $$AppUserTableTableManager(_db, _db.appUser);
   $$AuditEntryTableTableManager get auditEntry =>
       $$AuditEntryTableTableManager(_db, _db.auditEntry);
+  $$AccessTemplateTableTableTableManager get accessTemplateTable =>
+      $$AccessTemplateTableTableTableManager(_db, _db.accessTemplateTable);
+  $$AccessKeyBindingTableTableTableManager get accessKeyBindingTable =>
+      $$AccessKeyBindingTableTableTableManager(_db, _db.accessKeyBindingTable);
 }
