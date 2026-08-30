@@ -23,6 +23,7 @@ import '../widgets/key_mapping_sections.dart';
 import '../providers/preferences.dart';
 import '../providers/state_man.dart';
 import '../providers/database.dart';
+import 'access_templates_section.dart';
 
 /// Extension to find a [ModbusConfig] by server alias without nullable cast.
 extension ModbusConfigListExt on List<ModbusConfig> {
@@ -36,6 +37,15 @@ extension ModbusConfigListExt on List<ModbusConfig> {
 }
 
 enum _KeyStatus { ok, error, serverDisconnected, serverDisabled }
+
+/// Everything on this page that is not the key list: the database banner, the
+/// key section's own header and save row, the access-templates section and the
+/// import/export card. Measured at 800x600.
+const double kKeyRepositoryChromeHeight = 516;
+
+/// Three key cards. Below this the list is not worth showing and the page
+/// scrolls as a whole instead.
+const double kKeyRepositoryMinKeyListHeight = 264;
 
 /// ` @ st101` for a named server, nothing for an unnamed one.
 ///
@@ -91,18 +101,40 @@ class KeyRepositoryContent extends ConsumerWidget {
         ),
         Expanded(child: _KeyMappingsSection(proposalData: proposalData)),
         const SizedBox(height: 16),
+        const AccessTemplatesSection(),
+        const SizedBox(height: 16),
         _KeyMappingsImportExportCard(),
       ],
     );
 
-    // Header, save button and import/export are fixed height; below this the
-    // key list has no room left and the column would overflow. Fall back to
-    // scrolling the page as a whole (the key list itself stays lazy).
-    const minContentHeight = 320.0;
+    // Header, save button, the access-templates section and import/export are
+    // fixed height; below this the key list has no room left and the column
+    // would overflow. Fall back to scrolling the page as a whole (the key list
+    // itself stays lazy).
+    //
+    // **Re-derived when the templates section landed, not nudged.** The old
+    // value was 320, and it was never a height at which this column fitted:
+    // measured at 800x600 the chrome above and below the key list already came
+    // to ~344 px, so at 320 the list had negative room and the page overflowed
+    // — 320 was the height at which scrolling *began*, not the height at which
+    // the page worked. Adding the section made that gap visible rather than
+    // creating it: with the section the chrome is ~516 px, and a key list worth
+    // showing is three cards at ~82 px.
+    //
+    // So the constant is now what it always claimed to be: the chrome plus a
+    // usable list. A 1080p panel is far above it and lays out directly; a short
+    // window scrolls, which is what the fallback is for.
+    const minContentHeight =
+        kKeyRepositoryChromeHeight + kKeyRepositoryMinKeyListHeight;
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxHeight >= minContentHeight) return content;
         return SingleChildScrollView(
+          // Not the primary scroll view: the key list inside is what a "scroll
+          // the keys" gesture, and every test helper, means by the page's
+          // scrollable. Leaving this primary would hand it the
+          // PrimaryScrollController and make the two indistinguishable.
+          primary: false,
           child: SizedBox(height: minContentHeight, child: content),
         );
       },

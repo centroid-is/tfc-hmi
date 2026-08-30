@@ -123,7 +123,14 @@ void main() {
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
-      // The Add Key button lives in the pinned header, so it stays tappable.
+      // The Add Key button lives in the key section's own pinned header. On a
+      // window too short for the whole column — which the 800x600 test surface
+      // became once the access-templates section was mounted — the page itself
+      // scrolls (KeyRepositoryContent.minContentHeight), and focusing the new
+      // card's name field scrolls the header off the top. Bring it back before
+      // pressing it; the assertion below is unchanged.
+      await tester.ensureVisible(find.text('Add Key'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Add Key'));
       await tester.pumpAndSettle();
 
@@ -1149,11 +1156,17 @@ void main() {
       await tester.tap(find.text('modbus_key'));
       await tester.pumpAndSettle();
 
-      // Scroll to make poll group dropdown visible
+      // Scroll to make poll group dropdown visible.
+      //
+      // Named rather than taken as "the first Scrollable": since the
+      // access-templates section was mounted, a short window puts a page-level
+      // scroll view above the key list (KeyRepositoryContent.minContentHeight),
+      // and `.first` picked that one — which scrolls the card being inspected
+      // off the top instead of scrolling within it.
       await tester.scrollUntilVisible(
         find.text('Poll Group'),
         200,
-        scrollable: find.byType(Scrollable).first,
+        scrollable: keyListScrollable,
       );
       await tester.pumpAndSettle();
 
@@ -1167,6 +1180,10 @@ void main() {
         matching: find.byType(DropdownButtonFormField<String>),
       );
       expect(pollGroupDropdown, findsOneWidget);
+      // Built is not the same as on screen: expanding the card scrolled it
+      // within the key list, and on a short window the page scrolled too.
+      await tester.ensureVisible(pollGroupDropdown);
+      await tester.pumpAndSettle();
       await tester.tap(pollGroupDropdown);
       await tester.pumpAndSettle();
 

@@ -753,6 +753,11 @@ void main() {
     Future<void> openAddRule(WidgetTester tester, String name) async {
       await tester.tap(find.byKey(kAccessTemplateTileKey(name)));
       await tester.pumpAndSettle();
+      // The template list is bounded and scrolls on its own — see
+      // kAccessTemplatesListMaxHeight, which is what keeps this section from
+      // pushing the key list off a small panel.
+      await tester.ensureVisible(find.byKey(kAccessTemplateAddRuleKey(name)));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(kAccessTemplateAddRuleKey(name)));
       await tester.pumpAndSettle();
     }

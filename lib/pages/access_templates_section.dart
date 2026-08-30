@@ -53,6 +53,7 @@ import 'package:tfc_access/tfc_access.dart';
 
 import '../core/access_template_store.dart';
 import '../providers/access_templates.dart';
+import '../providers/state_man.dart';
 import '../widgets/panes/pane_chrome.dart';
 import '../widgets/panes/standard_dialog.dart';
 
@@ -152,6 +153,47 @@ const String kAccessTemplateDeleteUnknownNote =
     'Could not read which keys are bound to this template, so deleting it is '
     'not offered — it might unrestrict keys nobody can currently see.';
 
+/// How `kWholeKeyMember` is shown to a person.
+///
+/// `*` is a storage sentinel, chosen because it cannot collide with an
+/// IEC 61131-3 identifier. It is not a word, and a row reading "*" beside six
+/// member names is the kind of thing an operator reads as a bug.
+const String kWholeKeyMemberLabel = 'The whole key';
+
+/// An expanded template with nothing in it. Says what that costs.
+const String kAccessTemplateNoRulesNote =
+    'No rules, so this template restricts nothing — a key bound to it stays '
+    'open.';
+
+/// Above the suggestion chips.
+const String kAccessTemplateSuggestionsNote =
+    'Pick a member, or type one below:';
+
+/// No suggestions, and why. Not an error: a template written before the PLC is
+/// on the network is the normal commissioning order.
+const String kAccessTemplateNoSuggestionsNote =
+    'No members to offer — nothing is bound to this template yet, or the bound '
+    'key could not be read. Type the member name exactly as the PLC spells it.';
+
+/// The new rule's group picker, before anything is chosen.
+const String kAccessTemplateGroupHint = 'Choose the permission';
+
+const String kAccessTemplateMemberRequiredNote =
+    'Name the member, or pick one above.';
+
+const String kAccessTemplateMemberExistsNote =
+    'That member already has a rule. Change it in the list instead.';
+
+/// Deliberately no default group. A rule that quietly defaulted to the
+/// weakest permission would be a foot-gun in the one file whose whole purpose
+/// is deciding what a member needs.
+const String kAccessTemplateGroupRequiredNote =
+    'Choose the permission this member needs.';
+
+/// A member name as a person should read it.
+String memberLabel(String member) =>
+    member == kWholeKeyMember ? kWholeKeyMemberLabel : member;
+
 // ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------
@@ -196,6 +238,40 @@ Key kAccessTemplateRenameKey(String name) =>
 Key kAccessTemplateDeleteKey(String name) =>
     Key('access-template-delete-$name');
 
+/// One template's "add rule" control, inside its expanded body.
+Key kAccessTemplateAddRuleKey(String name) =>
+    Key('access-template-add-rule-$name');
+
+/// One rule row's group picker.
+Key kAccessTemplateRuleGroupKey(String member) =>
+    Key('access-template-rule-group-$member');
+
+/// One option inside one rule row's group picker.
+///
+/// Keyed per member as well as per group because a `DropdownButton` keeps
+/// every item in the tree (in an `IndexedStack`) whether the menu is open or
+/// not, so options shared by several rows would be indistinguishable.
+Key kAccessTemplateRuleGroupOptionKey(String member, AccessGroup group) =>
+    Key('access-template-rule-group-$member-${group.name}');
+
+/// One rule row's remove control.
+Key kAccessTemplateRuleRemoveKey(String member) =>
+    Key('access-template-rule-remove-$member');
+
+/// One suggested member in the add-rule dialog.
+Key kAccessTemplateSuggestionKey(String member) =>
+    Key('access-template-suggestion-$member');
+
+/// The add-rule dialog's member field. Free text, always.
+const Key kAccessTemplateMemberFieldKey = Key('access-template-member-field');
+
+/// The add-rule dialog's group picker.
+const Key kAccessTemplateNewRuleGroupKey = Key('access-template-new-rule-group');
+
+/// One option in the add-rule dialog's group picker.
+Key kAccessTemplateNewRuleGroupOptionKey(AccessGroup group) =>
+    Key('access-template-new-rule-group-option-${group.name}');
+
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -209,10 +285,13 @@ const double kAccessTemplatesListMaxHeight = 168;
 
 /// The tallest the whole section gets, card chrome included.
 ///
-/// Exported because `KeyRepositoryContent.minContentHeight` is derived from
-/// it: that constant exists so the page falls back to scrolling before the
-/// column overflows, and adding a section changes the arithmetic. A number
-/// left behind here would be a number that was right for the old column.
+/// Recorded rather than used: `KeyRepositoryContent`'s
+/// `kKeyRepositoryChromeHeight` is a **measured** figure for that page's whole
+/// chrome, this section included, because a sum of guessed parts was how the
+/// old `minContentHeight` came to be a height at which the page did not
+/// actually fit. This number is here so that a later change to
+/// [kAccessTemplatesListMaxHeight] carries a visible reminder that the page's
+/// constant was measured with the old value.
 const double kAccessTemplatesSectionMaxHeight =
     kAccessTemplatesListMaxHeight + 76;
 
@@ -222,11 +301,30 @@ const double kAccessTemplatesSectionMaxHeight =
 /// `accessTemplatesProvider` (the templates) and `tagBindingResolverProvider`
 /// (which keys name them), and every change it makes goes through the store
 /// and then invalidates the loader — the single refresh trigger 04-05 left.
-class AccessTemplatesSection extends ConsumerWidget {
+class AccessTemplatesSection extends ConsumerStatefulWidget {
   const AccessTemplatesSection({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AccessTemplatesSection> createState() =>
+      _AccessTemplatesSectionState();
+}
+
+class _AccessTemplatesSectionState
+    extends ConsumerState<AccessTemplatesSection> {
+  /// The template list's own controller, so the scrollbar beside it has
+  /// something to attach to. The list is bounded (see
+  /// [kAccessTemplatesListMaxHeight]) and a bounded list with no scrollbar
+  /// reads as a list that ends where it was cut.
+  final ScrollController _listController = ScrollController();
+
+  @override
+  void dispose() {
+    _listController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final storeAsync = ref.watch(accessTemplateStoreProvider);
 
     // Nothing while the database handle resolves. Not a spinner: this section
@@ -283,12 +381,20 @@ class AccessTemplatesSection extends ConsumerWidget {
           : ConstrainedBox(
               constraints: const BoxConstraints(
                   maxHeight: kAccessTemplatesListMaxHeight),
-              child: ListView.builder(
+              child: Scrollbar(
+                controller: _listController,
+                thumbVisibility: true,
+                child: ListView.builder(
+                controller: _listController,
                 shrinkWrap: true,
                 primary: false,
-                padding: EdgeInsets.zero,
+                padding: const EdgeInsets.only(right: 8),
                 itemCount: templates.length,
                 itemBuilder: (context, index) => _TemplateTile(
+                  // Keyed by name so that an expanded template stays expanded
+                  // across the rebuild every write triggers — otherwise
+                  // changing one rule would collapse the rules being edited.
+                  key: ValueKey('access-template-${templates[index].name}'),
                   template: templates[index],
                   otherNames: [
                     for (final n in names)
@@ -298,6 +404,7 @@ class AccessTemplatesSection extends ConsumerWidget {
                   // why this is not the store's method of the same name.
                   boundKeys: resolver.keysBoundTo(templates[index].name),
                   store: store,
+                ),
                 ),
               ),
             ),
@@ -369,9 +476,11 @@ class AccessTemplatesSection extends ConsumerWidget {
   }
 }
 
-/// One template: its name, what it says, and how many keys it governs.
-class _TemplateTile extends ConsumerWidget {
+/// One template: its name, what it says, how many keys it governs — and, when
+/// it is expanded, its rules.
+class _TemplateTile extends ConsumerStatefulWidget {
   const _TemplateTile({
+    super.key,
     required this.template,
     required this.otherNames,
     required this.boundKeys,
@@ -390,32 +499,179 @@ class _TemplateTile extends ConsumerWidget {
   final AccessTemplateStore store;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return ListTile(
-      key: kAccessTemplateTileKey(template.name),
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      title: Text(template.name),
-      subtitle: Text(
-          kAccessTemplateSummary(template.rules.length, boundKeys.length)),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            key: kAccessTemplateRenameKey(template.name),
-            icon: const Icon(Icons.drive_file_rename_outline, size: 18),
-            tooltip: 'Rename',
-            onPressed: () => _rename(context, ref),
+  ConsumerState<_TemplateTile> createState() => _TemplateTileState();
+}
+
+class _TemplateTileState extends ConsumerState<_TemplateTile> {
+  bool _expanded = false;
+
+  AccessTemplate get template => widget.template;
+  Set<String> get boundKeys => widget.boundKeys;
+  List<String> get otherNames => widget.otherNames;
+  AccessTemplateStore get store => widget.store;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ListTile(
+          key: kAccessTemplateTileKey(template.name),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          onTap: () => setState(() => _expanded = !_expanded),
+          leading: Icon(
+              _expanded ? Icons.expand_less : Icons.expand_more,
+              size: 18),
+          title: Text(template.name),
+          subtitle: Text(
+              kAccessTemplateSummary(template.rules.length, boundKeys.length)),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                key: kAccessTemplateRenameKey(template.name),
+                icon: const Icon(Icons.drive_file_rename_outline, size: 18),
+                tooltip: 'Rename',
+                onPressed: () => _rename(context, ref),
+              ),
+              IconButton(
+                key: kAccessTemplateDeleteKey(template.name),
+                icon: const Icon(Icons.delete_outline, size: 18),
+                tooltip: 'Delete',
+                onPressed: () => _delete(context, ref),
+              ),
+            ],
           ),
-          IconButton(
-            key: kAccessTemplateDeleteKey(template.name),
-            icon: const Icon(Icons.delete_outline, size: 18),
-            tooltip: 'Delete',
-            onPressed: () => _delete(context, ref),
+        ),
+        if (_expanded) _rules(context),
+      ],
+    );
+  }
+
+  /// The rules, whole-key row first.
+  ///
+  /// Every control here changes authorization and therefore goes through
+  /// `AccessTemplateStore.update` — one call, one audit row, one gate. None of
+  /// them is disabled for a session that may not use it; see [_write].
+  Widget _rules(BuildContext context) {
+    final members = template.rules.keys.toList()
+      ..sort((a, b) {
+        // The whole-key row is the template's default and reads first: every
+        // other row is an exception to it.
+        if (a == kWholeKeyMember) return -1;
+        if (b == kWholeKeyMember) return 1;
+        return a.compareTo(b);
+      });
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, bottom: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (members.isEmpty) _note(context, kAccessTemplateNoRulesNote),
+          for (final member in members) _ruleRow(context, member),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: kAccessTemplateAddRuleKey(template.name),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add rule'),
+              onPressed: _addRule,
+            ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _ruleRow(BuildContext context, String member) {
+    final group = template.rules[member]!;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            memberLabel(member),
+            style: Theme.of(context).textTheme.bodyMedium,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        DropdownButton<AccessGroup>(
+          key: kAccessTemplateRuleGroupKey(member),
+          value: group,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          // All seven, and nothing else. Labelled by `AccessGroup.name`, which
+          // is the same word the roles screen grants and the same word
+          // `kAccessDeniedGroupNote` names when the write is refused — three
+          // screens, one vocabulary.
+          items: [
+            for (final option in AccessGroup.values)
+              DropdownMenuItem<AccessGroup>(
+                key: kAccessTemplateRuleGroupOptionKey(member, option),
+                value: option,
+                child: Text(option.name),
+              ),
+          ],
+          onChanged: (next) {
+            if (next == null || next == group) return;
+            _saveRules(
+                Map<String, AccessGroup>.from(template.rules)..[member] = next);
+          },
+        ),
+        IconButton(
+          key: kAccessTemplateRuleRemoveKey(member),
+          icon: const Icon(Icons.remove_circle_outline, size: 18),
+          tooltip: 'Remove rule',
+          onPressed: () => _saveRules(
+              Map<String, AccessGroup>.from(template.rules)..remove(member)),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _saveRules(Map<String, AccessGroup> rules) => _write(
+        context,
+        ref,
+        () => store.update(AccessTemplate(name: template.name, rules: rules)),
+      );
+
+  Future<void> _addRule() async {
+    final rule = await showDialog<MapEntry<String, AccessGroup>>(
+      context: context,
+      builder: (_) => _AddRuleDialog(
+        existingMembers: template.rules.keys.toSet(),
+        suggestions: _memberSuggestions,
+      ),
+    );
+    if (rule == null || !mounted) return;
+    await _saveRules(
+        Map<String, AccessGroup>.from(template.rules)..[rule.key] = rule.value);
+  }
+
+  /// The members already seen on a key bound to this template.
+  ///
+  /// **One key is read, not all of them.** The members are the same across
+  /// keys sharing a template — that is what a template *means* — and reading
+  /// forty of them would put a PLC round trip per bound key behind a `+`
+  /// button (T-04-41). So this reads the first bound key and stops.
+  ///
+  /// **Everything that can go wrong here returns an empty list, quietly.** No
+  /// bound key, a `stateMan` that never resolved, a key the PLC will not
+  /// answer for, a scalar value with no members at all: none of them is an
+  /// error the operator can act on, and all of them leave the same plain text
+  /// field. The suggestion list is a convenience over free text, never a
+  /// gate — a member no key has reported yet is still a legal rule, because a
+  /// commissioning engineer writes the template before the PLC is on the
+  /// network.
+  Future<List<String>> _memberSuggestions() async {
+    if (boundKeys.isEmpty) return const [];
+    final stateMan = await ref.read(stateManProvider.future);
+    final value = await stateMan.read(boundKeys.first);
+    if (!value.isObject) return const [];
+    return [for (final entry in value.entries) entry.key]..sort();
   }
 
   Future<void> _rename(BuildContext context, WidgetRef ref) async {
@@ -609,6 +865,198 @@ class _TemplateNameDialogState extends State<_TemplateNameDialog> {
               keys: widget.warningKeys,
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One new rule: a member name and the permission it needs.
+///
+/// Spec §7d: "Adding a row offers the members already seen on keys bound to
+/// that template, so it is picking from a list rather than typing PLC
+/// identifiers from memory." That sentence is this dialog, and the reason it
+/// matters is that the alternative — typing `p_cfg_ManualFreq` from memory
+/// into a field where a typo silently means *no restriction* — is a fail-open
+/// hole with no symptom (T-04-39).
+///
+/// **The list is not authoritative and the text field never goes away.** A
+/// member no key has yet reported is still a legal rule. The residual is
+/// stated rather than closed: a typo here still reads as no restriction, and
+/// 04-08's unbound/dangling surface is what makes such a gap findable.
+class _AddRuleDialog extends StatefulWidget {
+  const _AddRuleDialog({
+    required this.existingMembers,
+    required this.suggestions,
+  });
+
+  /// Members that already have a rule. Offered nowhere — re-scoping one is
+  /// what the row's own picker is for, and a second way in would let the
+  /// operator "add" a rule that silently replaced another.
+  final Set<String> existingMembers;
+
+  /// Reads the members off the equipment. Injected rather than read from a
+  /// provider here so this dialog has no opinion about how many keys that
+  /// costs; see `_TemplateTileState._memberSuggestions`.
+  final Future<List<String>> Function() suggestions;
+
+  @override
+  State<_AddRuleDialog> createState() => _AddRuleDialogState();
+}
+
+class _AddRuleDialogState extends State<_AddRuleDialog> {
+  final TextEditingController _member = TextEditingController();
+  AccessGroup? _group;
+  String? _memberError;
+  String? _groupError;
+
+  List<String> _suggested = const [];
+
+  /// Whether the load has finished, however it finished.
+  ///
+  /// Nothing is rendered about suggestions until it has — not a spinner, and
+  /// not the "no members to offer" line, which would otherwise appear for a
+  /// frame and then be replaced by chips.
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _member.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    List<String> members;
+    try {
+      members = await widget.suggestions();
+    } on Object {
+      // Quietly. See `_memberSuggestions` for why none of these failures is
+      // something to put in front of the operator.
+      members = const [];
+    }
+    if (!mounted) return;
+    setState(() {
+      _suggested = members;
+      _loaded = true;
+    });
+  }
+
+  void _confirm() {
+    final member = _member.text.trim();
+    if (member.isEmpty) {
+      setState(() => _memberError = kAccessTemplateMemberRequiredNote);
+      return;
+    }
+    if (widget.existingMembers.contains(member)) {
+      setState(() => _memberError = kAccessTemplateMemberExistsNote);
+      return;
+    }
+    final group = _group;
+    if (group == null) {
+      setState(() => _groupError = kAccessTemplateGroupRequiredNote);
+      return;
+    }
+    Navigator.of(context).pop(MapEntry(member, group));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // The whole-key row is always offered: it is the one member name nobody
+    // can type, since `*` is a sentinel rather than something the PLC reports.
+    final offered = <String>[
+      if (!widget.existingMembers.contains(kWholeKeyMember)) kWholeKeyMember,
+      for (final member in _suggested)
+        if (!widget.existingMembers.contains(member)) member,
+    ];
+
+    return StandardDialogFrame(
+      title: 'Add rule',
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        PaneAction.primary(
+          label: 'Add',
+          buttonKey: kAccessTemplateConfirmKey,
+          onPressed: _confirm,
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_loaded && _suggested.isEmpty) ...[
+            _note(context, kAccessTemplateNoSuggestionsNote),
+            const SizedBox(height: 12),
+          ],
+          if (offered.isNotEmpty) ...[
+            _note(context, kAccessTemplateSuggestionsNote),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final member in offered)
+                  ActionChip(
+                    key: kAccessTemplateSuggestionKey(member),
+                    label: Text(memberLabel(member)),
+                    onPressed: () {
+                      _member.text = member;
+                      setState(() => _memberError = null);
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
+          TextField(
+            key: kAccessTemplateMemberFieldKey,
+            controller: _member,
+            decoration: InputDecoration(
+              labelText: 'Member',
+              errorText: _memberError,
+              errorMaxLines: 3,
+            ),
+            onChanged: (_) {
+              if (_memberError != null) setState(() => _memberError = null);
+            },
+          ),
+          const SizedBox(height: 16),
+          DropdownButton<AccessGroup>(
+            key: kAccessTemplateNewRuleGroupKey,
+            value: _group,
+            isExpanded: true,
+            hint: const Text(kAccessTemplateGroupHint),
+            items: [
+              for (final option in AccessGroup.values)
+                DropdownMenuItem<AccessGroup>(
+                  key: kAccessTemplateNewRuleGroupOptionKey(option),
+                  value: option,
+                  child: Text(option.name),
+                ),
+            ],
+            onChanged: (next) => setState(() {
+              _group = next;
+              _groupError = null;
+            }),
+          ),
+          if (_groupError != null)
+            Text(
+              _groupError!,
+              maxLines: null,
+              overflow: TextOverflow.visible,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.error),
+            ),
         ],
       ),
     );
