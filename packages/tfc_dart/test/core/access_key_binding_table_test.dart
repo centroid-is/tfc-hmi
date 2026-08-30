@@ -224,7 +224,9 @@ void main() {
       final offenders = _keyMappingEntryMembers()
           .where((m) => m.toLowerCase().contains('template'))
           .toList();
-      expect(offenders, isEmpty, reason: theRuling);
+      expect(offenders, isEmpty,
+          reason: 'no `accessTemplate` member, and no other spelling of a '
+              'template binding either. $theRuling');
     });
 
     test('the KeyMappingEntry source mentions no template binding at all', () {
