@@ -166,6 +166,22 @@ int _builtTiles(WidgetTester tester) => tester
     )
     .length;
 
+/// Where the list is scrolled to.
+///
+/// Read off the `Scrollable`'s own position rather than off a
+/// `ScrollController`: this page deliberately owns no controller — a controller
+/// is the thing a pre-fetching scroll listener would need, and the
+/// comment-stripped grep forbids one.
+double _listOffset(WidgetTester tester) => tester
+    .state<ScrollableState>(
+      find.descendant(
+        of: find.byKey(kAuditTrailListKey),
+        matching: find.byType(Scrollable),
+      ),
+    )
+    .position
+    .pixels;
+
 /// A host whose `setState` rebuilds [AuditTrailBody] without replacing its
 /// `State`.
 ///
@@ -200,8 +216,16 @@ class _RebuildHostState extends State<_RebuildHost> {
 // Harness
 // ---------------------------------------------------------------------------
 
-/// Pumps [AuditTrailBody] over [store], with the clock frozen at [_now] unless
-/// [freezeClock] is false.
+/// Pumps [AuditTrailBody] over [store].
+///
+/// **No `withClock` anywhere in this file, and that is not an oversight.**
+/// `testWidgets` runs its body inside `package:fake_async`, which installs its
+/// own `package:clock` — so the clock is already frozen for the whole test and
+/// advances only when a pump is given a duration. Freezing it a second time
+/// around the first pump only would be actively harmful: `initState` would
+/// resolve its query against the pinned instant while a later refresh resolved
+/// its own against fake_async's, and the page would look as though it had
+/// issued a query it never issued.
 ///
 /// `muted()` rather than a bare `MaterialApp`, for the reason
 /// `audit_trail_row_test.dart` states: `HmiStateColors.of` falls back to
@@ -211,27 +235,22 @@ class _RebuildHostState extends State<_RebuildHost> {
 Future<void> _pumpBody(
   WidgetTester tester, {
   required AuditTrailStore? store,
-  bool freezeClock = true,
   Widget child = const AuditTrailBody(),
 }) async {
   final (light, _) = muted();
 
-  final app = ProviderScope(
-    overrides: [
-      auditTrailStoreProvider.overrideWith((ref) async => store),
-    ],
-    child: MaterialApp(
-      theme: light,
-      home: Scaffold(body: child),
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        auditTrailStoreProvider.overrideWith((ref) async => store),
+      ],
+      child: MaterialApp(
+        theme: light,
+        home: Scaffold(body: child),
+      ),
     ),
   );
-
-  if (freezeClock) {
-    await withClock(Clock.fixed(_now), () => tester.pumpWidget(app));
-  } else {
-    await tester.pumpWidget(app);
-  }
-  // One extra frame for the store future and the entries future to resolve.
+  // Two more frames for the store future and the entries future to resolve.
   await tester.pump();
   await tester.pump();
 }
@@ -467,6 +486,10 @@ void main() {
     testWidgets('spans exactly seven days back from now and asks for 500 rows',
         (tester) async {
       final store = _FakeStore(answer: (_) => _rows(3));
+      // The instant `initState` will resolve the query against: fake_async
+      // holds the clock still until a pump is given a duration, and no pump in
+      // `_pumpBody` is.
+      final openedAt = clock.now();
       await _pumpBody(tester, store: store);
 
       expect(store.recorded, hasLength(1));
@@ -478,7 +501,7 @@ void main() {
         reason: 'the default is the last seven days, capped at 500 rows — '
             'whichever bound is reached first',
       );
-      expect(window.end, _now);
+      expect(window.end, openedAt);
       expect(store.recorded.single.limit, kAuditTrailRowLimit);
     });
 
@@ -563,7 +586,6 @@ void main() {
       await _pumpBody(
         tester,
         store: store,
-        freezeClock: false,
         child: const _RebuildHost(),
       );
 
@@ -599,7 +621,6 @@ void main() {
       await _pumpBody(
         tester,
         store: store,
-        freezeClock: false,
         child: const _RebuildHost(),
       );
       final opened = store.recorded.single.window!.end;
@@ -801,20 +822,24 @@ void main() {
 
       await tester.drag(find.byKey(kAuditTrailListKey), const Offset(0, -400));
       await tester.pump();
-      final offsetBefore =
-          tester.widget<ListView>(find.byKey(kAuditTrailListKey))
-              .controller
-              ?.offset;
+      final offsetBefore = _listOffset(tester);
+      expect(
+        offsetBefore,
+        greaterThan(0),
+        reason: 'a test that never left the top could not tell a preserved '
+            'position from a reset one',
+      );
 
       await tester.tap(find.byKey(kAuditTrailLoadMoreKey));
       await tester.pump();
       await tester.pump();
 
-      final offsetAfter =
-          tester.widget<ListView>(find.byKey(kAuditTrailListKey))
-              .controller
-              ?.offset;
-      expect(offsetAfter, offsetBefore);
+      expect(
+        _listOffset(tester),
+        offsetBefore,
+        reason: 'the older page arrives beneath what is on screen; the list '
+            'does not reset to the top and the earlier rows do not move',
+      );
     });
 
     testWidgets('a short second page ends the sequence', (tester) async {
@@ -833,10 +858,22 @@ void main() {
     });
 
     testWidgets('a second Load more appends a third query', (tester) async {
-      // Every page full, so the sequence never ends on its own.
-      final store = _FakeStore(
-        answer: (_) => _rows(kAuditTrailRowLimit),
-      );
+      // Every page full, so the sequence never ends on its own — and every
+      // page strictly older than the last, or the third query would carry the
+      // same cursor as the second, compare equal to it, and be answered from
+      // the family's cache rather than from the database.
+      var page = 0;
+      final store = _FakeStore(answer: (query) {
+        page++;
+        final anchor = query.before ?? _now;
+        return [
+          for (var i = 0; i < kAuditTrailRowLimit; i++)
+            _row(
+              id: page * kAuditTrailRowLimit + i,
+              at: anchor.subtract(Duration(minutes: i + 1)),
+            ),
+        ];
+      });
       await _pumpBody(tester, store: store);
 
       for (var tap = 0; tap < 2; tap++) {
@@ -859,7 +896,6 @@ void main() {
       await _pumpBody(
         tester,
         store: store,
-        freezeClock: false,
         child: const _RebuildHost(),
       );
 
