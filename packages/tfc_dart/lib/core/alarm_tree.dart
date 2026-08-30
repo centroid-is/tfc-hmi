@@ -1,41 +1,41 @@
 import 'alarm.dart';
 
-/// One node of the alarm tree — a group named by a segment of
-/// [AlarmConfig.path].
+/// One group in the alarm tree, named by a segment of [AlarmConfig.group].
 ///
-/// A node is not itself an alarm, with one exception: [bound] is the alarm
-/// that *is* this node, the coarse signal for equipment whose finer alarms do
-/// not exist yet.
-class AlarmNode {
+/// A group is not itself an alarm, with one exception: [bound] is the alarm
+/// that *is* this group, the coarse signal for equipment whose finer alarms
+/// do not exist yet.
+class AlarmGroup {
   /// The last segment of [path]. Empty for the root.
   final String name;
 
-  /// Full path from the root, outermost first. Empty for the root.
+  /// This group's address from the root, outermost first — the value an
+  /// [AlarmConfig.group] must carry to land here. Empty for the root.
   final List<String> path;
 
-  final AlarmNode? parent;
+  final AlarmGroup? parent;
 
-  /// Sub-groups, in the order their first alarm appeared in the config.
-  final List<AlarmNode> children = [];
+  /// Nested groups, in the order their first alarm appeared in the config.
+  final List<AlarmGroup> children = [];
 
-  /// Diagnosis alarms hanging directly off this node, in config order.
+  /// Diagnosis alarms sitting directly in this group, in config order.
   final List<AlarmConfig> alarms = [];
 
-  /// This node's own alarm, when one is bound to it. See
-  /// [AlarmConfig.bindToPath].
+  /// This group's own alarm, when one is bound to it. See
+  /// [AlarmConfig.bindToGroup].
   AlarmConfig? bound;
 
-  AlarmNode._({required this.name, required this.path, this.parent});
+  AlarmGroup._({required this.name, required this.path, this.parent});
 
   bool get isRoot => path.isEmpty;
 
   /// Zero for a top-level group; the root itself is -1.
   int get depth => path.length - 1;
 
-  /// Whether expanding this node would reveal anything.
+  /// Whether expanding this group would reveal anything.
   bool get hasChildren => children.isNotEmpty || alarms.isNotEmpty;
 
-  /// This node's own alarm, its leaves, and everything beneath it.
+  /// This group's own alarm, its members, and everything nested inside it.
   ///
   /// This is what a collapsed group lane draws the union of.
   Iterable<AlarmConfig> get subtreeAlarms sync* {
@@ -48,16 +48,16 @@ class AlarmNode {
   }
 
   @override
-  String toString() => 'AlarmNode(${path.join(' › ')})';
+  String toString() => 'AlarmGroup(${path.join(' › ')})';
 }
 
 /// One line of the timeline's label column, already flattened and indented.
 ///
-/// Exactly one of [node] and [alarm] is set: a group row carries the node, an
-/// alarm row carries the alarm.
+/// Exactly one of [group] and [alarm] is set: a group row carries the group,
+/// an alarm row carries the alarm.
 class AlarmTreeRow {
   /// Set on a group row.
-  final AlarmNode? node;
+  final AlarmGroup? group;
 
   /// Set on an alarm row.
   final AlarmConfig? alarm;
@@ -71,53 +71,53 @@ class AlarmTreeRow {
   final int depth;
 
   const AlarmTreeRow._({
-    this.node,
+    this.group,
     this.alarm,
     required this.isBound,
     required this.depth,
   });
 
-  bool get isGroup => node != null;
+  bool get isGroup => group != null;
 
-  String get label => node?.name ?? alarm!.title;
+  String get label => group?.name ?? alarm!.title;
 
   @override
   String toString() => 'AlarmTreeRow(${'  ' * depth}$label)';
 }
 
-/// The alarm definitions arranged as a tree by [AlarmConfig.path].
+/// The alarm definitions arranged as a tree by [AlarmConfig.group].
 ///
 /// Building this is the only interpretation step between the alarm system and
 /// anything that groups alarms; consumers pick a scope and render the rows.
 class AlarmTree {
-  final AlarmNode root;
+  final AlarmGroup root;
 
   AlarmTree._(this.root);
 
   factory AlarmTree.fromConfigs(Iterable<AlarmConfig> configs) {
-    final root = AlarmNode._(name: '', path: const []);
+    final root = AlarmGroup._(name: '', path: const []);
     for (final config in configs) {
-      final node = _nodeFor(root, config.path);
-      // A bound alarm needs a node to be; at the root there is none, and a
-      // node keeps the first alarm claiming it. Either way the alarm becomes
-      // an ordinary leaf rather than disappearing.
-      if (config.bindToPath && !node.isRoot && node.bound == null) {
-        node.bound = config;
+      final group = _groupFor(root, config.group);
+      // A bound alarm needs a group to be; at the root there is none, and a
+      // group keeps the first alarm claiming it. Either way the alarm becomes
+      // an ordinary member rather than disappearing.
+      if (config.bindToGroup && !group.isRoot && group.bound == null) {
+        group.bound = config;
       } else {
-        node.alarms.add(config);
+        group.alarms.add(config);
       }
     }
     return AlarmTree._(root);
   }
 
-  static AlarmNode _nodeFor(AlarmNode root, List<String> path) {
+  static AlarmGroup _groupFor(AlarmGroup root, List<String> path) {
     var current = root;
     for (var i = 0; i < path.length; i++) {
       final segment = path[i];
       var next =
           current.children.where((c) => c.name == segment).firstOrNull;
       if (next == null) {
-        next = AlarmNode._(
+        next = AlarmGroup._(
           name: segment,
           path: List.unmodifiable(path.sublist(0, i + 1)),
           parent: current,
@@ -129,12 +129,12 @@ class AlarmTree {
     return current;
   }
 
-  /// The node at [path], or null when no alarm is defined under it.
+  /// The group at [path], or null when no alarm is defined in it.
   ///
-  /// Returning null rather than an empty node is deliberate: a path that has
+  /// Returning null rather than an empty group is deliberate: a group that has
   /// stopped matching — because a segment was renamed in the alarm
   /// definitions — should be reportable, not silently drawn as empty.
-  AlarmNode? nodeAt(List<String> path) {
+  AlarmGroup? groupAt(List<String> path) {
     var current = root;
     for (final segment in path) {
       final next = current.children.where((c) => c.name == segment).firstOrNull;
@@ -144,61 +144,61 @@ class AlarmTree {
     return current;
   }
 
-  /// Rows in display order for an asset scoped to [scope].
+  /// Rows in display order, showing only [groups].
   ///
-  /// [scope] is a list of paths — the entire configuration a stop-timeline
-  /// asset needs. Empty means the whole tree. Each scoped subtree is
-  /// re-indented so its own node sits at depth zero, and paths that no longer
-  /// match simply contribute nothing.
+  /// [groups] is a list of group addresses — the entire configuration a
+  /// stop-timeline asset needs. Empty means the whole tree. Each one is
+  /// re-indented so it sits at depth zero, and an address that no longer
+  /// matches simply contributes nothing rather than throwing.
   ///
-  /// Order within a node is: the node, its own alarm (only when it also has
-  /// children — otherwise the node row already is that alarm), then its
-  /// sub-groups, then its own leaf alarms.
-  List<AlarmTreeRow> rows({List<List<String>> scope = const []}) {
+  /// Order within a group is: the group, its own alarm (only when it also has
+  /// members — otherwise the group row already is that alarm), then its
+  /// nested groups, then its own alarms.
+  List<AlarmTreeRow> rows({List<List<String>> groups = const []}) {
     final rows = <AlarmTreeRow>[];
-    if (scope.isEmpty) {
+    if (groups.isEmpty) {
       for (final child in root.children) {
         _emit(child, 0, rows);
       }
-      // alarms defined with no path at all
+      // alarms defined with no group at all
       for (final leaf in root.alarms) {
         rows.add(AlarmTreeRow._(alarm: leaf, isBound: false, depth: 0));
       }
       return rows;
     }
 
-    final seen = <AlarmNode>{};
-    for (final path in scope) {
-      final node = nodeAt(path);
-      if (node == null || node.isRoot || !seen.add(node)) continue;
-      // a node already covered by a broader scope path must not repeat
-      if (node.ancestors.any(seen.contains)) continue;
-      _emit(node, 0, rows);
+    final seen = <AlarmGroup>{};
+    for (final address in groups) {
+      final group = groupAt(address);
+      if (group == null || group.isRoot || !seen.add(group)) continue;
+      // a group already covered by a broader address must not repeat
+      if (group.ancestors.any(seen.contains)) continue;
+      _emit(group, 0, rows);
     }
     return rows;
   }
 
-  void _emit(AlarmNode node, int depth, List<AlarmTreeRow> out) {
-    out.add(AlarmTreeRow._(node: node, isBound: false, depth: depth));
-    final bound = node.bound;
-    // A branch whose only alarm is the bound one is already represented by its
-    // own row; repeating it would be a lane drawn twice. A branch that also
-    // has children needs the row, or its lane would show intervals that
-    // nothing underneath it explains.
-    if (bound != null && node.hasChildren) {
+  void _emit(AlarmGroup group, int depth, List<AlarmTreeRow> out) {
+    out.add(AlarmTreeRow._(group: group, isBound: false, depth: depth));
+    final bound = group.bound;
+    // A group whose only alarm is the bound one is already represented by its
+    // own row; repeating it would draw the same lane twice. A group that also
+    // has members needs the row, or its lane would show intervals that nothing
+    // inside it explains.
+    if (bound != null && group.hasChildren) {
       out.add(AlarmTreeRow._(alarm: bound, isBound: true, depth: depth + 1));
     }
-    for (final child in node.children) {
+    for (final child in group.children) {
       _emit(child, depth + 1, out);
     }
-    for (final leaf in node.alarms) {
-      out.add(AlarmTreeRow._(alarm: leaf, isBound: false, depth: depth + 1));
+    for (final member in group.alarms) {
+      out.add(AlarmTreeRow._(alarm: member, isBound: false, depth: depth + 1));
     }
   }
 }
 
-extension on AlarmNode {
-  Iterable<AlarmNode> get ancestors sync* {
+extension on AlarmGroup {
+  Iterable<AlarmGroup> get ancestors sync* {
     var current = parent;
     while (current != null) {
       yield current;

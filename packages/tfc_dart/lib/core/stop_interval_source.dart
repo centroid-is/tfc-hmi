@@ -1,0 +1,148 @@
+import 'alarm.dart';
+import 'alarm_interval.dart';
+
+/// One activation of one alarm, as the timeline needs it.
+///
+/// Distinct from [AlarmInterval], which is the anonymous shape the lanes draw:
+/// this one still knows which alarm it belongs to, so the Pareto can group by
+/// it and the detail row can name it.
+class StopActivation {
+  /// The alarm this activation belongs to, by [AlarmConfig.uid].
+  final String alarmUid;
+
+  final AlarmInterval interval;
+
+  const StopActivation({required this.alarmUid, required this.interval});
+
+  DateTime get start => interval.start;
+  bool get isOpen => interval.isOpen;
+  AlarmLevel get level => interval.level;
+
+  @override
+  String toString() => 'StopActivation($alarmUid, $interval)';
+}
+
+/// Turns alarm activations into the intervals the timeline draws.
+///
+/// The reason this exists at all is that the two halves of the record live in
+/// different places. [AlarmMan] writes a row to `alarm_history` from
+/// `_removeActiveAlarm`, i.e. **when an alarm clears** — so the table holds
+/// closed intervals only, and an alarm that is standing right now is missing
+/// from it entirely. The live set from `activeAlarms()` holds exactly the
+/// ones the table lacks.
+///
+/// Read one and you get a chart that omits the single stop the operator came
+/// to look at. So both are read and unioned, the same way
+/// `alarmHistoryEntries` already does for the alarm history list.
+class StopIntervalSource {
+  /// Closed activations, from `alarm_history`.
+  final List<StopActivation> closed;
+
+  /// Open activations, from the live active set. Their intervals have a null
+  /// end and run to whatever clock the caller reads them against.
+  final List<StopActivation> open;
+
+  const StopIntervalSource({required this.closed, required this.open});
+
+  static const empty = StopIntervalSource(closed: [], open: []);
+
+  /// Builds the union from the two sources [AlarmMan] exposes.
+  ///
+  /// [history] is what `getRecentAlarms()` returned; [active] is the latest
+  /// `activeAlarms()` event. An alarm appearing in both — which happens for a
+  /// frame as `AlarmMan` moves an instance from the active set into the
+  /// history buffer — is counted once, as closed, because the closed record is
+  /// the more complete one.
+  factory StopIntervalSource.fromAlarms({
+    required Iterable<AlarmActive> history,
+    required Iterable<AlarmActive> active,
+  }) {
+    final closed = <StopActivation>[];
+    // By identity, not value: AlarmActive has no value equality, and it is the
+    // same instance AlarmMan moves between the two collections.
+    final seen = Set<AlarmActive>.identity();
+
+    for (final entry in history) {
+      if (!seen.add(entry)) continue;
+      final deactivated = entry.deactivated;
+      // A history entry with no deactivation time has not actually closed;
+      // treat it as open rather than inventing an end for it.
+      closed.add(StopActivation(
+        alarmUid: entry.alarm.config.uid,
+        interval: AlarmInterval(
+          start: entry.notification.timestamp,
+          end: deactivated,
+          level: entry.notification.rule.level,
+        ),
+      ));
+    }
+
+    final open = <StopActivation>[];
+    for (final entry in active) {
+      if (!seen.add(entry)) continue;
+      open.add(StopActivation(
+        alarmUid: entry.alarm.config.uid,
+        interval: AlarmInterval(
+          start: entry.notification.timestamp,
+          end: null,
+          level: entry.notification.rule.level,
+        ),
+      ));
+    }
+
+    return StopIntervalSource(closed: closed, open: open);
+  }
+
+  /// Every activation, closed and open, sorted by start.
+  List<StopActivation> get all {
+    final out = [...closed, ...open]
+      ..sort((a, b) => a.start.compareTo(b.start));
+    return out;
+  }
+
+  /// Whether anything is standing right now.
+  bool get hasOpen => open.isNotEmpty;
+
+  /// Activations grouped by alarm uid, each sorted by start.
+  ///
+  /// This is the per-lane input: one alarm's activations cannot overlap each
+  /// other, so the result is already the sorted disjoint list
+  /// [AlarmIntervalSeries] wants.
+  Map<String, List<AlarmInterval>> byAlarm() {
+    final out = <String, List<AlarmInterval>>{};
+    for (final activation in all) {
+      (out[activation.alarmUid] ??= []).add(activation.interval);
+    }
+    return out;
+  }
+
+  /// A prepared series for one alarm, ready to be queried per frame.
+  ///
+  /// Returns an empty series for an alarm with no activations, rather than
+  /// null: a lane with nothing in it still has to draw and still reports zero.
+  AlarmIntervalSeries seriesFor(
+    String alarmUid, {
+    required DateTime now,
+    List<TimeRange> excluded = const [],
+  }) =>
+      AlarmIntervalSeries(
+        byAlarm()[alarmUid] ?? const [],
+        now: now,
+        excluded: excluded,
+      );
+
+  /// The merged union across several alarms — what a collapsed group lane
+  /// draws, carrying the worst severity standing in each stretch.
+  List<AlarmInterval> mergedFor(
+    Iterable<String> alarmUids, {
+    required DateTime now,
+  }) {
+    final grouped = byAlarm();
+    final gathered = <AlarmInterval>[];
+    for (final uid in alarmUids) {
+      final intervals = grouped[uid];
+      if (intervals != null) gathered.addAll(intervals);
+    }
+    return mergeIntervals(gathered, now: now);
+  }
+}

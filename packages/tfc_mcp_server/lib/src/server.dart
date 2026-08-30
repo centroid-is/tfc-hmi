@@ -37,6 +37,7 @@ import 'safety/elicitation_risk_gate.dart';
 import 'services/proposal_feedback_bus.dart';
 import 'services/proposal_service.dart';
 import 'tools/alarm_tools.dart';
+import 'tools/alarm_tree_tools.dart';
 import 'tools/alarm_write_tools.dart';
 import 'tools/asset_write_tools.dart';
 import 'tools/config_tools.dart';
@@ -169,6 +170,9 @@ class TfcMcpServer {
     }
     if (toggles.alarmsEnabled) {
       registerAlarmTools(registry, alarmService);
+      // The tree rides with the alarm group: it is read-only and only means
+      // anything to someone already allowed to read alarms.
+      registerAlarmTreeTools(registry, alarmService);
     }
     if (toggles.configEnabled) {
       registerConfigTools(registry, configService);

@@ -165,8 +165,8 @@ void main() {
       required String title,
       required String description,
       List<Map<String, dynamic>> rules = const [],
-      List<String>? path,
-      bool? bindToPath,
+      List<String>? group,
+      bool? bindToGroup,
     }) =>
         {
           'uid': uid,
@@ -174,8 +174,8 @@ void main() {
           'title': title,
           'description': description,
           'rules': rules,
-          if (path != null) 'path': path,
-          if (bindToPath != null) 'bindToPath': bindToPath,
+          if (group != null) 'group': group,
+          if (bindToGroup != null) 'bindToGroup': bindToGroup,
         };
 
     /// Reads back the stored alarm config, to prove a tool did not write it.
@@ -339,6 +339,56 @@ void main() {
       });
     });
 
+    group('create_alarm grouping', () {
+      test('a new alarm can be created straight into a group', () async {
+        await setupWithAutoConfirm();
+        final result = await client.callTool('create_alarm', {
+          'title': 'Vacuum not reached',
+          'description': 'Chamber did not pull down',
+          'group': ['Line 3', 'Multivac'],
+          'rules': [
+            {'level': 'warning', 'formula': 'mv.vacuum < 0.8'}
+          ],
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['group'], equals(['Line 3', 'Multivac']));
+        expect(json['bindToGroup'], isFalse);
+      });
+
+      test('a new alarm can be bound to its group', () async {
+        await setupWithAutoConfirm();
+        final result = await client.callTool('create_alarm', {
+          'title': 'Strapper stopped',
+          'description': 'No diagnosis alarm exists for it yet',
+          'group': ['Line 3', 'Afak'],
+          'bind_to_group': true,
+          'rules': [
+            {'level': 'error', 'formula': 'afak.running == false'}
+          ],
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['bindToGroup'], isTrue);
+      });
+
+      test('a new alarm with no group is ungrouped, not missing the field',
+          () async {
+        await setupWithAutoConfirm();
+        final result = await client.callTool('create_alarm', {
+          'title': 'T',
+          'description': 'D',
+          'rules': [
+            {'level': 'info', 'formula': 'a > 1'}
+          ],
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['group'], isEmpty);
+        expect(json['bindToGroup'], isFalse);
+      });
+    });
+
     group('update_alarm', () {
       test('valid args with existing alarm returns updated proposal',
           () async {
@@ -377,11 +427,11 @@ void main() {
       });
 
       test('an update keeps the alarm where it sits in the tree', () async {
-        // AlarmConfig.path/bindToPath place an alarm in the alarm tree, and
-        // accepting an update proposal replaces the stored alarm with the
-        // proposal wholesale. No tool edits the path, so if the proposal did
-        // not carry it, renaming an alarm would silently re-home it at the
-        // root and empty out whatever grouped by it.
+        // AlarmConfig.group/bindToGroup place an alarm in the alarm tree,
+        // and accepting an update proposal replaces the stored alarm with the
+        // proposal wholesale -- so if the proposal did not carry the group,
+        // renaming an alarm would silently re-home it at the root and empty
+        // out whatever grouped by it.
         await setupWithAutoConfirm();
 
         await seedAlarms([
@@ -389,14 +439,14 @@ void main() {
             uid: 'alarm-1',
             title: 'Film reel empty',
             description: 'The upper film reel ran out',
-            path: ['Line 3', 'Multivac'],
+            group: ['Line 3', 'Multivac'],
           ),
           alarmJson(
             uid: 'alarm-2',
             title: 'Multivac stopped',
             description: 'No finer alarm matched',
-            path: ['Line 3', 'Multivac'],
-            bindToPath: true,
+            group: ['Line 3', 'Multivac'],
+            bindToGroup: true,
           ),
         ]);
 
@@ -408,8 +458,8 @@ void main() {
             jsonDecode((renamed.content.first as TextContent).text)
                 as Map<String, dynamic>;
         expect(leaf['title'], equals('Film reel ran out'));
-        expect(leaf['path'], equals(['Line 3', 'Multivac']));
-        expect(leaf['bindToPath'], isFalse);
+        expect(leaf['group'], equals(['Line 3', 'Multivac']));
+        expect(leaf['bindToGroup'], isFalse);
 
         final bound = await client.callTool('update_alarm', {
           'alarm_uid': 'alarm-2',
@@ -418,11 +468,95 @@ void main() {
         final boundJson =
             jsonDecode((bound.content.first as TextContent).text)
                 as Map<String, dynamic>;
-        expect(boundJson['path'], equals(['Line 3', 'Multivac']));
-        expect(boundJson['bindToPath'], isTrue);
+        expect(boundJson['group'], equals(['Line 3', 'Multivac']));
+        expect(boundJson['bindToGroup'], isTrue);
       });
 
-      test('an alarm with no path proposes an empty one, not a missing one',
+      test('update_alarm can move an alarm into a group', () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(uid: 'a', title: 'Film reel empty', description: 'D'),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'a',
+          'group': ['Line 3', 'Multivac'],
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['group'], equals(['Line 3', 'Multivac']));
+        expect(json['title'], equals('Film reel empty'));
+      });
+
+      test('update_alarm can move an alarm back to the root', () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(
+              uid: 'a', title: 'T', description: 'D', group: ['Line 3']),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'a',
+          'group': <String>[],
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['group'], isEmpty);
+      });
+
+      test('update_alarm can bind an alarm to its group', () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(
+              uid: 'a',
+              title: 'Multivac stopped',
+              description: 'D',
+              group: ['Line 3', 'Multivac']),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'a',
+          'bind_to_group': true,
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['bindToGroup'], isTrue);
+        expect(json['group'], equals(['Line 3', 'Multivac']));
+      });
+
+      test('binding at the root is dropped, since there is no group to be',
+          () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(uid: 'a', title: 'T', description: 'D'),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'a',
+          'bind_to_group': true,
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['bindToGroup'], isFalse);
+      });
+
+      test('empty group segments are dropped rather than making blank groups',
+          () async {
+        await setupWithAutoConfirm();
+        await seedAlarms([
+          alarmJson(uid: 'a', title: 'T', description: 'D'),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'a',
+          'group': ['Line 3', '', 'Multivac'],
+        });
+        final json = jsonDecode((result.content.first as TextContent).text)
+            as Map<String, dynamic>;
+        expect(json['group'], equals(['Line 3', 'Multivac']));
+      });
+
+      test('an alarm with no group proposes an empty one, not a missing one',
           () async {
         await setupWithAutoConfirm();
         await seedAlarms([
@@ -435,8 +569,8 @@ void main() {
         });
         final json = jsonDecode((result.content.first as TextContent).text)
             as Map<String, dynamic>;
-        expect(json['path'], isEmpty);
-        expect(json['bindToPath'], isFalse);
+        expect(json['group'], isEmpty);
+        expect(json['bindToGroup'], isFalse);
       });
 
       test('an alarm that exists only in preferences can be updated',
