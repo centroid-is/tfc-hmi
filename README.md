@@ -137,3 +137,37 @@ flutter pub run build_runner build
 cd centroid-hmi
 flutter run -d macos
 ```
+
+### Profiling
+
+`ghcr.io/centroid-is/centroid-hmi:latest-profile` is a Flutter **profile**
+build — AOT-compiled like release, so its timings are the ones an operator
+feels, but with the Dart VM Service left in. It is an extra tag alongside
+`latest` and `latest-release`, which are unchanged; point a station's compose
+at it when you want to profile that station. `tools/hmi_profiler.py`
+turns that into a markdown report: frame build/raster percentiles, the call
+tree behind them, timeline blocks and the largest classes on the heap — led by
+a "Where to look" summary.
+
+For the one-off stall rather than the average, `slow` finds blocks that ran far
+longer than the median for their own name and dumps the stack that was on the
+CPU during each.
+
+It also reads the layers the VM cannot see: per-thread CPU (is the raster
+thread pegged while the UI thread idles?), RSS against the Dart heap (the
+engine, Skia, pdfium and open62541 allocate outside it), every container
+against its memory limit, and the database's live queries and scan counts.
+
+```sh
+# a running station (port 8181 is on the compose network, not published)
+docker compose run --rm profiler report --seconds 30
+docker compose run --rm profiler slow --seconds 20 --repeat   # hunt for hiccups
+docker compose run --rm profiler system --seconds 10          # containers, threads, database
+
+# a local profile run — paste the ws:// URI `flutter run` printed
+flutter run --profile -d macos
+python3 tools/hmi_profiler.py report --url ws://127.0.0.1:PORT/AUTHCODE=/ws
+```
+
+See [`docker/profiler/README.md`](docker/profiler/README.md) for the engine
+switches this needs, how to read the output, and why the port is not exposed.

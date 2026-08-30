@@ -258,6 +258,131 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-release-build.outputs.centroid_hmi_sha }}-release
             ghcr.io/${{ github.repository_owner }}/centroid-hmi:latest-release
 
+  # A third build of the same main commit, in **profile** mode, published as
+  # `latest-profile`. Additive: `latest` (debug) and `latest-release` above are
+  # untouched and keep their meaning.
+  #
+  # Profile is AOT-compiled by the same gen_snapshot with the same
+  # optimisations — a station running it feels like release — but the engine
+  # keeps three things release strips out: the Dart VM Service, the sampling
+  # CPU profiler, and the `Flutter.Frame` timing events the framework posts
+  # under `!kReleaseMode`. Without them there is no way to answer "why is this
+  # station slow" on the station itself; with them, docker/profiler does it
+  # from a terminal. The costs are a larger binary and the profiler's overhead
+  # while a profile is actually being taken, which is why this is its own tag
+  # and not a change to what stations already pull.
+  #
+  # `workflow_dispatch` is in the condition so the profile build can be proven
+  # on a branch before it is merged. Without it the first run of this job is
+  # the one that lands on main, and a mode flag that does not work turns main
+  # red rather than a PR. `gh workflow run centroid-hmi.yml --ref <branch>`;
+  # docker-profile-build stays main-only, so a dispatched run builds and
+  # verifies without publishing `latest-profile` from a branch.
+  elinux-profile-build:
+    if: >-
+      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+      && !inputs.release
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/centroid-is/tfc-toolchain:latest
+    outputs:
+      centroid_hmi_sha: ${{ steps.get_sha.outputs.sha }}
+    steps:
+      - name: Make safe directory
+        run: git config --system --add safe.directory '*'
+      - name: Checkout centroid-hmi
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Get commit SHA
+        id: get_sha
+        working-directory: centroid-hmi
+        run: |
+          SHA=$(git rev-parse --short HEAD) || exit 1
+          test -n "$SHA" || (echo "Empty SHA"; exit 1)
+          echo "SHA: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Setup elinux platform
+        working-directory: centroid-hmi
+        run: flutter-elinux create --platforms=elinux .
+
+      - name: Get Flutter Packages
+        working-directory: centroid-hmi
+        run: flutter-elinux pub get
+
+      - name: Build for eLinux
+        working-directory: centroid-hmi
+        run: flutter-elinux build elinux --profile
+
+      - name: Move build artifacts
+        working-directory: centroid-hmi
+        run: |
+          mkdir -p assets
+          mv build/elinux/x64/profile/bundle/* assets/
+
+      # A profile bundle that quietly came out as release would publish an
+      # image nothing can attach to, and the failure would only surface as a
+      # refused connection on a station weeks later.
+      #
+      # The marker is the VM Service RPC table: `getCpuSamples` is a string in
+      # a profile engine and absent from a release one, because release
+      # compiles the whole service protocol out. Measured on the 3.44.9
+      # artifacts — 2 hits in profile, 0 in release. `grep -a` rather than
+      # `strings`, so this does not depend on binutils being in the toolchain
+      # image.
+      - name: Verify the engine really is a profile build
+        working-directory: centroid-hmi
+        run: |
+          engine=assets/lib/libflutter_engine.so
+          test -f "$engine" || { echo "::error::no $engine in the bundle"; exit 1; }
+          if ! grep -a -q getCpuSamples "$engine"; then
+            echo "::error::$engine has no VM Service — this is a release engine, not a profile one"
+            exit 1
+          fi
+          echo "libflutter_engine.so carries the VM Service; profile build confirmed"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: centroid-hmi-artifacts-profile
+          path: centroid-hmi/assets/
+
+  docker-profile-build:
+    needs: elinux-profile-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: centroid-hmi-artifacts-profile
+          path: docker/frontend/bundle
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image (main, profile)
+        uses: ./.github/actions/docker-build-push
+        with:
+          context: docker/frontend
+          build-args: |
+            APP_BIN=centroidx
+            APP_BUNDLE=bundle
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi:${{ needs.elinux-profile-build.outputs.centroid_hmi_sha }}-profile
+            ghcr.io/${{ github.repository_owner }}/centroid-hmi:latest-profile
+
   backend-build:
     name: Backend Image (flutter-elinux)
     runs-on: ubuntu-latest
@@ -310,3 +435,59 @@ jobs:
           file: docker/backend/Dockerfile
           tags: |
             ghcr.io/${{ github.repository_owner }}/centroid-backend:pr-${{ github.event.pull_request.number }}
+
+  # The image that reads the VM Service the profile build exposes. It is a
+  # python:alpine plus one stdlib-only script, so it is cheap enough to build
+  # on every PR — and building it on PRs is what stops `docker/profiler` from
+  # rotting silently, since nothing else compiles it.
+  profiler-build:
+    name: Profiler Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Get commit SHA
+        id: get_sha
+        run: |
+          SHA=$(git rev-parse --short HEAD) || exit 1
+          test -n "$SHA" || (echo "Empty SHA"; exit 1)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push profiler image (main)
+        if: github.ref == 'refs/heads/main'
+        uses: ./.github/actions/docker-build-push
+        with:
+          context: .
+          file: docker/profiler/Dockerfile
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/hmi-profiler:${{ steps.get_sha.outputs.sha }}
+            ghcr.io/${{ github.repository_owner }}/hmi-profiler:latest
+
+      - name: Build and push profiler image (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ./.github/actions/docker-build-push
+        with:
+          context: .
+          file: docker/profiler/Dockerfile
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/hmi-profiler:${{ steps.get_sha.outputs.sha }}
+            ghcr.io/${{ github.repository_owner }}/hmi-profiler:stable
+
+      - name: Build and push profiler image (PR)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/docker-build-push
+        with:
+          context: .
+          file: docker/profiler/Dockerfile
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/hmi-profiler:pr-${{ github.event.pull_request.number }}
