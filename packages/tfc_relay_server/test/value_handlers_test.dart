@@ -72,11 +72,30 @@ final class _Kit {
       );
 }
 
+/// A source that hands back a live hold and then ends it on its own.
+///
+/// Not exotic: a `LocalStateMan` whose PLC link drops under a live hold does
+/// exactly this, and so does any source that tears a hold down for its own
+/// reasons. The gateway's `_holds` entry is then a handle that is no longer
+/// held, and the point of the case that uses this is that such an entry must
+/// not wedge the key against every later engage.
+final class _EndsHoldsItself extends FakeStateMan {
+  final handedOut = <HoldHandle>[];
+
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final hold = await super.holdToRun(key);
+    handedOut.add(hold);
+    return hold;
+  }
+}
+
 _Kit _kit({
   Duration writeOutcomeTtl = const Duration(seconds: 60),
   Set<String> readOnlyKeys = const {},
+  FakeStateMan? source,
 }) {
-  final api = FakeStateMan(readOnlyKeys: readOnlyKeys);
+  final api = source ?? FakeStateMan(readOnlyKeys: readOnlyKeys);
   final clock = FakeClock(start: _epochStart);
   final config = ServerConfig(writeOutcomeTtl: writeOutcomeTtl);
   final log = WriteOutcomeLog(ttl: writeOutcomeTtl, now: clock.now);
@@ -956,6 +975,113 @@ void main() {
           reason: 'a second holdToRun would have minted a second engage write '
               'at the source — one operator action, one movement of the '
               'machine, and that is the whole property');
+    });
+
+    test('a second engage on a key this session already holds is refused',
+        () async {
+      // 05-REVIEW WR-02. The branch used to overwrite the map entry, and the
+      // displaced handle was then unreachable: no tick could find it, a
+      // release write reached only the entry, and `releaseAllHolds` iterates
+      // `_holds.values` — so teardown missed it too. It stayed engaged in the
+      // source's own live-hold registry until the source itself went away,
+      // with its `onReleased` completer never completing.
+      final kit = _kit();
+      kit.api.setValue('CN01.MOT01.speed', 0);
+
+      final first = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': kit.mintCmd(),
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+      expect(WriteResult.fromJson(first), isA<WriteApplied>(),
+          reason: 'the first engage did not take, so there is no live hold '
+              'for the second one to collide with and this case proves '
+              'nothing');
+      final mintedAfterFirst = kit.api.mintedCmds.length;
+
+      final secondCmd = kit.mintCmd();
+      final error = await _refusal(
+          kit.handlers.write(_params(Methods.write, {
+            'cmd': secondCmd,
+            'key': 'CN01.MOT01.speed',
+            'value': 1,
+            'hold': true,
+          })),
+          'a second engage on a key this session already holds');
+
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'the refusal is raised before api.holdToRun, so '
+              '"definitively no effect" is true and INVALID_PARAMS is the '
+              'honest code');
+      expect(kit.api.mintedCmds, hasLength(mintedAfterFirst),
+          reason: 'a second source-side hold was taken. That handle is the '
+              'orphan: unreachable by tick, by release and by '
+              'releaseAllHolds, and left engaged at the source with its '
+              'onReleased completer never completing');
+      expect(kit.api.upstreamWriteAttempts(secondCmd), 0);
+      expect(error.message, contains('one deadman'),
+          reason: 'the refusal has to say why one key is one hold, because it '
+              'reaches the operator as WriteRejected(server_refused) and the '
+              'message is all they get');
+
+      // The live hold is untouched by the refusal: still feedable, still the
+      // handle a release will find. A refusal that quietly ended the first
+      // hold would stop a machine the operator is still holding the button
+      // for.
+      await kit.handlers.holdTick(_params(Methods.holdTick, {
+        'k': 'CN01.MOT01.speed',
+        'n': 2,
+      }));
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 2,
+          reason: 'the tick after the refusal did not reach the tag, so the '
+              'refusal took the live hold down with it');
+
+      kit.handlers.releaseAllHolds();
+      expect(kit.api.read('CN01.MOT01.speed')?.value, 0,
+          reason: 'teardown left the deadman counter where it was, which is a '
+              'hold outliving the session that engaged it');
+    });
+
+    test('a hold the source ended on its own does not wedge the key',
+        () async {
+      // The other half of WR-02's refusal: it is conditional on the entry
+      // still being *held*. A source that ends a hold for its own reasons —
+      // a PLC link dropping under it — leaves an entry in `_holds` that is
+      // inert, and refusing against that forever would make the key
+      // un-engageable for the life of the session. An inert handle is not an
+      // orphan: there is nothing left to release.
+      final source = _EndsHoldsItself();
+      final kit = _kit(source: source);
+      kit.api.setValue('CN01.MOT01.speed', 0);
+
+      final first = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': kit.mintCmd(),
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+      expect(WriteResult.fromJson(first), isA<WriteApplied>());
+      final mintedAfterFirst = source.mintedCmds.length;
+
+      await source.handedOut.single.release(reason: HoldEnded.disconnect);
+
+      final second = _asMap(await kit.handlers.write(_params(Methods.write, {
+        'cmd': kit.mintCmd(),
+        'key': 'CN01.MOT01.speed',
+        'value': 1,
+        'hold': true,
+      })));
+
+      expect(WriteResult.fromJson(second), isA<WriteApplied>(),
+          reason: 'the key was wedged by a handle nothing can release. The '
+              'operator presses the jog button after the link came back and '
+              'the gateway refuses forever');
+      expect(source.mintedCmds.length, greaterThan(mintedAfterFirst),
+          reason: 'the second engage was answered without a second hold being '
+              'taken at the source, so the ticks that follow have nothing to '
+              'feed');
+      expect(source.handedOut, hasLength(2));
     });
 
     test('an engage the gateway loses track of answers unknown, not an error',

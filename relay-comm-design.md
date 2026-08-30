@@ -442,7 +442,12 @@ nothing about the link needs binding.
   concurrent holds on one tag are a contradiction at the operator's end — one
   finger, one button — and nothing in the client can decide which the machine
   should obey. A binding that can double-fire its press gesture must not paper
-  over it with a `try`.
+  over it with a `try`. **The gateway refuses the same thing on the wire:** a
+  second engage frame on a key the session already holds live comes back
+  `INVALID_PARAMS` before `holdToRun` is called, because the displaced handle
+  would be reachable by no tick, no release and no session teardown. An engage
+  frame replaying an id already recorded is still answered from the outcome
+  log — one press arriving twice is one press.
 - **A release during the engage round trip wins, and does not throw.** The
   engage is a real write with a 50–100 ms floor over a socket, which is long
   enough for a scroll to steal the pointer or for the app to be backgrounded.

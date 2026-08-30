@@ -447,6 +447,49 @@ final class ValueHandlers {
           'of the machine. Mint a new id per action');
     }
 
+    // **One key, one live hold on this session** (05-REVIEW WR-02), and the
+    // refusal is what keeps every handle this gateway ever took reachable.
+    //
+    // The alternative considered was re-engage — take the new hold, release
+    // the displaced one — and it is worse in the only way that matters: the
+    // new engage puts 1 on the tag and the displaced handle's release then
+    // puts 0 on it, so the deadman counter reads released while a live hold
+    // exists. Refusing touches nothing.
+    //
+    // Refusing also matches both ends of the design. `HoldToRunController`
+    // throws `StateError` on a second `press()` for the same reason (§4.6a:
+    // one finger, one button, and nothing in software can decide which of two
+    // holds the machine should obey), and `releaseAllHolds` — which is what
+    // makes a hold unable to outlive its socket (T-05-20) — iterates
+    // `_holds.values`, so a handle that is not in that map is a hold no
+    // teardown can end.
+    //
+    // Placed *after* the idempotency window above, so a replayed engage under
+    // the same id is still answered from the log rather than refused: one
+    // press arriving twice is one press. Placed *before* `_record` and before
+    // any source call, so `INVALID_PARAMS` means here what it means
+    // everywhere else on this path — definitively no effect.
+    //
+    // Conditional on the entry still being *held*, because a source can end a
+    // hold for its own reasons (a PLC link dropping under it). An inert
+    // handle is not an orphan — there is nothing left to release — and
+    // refusing against one would wedge the key for the life of the session.
+    if (request.hold && request.value == 1) {
+      final live = _holds[request.key];
+      if (live != null && live.isHeld) {
+        throw _refuse(
+            Methods.write,
+            'this session already holds a live hold-to-run on "${request.key}" '
+            'and one key is one deadman counter, so a second engage was not '
+            'sent: no hold was taken and no device was consulted. Two holds on '
+            'one tag are a contradiction at the operator\'s end — one finger, '
+            'one button — and the second handle would be unreachable by every '
+            'tick, every release and the session teardown that has to end it. '
+            'Release the live hold first');
+      }
+      if (live != null) _holds.remove(request.key);
+    }
+
     // Recorded *before* the call so a writeStatus arriving while this is
     // upstream is answered "unknown" and not "never received": the command is
     // on its way to a machine at that exact moment.
@@ -490,6 +533,11 @@ final class ValueHandlers {
         // Recorded only when it took. A refused engage produces an inert
         // handle (`hold_handle.dart`), and keeping one would make the next
         // tick look authorized for a hold that never existed.
+        //
+        // Never an overwrite: the refusal above guarantees this key holds no
+        // live hold, and an inert entry was dropped there. Every handle this
+        // gateway takes is therefore in the map that `releaseAllHolds`
+        // iterates (05-REVIEW WR-02).
         if (handle.isHeld) _holds[request.key] = handle;
         result = _withCmd(handle.engagement, request.cmd);
       } else if (hold != null && request.value == 0) {

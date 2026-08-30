@@ -692,6 +692,13 @@ final class RemoteStateMan implements StateManApi {
   /// link — but it will not be released by [dispose] or by a disconnect.
   /// Two concurrent holds on one tag are a contradiction at the operator's
   /// end, not a state this client can resolve on its own.
+  ///
+  /// Over the pipe it does not arise: the gateway refuses a second engage on
+  /// a key the session already holds (05-REVIEW WR-02), so the second
+  /// `holdToRun` comes back rejected and the inert handle is never stored.
+  /// The displacement above is what happens if a gateway some day answers
+  /// otherwise, and it is the fail-safe half — nothing feeds an orphan, so
+  /// the machine stops on the deadman.
   final _holds = <String, HoldHandle>{};
 
   var _holdTicksSent = 0;
