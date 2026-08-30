@@ -449,22 +449,52 @@ void main() {
       expect(body, contains('03-14'));
     });
 
-    test('§3.2 is still deferred, and still names Phase 4 and spec §7c', () {
+    // Re-pointed by plan 04-09, not deleted. It used to assert that §3.2 was
+    // *deferred* and that it did not say `Closed`; 04-09 built the six §7c
+    // tools, the proposal-only posture and the `users` gate at the approval,
+    // so that assertion had to invert. What did not change is the property
+    // the original was defending — the section cannot quietly empty — and the
+    // enumeration is still what defends it. Four `contains` became six.
+    //
+    // A green run of this test now reads as "the closure is recorded and its
+    // evidence survives", where before it read "the deferral is recorded".
+    // That distinction is the whole reason the name changed with the body: a
+    // test whose name still said `deferred` while asserting a closure would
+    // be the kind of stale green this file exists to prevent.
+    test('§3.2 records the closure, still names Phase 4 and spec §7c, and '
+        'still carries its evidence', () {
       final body = _section(doc, '3.2');
       expect(body, contains('Phase 4'),
-          reason: 'MCP tool handlers run in-process and still reach the same '
-              'stores; a deferred section that quietly emptied is the same '
-              'defect as a sweep that never ran');
+          reason: 'MCP tool handlers run in-process and reach the same '
+              'stores; a section that quietly emptied — whether it was '
+              'deferred or closed — is the same defect as a sweep that '
+              'never ran');
       expect(body, contains('§7c'));
       expect(body, contains('read_toggles.dart'));
       expect(body, contains('audit_log_service.dart'));
-      expect(body, isNot(contains('Closed')),
-          reason: 'nothing in this phase closed it, and 03-12 must not read '
-              'as if something did');
+
+      // The closure itself, and the three things that make it checkable
+      // rather than a claim: who applies an accepted proposal, under which
+      // group, and how the row says where the change came from.
+      expect(body, contains('Closed'),
+          reason: '04-09 shipped the §7c tools; a §3.2 that still read as '
+              'deferred would contradict the code');
+      expect(body, contains('proposal'));
+      expect(body, contains('`users`'));
+      expect(body, contains("origin = 'mcp'"));
 
       // The `left open` verdict itself lives on the rows that point here —
       // §3.2's body is the reasoning, the table is where the vocabulary is
       // used. Both have to survive, so both are asserted.
+      //
+      // They still say `left open`, and that is not an oversight the closure
+      // above forgot to tidy: 04-09 closed the **authorization** half. The
+      // rows pointing here are `read_toggles.dart` (the copilot's own tool
+      // config) and `audit_log_service.dart` (the copilot's own trail),
+      // neither of which is authorization data and neither of which §7c
+      // scoped. §3.2's body says so in those words, and this pair of
+      // assertions is what stops the verdict widening from "the
+      // authorization half" to "all of it" without anybody deciding to.
       final pointing = doc
           .split('\n')
           .where((l) => l.startsWith('|') && l.contains('see §3.2'))
@@ -476,6 +506,9 @@ void main() {
             reason: 'a row deferring to §3.2 stopped saying it is open: '
                 '\n$row');
       }
+      expect(body, contains('What stays open'),
+          reason: 'the closed verdict has to name what it does NOT cover, or '
+              'the rows above read as a contradiction rather than a scope');
     });
 
     test('the four `is! DriftPlcCodeIndex` type tests are gone from lib/', () {
