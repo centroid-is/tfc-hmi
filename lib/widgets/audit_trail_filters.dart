@@ -37,6 +37,7 @@ import 'package:flutter/material.dart';
 import 'package:tfc_access/tfc_access.dart';
 
 import '../core/audit_trail_store.dart';
+import 'button_graph.dart' show showSetDatePicker;
 import 'fuzzy_search_bar.dart';
 
 // ---------------------------------------------------------------------------
@@ -115,6 +116,23 @@ const Key kAuditTrailWhoDropdownKey = ValueKey<String>('audit-who-dropdown');
 
 /// The all/allowed/denied segmented control.
 const Key kAuditTrailOutcomeKey = ValueKey<String>('audit-outcome-segments');
+
+/// The date-range affordance.
+const Key kAuditTrailRangeChipKey = ValueKey<String>('audit-range-chip');
+
+/// The affordance that drops an explicit range and nothing else.
+const Key kAuditTrailClearRangeKey = ValueKey<String>('audit-clear-range');
+
+/// The bar's own `Clear filters`. 05-06's empty body owns the other one.
+const Key kAuditTrailClearFiltersKey = ValueKey<String>('audit-clear-filters');
+
+/// The refresh affordance. There is no clock behind it; see
+/// [AuditTrailFilterBar].
+const Key kAuditTrailRefreshKey = ValueKey<String>('audit-refresh');
+
+/// The one line stating how many rows came back, and over what window.
+const Key kAuditTrailResultSummaryKey =
+    ValueKey<String>('audit-result-summary');
 
 /// How long the operator has to stop typing before the database is asked.
 ///
@@ -515,4 +533,301 @@ class AuditOutcomeSegments extends StatelessWidget {
           ),
         ),
       );
+}
+
+// ---------------------------------------------------------------------------
+// The date range, and how a window is named
+// ---------------------------------------------------------------------------
+
+/// What opens when the date chip is tapped.
+///
+/// A parameter rather than a direct call so the chip is testable. The default
+/// is [showSetDatePicker] from `button_graph.dart`, the range picker this repo
+/// already has — a third-party modal from `board_datetime_picker`, reused and
+/// not rebuilt. It must never be opened inside a golden: its rendering belongs
+/// to that package and is not this phase's to pin.
+typedef AuditRangePicker = Future<DateTimeRange?> Function(
+  BuildContext context,
+  DateTimeRange? current,
+);
+
+/// `2026-08-01 06:00 → 2026-08-30 18:30`.
+///
+/// `history_view.dart`'s `_rangeLabel` with the seconds dropped: an audit
+/// window is chosen to the minute and the extra two digits are two more
+/// characters to ellipsise away on a narrow bar.
+String auditRangeLabel(AuditWindow window) =>
+    '${_stamp(window.start)} → ${_stamp(window.end)}';
+
+String _stamp(DateTime at) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${at.year}-${two(at.month)}-${two(at.day)} '
+      '${two(at.hour)}:${two(at.minute)}';
+}
+
+/// The name of the window [filters] would actually be answered over.
+///
+/// Not simply the date chip's label. The chip states the *explicit* range and
+/// says [kAuditTrailDefaultRangeLabel] when there is none, which is what the
+/// control does; this states what the **query** did, and a search escapes the
+/// seven-day bound entirely (`AuditTrailFilters.toQuery`). Reporting "Last 7
+/// days" beside a count that was taken over the whole table would be the exact
+/// wrong-answer-that-looks-right the search escape exists to prevent.
+String auditTrailWindowLabel(AuditTrailFilters filters) {
+  final range = filters.range;
+  if (range != null) return auditRangeLabel(range);
+  if (filters.isSearching) return kAuditTrailWholeTableLabel;
+  return kAuditTrailDefaultRangeLabel;
+}
+
+/// `42 entries · Last 7 days`.
+///
+/// One line, stated once, above the list — never on a chip. A number without
+/// the window that produced it is a claim the operator cannot check, and
+/// counts on the chips would each need their own query to be true.
+String auditTrailResultSummary({
+  required int count,
+  required AuditTrailFilters filters,
+}) =>
+    '$count ${count == 1 ? 'entry' : 'entries'} · '
+    '${auditTrailWindowLabel(filters)}';
+
+// ---------------------------------------------------------------------------
+// The bar
+// ---------------------------------------------------------------------------
+
+/// The one widget the audit trail page mounts.
+///
+/// Five controls and a note in one folding container: the key-prefix field, the
+/// group chips, the outcome segments, the `who` dropdown and the date-range
+/// chip, with `Clear filters`, `Clear range`, a refresh button and the result
+/// summary around them. The lighter `surfaceContainerHighest` container of
+/// `history_view.dart`'s top controls rather than `alarm.dart`'s elevated
+/// `Material`: this bar sits above a dense table and an elevation shadow across
+/// the full width would cut the page in half.
+///
+/// ## Clear filters means "the state the page opened in"
+///
+/// `AuditTrailFilters.cleared()`, not an empty filter set. `operate` stays
+/// **deselected** afterwards, auth stays on, the outcome returns to `any` and
+/// the range and the search go away. The ROADMAP's single default exclusion is
+/// a decision, not an accident of initialisation, and a Clear that brought
+/// `operate` writes back would quietly disagree with [kAuditTrailOperateNote]
+/// rendered two lines above it.
+///
+/// It renders only while [AuditTrailFilters.isDefault] is false. With the
+/// filters already default there is nothing for it to undo, and 05-06's empty
+/// body renders its own `Clear filters` for the "no rows match" case — so
+/// exactly one such control is on screen in every state, and never two.
+///
+/// ## The refresh affordance is a button, not a clock
+///
+/// CONTEXT rules there is no timer on this page: it refreshes on open and on
+/// this control. The bar starts nothing, reads no provider, and knows nothing
+/// about where the rows come from. Any future live-update work must be
+/// listener-gated — started in `onListen`, stopped in `onCancel` — rather than
+/// added here as a periodic tick.
+class AuditTrailFilterBar extends StatefulWidget {
+  const AuditTrailFilterBar({
+    super.key,
+    required this.filters,
+    required this.whoOptions,
+    required this.onChanged,
+    this.resultSummary,
+    this.onRefresh,
+    this.pickRange = showSetDatePicker,
+    this.debounce = kAuditTrailSearchDebounce,
+  });
+
+  /// The state the page owns.
+  final AuditTrailFilters filters;
+
+  /// Every distinct author, from `AuditTrailStore.distinctWho`.
+  final List<String> whoOptions;
+
+  /// The one way filter state leaves this bar.
+  final ValueChanged<AuditTrailFilters> onChanged;
+
+  /// The line built by [auditTrailResultSummary]. Null while nothing has been
+  /// counted — during the first load, or under the denied and unavailable
+  /// states, where a count would be a claim about rows nobody read.
+  final String? resultSummary;
+
+  /// The page's reload. Null disables the button rather than hiding it.
+  final VoidCallback? onRefresh;
+
+  /// Injected so the chip is testable without building a third-party modal.
+  final AuditRangePicker pickRange;
+
+  /// Forwarded to [AuditPrefixField].
+  final Duration debounce;
+
+  @override
+  State<AuditTrailFilterBar> createState() => _AuditTrailFilterBarState();
+}
+
+class _AuditTrailFilterBarState extends State<AuditTrailFilterBar> {
+  /// `Clear filters` has to empty the box as well as the filter, through the
+  /// `GlobalKey<FuzzySearchBarState>.clear()` idiom `alarm.dart` already uses.
+  /// `FuzzySearchBar` holds its own `TextEditingController` and takes no
+  /// initial value, so this handle is the only way to reach it.
+  final GlobalKey<FuzzySearchBarState> _searchBarKey =
+      GlobalKey<FuzzySearchBarState>();
+
+  Future<void> _pickRange() async {
+    final current = widget.filters.range;
+    final picked = await widget.pickRange(
+      context,
+      current == null
+          ? null
+          : DateTimeRange(start: current.start, end: current.end),
+    );
+    // Null is the operator cancelling, which changes nothing. Emitting here
+    // would turn a dismissed modal into a fresh query.
+    if (picked == null) return;
+    widget.onChanged(
+      widget.filters.copyWith(
+        range: AuditWindow(start: picked.start, end: picked.end),
+      ),
+    );
+  }
+
+  void _clearFilters() {
+    _searchBarKey.currentState?.clear();
+    widget.onChanged(widget.filters.cleared());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final filters = widget.filters;
+    final summary = widget.resultSummary;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withAlpha(100),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Wrap, not Row: at a narrow window the five controls fold onto a
+          // second and third line rather than overflowing the bar.
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              // A `TextField` has no intrinsic width and a `Wrap` child is
+              // free to be as wide as the bar, so the field is bounded here
+              // rather than allowed to claim the whole first line.
+              SizedBox(
+                width: 240,
+                child: AuditPrefixField(
+                  key: kAuditTrailPrefixFieldKey,
+                  filters: filters,
+                  onChanged: widget.onChanged,
+                  searchBarKey: _searchBarKey,
+                  debounce: widget.debounce,
+                ),
+              ),
+              AuditOutcomeSegments(
+                filters: filters,
+                onChanged: widget.onChanged,
+              ),
+              AuditWhoDropdown(
+                filters: filters,
+                options: widget.whoOptions,
+                onChanged: widget.onChanged,
+              ),
+              _rangeChip(context),
+              if (filters.range != null)
+                IconButton(
+                  key: kAuditTrailClearRangeKey,
+                  onPressed: () =>
+                      widget.onChanged(filters.copyWith(clearRange: true)),
+                  icon: const Icon(Icons.event_busy, size: 18),
+                  tooltip: kAuditTrailClearRangeTooltip,
+                  visualDensity: VisualDensity.compact,
+                ),
+              IconButton(
+                key: kAuditTrailRefreshKey,
+                onPressed: widget.onRefresh,
+                icon: const Icon(Icons.refresh, size: 18),
+                tooltip: kAuditTrailRefreshTooltip,
+                visualDensity: VisualDensity.compact,
+              ),
+              if (!filters.isDefault)
+                TextButton.icon(
+                  key: kAuditTrailClearFiltersKey,
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off, size: 16),
+                  label: const Text(kAuditTrailClearFiltersLabel),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    textStyle: theme.textTheme.labelMedium,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          AuditGroupChips(filters: filters, onChanged: widget.onChanged),
+          if (summary != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              summary,
+              key: kAuditTrailResultSummaryKey,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// `history_view.dart`'s `_buildDateRangeChip`: an outlined container with a
+  /// calendar icon and a `Flexible` ellipsising label, so a long
+  /// `start → end` shortens rather than overflowing.
+  ///
+  /// Its resting label is [kAuditTrailDefaultRangeLabel] — the *name* of the
+  /// default window, not a preset. There is no preset menu: CONTEXT leaves the
+  /// affordance to discretion "as long as the 7-day default and the 500 cap
+  /// hold", and a list of ranges is more surface than this page needs.
+  Widget _rangeChip(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final range = widget.filters.range;
+
+    return InkWell(
+      key: kAuditTrailRangeChipKey,
+      borderRadius: BorderRadius.circular(6),
+      onTap: _pickRange,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(color: scheme.outline.withAlpha(80)),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.calendar_today, size: 14, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                range == null
+                    ? kAuditTrailDefaultRangeLabel
+                    : auditRangeLabel(range),
+                style: TextStyle(fontSize: 12, color: scheme.onSurface),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
