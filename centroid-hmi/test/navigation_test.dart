@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/access_routes.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/pages/alarm_editor.dart';
+import 'package:tfc/pages/audit_trail.dart';
 import 'package:tfc/pages/first_user.dart';
 import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/page_editor.dart';
@@ -67,6 +68,11 @@ void main() {
       expect(paths, isNot(contains('/advanced/page-editor')));
       expect(paths, isNot(contains('/advanced/preferences')));
       expect(paths, isNot(contains('/advanced/alarm-editor')));
+      // The audit trail is deliberately not god-gated. It surfaces no secret,
+      // and a raised entry stays visible and locked rather than hidden — a
+      // hidden entry is a page nobody knows to ask for. The `users` route gate
+      // is the access control; god mode is menu decoration.
+      expect(paths, contains('/advanced/audit-trail'));
     });
 
     test('god mode reveals them', () {
@@ -270,10 +276,10 @@ void main() {
       expect(lb.routes.containsKey('/draft'), isFalse);
     });
 
-    /// The seven raised routes, proven one at a time.
+    /// The eight raised routes, proven one at a time.
     ///
     /// These are the tests that keep `kRaisedRoutes` and the route table
-    /// spelling the same seven strings: a path mistyped in either place is a
+    /// spelling the same eight strings: a path mistyped in either place is a
     /// route that silently stays open, and nothing else in the repo would
     /// notice. Each group is asserted by its literal path rather than in a
     /// loop over the map, because a loop passes just as happily when the map
@@ -374,6 +380,20 @@ void main() {
         expect(gate.child, isA<PreferencesPage>());
       });
 
+      testWidgets('audit trail needs users', (tester) async {
+        // The whole of the enforcement for the audit trail page. Its store
+        // takes no session and cannot refuse a caller — the reads are ungated
+        // on purpose, because a guarded read would put a row in the trail
+        // every time somebody scrolled the trail. If this gate is wrong, the
+        // page is every write anybody ever made, open to an anonymous panel.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/audit-trail');
+        expect(gate.group.name, 'users');
+        expect(gate.allowWhenRepositoryUnavailable, isFalse,
+            reason: 'the trail is the database; there is nothing to read while it is down');
+        expect(gate.child, isA<AuditTrailPage>());
+      });
+
       testWidgets('server config is the only route open while the repository is unavailable', (tester) async {
         // Catches the helper being changed to a per-call-site boolean: the flag
         // is read off every built gate, not off the declaration it came from.
@@ -387,7 +407,7 @@ void main() {
       });
 
       testWidgets('every declared path is a real route', (tester) async {
-        // Iterates the map rather than repeating the seven, so a typo in
+        // Iterates the map rather than repeating the eight, so a typo in
         // kRaisedRoutes fails here instead of leaving a route quietly open.
         final lb = createLocationBuilder([_page('Home', '/')]);
         for (final path in kRaisedRoutes.keys) {
@@ -410,6 +430,7 @@ void main() {
         expect(accessGroupForRoute('/advanced/server-config').name, 'administer');
         expect(accessGroupForRoute('/advanced/ip-settings').name, 'administer');
         expect(accessGroupForRoute('/advanced/preferences').name, 'administer');
+        expect(accessGroupForRoute('/advanced/audit-trail').name, 'users');
         // A page-manager page is the plant's own page: operate, like everything
         // else on the floor.
         expect(accessGroupForRoute('/chiller').name, 'operate');
