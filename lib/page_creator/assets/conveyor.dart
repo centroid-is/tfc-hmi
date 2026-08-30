@@ -853,6 +853,18 @@ class ConveyorColorPaletteConfig extends BaseAsset {
   Map<String, dynamic> toJson() => _$ConveyorColorPaletteConfigToJson(this);
 }
 
+/// How the belt itself is drawn. The logic around it — keys, drive-state
+/// colours, batches, turns, gates, the operator pane — is identical for
+/// every style; only the band's rendering differs.
+enum ConveyorStyle {
+  /// The classic solid band.
+  box,
+
+  /// A roller conveyor: rollers across the belt on a darker bed. The state
+  /// colour moves onto the rollers, so the colour vocabulary is unchanged.
+  roller,
+}
+
 /// How a conveyor's drive reads.
 ///
 /// [running] is the boolean-driven equivalent of [auto]: the belt is moving,
@@ -1016,6 +1028,24 @@ class ConveyorConfig extends BaseAsset {
   String? augerRpmKey;
   AugerOpenEnd? augerOpenEnd;
 
+  /// Draws the belt as a wagon on rails: wheels and a rail under the band,
+  /// for shuttle conveyors that travel on a track. Straight belts only — a
+  /// turned belt has no single underside to put wheels on.
+  bool? onRails;
+
+  /// Which band renderer this asset paints with. Fixed per asset type — the
+  /// roller variant overrides it — so it is not stored in the page JSON;
+  /// `asset_name` already decides it.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  ConveyorStyle get style => ConveyorStyle.box;
+
+  /// Whether the wagon undercarriage is actually drawn: [onRails] is set and
+  /// nothing that replaces the straight band (turns, the auger renderer) is
+  /// in effect.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  bool get railsActive =>
+      (onRails ?? false) && turns.isEmpty && !(showAuger ?? false);
+
   @JsonKey(fromJson: _gatesFromJson, toJson: _gatesToJson)
   List<ChildGateEntry> gates;
 
@@ -1085,6 +1115,7 @@ class ConveyorConfig extends BaseAsset {
       this.showAuger,
       this.augerRpmKey,
       this.augerOpenEnd,
+      this.onRails,
       this.beltThickness,
       List<ChildGateEntry>? gates,
       List<ConveyorTurnEntry>? turns})
@@ -1115,6 +1146,51 @@ class ConveyorConfig extends BaseAsset {
   factory ConveyorConfig.fromJson(Map<String, dynamic> json) =>
       _$ConveyorConfigFromJson(json);
   Map<String, dynamic> toJson() => _$ConveyorConfigToJson(this);
+}
+
+/// A conveyor drawn as rollers instead of a solid band.
+///
+/// Only the paint differs: every key binding, the drive-state colour
+/// vocabulary, batches, turns, gates and the operator pane are
+/// [ConveyorConfig]'s, inherited unchanged — so the two asset types stay in
+/// step by construction rather than by parallel maintenance.
+@JsonSerializable(explicitToJson: true)
+class RollerConveyorConfig extends ConveyorConfig {
+  @override
+  String get displayName => 'Roller Conveyor';
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  List<String> get searchKeywords => const ['roller', 'rollers'];
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  ConveyorStyle get style => ConveyorStyle.roller;
+
+  RollerConveyorConfig(
+      {super.key,
+      super.batchesKey,
+      super.frequencyKey,
+      super.tripKey,
+      super.runningKey,
+      super.simulateBatches,
+      super.bidirectional,
+      super.reverseDirection,
+      super.showFrequency,
+      super.showAuger,
+      super.augerRpmKey,
+      super.augerOpenEnd,
+      super.onRails,
+      super.beltThickness,
+      super.gates,
+      super.turns});
+
+  RollerConveyorConfig.preview() : super.preview();
+
+  factory RollerConveyorConfig.fromJson(Map<String, dynamic> json) =>
+      _$RollerConveyorConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$RollerConveyorConfigToJson(this);
 }
 
 class _ConveyorConfigContent extends StatefulWidget {
@@ -1244,6 +1320,24 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
                     setState(() => widget.config.showFrequency = val)),
           ],
         ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('On rails (wagon):'),
+            const SizedBox(width: 8),
+            Checkbox(
+                value: widget.config.onRails ?? false,
+                onChanged: (val) =>
+                    setState(() => widget.config.onRails = val)),
+          ],
+        ),
+        if ((widget.config.onRails ?? false) &&
+            !widget.config.railsActive) ...[
+          Text(
+              'Rails are hidden while turns or the auger renderer are '
+              'configured — a wagon is a straight belt.',
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
         const SizedBox(height: 8),
         Row(
           children: [
@@ -2209,6 +2303,9 @@ class _ConveyorState extends ConsumerState<Conveyor>
       mirrorY: mirror?.yMirror ?? false,
       straightBeltWidth: beltWidth,
       paintSize: paintSize,
+      style: widget.config.style,
+      onRails: widget.config.railsActive,
+      railInk: Theme.of(context).colorScheme.onSurface,
     );
     // The belt's own outline, published for the mark the plant view draws
     // while this conveyor's pane is open. Not a shape built to be drawn
@@ -2251,14 +2348,20 @@ class _ConveyorState extends ConsumerState<Conveyor>
   Widget _positionedChildGate(
       ChildGateEntry entry, Size conveyorSize, ConveyorPathGeometry? geometry,
       {double? straightBeltWidth}) {
+    // A wagon's belt only occupies the box above the undercarriage, so
+    // everything that hangs off the band has to measure against that area
+    // rather than the whole box.
+    final beltAreaHeight = widget.config.railsActive
+        ? conveyorSize.height * (1 - ConveyorPainter.railZoneFraction)
+        : conveyorSize.height;
     // Cross-belt dimension: the turned belt carries its own width, a straight
-    // belt is either an explicit band or the full box height.
+    // belt is either an explicit band or the full belt area height.
     final beltHeight =
-        geometry?.beltWidth ?? straightBeltWidth ?? conveyorSize.height;
-    // A straight band is centred in the box, so gates hang off the band edge
-    // rather than the box edge.
+        geometry?.beltWidth ?? straightBeltWidth ?? beltAreaHeight;
+    // A straight band is centred in the belt area, so gates hang off the band
+    // edge rather than the box edge.
     final bandInset =
-        geometry == null ? (conveyorSize.height - beltHeight) / 2 : 0.0;
+        geometry == null ? (beltAreaHeight - beltHeight) / 2 : 0.0;
     final gateSize = beltHeight; // square so flap spans belt width
     final xCenter = entry.position * conveyorSize.width;
 
@@ -2325,9 +2428,12 @@ class _ConveyorState extends ConsumerState<Conveyor>
         child: child,
       );
     } else {
+      // Measured from the box bottom, which with rails is not the band
+      // bottom — the undercarriage sits between them.
+      final bottomInset = conveyorSize.height - bandInset - beltHeight;
       return Positioned(
         left: xCenter - gateSize / 2,
-        bottom: bandInset - outsideOverhang,
+        bottom: bottomInset - outsideOverhang,
         width: gateSize,
         height: gateSize,
         child: child,
@@ -2969,6 +3075,20 @@ class ConveyorPainter extends CustomPainter {
   /// straight band inside the box; null keeps the whole box tappable.
   final Size? paintSize;
 
+  /// Which band renderer to use — see [ConveyorStyle].
+  final ConveyorStyle style;
+
+  /// Draws a wagon undercarriage (wheels on a rail) under the belt, which
+  /// then occupies only the box above it. Straight belts only; the caller
+  /// gates this on [ConveyorConfig.railsActive].
+  final bool onRails;
+
+  /// Ink for the rail, sleepers and wheel rims. The belt's own border stays
+  /// black in every theme because it outlines a filled band; the track is
+  /// bare lines on the page background, so it has to take the theme's
+  /// foreground or it disappears on a dark page.
+  final Color railInk;
+
   ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
@@ -2982,7 +3102,10 @@ class ConveyorPainter extends CustomPainter {
       this.mirrorX = false,
       this.mirrorY = false,
       this.straightBeltWidth,
-      this.paintSize});
+      this.paintSize,
+      this.style = ConveyorStyle.box,
+      this.onRails = false,
+      this.railInk = Colors.black});
 
   /// Undoes the outer mirror after the counter-rotation, so overlay text
   /// paints upright. The canvas at that point carries mirror ∘ rotate ∘
@@ -3032,8 +3155,10 @@ class ConveyorPainter extends CustomPainter {
       final band = straightBeltWidth;
       final size = paintSize;
       if (band == null || size == null) return null;
-      final rect =
-          Rect.fromLTWH(0, (size.height - band) / 2, size.width, band);
+      // With rails the band is centred in the box above the undercarriage,
+      // not in the whole box.
+      final area = onRails ? size.height * (1 - railZoneFraction) : size.height;
+      final rect = Rect.fromLTWH(0, (area - band) / 2, size.width, band);
       return Path()
         ..addRRect(RRect.fromRectAndRadius(
           rect,
@@ -3076,6 +3201,14 @@ class ConveyorPainter extends CustomPainter {
       _paintTurnedBelt(canvas, size);
       return;
     }
+    // A wagon reserves the bottom of the box for its undercarriage and the
+    // belt is drawn in what remains, so the rails never grow the asset — the
+    // box the user drew still bounds all of the ink.
+    var beltArea = size;
+    if (onRails) {
+      beltArea = Size(size.width, size.height * (1 - railZoneFraction));
+      _paintUndercarriage(canvas, size, beltArea.height);
+    }
     // An explicit belt width paints the belt as a band centred in the box
     // rather than filling it, so a straight belt can be set to the same width
     // as a turned one. Everything below is box-relative, so resizing the box
@@ -3086,12 +3219,12 @@ class ConveyorPainter extends CustomPainter {
     final band = straightBeltWidth;
     if (band != null) {
       canvas.save();
-      canvas.translate(0, (size.height - band) / 2);
-      _paintStraightBelt(canvas, Size(size.width, band));
+      canvas.translate(0, (beltArea.height - band) / 2);
+      _paintStraightBelt(canvas, Size(beltArea.width, band));
       canvas.restore();
       return;
     }
-    _paintStraightBelt(canvas, size);
+    _paintStraightBelt(canvas, beltArea);
   }
 
   /// Rounding of the belt's two ends, as a fraction of the belt width.
@@ -3110,15 +3243,39 @@ class ConveyorPainter extends CustomPainter {
   /// does not scale with the box.
   static const _borderWidth = 2.0;
 
+  /// Fraction of the box height a wagon's undercarriage (wheels + rail)
+  /// takes; the belt gets the rest. Public because gate placement and tests
+  /// need to know where the band actually sits.
+  static const railZoneFraction = 0.30;
+
+  /// Roller spacing along the belt, as a fraction of the belt width. Each
+  /// roller bar is a bit over half its pitch, so roughly balanced bar/gap.
+  static const _rollerPitchFactor = 0.55;
+
+  /// How far each roller stops short of the belt edge, as a fraction of the
+  /// belt width — the strip left over reads as the conveyor's side frames.
+  static const _rollerEndInset = 0.14;
+
+  /// What the band is filled with before anything is drawn on it. The roller
+  /// style moves the state colour onto the rollers, so its bed is the same
+  /// colour darkened — the state stays legible at a glance either way.
+  Color get _bandFillColor => style == ConveyorStyle.roller
+      ? Color.lerp(color, Colors.black, 0.45)!
+      : color;
+
   void _paintStraightBelt(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
     final borderRadius = Radius.circular(size.shortestSide * _endRadiusFactor);
     final rrect = RRect.fromRectAndRadius(rect, borderRadius);
 
     final paint = Paint()
-      ..color = color
+      ..color = _bandFillColor
       ..style = PaintingStyle.fill;
     canvas.drawRRect(rrect, paint);
+
+    if (style == ConveyorStyle.roller) {
+      _paintStraightRollers(canvas, size, rrect);
+    }
 
     final border = Paint()
       ..color = Colors.black
@@ -3164,6 +3321,106 @@ class ConveyorPainter extends CustomPainter {
 
     _drawDirectionArrow(canvas, size);
     _drawFrequency(canvas, size);
+  }
+
+  /// Rollers across a straight belt, clipped to the band so the rounded ends
+  /// stay clean. Bars run the belt's cross direction, in the state colour,
+  /// over the darkened bed [_paintStraightBelt] laid down.
+  void _paintStraightRollers(Canvas canvas, Size size, RRect band) {
+    final pitch = max(size.height * _rollerPitchFactor, 4.0);
+    final bar = pitch * 0.55;
+    final y0 = size.height * _rollerEndInset;
+    final y1 = size.height * (1 - _rollerEndInset);
+    if (y1 <= y0) return;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = bar
+      ..strokeCap = StrokeCap.round;
+    canvas.save();
+    canvas.clipRRect(band);
+    // Start half a pitch in so the first roller clears the rounded end, and
+    // step from there — the last one may be clipped, which is fine: rollers
+    // are a texture, not counted objects.
+    for (var x = pitch / 2; x <= size.width - pitch / 4; x += pitch) {
+      canvas.drawLine(Offset(x, y0), Offset(x, y1), paint);
+    }
+    canvas.restore();
+  }
+
+  /// Rollers along a turned belt: same texture as the straight version, but
+  /// each bar sits perpendicular to the centerline's travel at its station.
+  void _paintTurnedRollers(
+      Canvas canvas, ConveyorPathGeometry g, Path outline) {
+    final w = g.beltWidth;
+    final pitch = max(w * _rollerPitchFactor, 4.0);
+    final bar = pitch * 0.55;
+    final half = w / 2 - w * _rollerEndInset;
+    if (half <= 0) return;
+    final length = g.length;
+    if (length <= 0) return;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = bar
+      ..strokeCap = StrokeCap.round;
+    canvas.save();
+    canvas.clipPath(outline);
+    for (var d = pitch / 2; d <= length - pitch / 4; d += pitch) {
+      final t = g.tangentAt(d / length);
+      final normal = Offset(-t.vector.dy, t.vector.dx);
+      canvas.drawLine(
+          t.position + normal * half, t.position - normal * half, paint);
+    }
+    canvas.restore();
+  }
+
+  /// The wagon's running gear: two wheels riding a rail with sleepers under
+  /// it, drawn in the bottom [railZoneFraction] of the box. Neutral ink —
+  /// the track is floor, not equipment state, so it never takes a colour.
+  void _paintUndercarriage(Canvas canvas, Size size, double beltBottom) {
+    final zone = size.height - beltBottom;
+    if (zone <= 2 || size.width <= 0) return;
+
+    final wheelRadius = zone * 0.30;
+    final railWidth = max(zone * 0.10, 1.0);
+    // Wheels touch the belt's underside and the rail tops them up exactly:
+    // belt, wheel, rail stack with no daylight between them.
+    final wheelY = beltBottom + wheelRadius;
+    final railY = beltBottom + 2 * wheelRadius + railWidth / 2;
+
+    final ink = Paint()
+      ..color = railInk
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = railWidth;
+    canvas.drawLine(Offset(0, railY), Offset(size.width, railY), ink);
+
+    // Sleepers: short ticks under the rail, spaced off the zone height so a
+    // long wagon gets more of them rather than stretched ones.
+    final sleeperDrop = zone - 2 * wheelRadius - railWidth;
+    if (sleeperDrop > 1) {
+      final sleeper = Paint()
+        ..color = railInk
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = max(railWidth * 0.75, 1.0);
+      final spacing = max(zone * 0.9, 6.0);
+      final y0 = railY + railWidth / 2;
+      final y1 = min(y0 + sleeperDrop, size.height);
+      for (var x = spacing / 2; x < size.width; x += spacing) {
+        canvas.drawLine(Offset(x, y0), Offset(x, y1), sleeper);
+      }
+    }
+
+    // Two wheels, inset from the ends like a real bogie so the wagon reads
+    // as riding the rail rather than balancing on its corners.
+    final wheelFill = Paint()..color = Colors.grey.shade600;
+    final wheelStroke = Paint()
+      ..color = railInk
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = max(railWidth * 0.75, 1.0);
+    final inset = max(size.width * 0.18, wheelRadius * 2);
+    for (final x in [inset, size.width - inset]) {
+      canvas.drawCircle(Offset(x, wheelY), wheelRadius, wheelFill);
+      canvas.drawCircle(Offset(x, wheelY), wheelRadius, wheelStroke);
+    }
   }
 
   /// Fills a band along the centerline and outlines it with [border].
@@ -3216,11 +3473,26 @@ class ConveyorPainter extends CustomPainter {
       ..color = Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = _borderWidth;
-    _paintBand(canvas, g, 0, 1,
-        width: g.beltWidth,
-        radius: g.beltWidth * _endRadiusFactor,
-        fill: color,
-        border: border);
+    // The outline is resolved here rather than through [_paintBand] because
+    // the rollers have to land between the fill and the border — and where
+    // there is no outline (belt too wide for its bend) the stroked fallback
+    // has no honest geometry to space rollers along, so it stays a plain
+    // band in every style.
+    final outline = g.bandOutline(0, 1,
+        width: g.beltWidth, radius: g.beltWidth * _endRadiusFactor);
+    if (outline != null) {
+      canvas.drawPath(outline, Paint()..color = _bandFillColor);
+      if (style == ConveyorStyle.roller) {
+        _paintTurnedRollers(canvas, g, outline);
+      }
+      canvas.drawPath(outline, border);
+    } else {
+      _paintBand(canvas, g, 0, 1,
+          width: g.beltWidth,
+          radius: g.beltWidth * _endRadiusFactor,
+          fill: _bandFillColor,
+          border: border);
+    }
 
     if (showExclamation) {
       _drawExclamation(canvas, size);
@@ -3372,6 +3644,9 @@ class ConveyorPainter extends CustomPainter {
       oldDelegate.mirrorX != mirrorX ||
       oldDelegate.mirrorY != mirrorY ||
       oldDelegate.straightBeltWidth != straightBeltWidth ||
+      oldDelegate.style != style ||
+      oldDelegate.onRails != onRails ||
+      oldDelegate.railInk != railInk ||
       // Geometry is rebuilt each frame when turns are configured, so curved
       // conveyors repaint on every rebuild (needed for batch animation).
       !identical(oldDelegate.geometry, geometry);
