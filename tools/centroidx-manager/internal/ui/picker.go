@@ -1,9 +1,12 @@
 package ui
 
 import (
-	"strings"
 	"context"
+	"fmt"
 	"image"
+	"log"
+	"strings"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/layout"
@@ -14,6 +17,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
+	"github.com/centroid-is/centroidx-manager/internal/platform"
 	"github.com/centroid-is/centroidx-manager/internal/update"
 )
 
@@ -68,6 +72,12 @@ type pickerState struct {
 	// What Get-AppxPackage reports right now; shown beside "is installed"
 	// so a failed update reads as "still on 2026.8.22", not as success.
 	installedVersion string
+
+	// What the manager last installed and when that build was published —
+	// the only place a main-latest install's timepoint survives (the package
+	// version 0.YYYY.M.run carries no date). Nil when the manager has never
+	// installed here, or the record predates a build installed by other means.
+	installRecord *update.InstallRecord
 }
 
 // runPickerMode fetches versions and runs the picker event loop.
@@ -82,6 +92,7 @@ func runPickerMode(w *app.Window, th *material.Theme, eng *update.Engine, instal
 		notesCacheFor:    -1,
 		isInstalled:      installer.IsInstalled(),
 		installedVersion: installer.InstalledVersion(),
+		installRecord:    loadInstallRecordOrNil(),
 	}
 	state.keepSettings.Value = true
 	state.listState.List.Axis = layout.Vertical
@@ -160,6 +171,83 @@ func (s *pickerState) notesLines() []string {
 	s.notesCache = strings.Split(strings.ReplaceAll(notes, "\r\n", "\n"), "\n")
 	s.notesCacheFor = s.selected
 	return s.notesCache
+}
+
+// loadInstallRecordOrNil reads the install record, treating a missing or
+// unreadable one the same way: the picker simply cannot date the installed
+// build. The failure still goes to the log — it is the answer to "why does my
+// station not say when its build is from".
+func loadInstallRecordOrNil() *update.InstallRecord {
+	rec, err := update.LoadInstallRecord()
+	if err != nil {
+		log.Printf("warn: could not read the install record: %v", err)
+		return nil
+	}
+	return rec
+}
+
+// formatBuildTime renders a publish/install timepoint for the UI, in local
+// time and to the minute — the rolling main-latest build is republished on
+// every merge, so the date alone cannot tell two of the same day's builds
+// apart.
+func formatBuildTime(t time.Time) string {
+	return t.Local().Format("2 Jan 2006 15:04")
+}
+
+// upgradeBanner is the line above the version list that answers the question
+// the list itself cannot: is the newest build here newer than what this
+// station is running? Returns "" when there is nothing trustworthy to say.
+// upgrade=true means the banner announces a newer build (and should be loud),
+// false means it confirms the station is current.
+//
+// The comparison is by publish time via the install record, because on the
+// latest channel the versions are opaque (main-latest vs 0.YYYY.M.run). On
+// stable, when no record helps, the package versions themselves are ordered,
+// so a fallback comparison still catches "a release is newer than installed".
+func upgradeBanner(releases []update.ReleaseInfo, rec *update.InstallRecord, installedVersion string, isInstalled bool, channel string) (text string, upgrade bool) {
+	if !isInstalled || len(releases) == 0 {
+		return "", false
+	}
+	newest := releases[0]
+	if rec.DescribesCurrentInstall(installedVersion) {
+		if newest.PublishedAt.After(rec.PublishedAt) {
+			return fmt.Sprintf(
+				"A newer build is available: %s, published %s. The installed build is from %s.",
+				displayVersion(newest.Version), formatBuildTime(newest.PublishedAt), formatBuildTime(rec.PublishedAt),
+			), true
+		}
+		return fmt.Sprintf(
+			"Up to date: the installed build is the newest on this channel, published %s.",
+			formatBuildTime(rec.PublishedAt),
+		), false
+	}
+	// No usable record. Stable versions order on their own; latest-channel
+	// tags do not, so there the picker stays silent rather than guessing.
+	if channel == update.ChannelStable && installedVersion != "" {
+		if platform.ComparePackageVersions(newest.Version, installedVersion) > 0 {
+			return fmt.Sprintf(
+				"A newer version is available: %s, published %s. Installed: %s.",
+				displayVersion(newest.Version), formatBuildTime(newest.PublishedAt), installedVersion,
+			), true
+		}
+	}
+	return "", false
+}
+
+// installedSummary is the "what is on this machine" line: the package version
+// always, and — when the install record vouches for the current build — which
+// release it came from, when that build was published, and when it was
+// installed.
+func installedSummary(rec *update.InstallRecord, installedVersion string) string {
+	text := "CentroidX is installed"
+	if installedVersion != "" {
+		text = "CentroidX " + installedVersion + " is installed"
+	}
+	if rec.DescribesCurrentInstall(installedVersion) {
+		text += fmt.Sprintf(" — the %s build published %s, installed %s",
+			displayVersion(rec.ReleaseVersion), formatBuildTime(rec.PublishedAt), formatBuildTime(rec.InstalledAt))
+	}
+	return text
 }
 
 func layoutPicker(gtx layout.Context, th *material.Theme, state *pickerState, eng *update.Engine, installer PickerInstaller, w *app.Window) layout.Dimensions {
@@ -305,7 +393,48 @@ func layoutPickerBody(gtx layout.Context, th *material.Theme, state *pickerState
 		})
 	}
 
-	// 35/65 split: list on left, detail on right
+	bannerText, bannerUpgrade := upgradeBanner(
+		state.releases, state.installRecord, state.installedVersion, state.isInstalled, state.channel)
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutUpgradeBanner(gtx, th, bannerText, bannerUpgrade)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return layoutPickerSplit(gtx, th, state)
+		}),
+	)
+}
+
+// layoutUpgradeBanner draws the upgrade/up-to-date line in a bordered strip
+// above the list — bordered so "you can upgrade" is something the eye lands
+// on, not a caption to hunt for.
+func layoutUpgradeBanner(gtx layout.Context, th *material.Theme, text string, upgrade bool) layout.Dimensions {
+	if text == "" {
+		return layout.Dimensions{}
+	}
+	color := ColorSuccess()
+	if upgrade {
+		color = ColorAccent()
+	}
+	return layout.Inset{
+		Top: unit.Dp(10), Bottom: unit.Dp(4),
+		Left: unit.Dp(12), Right: unit.Dp(12),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return widget.Border{Color: color, Width: unit.Dp(1), CornerRadius: unit.Dp(4)}.Layout(gtx,
+			func(gtx layout.Context) layout.Dimensions {
+				return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+					lbl := material.Body1(th, text)
+					lbl.Color = color
+					return lbl.Layout(gtx)
+				})
+			})
+	})
+}
+
+// layoutPickerSplit is the 35/65 split: list on left, detail on right.
+func layoutPickerSplit(gtx layout.Context, th *material.Theme, state *pickerState) layout.Dimensions {
 	return layout.Flex{}.Layout(gtx,
 		layout.Flexed(0.35, func(gtx layout.Context) layout.Dimensions {
 			return layoutVersionList(gtx, th, state)
@@ -368,7 +497,14 @@ func layoutVersionList(gtx layout.Context, th *material.Theme, state *pickerStat
 							return lbl.Layout(gtx)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							lbl := material.Caption(th, r.PublishedAt.Format("2006-01-02"))
+							// To the minute on the development channel: the
+							// rolling build is republished on every merge, so
+							// two builds from the same day differ only here.
+							stamp := r.PublishedAt.Local().Format("2006-01-02")
+							if state.channel == update.ChannelLatest {
+								stamp = r.PublishedAt.Local().Format("2006-01-02 15:04")
+							}
+							lbl := material.Caption(th, stamp)
 							lbl.Color = ColorMuted()
 							return lbl.Layout(gtx)
 						}),
@@ -393,6 +529,17 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 				r := state.releases[state.selected]
 				lbl := material.H5(th, displayVersion(r.Version))
 				lbl.Color = ColorAccent()
+				return lbl.Layout(gtx)
+			}),
+			// The selected build's timepoint — for main-latest this is the
+			// only thing that says which state of main it carries.
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if state.selected < 0 {
+					return layout.Dimensions{}
+				}
+				r := state.releases[state.selected]
+				lbl := material.Body2(th, "Published "+formatBuildTime(r.PublishedAt))
+				lbl.Color = ColorMuted()
 				return lbl.Layout(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
@@ -436,11 +583,7 @@ func layoutDetail(gtx layout.Context, th *material.Theme, state *pickerState) la
 				if !state.isInstalled {
 					return layout.Dimensions{}
 				}
-				text := "CentroidX is installed"
-				if state.installedVersion != "" {
-					text = "CentroidX " + state.installedVersion + " is installed"
-				}
-				lbl := material.Body2(th, text)
+				lbl := material.Body2(th, installedSummary(state.installRecord, state.installedVersion))
 				lbl.Color = ColorSuccess()
 				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, lbl.Layout)
 			}),

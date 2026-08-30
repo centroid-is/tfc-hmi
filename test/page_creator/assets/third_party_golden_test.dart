@@ -6,9 +6,12 @@ import 'dart:math' show pi;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FontLoader;
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../helpers/golden_tolerance.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
-import 'package:tfc/widgets/panes/pane_chrome.dart' show PaneStatus, PaneSection;
+import 'package:tfc/widgets/panes/pane_chrome.dart'
+    show PaneStatus, PaneSection, PaneDetailRow;
 import 'package:tfc/widgets/panes/side_pane.dart' show SidePane, closeSidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
@@ -522,17 +525,50 @@ void main() {
       );
     });
 
-    // The box erector's Status section, one diode per state: stopping-the-line
-    // OFF (white), box-bottom ready LIT green, way-out clear LIT blue, and the
-    // block-ready permit absent from the map — a key the PLC does not serve —
-    // as the grey `!` unknown. The box erector is now the sole prefix-backed
-    // kind (the fish aligner moved to the struct system with the Multivac), so
-    // it is the generic per-bit pane to judge [EquipmentStatusDiodes] by.
-    testWidgets('boxErector — status pane diodes', (tester) async {
+    // The box erector's Status section off the enhanced `BER0n.BER0n` struct,
+    // a mix of diode states: a red fault LIT (a drive has faulted) while the
+    // stopping-line and estop rows are OFF (white), an amber waiting row LIT
+    // (waiting for carton bottoms), the green running row LIT, and several
+    // members absent from the struct — keys this pumped value does not carry —
+    // rendered as the grey `!` unknown rather than claiming "off". The box
+    // erector was the last prefix-backed kind; the enhanced FB moved it onto
+    // the struct system, so this is now a [StructStatusDiodes] pane like the
+    // strapper's, pinning the curated fault-first vocabulary in pixels.
+    testWidgets('boxErector — status pane diodes, every row lit', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1000);
+      tester.view.physicalSize = const Size(900, 1400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
+
+      // EVERY bit true. Not a state the machine is ever in -- it could not be
+      // faulted, waiting and running at once -- but this golden exists to be
+      // read as a COLOUR CHART: one lit diode per row, so the whole vocabulary
+      // can be checked down a single column. A realistic mixed state leaves
+      // most rows grey, which pins the unknown treatment (already covered by
+      // the Multivac's pane) and pins none of the colours.
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
+          m: true,
+        // The permit is INVERTED in its group, so "true" here is the healthy
+        // case -- left true so the golden shows a permit that is fine sitting
+        // beside the two conditions that are not.
+        'q_xOutfeedPermitted': true,
+        // How long each starve has run, so the duration column is in the PNG.
+        'p_stat_tNoBottomsFor': 252000,
+        'p_stat_tNoLidsFor': 45000,
+        'p_stat_tWaitingProductFor': 3780000,
+        // The throughput, in the shape the PLC actually publishes: an FB_BPM
+        // INSTANCE carrying an `hmi : ST_BPM` of rolling averages, not a
+        // scalar. Non-zero on purpose -- 0 is what a stopped machine reads,
+        // and the point of this row is that it is a live rate, not a lamp.
+        'bpmCartonsOut':
+            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'hmi': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+            'avgBPM1Minute': 37.0,
+            'avgBPM5Minute': 35.0,
+          })),
+        })),
+      }));
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -542,25 +578,37 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 560,
+                height: 1180,
                 child: Material(
                   child: SidePane(
-                    title: 'BER-02',
+                    title: 'BER-01',
                     subtitle: 'Box erector',
                     icon: Icons.precision_manufacturing,
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: EquipmentStatusDiodes(
-                        bits: kEquipmentStatusBits[
-                            ThirdPartyEquipmentKind.boxErector]!,
-                        values: const {
-                          'WaitingFrustration': false,
-                          'PermitBottomInfeed': true,
-                          'PermitOutfeed': true,
-                        },
-                        machine: equipmentShortName(
-                            ThirdPartyEquipmentKind.boxErector),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // The same two blocks `_statusSection` composes for a
+                          // box erector: the throughput figure, then the
+                          // diodes.
+                          PaneDetailRow(
+                            label: 'Cartons per minute',
+                            child: Builder(
+                              builder: (context) => Text(
+                                boxErectorBpmOf(status)!.toStringAsFixed(0),
+                                style: Theme.of(context).textTheme.bodyLarge,
+                              ),
+                            ),
+                          ),
+                          GroupedStatusDiodes(
+                            status: status,
+                            groups: boxErectorStatusGroups,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -576,6 +624,179 @@ void main() {
       );
     });
 
+    // The same pane with two groups OPENED — the half of the design a collapsed
+    // golden cannot show. This is the "exactly what is wrong" half: Drives
+    // breaks into the five not-ready and three not-turning alarms the machine
+    // publishes (a drive can be ready and still not move, so they are different
+    // faults), and Out of material carries HOW LONG each starve has run, off
+    // the FB's own timers.
+    //
+    // "Strapper permit off" is dark while the two rows above it are
+    // lit: the permit is INVERTED, so a healthy permit reads as no fault. That
+    // row disagreeing with "Next machine not ready" is how a broken interlock
+    // between the two machines becomes visible.
+    testWidgets('boxErector — status groups opened', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
+          m: false,
+        // A believable single fault plus a starve, rather than everything at
+        // once: the carton conveyor is not ready, and the line has been out of
+        // bottoms for four minutes.
+        'p_stat_xDriveError': true,
+        'p_stat_xAlmDriveM101': true,
+        'p_stat_xAlmMotionM101': true,
+        'p_stat_xWaitingBottoms': true,
+        'p_stat_xWaitingLids': false,
+        'p_stat_xWaitingProduct': false,
+        'p_stat_xExtNotReady': true,
+        'q_xOutfeedPermitted': true,
+        'p_stat_tNoBottomsFor': 252000,
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 1400,
+                child: Material(
+                  child: SidePane(
+                    title: 'BER-01',
+                    subtitle: 'Box erector',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: GroupedStatusDiodes(
+                        status: status,
+                        groups: boxErectorStatusGroups,
+                        machine: equipmentShortName(
+                            ThirdPartyEquipmentKind.boxErector),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      // Opened by real taps, so the golden also proves the rows are tappable
+      // and that the state survives the rebuild each tap triggers.
+      await tester.tap(find.text('Drives'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Out of material'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text("Can't send on"));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_boxErector_groups_open.png'),
+      );
+    });
+
+    // The pane with the Modbus link down, driven through the REAL widget so
+    // the gate, the banner and the header badge are all the ones an operator
+    // gets -- not three pieces reassembled by the test.
+    //
+    // The struct fed in is the dangerous one: every bit still says the machine
+    // is fine ("Running" true, no estop, throughput 37) because
+    // FB_BER01ScadaPoll decodes the Saia's process word unconditionally and
+    // those words simply stop being written when polling fails. Without the
+    // gate this pane would show a confident green "Running" for a machine we
+    // have lost contact with, forever. With it: red banner on top, header
+    // reads "No link", every diode grey, throughput "--".
+    testWidgets('boxErector — Modbus link down', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final frozen = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
+          m: true,
+        // The permit is INVERTED in its group, so "true" here is the healthy
+        // case -- left true so the golden shows a permit that is fine sitting
+        // beside the two conditions that are not.
+        'q_xOutfeedPermitted': true,
+        // How long each starve has run, so the duration column is in the PNG.
+        'p_stat_tNoBottomsFor': 252000,
+        'p_stat_tNoLidsFor': 45000,
+        'p_stat_tWaitingProductFor': 3780000,
+        'p_stat_xModbusHealthy': false,
+        'bpmCartonsOut':
+            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+          'hmi': DynamicValue.fromMap(
+              LinkedHashMap<String, dynamic>.from({'avgBPM1Minute': 37.0})),
+        })),
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 1180,
+                child: Material(
+                  child: SidePane(
+                    title: 'BER-01',
+                    subtitle: 'Box erector',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.unknown('No link'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const CommsLostBanner(),
+                        PaneSection(
+                          title: 'Status',
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const PaneDetailRow(
+                                label: 'Cartons per minute',
+                                child: Text('—'),
+                              ),
+                              GroupedStatusDiodes(
+                                // null, exactly as the gate feeds it: the
+                                // frozen values above are deliberately NOT
+                                // shown.
+                                status: null,
+                                groups: boxErectorStatusGroups,
+                                machine: equipmentShortName(
+                                    ThirdPartyEquipmentKind.boxErector),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      // Referenced so the frozen struct is not an unused local: it documents
+      // what the gate is refusing to display.
+      expect(boxErectorCommsOf(frozen), isFalse);
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_boxErector_comms_down.png'),
+      );
+    });
 
     // The Multivac's Status section as an operator on line 2 actually sees it:
     // the four struct diodes off `SP_Packing_HMI`, and BENEATH them the one
@@ -722,16 +943,33 @@ void main() {
       );
     });
 
-    // The editor with the box erector selected: the Status Key Prefix field
-    // and its suffix-listing help text, which no kind but the SpeedBatcher
-    // had before — without it these diodes could never be pointed at keys.
+    // The editor with the box erector selected: the Status Struct Key field and
+    // its member-listing help text. The box erector migrated to the struct
+    // system with the enhanced `BER0n.BER0n` FB, so its field now names the one
+    // node the diodes read rather than the suffixes a prefix appended.
     testWidgets('boxErector — editor status key field', (tester) async {
+      // The one golden in this file that needs a looser threshold, and the
+      // only full-editor surface here: 400 x 1500 of form fields, dropdowns
+      // and wrapped help text. CI failed it at 0.01% / 64 px — a rounding
+      // difference on antialiased glyph edges, spread over an image with far
+      // more of them than a pane has. The default 0.01% leaves no room for
+      // that on a surface this size, which is exactly what
+      // `useTolerantGoldenComparator` exists for.
+      //
+      // Scoped to this test and restored afterwards, NOT set in `main()`: the
+      // pane goldens beside it are small and deliberately tight, and loosening
+      // them by twenty times to fix this one would let a real colour or layout
+      // regression through where it matters most.
+      final previousComparator = goldenFileComparator;
+      addTearDown(() => goldenFileComparator = previousComparator);
+      useTolerantGoldenComparator(tolerance: 0.002);
+
       await loadRealFont();
       // Taller than the field it is named for needs: #385 added the "Extra
       // status diodes" section below, and at the old 1100 the frame cut
       // through the middle of the Running Color row, which reads as a
       // rendering fault rather than a crop.
-      tester.view.physicalSize = const Size(600, 1500);
+      tester.view.physicalSize = const Size(600, 1600);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
@@ -749,7 +987,7 @@ void main() {
                 key: _key,
                 child: SizedBox(
                   width: 400,
-                  height: 1420,
+                  height: 1500,
                   child: Material(
                     child: Builder(
                         builder: (context) => config.configure(context)),

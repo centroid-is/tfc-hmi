@@ -38,13 +38,17 @@ jobs:
         run: echo "BUILD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       # GTK for the desktop shell, libsecret/jsoncpp for
-      # flutter_secure_storage_linux, liblzma for the Flutter toolchain.
+      # flutter_secure_storage_linux, liblzma for the Flutter toolchain,
+      # libmpv for media_kit (RTSP camera asset) — the bundle does not ship
+      # libmpv, so the target machine needs the distro's libmpv/mpv package
+      # for camera playback (everything else runs without it).
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             clang cmake ninja-build pkg-config \
-            libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+            libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev \
+            libmpv-dev
 
       - name: Setup Flutter
         uses: ./.github/actions/setup-flutter

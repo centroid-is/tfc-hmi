@@ -410,12 +410,31 @@ func (e *Engine) Update(ctx context.Context, opts UpdateOptions) error {
 		e.log("warn: could not remove the downloaded package %s: %v", downloadedPath, err)
 	}
 
+	e.recordInstalledBuild(info, opts.Channel)
+
 	// Step 7: Launch the application.
 	if err := e.installer.LaunchApp(); err != nil {
 		return fmt.Errorf("launch app: %w", err)
 	}
 
 	return nil
+}
+
+// recordInstalledBuild remembers what was just installed and when it was
+// published — for the rolling main-latest build the publish time is the only
+// timepoint the install leaves behind (see InstallRecord). Best effort: a
+// station that cannot write its config directory still gets its update.
+func (e *Engine) recordInstalledBuild(info *ReleaseInfo, channel string) {
+	rec := InstallRecord{
+		ReleaseVersion: info.Version,
+		PackageVersion: e.installer.InstalledVersion(),
+		Channel:        channel,
+		PublishedAt:    info.PublishedAt,
+		InstalledAt:    time.Now(),
+	}
+	if err := SaveInstallRecord(rec); err != nil {
+		e.log("warn: could not record the installed build: %v", err)
+	}
 }
 
 // trustReleaseCertificate imports the release's signing certificate into the

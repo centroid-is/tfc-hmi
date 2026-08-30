@@ -112,13 +112,13 @@ flutter_native_splash:
 
 dependency_overrides:
   # open62541 dev branch: session-recreate freeze fix (open62541_dart#91) +
-  # orphaned-monitored-item fix (open62541_dart#92), not yet in a pub release.
-  # Head of `dev` on open62541_dart, 2026-08-29. SHA-pinned like postgres below
+  # orphaned-monitored-item fix (open62541_dart#92) + worker-isolate stderr-crash fix (open62541_dart#97), not yet in a pub release.
+  # Head of `dev` on open62541_dart, 2026-08-30. SHA-pinned like postgres below
   # (pubspec.lock is gitignored). Remove once these ship to pub.
   open62541:
     git:
       url: https://github.com/centroid-is/open62541_dart.git
-      ref: 1c44a8fef8bc9b007cf03f24e035caeb8b8b6adc
+      ref: 6a34f3482f6c9c2e51c4dc78e5625e4a3b38021e
   # tfc:
   #   git:
   #     url: https://github.com/centroid-is/tfc-hmi.git

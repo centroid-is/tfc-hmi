@@ -374,9 +374,12 @@ func startInstall(state *pickerState, eng *update.Engine, installer PickerInstal
 		} else {
 			state.statusMsg = fmt.Sprintf("CentroidX %s installed!", displayVersion(version))
 		}
-		// Whatever happened, say what is actually on the machine now.
+		// Whatever happened, say what is actually on the machine now — the
+		// install record included, so the banner and the installed line date
+		// the build that just landed, not the one it replaced.
 		state.isInstalled = installer.IsInstalled()
 		state.installedVersion = installer.InstalledVersion()
+		state.installRecord = loadInstallRecordOrNil()
 		state.installing = false
 		w.Invalidate()
 	}()

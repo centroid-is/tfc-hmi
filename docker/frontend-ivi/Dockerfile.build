@@ -54,12 +54,16 @@ FROM debian:trixie-slim AS flutter-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# libmpv-dev: media_kit_video's GTK plugin links against it (RTSP camera
+# asset). The runtime image deliberately does not ship libmpv — ivi-homescreen
+# has no GTK plugin registrar, so camera tiles degrade to their placeholder on
+# these stations either way.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git unzip xz-utils zip ca-certificates \
     clang llvm lld cmake ninja-build pkg-config \
     build-essential python3 \
     libgtk-3-dev liblzma-dev libstdc++-14-dev \
-    libsecret-1-dev \
+    libsecret-1-dev libmpv-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Flutter SDK (pinned to ensure engine hash matches ardera/flutter-ci releases)

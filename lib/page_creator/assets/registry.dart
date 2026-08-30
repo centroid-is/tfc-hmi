@@ -37,6 +37,7 @@ import 'connection_info.dart';
 import 'drawing_viewer.dart';
 import 'third_party.dart';
 import 'alarm_visibility.dart';
+import 'rtsp_camera.dart';
 import 'stop_timeline.dart';
 
 class AssetRegistry {
@@ -92,6 +93,7 @@ class AssetRegistry {
     DrawingViewerConfig: DrawingViewerConfig.fromJson,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.fromJson,
     AlarmVisibilityConfig: AlarmVisibilityConfig.fromJson,
+    RtspCameraConfig: RtspCameraConfig.fromJson,
     StopTimelineConfig: StopTimelineConfig.fromJson,
   };
 
@@ -147,6 +149,7 @@ class AssetRegistry {
     if (kKnowledgeEnabled) DrawingViewerConfig: DrawingViewerConfig.preview,
     ThirdPartyEquipmentConfig: ThirdPartyEquipmentConfig.preview,
     AlarmVisibilityConfig: AlarmVisibilityConfig.preview,
+    RtspCameraConfig: RtspCameraConfig.preview,
     StopTimelineConfig: StopTimelineConfig.preview,
   };
 
