@@ -109,6 +109,71 @@ final class ClientConfig {
   /// sensor when the problem is a switch.
   final double subscriptionStalenessMultiple;
 
+  /// How often a live hold-to-run feeds the plant's deadman counter.
+  ///
+  /// The operator is holding a button and a machine is jogging. What keeps it
+  /// jogging is not a message saying "still held" — it is a counter on the tag
+  /// that keeps going up, which the PLC watches and gives up on after
+  /// [holdDeadman]. The panel sends one increment every [holdPulsePeriod]; the
+  /// safety property is the increments STOPPING, so a panel that crashes, is
+  /// backgrounded or loses its link stops the machine by doing nothing at all.
+  ///
+  /// **Why this is not spelled `holdTickPeriod`.** `client_config_test.dart`'s
+  /// last case (`:202-222`, "the freshness deadline cannot learn a transport
+  /// period") reads *this file* as text, strips the `///` lines, lowercases
+  /// the remainder and asserts it does not contain the substring `tick`. That
+  /// sweep is not fussiness. The gateway advertises its fan-out cadence at
+  /// `hello` as `capabilities.tickMs`, measured at 50-100 ms; the moment this
+  /// class can name that cadence, somebody derives the freshness deadline from
+  /// it as "three periods", ships a 150 ms staleness horizon, and one garbage
+  /// collection pause greys every value in the plant at once. The sweep exists
+  /// so that the derivation cannot be written here at all, and the price of
+  /// keeping it is this paragraph plus a field name without the substring.
+  /// The alternatives were considered and rejected: putting the cadence on
+  /// `HoldToRunController` or in a separate `HoldToRunConfig` would make the
+  /// hold the one client timing number with no named injectable home in this
+  /// class (04-01's must-have truths), which is a worse rule to break than a
+  /// naming preference (D-P5-K).
+  ///
+  /// **Validated with `_positive`, never `_atLeastFloor`.** 100 ms is a fifth
+  /// of the default [deadlineFloor], and routing a cadence through the
+  /// deadline validator would make `ClientConfig()` with no arguments throw at
+  /// construction. It is not a deadline: nothing waits on one pulse, and a
+  /// dropped pulse costs nothing the next one does not fix.
+  final Duration holdPulsePeriod;
+
+  /// How many missed pulses the PLC tolerates before it drops the output.
+  ///
+  /// A *ratio*, for the same reason [subscriptionStalenessMultiple] is one:
+  /// the quantity follows the cadence rather than being an independent
+  /// millisecond count that somebody has to remember to change twice.
+  /// [holdDeadman] is the product, and 100 ms x 10 is the one second the plant
+  /// was configured for (05-CONTEXT decision 3 — the user chose tolerance for
+  /// a Wi-Fi hiccup mid-jog over a near-instant stop, and accepted up to a
+  /// second of coasting after a release on a dead link).
+  ///
+  /// **At least 3.** Below that, two dropped frames stop the machine — which
+  /// is the tolerance decision inverted while wearing the clothes of a safety
+  /// tightening. An operator whose jog cuts out every time the panel's Wi-Fi
+  /// retransmits holds the button harder and then calls somebody.
+  ///
+  /// **Nothing in Dart enforces the PLC's timer.** This number is the client's
+  /// *statement* of what the plant's `FB_HoldToRun` is configured for; the TON
+  /// preset on the other side is a number in a PLC program that no Dart code
+  /// can read or set. The two are kept in step by the design document
+  /// (`relay-comm-design.md` §4.6a) and by nothing else, which is why the
+  /// derived [holdDeadman] exists at all: so there is exactly one place to
+  /// compare against when somebody changes one of them.
+  final int holdMissedPulsesBeforeStop;
+
+  /// How long the machine keeps moving after the pulses stop.
+  ///
+  /// **Derived, never stored.** Two independently settable numbers that must
+  /// agree is precisely how they stop agreeing — and here the disagreement is
+  /// invisible until an operator lets go of a button and something keeps
+  /// moving for longer than anybody expected.
+  Duration get holdDeadman => holdPulsePeriod * holdMissedPulsesBeforeStop;
+
   /// The smallest deadline any of the three above may be set to.
   ///
   /// A parameter rather than a constant on purpose; see the library doc.
@@ -121,6 +186,9 @@ final class ClientConfig {
   /// already decided the panel is dead.
   static const Duration maxBackoffCap = Duration(seconds: 30);
 
+  /// The floor under [holdMissedPulsesBeforeStop]. See that field for why.
+  static const int _minMissedPulses = 3;
+
   ClientConfig({
     this.controlDeadline = const Duration(seconds: 1),
     this.writeDeadline = const Duration(seconds: 2),
@@ -130,6 +198,8 @@ final class ClientConfig {
     this.implausibleClockThreshold = const Duration(minutes: 5),
     this.deadlineFloor = defaultDeadlineFloor,
     this.subscriptionStalenessMultiple = 30,
+    this.holdPulsePeriod = const Duration(milliseconds: 100),
+    this.holdMissedPulsesBeforeStop = 10,
   }) {
     if (!(subscriptionStalenessMultiple > 1)) {
       throw ArgumentError('subscriptionStalenessMultiple '
@@ -142,6 +212,20 @@ final class ClientConfig {
     _atLeastFloor('controlDeadline', controlDeadline);
     _atLeastFloor('writeDeadline', writeDeadline);
     _atLeastFloor('freshnessDeadline', freshnessDeadline);
+
+    // `_positive`, and the choice is load-bearing: see [holdPulsePeriod]. The
+    // deadline floor defaults to 500 ms and the cadence is 100 ms, so
+    // `_atLeastFloor` here would throw on the default construction of this
+    // class and no panel in the plant would start.
+    _positive('holdPulsePeriod', holdPulsePeriod);
+    if (holdMissedPulsesBeforeStop < _minMissedPulses) {
+      throw ArgumentError('holdMissedPulsesBeforeStop '
+          '($holdMissedPulsesBeforeStop) must be at least $_minMissedPulses: '
+          'below that, two dropped frames stop the machine mid-jog, which '
+          'inverts the tolerance the plant decided on — up to a second of '
+          'coasting is accepted precisely so that one Wi-Fi retransmit does '
+          'not drop the output under an operator who never let go');
+    }
 
     _positive('backoffBase', backoffBase);
     _positive('backoffCap', backoffCap);
