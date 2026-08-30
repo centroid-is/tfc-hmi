@@ -33,6 +33,7 @@ import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/pages/first_user.dart';
+import 'package:tfc/pages/audit_trail.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/feature_flags.dart';
@@ -466,7 +467,10 @@ RoutesLocationBuilder createLocationBuilder(
         child: child,
       );
 
-  // Seven routes are gated, and only seven. Left open on purpose:
+  // Eight routes are gated, and only eight. The eighth, '/advanced/audit-trail',
+  // is the one raised for what it *displays* rather than what it writes: the
+  // trail is every write anybody ever made, with old and new values, so it sits
+  // at `users` beside the roles that govern it. Left open on purpose:
   //
   //  - '/advanced/about-linux' reads system information and changes nothing.
   //  - '/advanced/history-view', AppRoutes.historyView and
@@ -590,6 +594,10 @@ RoutesLocationBuilder createLocationBuilder(
     // which is exactly when somebody is commissioning the station.
     AppRoutes.firstUser: (context, state, args) =>
         BeamPage(key: const ValueKey(AppRoutes.firstUser), title: 'First account', child: const FirstUserPage()),
+    '/advanced/audit-trail': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/audit-trail'),
+        title: 'Audit Trail',
+        child: gated('/advanced/audit-trail', 'Audit Trail', const AuditTrailPage())),
   };
 
   // Statement-level const guard rather than a collection-if inside the map

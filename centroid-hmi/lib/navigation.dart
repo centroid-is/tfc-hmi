@@ -65,6 +65,19 @@ List<MenuItem> buildTopLevelMenuItems({
     if (!historyAtTopLevel) historyViewMenuItem,
     MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server.data),
     if (god) MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
+    // Not god-gated, and the first entry here that is neither
+    // commissioning-critical nor Linux-conditional — so the reasoning is
+    // recorded rather than left to be inferred from the majority above. The
+    // rule stated in this function's doc is to god-gate what surfaces secrets
+    // or is a developer tool. The audit trail is neither: no constructor on an
+    // audit record takes a password and the trail withholds values on auth
+    // rows on purpose. And a raised entry stays *visible and locked*, never
+    // hidden — a hidden entry is a page nobody knows to ask for, and a god
+    // gate here would make the viewer invisible on every production station,
+    // which is the one place anybody needs it. The `users` gate on
+    // '/advanced/audit-trail' is the access control; the menu shows a lock
+    // badge to everyone who does not hold it.
+    MenuItem(label: 'Audit Trail', path: '/advanced/audit-trail', icon: Icons.receipt_long),
     if (kKnowledgeEnabled)
       MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
   ];
