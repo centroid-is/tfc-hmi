@@ -144,6 +144,7 @@ here are therefore grouped by what the handle is used for.
 | `lib/core/access_template_store.dart:163, 176` | `required AppDatabase db`, `final AppDatabase _db` | `AppDatabase` | `AccessTemplateStore` | `correct as-is` — the handle 2.2's guard delegates through; the check happens above it. Same `_db` spelling as `HistoryViewStore`, so no ninth accessor |
 | `lib/core/audit_trail_store.dart:413, 417` | `required AppDatabase db`, `final AppDatabase _db` | `AppDatabase` | `AuditTrailStore` | `correct as-is` — the handle Phase 5's **read-only** trail viewer holds. It is on this table because it names `AppDatabase`, not because it writes: the file contains no `into(`, no `update(` and no `delete(`, and `test/core/audit_trail_store_test.dart` asserts that on the source text rather than leaving it merely true today. The enforcement is the route gate `kRaisedRoutes['/advanced/audit-trail']` (05-07) and deliberately not a store check — a guard here would write a row into the trail every time somebody scrolled the trail, on the same reasoning `access_template_store.dart` gives for its own ungated reads. Same `_db` spelling as `HistoryViewStore` and `AccessTemplateStore`, so no ninth accessor |
 | `lib/providers/access_templates.dart:109` | `db: db.db` | `AppDatabase` | `accessTemplateStoreProvider` | `correct as-is` — the provider that hands `AccessTemplateStore` its handle, one line, no statement of its own. Same `db.db` spelling `accessRepositoryProvider` and `auditSinkProvider` already use, so no ninth accessor |
+| `lib/providers/audit_trail.dart:53` | `db: db.db` | `AppDatabase` | `auditTrailStoreProvider` | `correct as-is` — the provider that hands the **read-only** `AuditTrailStore` its handle, one line, no statement of its own. It is on this table because it names the `.db` accessor, not because it writes: the file contains no Drift statement at all, and `test/providers/audit_trail_test.dart` asserts on the source text that it holds no audit sink and performs no permission check. The enforcement is the route gate `kRaisedRoutes['/advanced/audit-trail']` (05-07), on the same reasoning `lib/core/audit_trail_store.dart` gives above. Same `db.db` spelling `accessRepositoryProvider`, `auditSinkProvider` and `accessTemplateStoreProvider` already use, so no ninth accessor |
 | `packages/tfc_dart/lib/core/database_drift.g.dart` (176 occurrences) | generated `_$AppDatabase` boilerplate | — | drift codegen | `not widget-reachable` — regenerated from `database_drift.dart`, which is searched above; collapsed by the script and counted |
 
 **Seven accessor spellings at the 2026-08-29 run — `adb`, `dbWrap.db`,
@@ -371,14 +372,53 @@ its tool handlers reach the same stores the app does:
 `read_toggles.dart:38, 114` writes `mcp.config`, and
 `audit_log_service.dart:47, 85` writes the MCP audit table.
 
-**Why not closed here.** No widget reaches them; the caller is a remote agent
-over SSE. Spec §7c already decides what happens: MCP tools that change
+**Why it was deferred.** No widget reaches them; the caller is a remote agent
+over SSE. Spec §7c already decided what happens: MCP tools that change
 authorization are gated on `users` and audited with `origin = 'mcp'` and `who` =
-the approving human. That is Phase 4's work, not this phase's.
+the approving human. That was Phase 4's work, not Phase 3's.
 
-**What closing it would take.** The `origin` column and the MCP tool gating §7c
-describes. Nothing in this document changes that plan; the entry exists so the
-reachability is written down rather than assumed absent.
+**Closed by Phase 4, plan 04-09 — the authorization half.** The deferral is
+discharged and this is what discharged it, so that a reader can check the claim
+rather than take it:
+
+- Six tools in `packages/tfc_mcp_server/lib/src/tools/access_template_tools.dart`
+  (spec §7c's names): `list_access_templates` and `list_unbound_keys` read;
+  `create_access_template`, `update_access_template`,
+  `delete_access_template` and `bind_key_access_template` change nothing at
+  all and return a **proposal**.
+- **Nothing in `tfc_mcp_server` writes** either authorization table.
+  `AccessTemplateService` has no write method, public or private, and a test
+  greps both files for write verbs. That property is what the rest of this
+  entry rests on.
+- **The `users` gate is at the approval, not in the tool.** The MCP server is
+  a separate package with no session — it cannot know who is standing at the
+  panel, and shipping an `AccessSession` into it would be exactly the
+  `tfc_dart` dependency `packages/tfc_access`'s purity rule exists to avoid.
+  So an accepted proposal is applied in the app, by
+  `lib/pages/access_templates_section.dart`, through 04-03's
+  `AccessTemplateStore` — the same `users`-gated store the section's own
+  buttons use, and the only writer of `access_template` and
+  `access_key_binding`. An agent proposing a change nobody may make gets a
+  proposal nobody can approve, and an `allowed: false` row saying so.
+- **`origin = 'mcp'` on every applied row, and `who` = the approving human.**
+  `origin` is the only thing the accept path tells the store about
+  provenance; `who` comes from the live session at the moment of the write,
+  and there is no parameter through which a proposal could name somebody
+  else. `test/pages/access_template_proposal_test.dart` seeds a proposal with
+  a conflicting `operator_id` and asserts the row carries the signed-in user.
+
+**What stays open, and stays rowed.** The closure above is about MCP writes
+that change **authorization**. It is not about the two write sites this entry
+enumerates, which are still reached over MCP and still ungated:
+`read_toggles.dart:38, 114` writes `mcp.config`, and
+`audit_log_service.dart:47, 85` writes the MCP audit table. Neither is
+authorization data — one is the copilot's own tool configuration, the other
+the copilot's own trail — and neither was in §7c's scope. Their rows in §2
+therefore still read `left open: reached over MCP, not from a widget`, and
+that is deliberate: a section that closed *by* emptying its evidence is the
+defect this document exists to prevent, and a verdict that quietly widened
+from "the authorization half" to "all of it" would be the same defect wearing
+a better mood.
 
 ### 3.3 The access repository writes its own store
 
