@@ -517,6 +517,17 @@ final class ValueHandlers {
       //    machine a second after it starts it.
       //  * `hold: true, value: 0` → the handle's own `release()`, which
       //    writes the 0 and completes `onReleased`.
+      //  * A replayed engage answered from the log above never reaches this
+      //    branch, and if the `cmd` was recorded by a *different* session the
+      //    replaying one is told "applied" without being given a handle
+      //    (05-REVIEW IN-01). The log is server-global by design (04-REVIEW
+      //    CR-02) and `_holds` is per-session, so every tick that session
+      //    then sends is dropped and counted in `droppedHoldTicks`. Fail-safe
+      //    — the counter never advances, so the machine stays stopped — but
+      //    the UI shows a live hold on a dead button. It is reachable only by
+      //    a peer holding another client's 80-bit-random ULID, which is the
+      //    capability argument `write_outcome_log.dart:32-41` already makes
+      //    and Phase 6's identity narrowing closes.
       //  * `hold: true, value: 0` with **no** handle held → falls through to
       //    the ordinary write below, deliberately. Writing 0 to a deadman tag
       //    is a legitimate thing to do, and a gateway that restarted holds no
