@@ -93,6 +93,13 @@ void main() {
     return row.read<int>('c');
   }
 
+  Future<int> bindingRowCount() async {
+    final row =
+        await db.customSelect('SELECT COUNT(*) AS c FROM access_key_binding')
+            .getSingle();
+    return row.read<int>('c');
+  }
+
   setUp(() async {
     db = AppDatabase.inMemoryForTest();
     // Force the schema to be created before the first store call, so a row
@@ -151,6 +158,8 @@ void main() {
       session = _anonymous();
       expect((await store.list()).single.name, 'conveyor');
       expect((await store.template('conveyor'))!.name, 'conveyor');
+      expect(await store.bindings(), isEmpty);
+      expect(await store.keysBoundTo('conveyor'), isEmpty);
 
       expect(sink.rows, isEmpty,
           reason: 'reading the rules is not an authorization change; spec §11 '
@@ -519,6 +528,318 @@ void main() {
       await expectLater(
           store.create(_conveyor()), throwsA(isA<AccessDenied>()));
       expect(sink.rows.single.allowed, isFalse);
+      expect(await templateRowCount(), 0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 2 — the bindings
+  // -------------------------------------------------------------------------
+
+  group('bind and unbind', () {
+    test('bind writes the binding and one allowed row', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      sink.rows.clear();
+
+      await store.bind('CN04.MOTOR01', 'conveyor');
+
+      expect(await store.bindings(), {'CN04.MOTOR01': 'conveyor'});
+      final row = sink.rows.single;
+      expect(row.allowed, isTrue);
+      expect(row.itemKey, 'access_key_binding.CN04.MOTOR01');
+      expect(row.surface, AccessSurface.pref.wireName);
+      expect(row.groupRequired, 'users');
+      expect(row.oldValue, isNull);
+      expect(row.newValue, 'conveyor');
+    });
+
+    test('bind over an existing binding replaces it and records the transition '
+        'in one row', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.create(AccessTemplate(name: 'conveyor-strict', rules: const {}));
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+
+      await store.bind('CN04.MOTOR01', 'conveyor-strict');
+
+      expect(await bindingRowCount(), 1,
+          reason: 'key_name is the primary key — a key cannot be bound twice');
+      expect(sink.rows, hasLength(1));
+      expect(sink.rows.single.oldValue, 'conveyor');
+      expect(sink.rows.single.newValue, 'conveyor-strict');
+    });
+
+    test('unbind clears the binding and records the template it left', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+
+      await store.unbind('CN04.MOTOR01');
+
+      expect(await bindingRowCount(), 0);
+      expect(sink.rows.single.oldValue, 'conveyor');
+      expect(sink.rows.single.newValue, isNull);
+    });
+
+    test('bind to a template that does not exist is rejected and writes no row',
+        () async {
+      final store = buildStore();
+
+      await expectLater(store.bind('CN04.MOTOR01', 'ghost'),
+          throwsA(isA<TemplateNotFoundException>()));
+
+      expect(await bindingRowCount(), 0,
+          reason: 'a dangling binding is unrestricted; creating one '
+              'deliberately is not something this store should make easy');
+      expect(sink.rows, isEmpty);
+      expect(denials, isEmpty);
+    });
+
+    test('unbind of a key that is not bound throws and writes no row',
+        () async {
+      final store = buildStore();
+      await expectLater(store.unbind('CN04.MOTOR01'),
+          throwsA(isA<BindingNotFoundException>()));
+      expect(sink.rows, isEmpty);
+    });
+  });
+
+  group('the users gate on the binding table', () {
+    test('an anonymous session is refused on bind, and the table is unchanged',
+        () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      sink.rows.clear();
+      session = _anonymous();
+
+      await expectLater(store.bind('CN04.MOTOR01', 'conveyor'),
+          throwsA(isA<AccessDenied>()));
+
+      expect(await bindingRowCount(), 0);
+      expect(sink.rows.single.allowed, isFalse);
+      expect(sink.rows.single.itemKey, 'access_key_binding.CN04.MOTOR01');
+      expect(denials, hasLength(1));
+    });
+
+    test('a configure-only session is refused on bind and on unbind, and both '
+        'tables are unchanged', () async {
+      // The 2026-08-30 ruling in one test: the binding is behind `users` as
+      // **data**, not merely as a button. Left on KeyMappingEntry it would
+      // have been reachable by exactly this session through the key
+      // repository's import card.
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+      session = _configureOnly();
+
+      await expectLater(store.bind('CN05.MOTOR01', 'conveyor'),
+          throwsA(isA<AccessDenied>()));
+      await expectLater(
+          store.unbind('CN04.MOTOR01'), throwsA(isA<AccessDenied>()));
+
+      expect(await bindingRowCount(), 1,
+          reason: 'neither statement was issued');
+      expect(await store.bindings(), {'CN04.MOTOR01': 'conveyor'});
+      expect(await templateRowCount(), 1);
+      expect(sink.rows, hasLength(2));
+      expect(sink.rows.every((r) => !r.allowed), isTrue);
+      expect(sink.rows.every((r) => r.groupRequired == 'users'), isTrue);
+    });
+
+    test("a bind on behalf of an accepted MCP proposal carries origin 'mcp' "
+        'and the approving human', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      sink.rows.clear();
+
+      await store.bind('CN04.MOTOR01', 'conveyor', origin: 'mcp');
+
+      expect(sink.rows.single.origin, 'mcp');
+      expect(sink.rows.single.who, 'admin');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // keysBoundTo
+  // -------------------------------------------------------------------------
+
+  group('keysBoundTo', () {
+    test('returns the bound keys, sorted', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.create(AccessTemplate(name: 'recipes', rules: const {}));
+      await store.bind('CN09.MOTOR01', 'conveyor');
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      await store.bind('RC01.BATCH', 'recipes');
+
+      expect(await store.keysBoundTo('conveyor'),
+          ['CN04.MOTOR01', 'CN09.MOTOR01']);
+      expect(await store.keysBoundTo('recipes'), ['RC01.BATCH']);
+      expect(await store.keysBoundTo('no-such-template'), isEmpty);
+    });
+
+    test('is case-sensitive — template names are identifiers, not prose',
+        () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+
+      expect(await store.keysBoundTo('conveyor'), ['CN04.MOTOR01']);
+      expect(await store.keysBoundTo('Conveyor'), isEmpty,
+          reason: 'the binding column stores what the template is named; a '
+              'case-folding match would make delete(\'Conveyor\') report keys '
+              'it is not about, and this is the behaviour somebody will trip '
+              'over');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The blocked delete
+  // -------------------------------------------------------------------------
+
+  group('deleting a template keys still name', () {
+    test('with zero bound keys the delete succeeds and the row is gone',
+        () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      sink.rows.clear();
+
+      await store.delete('conveyor');
+
+      expect(await templateRowCount(), 0);
+      expect(sink.rows.single.allowed, isTrue);
+    });
+
+    test('with one bound key it throws TemplateInUseException naming that key, '
+        'and the row is still there', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+
+      await expectLater(
+        store.delete('conveyor'),
+        throwsA(isA<TemplateInUseException>()
+            .having((e) => e.templateName, 'templateName', 'conveyor')
+            .having((e) => e.boundKeys, 'boundKeys', ['CN04.MOTOR01'])),
+      );
+
+      expect(await templateRowCount(), 1,
+          reason: 'spec §7d: block the delete rather than silently unbinding');
+      expect(await bindingRowCount(), 1,
+          reason: 'and no cascade — a cascade is the silent unbind §7d forbids');
+    });
+
+    test('the bound key list is exact and sorted', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      for (final key in ['CN09.MOTOR01', 'CN04.MOTOR01', 'CN21.MOTOR01']) {
+        await store.bind(key, 'conveyor');
+      }
+
+      await expectLater(
+        store.delete('conveyor'),
+        throwsA(isA<TemplateInUseException>().having((e) => e.boundKeys,
+            'boundKeys', ['CN04.MOTOR01', 'CN09.MOTOR01', 'CN21.MOTOR01'])),
+      );
+    });
+
+    test('a users-holding session gets TemplateInUseException too — the block '
+        'is not a permission failure', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+
+      expect(session.can(AccessGroup.users), isTrue);
+      await expectLater(store.delete('conveyor'),
+          throwsA(isA<TemplateInUseException>()));
+      await expectLater(
+          store.delete('conveyor'), throwsA(isNot(isA<AccessDenied>())));
+
+      expect(denials, isEmpty,
+          reason: 'no sign-in resolves this, so it must not be rendered '
+              'through the locked prompt');
+    });
+
+    test('an unprivileged caller still gets AccessDenied first, and the row '
+        'still says the refusal was about permission', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+      session = _configureOnly();
+
+      await expectLater(
+          store.delete('conveyor'), throwsA(isA<AccessDenied>()));
+
+      expect(sink.rows.single.allowed, isFalse);
+      expect(sink.rows.single.groupRequired, 'users');
+      expect(await templateRowCount(), 1);
+    });
+
+    test('a delete blocked by bindings writes no allowed row', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      sink.rows.clear();
+
+      await expectLater(store.delete('conveyor'),
+          throwsA(isA<TemplateInUseException>()));
+
+      expect(sink.rows, isEmpty,
+          reason: 'nothing was refused on authorization grounds and nothing '
+              'changed, so there is nothing to record');
+    });
+
+    test('unbinding the last key unblocks the delete', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      await expectLater(store.delete('conveyor'),
+          throwsA(isA<TemplateInUseException>()));
+
+      await store.unbind('CN04.MOTOR01');
+      await store.delete('conveyor');
+
+      expect(await templateRowCount(), 0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Rename deliberately does not unbind
+  // -------------------------------------------------------------------------
+
+  group('rename', () {
+    test('does not re-point bindings — the bound keys become unbound and 04-07 '
+        'must warn', () async {
+      // T-04-16, accepted and surfaced. A bulk re-point is the silent unbind
+      // spec §7d forbids with a friendlier label; 04-01's resolver reports the
+      // dangling binding as unbound and 04-08 surfaces it.
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+
+      await store.rename('conveyor', 'conveyor-strict');
+
+      expect(await store.bindings(), {'CN04.MOTOR01': 'conveyor'},
+          reason: 'the binding still names the old template, which now does '
+              'not exist — dangling, and therefore unrestricted');
+      expect(await store.keysBoundTo('conveyor-strict'), isEmpty);
+    });
+
+    test('a renamed-away template can then be deleted, because nothing names '
+        'the new name', () async {
+      final store = buildStore();
+      await store.create(_conveyor());
+      await store.bind('CN04.MOTOR01', 'conveyor');
+      await store.rename('conveyor', 'conveyor-strict');
+
+      await store.delete('conveyor-strict');
       expect(await templateRowCount(), 0);
     });
   });
