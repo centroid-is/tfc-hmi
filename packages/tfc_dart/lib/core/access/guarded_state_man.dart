@@ -204,9 +204,8 @@ class GuardedStateMan implements StateMan {
       if (changes.isEmpty || changes.any((c) => c.member == null))
         _policy.groupForWireSurface(_surface, resolvedKey)
       else
-        for (final change in changes)
-          _policy.groupForWireSurface(_surface, resolvedKey,
-              member: change.member),
+        for (final c in changes)
+          _policy.groupForWireSurface(_surface, resolvedKey, member: c.member),
     ];
 
     // Null means unrestricted, per member and per key alike. Tags fail
