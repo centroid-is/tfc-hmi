@@ -530,6 +530,76 @@ class AuditTrailStore {
 
     return statement.get();
   }
+
+  /// The true number of rows each of [actionIds] produced, counted over the
+  /// **whole** table with no filter and no time bound.
+  ///
+  /// ## Why a second query exists at all
+  ///
+  /// Filtering happens in SQL, so a group's non-matching siblings are **not in
+  /// the result set** — a prefix that matches three of an action's nine rows
+  /// returns three rows and no trace of the other six. "3 of 9 members hidden
+  /// by filters" therefore cannot be derived from the page, and CONTEXT
+  /// requires the page to say it: dropping a parent whose header did not match
+  /// silently loses the row the operator filtered for. This is how the number
+  /// is obtained.
+  ///
+  /// ## What it costs
+  ///
+  /// One extra round trip per page load — not per row — and a scan bounded by
+  /// the `IN` list, which is at most [kAuditTrailRowLimit] ids. `action_id` has
+  /// no index; that is a deliberate omission recorded in Phase 5's deferred
+  /// items, to be revisited only if client-side grouping proves slow.
+  ///
+  /// The alternative considered and rejected was fetching whole groups for any
+  /// action with a matching row. That would blow past the 500-row cap in a way
+  /// the operator could not see — the page would silently hold more than it
+  /// said it did. Both options are written down so a future reader can reopen
+  /// the choice knowing what it was.
+  ///
+  /// An empty [actionIds] returns an empty map **without issuing a statement**:
+  /// Drift's `isIn([])` is not portable, and a page with no rows must not go to
+  /// the database to learn it.
+  ///
+  /// The result names only ids that exist. An unknown id is absent from the map
+  /// rather than present with a zero, because zero would be a claim about an
+  /// action rather than the absence of one.
+  Future<Map<String, int>> memberCountsByAction(Iterable<String> actionIds) async {
+    final ids = actionIds.toSet().toList();
+    if (ids.isEmpty) return const {};
+
+    final total = _db.auditEntry.id.count();
+    final rows = await (_db.selectOnly(_db.auditEntry)
+          ..addColumns([_db.auditEntry.actionId, total])
+          ..where(_db.auditEntry.actionId.isIn(ids))
+          ..groupBy([_db.auditEntry.actionId]))
+        .get();
+
+    return {
+      for (final row in rows)
+        row.read(_db.auditEntry.actionId)!: row.read(total) ?? 0,
+    };
+  }
+
+  /// Every distinct `who` in the table, sorted ascending, deduplicated.
+  ///
+  /// **Unbounded on purpose.** The list of people who have ever touched this
+  /// station is small, it feeds the `who` dropdown, and a `LIMIT` there would
+  /// silently hide the person somebody is looking for — which is the same class
+  /// of wrong answer the whole-table search escape exists to prevent.
+  ///
+  /// The sort is case-sensitive: usernames are identifiers, not prose, and the
+  /// column stores what was typed at the login form.
+  Future<List<String>> distinctWho() async {
+    final rows = await (_db.selectOnly(_db.auditEntry)
+          ..addColumns([_db.auditEntry.who])
+          ..groupBy([_db.auditEntry.who]))
+        .get();
+
+    final names = rows.map((row) => row.read(_db.auditEntry.who)!).toList()
+      ..sort();
+    return names;
+  }
 }
 
 /// Element-wise list equality, so the two value types above do not need a
