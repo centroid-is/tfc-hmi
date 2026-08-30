@@ -1266,6 +1266,43 @@ void main() {
           '1h 03m');
     });
 
+    test('the summary carries the LONGEST lit wait, so a collapsed pane says it',
+        () {
+      final material =
+          boxErectorStatusGroups.firstWhere((g) => g.label == 'Out of material');
+      DynamicValue struct(Map<String, dynamic> m) =>
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
+
+      // Out of both: the one waiting longer is the one that stopped the line.
+      expect(
+          material.summaryDurationOf(struct({
+            'p_stat_xWaitingBottoms': true,
+            'p_stat_tNoBottomsFor': 252000,
+            'p_stat_xWaitingLids': true,
+            'p_stat_tNoLidsFor': 45000,
+          })),
+          const Duration(minutes: 4, seconds: 12));
+
+      // A duration on a child that is NOT lit is last time's number -- the FB's
+      // TON holds its ET until the condition returns. It must not be shown.
+      expect(
+          material.summaryDurationOf(struct({
+            'p_stat_xWaitingBottoms': false,
+            'p_stat_tNoBottomsFor': 252000,
+          })),
+          isNull);
+
+      // Nothing lit, nothing to say.
+      expect(material.summaryDurationOf(struct({})), isNull);
+      // Groups whose children carry no timers never show one.
+      final drives =
+          boxErectorStatusGroups.firstWhere((g) => g.label == 'Drives');
+      expect(
+          drives.summaryDurationOf(struct({'p_stat_xAlmDriveM101': true})),
+          isNull,
+          reason: 'the FB times only bottoms, lids and product');
+    });
+
     test('the outfeed permit is INVERTED, or a healthy line reads as a fault',
         () {
       final group =

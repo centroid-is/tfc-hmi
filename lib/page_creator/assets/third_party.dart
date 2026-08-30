@@ -1607,6 +1607,26 @@ class StructStatusGroup {
 
   String labelFor(String machine) => fillMachineLabel(label, machine);
 
+  /// The longest time any lit child has been waiting, or null.
+  ///
+  /// Put on the SUMMARY row as well as the child, so a collapsed pane still
+  /// says "4m 12s" — the number is most of the value here, and needing to open
+  /// a drawer to learn a line has been starved for four minutes defeats the
+  /// glance the grouping was for.
+  ///
+  /// Longest rather than first: if a machine is out of both bottoms and lids,
+  /// the one that has been waiting longer is the one that stopped it.
+  Duration? summaryDurationOf(DynamicValue? status) {
+    Duration? worst;
+    for (final c in children) {
+      if (c.durationMember == null || c.valueIn(status) != true) continue;
+      final held = structDurationOf(status, c.durationMember!);
+      if (held == null) continue;
+      if (worst == null || held > worst) worst = held;
+    }
+    return worst;
+  }
+
   /// Lit / off / unknown for the summary diode.
   ///
   /// Unknown only when EVERYTHING is unknown: one readable child that is off
@@ -1718,6 +1738,14 @@ class _GroupedStatusDiodesState extends State<GroupedStatusDiodes> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (group.summaryDurationOf(widget.status) case final held?)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(
+                        formatStatusDuration(held),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
                   _diode(context, lit, group.onRole),
                   // A fixed-width slot either way, so the diodes line up in one
                   // column whether or not a row can be opened.
