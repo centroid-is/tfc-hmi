@@ -54,8 +54,7 @@ const String _anonymousWho = 'anonymous';
 /// **It governs the binding table too.** Ruled 2026-08-30, reversing the shape
 /// spec §7b implies: the binding is not a field on `KeyMappingEntry` but its
 /// own `access_key_binding` table, precisely so this gate is true of the
-/// **data** and not only of the button. The binding writes land in Task 2 of
-/// this plan.
+/// **data** and not only of the button. See [AccessTemplateStore.bind].
 const AccessGroup kAccessTemplateGroup = AccessGroup.users;
 
 /// A template could not be deleted because keys still name it (spec §7d).
@@ -124,13 +123,31 @@ class TemplateExistsException implements Exception {
       'TemplateExistsException: a template named "$name" already exists.';
 }
 
-/// The writes that decide who may write what, and the reads that show it.
+/// [AccessTemplateStore.unbind] was called for a key that carries no binding.
 ///
-/// Writes — [create], [update], [rename], [delete] — all ask for
-/// [kAccessTemplateGroup] and all leave a row, denials included. Reads —
-/// [list], [template] — are ungated and unaudited: looking at the rules is not
-/// an authorization change, and a row per render would bury the writes that
-/// matter.
+/// Spec §7c and §7d do not say what an unbind of an unbound key should do.
+/// This store throws rather than succeeding quietly, for the same reason the
+/// other four "it is not there" cases throw: a silent success would write an
+/// audit row claiming a change that did not happen, and the trail's only value
+/// is that its rows are true.
+class BindingNotFoundException implements Exception {
+  const BindingNotFoundException(this.keyName);
+
+  final String keyName;
+
+  @override
+  String toString() =>
+      'BindingNotFoundException: "$keyName" is not bound to a template.';
+}
+
+/// The six writes that decide who may write what, and the four reads that show
+/// it.
+///
+/// Writes — [create], [update], [rename], [delete], [bind], [unbind] — all ask
+/// for [kAccessTemplateGroup] and all leave a row, denials included. Reads —
+/// [list], [template], [bindings], [keysBoundTo] — are ungated and unaudited:
+/// looking at the rules is not an authorization change, and a row per render
+/// would bury the writes that matter.
 class AccessTemplateStore {
   /// [session] is a **callback, not a value**, for the reason `HistoryViewStore`
   /// gives at its own constructor (`lib/core/guarded_history_views.dart`): this
@@ -201,6 +218,36 @@ class AccessTemplateStore {
   Future<AccessTemplate?> template(String name) async {
     final row = await _row(name);
     return row == null ? null : _toTemplate(row);
+  }
+
+  /// Every binding, as key name to template name.
+  ///
+  /// This is the shape 04-01's `TagBindingResolver.setSnapshot` wants, so
+  /// 04-05 has nothing to reshape. Note that the value may name a template
+  /// that no longer exists — see [rename]; the resolver reports such a key as
+  /// unbound and 04-08 surfaces it.
+  Future<Map<String, String>> bindings() async {
+    final rows = await _db.select(_db.accessKeyBindingTable).get();
+    return {for (final row in rows) row.keyName: row.templateName};
+  }
+
+  /// The keys bound to [templateName], sorted.
+  ///
+  /// One query against `access_key_binding`, using the
+  /// `idx_access_key_binding_template_name` index 04-02 created. **One
+  /// implementation**, so the list 04-07's delete dialog shows and the list
+  /// [delete]'s block uses cannot disagree.
+  ///
+  /// **Case-sensitive.** Template names are identifiers, not prose: the column
+  /// stores what the template is named, and a case-folding match would make
+  /// `delete('Conveyor')` report keys it is not about. A named test says so,
+  /// because it is the behaviour somebody will trip over.
+  Future<List<String>> keysBoundTo(String templateName) async {
+    final rows = await (_db.select(_db.accessKeyBindingTable)
+          ..where((t) => t.templateName.equals(templateName)))
+        .get();
+    final keys = rows.map((row) => row.keyName).toList()..sort();
+    return keys;
   }
 
   // ---------------------------------------------------------------------------
@@ -379,7 +426,8 @@ class AccessTemplateStore {
     final existing = await _row(name);
     if (existing == null) throw TemplateNotFoundException(name);
 
-    // Task 2 (04-03) adds the bound-key block here.
+    final bound = await keysBoundTo(name);
+    if (bound.isNotEmpty) throw TemplateInUseException(name, bound);
 
     await _recordAllowed(
       itemKey: _templateItemKey(name),
@@ -390,6 +438,98 @@ class AccessTemplateStore {
     );
     await (_db.delete(_db.accessTemplateTable)
           ..where((t) => t.name.equals(name)))
+        .go();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Binding writes
+  // ---------------------------------------------------------------------------
+
+  /// Binds [keyName] to [templateName], replacing any binding it already has.
+  /// Requires [kAccessTemplateGroup].
+  ///
+  /// **Why the binding lives here and not on `KeyMappingEntry`.** Ruled
+  /// 2026-08-30. Spec §7b still reads as though the binding is an
+  /// `accessTemplate: String?` field on the key-mapping blob; it is not, and
+  /// the disagreement is deliberate rather than an oversight. The key-mapping
+  /// preference is classified `configure` by `kPrefAccessRules`, so a binding
+  /// inside it would be authorization data behind the wrong gate — rewritable
+  /// through
+  /// the key repository's import/export card and through the raw preferences
+  /// editor by anybody who can edit a page. Its own table behind this store's
+  /// `users` gate makes the gate true of the data and not merely of the
+  /// button. §7b's synchronous-resolution requirement survives the move: these
+  /// rows are loaded into the same in-memory snapshot the templates are, so a
+  /// tap still resolves with no await.
+  ///
+  /// A [templateName] that does not exist is refused. A dangling binding is
+  /// *unrestricted*, so creating one deliberately is not something this store
+  /// should make easy. (One can still arise from a [rename]; 04-01's resolver
+  /// and 04-08's surface handle that case, and the rename dialog warns.)
+  Future<void> bind(
+    String keyName,
+    String templateName, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    _requireValidName(templateName);
+    final actionId = await _requireUsers(
+      itemKey: _bindingItemKey(keyName),
+      reason: _reason('bind', reason),
+      origin: origin,
+      newValue: templateName,
+    );
+
+    if (await _row(templateName) == null) {
+      throw TemplateNotFoundException(templateName);
+    }
+
+    final previous = await _bindingRow(keyName);
+    await _recordAllowed(
+      itemKey: _bindingItemKey(keyName),
+      reason: _reason('bind', reason),
+      origin: origin,
+      oldValue: previous?.templateName,
+      newValue: templateName,
+      actionId: actionId,
+    );
+    // One row, replaced rather than duplicated: `key_name` is the primary key,
+    // which is what makes "explicit, per key, always" structural.
+    await _db.into(_db.accessKeyBindingTable).insertOnConflictUpdate(
+          AccessKeyBindingTableCompanion.insert(
+            keyName: keyName,
+            templateName: templateName,
+            updatedAt: DateTime.now(),
+          ),
+        );
+  }
+
+  /// Clears [keyName]'s binding, leaving the key unrestricted. Requires
+  /// [kAccessTemplateGroup] — clearing a binding changes who may write that
+  /// key just as much as setting one does.
+  Future<void> unbind(
+    String keyName, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    final actionId = await _requireUsers(
+      itemKey: _bindingItemKey(keyName),
+      reason: _reason('unbind', reason),
+      origin: origin,
+    );
+
+    final previous = await _bindingRow(keyName);
+    if (previous == null) throw BindingNotFoundException(keyName);
+
+    await _recordAllowed(
+      itemKey: _bindingItemKey(keyName),
+      reason: _reason('unbind', reason),
+      origin: origin,
+      oldValue: previous.templateName,
+      actionId: actionId,
+    );
+    await (_db.delete(_db.accessKeyBindingTable)
+          ..where((t) => t.keyName.equals(keyName)))
         .go();
   }
 
@@ -533,6 +673,11 @@ class AccessTemplateStore {
       (_db.select(_db.accessTemplateTable)..where((t) => t.name.equals(name)))
           .getSingleOrNull();
 
+  Future<AccessKeyBindingTableData?> _bindingRow(String keyName) =>
+      (_db.select(_db.accessKeyBindingTable)
+            ..where((t) => t.keyName.equals(keyName)))
+          .getSingleOrNull();
+
   AccessTemplate _toTemplate(AccessTemplateTableData row) => AccessTemplate(
         name: row.name,
         rules: AccessTemplate.decodeRules(row.rules),
@@ -546,4 +691,10 @@ class AccessTemplateStore {
   /// The `itemKey` of a template row. The prefix is what the Phase 5 viewer
   /// filters on.
   static String _templateItemKey(String name) => 'access_template.$name';
+
+  /// The `itemKey` of a binding row. A distinct prefix from
+  /// [_templateItemKey] — `access_key_binding.` does not start with
+  /// `access_template.` — so filtering for one does not drag in the other.
+  static String _bindingItemKey(String keyName) =>
+      'access_key_binding.$keyName';
 }
