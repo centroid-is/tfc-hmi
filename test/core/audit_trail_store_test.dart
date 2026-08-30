@@ -793,6 +793,149 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  // The companion queries: the member total, and the who list
+  // -------------------------------------------------------------------------
+
+  group('AuditTrailStore.memberCountsByAction and distinctWho', () {
+    late AppDatabase db;
+
+    AuditTrailStore store() => AuditTrailStore(db: db);
+
+    Future<void> seed({
+      required DateTime at,
+      String who = 'engineer',
+      String itemKey = 'CN04.MOT01.p_cmd_Run',
+      String? member,
+      String actionId = 'action-a',
+    }) =>
+        DriftAuditSink(db).record(AuditRecord(
+          at: at,
+          who: who,
+          station: 'SVN-NES-OT-CL02',
+          roleName: 'Engineering',
+          surface: 'tag',
+          itemKey: itemKey,
+          member: member,
+          oldValue: '0',
+          newValue: '1',
+          groupRequired: 'configure',
+          allowed: true,
+          actionId: actionId,
+        ));
+
+    setUp(() async {
+      db = AppDatabase.inMemoryForTest();
+      await db.customSelect('SELECT 1').getSingle();
+    });
+
+    tearDown(() => db.close());
+
+    test('the count is the true size of the action, not the size of what '
+        'survived the filters', () async {
+      final at = _now.subtract(const Duration(hours: 1));
+      // One human action that wrote nine tags: three under CN04, six not.
+      for (var i = 0; i < 3; i++) {
+        await seed(at: at, itemKey: 'CN04.MOT0$i.p_cmd_Run');
+      }
+      for (var i = 0; i < 6; i++) {
+        await seed(at: at, itemKey: 'BA01.MOT0$i.p_cmd_Run');
+      }
+      await seed(at: at, itemKey: 'CN21.MOT01.p_cmd_Run', actionId: 'action-b');
+
+      final rows = await store()
+          .entries(const AuditTrailFilters(keyPrefix: 'CN04').toQuery(now: _now));
+      final counts = await store().memberCountsByAction(const ['action-a']);
+
+      expect(rows, hasLength(3));
+      expect(counts['action-a'], 9,
+          reason: 'filtering in SQL means the six non-matching siblings are '
+              'not in the result set, so "3 of 9 members hidden by filters" '
+              'cannot be derived from the page. This second query is how the '
+              'number is obtained.');
+    });
+
+    test('a single-row action answers one', () async {
+      await seed(
+          at: _now.subtract(const Duration(hours: 1)), actionId: 'action-b');
+
+      expect(await store().memberCountsByAction(const ['action-b']),
+          {'action-b': 1});
+    });
+
+    test('the count has no time bound and no filter', () async {
+      final at = _now.subtract(const Duration(days: 30));
+      await seed(at: at, member: 'p_cfg.Freq');
+      await seed(at: at, member: 'p_cfg.Ramp');
+
+      final page = await store().entries(const AuditTrailFilters().toQuery(now: _now));
+      final counts = await store().memberCountsByAction(const ['action-a']);
+
+      expect(page, isEmpty,
+          reason: 'thirty days is outside the seven-day default window.');
+      expect(counts['action-a'], 2,
+          reason: 'the number is the true size of the action, counted over '
+              'the whole table.');
+    });
+
+    test('an empty actionIds returns an empty map without issuing a statement',
+        () async {
+      // Proved by closing the database first: a statement would throw.
+      await db.close();
+
+      expect(await store().memberCountsByAction(const []), isEmpty,
+          reason: "Drift's isIn([]) is not portable, and a page with no rows "
+              'must not go to the database to learn it.');
+    });
+
+    test('an unknown action id is absent from the map, not present with zero',
+        () async {
+      await seed(at: _now.subtract(const Duration(hours: 1)));
+
+      final counts =
+          await store().memberCountsByAction(const ['action-a', 'no-such']);
+
+      expect(counts, {'action-a': 1});
+      expect(counts.containsKey('no-such'), isFalse);
+    });
+
+    test('distinctWho deduplicates and sorts', () async {
+      final at = _now.subtract(const Duration(hours: 1));
+      await seed(at: at, who: 'engineer');
+      await seed(at: at, who: 'admin');
+      await seed(at: at, who: 'engineer');
+      await seed(at: at, who: 'admin');
+
+      expect(await store().distinctWho(), ['admin', 'engineer']);
+    });
+
+    test('distinctWho sorts case-sensitively', () async {
+      final at = _now.subtract(const Duration(hours: 1));
+      await seed(at: at, who: 'engineer');
+      await seed(at: at, who: 'Admin');
+      await seed(at: at, who: 'admin');
+
+      expect(await store().distinctWho(), ['Admin', 'admin', 'engineer'],
+          reason: 'usernames are identifiers, not prose — the same reasoning '
+              'keysBoundTo states for template names.');
+    });
+
+    test('distinctWho on an empty table returns an empty list', () async {
+      expect(await store().distinctWho(), isEmpty);
+    });
+
+    test('distinctWho is not bounded by the row limit', () async {
+      final at = _now.subtract(const Duration(hours: 1));
+      for (var i = 0; i < kAuditTrailRowLimit + 20; i++) {
+        await seed(at: at, who: 'user${i.toString().padLeft(4, '0')}');
+      }
+
+      expect(await store().distinctWho(), hasLength(kAuditTrailRowLimit + 20),
+          reason: 'the list feeds a dropdown, and a LIMIT there would silently '
+              'hide the person somebody is looking for.');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // The store reads and never writes
   // -------------------------------------------------------------------------
 
@@ -839,6 +982,13 @@ void main() {
       expect(source, isNot(contains('AccessSession')),
           reason: 'the enforcement is the route gate. A store-level guard '
               'mistaken for it would be a second, weaker boundary.');
+    });
+
+    test('the constructor takes only a database and a logger', () {
+      expect(source, contains('AuditTrailStore({required AppDatabase db, Logger? logger})'),
+          reason: 'no session, no sink, no station and no onDenied. Reading '
+              'the trail is ungated and unaudited on the same terms as '
+              "access_template_store.dart's own reads.");
     });
 
     test('issues no raw SQL', () {
