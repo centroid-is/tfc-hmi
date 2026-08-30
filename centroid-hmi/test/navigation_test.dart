@@ -18,6 +18,7 @@ import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/pages/page_editor.dart';
 import 'package:tfc/pages/preferences.dart';
 import 'package:tfc/pages/server_config.dart';
+import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/routes.dart';
 import 'package:tfc/widgets/access_gate.dart';
@@ -269,10 +270,10 @@ void main() {
       expect(lb.routes.containsKey('/draft'), isFalse);
     });
 
-    /// The six raised routes, proven one at a time.
+    /// The seven raised routes, proven one at a time.
     ///
     /// These are the tests that keep `kRaisedRoutes` and the route table
-    /// spelling the same six strings: a path mistyped in either place is a
+    /// spelling the same seven strings: a path mistyped in either place is a
     /// route that silently stays open, and nothing else in the repo would
     /// notice. Each group is asserted by its literal path rather than in a
     /// loop over the map, because a loop passes just as happily when the map
@@ -324,6 +325,27 @@ void main() {
         expect(gate.child, isA<KeyRepositoryPage>());
       });
 
+      testWidgets('the knowledge base needs configure', (tester) async {
+        // Not a read surface. docs/access-control-write-path-sweep.md §3.1
+        // found three raw-Drift index classes behind this page, and a caller
+        // that rewrites `page_editor_data` — routing around the page editor's
+        // own gate. The accepted cost is that an anonymous operator can no
+        // longer read a technical document or browse PLC code at the panel;
+        // the drawings overlay on ordinary pages is a different surface and
+        // is unaffected.
+        //
+        // Registered inside `if (kKnowledgeEnabled)`, which defaults to true,
+        // so the route exists here; the gate wraps the child inside that `if`
+        // rather than outside it, so a flag-off build still tree-shakes
+        // TechDocLibraryPage.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/knowledge-base');
+        expect(gate.group.name, 'configure');
+        expect(gate.allowWhenRepositoryUnavailable, isFalse,
+            reason: 'a document library is not the page that configures the database');
+        expect(gate.child, isA<TechDocLibraryPage>());
+      });
+
       testWidgets('server config needs administer', (tester) async {
         final lb = createLocationBuilder([_page('Home', '/')]);
         final gate = await buildGate(tester, lb, '/advanced/server-config');
@@ -365,7 +387,7 @@ void main() {
       });
 
       testWidgets('every declared path is a real route', (tester) async {
-        // Iterates the map rather than repeating the six, so a typo in
+        // Iterates the map rather than repeating the seven, so a typo in
         // kRaisedRoutes fails here instead of leaving a route quietly open.
         final lb = createLocationBuilder([_page('Home', '/')]);
         for (final path in kRaisedRoutes.keys) {
@@ -384,6 +406,7 @@ void main() {
         expect(accessGroupForRoute('/advanced/page-editor').name, 'configure');
         expect(accessGroupForRoute('/advanced/alarm-editor').name, 'configure');
         expect(accessGroupForRoute('/advanced/key-repository').name, 'configure');
+        expect(accessGroupForRoute('/advanced/knowledge-base').name, 'configure');
         expect(accessGroupForRoute('/advanced/server-config').name, 'administer');
         expect(accessGroupForRoute('/advanced/ip-settings').name, 'administer');
         expect(accessGroupForRoute('/advanced/preferences').name, 'administer');

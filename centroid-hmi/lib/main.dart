@@ -466,13 +466,29 @@ RoutesLocationBuilder createLocationBuilder(
         child: child,
       );
 
-  // Six routes are gated, and only six. Left open on purpose:
+  // Seven routes are gated, and only seven. Left open on purpose:
   //
   //  - '/advanced/about-linux' reads system information and changes nothing.
-  //  - '/advanced/knowledge-base', '/advanced/history-view',
-  //    AppRoutes.historyView and AppRoutes.alarmView are read surfaces, and
-  //    read permissions are explicitly out of scope
-  //    (docs/access-control-spec.md §Scope, §11).
+  //  - '/advanced/history-view', AppRoutes.historyView and
+  //    AppRoutes.alarmView are read surfaces, and read permissions are
+  //    explicitly out of scope (docs/access-control-spec.md §Scope, §11).
+  //
+  //    '/advanced/knowledge-base' was on that list until 2026-08-30 and is
+  //    now the seventh gated route, at `configure`.
+  //    docs/access-control-write-path-sweep.md §3.1 found three raw-Drift
+  //    index classes behind that page — twenty-six statements — and a caller
+  //    that rewrites `page_editor_data`, the key the configure-gated page
+  //    editor saves, so it was never the read surface this comment called it.
+  //    The cost was accepted deliberately and is not softened here: an
+  //    anonymous operator can no longer read a technical document or browse
+  //    PLC code at the panel, which on a plant floor means finding somebody
+  //    with a `configure` account or walking. It was chosen over leaving a
+  //    write path around the page editor's gate. The drawings overlay below
+  //    (:763-781) is a different surface — not this route, read-only — so a
+  //    drawing is still available on the page an operator is standing at.
+  //    Note that '/advanced/history-view' had to be corrected in this same
+  //    comment for the same reason: both were called read surfaces because
+  //    the menu label was read instead of the call sites.
   //
   //    One caveat, so this comment is not read as a clean bill of health:
   //    the history view is not purely a read surface. It deletes directly
@@ -581,7 +597,11 @@ RoutesLocationBuilder createLocationBuilder(
   // build drops TechDocLibraryPage and everything it pulls in.
   if (kKnowledgeEnabled) {
     routes['/advanced/knowledge-base'] = (context, state, args) => BeamPage(
-        key: const ValueKey('/advanced/knowledge-base'), title: 'Knowledge Base', child: const TechDocLibraryPage());
+        key: const ValueKey('/advanced/knowledge-base'),
+        title: 'Knowledge Base',
+        // Gated inside the `if`, not outside it, so a flag-off build still
+        // tree-shakes TechDocLibraryPage.
+        child: gated('/advanced/knowledge-base', 'Knowledge Base', const TechDocLibraryPage()));
   }
 
   addRoute(MenuItem menuItem) {

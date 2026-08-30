@@ -32,7 +32,9 @@ limits on the search and both are restated in §6 below.
 **The answer to "is there a fifth?" is yes**, and it is in §4. The largest new
 finding is a family the spec never mentions: three raw-Drift index classes in
 `packages/tfc_mcp_server`, called directly from the Knowledge Base page, which
-Phase 2 deliberately left ungated because it reads as a read surface.
+Phase 2 deliberately left ungated because it reads as a read surface. Plans
+03-13 and 03-14 close it at the controls and at the route; §3.1 records both,
+and the operational cost of the second.
 
 ---
 
@@ -80,9 +82,9 @@ moves all five.
 | `lib/core/server_config_db.dart:58` | `db.into(db.flutterPreferences).insertOnConflictUpdate(...)` | `flutter_preferences` | `ServerConfigDb.publish()` ← `lib/pages/server_config.dart:3224` | `guarded by 03-08` |
 | `lib/core/server_config_db.dart:85-87` | `(db.delete(db.flutterPreferences)..where(...)).go()` | `flutter_preferences` | `ServerConfigDb.remove()` | `guarded by 03-08` |
 | `packages/tfc_dart/lib/core/access/drift_audit_sink.dart:75` | `_db.into(_db.auditEntry).insert(...)` | `audit_entry` | `auditSinkProvider` (`lib/providers/access.dart:104`) | `correct as-is` — append-only and retention-exempt by design; the class doc explains why, and this sweep does not restate it |
-| `packages/tfc_mcp_server/lib/src/services/drift_tech_doc_index.dart:65, 230-236, 242, 251-253, 260, 306, 322` | `_db.into(...)`, `_db.delete(...)`, `_db.update(...)` | tech-doc tables | **`lib/tech_docs/tech_doc_upload_service.dart:104, 149, 221-222, 275`**, wired at `lib/providers/tech_doc.dart`, driven by the Knowledge Base page | `left open: reachable from an ungated route; no Phase 3 plan owns it` — see §3.1 |
-| `packages/tfc_mcp_server/lib/src/services/drift_plc_code_index.dart:84, 102, 121, 154, 169, 189, 257-276, 565` | `_db.into(...)`, `_db.delete(...)`, `_db.update(...)` | PLC index tables | **`lib/tech_docs/tech_doc_library_section.dart:1075` (`reindexAsset`) and `:1133` (`deleteAssetIndex`)**, wired at `lib/providers/plc.dart:65` | `left open: reachable from an ungated route; no Phase 3 plan owns it` — see §3.1 |
-| `packages/tfc_mcp_server/lib/src/services/drift_drawing_index.dart:56, 68, 89-97, 219, 232` | `_db.into(...)`, `_db.delete(...)` | drawing tables | `lib/drawings/drawing_upload_service.dart:46, 61, 75`, wired at `lib/providers/drawing.dart:14`; `DrawingUploadDialog` has **no caller in the tree today** | `left open: reachable in principle, unwired in fact; no Phase 3 plan owns it` — see §3.1 |
+| `packages/tfc_mcp_server/lib/src/services/drift_tech_doc_index.dart:65, 230-236, 242, 251-253, 260, 306, 322` | `_db.into(...)`, `_db.delete(...)`, `_db.update(...)` | tech-doc tables | **`lib/tech_docs/tech_doc_upload_service.dart:104, 149, 221-222, 275`**, wired at `lib/providers/tech_doc.dart`, driven by the Knowledge Base page | `guarded by 03-13`, and `route-gated (03-14)` besides — see §3.1 |
+| `packages/tfc_mcp_server/lib/src/services/drift_plc_code_index.dart:84, 102, 121, 154, 169, 189, 257-276, 565` | `_db.into(...)`, `_db.delete(...)`, `_db.update(...)` | PLC index tables | **`lib/tech_docs/tech_doc_library_section.dart:1075` (`reindexAsset`) and `:1133` (`deleteAssetIndex`)**, wired at `lib/providers/plc.dart:65` | `guarded by 03-13`, and `route-gated (03-14)` besides — see §3.1 |
+| `packages/tfc_mcp_server/lib/src/services/drift_drawing_index.dart:56, 68, 89-97, 219, 232` | `_db.into(...)`, `_db.delete(...)` | drawing tables | `lib/drawings/drawing_upload_service.dart:46, 61, 75`, wired at `lib/providers/drawing.dart:14`; `DrawingUploadDialog` has **no caller in the tree today** | `guarded by 03-13` — reachable in principle, unwired in fact, and guarded either way; the route it would be reached from is `route-gated (03-14)`. See §3.1 |
 | `packages/tfc_mcp_server/lib/src/audit/audit_log_service.dart:47, 85` | `_db.into(_auditLog).insert(...)`, `_db.update(_auditLog)` | `audit_log` (MCP's own) | `TfcMcpServer`, which runs **in the HMI process** (`lib/mcp/mcp_bridge_notifier.dart:266`, `lib/mcp/mcp_sse_server.dart:56`) | `left open: reached over MCP, not from a widget` — see §3.2 |
 | `packages/tfc_dart/lib/core/access/access_repository.dart:177, 185, 201, 240, 247-249, 285, 340` | `db.into/update/delete` on `app_role` / `app_user` | roles and users | `accessRepositoryProvider`; Phase 6 owns the screens that drive it | `left open: the authorization store itself; Phase 6 gates it on \`users\`` — see §3.3 |
 | `packages/tfc_dart/lib/core/preferences.dart:210, 254, 428` | `secureStorage.delete(key:)`, `db.customInsert(...)`, `database!.db.customUpdate(...)` | secure store, `flutter_preferences` | inside `Preferences` — the implementation `GuardedPreferences` wraps | `correct as-is` — these are the store the guard decorates; the check happens above them |
@@ -276,28 +278,56 @@ methods are called from app code:
   `deleteDrawing`. `DrawingUploadDialog` has no caller in the tree today, so
   this third one is reachable in principle and unwired in fact.
 
-**Where the operator is.** `/advanced/knowledge-base`
-(`centroid-hmi/lib/main.dart:584-585`) is deliberately **not** in
-`kRaisedRoutes` — `lib/access_routes.dart` names it among the pages that "read
-rather than configure". It does not only read: an anonymous session at the panel
-can delete a technical document, delete a PLC asset's index, and — through
-`tech_doc_upload_service.dart:267` — rewrite `page_editor_data`.
+**Where the operator was, when this was written.** `/advanced/knowledge-base`
+was deliberately **not** in `kRaisedRoutes`, and `lib/access_routes.dart` named
+it among the pages that "read rather than configure". It does not only read: an
+anonymous session at the panel could delete a technical document, delete a PLC
+asset's index, and — through `tech_doc_upload_service.dart:267` — rewrite
+`page_editor_data`. That is the claim plan 03-14 acted on; the route is raised
+now and both spellings of the sentence are gone from the source.
 
 **Why this is the same defect as the history view.** A destructive control on a
 page that should stay readable. §6's fourth bypass was exactly that, on
 `/advanced/history-view`, and plan 03-10 fixes it at the controls rather than at
 the route for exactly this reason.
 
-**Why not closed here.** This plan finds and records; it changes no source file.
-No plan in this phase owns these call sites — 03-08, 03-09 and 03-10 close the
-three §6 bypasses this document was written to go beyond.
+**Closed, at both ends.** This document found it and owned no fix; two plans
+were then written for it and both have landed.
 
-**What closing it would take.** The same shape as plan 03-10: one store object
-per index holding the write methods, checking a group on the destructive ones
-and auditing all of them, with the page's call sites changing only their
-receiver. `configure` is the natural group — this is authored content, the same
-concern as the page editor. Cost is bounded: ten call sites in three app-side
-files, no change to the index classes themselves.
+- **The controls, by plan 03-13.** One guarded store object per index, holding
+  the write methods, checking `configure` on the destructive ones and auditing
+  all of them, with the app-side call sites changing only their receiver
+  (`lib/core/guarded_knowledge_stores.dart`, wired at
+  `lib/providers/tech_doc.dart`, `lib/providers/plc.dart` and
+  `lib/providers/drawing.dart`). The index classes themselves are unchanged.
+- **The route, by plan 03-14.** `/advanced/knowledge-base` is the seventh entry
+  in `kRaisedRoutes` at `AccessGroup.configure`, and its child in
+  `centroid-hmi/lib/main.dart` is wrapped in the same `gated(...)` helper the
+  other six use. An anonymous session now sees the locked page, and the menu
+  entry stays visible with a lock badge rather than disappearing.
+
+**Why both, rather than either.** The route gate alone would leave the three
+write surfaces unaudited for anybody who does hold `configure` — the same group
+`page_editor_data` is worth. The control guards alone would leave a page that
+reaches three write surfaces open to a session holding nothing.
+
+**The accepted cost, stated plainly.** An anonymous operator can no longer read
+technical documents or browse PLC code at the panel. On a plant floor that is a
+real loss: somebody wanting a manual at the machine now has to find a person
+with a `configure` account, or walk. The user was told and chose it over leaving
+a write path around the page-editor gate. It is the one place in this milestone
+where gating a route takes something away from an operator rather than only from
+a configurer, and spec §11's deferral of read permissions is not a defence here
+— this page writes.
+
+**What is not lost**, stated as precisely. The drawings overlay on ordinary
+pages (`centroid-hmi/lib/main.dart:763-781`) is a different surface — not this
+route, read-only, and 03-13's decorators pass reads straight through — so a
+drawing is still available on the page an operator is standing at.
+
+**The evidence above is kept deliberately.** The file-and-line list and the
+`page_editor_data` argument are what make this finding re-checkable; a closed
+finding with its evidence deleted is a finding nobody can audit.
 
 ### 3.2 Writes reached over MCP rather than from a widget
 
@@ -481,7 +511,10 @@ page.** `DriftTechDocIndex`, `DriftPlcCodeIndex` and `DriftDrawingIndex` in
 `/advanced/knowledge-base` can delete a technical document, delete a PLC asset's
 index and rewrite `page_editor_data`. **This is the fifth bypass, and it is the
 same shape as the fourth**: a destructive control on a page classified as a read
-surface. Owner: none. Priced in §3.1.
+surface. Owners: **plan 03-13** (the controls, through guarded store objects)
+and **plan 03-14** (the route, raised to `configure` as the seventh entry in
+`kRaisedRoutes`). **Closed** — see §3.1, which keeps the evidence and records
+the accepted cost.
 
 **B. An ungated write-and-launch of the manager binary.**
 `packages/centroidx_upgrader/lib/src/manager_launcher.dart:159`, reached from
