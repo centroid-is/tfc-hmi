@@ -23,7 +23,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/page_creator/assets/button.dart';
 import 'package:tfc/page_creator/assets/number.dart';
+import 'package:tfc/page_creator/assets/section_button.dart';
 import 'package:tfc/page_creator/assets/start_stop_button.dart';
 import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/access_policy.dart';
@@ -34,6 +36,7 @@ import 'package:tfc/widgets/access_denied_prompt.dart';
 import 'package:tfc/widgets/access_sign_in_dialog.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc/widgets/panes/side_pane.dart' show closeSidePane;
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/guarded_state_man.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
@@ -103,12 +106,14 @@ List<Override> _accessOverrides({AccessSession? session}) => [
 /// What plan 04-10's converted call sites decide from: one key bound to a
 /// one-rule template, and somewhere for the refusal's audit row to go.
 ///
-/// The rule is on [kWholeKeyMember], because the two converted sites these
-/// drive — `number.dart` and `start_stop_button.dart` — write scalar keys and
-/// name no member.
+/// The rule is on [kWholeKeyMember] by default, because most of the converted
+/// sites these drive — `number.dart`, `start_stop_button.dart`, `button.dart`
+/// — write scalar keys and name no member. Pass [member] for the ones that do
+/// name one: `section_button.dart` sets a single `p_cmd_*` bit on a struct.
 List<Override> _tagOverrides({
   required String key,
   required AccessGroup group,
+  String? member,
 }) {
   final resolver = TagBindingResolver()
     ..setSnapshot(
@@ -116,7 +121,7 @@ List<Override> _tagOverrides({
       templates: {
         'test-template': AccessTemplate(
           name: 'test-template',
-          rules: {kWholeKeyMember: group},
+          rules: {member ?? kWholeKeyMember: group},
         ),
       },
     );
@@ -803,6 +808,98 @@ void main() {
       expect(inner.writes, isEmpty);
       expect(tester.takeException(), isNull);
     });
+
+    // -----------------------------------------------------------------
+    // Plan 04-11 — the last two assets, and the ones whose bare `catch (e)`
+    // used to swallow the refusal into a log line
+    // -----------------------------------------------------------------
+
+    testWidgets('a refused button press writes neither the press nor the '
+        'release', (tester) async {
+      const key = 'cmd/pulse';
+      final inner = _RecordingStateMan();
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: SizedBox(
+            width: 120,
+            height: 120,
+            child: Button(
+                ButtonConfig(key: key, buttonType: ButtonType.circle)),
+          ),
+        ),
+        overrides: [
+          stateManProvider.overrideWith((ref) async => inner),
+          ..._tagOverrides(key: key, group: AccessGroup.force),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(Button));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.text(kAccessDeniedGroupNote(AccessGroup.force)),
+          findsOneWidget);
+      // Both halves. `onTapUp` writes `false` unconditionally today, so a
+      // refused press that only suppressed the rise would still send a lone
+      // falling edge to a PLC that never saw it go high.
+      expect(inner.writes, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a refused section command names the member it would have set',
+        (tester) async {
+      const key = 'sec/a';
+      final inner = _RecordingStateMan();
+      final struct = DynamicValue();
+      struct[kSectionStatEnabled] = false;
+      struct[kSectionStatCleanEnabled] = false;
+      struct[kSectionStatPermissive] = true;
+      inner.pushStruct(key, struct);
+
+      // The pane is a full-height strip; on the default surface Run scrolls
+      // out from under the pinned action bar.
+      tester.view.physicalSize = const Size(1400, 1100);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      addTearDown(() => closeSidePane(immediate: true));
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: SizedBox(
+            width: 80,
+            height: 80,
+            child: SectionButton(
+              config: SectionButtonConfig(
+                label: 'Before freezers',
+                sections: [SectionRef(key: key)],
+              ),
+            ),
+          ),
+        ),
+        overrides: [
+          stateManProvider.overrideWith((ref) async => inner),
+          // The member, not the whole key: a section struct carries status
+          // bits an operator must keep reading while the command that sets
+          // one bit of it is locked.
+          ..._tagOverrides(
+              key: key, group: AccessGroup.device, member: kSectionCmdStart),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(SectionButton));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('section-run')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.text(kAccessDeniedGroupNote(AccessGroup.device)),
+          findsOneWidget);
+      expect(inner.writes, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('the residual, counted', () {
@@ -991,6 +1088,13 @@ class _RecordingStateMan implements StateMan {
           value: value,
           typeId: value is bool ? NodeId.boolean : NodeId.double,
         ));
+  }
+
+  /// A struct, for the assets whose key is one.
+  void pushStruct(String key, DynamicValue value) {
+    _streams
+        .putIfAbsent(key, () => BehaviorSubject<DynamicValue>())
+        .add(value);
   }
 
   @override
