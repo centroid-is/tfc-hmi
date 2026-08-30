@@ -650,7 +650,7 @@ void main() {
       expect(find.byType(ExpansionTile), findsOneWidget);
       expect(find.byType(AuditEntryLine), findsNothing);
 
-      await tester.tap(find.byType(ExpansionTile));
+      await tester.tap(find.byKey(kAuditActionHeaderKey));
       await tester.pumpAndSettle();
 
       expect(find.byType(AuditEntryLine), findsNWidgets(2));
@@ -669,7 +669,7 @@ void main() {
         ),
       );
 
-      await tester.tap(find.byType(ExpansionTile));
+      await tester.tap(find.byKey(kAuditActionHeaderKey));
       await tester.pumpAndSettle();
 
       final members = tester
@@ -725,7 +725,7 @@ void main() {
     testWidgets('states it whether the tile is open or shut', (tester) async {
       await _pump(tester, AuditActionTile(action: partial()));
 
-      await tester.tap(find.byType(ExpansionTile));
+      await tester.tap(find.byKey(kAuditActionHeaderKey));
       await tester.pumpAndSettle();
 
       expect(find.byType(AuditEntryLine), findsNothing);
@@ -741,11 +741,11 @@ void main() {
         (tester) async {
       await _pump(tester, AuditActionTile(action: partial()));
 
-      await tester.tap(find.byType(ExpansionTile));
+      await tester.tap(find.byKey(kAuditActionHeaderKey));
       await tester.pumpAndSettle();
       expect(find.byType(AuditEntryLine), findsNothing);
 
-      await tester.tap(find.byType(ExpansionTile));
+      await tester.tap(find.byKey(kAuditActionHeaderKey));
       await tester.pumpAndSettle();
       expect(find.byType(AuditEntryLine), findsNWidgets(3));
     });
