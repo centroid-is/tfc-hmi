@@ -26,6 +26,7 @@ import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/start_stop_button.dart';
 import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/access_policy.dart';
+import 'package:tfc/providers/access_templates.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc/widgets/access_denied_prompt.dart';
@@ -97,6 +98,36 @@ List<Override> _accessOverrides({AccessSession? session}) => [
           .overrideWith(() => _FixedSession(session ?? _anonymous())),
       accessRepositoryProvider.overrideWith((ref) async => _StubRepository()),
     ];
+
+/// What plan 04-10's converted call sites decide from: one key bound to a
+/// one-rule template, and somewhere for the refusal's audit row to go.
+///
+/// The rule is on [kWholeKeyMember], because the three converted sites these
+/// drive — `number.dart`, `start_stop_button.dart` — write scalar keys and name
+/// no member.
+List<Override> _tagOverrides({
+  required String key,
+  required AccessGroup group,
+}) {
+  final resolver = TagBindingResolver()
+    ..setSnapshot(
+      keyToTemplate: {key: 'test-template'},
+      templates: {
+        'test-template': AccessTemplate(
+          name: 'test-template',
+          rules: {kWholeKeyMember: group},
+        ),
+      },
+    );
+  return [
+    tagBindingResolverProvider.overrideWith((ref) => resolver),
+    // The loader is what `tagAccessProvider` watches. It must answer without a
+    // database; the snapshot is already in the resolver.
+    accessTemplatesProvider.overrideWith((ref) async => const <AccessTemplate>[]),
+    auditSinkProvider.overrideWith((ref) async => const NullAuditSink()),
+    stationNameProvider.overrideWithValue('test-station'),
+  ];
+}
 
 /// The prompt under a bare `MaterialApp`, with the denial stream driven by the
 /// test and the sign-in opener injected.
@@ -675,6 +706,98 @@ void main() {
           reason: 'nothing reported it to the framework either');
       expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
       expect(inner.writes, isEmpty);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Plan 04-10 — the same two assets, refused at the tap instead
+  // -------------------------------------------------------------------------
+  //
+  // The two tests above are 03-07's: they drive the **guard**, which is still
+  // underneath and still throws. These two drive the tap-time gate in front of
+  // it, with an ordinary unguarded `StateMan` behind — so a write reaching
+  // `inner.writes` here means the gate let it through, not that the guard
+  // failed to catch it.
+  group('refused at the tap, through a real asset', () {
+    setUp(_registerAppMenu);
+    tearDown(() => RouteRegistry().menuItems.clear());
+
+    testWidgets(
+        'a refused number write keeps the typed value and leaves the dialog '
+        'open', (tester) async {
+      const key = 'ST101.CN01.p_par_Speed';
+      final inner = _RecordingStateMan()..push(key, 12.0);
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: SizedBox(
+            width: 200,
+            height: 80,
+            child: NumberWidget(config: NumberConfig(key: key, writable: true)),
+          ),
+        ),
+        overrides: [
+          stateManProvider.overrideWith((ref) async => inner),
+          ..._tagOverrides(key: key, group: AccessGroup.setpoints),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(NumberWidget));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, '42');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Write'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(inner.writes, isEmpty);
+      // Nothing was thrown at all — this is the half 03-07's version of this
+      // test asserts the opposite of, and the difference is the whole plan.
+      expect(tester.takeException(), isNull);
+
+      // The dialog is still up with the operator's number still in it. After
+      // signing in they press Enter; they do not type 42 again, and nothing
+      // was sent on their behalf while they were away.
+      expect(find.byType(TextField), findsWidgets);
+      expect(find.text('42'), findsOneWidget);
+    });
+
+    testWidgets('a refused start/stop press produces no pulse and prompts',
+        (tester) async {
+      final inner = _RecordingStateMan()..push('fb/running', false);
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: SizedBox(
+            width: 320,
+            height: 80,
+            child: StartStopPillButton(StartStopPillButtonConfig(
+              runKey: 'cmd/run',
+              stopKey: 'cmd/stop',
+              runningKey: 'fb/running',
+              stoppedKey: 'fb/stopped',
+            )),
+          ),
+        ),
+        overrides: [
+          stateManProvider.overrideWith((ref) async => inner),
+          ..._tagOverrides(key: 'cmd/run', group: AccessGroup.force),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(StartStopPillButton).first);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.text(kAccessDeniedGroupNote(AccessGroup.force)),
+          findsOneWidget);
+      // Both halves of the pulse: neither the press's `true` nor the
+      // release's `false` may reach the PLC.
+      expect(inner.writes, isEmpty);
+      expect(tester.takeException(), isNull);
     });
   });
 
