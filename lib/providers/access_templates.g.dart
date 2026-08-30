@@ -7,7 +7,7 @@ part of 'access_templates.dart';
 // **************************************************************************
 
 String _$tagBindingResolverHash() =>
-    r'bbb75a752c712628cb2f94b58f3522f81884d660';
+    r'46a07a7abb0bc878c49298b93dbc294fc8bafd61';
 
 /// The one live binding snapshot on the panel.
 ///
@@ -36,6 +36,11 @@ String _$tagBindingResolverHash() =>
 /// The provider therefore has **no dependencies**: nothing can invalidate it,
 /// so nothing can rebuild it, so nothing downstream of it rebuilds either.
 /// That is the property, and it is worth the mutable object.
+///
+/// ## Why it kicks the loader
+///
+/// Having no dependencies is what creates the hole the kick below closes. See
+/// the comment at the kick; it is the reason this plan exists.
 ///
 /// Copied from [tagBindingResolver].
 @ProviderFor(tagBindingResolver)
