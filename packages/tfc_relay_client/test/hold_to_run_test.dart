@@ -303,6 +303,195 @@ void main() {
     });
   });
 
+  group('the operator lets go while the engage is still in flight', () {
+    // CR-01. The window is the engage round trip, which over a socket has a
+    // measured floor of 50-100 ms — long enough for a scroll to steal the
+    // pointer, for a stray second touch, or for the app to be backgrounded.
+    // What must never come out of it is a hold that took, a timer that
+    // started, and nobody holding the button: the deadman would then be fed
+    // at full cadence from a panel no finger is on. Deadman principle: when
+    // in doubt, released.
+    //
+    // Every arm here parks the engage with `stallWrites()`, releases while it
+    // is parked, and only then lets the engage land applied — so the hold
+    // genuinely takes, which is the case where getting it wrong actuates.
+
+    /// Parks the engage and hands back the future nobody has awaited yet.
+    ///
+    /// Anti-vacuity: it waits for the write to be genuinely parked at the
+    /// plant before returning, because a case that releases before the engage
+    /// has reached the source is not testing the in-flight window at all — it
+    /// is testing a controller that never pressed.
+    Future<Future<WriteResult>> engageStalled(
+        FakeStateMan plant, HoldToRunController controller) async {
+      plant.stallWrites();
+      final engaging = controller.press();
+      await _until('the engage write to park upstream',
+          () => plant.writesInFlight >= 1);
+      return engaging;
+    }
+
+    test('a tap cancelled during the engage never starts the counter',
+        () async {
+      final plant = _plant();
+      final controller = HoldToRunController(
+        api: plant,
+        key: _key,
+        pulsePeriod: _pulse,
+      );
+      addTearDown(controller.dispose);
+
+      final engaging = await engageStalled(plant, controller);
+
+      // The binding table in §4.6a wires onTapCancel straight to release(),
+      // and line 444 forbids papering over it with a try. So this call is
+      // made exactly as an integrator following the spec would make it: bare,
+      // awaited, inside a gesture callback that a throw would take down.
+      final refusal = await controller.release();
+      expect(refusal, isA<WriteUnknown>(),
+          reason: 'a release with the engage still out has no hold to end and '
+              'no zero to write, so the honest answer is unknown — it came '
+              'back as ${refusal.runtimeType}');
+
+      plant.releaseWrites();
+      final engagement = await engaging;
+
+      expect(engagement, isA<WriteApplied>(),
+          reason: 'the engage came back as ${engagement.runtimeType}, so this '
+              'case proved nothing: the hazard is a hold that DID take while '
+              'the operator was letting go');
+      expect(controller.debugTimerCount, 0,
+          reason: 'the engage landed after the operator let go and started the '
+              'pulse timer anyway. That is a deadman being fed at full cadence '
+              'from a panel nobody is touching, and it stops only when the '
+              'page is disposed or the link drops');
+      expect(controller.isHeld, isFalse,
+          reason: 'the controller reports a live hold after the release that '
+              'preceded the engage landing');
+      expect(controller.debugReleaseReason, HoldEnded.operatorLetGo,
+          reason: 'the hold ended as ${controller.debugReleaseReason}; the '
+              'trigger that arrived first is the one the panel must report, '
+              'and here it was the finger coming off');
+
+      await Future<void>.delayed(_quiet);
+      expect(controller.debugPulsesSent, 0,
+          reason: 'the controller emitted ${controller.debugPulsesSent} '
+              'pulses for a hold released before it existed');
+      await _until('the release write to put 0 on the tag',
+          () => plant.read(_key)?.asInt == 0);
+    });
+
+    test('an app-lifecycle event during the engage never starts the counter',
+        () async {
+      final plant = _plant();
+      final lifecycle = StreamController<void>();
+      addTearDown(lifecycle.close);
+      final controller = HoldToRunController(
+        api: plant,
+        key: _key,
+        pulsePeriod: _pulse,
+        releaseOn: lifecycle.stream,
+      );
+      addTearDown(controller.dispose);
+
+      final engaging = await engageStalled(plant, controller);
+
+      // The worse of the two paths: the constructor's listener swallows
+      // whatever comes out of the release, so a controller that got this
+      // wrong keeps feeding the deadman with no error surfaced anywhere.
+      lifecycle.add(null);
+      await _until('the lifecycle release to be recorded',
+          () => controller.debugReleaseReason != null);
+
+      plant.releaseWrites();
+      final engagement = await engaging;
+
+      expect(engagement, isA<WriteApplied>(),
+          reason: 'the engage came back as ${engagement.runtimeType}, so the '
+              'hold never took and this case is not the hazard');
+      expect(controller.debugReleaseReason, HoldEnded.lifecycle,
+          reason: 'the hold ended as ${controller.debugReleaseReason} after '
+              'the app went away while the engage was out');
+      expect(controller.debugTimerCount, 0,
+          reason: 'a backgrounded panel started a pulse timer when its engage '
+              'landed — the same jog with nobody watching the screen');
+      expect(controller.isHeld, isFalse);
+
+      await Future<void>.delayed(_quiet);
+      expect(controller.debugPulsesSent, 0,
+          reason: 'the controller emitted ${controller.debugPulsesSent} '
+              'pulses after the app stopped being in front of the operator');
+      await _until('the release write to put 0 on the tag',
+          () => plant.read(_key)?.asInt == 0);
+    });
+
+    test('disposing during the engage never starts the counter', () async {
+      final plant = _plant();
+      final controller = HoldToRunController(
+        api: plant,
+        key: _key,
+        pulsePeriod: _pulse,
+      );
+
+      final engaging = await engageStalled(plant, controller);
+
+      await controller.dispose();
+
+      plant.releaseWrites();
+      final engagement = await engaging;
+
+      expect(engagement, isA<WriteApplied>(),
+          reason: 'the engage came back as ${engagement.runtimeType}, so the '
+              'hold never took and this case is not the hazard');
+      expect(controller.debugReleaseReason, HoldEnded.disposed,
+          reason: 'a page torn down with its engage still out ended as '
+              '${controller.debugReleaseReason}');
+      expect(controller.debugTimerCount, 0,
+          reason: 'the engage landed into a disposed controller and started a '
+              'timer nobody owns');
+      expect(controller.isHeld, isFalse);
+
+      await Future<void>.delayed(_quiet);
+      expect(controller.debugPulsesSent, 0,
+          reason: 'the controller emitted ${controller.debugPulsesSent} '
+              'pulses for a page that is gone');
+      await _until('the release write to put 0 on the tag',
+          () => plant.read(_key)?.asInt == 0);
+    });
+
+    test('a lifecycle event before any press is not an error', () async {
+      final plant = _plant();
+      final lifecycle = StreamController<void>();
+      addTearDown(lifecycle.close);
+      final controller = HoldToRunController(
+        api: plant,
+        key: _key,
+        pulsePeriod: _pulse,
+        releaseOn: lifecycle.stream,
+      );
+      addTearDown(controller.dispose);
+
+      // Nothing to release, so nothing happens — and in particular no write
+      // is invented. The public release() still refuses, because a caller who
+      // asked for a release deserves to be told there was no hold; a trigger
+      // that fired on its own does not.
+      lifecycle.add(null);
+      await Future<void>.delayed(_quiet);
+
+      expect(plant.mintedCmds, isEmpty,
+          reason: 'a lifecycle event with no hold live put a write on the '
+              'plant. A release that invented one would put a 0 on a deadman '
+              'tag some other panel may be feeding');
+      expect(controller.debugReleaseReason, isNull,
+          reason: 'the controller recorded '
+              '${controller.debugReleaseReason} as an ending for a hold that '
+              'never began');
+      expect(() => controller.release(), throwsStateError,
+          reason: 'release() on a controller that has never pressed must still '
+              'refuse: there is no hold to end and no write to make');
+    });
+  });
+
   group('the controller carries no queue and one timer', () {
     // Structural, and it stays structural on purpose (T-05-28). The gate that
     // drops a pulse the link cannot carry lives in `RemoteStateMan` (05-04);

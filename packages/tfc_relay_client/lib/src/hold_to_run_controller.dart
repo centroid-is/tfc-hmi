@@ -69,12 +69,18 @@ final class HoldToRunController {
     Stream<void>? releaseOn,
   }) : _api = api {
     _lifecycle = releaseOn?.listen((_) {
-      // Fire and forget, with the error swallowed: a lifecycle event is not a
-      // caller who can be told anything. The counter has already stopped by
-      // the time the release write's outcome could matter, and a stream
-      // callback that throws takes down the zone it runs in.
-      unawaited(release(reason: HoldEnded.lifecycle)
-          .then((_) {}, onError: (Object _) {}));
+      // Through [_release] and not through [release]: the public method
+      // refuses a caller who asked to end a hold that never began, and that
+      // refusal is right for a caller and wrong for a trigger — a lifecycle
+      // event on a controller nobody has pressed is a no-op, not an error,
+      // and swallowing a StateError here is how a real fault would go unseen.
+      //
+      // What is left is fire-and-forget with the *write's* error swallowed: a
+      // lifecycle event is not a caller who can be told anything, the counter
+      // has already stopped by the time that outcome could matter, and a
+      // stream callback that throws takes down the zone it runs in.
+      unawaited(
+          _release(HoldEnded.lifecycle)?.then((_) {}, onError: (Object _) {}));
     });
   }
 
@@ -97,6 +103,22 @@ final class HoldToRunController {
 
   HoldHandle? _handle;
   HoldEnded? _releaseReason;
+
+  /// A release that arrived while the engage was still out, kept until there
+  /// is a hold to apply it to.
+  ///
+  /// Not a queue and not a pulse: one nullable reason, which is the whole
+  /// state the in-flight window needs (the release trigger that arrives first
+  /// is the only one that matters). See [press] for what it buys.
+  HoldEnded? _pendingRelease;
+
+  /// True from the moment [press] asks for the hold until the engage answers.
+  ///
+  /// The window this exists for is the engage round trip — over a socket a
+  /// measured 50-100 ms, which is long enough for a finger to come off a
+  /// button.
+  var _engaging = false;
+
   var _pulsesSent = 0;
   var _disposed = false;
 
@@ -132,9 +154,19 @@ final class HoldToRunController {
   /// starts the timer: a device that refused is a machine that never agreed to
   /// move, and a UI feeding a deadman for a hold that does not exist is the
   /// shipped version of a button that lights on the local click.
+  ///
+  /// **A release that arrives while the engage is out wins.** The round trip
+  /// is 50-100 ms over a socket, which is long enough for a scroll to steal
+  /// the pointer, for a stray second touch, or for the app to be backgrounded.
+  /// If any of that happens the hold may still take — the write was already on
+  /// its way — so the engage is honoured and then immediately released, and
+  /// the pulse timer never starts. The alternative is the one failure this
+  /// whole design exists to make impossible: a deadman fed at full cadence
+  /// from a panel nobody is touching, stopping only when the page closes or
+  /// the link drops. When in doubt, released.
   Future<WriteResult> press() async {
     _refuseIfDisposed('press');
-    if (isHeld) {
+    if (isHeld || _engaging) {
       throw StateError('a hold on "$key" is already live on this controller. '
           'Two concurrent holds on one tag are a contradiction at the '
           'operator\'s end — one finger, one button — and nothing here can '
@@ -145,19 +177,33 @@ final class HoldToRunController {
     // reported once the button is down again.
     _releaseReason = null;
     _handle = null;
+    _pendingRelease = null;
+    _engaging = true;
 
-    final handle = await _api.holdToRun(key);
+    final HoldHandle handle;
+    try {
+      handle = await _api.holdToRun(key);
+    } finally {
+      // Cleared however the engage ended, including by throwing: a controller
+      // stuck reporting itself mid-engage would answer every later release
+      // with "the hold is coming" and never press again.
+      _engaging = false;
+    }
     unawaited(handle.onReleased.then(_noteEnded));
     _handle = handle;
 
     if (!handle.isHeld) return handle.engagement;
-    if (_disposed) {
-      // Engaged into a controller that closed while the engage was out.
-      // Nothing is watching this counter and nothing will feed it; say so at
-      // once rather than leave a hold that looks live.
-      unawaited(handle
-          .release(reason: HoldEnded.disposed)
-          .then((_) {}, onError: (Object _) {}));
+
+    // The operator let go, the app went away, or this controller was disposed
+    // while the engage was out. The hold took; nothing is holding it.
+    final ending = _disposed ? HoldEnded.disposed : _pendingRelease;
+    if (ending != null) {
+      // Recorded here rather than left to the [onReleased] listener, which
+      // runs a microtask after the caller of `press()` has already been
+      // resumed: a panel that read [debugReleaseReason] the instant the
+      // engage answered would otherwise see a hold that ended for no reason.
+      _releaseReason ??= ending;
+      unawaited(_release(ending)?.then((_) {}, onError: (Object _) {}));
       return handle.engagement;
     }
 
@@ -176,26 +222,62 @@ final class HoldToRunController {
   /// one's future and writes nothing, so a disconnect racing a finger cannot
   /// put two zeros on the wire.
   ///
+  /// Safe to call with the engage still in flight, and the binding depends on
+  /// it: §4.6a wires `onTapCancel` straight here with no `try` around it, so a
+  /// throw would land in a gesture callback. There is no hold to end yet and
+  /// no zero to write, so the answer is [WriteUnknown] and the intent is kept
+  /// for [press] to honour the moment the hold exists.
+  ///
+  /// Throws only for the one case that is a caller's mistake: a release on a
+  /// controller that has never pressed at all.
+  ///
   /// The returned outcome is informational. What stops the machine is the
   /// counter stopping, which has already happened before this future exists,
   /// so a release over a dead link resolving `WriteUnknown` is the honest
   /// answer and not a failure to release.
   Future<WriteResult> release(
       {HoldEnded reason = HoldEnded.operatorLetGo}) async {
-    _cancelPulse();
-    final handle = _handle;
-    if (handle == null) {
+    final outcome = _release(reason);
+    if (outcome == null) {
       throw StateError('release() was called on a controller for "$key" that '
           'has never pressed. There is no hold to end and no write to make; '
           'a release that invented one would put a 0 on a deadman tag some '
           'other panel may be feeding');
     }
+    return outcome;
+  }
+
+  /// The one place a hold ends, whichever trigger got here first.
+  ///
+  /// Null means there was nothing to release — no hold, and no engage on its
+  /// way. What that means is the caller's to decide: [release] refuses,
+  /// because a caller who asked deserves to be told; the lifecycle listener
+  /// ignores it, because a trigger firing on a controller nobody pressed is a
+  /// no-op. Both go through here so neither can end a hold in a way the other
+  /// does not, which is exactly how the in-flight window came to behave
+  /// differently on the two paths.
+  Future<WriteResult>? _release(HoldEnded reason) {
+    _cancelPulse();
+    final handle = _handle;
+    if (handle == null) {
+      if (!_engaging) return null;
+      // The engage has not answered yet, so there is no handle to release and
+      // no zero to write. The intent is recorded and [press] honours it the
+      // moment the hold exists; the counter never starts.
+      _pendingRelease ??= reason;
+      _releaseReason ??= reason;
+      return Future<WriteResult>.value(WriteUnknown(
+          '',
+          const WriteReason('hold_released_before_engage_answered',
+              message: 'the operator let go before the engage came back; the '
+                  'hold is released as soon as it exists and the counter is '
+                  'never fed')));
+    }
     final outcome = handle.release(reason: reason);
     // The ending is recorded by the listener registered in [press], which is
     // ahead of this continuation in the completer's own order — so by the time
     // the caller has its outcome, [debugReleaseReason] is set.
-    await handle.onReleased;
-    return outcome;
+    return handle.onReleased.then<WriteResult>((_) => outcome);
   }
 
   /// Ends everything this controller owns, and is safe to call twice.

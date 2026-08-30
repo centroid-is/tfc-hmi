@@ -443,6 +443,15 @@ nothing about the link needs binding.
   finger, one button — and nothing in the client can decide which the machine
   should obey. A binding that can double-fire its press gesture must not paper
   over it with a `try`.
+- **A release during the engage round trip wins, and does not throw.** The
+  engage is a real write with a 50–100 ms floor over a socket, which is long
+  enough for a scroll to steal the pointer or for the app to be backgrounded.
+  `release()` in that window records the intent and answers `WriteUnknown`
+  (`hold_released_before_engage_answered`) — it never throws, so `onTapCancel`
+  can stay wired straight to it. When the engage lands the controller releases
+  the hold it just took and **never starts the pulse timer**: the alternative
+  is a deadman fed at full cadence from a panel nobody is touching. The same
+  holds for a lifecycle event and for `dispose()` inside that window.
 
 ### 4.7 Status channel & pipeline health
 
