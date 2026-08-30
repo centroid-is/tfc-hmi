@@ -545,7 +545,16 @@ void main() {
       // most rows grey, which pins the unknown treatment (already covered by
       // the Multivac's pane) and pins none of the colours.
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final bit in boxErectorStatusBits) bit.member: true,
+        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
+          m: true,
+        // The permit is INVERTED in its group, so "true" here is the healthy
+        // case -- left true so the golden shows a permit that is fine sitting
+        // beside the two conditions that are not.
+        'q_xOutfeedPermitted': true,
+        // How long each starve has run, so the duration column is in the PNG.
+        'p_stat_tNoBottomsFor': 252000,
+        'p_stat_tNoLidsFor': 45000,
+        'p_stat_tWaitingProductFor': 3780000,
         // The throughput, in the shape the PLC actually publishes: an FB_BPM
         // INSTANCE carrying an `hmi : ST_BPM` of rolling averages, not a
         // scalar. Non-zero on purpose -- 0 is what a stopped machine reads,
@@ -591,9 +600,9 @@ void main() {
                               ),
                             ),
                           ),
-                          StructStatusDiodes(
+                          GroupedStatusDiodes(
                             status: status,
-                            bits: boxErectorStatusBits,
+                            groups: boxErectorStatusGroups,
                             machine: equipmentShortName(
                                 ThirdPartyEquipmentKind.boxErector),
                           ),
@@ -610,6 +619,86 @@ void main() {
       await expectLater(
         find.byKey(_key),
         matchesGoldenFile('goldens/third_party_boxErector_status_pane.png'),
+      );
+    });
+
+    // The same pane with two groups OPENED — the half of the design a collapsed
+    // golden cannot show. This is the "exactly what is wrong" half: Drives
+    // breaks into the five not-ready and three not-turning alarms the machine
+    // publishes (a drive can be ready and still not move, so they are different
+    // faults), and Out of material carries HOW LONG each starve has run, off
+    // the FB's own timers.
+    //
+    // "Strapper permit off" is dark while the two rows above it are
+    // lit: the permit is INVERTED, so a healthy permit reads as no fault. That
+    // row disagreeing with "Next machine not ready" is how a broken interlock
+    // between the two machines becomes visible.
+    testWidgets('boxErector — status groups opened', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
+          m: false,
+        // A believable single fault plus a starve, rather than everything at
+        // once: the carton conveyor is not ready, and the line has been out of
+        // bottoms for four minutes.
+        'p_stat_xDriveError': true,
+        'p_stat_xAlmDriveM101': true,
+        'p_stat_xAlmMotionM101': true,
+        'p_stat_xWaitingBottoms': true,
+        'p_stat_xWaitingLids': false,
+        'p_stat_xWaitingProduct': false,
+        'p_stat_xExtNotReady': true,
+        'q_xOutfeedPermitted': true,
+        'p_stat_tNoBottomsFor': 252000,
+      }));
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.white,
+          body: Center(
+            child: RepaintBoundary(
+              key: _key,
+              child: SizedBox(
+                width: 420,
+                height: 1400,
+                child: Material(
+                  child: SidePane(
+                    title: 'BER-01',
+                    subtitle: 'Box erector',
+                    icon: Icons.precision_manufacturing,
+                    status: const PaneStatus.running(),
+                    child: PaneSection(
+                      title: 'Status',
+                      child: GroupedStatusDiodes(
+                        status: status,
+                        groups: boxErectorStatusGroups,
+                        machine: equipmentShortName(
+                            ThirdPartyEquipmentKind.boxErector),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      // Opened by real taps, so the golden also proves the rows are tappable
+      // and that the state survives the rebuild each tap triggers.
+      await tester.tap(find.text('Drives'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Out of material'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text("Can't send on"));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_boxErector_groups_open.png'),
       );
     });
 
@@ -631,7 +720,16 @@ void main() {
       addTearDown(tester.view.reset);
 
       final frozen = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final bit in boxErectorStatusBits) bit.member: true,
+        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
+          m: true,
+        // The permit is INVERTED in its group, so "true" here is the healthy
+        // case -- left true so the golden shows a permit that is fine sitting
+        // beside the two conditions that are not.
+        'q_xOutfeedPermitted': true,
+        // How long each starve has run, so the duration column is in the PNG.
+        'p_stat_tNoBottomsFor': 252000,
+        'p_stat_tNoLidsFor': 45000,
+        'p_stat_tWaitingProductFor': 3780000,
         'p_stat_xModbusHealthy': false,
         'bpmCartonsOut':
             DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
@@ -668,12 +766,12 @@ void main() {
                                 label: 'Cartons per minute',
                                 child: Text('—'),
                               ),
-                              StructStatusDiodes(
+                              GroupedStatusDiodes(
                                 // null, exactly as the gate feeds it: the
                                 // frozen values above are deliberately NOT
                                 // shown.
                                 status: null,
-                                bits: boxErectorStatusBits,
+                                groups: boxErectorStatusGroups,
                                 machine: equipmentShortName(
                                     ThirdPartyEquipmentKind.boxErector),
                               ),

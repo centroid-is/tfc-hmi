@@ -1164,93 +1164,139 @@ void main() {
         () {
       // Read off the live line-1 box-erector struct at ns=4;s=BER01.BER01.
       // Unlike the strapper/Multivac the members sit DIRECTLY under the node as
-      // p_stat_* with no `.hmi` wrapper. Curated fault-first: three red rows
-      // that say something is WRONG, then the amber waiting-for-X cycle rows,
-      // then green ready/running, then the blue mode rows. A member the struct
-      // does not carry renders as the grey `!` forever, so the names are pinned
-      // here.
-      expect(boxErectorStatusBits.map((b) => b.member), [
+      // p_stat_* with no `.hmi` wrapper. A member the struct does not carry
+      // renders as the grey `!` forever -- indistinguishable from a PLC that has
+      // not been rolled out -- so every name is pinned here against
+      // ST101/ST101/BER/FB_BER01ScadaPoll.TcPOU.
+      expect(structMembersOf(ThirdPartyEquipmentKind.boxErector), [
         'p_stat_WaitingFrustration',
         'p_stat_xEstopActive',
+        'p_stat_xAlmEstop',
         'p_stat_xDriveError',
+        'p_stat_xAlmDriveM101',
+        'p_stat_xAlmDriveM102',
+        'p_stat_xAlmDriveM103',
+        'p_stat_xAlmDriveM104',
+        'p_stat_xAlmDriveM105',
+        'p_stat_xAlmMotionM101',
+        'p_stat_xAlmMotionM102',
+        'p_stat_xAlmMotionM103',
         'p_stat_xWaitingBottoms',
         'p_stat_xWaitingLids',
         'p_stat_xWaitingProduct',
         'p_stat_xOutputBlocked',
         'p_stat_xExtNotReady',
-        'p_stat_xReadyToVacuum',
         'q_xOutfeedPermitted',
+        'p_stat_xAlmPusherFrontSensor',
+        'p_stat_xAlmPusherRearSensor',
         'p_stat_xModeManual',
       ]);
     });
 
-    test('the stopping-line row is first, red, and names the box erector', () {
-      // Mirrors the strapper/multivac ordering: the one bit that says something
-      // is wrong (the machine is holding up the line) leads, red, before the
-      // rows that only describe the cycle.
-      final first = boxErectorStatusBits.first;
-      expect(first.member, 'p_stat_WaitingFrustration');
-      expect(first.onRole, HmiColorRole.red,
-          reason: 'it is the one bit that says something is wrong');
-      expect(
-          first.labelFor(
-              equipmentShortName(ThirdPartyEquipmentKind.boxErector)),
-          'Box erector is stopping the line');
+    test('six rows collapsed, and the catch-all leads', () {
+      expect(boxErectorStatusGroups.map((g) => g.label), [
+        'Holding up the line',
+        'Emergency stop',
+        'Drives',
+        'Out of material',
+        "Can't send on",
+        'Pusher',
+        'In manual',
+      ]);
+      // The FB raises WaitingFrustration only when running, permitted out, not
+      // ready for product and NOT starved of bottoms or lids -- so it means
+      // "stopped for a reason none of the rows below explain". It leads, red.
+      expect(boxErectorStatusGroups.first.summaryMember,
+          'p_stat_WaitingFrustration');
+      expect(boxErectorStatusGroups.first.onRole, HmiColorRole.red);
+      expect(boxErectorStatusGroups.first.children, isEmpty);
     });
 
-    test('fault rows red, waiting amber, ready green, manual amber',
+    test('the drives summary is the machine own roll-up, not our guess', () {
+      final drives =
+          boxErectorStatusGroups.firstWhere((g) => g.label == 'Drives');
+      // p_stat_xDriveError is the Saia's process-word roll-up. Deriving the
+      // summary from the children instead would have the HMI second-guessing
+      // the machine about its own drives.
+      expect(drives.summaryMember, 'p_stat_xDriveError');
+      expect(drives.children, hasLength(8),
+          reason: 'five not-ready plus three not-turning');
+      final struct = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_xDriveError': false,
+        'p_stat_xAlmDriveM101': true,
+      }));
+      expect(drives.summaryOf(struct), isFalse,
+          reason: 'the roll-up wins over a child');
+    });
+
+    test('a group summary lights when any child does', () {
+      final material =
+          boxErectorStatusGroups.firstWhere((g) => g.label == 'Out of material');
+      expect(material.summaryMember, isNull);
+      DynamicValue struct(Map<String, dynamic> m) =>
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
+      expect(material.summaryOf(struct({'p_stat_xWaitingLids': true})), isTrue);
+      expect(material.summaryOf(struct({'p_stat_xWaitingLids': false})), isFalse,
+          reason: 'one readable child that is off means the group is off');
+      // Everything absent is unknown, not off: a group that claimed "no
+      // problem" from a struct it could not read would be the worst answer.
+      expect(material.summaryOf(struct({'p_stat_xRunning': true})), isNull);
+    });
+
+    test('the starve rows carry how long, from the FB own timers', () {
+      final material =
+          boxErectorStatusGroups.firstWhere((g) => g.label == 'Out of material');
+      final byMember = {for (final c in material.children) c.member: c};
+      expect(byMember['p_stat_xWaitingBottoms']!.durationMember,
+          'p_stat_tNoBottomsFor');
+      expect(byMember['p_stat_xWaitingLids']!.durationMember,
+          'p_stat_tNoLidsFor');
+      expect(byMember['p_stat_xWaitingProduct']!.durationMember,
+          'p_stat_tWaitingProductFor');
+
+      final struct = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+        'p_stat_tNoBottomsFor': 252000,
+      }));
+      expect(structDurationOf(struct, 'p_stat_tNoBottomsFor'),
+          const Duration(minutes: 4, seconds: 12));
+      expect(formatStatusDuration(const Duration(minutes: 4, seconds: 12)),
+          '4m 12s');
+      expect(formatStatusDuration(const Duration(seconds: 45)), '45s');
+      expect(formatStatusDuration(const Duration(hours: 1, minutes: 3)),
+          '1h 03m');
+    });
+
+    test('the outfeed permit is INVERTED, or a healthy line reads as a fault',
         () {
-      final byMember = {for (final b in boxErectorStatusBits) b.member: b};
-      // The three fault rows.
-      expect(byMember['p_stat_xEstopActive']!.onRole, HmiColorRole.red);
-      expect(byMember['p_stat_xEstopActive']!.labelFor('box erector'),
-          'Emergency stop is out');
-      expect(byMember['p_stat_xDriveError']!.onRole, HmiColorRole.red);
-      expect(byMember['p_stat_xDriveError']!.labelFor('box erector'),
-          'A drive has faulted');
-      // The amber waiting-for-X cycle rows.
-      expect(byMember['p_stat_xWaitingBottoms']!.onRole, HmiColorRole.yellow);
-      expect(byMember['p_stat_xWaitingBottoms']!.labelFor('box erector'),
-          'Waiting for carton bottoms');
-      expect(byMember['p_stat_xWaitingLids']!.onRole, HmiColorRole.yellow);
-      expect(byMember['p_stat_xWaitingProduct']!.onRole, HmiColorRole.yellow);
-      expect(byMember['p_stat_xOutputBlocked']!.onRole, HmiColorRole.yellow);
-      // The Saia machine's own words for its two downstream conditions.
-      expect(byMember['p_stat_xOutputBlocked']!.labelFor('box erector'),
-          'Carton outfeed is blocked');
-      expect(byMember['p_stat_xExtNotReady']!.labelFor('box erector'),
-          'Downstream equipment not ready');
-      // The real permit: an FB VAR_OUTPUT, not a p_stat_ var, carrying the
-      // shared outfeed sentence and green like every other permit.
-      expect(byMember['q_xOutfeedPermitted']!.onRole, HmiColorRole.green);
-      expect(byMember['q_xOutfeedPermitted']!.labelFor('box erector'),
-          'Box erector may send boxes on');
-      expect(byMember['p_stat_xExtNotReady']!.onRole, HmiColorRole.yellow);
-      // Green ready/running.
-      expect(byMember['p_stat_xReadyToVacuum']!.onRole, HmiColorRole.green);
-      expect(byMember['p_stat_xReadyToVacuum']!.labelFor('box erector'),
-          'Box erector is ready to vacuum');
-      // No Running diode: the pane header badge is driven by the same bit
-      // through runKey, so a row would show it twice.
-      expect(byMember.containsKey('p_stat_xRunning'), isFalse);
-      // Blue mode rows.
-      // Yellow, the same yellow conveyor.dart gives DriveState.manual -- an
-      // operator override is one fact and gets one colour across the app.
-      expect(byMember['p_stat_xModeManual']!.onRole, HmiColorRole.yellow);
-      expect(byMember['p_stat_xModeManual']!.labelFor('box erector'),
-          'In manual mode');
-      // Transport is deliberately absent: it is lit during normal running, so
-      // it says nothing about why product stopped.
-      expect(byMember.containsKey('p_stat_xModeTransport'), isFalse);
+      final group =
+          boxErectorStatusGroups.firstWhere((g) => g.label == "Can't send on");
+      final permit = group.children
+          .firstWhere((c) => c.member == 'q_xOutfeedPermitted');
+      expect(permit.invert, isTrue);
+
+      DynamicValue struct(Map<String, dynamic> m) =>
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
+      // Permit ON is the good case: the row is dark and the group stays dark.
+      expect(permit.valueIn(struct({'q_xOutfeedPermitted': true})), isFalse);
+      expect(
+          group.summaryOf(struct({
+            'q_xOutfeedPermitted': true,
+            'p_stat_xOutputBlocked': false,
+            'p_stat_xExtNotReady': false,
+          })),
+          isFalse);
+      // Permit OFF is the fault.
+      expect(permit.valueIn(struct({'q_xOutfeedPermitted': false})), isTrue);
     });
 
-    test('the box erector is struct-backed, not prefix-backed', () {
-      // The enhanced FB retired the old flat BERnn.xPermit* globals; the kind
-      // moved from kEquipmentStatusBits to kStructStatusBits.
-      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector],
-          same(boxErectorStatusBits));
-      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector], isNull,
-          reason: 'both maps would render two Status sections');
+    test('the box erector is grouped, and in exactly one routing map', () {
+      expect(kStructStatusGroups[ThirdPartyEquipmentKind.boxErector],
+          same(boxErectorStatusGroups));
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector], isNull,
+          reason: 'two maps would render two Status sections');
+      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector], isNull);
+      expect(isStructBacked(ThirdPartyEquipmentKind.boxErector), isTrue,
+          reason: 'grouped is still one struct at one subscription');
     });
   });
 
