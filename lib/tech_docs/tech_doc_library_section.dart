@@ -9,15 +9,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
+import 'package:tfc_access/tfc_access.dart' show AccessDenied;
 import 'package:tfc_dart/core/preferences.dart' show PreferencesApi;
 import 'package:tfc_dart/core/fuzzy_match.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
-    show TechDocIndex, TechDocSummary, PlcAssetSummary, DriftPlcCodeIndex;
+    show TechDocIndex, TechDocSummary, PlcAssetSummary;
 
 import '../chat/ai_context_action.dart';
 import '../core/feature_flags.dart';
+import '../core/guarded_knowledge_stores.dart'
+    show GuardedPrefsReader, PlcCodeIndexExtras;
 import '../plc/plc_code_upload_dialog.dart';
 import '../plc/plc_detail_panel.dart';
+import '../providers/access.dart' show stationNameProvider;
+import '../providers/access_policy.dart'
+    show RefAuditSink, reportAccessDenial, sessionInForce;
 import '../providers/mcp_bridge.dart'
     show isMcpChatAvailable, isMcpWriteEnabled;
 import '../providers/plc.dart';
@@ -745,9 +751,9 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       return;
     }
 
-    // Use SharedPreferencesWrapper as PrefsReader for deleteAndCleanAssets.
-    // For now, use direct SharedPreferences access.
-    final prefsReader = _SharedPrefsReader();
+    // The device-local reader, behind the knowledge-base guard: the cleanup
+    // rewrites `page_editor_data`, which asks for `configure`.
+    final prefsReader = ref.read(guardedPageLayoutPrefsProvider);
 
     // Evict from local PDF cache.
     ref.read(pdfBytesCacheProvider).remove(doc.id);
@@ -763,17 +769,31 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     // No invalidate needed — pendingDeleteIdsProvider is watched by
     // techDocListProvider, so the list rebuilds automatically.
 
-    await auditTechDocOperation<void>(
-      action: TechDocAuditAction.delete,
-      user: _currentUser,
-      docId: doc.id,
-      docName: doc.name,
-      operation: () => service.deleteAndCleanAssets(
+    try {
+      await auditTechDocOperation<void>(
+        action: TechDocAuditAction.delete,
+        user: _currentUser,
         docId: doc.id,
-        prefsReader: prefsReader,
-      ),
-      logger: _logger,
-    );
+        docName: doc.name,
+        operation: () => service.deleteAndCleanAssets(
+          docId: doc.id,
+          prefsReader: prefsReader,
+        ),
+        logger: _logger,
+      );
+    } on AccessDenied {
+      // The row was hidden optimistically for a delete that was refused. Put
+      // it back, or the document stays invisible until the page is rebuilt.
+      // The guard has already published the refusal, so `AccessDeniedPrompt`
+      // is what says why — a snackbar here would be a second message.
+      if (mounted) {
+        ref.read(pendingDeleteIdsProvider.notifier).state = ref
+            .read(pendingDeleteIdsProvider)
+            .where((id) => id != doc.id)
+            .toList();
+      }
+      return;
+    }
 
     // DB delete done — refresh from DB, then clear pending flag.
     // Order matters: invalidate first so the DB re-query runs while
@@ -1013,10 +1033,23 @@ Then provide a summary of what this PLC code controls and how it is structured.'
   /// messenger key for snackbar feedback.
   void _reindexPlcAsset(PlcAssetSummary plc) {
     final index = ref.read(plcCodeIndexProvider);
-    if (index == null || index is! DriftPlcCodeIndex) {
+    if (index == null) {
       globalScaffoldMessengerKey.currentState?.showSnackBar(
         const SnackBar(
           content: Text('Re-index unavailable — database not connected'),
+        ),
+      );
+      return;
+    }
+    // `PlcCodeIndexExtras`, not the concrete `DriftPlcCodeIndex`:
+    // `plcCodeIndexProvider` returns the guard, and the old check would have
+    // reported a database fault this station does not have. Unreachable while
+    // the provider returns the guard, which is the only implementer —
+    // `knowledge_guard_wiring_test.dart` asserts that.
+    if (index is! PlcCodeIndexExtras) {
+      globalScaffoldMessengerKey.currentState?.showSnackBar(
+        const SnackBar(
+          content: Text('Re-index unavailable — this index cannot re-index'),
         ),
       );
       return;
@@ -1036,7 +1069,7 @@ Then provide a summary of what this PLC code controls and how it is structured.'
 
   /// Performs the actual reindex work. Lifecycle-independent.
   Future<void> _doReindex(
-    DriftPlcCodeIndex index,
+    PlcCodeIndexExtras index,
     String assetKey,
     StateController<TechDocUploadProgress?> progressNotifier,
   ) async {
@@ -1054,6 +1087,13 @@ Then provide a summary of what this PLC code controls and how it is structured.'
           ),
         ),
       );
+    } on AccessDenied {
+      // The guard has already published the refusal to
+      // `accessDenialsProvider`, so `AccessDeniedPrompt` (mounted in
+      // `BaseScaffold`) is what tells the operator what is missing. A
+      // "Re-index failed: AccessDenied" snackbar would be a second message for
+      // one action, and a worse one — it reads like a fault.
+      progressNotifier.state = null;
     } catch (e) {
       _logger.e('Re-index failed for $assetKey: $e');
 
@@ -1099,7 +1139,15 @@ Then provide a summary of what this PLC code controls and how it is structured.'
       ref.read(selectedPlcAssetProvider.notifier).state = null;
     }
 
-    await index.deleteAssetIndex(plc.assetKey);
+    try {
+      await index.deleteAssetIndex(plc.assetKey);
+    } on AccessDenied {
+      // The guard has already published the refusal, so `AccessDeniedPrompt`
+      // is what tells the operator what is missing. Everything below this is
+      // the page reacting to a deletion that did not happen — including a
+      // snackbar claiming the index was deleted.
+      return;
+    }
     ref.invalidate(plcAssetSummaryProvider);
 
     if (mounted) {
@@ -1157,6 +1205,35 @@ Then provide a summary of what this PLC code controls and how it is structured.'
     return docs;
   }
 }
+
+/// The raw device-local reader `deleteAndCleanAssets` writes through.
+///
+/// A provider rather than a bare constructor call so that tests can substitute
+/// an in-memory store and observe what the guard above it did or did not write.
+/// Nothing else should read this: the page reads
+/// [guardedPageLayoutPrefsProvider].
+final pageLayoutPrefsProvider = Provider<PrefsReader>((ref) =>
+    _SharedPrefsReader());
+
+/// [pageLayoutPrefsProvider] behind the knowledge-base guard.
+///
+/// `deleteAndCleanAssets` rewrites `page_editor_data` when a technical document
+/// is deleted, and before plan 03-13 it did so for whoever was standing at the
+/// panel. `GuardedPrefsReader` checks `configure` on `setString` and records a
+/// row; `getString` passes through.
+///
+/// Declared here rather than assembled on the widget state because
+/// `sessionInForce`, `RefAuditSink` and `reportAccessDenial` all need a
+/// provider `Ref`, and a `ConsumerState`'s `ref` is a `WidgetRef` — the same
+/// reason plan 03-10 put `historyViewStoreProvider` in `history_view.dart`.
+final guardedPageLayoutPrefsProvider = Provider<PrefsReader>((ref) =>
+    GuardedPrefsReader(
+      inner: ref.watch(pageLayoutPrefsProvider),
+      session: () => sessionInForce(ref),
+      audit: RefAuditSink(ref),
+      station: ref.read(stationNameProvider),
+      onDenied: (denial) => reportAccessDenial(ref, denial),
+    ));
 
 /// Adapter from SharedPreferences to [PrefsReader] for deleteAndCleanAssets.
 class _SharedPrefsReader implements PrefsReader {

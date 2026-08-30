@@ -117,7 +117,14 @@ const AccessGroup kKnowledgeWriteGroup = AccessGroup.configure;
 ///
 /// `DriftPlcCodeIndex.getCallers` is a sixth extra member and is deliberately
 /// **not** here: no app code calls it. Add it the day something does.
-abstract interface class PlcCodeIndexExtras {
+///
+/// **It `implements PlcCodeIndex`** so that `is! PlcCodeIndexExtras` at the
+/// four providers *promotes*. Dart only promotes a variable to a subtype of its
+/// declared type, and those providers hold a `PlcCodeIndex?`; against a
+/// standalone interface the check would compile to nothing usable and every
+/// call after it would need a cast. Five members are declared here — the
+/// eight below them are `PlcCodeIndex`'s, unchanged.
+abstract interface class PlcCodeIndexExtras implements PlcCodeIndex {
   /// Re-parses an asset's stored source and rebuilds its index. A **write**,
   /// however the name reads — see [GuardedPlcCodeIndex.reindexAsset].
   Future<int> reindexAsset(String assetKey);
