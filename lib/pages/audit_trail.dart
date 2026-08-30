@@ -95,6 +95,18 @@ const String kAuditTrailUnavailable =
 /// answer from a database that was reached.
 const String kAuditTrailEmptyUnderFilters = 'No entries match these filters.';
 
+/// The cap was reached, so there are older matching rows this query did not
+/// return.
+///
+/// Deliberately distinct from both of the above, and not a terminal state at
+/// all: it renders *with* a full list rather than instead of one. The 500-row
+/// cap exists to be visible rather than to be worked around silently (T-05-65),
+/// so the page says the number out loud and names the two ways to see further
+/// back.
+const String kAuditTrailLimitNote =
+    'Showing the newest $kAuditTrailRowLimit entries. Narrow the range or the '
+    'filters to see further back.';
+
 // ---------------------------------------------------------------------------
 // The keys
 // ---------------------------------------------------------------------------
@@ -123,6 +135,9 @@ const Key kAuditTrailLoadingKey = ValueKey<String>('audit-trail-loading');
 /// screen in every state — never zero, and never two.
 const Key kAuditTrailEmptyClearFiltersKey =
     ValueKey<String>('audit-trail-empty-clear-filters');
+
+/// The line carrying [kAuditTrailLimitNote].
+const Key kAuditTrailLimitNoteKey = ValueKey<String>('audit-trail-limit-note');
 
 // ---------------------------------------------------------------------------
 // The page
@@ -274,6 +289,12 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
     final actions = <AuditAction>[
       for (final result in resolved) ...result.actions,
     ];
+    // The number the `LIMIT` applied to, not `actions.length`: eight rows of
+    // one struct write are one action, and it is the eight that the cap
+    // counted.
+    final rowCount =
+        resolved.fold<int>(0, (sum, result) => sum + result.rowCount);
+    final tail = resolved.last;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -283,6 +304,14 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
           child: AuditTrailFilterBar(
             filters: _filters,
             whoOptions: whoOptions,
+            // One line, above the list, stating the count *and* the window it
+            // was counted over. `auditTrailResultSummary` says "All time" once
+            // the query escaped the seven-day bound, which is the whole reason
+            // the window is named beside the number rather than assumed.
+            resultSummary: auditTrailResultSummary(
+              count: rowCount,
+              filters: _filters,
+            ),
             onChanged: _onFiltersChanged,
             onRefresh: _refresh,
           ),
@@ -291,6 +320,7 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
           Expanded(child: _empty(context))
         else
           Expanded(child: _list(actions)),
+        if (actions.isNotEmpty && tail.reachedLimit) _limitNote(context),
       ],
     );
   }
@@ -383,4 +413,19 @@ class AuditTrailBodyState extends ConsumerState<AuditTrailBody> {
         itemBuilder: (context, index) =>
             AuditActionTile(action: actions[index]),
       );
+
+  /// Under the list, not over it: the cap is a fact about the bottom of the
+  /// result, and the operator reads it when they get there.
+  Widget _limitNote(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Text(
+        kAuditTrailLimitNote,
+        key: kAuditTrailLimitNoteKey,
+        style: theme.textTheme.bodySmall
+            ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
 }
