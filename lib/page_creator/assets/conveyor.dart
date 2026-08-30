@@ -21,6 +21,7 @@ import '../../widgets/state_value_builder.dart';
 import '../../widgets/panes/setpoint_field.dart';
 import 'auger_conveyor_painter.dart';
 import 'helper/atv320_diagnostics.dart';
+import 'sensor.dart' show SensorFbState;
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/collector.dart';
 import '../../theme.dart';
@@ -911,6 +912,21 @@ DriveState readDriveState(DynamicValue? value) {
 bool driveStateIsMoving(DriveState state) =>
     state == DriveState.auto || state == DriveState.running;
 
+/// Reads a safety-edge value, whether it is an `ST_Sensor_HMI` struct (an
+/// FB_Sensor over OPC UA) or a plain BOOL.
+///
+/// A struct answers with its debounced output — and a faulted sensor also
+/// reads as pressed: a safety edge whose sensor is broken must fail safe,
+/// not quietly disarm. A plain bool answers with itself. Anything else is
+/// not pressed — the edge only claims a press it can stand behind.
+bool readSafetyEdge(DynamicValue? value) {
+  if (value == null) return false;
+  final fb = SensorFbState.tryParse(value);
+  if (fb != null) return fb.output || fb.fault;
+  if (value.value is bool) return value.value as bool;
+  return false;
+}
+
 /// Maps a decoded [DriveState] onto the themed equipment-state colours —
 /// the one vocabulary every conveyor-drawn drive answers in, belt and
 /// wagon traverse motor alike.
@@ -1076,11 +1092,13 @@ class ConveyorConfig extends BaseAsset {
   /// direction.
   bool? beltAlongRails;
 
-  /// Plain BOOL keys for the safety edges on the wagon's two moving sides —
-  /// true while that edge is pressed. Idle they draw nothing; tripped, the
-  /// bumper on that side lights up in fault red. Only read while
-  /// [railsActive]. Left/right are in the asset's own frame, before its
-  /// rotation or the page mirror — the same convention the geometry uses.
+  /// Keys for the safety edges on the wagon's two moving sides — a plain
+  /// BOOL (true = pressed) or an `FB_Sensor` HMI struct, decoded by
+  /// [readSafetyEdge] (a faulted sensor reads as pressed — fail safe).
+  /// Idle they draw nothing; tripped, the bumper on that side lights up in
+  /// fault red. Only read while [railsActive]. Left/right are in the
+  /// asset's own frame, before its rotation or the page mirror — the same
+  /// convention the geometry uses.
   String? safetyLeftKey;
   String? safetyRightKey;
 
@@ -1443,14 +1461,14 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
             initialValue: widget.config.safetyLeftKey,
             onChanged: (val) =>
                 setState(() => widget.config.safetyLeftKey = val),
-            label: 'Safety edge key, left (true = pressed)',
+            label: 'Safety edge key, left (BOOL or FB_Sensor)',
           ),
           const SizedBox(height: 8),
           KeyField(
             initialValue: widget.config.safetyRightKey,
             onChanged: (val) =>
                 setState(() => widget.config.safetyRightKey = val),
-            label: 'Safety edge key, right (true = pressed)',
+            label: 'Safety edge key, right (BOOL or FB_Sensor)',
           ),
           const SizedBox(height: 8),
           NumberSlider(
@@ -2222,17 +2240,6 @@ class _ConveyorState extends ConsumerState<Conveyor>
               driveStateColor(states, readDriveState(dynValue['wagonMotor']));
         }
 
-        // A safety edge only ever claims to be pressed on an honest true —
-        // an unreadable or missing value stays quiet rather than crying
-        // wolf on every stream hiccup.
-        bool edgePressed(String label) {
-          try {
-            return dynValue[label]?.asBool ?? false;
-          } catch (_) {
-            return false;
-          }
-        }
-
         final hasMainKey = _bound(widget.config.key);
         final hasMotorKey =
             widget.config.railsActive && _bound(widget.config.wagonMotorKey);
@@ -2242,8 +2249,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
           frequency: freq,
           wagonPosition: wagonPosition,
           chassisColor: chassisColor,
-          safetyLeftActive: edgePressed('safetyLeft'),
-          safetyRightActive: edgePressed('safetyRight'),
+          safetyLeftActive: readSafetyEdge(dynValue['safetyLeft']),
+          safetyRightActive: readSafetyEdge(dynValue['safetyRight']),
           onBeltTap: hasMainKey
               ? () => _showDrivePane(context, widget.config.key!,
                   subtitle: 'Conveyor', icon: Icons.conveyor_belt)

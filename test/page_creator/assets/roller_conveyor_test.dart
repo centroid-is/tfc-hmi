@@ -1,8 +1,12 @@
+import 'dart:collection';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/registry.dart';
+import 'package:tfc/page_creator/assets/sensor.dart' show SensorFbFields;
 
 void main() {
   group('RollerConveyorConfig', () {
@@ -145,6 +149,24 @@ void main() {
       expect(restored.wagonLength, 0.3);
       expect(restored.effectiveWagonLength, 0.3);
       expect(ConveyorConfig().effectiveWagonLength, 0.25);
+    });
+
+    test('readSafetyEdge accepts a plain BOOL and an FB_Sensor struct', () {
+      DynamicValue edge({required bool output, required bool fault}) =>
+          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
+            SensorFbFields.output: output,
+            SensorFbFields.fault: fault,
+          }));
+      // FB_Sensor: the debounced output answers.
+      expect(readSafetyEdge(edge(output: true, fault: false)), isTrue);
+      expect(readSafetyEdge(edge(output: false, fault: false)), isFalse);
+      // A faulted sensor fails safe — the edge shows pressed.
+      expect(readSafetyEdge(edge(output: false, fault: true)), isTrue);
+      // Plain BOOL answers with itself; anything else is not a press.
+      expect(readSafetyEdge(DynamicValue(value: true)), isTrue);
+      expect(readSafetyEdge(DynamicValue(value: false)), isFalse);
+      expect(readSafetyEdge(null), isFalse);
+      expect(readSafetyEdge(DynamicValue(value: 3.14)), isFalse);
     });
 
     test('a belt along the rails is a horizontal band on the chassis', () {
