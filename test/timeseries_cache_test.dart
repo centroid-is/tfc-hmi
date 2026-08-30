@@ -19,7 +19,7 @@ void main() {
       cache.init(['a', 'b']);
       final t = DateTime.now();
       cache.addTimestamp('a', t);
-      expect(cache.timestamps('a'), {t});
+      expect(cache.timestamps('a'), {t.toUtc()});
       expect(cache.timestamps('b'), isEmpty);
     });
 
@@ -73,7 +73,7 @@ void main() {
       final recent = now.subtract(const Duration(seconds: 30));
       cache.addTimestamp('a', recent);
       cache.prune(1);
-      expect(cache.timestamps('a'), {recent});
+      expect(cache.timestamps('a'), {recent.toUtc()});
     });
 
     test('multiple keys are independent', () {
@@ -144,7 +144,7 @@ void main() {
     test('addTimestamp on uninitialized key auto-creates it', () {
       final t = DateTime.now();
       cache.addTimestamp('new_key', t);
-      expect(cache.timestamps('new_key'), {t});
+      expect(cache.timestamps('new_key'), {t.toUtc()});
     });
 
     test('addAll on uninitialized key auto-creates it', () {
@@ -180,7 +180,7 @@ void main() {
       cache.addTimestamp('b', oldest);
       cache.addTimestamp('b', now.subtract(const Duration(minutes: 8))); // before cutoff
       final result = cache.oldestAfter(['a', 'b'], now.subtract(const Duration(minutes: 5)));
-      expect(result, oldest);
+      expect(result, oldest.toUtc());
     });
 
     test('expiry delay matches when oldest event ages out of window', () {
@@ -191,7 +191,7 @@ void main() {
       cache.addTimestamp('a', now.subtract(const Duration(minutes: 1)));
 
       final result = cache.oldestAfter(['a'], now.subtract(const Duration(minutes: 5)));
-      expect(result, oldest);
+      expect(result, oldest.toUtc());
       // oldest expires from a 5-min window in 30 seconds
       final expiresAt = oldest.add(const Duration(minutes: 5));
       expect(expiresAt.difference(now).inSeconds, 30);
@@ -203,7 +203,7 @@ void main() {
       cache.init(['a']);
       final t = DateTime.now();
       cache.addEntry('a', t, 42.5);
-      expect(cache.latestValue('a'), (t, 42.5));
+      expect(cache.latestValue('a'), (t.toUtc(), 42.5));
     });
 
     test('addEntries bulk adds from TimeseriesData-like list', () {
@@ -228,7 +228,7 @@ void main() {
       cache.addEntry('a', t3, 'third');
       cache.addEntry('a', t2, 'second');
       final result = cache.latestValue('a');
-      expect(result?.$1, t3);
+      expect(result?.$1, t3.toUtc());
       expect(result?.$2, 'third');
     });
 
@@ -324,7 +324,7 @@ void main() {
     test('addEntry auto-creates key if missing', () {
       final t = DateTime.now();
       cache.addEntry('new_key', t, 99);
-      expect(cache.latestValue('new_key'), (t, 99));
+      expect(cache.latestValue('new_key'), (t.toUtc(), 99));
     });
 
     test('existing countSince/addTimestamp still work (no regression)', () {
