@@ -228,11 +228,28 @@ Future<void> checkEngageIsThreeStateAndARefusalHoldsNothing(
           'that is doing nothing');
 
   // A hold that was never taken must not be feedable.
+  //
+  // **The value asserted is the one the tag must still hold, not one it must
+  // avoid** (05-REVIEW WR-04). This was `isNot(1)`, and a leaked tick does not
+  // put 1 on the tag: the handle's counter starts at 1 and [HoldHandle.tick]
+  // pre-increments, so the first advance writes **2** — which `isNot(1)`
+  // accepts. The assertion passed in exactly the scenario its own reason
+  // described. The tag was seeded 0 and the engage was rejected, so 0 is the
+  // only value that means nothing is being fed, and every other value is the
+  // failure.
+  //
+  // Over a window rather than at an instant, for the same reason the release
+  // check waits: on the socket legs the read is synchronous and a tick's path
+  // to the tag is not, so an immediate re-read is answered before a leaked
+  // tick could have arrived.
   refused.tick();
-  expect(api.read(_refusedKey)?.asInt, isNot(1),
-      reason: 'a tick on a refused hold reached the tag, so a hold the device '
-          'said no to is being fed anyway — the deadman counter would advance '
-          'for a hold that does not exist');
+  await _tagStaysAt(api, _refusedKey, 0, _quietWindow(plant),
+      reason: 'the deadman tag moved off 0 after a tick on a hold the device '
+          'refused. The engage was rejected and nothing was ever seeded, so a '
+          'counter advancing there is a UI feeding a deadman for a hold that '
+          'does not exist — and `applyHoldTick` goes through `applyChanges`, '
+          'which does not consult the read-only refusal that stopped the '
+          'engage, so a leaked tick genuinely reaches the plant');
 }
 
 /// The counter advances on the tag while the hold is fed.

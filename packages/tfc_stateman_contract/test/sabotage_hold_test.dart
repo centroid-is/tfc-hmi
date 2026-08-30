@@ -138,6 +138,51 @@ void main() {
     });
   });
 
+  group('a source that feeds a hold the device refused', () {
+    test('is caught by the engage check', () async {
+      // 05-REVIEW WR-04. Nothing else in this file covers "a refused engage is
+      // still feedable": the engage check's last assertion was the only thing
+      // standing between that bug and a green suite, and it was written as
+      // `isNot(1)` while a leaked tick puts 2 on the tag — so it passed in
+      // exactly the scenario its own reason described.
+      final api = FeedsAHoldTheDeviceRefused();
+      addTearDown(api.dispose);
+      await expectContractViolation(
+          checkEngageIsThreeStateAndARefusalHoldsNothing, api);
+    });
+
+    test('names the machine, not the counter value', () async {
+      final api = FeedsAHoldTheDeviceRefused();
+      addTearDown(api.dispose);
+
+      Object? caught;
+      try {
+        await checkEngageIsThreeStateAndARefusalHoldsNothing(api);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught, isA<TestFailure>());
+      expect((caught as TestFailure).message,
+          contains('a hold that does not exist'),
+          reason: 'the message has to say what a moved counter means here — a '
+              'deadman being fed for a hold the device refused — because '
+              '"expected 0, got 2" reads like an off-by-one and gets the '
+              'assertion relaxed by whoever is trying to get CI green. Which '
+              'is how it became `isNot(1)`');
+    });
+
+    test('still advances the counter while a real hold is fed — the sabotage '
+        'is surgical', () async {
+      // It acts only when the engage was refused. A hold the device took is
+      // fed and released exactly as it should be, which is what pins this
+      // failure to the refusal path rather than to the feed.
+      final api = FeedsAHoldTheDeviceRefused();
+      addTearDown(api.dispose);
+      await checkTheCounterAdvancesWhileTheHoldIsFed(api);
+    });
+  });
+
   group('a source that hands out holds it does not track', () {
     test('is caught by the dispose check', () async {
       // The page closed and the counter kept going. A registry that is never

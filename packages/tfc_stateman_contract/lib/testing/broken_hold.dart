@@ -219,6 +219,43 @@ class FeedsTheCounterOnATimer extends FakeStateMan {
   }
 }
 
+/// Feeds a hold the device refused.
+///
+/// Everything visible about the engage is honest: the write was rejected, the
+/// handle is inert, `isHeld` is false, and `onReleased` has already completed
+/// with [HoldEnded.refused]. A UI reading this handle would draw the button
+/// correctly. What is wrong is one `if` away from the smoothing pump above —
+/// the feed starts when the button goes down, without looking at whether the
+/// device agreed — and on a plant that is a deadman counter advancing for a
+/// hold that does not exist, on a key whose whole reason for refusing writes
+/// is that it is not a thing anybody should be commanding.
+///
+/// It reaches the tag because `applyHoldTick` goes through `applyChanges`,
+/// which is how a value *arrives* from a device and therefore does not consult
+/// the read-only refusal that stopped the engage.
+///
+/// **The value it lands on is 2, and that is the point of the variant**
+/// (05-REVIEW WR-04). The engage write never reached the tag, so the tag still
+/// reads 0, and the first advance of a counter that starts at 1 writes 2. An
+/// assertion spelled "the tag must not read 1" is satisfied by 2, and this
+/// source walks straight through it.
+///
+/// Surgical: it acts only when the engage was *not* applied, so every case
+/// that engages the writable key sees an ordinary source.
+class FeedsAHoldTheDeviceRefused extends FakeStateMan {
+  FeedsAHoldTheDeviceRefused({super.staleAfter});
+
+  @override
+  Future<HoldHandle> holdToRun(String key) async {
+    final hold = await super.holdToRun(key);
+    // `hold.counter + 1` rather than a literal: it is the value
+    // [HoldHandle.tick] would mint, written by a source that started feeding
+    // before it read the outcome.
+    if (!hold.isHeld) applyHoldTick(key, hold.counter + 1);
+    return hold;
+  }
+}
+
 /// Hands out a hold it does not track, so its teardown has nothing to release.
 ///
 /// The registry was never written to. Releasing by hand works perfectly and
