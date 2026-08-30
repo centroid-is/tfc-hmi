@@ -294,13 +294,155 @@ cached numeric NodeId across a session boundary.
   requiring dismissal. Client code cannot represent this as failure: the
   write API is a sealed three-state type with no throw on the unknown path.
 - **Momentary/hold-to-run controls never use set-on-press/clear-on-release.**
-  Hold-to-run is a rolling-counter deadman streamed while held; the PLC runs
-  only while the counter advances. Discrete commands: HMI sets, PLC clears.
-  `onTapCancel`, app-lifecycle changes, and connection loss all count as
-  release.
+  The wire frames, the PLC-side function block that makes the ruling true on
+  the plant, the 1 s deadman constant, the discrete-command pattern and the
+  Flutter binding are all §4.6a.
 - Reads/RPCs (timeseries, history-view, preferences) are ordinary requests —
   ~14 named methods mapped verbatim from the drift API. **No `query(sql)`
   RPC, ever.**
+
+### 4.6a Hold-to-run and momentary commands
+
+The pipe's half of hold-to-run is code in this repository; the plant's half is
+a function block in a PLC program nothing here can read, write or verify, and a
+deadman with only one half written down is a deadman nobody can commission.
+This subsection is the other half, kept next to the ruling it implements.
+
+**The three wire frames.** Engage and release are ordinary writes — they get
+the three-state outcome, the outcome log and the idempotency window of §4.6
+for free — and only the ticks in between are a new name.
+
+```jsonc
+→ {"id":91,"method":"write","params":{
+    "cmd":"01J8XW5R2Q…","key":"ST101.CN01.MOT01.jog",
+    "value":1,"hold":true}}        // hold:true + value 1 = engage. The gateway
+                                   // takes a handle and remembers it per SESSION,
+                                   // so a dead socket cannot leave one behind.
+← result: {"cmd":"…","outcome":"applied","readback":1,"at":…}
+
+→ {"method":"h","params":{"k":"ST101.CN01.MOT01.jog","n":7}}
+    // ~10 Hz while the finger is down. No `id`, no `cmd`, no answer: a tick has
+    // no outcome to correlate, and giving it one would invite somebody to await
+    // it — an await on the hot path is a queue with a nicer name.
+    // `n` is decoded and validated and then DISCARDED. The gateway mints the
+    // next counter from the handle the engage created; the panel's integer never
+    // reaches the tag. Trusting it would put a peer-chosen number on a deadman.
+
+→ {"id":92,"method":"write","params":{
+    "cmd":"01J8XW6T4V…","key":"ST101.CN01.MOT01.jog",
+    "value":0,"hold":true}}        // 0 = release. Stops the machine in the same
+                                   // PLC scan instead of coasting out the deadman.
+← result: {"cmd":"…","outcome":"applied","readback":0,"at":…}
+```
+
+- **The value vocabulary on a hold write is exactly 1 and 0.** Anything else is
+  `INVALID_PARAMS`, raised before the handle is taken and before the device is
+  consulted — a pre-plant refusal, so "rejected" here means *definitively no
+  effect*, provably. Without it, `write` would be a way to put an arbitrary
+  integer on a deadman tag while calling it an engage. The check is on `num`,
+  not `int`: a REAL tag's `1.0` and a DINT's `1` are the same operator intent,
+  and the refusal is about the number 7.
+
+**`FB_HoldToRun`** — the machine runs only while the counter changes:
+
+```
+FUNCTION_BLOCK FB_HoldToRun
+VAR_INPUT
+    Counter    : DINT;   // written by the HMI; advances ~10 Hz while held
+    Permissive : BOOL;   // interlocks, mode, guard doors — ANDed in
+END_VAR
+VAR_OUTPUT
+    Run        : BOOL;
+END_VAR
+VAR
+    LastCounter : DINT;
+    Deadman     : TON;   // PT := T#1000MS  <- the 1 s decision
+END_VAR
+
+// The counter CHANGING is the signal. Its value carries no meaning:
+// the HMI may wrap, restart at 1, or skip values after a dropped frame.
+IF Counter <> LastCounter THEN
+    LastCounter := Counter;
+    Deadman(IN := FALSE);   // retrigger
+END_IF
+Deadman(IN := TRUE, PT := T#1000MS);
+
+// Counter 0 is the explicit release the HMI writes on a clean let-go:
+// it stops the machine in the same scan instead of coasting for a second.
+Run := Permissive AND (Counter <> 0) AND NOT Deadman.Q;
+```
+
+- **1000 ms is a tolerance decision, not a physical one.** At a 100 ms pulse it
+  is ten missed frames. It buys through a Wi-Fi hiccup mid-jog at the cost of
+  up to one second of coasting when the link dies. Anything whose stopping
+  distance makes a second unacceptable needs a hardwired enabling device, not
+  this. The client states the same number as
+  `ClientConfig.holdPulsePeriod` (100 ms) × `ClientConfig.holdMissedPulsesBeforeStop`
+  (10), whose product is the derived `ClientConfig.holdDeadman` — but that is a
+  *statement* of what the PLC is configured for and cannot enforce it: the `TON`
+  preset above is a number in a PLC program no Dart code can read or set. **The
+  two are kept in step by this document and by nothing else.** Change one, change
+  the other in the same commit; the derived getter exists so there is exactly
+  one place to compare against.
+- **This is not a safety function.** It is a usability layer over an interlock
+  chain. `Permissive` is where the real safety system enters, and a category-3
+  hold-to-run pendant is a hardware device wired to a safety relay.
+- **The HMI never sets a boolean and clears it on release.** A panel that
+  crashes between the set and the clear leaves the machine running. The counter
+  inverts that failure mode: a panel that crashes stops sending, and stopping
+  is the safe state. This is the sentence F26 is testing — cable pull, app kill,
+  backgrounding.
+
+**Discrete momentary commands — HMI sets, PLC clears:**
+
+```
+// HMI writes TRUE. The PLC consumes the edge and writes FALSE itself.
+IF CmdStart AND NOT CmdStart_Prev THEN
+    // ... act on the command exactly once ...
+    CmdStart := FALSE;   // the PLC clears; the HMI never does
+END_IF
+CmdStart_Prev := CmdStart;
+```
+
+The HMI clearing the bit means a panel that dies between set and clear leaves a
+latched command; the PLC clearing it means the command is consumed exactly once
+and the tag self-heals. It also makes the write idempotent from the pipe's
+point of view — a replayed `write(CmdStart, TRUE)` inside the idempotency window
+either matches the log or arrives after the PLC has already cleared, and either
+way the machine acts once.
+
+**The Flutter binding, specified and not built.** The controller
+(`HoldToRunController`, `packages/tfc_relay_client`) is pure Dart with its
+triggers injected, so the widget layer is a specification here rather than code
+in a package that cannot import Flutter. Building it is transcription: three
+release paths, and for each the Flutter API and the controller member it calls.
+
+| Release path | Flutter API | Controller member |
+|---|---|---|
+| the operator lets go | `GestureDetector.onTapDown` / `onLongPressStart` engages; `onTapUp`, `onTapCancel` and `onLongPressEnd` end it | `press()` / `release()` |
+| the app stops being in front of the operator | `WidgetsBindingObserver.didChangeAppLifecycleState` firing on anything but `resumed` | an event on the `Stream<void>` handed to `releaseOn` at construction |
+| the link dies | **no widget code at all** | none — `RemoteStateMan` releases every live hold on leaving `ready`, and the handle's `onReleased` settles the controller |
+
+`State.dispose` calls `dispose()`. That is the whole binding: four members, and
+nothing about the link needs binding.
+
+- **The one rule the binding must not break:** it may not hold a queue, a retry
+  or a debounce between the gesture and the controller. Each of those is a way
+  for a finger that lifted to keep a machine moving — a debounced release is a
+  release that has not happened yet, and a queued tick is a burst of stale
+  counter values delivered the instant a stalled link recovers.
+- **A disconnect stops a hold twice over, and the tag reads 0 rather than
+  freezing.** The panel stops pulsing (the counter stops advancing, which is
+  what the deadman above watches for) *and* the gateway, when it tears the
+  session down, releases every hold that session engaged — which writes the
+  explicit zero. Two independent mechanisms, either of which is sufficient.
+  Do not write a plant-side check that expects the counter to freeze at its
+  last value.
+- **A second `press()` on a live controller throws `StateError`.** Two
+  concurrent holds on one tag are a contradiction at the operator's end — one
+  finger, one button — and nothing in the client can decide which the machine
+  should obey. A binding that can double-fire its press gesture must not paper
+  over it with a `try`.
 
 ### 4.7 Status channel & pipeline health
 
