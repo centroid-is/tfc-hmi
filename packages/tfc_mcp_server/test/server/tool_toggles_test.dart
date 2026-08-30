@@ -218,18 +218,18 @@ void main() {
       );
     }
 
-    test('allEnabled registers 25 tools (16 read + 9 write)', () async {
+    test('allEnabled registers 26 tools (17 read + 9 write)', () async {
       final server = createServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
         final tools = await client.listTools();
-        expect(tools, hasLength(25));
+        expect(tools, hasLength(26));
       } finally {
         await client.close();
       }
     });
 
-    test('tagsEnabled=false registers 22 tools', () async {
+    test('tagsEnabled=false registers 23 tools', () async {
       final server = createServer(
         toggles: const McpToolToggles(tagsEnabled: false),
       );
@@ -237,7 +237,7 @@ void main() {
       try {
         final tools = await client.listTools();
         final names = tools.map((t) => t.name).toSet();
-        expect(tools, hasLength(22));
+        expect(tools, hasLength(23));
         expect(names, isNot(contains('list_tags')));
         expect(names, isNot(contains('get_tag_value')));
       } finally {
@@ -280,7 +280,7 @@ void main() {
       try {
         final tools = await client.listTools();
         final names = tools.map((t) => t.name).toSet();
-        expect(tools, hasLength(16));
+        expect(tools, hasLength(17));
         expect(names, isNot(contains('create_alarm')));
         expect(names, isNot(contains('update_alarm')));
         expect(names, isNot(contains('delete_alarm')));
@@ -311,8 +311,8 @@ void main() {
         // update_alarm, delete_alarm (the alarm write tools need
         // configEnabled for their lookups), create_key_mapping,
         // update_key_mapping, delete_key_mapping.
-        // 25 total - 12 = 13.
-        expect(tools, hasLength(13));
+        // 26 total - 12 = 14.
+        expect(tools, hasLength(14));
         expect(names, isNot(contains('list_pages')));
         expect(names, isNot(contains('list_assets')));
         expect(names, isNot(contains('get_asset_detail')));

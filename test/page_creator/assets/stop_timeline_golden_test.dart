@@ -1,0 +1,234 @@
+import 'dart:io' show File, Platform;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show ByteData, FontLoader;
+import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/page_creator/assets/stop_timeline.dart';
+import 'package:tfc/theme.dart';
+import 'package:tfc_dart/core/alarm.dart';
+import 'package:tfc_dart/core/alarm_interval.dart';
+import 'package:tfc_dart/core/alarm_tree.dart';
+import 'package:tfc_dart/core/boolean_expression.dart';
+import 'package:tfc_dart/core/stop_interval_source.dart';
+
+/// Fixed clock, so a golden of a live-edge chart is reproducible.
+final now = DateTime(2026, 8, 29, 14, 22);
+DateTime ago(int minutes) => now.subtract(Duration(minutes: minutes));
+
+/// The muted theme sets `fontFamily: 'roboto-mono'`, so the font has to be
+/// registered under that family too or every glyph renders as an Ahem box.
+Future<void> loadFonts() async {
+  final data = ByteData.view(
+      File('lib/fonts/roboto-mono/RobotoMono-Regular.ttf')
+          .readAsBytesSync()
+          .buffer);
+  for (final family in ['Roboto', 'roboto-mono']) {
+    await (FontLoader(family)..addFont(Future.value(data))).load();
+  }
+  final flutterRoot = Platform.environment['FLUTTER_ROOT'];
+  final icons = File(
+      '$flutterRoot/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
+  if (flutterRoot != null && icons.existsSync()) {
+    await (FontLoader('MaterialIcons')
+          ..addFont(
+              Future.value(ByteData.view(icons.readAsBytesSync().buffer))))
+        .load();
+  }
+}
+
+AlarmConfig alarm(
+  String title, {
+  required List<String> group,
+  bool bindToGroup = false,
+  AlarmLevel level = AlarmLevel.error,
+}) =>
+    AlarmConfig(
+      uid: title.toLowerCase().replaceAll(' ', '-'),
+      title: title,
+      description: title,
+      group: group,
+      bindToGroup: bindToGroup,
+      rules: [
+        AlarmRule(
+          level: level,
+          expression: ExpressionConfig(value: Expression(formula: 'a')),
+          acknowledgeRequired: false,
+        )
+      ],
+    );
+
+/// The packing hall the design was drawn against: a group with its own alarm
+/// AND diagnoses under it, a group with only diagnoses, and a group whose only
+/// alarm is its own.
+final alarms = [
+  alarm('Multivac stopped', group: ['Line 3', 'Multivac'], bindToGroup: true),
+  alarm('Film reel empty', group: ['Line 3', 'Multivac']),
+  alarm('Film tracking error',
+      group: ['Line 3', 'Multivac'], level: AlarmLevel.warning),
+  alarm('Seal temperature out of band', group: ['Line 3', 'Multivac']),
+  alarm('Blank magazine empty', group: ['Line 3', 'Box erector BER01']),
+  alarm('Glue temperature low',
+      group: ['Line 3', 'Box erector BER01'], level: AlarmLevel.warning),
+  alarm('Strapper stopped', group: ['Line 3', 'Afak SL-15-3'], bindToGroup: true),
+  alarm('Line stopped from panel',
+      group: ['Line 3'], level: AlarmLevel.warning),
+  alarm('Link error', group: ['Infrastructure'], level: AlarmLevel.warning),
+  alarm('Air cabinet is off', group: ['Infrastructure'], level: AlarmLevel.info),
+];
+
+/// A shift's worth of activations, including one still standing.
+StopIntervalSource sampleSource() {
+  AlarmInterval closed(int from, int to, AlarmLevel level) => AlarmInterval(
+      start: ago(from), end: ago(to), level: level);
+
+  final byUid = <String, List<AlarmInterval>>{
+    'film-reel-empty': [
+      closed(160, 148, AlarmLevel.error),
+      closed(64, 52, AlarmLevel.error),
+    ],
+    'film-tracking-error': [
+      for (var i = 0; i < 9; i++)
+        AlarmInterval(
+            start: ago(120 - i),
+            end: ago(120 - i).add(const Duration(seconds: 20)),
+            level: AlarmLevel.warning),
+    ],
+    'seal-temperature-out-of-band': [
+      closed(95, 71, AlarmLevel.error),
+      AlarmInterval(start: ago(9), end: null, level: AlarmLevel.error),
+    ],
+    'multivac-stopped': [closed(140, 133, AlarmLevel.error)],
+    'blank-magazine-empty': [closed(175, 164, AlarmLevel.error)],
+    'glue-temperature-low': [closed(40, 31, AlarmLevel.warning)],
+    'strapper-stopped': [
+      closed(110, 101, AlarmLevel.error),
+      closed(22, 16, AlarmLevel.error),
+    ],
+    'line-stopped-from-panel': [closed(150, 146, AlarmLevel.warning)],
+    'link-error': [closed(88, 86, AlarmLevel.warning)],
+    'air-cabinet-is-off': [closed(60, 45, AlarmLevel.info)],
+  };
+
+  final closedOnes = <StopActivation>[];
+  final openOnes = <StopActivation>[];
+  byUid.forEach((uid, intervals) {
+    for (final interval in intervals) {
+      final activation = StopActivation(alarmUid: uid, interval: interval);
+      (interval.isOpen ? openOnes : closedOnes).add(activation);
+    }
+  });
+  return StopIntervalSource(closed: closedOnes, open: openOnes);
+}
+
+Widget harness(
+  StopTimelineConfig config,
+  Brightness brightness, {
+  Size size = const Size(900, 420),
+}) {
+  return MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: brightness == Brightness.dark ? muted().$2 : muted().$1,
+    home: Scaffold(
+      body: Center(
+        child: SizedBox(
+          width: size.width,
+          height: size.height,
+          child: StopTimelineView(
+            config: config,
+            tree: AlarmTree.fromConfigs(alarms),
+            source: sampleSource(),
+            clock: now,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+Future<void> pump(WidgetTester tester, Widget widget, Size view) async {
+  await loadFonts();
+  tester.view.physicalSize = view;
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.resetPhysicalSize);
+  await tester.pumpWidget(widget);
+  await tester.pumpAndSettle();
+}
+
+void main() {
+  group('stop timeline goldens', () {
+    for (final brightness in [Brightness.light, Brightness.dark]) {
+      final name = brightness == Brightness.light ? 'light' : 'dark';
+
+      testWidgets('collapsed groups ($name)', (tester) async {
+        await pump(tester, harness(StopTimelineConfig(), brightness),
+            const Size(960, 480));
+        await expectLater(find.byType(StopTimelineView),
+            matchesGoldenFile('goldens/stop_timeline_collapsed_$name.png'));
+      }, skip: !Platform.isMacOS);
+
+      testWidgets('drilled into Multivac ($name)', (tester) async {
+        await pump(tester, harness(StopTimelineConfig(), brightness),
+            const Size(960, 480));
+        // Line 3, then Multivac: the drill-down the design is built around.
+        await tester.tap(find.byKey(
+            const ValueKey('stop-timeline-row-g:Line 3')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(
+            const ValueKey('stop-timeline-row-g:Line 3/Multivac')));
+        await tester.pumpAndSettle();
+
+        await expectLater(find.byType(StopTimelineView),
+            matchesGoldenFile('goldens/stop_timeline_expanded_$name.png'));
+      }, skip: !Platform.isMacOS);
+    }
+
+    testWidgets('scoped to one group', (tester) async {
+      await pump(
+          tester,
+          harness(
+              StopTimelineConfig(groups: [
+                ['Line 3', 'Multivac']
+              ]),
+              Brightness.dark),
+          const Size(960, 400));
+      await expectLater(find.byType(StopTimelineView),
+          matchesGoldenFile('goldens/stop_timeline_scoped.png'));
+    }, skip: !Platform.isMacOS);
+
+    testWidgets('strip height drops the brush and detail row', (tester) async {
+      await pump(
+          tester,
+          harness(StopTimelineConfig(), Brightness.dark,
+              size: const Size(620, 150)),
+          const Size(700, 240));
+      await expectLater(find.byType(StopTimelineView),
+          matchesGoldenFile('goldens/stop_timeline_strip.png'));
+    }, skip: !Platform.isMacOS);
+
+    testWidgets('a group with no alarms says so', (tester) async {
+      await pump(
+          tester,
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: muted().$2,
+            home: Scaffold(
+              body: SizedBox(
+                width: 700,
+                height: 260,
+                child: StopTimelineView(
+                  config: StopTimelineConfig(groups: [
+                    ['Line 9']
+                  ]),
+                  tree: AlarmTree.fromConfigs(alarms),
+                  source: sampleSource(),
+                  clock: now,
+                ),
+              ),
+            ),
+          ),
+          const Size(760, 320));
+      await expectLater(find.byType(StopTimelineView),
+          matchesGoldenFile('goldens/stop_timeline_empty_group.png'));
+    }, skip: !Platform.isMacOS);
+  });
+}
