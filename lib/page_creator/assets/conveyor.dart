@@ -1033,6 +1033,23 @@ class ConveyorConfig extends BaseAsset {
   /// turned belt has no single underside to put wheels on.
   bool? onRails;
 
+  /// PLC key emitting the wagon's raw 0..100% position along the rail —
+  /// same convention as the elevator's position key. 0% is the left end of
+  /// the box (before the asset's own rotation/mirror). Only read while
+  /// [railsActive]; when bound, the box becomes the rail run and the belt
+  /// shrinks to [effectiveWagonLength] of it so it has track to travel.
+  String? positionKey;
+
+  /// Wagon length as a fraction of the box width, when [positionKey] drives
+  /// it along the rail. Null falls back to [_defaultWagonLength].
+  double? wagonLength;
+
+  static const _defaultWagonLength = 0.4;
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  double get effectiveWagonLength =>
+      (wagonLength ?? _defaultWagonLength).clamp(0.05, 1.0);
+
   /// Which band renderer this asset paints with. Fixed per asset type — the
   /// roller variant overrides it — so it is not stored in the page JSON;
   /// `asset_name` already decides it.
@@ -1116,6 +1133,8 @@ class ConveyorConfig extends BaseAsset {
       this.augerRpmKey,
       this.augerOpenEnd,
       this.onRails,
+      this.positionKey,
+      this.wagonLength,
       this.beltThickness,
       List<ChildGateEntry>? gates,
       List<ConveyorTurnEntry>? turns})
@@ -1181,6 +1200,8 @@ class RollerConveyorConfig extends ConveyorConfig {
       super.augerRpmKey,
       super.augerOpenEnd,
       super.onRails,
+      super.positionKey,
+      super.wagonLength,
       super.beltThickness,
       super.gates,
       super.turns});
@@ -1337,6 +1358,30 @@ class _ConveyorConfigContentState extends State<_ConveyorConfigContent> {
               'Rails are hidden while turns or the auger renderer are '
               'configured — a wagon is a straight belt.',
               style: Theme.of(context).textTheme.bodySmall),
+        ],
+        if (widget.config.onRails ?? false) ...[
+          const SizedBox(height: 8),
+          KeyField(
+            initialValue: widget.config.positionKey,
+            onChanged: (val) =>
+                setState(() => widget.config.positionKey = val),
+            label: 'Wagon position key (0-100%)',
+          ),
+          if ((widget.config.positionKey ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            NumberSlider(
+              labelAbove: true,
+              label: 'Wagon length',
+              min: 0.05,
+              max: 1.0,
+              divisions: 95,
+              displayScale: 100,
+              suffix: '% of box',
+              value: widget.config.effectiveWagonLength,
+              onChanged: (v) =>
+                  setState(() => widget.config.wagonLength = v),
+            ),
+          ],
         ],
         const SizedBox(height: 8),
         Row(
@@ -1992,6 +2037,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
         (label: 'trip', key: widget.config.tripKey!, optional: true),
       if (_bound(widget.config.augerRpmKey))
         (label: 'augerRpm', key: widget.config.augerRpmKey!, optional: true),
+      if (widget.config.railsActive && _bound(widget.config.positionKey))
+        (label: 'position', key: widget.config.positionKey!, optional: true),
     ];
 
     // If no streams are configured, show error state
@@ -2069,6 +2116,22 @@ class _ConveyorState extends ConsumerState<Conveyor>
           _updateBatches(dynValue['batches']!);
         }
 
+        // Wagon position: raw 0..100% like the elevator's position key,
+        // normalised to 0..1 along the rail. While the key is bound the box
+        // is the rail run and the belt is a wagon on it — parked mid-rail
+        // until the PLC answers, so a stream hiccup moves the wagon rather
+        // than reshaping the asset between wagon and full-length belt.
+        double? wagonPosition;
+        if (widget.config.railsActive && _bound(widget.config.positionKey)) {
+          wagonPosition = 0.5;
+          final pos = dynValue['position'];
+          if (pos != null) {
+            try {
+              wagonPosition = pos.asDouble.clamp(0.0, 100.0) / 100.0;
+            } catch (_) {}
+          }
+        }
+
         final hasMainKey =
             widget.config.key != null && widget.config.key!.isNotEmpty;
         return _buildConveyorVisual(
@@ -2077,6 +2140,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
           null,
           freq,
           hasMainKey ? () => _showDetailsPane(context) : null,
+          wagonPosition,
         );
       },
     );
@@ -2198,6 +2262,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     bool? showExclamation,
     double? frequency,
     VoidCallback? onTap,
+    double? wagonPosition,
   ]) {
     // Layering, outer → inner:
     //   LayoutRotatedBox → GestureDetector → LayoutBuilder → CustomPaint
@@ -2219,7 +2284,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
         onTap,
         LayoutBuilder(
           builder: (context, constraints) => _buildConveyorVisualSized(
-              context, constraints, color, showExclamation, frequency),
+              context, constraints, color, showExclamation, frequency,
+              wagonPosition),
         ),
       ),
     );
@@ -2242,6 +2308,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
     Color color,
     bool? showExclamation,
     double? frequency,
+    double? wagonPosition,
   ) {
     // The geometry must be built for the box the belt is actually painted
     // into. `AssetStack` lays assets out with tight constraints from the page
@@ -2306,6 +2373,8 @@ class _ConveyorState extends ConsumerState<Conveyor>
       style: widget.config.style,
       onRails: widget.config.railsActive,
       railInk: Theme.of(context).colorScheme.onSurface,
+      wagonPosition: wagonPosition,
+      wagonFraction: widget.config.effectiveWagonLength,
     );
     // The belt's own outline, published for the mark the plant view draws
     // while this conveyor's pane is open. Not a shape built to be drawn
@@ -3089,6 +3158,14 @@ class ConveyorPainter extends CustomPainter {
   /// foreground or it disappears on a dark page.
   final Color railInk;
 
+  /// Live wagon position along the rail, 0..1 (0 = left end of the box),
+  /// or null for a wagon with no position binding — which spans the whole
+  /// box like an ordinary belt. Only meaningful with [onRails].
+  final double? wagonPosition;
+
+  /// Length of a position-driven wagon as a fraction of the box width.
+  final double wagonFraction;
+
   ConveyorPainter(
       {required this.color,
       this.showExclamation = false,
@@ -3105,7 +3182,9 @@ class ConveyorPainter extends CustomPainter {
       this.paintSize,
       this.style = ConveyorStyle.box,
       this.onRails = false,
-      this.railInk = Colors.black});
+      this.railInk = Colors.black,
+      this.wagonPosition,
+      this.wagonFraction = 0.4});
 
   /// Undoes the outer mirror after the counter-rotation, so overlay text
   /// paints upright. The canvas at that point carries mirror ∘ rotate ∘
@@ -3139,7 +3218,9 @@ class ConveyorPainter extends CustomPainter {
   /// resolving a turned belt's outline costs about as much again as the
   /// geometry it comes from, and a page of belts rebuilds on every drag tick.
   bool get hasHitShape =>
-      geometry != null || (straightBeltWidth != null && paintSize != null);
+      geometry != null ||
+      (paintSize != null &&
+          (straightBeltWidth != null || (onRails && wagonPosition != null)));
 
   Path? hitShape() {
     if (!_hitOutlineResolved) {
@@ -3152,13 +3233,20 @@ class ConveyorPainter extends CustomPainter {
   Path? _buildHitOutline() {
     final g = geometry;
     if (g == null) {
-      final band = straightBeltWidth;
       final size = paintSize;
-      if (band == null || size == null) return null;
+      if (size == null) return null;
       // With rails the band is centred in the box above the undercarriage,
       // not in the whole box.
       final area = onRails ? size.height * (1 - railZoneFraction) : size.height;
-      final rect = Rect.fromLTWH(0, (area - band) / 2, size.width, band);
+      // A position-driven wagon is a band even without an explicit width:
+      // the belt is a fraction of the box, and the tap target has to ride
+      // along the rail with it.
+      final band = straightBeltWidth ??
+          (onRails && wagonPosition != null ? area : null);
+      if (band == null) return null;
+      final span = _beltSpan(size);
+      final rect =
+          Rect.fromLTWH(span.x0, (area - band) / 2, span.width, band);
       return Path()
         ..addRRect(RRect.fromRectAndRadius(
           rect,
@@ -3205,9 +3293,11 @@ class ConveyorPainter extends CustomPainter {
     // belt is drawn in what remains, so the rails never grow the asset — the
     // box the user drew still bounds all of the ink.
     var beltArea = size;
+    final span = _beltSpan(size);
     if (onRails) {
       beltArea = Size(size.width, size.height * (1 - railZoneFraction));
-      _paintUndercarriage(canvas, size, beltArea.height);
+      _paintUndercarriage(canvas, size, beltArea.height,
+          wagonX: span.x0, wagonWidth: span.width);
     }
     // An explicit belt width paints the belt as a band centred in the box
     // rather than filling it, so a straight belt can be set to the same width
@@ -3217,14 +3307,21 @@ class ConveyorPainter extends CustomPainter {
     // back to it: the width is set in screen units and must not move when the
     // box does.
     final band = straightBeltWidth;
-    if (band != null) {
-      canvas.save();
-      canvas.translate(0, (beltArea.height - band) / 2);
-      _paintStraightBelt(canvas, Size(beltArea.width, band));
-      canvas.restore();
-      return;
-    }
-    _paintStraightBelt(canvas, beltArea);
+    canvas.save();
+    canvas.translate(
+        span.x0, band == null ? 0 : (beltArea.height - band) / 2);
+    _paintStraightBelt(canvas, Size(span.width, band ?? beltArea.height));
+    canvas.restore();
+  }
+
+  /// Horizontal span the belt occupies inside the box: the whole box, or —
+  /// for a position-driven wagon — [wagonFraction] of it, slid along the
+  /// rail by [wagonPosition] so 0 parks flush left and 1 flush right.
+  ({double x0, double width}) _beltSpan(Size size) {
+    final pos = wagonPosition;
+    if (!onRails || pos == null) return (x0: 0.0, width: size.width);
+    final w = size.width * wagonFraction.clamp(0.05, 1.0);
+    return (x0: pos.clamp(0.0, 1.0) * (size.width - w), width: w);
   }
 
   /// Rounding of the belt's two ends, as a fraction of the belt width.
@@ -3376,7 +3473,11 @@ class ConveyorPainter extends CustomPainter {
   /// The wagon's running gear: two wheels riding a rail with sleepers under
   /// it, drawn in the bottom [railZoneFraction] of the box. Neutral ink —
   /// the track is floor, not equipment state, so it never takes a colour.
-  void _paintUndercarriage(Canvas canvas, Size size, double beltBottom) {
+  /// The rail and sleepers span the whole box (they are the track); the
+  /// wheels sit under the wagon at [wagonX]..[wagonX]+[wagonWidth] and
+  /// travel with it.
+  void _paintUndercarriage(Canvas canvas, Size size, double beltBottom,
+      {required double wagonX, required double wagonWidth}) {
     final zone = size.height - beltBottom;
     if (zone <= 2 || size.width <= 0) return;
 
@@ -3416,8 +3517,8 @@ class ConveyorPainter extends CustomPainter {
       ..color = railInk
       ..style = PaintingStyle.stroke
       ..strokeWidth = max(railWidth * 0.75, 1.0);
-    final inset = max(size.width * 0.18, wheelRadius * 2);
-    for (final x in [inset, size.width - inset]) {
+    final inset = max(wagonWidth * 0.18, wheelRadius * 2);
+    for (final x in [wagonX + inset, wagonX + wagonWidth - inset]) {
       canvas.drawCircle(Offset(x, wheelY), wheelRadius, wheelFill);
       canvas.drawCircle(Offset(x, wheelY), wheelRadius, wheelStroke);
     }
@@ -3647,6 +3748,8 @@ class ConveyorPainter extends CustomPainter {
       oldDelegate.style != style ||
       oldDelegate.onRails != onRails ||
       oldDelegate.railInk != railInk ||
+      oldDelegate.wagonPosition != wagonPosition ||
+      oldDelegate.wagonFraction != wagonFraction ||
       // Geometry is rebuilt each frame when turns are configured, so curved
       // conveyors repaint on every rebuild (needed for batch animation).
       !identical(oldDelegate.geometry, geometry);

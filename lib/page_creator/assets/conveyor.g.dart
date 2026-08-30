@@ -70,6 +70,8 @@ ConveyorConfig _$ConveyorConfigFromJson(Map<String, dynamic> json) =>
       augerOpenEnd:
           $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
       onRails: json['onRails'] as bool?,
+      positionKey: json['positionKey'] as String?,
+      wagonLength: (json['wagonLength'] as num?)?.toDouble(),
       beltThickness: (json['beltThickness'] as num?)?.toDouble(),
       gates: _gatesFromJson(json['gates'] as List?),
       turns: (json['turns'] as List<dynamic>?)
@@ -108,6 +110,8 @@ Map<String, dynamic> _$ConveyorConfigToJson(ConveyorConfig instance) =>
       'augerRpmKey': instance.augerRpmKey,
       'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
       'onRails': instance.onRails,
+      'positionKey': instance.positionKey,
+      'wagonLength': instance.wagonLength,
       'gates': _gatesToJson(instance.gates),
       'turns': instance.turns.map((e) => e.toJson()).toList(),
       'beltThickness': instance.beltThickness,
@@ -136,6 +140,8 @@ RollerConveyorConfig _$RollerConveyorConfigFromJson(
       augerOpenEnd:
           $enumDecodeNullable(_$AugerOpenEndEnumMap, json['augerOpenEnd']),
       onRails: json['onRails'] as bool?,
+      positionKey: json['positionKey'] as String?,
+      wagonLength: (json['wagonLength'] as num?)?.toDouble(),
       beltThickness: (json['beltThickness'] as num?)?.toDouble(),
       gates: _gatesFromJson(json['gates'] as List?),
       turns: (json['turns'] as List<dynamic>?)
@@ -175,6 +181,8 @@ Map<String, dynamic> _$RollerConveyorConfigToJson(
       'augerRpmKey': instance.augerRpmKey,
       'augerOpenEnd': _$AugerOpenEndEnumMap[instance.augerOpenEnd],
       'onRails': instance.onRails,
+      'positionKey': instance.positionKey,
+      'wagonLength': instance.wagonLength,
       'gates': _gatesToJson(instance.gates),
       'turns': instance.turns.map((e) => e.toJson()).toList(),
       'beltThickness': instance.beltThickness,
