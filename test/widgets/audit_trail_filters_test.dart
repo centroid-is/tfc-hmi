@@ -596,6 +596,323 @@ void main() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Task 3 — the date-range chip, Clear filters, and the assembled bar
+  //
+  // Nothing below opens `showSetDatePicker`. It is a third-party modal from
+  // `board_datetime_picker`, already in the tree and reused rather than rebuilt;
+  // driving it here would be a test of that package's rendering. The bar takes
+  // the picker as an injected `AuditRangePicker` that defaults to it, so the
+  // conversion from `DateTimeRange` to `AuditWindow` is exercised without the
+  // modal ever being built.
+  // -------------------------------------------------------------------------
+  group('AuditTrailFilterBar', () {
+    final start = DateTime(2026, 8, 1, 6);
+    final end = DateTime(2026, 8, 30, 18, 30);
+    final window = AuditWindow(start: start, end: end);
+
+    Widget bar(
+      AuditTrailFilters filters,
+      ValueChanged<AuditTrailFilters> onChanged, {
+      AuditRangePicker? pickRange,
+      VoidCallback? onRefresh,
+      String? resultSummary,
+    }) =>
+        AuditTrailFilterBar(
+          filters: filters,
+          whoOptions: const ['ada', 'jon'],
+          onChanged: onChanged,
+          pickRange: pickRange ?? (context, current) async => null,
+          onRefresh: onRefresh,
+          resultSummary: resultSummary,
+        );
+
+    testWidgets('mounts all five controls', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(tester, log: log, builder: bar);
+
+      expect(find.byType(AuditPrefixField), findsOneWidget);
+      expect(find.byType(AuditGroupChips), findsOneWidget);
+      expect(find.byType(AuditOutcomeSegments), findsOneWidget);
+      expect(find.byType(AuditWhoDropdown), findsOneWidget);
+      expect(find.byKey(kAuditTrailRangeChipKey), findsOneWidget);
+    });
+
+    testWidgets('the range chip reads Last 7 days with a null range',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(tester, log: log, builder: bar);
+
+      expect(find.text(kAuditTrailDefaultRangeLabel), findsOneWidget);
+    });
+
+    testWidgets('the range chip reads start → end with a range set',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        initial: AuditTrailFilters(range: window),
+        log: log,
+        builder: bar,
+      );
+
+      expect(find.text(auditRangeLabel(window)), findsOneWidget);
+      expect(auditRangeLabel(window), contains('→'));
+      expect(find.text(kAuditTrailDefaultRangeLabel), findsNothing);
+    });
+
+    testWidgets('a picked range becomes the emitted range, converted at this '
+        'boundary', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) => bar(
+          filters,
+          onChanged,
+          pickRange: (context, current) async =>
+              DateTimeRange(start: start, end: end),
+        ),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailRangeChipKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        log.single.range,
+        window,
+        reason: 'lib/core/ holds no flutter import, so DateTimeRange stops '
+            'here and AuditWindow goes on.',
+      );
+    });
+
+    testWidgets('a cancelled picker changes nothing', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            bar(filters, onChanged, pickRange: (context, current) async => null),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailRangeChipKey));
+      await tester.pumpAndSettle();
+
+      expect(log, isEmpty);
+    });
+
+    testWidgets('Clear range drops the range and leaves the prefix intact',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        initial: AuditTrailFilters(keyPrefix: 'CN04', range: window),
+        log: log,
+        builder: bar,
+      );
+
+      await tester.tap(find.byKey(kAuditTrailClearRangeKey));
+      await tester.pumpAndSettle();
+
+      expect(log.single.range, isNull);
+      expect(
+        log.single.keyPrefix,
+        'CN04',
+        reason: 'Returning to the seven-day default must not also throw away '
+            'the search that the operator widened the window for.',
+      );
+    });
+
+    testWidgets('Clear range is absent when there is no range', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(tester, log: log, builder: bar);
+
+      expect(find.byKey(kAuditTrailClearRangeKey), findsNothing);
+    });
+
+    testWidgets('Clear filters emits exactly the state a freshly-opened page '
+        'holds', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        initial: AuditTrailFilters(
+          keyPrefix: 'CN04',
+          who: 'jon',
+          groupNames: const ['operate'],
+          includeAuth: false,
+          outcome: AuditOutcomeFilter.deniedOnly,
+          range: window,
+        ),
+        log: log,
+        builder: bar,
+      );
+
+      await tester.tap(find.byKey(kAuditTrailClearFiltersKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        log.first,
+        const AuditTrailFilters(),
+        reason: 'Cleared means the state a freshly-opened page holds, not an '
+            'empty filter set: operate stays deselected, because the '
+            "ROADMAP's default exclusion is a decision and not an accident of "
+            'initialisation. A Clear that brought operate writes back would '
+            'quietly disagree with the note two lines above it.',
+      );
+      expect(log.first.groupNames, isNot(contains(AccessGroup.operate.name)));
+      expect(log.first.includeAuth, isTrue);
+      expect(log.first.outcome, AuditOutcomeFilter.any);
+      expect(log.first.range, isNull);
+    });
+
+    testWidgets('Clear filters also empties the search box', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: bar,
+      );
+
+      await tester.enterText(find.byType(TextField), 'CN04');
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(kAuditTrailClearFiltersKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kAuditTrailClearFiltersKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        isEmpty,
+        reason: 'A box still showing a term that is no longer applied is a bar '
+            'that lies about what the list below it holds.',
+      );
+    });
+
+    testWidgets('Clear filters renders only when the filters are not default',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(tester, log: log, builder: bar);
+
+      expect(
+        find.byKey(kAuditTrailClearFiltersKey),
+        findsNothing,
+        reason: 'With the filters already default there is nothing for this '
+            "control to undo, and 05-06's empty body renders its own Clear "
+            'filters for that case — so exactly one such control is on screen '
+            'in every state, and never two.',
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await _pumpHost(
+        tester,
+        initial: const AuditTrailFilters(who: 'jon'),
+        log: log,
+        builder: bar,
+      );
+      expect(find.byKey(kAuditTrailClearFiltersKey), findsOneWidget);
+    });
+
+    testWidgets('the refresh affordance invokes its callback once per tap',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      var refreshes = 0;
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) =>
+            bar(filters, onChanged, onRefresh: () => refreshes++),
+      );
+
+      await tester.tap(find.byKey(kAuditTrailRefreshKey));
+      await tester.pumpAndSettle();
+      expect(refreshes, 1);
+
+      await tester.tap(find.byKey(kAuditTrailRefreshKey));
+      await tester.pumpAndSettle();
+      expect(
+        refreshes,
+        2,
+        reason: 'CONTEXT: no timer on this page. It refreshes on open and on '
+            'this control, so the control has to be the whole mechanism.',
+      );
+    });
+
+    testWidgets('the result summary renders and names the window it counted '
+        'over', (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(
+        tester,
+        log: log,
+        builder: (filters, onChanged) => bar(
+          filters,
+          onChanged,
+          resultSummary: auditTrailResultSummary(
+            count: 42,
+            filters: filters,
+          ),
+        ),
+      );
+
+      expect(find.byKey(kAuditTrailResultSummaryKey), findsOneWidget);
+      expect(find.textContaining('42'), findsOneWidget);
+      expect(
+        find.textContaining(kAuditTrailDefaultRangeLabel),
+        findsWidgets,
+        reason: 'A number is never presented without the window that produced '
+            'it.',
+      );
+    });
+
+    testWidgets('at 320 logical pixels the bar folds rather than overflows',
+        (tester) async {
+      final log = <AuditTrailFilters>[];
+      await _pumpHost(tester, log: log, width: 320, builder: bar);
+
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('auditTrailResultSummary', () {
+    test('names the seven-day default when nothing was asked for', () {
+      expect(
+        auditTrailResultSummary(
+            count: 3, filters: const AuditTrailFilters()),
+        contains(kAuditTrailDefaultRangeLabel),
+      );
+    });
+
+    test('names the whole table once a search escapes the window', () {
+      expect(
+        auditTrailResultSummary(
+          count: 3,
+          filters: const AuditTrailFilters(keyPrefix: 'CN04'),
+        ),
+        contains(kAuditTrailWholeTableLabel),
+      );
+    });
+
+    test('names an explicit range when one is set', () {
+      final window = AuditWindow(
+        start: DateTime(2026, 8, 1, 6),
+        end: DateTime(2026, 8, 30, 18, 30),
+      );
+      expect(
+        auditTrailResultSummary(
+          count: 1,
+          filters: AuditTrailFilters(range: window),
+        ),
+        contains(auditRangeLabel(window)),
+      );
+    });
+
+    test('counts one entry in the singular', () {
+      expect(
+        auditTrailResultSummary(count: 1, filters: const AuditTrailFilters()),
+        startsWith('1 entry '),
+      );
+    });
+  });
+
   group('the colour convention', () {
     test('the source names no raw palette colour', () {
       final source =
