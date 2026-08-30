@@ -171,9 +171,14 @@ final class _Seam {
   final String consequence;
 }
 
-/// The four hops, gateway-ward, each singular today.
+/// The seven hops, gateway-ward, each singular today.
 ///
-/// Measured 2026-08-14 in this worktree with `///` and `//` lines stripped.
+/// The first four were measured 2026-08-14, before the hold path existed. The
+/// last three are 05-REVIEW WR-05: an engage is a real write with a real
+/// three-state outcome, so "the engage came back unknown, try once more" is
+/// precisely the well-meaning wrapper these pins exist to catch — and unlike a
+/// setpoint, the second one starts a jog nobody is holding. All measured in
+/// this worktree with `///` and `//` lines stripped.
 final List<_Seam> _seams = <_Seam>[
   _Seam(
     // This exact name is what a second `peer.sendRequest(` under `lib/` trips.
@@ -220,6 +225,55 @@ final List<_Seam> _seams = <_Seam>[
         'reconnect. A retry here is the worst of the four: the client sent '
         'once, believes it sent once, and reports one outcome for two '
         'actuations.',
+  ),
+  _Seam(
+    caseName: 'the gateway takes a source-side hold in exactly one place',
+    spelling: 'api.holdToRun(',
+    scope: '../tfc_relay_server/lib',
+    needle: RegExp(r'api\.holdToRun\('),
+    expected: 1,
+    soleSite: '../tfc_relay_server/lib/src/value_handlers.dart:532, inside '
+        'the write path\'s hold branch',
+    consequence: 'an engage is a real write, so a retry around it is a second '
+        'movement of a machine the operator asked to move once — and unlike a '
+        'setpoint, the second one starts a jog nobody is holding. A second '
+        'site is also a second handle: the map that `releaseAllHolds` '
+        'iterates holds one entry per key, and a hold that is not in it is a '
+        'hold no session teardown can end.',
+  ),
+  _Seam(
+    caseName: 'the gateway releases a hold in exactly one place on the write '
+        'path',
+    spelling: 'hold.release(',
+    scope: '../tfc_relay_server/lib',
+    // Word-bounded, which deliberately does not match `releaseAllHolds`'s
+    // call: that one is spelled `hold\n  .release(reason:` across two lines
+    // and is the *teardown* path, not the write path. Pinning both under one
+    // count would make a legitimate edit to either look like a second
+    // actuation site on the other.
+    needle: RegExp(r'\bhold\.release\('),
+    expected: 1,
+    soleSite: '../tfc_relay_server/lib/src/value_handlers.dart:545, the '
+        'hold-flag release branch',
+    consequence: 'the release writes the zero that stops the machine in the '
+        'same PLC scan. A second site is a second zero on a tag another panel '
+        'may be feeding, and 0 is reserved for "released" — so the second one '
+        'tells that panel\'s PLC the operator let go when they have not.',
+  ),
+  _Seam(
+    caseName: 'the client feeds a deadman from exactly one place',
+    spelling: 'Methods.holdTick',
+    scope: 'lib',
+    needle: RegExp(r'Methods\.holdTick'),
+    expected: 1,
+    soleSite: 'lib/src/remote_state_man.dart:764, inside _sendHoldTick',
+    consequence: 'the one site gates every pulse on the link being ready and '
+        'drops the rest, because a tick that cannot be sent must never be '
+        'stored (`_WsSink.add` buffers without bound and reports nothing, '
+        'flutter#103306). A second site is a second thing that can put a '
+        'counter value on the wire without that gate, which is a burst of '
+        'stale counter values arriving the instant a stalled link recovers — '
+        'a machine jogging on a finger that came off a minute ago.',
   ),
   _Seam(
     caseName: 'the plant counts an upstream attempt in exactly one place',
