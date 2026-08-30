@@ -250,4 +250,87 @@ void main() {
       expect(timelineTicks(win(0, 100), 0), isEmpty);
     });
   });
+
+  paretoTests();
+}
+
+ParetoRow prow(String label, {required int minutes, required int count}) =>
+    ParetoRow(
+      key: label,
+      label: label,
+      context: null,
+      level: AlarmLevel.error,
+      total: Duration(minutes: minutes),
+      count: count,
+      isOpen: false,
+    );
+
+void paretoTests() {
+  group('rankPareto', () {
+    final rows = [
+      prow('cheap but chronic', minutes: 3, count: 40),
+      prow('expensive', minutes: 33, count: 2),
+      prow('middling', minutes: 12, count: 5),
+    ];
+
+    test('by lost time finds what is expensive', () {
+      expect(rankPareto(rows, byCount: false).map((r) => r.label),
+          ['expensive', 'middling', 'cheap but chronic']);
+    });
+
+    test('by count finds what is chronic — a different answer', () {
+      expect(rankPareto(rows, byCount: true).map((r) => r.label),
+          ['cheap but chronic', 'middling', 'expensive']);
+    });
+
+    test('rows that never fired in the window are dropped', () {
+      final withZero = [...rows, prow('never', minutes: 0, count: 0)];
+      expect(rankPareto(withZero, byCount: false).map((r) => r.label),
+          isNot(contains('never')));
+    });
+
+    test('ties break stably so the order does not flicker', () {
+      final tied = [
+        prow('b', minutes: 5, count: 1),
+        prow('a', minutes: 5, count: 1),
+      ];
+      expect(rankPareto(tied, byCount: false).map((r) => r.label), ['a', 'b']);
+    });
+  });
+
+  group('paretoShares', () {
+    test('shares are each row over the total', () {
+      final ranked = rankPareto([
+        prow('a', minutes: 30, count: 1),
+        prow('b', minutes: 10, count: 1),
+      ], byCount: false);
+      final shares = paretoShares(ranked);
+      expect(shares[0].$1, closeTo(0.75, 1e-9));
+      expect(shares[1].$1, closeTo(0.25, 1e-9));
+    });
+
+    test('the cumulative column runs to one', () {
+      final ranked = rankPareto([
+        prow('a', minutes: 30, count: 1),
+        prow('b', minutes: 10, count: 1),
+        prow('c', minutes: 10, count: 1),
+      ], byCount: false);
+      final shares = paretoShares(ranked);
+      expect(shares[0].$2, closeTo(0.6, 1e-9));
+      expect(shares.last.$2, closeTo(1.0, 1e-9));
+    });
+
+    test('shares sum to one', () {
+      final ranked = rankPareto([
+        for (var i = 1; i <= 7; i++) prow('r$i', minutes: i * 3, count: i),
+      ], byCount: false);
+      final sum = paretoShares(ranked).fold<double>(0, (n, s) => n + s.$1);
+      expect(sum, closeTo(1.0, 1e-9));
+    });
+
+    test('all-zero totals do not divide by zero', () {
+      final shares = paretoShares([prow('a', minutes: 0, count: 1)]);
+      expect(shares.single.$1, 0);
+    });
+  });
 }

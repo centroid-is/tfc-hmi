@@ -233,3 +233,88 @@ List<TimelineTick> timelineTicks(TimelineWindow window, double width) {
   }
   return ticks;
 }
+
+/// How the Pareto is grouped.
+enum ParetoGrouping {
+  /// One row per alarm — the actionable unit ("film reel empty").
+  alarm,
+
+  /// One row per group, so a machine's whole cost shows in one line.
+  group,
+
+  /// One row per severity.
+  severity,
+}
+
+/// One line of the Pareto: what it is, and what it cost.
+class ParetoRow {
+  final String key;
+  final String label;
+
+  /// Where it sits, for an alarm row. Null on a group or severity row.
+  final String? context;
+  final AlarmLevel level;
+  final Duration total;
+  final int count;
+  final bool isOpen;
+
+  const ParetoRow({
+    required this.key,
+    required this.label,
+    required this.context,
+    required this.level,
+    required this.total,
+    required this.count,
+    required this.isOpen,
+  });
+
+  ParetoRow operator +(ParetoRow other) => ParetoRow(
+        key: key,
+        label: label,
+        context: context == other.context ? context : null,
+        level: level.worst(other.level),
+        total: total + other.total,
+        count: count + other.count,
+        isOpen: isOpen || other.isOpen,
+      );
+}
+
+/// Ranks Pareto rows, dropping the ones that cost nothing in this window.
+///
+/// Ranking by total finds what is expensive; ranking by count finds what is
+/// chronic. They are different questions — a twenty-minute seal fault and
+/// eighty thirty-second film jams cost the same and are fixed completely
+/// differently — which is why the table offers both rather than picking one.
+List<ParetoRow> rankPareto(Iterable<ParetoRow> rows, {required bool byCount}) {
+  final ranked = rows.where((r) => r.count > 0).toList()
+    ..sort((a, b) {
+      final primary = byCount
+          ? b.count.compareTo(a.count)
+          : b.total.compareTo(a.total);
+      if (primary != 0) return primary;
+      // A stable tiebreak keeps the order from flickering as the clock moves.
+      final secondary = byCount
+          ? b.total.compareTo(a.total)
+          : b.count.compareTo(a.count);
+      return secondary != 0 ? secondary : a.label.compareTo(b.label);
+    });
+  return ranked;
+}
+
+/// Each row's share of the total, and the running total behind it.
+///
+/// The cumulative figure is what makes the 80/20 point readable without doing
+/// arithmetic in your head.
+List<(double share, double cumulative)> paretoShares(List<ParetoRow> rows) {
+  final grand = rows.fold<int>(0, (n, r) => n + r.total.inMilliseconds);
+  if (grand == 0) return [for (final _ in rows) (0.0, 0.0)];
+  var running = 0.0;
+  return [
+    for (final row in rows)
+      () {
+        final share = row.total.inMilliseconds / grand;
+        running += share;
+        return (share, running);
+      }()
+  ];
+}

@@ -234,6 +234,104 @@ void main() {
     });
   });
 
+  group('the Pareto table', () {
+    Future<void> openTable(WidgetTester tester) async {
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-view-table')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('switching to it replaces the lanes', (tester) async {
+      await pumpTimeline(tester);
+      await openTable(tester);
+      expect(find.byKey(const ValueKey('stop-timeline-pareto')),
+          findsOneWidget);
+      // the detail row belongs to the timeline, not the table
+      expect(find.text('Select an activation to inspect it.'), findsNothing);
+    });
+
+    testWidgets('ranks the most expensive alarm first', (tester) async {
+      await pumpTimeline(tester);
+      await openTable(tester);
+      // film reel empty ran 20m; seal temperature has been standing 10m;
+      // multivac stopped ran 10m; link error ran 10m
+      final labels = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data)
+          .whereType<String>()
+          .toList();
+      expect(labels, contains('Film reel empty'));
+      expect(labels.indexOf('Film reel empty'),
+          lessThan(labels.indexOf('Link error')));
+    });
+
+    testWidgets('grouping by group collapses a machine into one line',
+        (tester) async {
+      await pumpTimeline(tester);
+      await openTable(tester);
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-pareto-group')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Line 3 › Multivac'), findsOneWidget);
+      expect(find.text('Film reel empty'), findsNothing);
+    });
+
+    testWidgets('grouping by severity collapses to the three levels',
+        (tester) async {
+      await pumpTimeline(tester);
+      await openTable(tester);
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-pareto-severity')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Error'), findsOneWidget);
+      expect(find.text('Warning'), findsOneWidget);
+    });
+
+    testWidgets('ranking by count asks a different question than by time',
+        (tester) async {
+      await pumpTimeline(tester);
+      await openTable(tester);
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-rank-count')));
+      await tester.pumpAndSettle();
+      // still a table, now ordered by frequency
+      expect(find.byKey(const ValueKey('stop-timeline-pareto')),
+          findsOneWidget);
+    });
+
+    testWidgets('an alarm that did not fire in the window is not listed',
+        (tester) async {
+      await pumpTimeline(tester,
+          config: StopTimelineConfig(groups: [
+            ['Infrastructure']
+          ]));
+      await openTable(tester);
+      expect(find.text('Link error'), findsOneWidget);
+      expect(find.text('Film reel empty'), findsNothing);
+    });
+
+    testWidgets('a severity turned off drops out of the ranking',
+        (tester) async {
+      await pumpTimeline(tester);
+      await openTable(tester);
+      expect(find.text('Link error'), findsOneWidget);
+
+      await tester.tap(
+          find.byKey(const ValueKey('stop-timeline-level-warning')));
+      await tester.pumpAndSettle();
+      expect(find.text('Link error'), findsNothing);
+    });
+
+    testWidgets('an empty window says so rather than showing a blank table',
+        (tester) async {
+      await pumpTimeline(tester, configs: const []);
+      // no alarms at all, so the lanes say so and there is no table to open
+      expect(find.text('No alarms are configured yet.'), findsOneWidget);
+    });
+  });
+
   group('StopTimelineConfigForm', () {
     testWidgets('adding a group gives the asset another one to show',
         (tester) async {

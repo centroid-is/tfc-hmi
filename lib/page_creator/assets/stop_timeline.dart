@@ -199,6 +199,9 @@ class _StopTimelineViewState extends State<StopTimelineView> {
   final Set<AlarmLevel> _levels = {...AlarmLevel.values};
   AlarmInterval? _selected;
   String? _selectedLabel;
+  bool _showTable = false;
+  ParetoGrouping _grouping = ParetoGrouping.alarm;
+  bool _rankByCount = false;
 
   /// Frozen per frame so every lane and every statistic agrees about "now".
   late DateTime _now;
@@ -260,17 +263,23 @@ class _StopTimelineViewState extends State<StopTimelineView> {
   /// The header counts and the overview strip are about what this asset is
   /// showing, not about the whole plant — an asset scoped to Multivac that
   /// reports the site's alarm counts is lying about its own subject.
-  Set<String> _scopedUids() {
-    final uids = <String>{};
+  Map<String, AlarmConfig> _scopedAlarms() {
+    final alarms = <String, AlarmConfig>{};
     for (final row in widget.tree.rows(groups: widget.config.groups)) {
       if (row.isGroup) {
-        uids.addAll(row.group!.subtreeAlarms.map((a) => a.uid));
+        // subtreeAlarms already includes the group's own bound alarm, and the
+        // map dedupes what nested groups report twice.
+        for (final alarm in row.group!.subtreeAlarms) {
+          alarms[alarm.uid] = alarm;
+        }
       } else {
-        uids.add(row.alarm!.uid);
+        alarms[row.alarm!.uid] = row.alarm!;
       }
     }
-    return uids;
+    return alarms;
   }
+
+  Set<String> _scopedUids() => _scopedAlarms().keys.toSet();
 
   String _keyOf(AlarmTreeRow row) =>
       row.isGroup ? 'g:${row.group!.path.join('/')}' : 'a:${row.alarm!.uid}';
@@ -322,10 +331,15 @@ class _StopTimelineViewState extends State<StopTimelineView> {
         child: Column(
           children: [
             _header(context, compact: compact),
-            _axis(context),
-            Expanded(child: _lanes(context, lanes)),
+            if (_showTable && !compact) ...[
+              _tableBar(context),
+              Expanded(child: _table(context)),
+            ] else ...[
+              _axis(context),
+              Expanded(child: _lanes(context, lanes)),
+            ],
             if (!compact) _brush(context),
-            if (!compact) _detail(context),
+            if (!compact && !_showTable) _detail(context),
           ],
         ),
       );
@@ -364,7 +378,10 @@ class _StopTimelineViewState extends State<StopTimelineView> {
               style: theme.textTheme.titleSmall,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
+          if (!compact)
+            _viewToggle(context),
+          const SizedBox(width: 10),
           if (!compact)
             Flexible(
               flex: 3,
@@ -401,6 +418,242 @@ class _StopTimelineViewState extends State<StopTimelineView> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _viewToggle(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget option(String label, bool selected, VoidCallback onTap) => InkWell(
+          key: ValueKey('stop-timeline-view-${label.toLowerCase()}'),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            color: selected ? theme.colorScheme.primary : null,
+            child: Text(label,
+                style: theme.textTheme.labelSmall?.copyWith(
+                    color: selected ? theme.colorScheme.onPrimary : null)),
+          ),
+        );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(2),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          option('Timeline', !_showTable,
+              () => setState(() => _showTable = false)),
+          option('Table', _showTable, () => setState(() => _showTable = true)),
+        ]),
+      ),
+    );
+  }
+
+  /// The Pareto's own controls: what to group by, and which question to ask.
+  Widget _tableBar(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget chip(String label, bool selected, VoidCallback onTap, String key) =>
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: InkWell(
+            key: ValueKey(key),
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                border: Border.all(
+                    color: selected
+                        ? theme.colorScheme.primary
+                        : theme.dividerColor),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: Text(label, style: theme.textTheme.labelSmall),
+            ),
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: theme.dividerColor)),
+      ),
+      child: Row(children: [
+        Text('GROUP BY',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(fontSize: 9, letterSpacing: 1.1)),
+        const SizedBox(width: 8),
+        chip('Alarm', _grouping == ParetoGrouping.alarm,
+            () => setState(() => _grouping = ParetoGrouping.alarm),
+            'stop-timeline-pareto-alarm'),
+        chip('Group', _grouping == ParetoGrouping.group,
+            () => setState(() => _grouping = ParetoGrouping.group),
+            'stop-timeline-pareto-group'),
+        chip('Severity', _grouping == ParetoGrouping.severity,
+            () => setState(() => _grouping = ParetoGrouping.severity),
+            'stop-timeline-pareto-severity'),
+        const Spacer(),
+        Text('RANK BY',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(fontSize: 9, letterSpacing: 1.1)),
+        const SizedBox(width: 8),
+        // Two different questions: what is expensive, and what is chronic.
+        chip('Lost time', !_rankByCount,
+            () => setState(() => _rankByCount = false),
+            'stop-timeline-rank-time'),
+        chip('Count', _rankByCount,
+            () => setState(() => _rankByCount = true),
+            'stop-timeline-rank-count'),
+      ]),
+    );
+  }
+
+  /// The Pareto rows for the visible window, at the current grouping.
+  List<ParetoRow> _paretoRows() {
+    final window = _window.value;
+    final byKey = <String, ParetoRow>{};
+
+    // Straight from the scoped alarms, not from the display rows: a group
+    // whose only alarm is its own bound one has no leaf row, and walking rows
+    // would silently leave it out of the ranking.
+    for (final alarm in _scopedAlarms().values) {
+      final level =
+          alarm.rules.isEmpty ? AlarmLevel.info : alarm.rules.first.level;
+      if (!_levels.contains(level)) continue;
+      final stats = widget.source
+          .seriesFor(alarm.uid, now: _now)
+          .statsIn(window.start, window.end);
+      if (stats.count == 0) continue;
+
+      final groupLabel =
+          alarm.group.isEmpty ? 'Ungrouped' : alarm.group.join(' › ');
+      final (key, label, context) = switch (_grouping) {
+        ParetoGrouping.alarm => (alarm.uid, alarm.title, groupLabel),
+        ParetoGrouping.group => (groupLabel, groupLabel, null),
+        ParetoGrouping.severity => (level.name, _levelLabel(level), null),
+      };
+      final entry = ParetoRow(
+        key: key,
+        label: label,
+        context: context,
+        level: level,
+        total: stats.total,
+        count: stats.count,
+        isOpen: stats.isOpen,
+      );
+      byKey[key] = byKey.containsKey(key) ? byKey[key]! + entry : entry;
+    }
+    return rankPareto(byKey.values, byCount: _rankByCount);
+  }
+
+  Widget _table(BuildContext context) {
+    final theme = Theme.of(context);
+    final rows = _paretoRows();
+    if (rows.isEmpty) {
+      return Center(
+        child: Text('Nothing stopped in this window.',
+            style: theme.textTheme.bodySmall),
+      );
+    }
+    final shares = paretoShares(rows);
+
+    return ListView.builder(
+      key: const ValueKey('stop-timeline-pareto'),
+      padding: EdgeInsets.zero,
+      itemCount: rows.length,
+      itemBuilder: (context, i) {
+        final row = rows[i];
+        final (share, cumulative) = shares[i];
+        return Container(
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            border: Border(
+                bottom: BorderSide(
+                    color: theme.dividerColor.withValues(alpha: 0.5))),
+          ),
+          child: Row(children: [
+            SizedBox(
+              width: 22,
+              child: Text('${i + 1}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      fontFeatures: const [FontFeature.tabularFigures()])),
+            ),
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                  color: colorForLevel(context, row.level),
+                  borderRadius: BorderRadius.circular(1)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 4,
+              child: Text(row.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelMedium),
+            ),
+            if (row.context != null)
+              Expanded(
+                flex: 3,
+                child: Text(row.context!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall),
+              ),
+            SizedBox(
+              width: 44,
+              child: Text('${row.count}×',
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      fontFeatures: const [FontFeature.tabularFigures()])),
+            ),
+            SizedBox(
+              width: 62,
+              child: Text(_durShort(row.total),
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      fontFeatures: const [FontFeature.tabularFigures()])),
+            ),
+            const SizedBox(width: 10),
+            // The bar is the share; the notch behind it is the running total,
+            // so the 80/20 point is visible without doing the arithmetic.
+            Expanded(
+              flex: 4,
+              child: LayoutBuilder(builder: (context, c) {
+                return Stack(children: [
+                  Container(
+                      height: 9, color: _laneColor(theme, isGroup: false)),
+                  Container(
+                    height: 9,
+                    width: c.maxWidth * share,
+                    color: colorForLevel(context, row.level),
+                  ),
+                  Positioned(
+                    left: (c.maxWidth * cumulative).clamp(0.0, c.maxWidth - 1),
+                    width: 1,
+                    top: 0,
+                    bottom: 0,
+                    child: ColoredBox(
+                        color: theme.colorScheme.onSurface
+                            .withValues(alpha: 0.5)),
+                  ),
+                ]);
+              }),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 34,
+              child: Text('${(share * 100).toStringAsFixed(0)}%',
+                  textAlign: TextAlign.right,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                      fontSize: 9,
+                      fontFeatures: const [FontFeature.tabularFigures()])),
+            ),
+          ]),
+        );
+      },
     );
   }
 

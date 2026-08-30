@@ -182,6 +182,32 @@ void main() {
       }, skip: !Platform.isMacOS);
     }
 
+    for (final brightness in [Brightness.light, Brightness.dark]) {
+      final name = brightness == Brightness.light ? 'light' : 'dark';
+      testWidgets('pareto table ($name)', (tester) async {
+        await pump(tester, harness(StopTimelineConfig(), brightness),
+            const Size(960, 480));
+        await tester
+            .tap(find.byKey(const ValueKey('stop-timeline-view-table')));
+        await tester.pumpAndSettle();
+        await expectLater(find.byType(StopTimelineView),
+            matchesGoldenFile('goldens/stop_timeline_table_$name.png'));
+      }, skip: !Platform.isMacOS);
+    }
+
+    testWidgets('pareto ranked by count instead of lost time', (tester) async {
+      await pump(tester, harness(StopTimelineConfig(), Brightness.dark),
+          const Size(960, 480));
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-view-table')));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-rank-count')));
+      await tester.pumpAndSettle();
+      await expectLater(find.byType(StopTimelineView),
+          matchesGoldenFile('goldens/stop_timeline_table_by_count.png'));
+    }, skip: !Platform.isMacOS);
+
     testWidgets('scoped to one group', (tester) async {
       await pump(
           tester,
