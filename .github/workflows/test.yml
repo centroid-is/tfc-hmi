@@ -47,6 +47,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # Spec §6's invariant: nothing outside lib/providers/ may construct a
+    # device-local preferences store, because such a store is not wrapped by
+    # GuardedPreferences — its writes pass no check and leave no audit row.
+    # A grep over source, so it runs before the toolchain is even installed and
+    # a violation costs ten seconds instead of forty minutes. Linux only: the
+    # result is a property of the source and identical on all three runners,
+    # and git-bash's grep on Windows is a different build with no upside.
+    - name: Check the preferences construction invariant
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash scripts/check-preferences-construction.sh
+
     - name: Set up Flutter
       uses: ./.github/actions/setup-flutter
 

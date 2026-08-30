@@ -127,31 +127,47 @@ the tree.** All seven are covered above. That is the claim this section is for.
 
 ### 2.4 `SharedPreferencesAsync()` constructed rather than injected (script §4 — 12 hits)
 
-Spec §6 names **one** of these. There are twelve, in eight files, and nine of
-the twelve are outside `lib/providers/` — the directory the spec's own CI check
+Spec §6 names **one** of these. There were twelve, in eight files, and nine of
+the twelve were outside `lib/providers/` — the directory the spec's own CI check
 would allow.
+
+**Now enforced.** Plan 03-11 added
+`scripts/check-preferences-construction.sh`, wired into the `flutter-test` job
+of `.github/workflows/test.yml`, which fails the build for any construction
+under `lib/` or `centroid-hmi/lib/` outside `lib/providers/`. The check found
+**nine** violations against the tree this table describes and finds **zero**
+now. The hit counts in the headings above are the pre-phase ones; plan 03-12
+re-runs the sweep and reconciles them.
 
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
-| `lib/providers/preferences.dart:14, 24` | `SharedPreferencesWrapper(SharedPreferencesAsync())` | device-local | the two preference providers | `correct as-is` — this is the one place that is meant to construct it |
-| `lib/providers/collector.dart:21` | `final prefs = SharedPreferencesAsync()` | device-local | `collectorProvider`, at boot | `guarded by 03-09` — spec §6 bypass 2 |
-| `lib/core/update_channel.dart:23, 35` | `prefs ?? SharedPreferencesAsync()` | device-local | `readUpdateChannel` / `writeUpdateChannel`, called as tear-offs from `centroid-hmi/lib/main.dart:333, 368` and `lib/widgets/preferences.dart:81-82` | `guarded by 03-11` |
-| `lib/tech_docs/tech_doc_library_section.dart:1194` | field on `_SharedPrefsReader` | device-local | the Knowledge Base page's delete-document flow | `guarded by 03-11` |
-| `lib/pages/page_view.dart:253` | field on `_AssetStackState` | device-local | every asset page, on mount | `guarded by 03-11` |
-| `lib/widgets/preferences.dart:556` | field on `_DatabaseConfigEditorState` | device-local | nothing — `grep -n sharedPreferences lib/widgets/preferences.dart` returns this line and no other | `guarded by 03-11` — 03-11 deletes it rather than rerouting it |
-| `lib/widgets/preferences.dart:825` | `SharedPreferencesWrapper(SharedPreferencesAsync())` in `_loadData` | device-local | the preferences page, read path (`localPrefs.getAll()`) | `route-gated (Phase 2)` — `/advanced/preferences` is `administer`; still reconstructed, and 03-11 covers the construction |
-| `lib/widgets/panes/color_picker_dialog.dart:42, 66` | inline in two statics | device-local | any colour picker, anywhere in the app | `guarded by 03-11` |
-| `centroid-hmi/lib/main.dart:269` | `SharedPreferencesWrapper(SharedPreferencesAsync())` | device-local | app boot, feeding `PageManager(prefs:)` at `:270` and `pageManager.load()` at `:271` | `guarded by 03-11` — this is the boot write of `page_editor_data` outside any provider |
+| `lib/providers/preferences.dart:26` | `createDeviceLocalPreferences()` — `SharedPreferencesWrapper(SharedPreferencesAsync())` | device-local | the two preference providers, and every site below that has no `ref` | `correct as-is` — this is the one place that is meant to construct it, and after 03-11 it is the only one |
+| `lib/providers/collector.dart:21` | `final prefs = SharedPreferencesAsync()` | device-local | `collectorProvider`, at boot | `enforced by 03-09` — spec §6 bypass 2; gone from the tree, and the check would refuse its return |
+| `lib/core/update_channel.dart:29, 41` | `prefs ?? createDeviceLocalPreferences()` | device-local | `readUpdateChannel` / `writeUpdateChannel`, called as tear-offs from `centroid-hmi/lib/main.dart:337, 372` and `lib/widgets/preferences.dart:79-80` | `enforced by 03-11` — the parameter is a `PreferencesApi` now, so the tear-off form is unchanged |
+| `lib/tech_docs/tech_doc_library_section.dart:1197` | field on `_SharedPrefsReader`, from the factory | device-local | the Knowledge Base page's delete-document flow | `enforced by 03-11` |
+| `lib/pages/page_view.dart:259` | `late final PreferencesApi prefs = ref.read(localPreferencesProvider)` | device-local | every asset page, on mount | `enforced by 03-11` — a `ref` exists, so it reads the provider rather than the factory |
+| `lib/widgets/preferences.dart:556` | field on `_DatabaseConfigEditorState` | device-local | nothing — `grep -n sharedPreferences lib/widgets/preferences.dart` returned this line and no other | `enforced by 03-11` — **deleted**, not rerouted; confirmed unreferenced first |
+| `lib/widgets/preferences.dart:822` | `ref.read(localPreferencesProvider)` in `_loadData` | device-local | the preferences page, read path (`localPrefs.getAll()`) | `route-gated (Phase 2)` — `/advanced/preferences` is `administer`; the construction is `enforced by 03-11` |
+| `lib/widgets/panes/color_picker_dialog.dart:46, 70` | the factory, inline in two statics | device-local | any colour picker, anywhere in the app | `enforced by 03-11` — both statics keep their `try`/`catch`, so a broken store is still an empty strip |
+| `centroid-hmi/lib/main.dart:273` | `createDeviceLocalPreferences()` | device-local | app boot, feeding `PageManager(prefs:)` and `pageManager.load()` on the next two lines | `enforced by 03-11` — this is the boot write of `page_editor_data` outside any provider; no `ProviderScope` exists yet, so it calls the factory |
 
 ### 2.5 Legacy synchronous `SharedPreferences.getInstance()` (script §5 — 6 hits)
 
 Spec §6 does not mention this API, and the CI check it asks for
 (`SharedPreferencesAsync()`) would never catch it. It is in the tree today.
 
+**Now enforced, on a wider rule than the spec wrote.**
+`scripts/check-preferences-construction.sh` searches for this pattern as well
+as the one §6 names, under the same rule: anything outside `lib/providers/`
+fails the build. Both files below are still in the tree and both are still
+open — the point is that the check *looks* at them and lets them past for a
+stated reason rather than never looking. The six hits are zero violations, and
+that arithmetic is the whole content of the two rows.
+
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
-| `lib/providers/theme.dart:15, 22, 44, 51` | `await SharedPreferences.getInstance()` | device-local | the theme and colour-scheme notifiers | `left open: device-local UI state, and inside \`lib/providers/\`` — see §3.6 |
-| `lib/pages/dbus_login.dart:124, 141` | `await SharedPreferences.getInstance()` | device-local | the D-Bus login form | `left open: spec §2 excludes changing this file` — see §3.7 |
+| `lib/providers/theme.dart:15, 22, 44, 51` | `await SharedPreferences.getInstance()` | device-local | the theme and colour-scheme notifiers | `left open: device-local UI state, and inside \`lib/providers/\`` — see §3.6. Passes the check on the **directory** rule, not an allow-list entry; a copy of these four lines anywhere else fails the build |
+| `lib/pages/dbus_login.dart:124, 141` | `await SharedPreferences.getInstance()` | device-local | the D-Bus login form | `left open: spec §2 excludes changing this file` — see §3.7. The **one** allow-list entry in the check, carrying that reason inline. Removing the entry makes the build fail on these two lines, which is how the entry was confirmed to be doing work |
 
 ### 2.6 Secure storage (script §6 — 33 hits)
 
@@ -196,17 +212,17 @@ in §5.
 | File and line | Call | Store | Reached from | Verdict |
 |---|---|---|---|---|
 | `lib/core/startup_url.dart:24, 26` | `prefs.remove/setString(startupUrlPrefsKey)` | preferences | the startup-page control | `guarded by 03-06` |
-| `lib/core/update_channel.dart:36` | `p.setString(updateChannelPrefsKey, ...)` | preferences | the update-channel control | `guarded by 03-11` then `03-06` — the construction moves first |
+| `lib/core/update_channel.dart:42` | `p.setString(updateChannelPrefsKey, ...)` | preferences | the update-channel control | construction `enforced by 03-11`; the write itself is `guarded by 03-06` |
 | `lib/chat/chat_widget.dart:189, 361, 392, 394` | `prefs.setString/remove(...)` | preferences | the chat provider-settings dialog | `guarded by 03-06` |
 | `lib/providers/state_man.dart:26` | `prefs.setString('key_mappings', ...)` | preferences | `stateManProvider` at boot | `guarded by 03-06` — routed through `systemWrites` |
 | `lib/providers/collector.dart:27` | `prefs.setString(Collector.configLocation, ...)` | preferences | `collectorProvider` at boot | `guarded by 03-09` |
 | `lib/providers/access.dart:694` | `local.setString(kAccessSessionPrefKey, ...)` | device-local preferences | every `poke()`, i.e. every pointer-down | `guarded by 03-06` |
 | `lib/providers/chat.dart:340, 370, 405, 449, 453, 494, 505, 525, 529, 532, 535, 538, 548, 558, 905` | `prefs.setString/remove(chat.*)` | preferences | chat conversation management | `guarded by 03-06` |
 | `lib/providers/theme.dart:23, 52` | `prefs.setString(_key, ...)` | device-local, **legacy sync API** | theme and colour-scheme controls | `left open: device-local UI state, and inside \`lib/providers/\`` — see §3.6 |
-| `lib/tech_docs/tech_doc_upload_service.dart:267` | `prefsReader.setString('page_editor_data', ...)` | preferences | deleting a tech doc on the ungated Knowledge Base page | `guarded by 03-11` — the store it writes through is constructed privately at `tech_doc_library_section.dart:1194`; see also §3.1 |
-| `lib/tech_docs/tech_doc_library_section.dart:1203` | `_prefs.setString(key, value)` | device-local | the `PrefsReader` adapter the row above uses | `guarded by 03-11` |
+| `lib/tech_docs/tech_doc_upload_service.dart:267` | `prefsReader.setString('page_editor_data', ...)` | preferences | deleting a tech doc on the ungated Knowledge Base page | construction `enforced by 03-11` — the store it writes through comes from the factory at `tech_doc_library_section.dart:1197`; see also §3.1 |
+| `lib/tech_docs/tech_doc_library_section.dart:1206` | `_prefs.setString(key, value)` | device-local | the `PrefsReader` adapter the row above uses | construction `enforced by 03-11` |
 | `lib/pages/key_repository.dart:637, 1933` | `prefs.setString('key_mappings', ...)` | preferences | `/advanced/key-repository` | `guarded by 03-06` — and `route-gated (Phase 2)` besides |
-| `lib/pages/page_view.dart:264` | `prefs.setString('asset_stack_config', ...)` | device-local | every asset page, on the read path when the key is absent | `guarded by 03-11` |
+| `lib/pages/page_view.dart:270` | `prefs.setString('asset_stack_config', ...)` | device-local | every asset page, on the read path when the key is absent | construction `enforced by 03-11` — the store now comes from `localPreferencesProvider`; the write is unchanged and still once per mount |
 | `lib/pages/dbus_login.dart:127-131` | `prefs.setString/setBool(...)` | device-local, **legacy sync API** | the D-Bus login form | `left open: spec §2 excludes changing this file` — see §3.7 |
 | `lib/page_creator/page.dart:247` | `prefs.setString(storageKey, jsonString)` | preferences | `PageManager.load()` at boot, **unawaited** | `guarded by 03-06` — routed through `systemWrites` |
 | `lib/page_creator/page.dart:252, 257` | `prefs.setString(storageKey \| orderStorageKey, ...)` | preferences | the page editor's save | `guarded by 03-06` |
@@ -215,7 +231,7 @@ in §5.
 | `lib/page_creator/assets/recipes.dart:269` | `prefs.setString(prefKey, jsonEncode(recipes))` | preferences | `_getRecipes` on the **read** path | `guarded by 03-06` |
 | `lib/page_creator/assets/recipes.dart:281` | `prefs.setString(prefKey, ...)` | preferences | `_saveRecipes`, behind a control | `guarded by 03-06` |
 | `lib/widgets/preferences.dart:949-957, 979, 981` | `target.setBool/setInt/setDouble/setStringList/setString(e.key, ...)`, `prefs.remove(e.key)`, `localPrefs.remove(e.key)` | preferences and device-local | the raw preference editor on `/advanced/preferences` | `route-gated (Phase 2)` — `administer`; the key is whatever the operator typed, see §5 |
-| `lib/widgets/panes/color_picker_dialog.dart:66` | `SharedPreferencesAsync().setStringList(prefsKey, ...)` | device-local | confirming a colour anywhere in the app | `guarded by 03-11` |
+| `lib/widgets/panes/color_picker_dialog.dart:70` | `createDeviceLocalPreferences().setStringList(prefsKey, ...)` | device-local | confirming a colour anywhere in the app | construction `enforced by 03-11`; the write stays on the deliberately unguarded device-local store |
 | `lib/core/preferences.dart:54-84` | `_prefs.set*/remove/clear(key)` | device-local | `SharedPreferencesWrapper` | `correct as-is` — delegation with the caller's key |
 | `packages/tfc_dart/lib/core/preferences.dart:344-413, 485-493, 524-532, 565-585` | `_memoryCache.set*`, `localCache?.set*`, `cache.set*` | in-memory and device-local caches | inside `Preferences` | `correct as-is` — the cache fan-out below the guard |
 | `packages/tfc_dart/lib/core/state_man.dart:442` | `prefs.setString(configKey, ..., secret: true, saveToDb: false)` | secure store | `StateManConfig.fromPrefs` at boot when the key is absent | `guarded by 03-06` — routed through `systemWrites` |
@@ -489,11 +505,21 @@ finds twelve constructions in eight files; three are inside `lib/providers/`
 names each. `lib/widgets/preferences.dart:556` is a dead field with no other
 reference in the file.
 
+**Closed and enforced.** All nine are gone. Eight were rerouted to
+`createDeviceLocalPreferences()` or `localPreferencesProvider`; the dead field
+was deleted. `scripts/check-preferences-construction.sh` found these nine and
+now finds none, and the `flutter-test` job fails on a tenth.
+
 **E. Six legacy `SharedPreferences.getInstance()` calls.** An API spec §6 does
 not mention and its proposed CI check would not catch:
 `lib/providers/theme.dart:15, 22, 44, 51` and `lib/pages/dbus_login.dart:124, 141`.
 Owner: plan 03-11, which extends the check to the legacy API. Both files stay
 open on purpose — §3.6 and §3.7.
+
+**Enforced.** The check searches for this pattern under the same
+outside-`lib/providers/` rule. `theme.dart` passes on the directory rule;
+`dbus_login.dart` is the check's single allow-list entry, carrying §2's
+exclusion as its reason. A seventh call anywhere else fails the build.
 
 ### 4.3 Where the answer was "nothing further"
 
