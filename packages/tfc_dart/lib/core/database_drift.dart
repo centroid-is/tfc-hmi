@@ -683,9 +683,23 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               // `m.createTable`, following the v5 and v6 branches above and
               // not the spec's simplification that `m.createTable` covers both
               // backends. Several SVN stations share one Postgres database and
-              // every one of them runs this branch when it opens, so it has to
-              // be safe to run twice — otherwise the second station aborts the
-              // migration and leaves the database half-upgraded.
+              // every one of them runs this branch when it opens, so running
+              // it twice must not error — otherwise the second station aborts
+              // the migration and leaves the database half-upgraded.
+              //
+              // **No test executes this arm.** Not one in `test/core/`, which
+              // can only open SQLite, and none in `test/integration/` either.
+              // The `from < 6` arm immediately above is in exactly the same
+              // position: Phase 1 recorded that on 2026-08-28 in
+              // `.planning/phases/01-identity-and-audit/deferred-items.md` §1
+              // and it is still open. What stands behind these two statements
+              // is a read against the v6 arm's wording and the source-derived
+              // column-parity tests in
+              // `test/core/access_key_binding_table_test.dart`, which compare
+              // these string literals against the drift tables and nothing
+              // more — they do not connect to Postgres and they cannot see a
+              // wrong type or a statement that fails at runtime. The first
+              // thing that will actually run this is a station.
               //
               // Datetimes are TEXT on both backends, as in the v6 arm: this
               // database sets `DriftDatabaseOptions(storeDateTimeAsText: true)`
