@@ -1,10 +1,11 @@
-/// The seven raised routes. This map is the entire blast radius of route
+/// The eight raised routes. This map is the entire blast radius of route
 /// gating: a path that is missing from it, or spelled differently from
 /// `centroid-hmi/lib/main.dart`, is a route that silently stays open.
 library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/access_routes.dart';
+import 'package:tfc/core/audit_trail_store.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc_access/tfc_access.dart';
 
@@ -23,7 +24,7 @@ void main() {
   });
 
   group('kRaisedRoutes', () {
-    test('names exactly the seven routes, each with its group', () {
+    test('names exactly the eight routes, each with its group', () {
       // Spelled literally rather than derived, so that a change to the map
       // has to be made twice on purpose.
       expect(kRaisedRoutes, {
@@ -34,11 +35,12 @@ void main() {
         '/advanced/server-config': AccessGroup.administer,
         '/advanced/ip-settings': AccessGroup.administer,
         '/advanced/preferences': AccessGroup.administer,
+        '/advanced/audit-trail': AccessGroup.users,
       });
     });
 
-    test('has exactly seven entries', () {
-      expect(kRaisedRoutes, hasLength(7));
+    test('has exactly eight entries', () {
+      expect(kRaisedRoutes, hasLength(8));
     });
 
     test('the three editors need configure', () {
@@ -59,6 +61,35 @@ void main() {
       expect(kRaisedRoutes['/advanced/server-config'], AccessGroup.administer);
       expect(kRaisedRoutes['/advanced/ip-settings'], AccessGroup.administer);
       expect(kRaisedRoutes['/advanced/preferences'], AccessGroup.administer);
+    });
+
+    test('the audit trail needs users', () {
+      // The only `users` entry, and the only route raised for what it
+      // *displays* rather than what it writes. The trail is every setpoint
+      // change anybody ever made, with old and new values, its author and its
+      // station; lowering it to `configure` would put that in front of anyone
+      // who can edit a page or import a key map.
+      expect(kRaisedRoutes[kAuditTrailRoute], AccessGroup.users);
+      expect(kAuditTrailRoute, '/advanced/audit-trail');
+    });
+
+    test('the audit trail route and kAuditTrailGroup are one decision', () {
+      // `lib/core/audit_trail_store.dart` names the group and this map spells
+      // it, because `lib/core/` and the route table are two files and the
+      // store's reads are deliberately ungated — the route gate is the whole
+      // enforcement. A drift between these two lines is a page open to the
+      // wrong people, with nothing else in the repo to notice.
+      expect(kRaisedRoutes[kAuditTrailRoute], kAuditTrailGroup,
+          reason: 'the store names the group and the route spells it; a drift '
+              'between them is a page open to the wrong people');
+    });
+
+    test('the audit trail is the only users route', () {
+      final users = kRaisedRoutes.entries
+          .where((e) => e.value == AccessGroup.users)
+          .map((e) => e.key);
+
+      expect(users, [kAuditTrailRoute]);
     });
 
     test('no entry is operate', () {
@@ -103,6 +134,13 @@ void main() {
       expect(exempt, [kServerConfigRoute]);
     });
 
+    test('answers false for the audit trail', () {
+      // No exemption, and the reason is not symmetry: the trail *is* the
+      // database, so "readable while the database is down" would be
+      // incoherent as well as unsafe.
+      expect(routeAllowedWhenRepositoryUnavailable(kAuditTrailRoute), isFalse);
+    });
+
     test('answers false for an unraised path', () {
       expect(routeAllowedWhenRepositoryUnavailable('/alarm-view'), isFalse);
     });
@@ -113,7 +151,7 @@ void main() {
   });
 
   group('installRaisedRoutes', () {
-    test('declares each of the seven into the registry', () {
+    test('declares each of the eight into the registry', () {
       installRaisedRoutes();
 
       kRaisedRoutes.forEach((path, group) {
