@@ -637,6 +637,42 @@ void main() {
     });
   });
 
+  group('signing in gives back the affordance, not the action (T-04-34)', () {
+    testWidgets('the refused write is not held anywhere, so the button needs a '
+        'fresh press', (tester) async {
+      final inner = _FakeStateMan();
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: _WriteButton(
+            stateMan: inner,
+            tagKey: _key,
+            member: _lockedMember,
+          ),
+        ),
+        overrides: _overrides(
+          resolver: _loadedResolver(),
+          session: _anonymous(),
+          sink: _RecordingSink(),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Write'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+
+      // "Sign in" dismisses the prompt and opens the form. Nothing here is
+      // remembered to retry — `kAccessDeniedNoReplayNote` is what says so to
+      // the operator, and this is what says so to the next person to edit it.
+      await tester.tap(find.byKey(kAccessDeniedSignInKey));
+      await tester.pumpAndSettle();
+
+      expect(inner.writes, isEmpty,
+          reason: 'signing in must never replay the refused action');
+    });
+  });
+
   group('the guard underneath is unchanged (T-04-32)', () {
     testWidgets('a write that skips the helper is still refused at the guard',
         (tester) async {
