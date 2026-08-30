@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:rxdart/rxdart.dart' show Rx;
 
 import 'package:tfc_dart/core/alarm.dart';
 import 'package:tfc_dart/core/boolean_expression.dart';
@@ -37,6 +38,136 @@ extension AlarmNotificationColors on AlarmNotification {
   /// Returns the background and text colors for this alarm level
   (Color, Color) getColors(BuildContext context) =>
       alarmLevelColors(context, rule.level);
+}
+
+/// The name a level goes by on screen.
+String alarmLevelLabel(AlarmLevel level) {
+  switch (level) {
+    case AlarmLevel.info:
+      return 'Info';
+    case AlarmLevel.warning:
+      return 'Warning';
+    case AlarmLevel.error:
+      return 'Error';
+  }
+}
+
+/// What the History list shows: the alarms that have ended, paired with their
+/// deactivation time, *and* the ones still standing, paired with null.
+///
+/// History used to be only what [AlarmMan] had already deactivated, so the
+/// alarm an operator is standing in front of -- the one they scrolled here to
+/// ask "when did this start?" about -- was the single alarm missing from it.
+/// A live alarm belongs in the record too; it simply has no deactivation time
+/// yet, and the row says so instead of leaving the line blank.
+///
+/// Still-active entries sort to the top, newest activation first; the ended
+/// ones follow, newest deactivation first. An alarm that ran, cleared and came
+/// back is two entries, because it was two events.
+List<(AlarmActive, DateTime?)> alarmHistoryEntries(
+  Iterable<AlarmActive?> history,
+  Iterable<AlarmActive> active,
+) {
+  // By identity: [AlarmActive] has no value equality, and the same instance is
+  // what AlarmMan moves from the active set into the history buffer -- so a
+  // just-cleared alarm can be in both streams for a frame.
+  final seen = Set<AlarmActive>.identity();
+  final entries = <(AlarmActive, DateTime?)>[];
+  for (final alarm in active) {
+    if (seen.add(alarm)) entries.add((alarm, null));
+  }
+  for (final alarm in history) {
+    if (alarm == null) continue;
+    if (!seen.add(alarm)) continue;
+    entries.add((alarm, alarm.deactivated));
+  }
+
+  entries.sort((a, b) {
+    final aLive = a.$2 == null, bLive = b.$2 == null;
+    if (aLive != bLive) return aLive ? -1 : 1;
+    if (aLive) {
+      return b.$1.notification.timestamp.compareTo(a.$1.notification.timestamp);
+    }
+    return b.$2!.compareTo(a.$2!);
+  });
+  return entries;
+}
+
+/// The level quick-filter: one chip per severity, worst first, each carrying
+/// how many of the alarms in view sit at that level.
+///
+/// Nothing selected means every level. That keeps the list unfiltered by
+/// default -- what an alarm page must show on arrival -- while a single tap
+/// narrows it to the errors, and a second tap gives everything back.
+class AlarmLevelFilterChips extends StatelessWidget {
+  /// The levels currently kept. Empty means no filter at all.
+  final Set<AlarmLevel> selected;
+
+  /// Alarms per level in the list as it stands before this filter, so a chip
+  /// says what tapping it would leave.
+  final Map<AlarmLevel, int> counts;
+
+  final ValueChanged<Set<AlarmLevel>> onChanged;
+
+  const AlarmLevelFilterChips({
+    super.key,
+    required this.selected,
+    required this.counts,
+    required this.onChanged,
+  });
+
+  /// Worst first: the chip reached for in a hurry is the one nearest the edge.
+  static const List<AlarmLevel> order = [
+    AlarmLevel.error,
+    AlarmLevel.warning,
+    AlarmLevel.info,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      // Wrap, not Row: the alarm list is 2/5 of the page and the chips have to
+      // fold onto a second line rather than overflow it.
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [for (final level in order) _chip(context, level)],
+      ),
+    );
+  }
+
+  Widget _chip(BuildContext context, AlarmLevel level) {
+    final (background, foreground) = alarmLevelColors(context, level);
+    final isSelected = selected.contains(level);
+    return FilterChip(
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      showCheckmark: false,
+      // The dot is the level's own colour, which is how the cards below are
+      // already read; on a selected chip the fill has taken that colour, so
+      // the dot inverts to stay visible.
+      avatar: CircleAvatar(
+        radius: 6,
+        backgroundColor: isSelected ? foreground : background,
+      ),
+      label: Text('${alarmLevelLabel(level)} ${counts[level] ?? 0}'),
+      labelStyle: isSelected
+          ? Theme.of(context).textTheme.labelLarge?.copyWith(color: foreground)
+          : null,
+      selected: isSelected,
+      selectedColor: background,
+      onSelected: (keep) {
+        final next = {...selected};
+        if (keep) {
+          next.add(level);
+        } else {
+          next.remove(level);
+        }
+        onChanged(next);
+      },
+    );
+  }
 }
 
 class ListAlarms extends ConsumerStatefulWidget {
@@ -527,6 +658,12 @@ class ListActiveAlarms extends ConsumerStatefulWidget {
 class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
   String _searchQuery = '';
   bool _showHistory = false;
+
+  /// The levels the operator has tapped. Empty means every level; it survives
+  /// the Active/History toggle, because "I am only looking at errors" is a
+  /// stance on the plant, not on which of the two lists is on screen.
+  final Set<AlarmLevel> _levelFilter = {};
+
   final _searchBarKey = GlobalKey<FuzzySearchBarState>();
 
   /// The list's stream, made once per mode (active / history). Built inline
@@ -540,19 +677,22 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
     final cached = _stream;
     if (cached != null && _streamShowsHistory == showHistory) return cached;
     _streamShowsHistory = showHistory;
-    return _stream = Stream.fromFuture(ref.read(alarmManProvider.future)).asyncExpand(
-        (alarmMan) => showHistory
-            ? alarmMan.history().map((history) => (
-                  alarmMan,
-                  history
-                      .where((h) => h != null)
-                      .map((h) => (h!, h!.deactivated))
-                      .toList()
-                    ..sort((a, b) => b.$2!.compareTo(a.$2!))
-                ))
-            : alarmMan.activeAlarms().map((active) =>
-                (alarmMan, active.map((a) => (a, null as DateTime?)).toList())),
-      );
+    return _stream =
+        Stream.fromFuture(ref.read(alarmManProvider.future)).asyncExpand(
+      // History reads both streams: AlarmMan's buffer holds only the alarms it
+      // has already deactivated, and the standing ones belong in the record
+      // too -- see [alarmHistoryEntries].
+      (alarmMan) => showHistory
+          ? Rx.combineLatest2<List<AlarmActive?>, Set<AlarmActive>,
+              (AlarmMan, List<(AlarmActive, DateTime?)>)>(
+              alarmMan.history(),
+              alarmMan.activeAlarms(),
+              (history, active) =>
+                  (alarmMan, alarmHistoryEntries(history, active)),
+            )
+          : alarmMan.activeAlarms().map((active) =>
+              (alarmMan, active.map((a) => (a, null as DateTime?)).toList())),
+    );
   }
 
   @override
@@ -583,13 +723,29 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
               .toList();
         }
 
+        // Counted before the level filter is applied, so a chip states what
+        // is behind it rather than what is left after itself.
+        final counts = <AlarmLevel, int>{
+          for (final level in AlarmLevel.values)
+            level: alarms
+                .where((a) => a.$1.notification.rule.level == level)
+                .length,
+        };
+        if (_levelFilter.isNotEmpty) {
+          alarms = alarms
+              .where((a) => _levelFilter.contains(a.$1.notification.rule.level))
+              .toList();
+        }
+
         if (alarms.isEmpty) {
           return Column(
             children: [
-              _buildSearchAndToggleBar(),
-              const Expanded(
+              _buildSearchAndToggleBar(counts),
+              Expanded(
                 child: Center(
-                  child: Text('No alarms'),
+                  child: Text(_levelFilter.isEmpty
+                      ? 'No alarms'
+                      : 'No alarms at the selected levels'),
                 ),
               ),
             ],
@@ -598,7 +754,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
 
         return Column(
           children: [
-            _buildSearchAndToggleBar(),
+            _buildSearchAndToggleBar(counts),
             Expanded(
               child: ListView.builder(
                 itemCount: alarms.length,
@@ -629,6 +785,17 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
                               style: TextStyle(
                                 color: textColor.withAlpha(178),
                               ),
+                            )
+                          // In the history list an alarm with no deactivation
+                          // time has not ended yet -- say so, rather than
+                          // leaving a row that looks like a missing timestamp.
+                          else if (_showHistory)
+                            Text(
+                              'Still active',
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                         ],
                       ),
@@ -644,7 +811,7 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
     );
   }
 
-  Widget _buildSearchAndToggleBar() {
+  Widget _buildSearchAndToggleBar(Map<AlarmLevel, int> counts) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Material(
@@ -656,64 +823,82 @@ class _ListActiveAlarmsState extends ConsumerState<ListActiveAlarms> {
             borderRadius: BorderRadius.circular(12),
             color: Theme.of(context).colorScheme.surface,
           ),
-          child: LayoutBuilder(builder: (context, constraints) {
-            // The list column is 2/5 of the page, so in a narrow window the
-            // bar can be under 250 px -- less than the labelled toggle alone,
-            // and the search field then overflowed. Below that, the segments
-            // keep their icons and say their name in a tooltip instead.
-            final compact = constraints.maxWidth < 360;
-            return Row(
-              children: [
-                // Search field
-                Expanded(
-                  child: FuzzySearchBar(
-                    key: _searchBarKey,
-                    hintText:
-                        'Search ${_showHistory ? "historical" : "active"} alarms...',
-                    onChanged: (value) {
-                      setState(() {
-                        _searchQuery = value;
-                      });
-                    },
-                  ),
-                ),
-                // Toggle
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: SegmentedButton<bool>(
-                    style: ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      side: WidgetStateProperty.all(BorderSide.none),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LayoutBuilder(builder: (context, constraints) {
+                // The list column is 2/5 of the page, so in a narrow
+                // window the bar can be under 250 px -- less than the
+                // labelled toggle alone, and the search field then
+                // overflowed. Below that, the segments keep their icons and
+                // say their name in a tooltip instead.
+                final compact = constraints.maxWidth < 360;
+                return Row(
+                  children: [
+                    // Search field
+                    Expanded(
+                      child: FuzzySearchBar(
+                        key: _searchBarKey,
+                        hintText:
+                            'Search ${_showHistory ? "historical" : "active"} alarms...',
+                        onChanged: (value) {
+                          setState(() {
+                            _searchQuery = value;
+                          });
+                        },
+                      ),
                     ),
-                    segments: [
-                      ButtonSegment<bool>(
-                        value: false,
-                        icon: const Icon(Icons.warning, size: 18),
-                        label: compact ? null : const Text('Active'),
-                        tooltip: compact ? 'Active' : null,
+                    // Toggle
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                      child: SegmentedButton<bool>(
+                        style: ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          side: WidgetStateProperty.all(BorderSide.none),
+                        ),
+                        segments: [
+                          ButtonSegment<bool>(
+                            value: false,
+                            icon: const Icon(Icons.warning, size: 18),
+                            label: compact ? null : const Text('Active'),
+                            tooltip: compact ? 'Active' : null,
+                          ),
+                          ButtonSegment<bool>(
+                            value: true,
+                            icon: const Icon(Icons.history, size: 18),
+                            label: compact ? null : const Text('History'),
+                            tooltip: compact ? 'History' : null,
+                          ),
+                        ],
+                        selected: {_showHistory},
+                        onSelectionChanged: (Set<bool> newSelection) {
+                          setState(() {
+                            _showHistory = newSelection.first;
+                            _searchQuery = '';
+                            _searchBarKey.currentState?.clear();
+                          });
+                          widget.onViewChanged?.call();
+                        },
                       ),
-                      ButtonSegment<bool>(
-                        value: true,
-                        icon: const Icon(Icons.history, size: 18),
-                        label: compact ? null : const Text('History'),
-                        tooltip: compact ? 'History' : null,
-                      ),
-                    ],
-                    selected: {_showHistory},
-                    onSelectionChanged: (Set<bool> newSelection) {
-                      setState(() {
-                        _showHistory = newSelection.first;
-                        _searchQuery = '';
-                        _searchBarKey.currentState?.clear();
-                      });
-                      widget.onViewChanged?.call();
-                    },
-                  ),
+                    ),
+                  ],
+                );
+              }),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                child: AlarmLevelFilterChips(
+                  selected: _levelFilter,
+                  counts: counts,
+                  onChanged: (levels) => setState(() {
+                    _levelFilter
+                      ..clear()
+                      ..addAll(levels);
+                  }),
                 ),
-              ],
-            );
-          }),
+              ),
+            ],
+          ),
         ),
       ),
     );
