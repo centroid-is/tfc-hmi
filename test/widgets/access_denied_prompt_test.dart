@@ -1,0 +1,910 @@
+/// The denial prompt: what an operator sees when a write is refused.
+///
+/// Two halves, matching the two tasks of plan 03-07.
+///
+///  * The widget itself — that it costs nothing while idle, that a denial
+///    produces a lock rather than an error, that one action produces one
+///    prompt, and that signing in from it does not repeat the refused write.
+///  * The mount in `BaseScaffold`, and the honest count of the write call
+///    sites that still let `AccessDenied` past them. The count is derived from
+///    the tree here rather than asserted from a comment, so it cannot quietly
+///    grow and Phase 4 has a countdown to zero.
+library;
+
+import 'dart:async';
+import 'dart:io';
+
+import 'package:beamer/beamer.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:rxdart/rxdart.dart';
+import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/page_creator/assets/number.dart';
+import 'package:tfc/page_creator/assets/start_stop_button.dart';
+import 'package:tfc/providers/access.dart';
+import 'package:tfc/providers/access_policy.dart';
+import 'package:tfc/providers/state_man.dart';
+import 'package:tfc/route_registry.dart';
+import 'package:tfc/widgets/access_denied_prompt.dart';
+import 'package:tfc/widgets/access_sign_in_dialog.dart';
+import 'package:tfc/widgets/base_scaffold.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
+import 'package:tfc_access/tfc_access.dart';
+import 'package:tfc_dart/core/access/guarded_state_man.dart';
+import 'package:tfc_dart/core/access/access_repository.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/// The refusal every test drives, unless it needs a second, different one.
+const AccessDenied _denial =
+    AccessDenied('ST101.CN01.p_cmd_JogFwd', AccessGroup.force);
+
+/// A second refusal, from a different item and a different group, so a test
+/// that asserts the prompt names *this* one cannot pass on the other's copy.
+const AccessDenied _otherDenial =
+    AccessDenied('ST201.MX02.p_par_Recipe', AccessGroup.setpoints);
+
+/// Counts the taps on the sign-in affordance without standing up a dialog
+/// route — the `AccessStatusAction` / `AccessLockedBody` idiom.
+class _CountingOpener {
+  int calls = 0;
+
+  Future<void> call(BuildContext context, WidgetRef ref) async {
+    calls++;
+  }
+}
+
+/// A session that answers one fixed value. `accessSessionProvider` is
+/// overridden in every host below, always: an unoverridden one runs the real
+/// controller chain and a frame captured before it settles is `AsyncLoading`,
+/// in which `AccessStatusAction` renders nothing at all.
+class _FixedSession extends AccessSessionController {
+  _FixedSession(this._session);
+
+  final AccessSession _session;
+
+  @override
+  Future<AccessSession> build() async => _session;
+
+  @override
+  Future<AccessSignInResult> signIn(String username, String password) async =>
+      AccessSignInResult.ok;
+
+  @override
+  Future<void> signOut() async {}
+
+  @override
+  void poke() {}
+}
+
+/// A repository that answers nothing. Nothing in this file asks it anything;
+/// it exists so `accessRepositoryProvider` never reaches `databaseProvider`
+/// and the station keychain.
+class _StubRepository extends Fake implements AccessRepository {}
+
+AccessSession _anonymous() =>
+    AccessSession.anonymous(const {AccessGroup.operate});
+
+/// Overrides every host in this file shares.
+List<Override> _accessOverrides({AccessSession? session}) => [
+      accessSessionProvider
+          .overrideWith(() => _FixedSession(session ?? _anonymous())),
+      accessRepositoryProvider.overrideWith((ref) async => _StubRepository()),
+    ];
+
+/// The prompt under a bare `MaterialApp`, with the denial stream driven by the
+/// test and the sign-in opener injected.
+Widget _promptHost({
+  required Stream<AccessDenied> denials,
+  required AccessSignInOpener openSignIn,
+  Widget? child,
+}) {
+  return ProviderScope(
+    overrides: [
+      ..._accessOverrides(),
+      accessDenialsProvider.overrideWithValue(denials),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: Column(
+          children: [
+            AccessDeniedPrompt(openSignIn: openSignIn, child: child),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// The Phase 1 lesson, copied deliberately: `find.text` passes on a string the
+/// painter has clipped to "…will not repeat th…", which is how an ellipsised
+/// honesty line shipped past a green assertion. Pin the properties that decide
+/// legibility, then check the paragraph really is taller than one line at the
+/// width the prompt renders it at.
+void _expectWrapsLegibly(WidgetTester tester, Key key, String expected) {
+  final text = tester.widget<Text>(find.byKey(key));
+  expect(text.data, expected);
+  expect(text.maxLines, isNull);
+  expect(text.overflow, isNot(TextOverflow.ellipsis));
+
+  final rendered = tester.renderObject<RenderParagraph>(
+    find.descendant(of: find.byKey(key), matching: find.byType(RichText)),
+  );
+  expect(
+    rendered.size.height,
+    greaterThan(rendered.preferredLineHeight),
+    reason: 'the line must wrap onto more than one line at the real width',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 — the widget
+// ---------------------------------------------------------------------------
+
+void main() {
+  group('idle cost', () {
+    testWidgets('renders nothing at all before any write is refused',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      // Not merely "no text found": the render object occupies no pixels, so
+      // the four Phase 2 goldens containing a BaseScaffold cannot move.
+      expect(tester.getSize(find.byType(AccessDeniedPrompt)), Size.zero);
+      expect(find.byType(Dialog), findsNothing);
+      expect(find.byKey(kAccessDeniedBodyKey), findsNothing);
+
+      // And nothing that paints, pads or elevates sits inside it either.
+      expect(
+        find.descendant(
+          of: find.byType(AccessDeniedPrompt),
+          matching: find.byWidgetPredicate((w) => w is! SizedBox),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('wrapping a page adds no render object of its own',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+        child: const SizedBox(key: Key('page'), width: 111, height: 47),
+      ));
+      await tester.pumpAndSettle();
+
+      // The mount form used by BaseScaffold contributes NO render object,
+      // which is a stronger statement than Size.zero: there is nothing in the
+      // layout for a golden to shift against.
+      expect(
+        tester.renderObject(find.byType(AccessDeniedPrompt)),
+        same(tester.renderObject(find.byKey(const Key('page')))),
+      );
+      expect(
+          tester.getSize(find.byType(AccessDeniedPrompt)), const Size(111, 47));
+    });
+  });
+
+  group('the prompt a refused write produces', () {
+    testWidgets('names the item that was refused and the permission needed',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.text(kAccessDeniedHeadline), findsOneWidget);
+      expect(
+          find.text(kAccessDeniedGroupNote(_denial.required)), findsOneWidget);
+      expect(find.text(kAccessDeniedItemNote(_denial.itemKey)), findsOneWidget);
+
+      // The copy is about *this* refusal, not a generic one: the other
+      // fixture's group and item must not appear.
+      expect(find.text(kAccessDeniedGroupNote(_otherDenial.required)),
+          findsNothing);
+      expect(
+          find.text(kAccessDeniedItemNote(_otherDenial.itemKey)), findsNothing);
+    });
+
+    testWidgets('reads as a lock, not as an error', (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      final scheme = Theme.of(tester.element(find.byKey(kAccessDeniedBodyKey)))
+          .colorScheme;
+
+      // A lock glyph, in onSurfaceVariant. NOT HmiStateColors.orange, which
+      // means forced/override and — since plan 01-08 — an elevated session; a
+      // lock is neither. And never the error colour.
+      final lock = tester.widget<Icon>(find.byKey(kAccessDeniedLockKey));
+      expect(lock.icon, Icons.lock_outline);
+      expect(lock.color, scheme.onSurfaceVariant);
+
+      expect(find.byIcon(Icons.error), findsNothing);
+      expect(find.byIcon(Icons.error_outline), findsNothing);
+      expect(find.byIcon(Icons.warning_amber), findsNothing);
+
+      // Nothing on the prompt is painted in the error colour.
+      final texts = tester.widgetList<Text>(find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(Text),
+      ));
+      for (final text in texts) {
+        expect(text.style?.color, isNot(scheme.error));
+      }
+    });
+
+    testWidgets('never renders the developer exception string', (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      // `AccessDenied.toString()` is a developer string; the prompt's copy is
+      // the operator's.
+      expect(find.text(_denial.toString()), findsNothing);
+      final texts = tester.widgetList<Text>(find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(Text),
+      ));
+      for (final text in texts) {
+        expect(text.data ?? '', isNot(contains('AccessDenied')));
+        expect(text.data ?? '', isNot(contains('Exception')));
+      }
+    });
+
+    testWidgets('offers exactly a sign-in and a dismissal — no retry',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      final bar = tester.widget<PaneActionBar>(find.byType(PaneActionBar));
+      expect(bar.actions, hasLength(2),
+          reason: 'a sign-in and a dismissal, and nothing else');
+      expect(
+        bar.actions.map((a) => a.buttonKey).toSet(),
+        {kAccessDeniedDismissKey, kAccessDeniedSignInKey},
+      );
+
+      // There is nobody in this build to request access from, and a retry
+      // affordance would re-issue a write the operator did not ask for twice.
+      for (final label in const ['Retry', 'Try again', 'Request access']) {
+        expect(find.text(label), findsNothing);
+      }
+      // The header's close button is off, so dismissal has exactly one home.
+      expect(
+        find.descendant(
+          of: find.byType(Dialog),
+          matching: find.byTooltip('Close'),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('says plainly that the change did not happen', (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessDeniedNoReplayNote), findsOneWidget);
+      // An operator who signs in and walks away believing the jog happened is
+      // the failure this sentence prevents, so it has to say both halves.
+      expect(kAccessDeniedNoReplayNote, contains('Nothing was changed'));
+    });
+
+    testWidgets('the no-replay line wraps rather than ellipsising',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      _expectWrapsLegibly(
+          tester, kAccessDeniedNoReplayKey, kAccessDeniedNoReplayNote);
+    });
+
+    testWidgets('dismissing returns to the page with nothing changed',
+        (tester) async {
+      final opener = _CountingOpener();
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: opener.call,
+        child: const Text('page-body'),
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kAccessDeniedDismissKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsNothing);
+      expect(find.text('page-body'), findsOneWidget);
+      expect(opener.calls, 0);
+    });
+
+    testWidgets('the sign-in action opens the sign-in prompt and dismisses',
+        (tester) async {
+      final opener = _CountingOpener();
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: opener.call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kAccessDeniedSignInKey));
+      await tester.pumpAndSettle();
+
+      expect(opener.calls, 1);
+      expect(find.byKey(kAccessDeniedBodyKey), findsNothing);
+    });
+  });
+
+  group('one action, one prompt', () {
+    testWidgets('four denials from one struct write show exactly one prompt',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      // One tap on a struct write: the guard produces one denial per member
+      // that moved. The operator pressed one button and must see one prompt.
+      denials
+        ..add(_denial)
+        ..add(_denial)
+        ..add(_denial)
+        ..add(_denial);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.byType(Dialog), findsOneWidget);
+    });
+
+    testWidgets('a later refusal shows a prompt again once the first is gone',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessDeniedDismissKey));
+      await tester.pumpAndSettle();
+
+      // Dropping while showing must not latch: the next refusal is a new
+      // action and gets its own prompt, naming its own item.
+      denials.add(_otherDenial);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.text(kAccessDeniedItemNote(_otherDenial.itemKey)),
+          findsOneWidget);
+    });
+
+    testWidgets('a nested prompt does not produce a second prompt',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: _CountingOpener().call,
+        child: AccessDeniedPrompt(
+          openSignIn: _CountingOpener().call,
+          child: const Text('inner-page'),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessDeniedPrompt), findsNWidgets(2));
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.byType(Dialog), findsOneWidget);
+    });
+  });
+
+  group('the never-replay rule', () {
+    testWidgets(
+        'the guarded interface is called exactly once across denial, sign-in '
+        'and dismiss', (tester) async {
+      // A real GuardedStateMan over a recording inner, with a binding that
+      // refuses the key. Nothing holds the attempted write, so the only way
+      // this count can reach two is if something re-issued it.
+      final inner = _RecordingStateMan();
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+      final guard = _CountingStateMan(GuardedStateMan(
+        inner: inner,
+        policy: AccessPolicy(tagBindings: (key, member) => AccessGroup.force),
+        session: _anonymous,
+        audit: const NullAuditSink(),
+        station: 'test-station',
+        onDenied: denials.add,
+      ));
+
+      final opener = _CountingOpener();
+      await tester.pumpWidget(_promptHost(
+        denials: denials.stream,
+        openSignIn: opener.call,
+      ));
+      await tester.pumpAndSettle();
+
+      // The refused write, exactly as an asset issues it.
+      await expectLater(
+        guard.write('ST101.CN01.p_cmd_JogFwd',
+            DynamicValue(value: true, typeId: NodeId.boolean)),
+        throwsA(isA<AccessDenied>()),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+
+      await tester.tap(find.byKey(kAccessDeniedSignInKey));
+      await tester.pumpAndSettle();
+      expect(opener.calls, 1);
+
+      expect(guard.writes, 1,
+          reason: 'signing in must not repeat the refused write');
+      expect(inner.writes, isEmpty,
+          reason: 'the refused write reached nothing');
+    });
+  });
+
+  group('the source', () {
+    test('names no raw Material colour constant', () {
+      final source =
+          File('lib/widgets/access_denied_prompt.dart').readAsStringSync();
+      // Deliberately not a bare `Colors\.` — that also matches
+      // `HmiStateColors.`, and a grep that cannot fail is not a gate.
+      final raw = RegExp(r'(^|[^A-Za-z])Colors\.', multiLine: true);
+      expect(raw.allMatches(source).map((m) => m.group(0)).toList(), isEmpty);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 2 — the mount, and the residual
+  // -------------------------------------------------------------------------
+
+  group('mounted in the shell', () {
+    setUp(_registerAppMenu);
+    tearDown(() => RouteRegistry().menuItems.clear());
+
+    testWidgets('BaseScaffold mounts the prompt exactly once', (tester) async {
+      await tester.pumpWidget(_shell(
+        body: const Text('home-body'),
+        overrides: const [],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessDeniedPrompt), findsOneWidget);
+      expect(find.byKey(kAccessDeniedBodyKey), findsNothing);
+    });
+
+    testWidgets('the mount adds no render object to the page', (tester) async {
+      await tester.pumpWidget(_shell(
+        body: const SizedBox.expand(child: Text('home-body')),
+        overrides: const [],
+      ));
+      await tester.pumpAndSettle();
+
+      // The zero-pixel budget, mechanically: the prompt's nearest render
+      // object IS the body's, so there is nothing in the layout for any
+      // Phase 1 or Phase 2 golden to shift against.
+      expect(
+        tester.renderObject(find.byType(AccessDeniedPrompt)),
+        same(tester.renderObject(find.byType(SizedBox).first)),
+      );
+    });
+
+    testWidgets('a nested BaseScaffold shows one prompt for one denial',
+        (tester) async {
+      final denials = StreamController<AccessDenied>.broadcast();
+      addTearDown(denials.close);
+
+      await tester.pumpWidget(_shell(
+        body: const BaseScaffold(title: 'Inner', body: Text('inner-body')),
+        overrides: [accessDenialsProvider.overrideWithValue(denials.stream)],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessDeniedPrompt), findsNWidgets(2));
+
+      denials.add(_denial);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.byType(Dialog), findsOneWidget);
+    });
+  });
+
+  group('end to end, through a real asset', () {
+    setUp(_registerAppMenu);
+    tearDown(() => RouteRegistry().menuItems.clear());
+
+    testWidgets(
+        'a refused start/stop press shows the prompt even though the call '
+        'site swallows the exception', (tester) async {
+      final inner = _RecordingStateMan()..push('fb/running', false);
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: SizedBox(
+            width: 320,
+            height: 80,
+            child: StartStopPillButton(StartStopPillButtonConfig(
+              runKey: 'cmd/run',
+              stopKey: 'cmd/stop',
+              runningKey: 'fb/running',
+              stoppedKey: 'fb/stopped',
+            )),
+          ),
+        ),
+        overrides: [_guardedStateMan(inner)],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(StartStopPillButton).first);
+      await tester.pumpAndSettle();
+
+      // The prompt is on screen and the write reached nothing.
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(
+          find.text(kAccessDeniedGroupNote(AccessGroup.force)), findsOneWidget);
+      expect(inner.writes, isEmpty);
+
+      // And this is the ordering guarantee, stated as an assertion rather than
+      // a comment: `start_stop_button.dart:184` catches every exception and
+      // logs it, so nothing here caught `AccessDenied` on the prompt's behalf.
+      // The prompt appeared because the guard published to
+      // `accessDenialsProvider` BEFORE it threw.
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        'a refused number write shows the prompt and the exception still '
+        'escapes the call site uncaught', (tester) async {
+      final inner = _RecordingStateMan()..push('ST101.CN01.p_par_Speed', 12.0);
+      final config =
+          NumberConfig(key: 'ST101.CN01.p_par_Speed', writable: true);
+
+      await tester.pumpWidget(_shell(
+        body: Center(
+          child: SizedBox(
+            width: 200,
+            height: 80,
+            child: NumberWidget(config: config),
+          ),
+        ),
+        overrides: [_guardedStateMan(inner)],
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(NumberWidget));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField).first, '42');
+      await tester.pumpAndSettle();
+
+      // `number.dart:473` awaits the write with no `try` anywhere above it, so
+      // the refusal leaves the call site as an unhandled **asynchronous**
+      // error. `tester.takeException()` cannot see that: it returns errors the
+      // Flutter framework reported (build, layout, paint), whereas a zone
+      // error from an `onPressed` future fails the test the instant it
+      // arrives. Catching it in a guarded zone is what makes the escape an
+      // assertion instead of a red test.
+      Object? escaped;
+      await runZonedGuarded(() async {
+        await tester.tap(find.text('Write'));
+        await tester.pumpAndSettle();
+      }, (error, stack) => escaped = error);
+
+      expect(escaped, isA<AccessDenied>(),
+          reason: 'the residual kUncaughtAccessDeniedWriteSites counts');
+      expect(tester.takeException(), isNull,
+          reason: 'nothing reported it to the framework either');
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(inner.writes, isEmpty);
+    });
+  });
+
+  group('the residual, counted', () {
+    test('kUncaughtAccessDeniedWriteSites matches the tree', () {
+      final sites = _stateManWriteSites();
+
+      expect(sites, isNotEmpty,
+          reason: 'a walk that finds nothing would pass vacuously');
+      expect(
+        sites.length,
+        kUncaughtAccessDeniedWriteSites,
+        reason: 'the doc comment beside the constant carries the command that '
+            'produced it; re-run it and update both together',
+      );
+    });
+
+    test('not one of those call sites handles AccessDenied', () {
+      // The constant claims these sites do not handle the refusal. That claim
+      // is checked, not assumed: no file holding one of them mentions
+      // `AccessDenied` at all, so no `on AccessDenied` clause and no
+      // `catchError` that inspects the type can be hiding in any of them.
+      final files = _stateManWriteSites().map((s) => s.file).toSet();
+      final handling = <String>[
+        for (final file in files)
+          if (File(file).readAsStringSync().contains('AccessDenied')) file,
+      ];
+      expect(handling, isEmpty,
+          reason: 'a site that now handles AccessDenied must come off the '
+              'count: lower kUncaughtAccessDeniedWriteSites and say so');
+    });
+
+    test('every .write( receiver in lib/ is classified', () {
+      // Both directions, the 03-06 idiom. A renamed receiver would otherwise
+      // shrink the count silently, and a new non-StateMan `.write(` would
+      // inflate it.
+      final unclassified = <String>[];
+      for (final file in _libDartFiles()) {
+        final source = _stripComments(File(file).readAsStringSync());
+        for (final match in _writeCall.allMatches(source)) {
+          final receiver = match.group(1)!;
+          if (_kStateManWriteReceivers.contains(receiver)) continue;
+          if (_kOtherWriteReceivers.contains(receiver)) continue;
+          unclassified.add('$file: $receiver.write(');
+        }
+      }
+      expect(unclassified, isEmpty,
+          reason: 'add the receiver to _kStateManWriteReceivers or to '
+              '_kOtherWriteReceivers, and re-derive the count');
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The count's derivation
+// ---------------------------------------------------------------------------
+
+/// The receivers that mean a `StateMan`. Every one of them is a variable
+/// holding the value of `ref.read(stateManProvider.future)` or the
+/// `stateMan` a pane builder hands down.
+const Set<String> _kStateManWriteReceivers = {
+  'client',
+  'stateMan',
+  'sm',
+  'widget.stateMan',
+};
+
+/// Every other `.write(` receiver in `lib/`: string buffers and the secure
+/// store. Listed rather than filtered by a pattern so a new one fails the
+/// classification test instead of quietly joining either side.
+const Set<String> _kOtherWriteReceivers = {
+  'buffer',
+  'builder',
+  'contentBuffer',
+  'request',
+  'secureStorage',
+  '_storage',
+  '_legacy',
+};
+
+final RegExp _writeCall = RegExp(r'([A-Za-z_][A-Za-z0-9_.]*)\.write\(');
+
+/// One `StateMan` write call site: the file it is in and the receiver.
+class _WriteSite {
+  const _WriteSite(this.file, this.receiver);
+
+  final String file;
+  final String receiver;
+}
+
+List<String> _libDartFiles() => Directory('lib')
+    .listSync(recursive: true)
+    .whereType<File>()
+    .map((f) => f.path)
+    .where((p) => p.endsWith('.dart'))
+    .toList()
+  ..sort();
+
+/// Drops comment lines, so a `stateMan.write(...)` quoted inside a doc comment
+/// is not counted as a call site. `advantys_stb.dart` has exactly one.
+String _stripComments(String source) {
+  final withoutBlocks =
+      source.replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '');
+  return withoutBlocks
+      .split('\n')
+      .where((line) => !line.trimLeft().startsWith('//'))
+      .join('\n');
+}
+
+List<_WriteSite> _stateManWriteSites() {
+  final sites = <_WriteSite>[];
+  for (final file in _libDartFiles()) {
+    final source = _stripComments(File(file).readAsStringSync());
+    for (final match in _writeCall.allMatches(source)) {
+      final receiver = match.group(1)!;
+      if (!_kStateManWriteReceivers.contains(receiver)) continue;
+      sites.add(_WriteSite(file, receiver));
+    }
+  }
+  return sites;
+}
+
+// ---------------------------------------------------------------------------
+// Harnesses
+// ---------------------------------------------------------------------------
+
+/// A `StateMan` that answers subscriptions from a map and records writes.
+class _RecordingStateMan implements StateMan {
+  final Map<String, BehaviorSubject<DynamicValue>> _streams = {};
+  final List<String> writes = [];
+
+  void push(String key, Object value) {
+    _streams
+        .putIfAbsent(key, () => BehaviorSubject<DynamicValue>())
+        .add(DynamicValue(
+          value: value,
+          typeId: value is bool ? NodeId.boolean : NodeId.double,
+        ));
+  }
+
+  @override
+  Future<Stream<DynamicValue>> subscribe(String key) async =>
+      _streams.putIfAbsent(key, () => BehaviorSubject<DynamicValue>()).stream;
+
+  @override
+  Future<DynamicValue> read(String key) async =>
+      _streams[key]?.valueOrNull ??
+      DynamicValue(value: 0.0, typeId: NodeId.double);
+
+  /// The guard resolves before it checks, and hands the call straight on when
+  /// this throws — so a fake that left it to `noSuchMethod` would silently
+  /// turn every denial in this file into a permitted write.
+  @override
+  String resolveKey(String key) => key;
+
+  @override
+  Future<void> write(String key, DynamicValue value) async => writes.add(key);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError(
+        '_RecordingStateMan: ${invocation.memberName} not in test scope',
+      );
+}
+
+/// Counts calls to the guarded interface, so the never-replay rule is an
+/// assertion about what was invoked rather than about what was written.
+class _CountingStateMan implements StateMan {
+  _CountingStateMan(this._guard);
+
+  final StateMan _guard;
+  int writes = 0;
+
+  @override
+  Future<void> write(String key, DynamicValue value) {
+    writes++;
+    return _guard.write(key, value);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('_CountingStateMan: not in test scope');
+}
+
+/// `stateManProvider` answering a real `GuardedStateMan` that refuses every
+/// tag and publishes each refusal the way `lib/providers/state_man.dart` does.
+Override _guardedStateMan(_RecordingStateMan inner) =>
+    stateManProvider.overrideWith((ref) async => GuardedStateMan(
+          inner: inner,
+          policy: AccessPolicy(tagBindings: (key, member) => AccessGroup.force),
+          session: () => _anonymous(),
+          audit: const NullAuditSink(),
+          station: 'test-station',
+          onDenied: (denial) => reportAccessDenial(ref, denial),
+        ));
+
+/// The top-level menu `BaseScaffold` renders its navigation bar from.
+void _registerAppMenu() {
+  final registry = RouteRegistry();
+  registry.menuItems.clear();
+  registry
+      .addMenuItem(const MenuItem(label: 'Home', path: '/', icon: Icons.home));
+  // Two, not one: `NavigationBar` asserts `destinations.length >= 2`.
+  registry.addMenuItem(const MenuItem(
+      label: 'Alarm View', path: '/alarm-view', icon: Icons.alarm));
+}
+
+/// A one-route Beamer shell around a real `BaseScaffold`.
+///
+/// The Beamer wrapper is not optional: `BaseScaffold` calls
+/// `context.currentBeamLocation`, so it cannot be pumped without a router
+/// above it.
+Widget _shell({required Widget body, required List<Override> overrides}) {
+  final delegate = BeamerDelegate(
+    locationBuilder: RoutesLocationBuilder(routes: {
+      '/': (context, state, data) => BeamPage(
+            key: const ValueKey('/'),
+            title: 'Home',
+            child: BaseScaffold(title: 'Home', body: body),
+          ),
+    }).call,
+  );
+
+  return ProviderScope(
+    overrides: [..._accessOverrides(), ...overrides],
+    child: BeamerProvider(
+      routerDelegate: delegate,
+      child: MaterialApp.router(
+        routerDelegate: delegate,
+        routeInformationParser: BeamerParser(),
+      ),
+    ),
+  );
+}
