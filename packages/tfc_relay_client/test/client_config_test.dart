@@ -199,6 +199,125 @@ void main() {
     });
   });
 
+  group('the hold-to-run cadence and the deadman ratio', () {
+    test("the default hold cadence and ratio multiply out to the plant's one "
+        'second', () {
+      final config = ClientConfig();
+
+      expect(config.holdPulsePeriod, const Duration(milliseconds: 100),
+          reason: 'the deadman is fed at 10 Hz; a slower cadence spends the '
+              "PLC's tolerance budget on fewer pulses and a faster one buys "
+              'nothing the operator can feel');
+      expect(config.holdMissedPulsesBeforeStop, 10);
+      // The product, not the constant. A change to either factor moves the
+      // number the PLC's TON preset was chosen against, and the whole point of
+      // spelling the deadman as a ratio is that the two cannot drift apart
+      // silently.
+      expect(config.holdPulsePeriod * config.holdMissedPulsesBeforeStop,
+          const Duration(seconds: 1),
+          reason: 'the cadence and the ratio no longer multiply out to the one '
+              'second the plant was configured for, so the panel and the PLC '
+              'now disagree about how long a machine may coast after the '
+              'operator lets go — and only the PLC stops it');
+      expect(config.holdDeadman, const Duration(seconds: 1),
+          reason: 'holdDeadman is the derived answer to "how long until the '
+              'machine stops"; a value other than the product means it is '
+              'being stored somewhere instead of computed, which is how two '
+              'numbers that must agree stop agreeing');
+    });
+
+    test('the default config constructs, because a cadence is not a deadline',
+        () {
+      // The named regression case for the phase's most likely mechanical
+      // mistake (05-RESEARCH "Traps for the executor" #1). `_atLeastFloor`
+      // rejects anything under `deadlineFloor`, which defaults to 500 ms; the
+      // hold cadence is 100 ms, one fifth of it.
+      final config =
+          ClientConfig(holdPulsePeriod: const Duration(milliseconds: 100));
+
+      expect(config.holdPulsePeriod, const Duration(milliseconds: 100),
+          reason: 'a 100 ms cadence against the default 500 ms deadline floor '
+              'threw at construction, which means the hold cadence was routed '
+              'through the deadline-floor validator. A cadence is not a '
+              'deadline: nothing waits on one pulse, and a dropped one costs '
+              'nothing the next one 100 ms later does not fix. Routed that '
+              'way, `ClientConfig()` with no arguments throws — so the panel '
+              'does not come up at all, and every screen in the plant is dark '
+              'at shift start');
+      expect(config.deadlineFloor, const Duration(milliseconds: 500),
+          reason: 'the floor is still the researched 500 ms, so the case above '
+              'was judged against the default and not against a floor the case '
+              'quietly lowered for itself');
+    });
+
+    test('a zero cadence is refused by name', () {
+      expect(
+        () => ClientConfig(holdPulsePeriod: Duration.zero),
+        throwsA(isA<ArgumentError>().having(
+          (e) => e.message.toString(),
+          'message',
+          allOf(contains('holdPulsePeriod'), contains('0 ms')),
+        )),
+        reason: 'a zero cadence is a timer that fires as fast as the event '
+            'loop will let it, which floods the socket the deadman is fed '
+            'over and starves everything else on the panel',
+      );
+    });
+
+    test('a negative cadence is refused by name', () {
+      expect(
+        () => ClientConfig(holdPulsePeriod: const Duration(milliseconds: -100)),
+        throwsA(isA<ArgumentError>().having(
+          (e) => e.message.toString(),
+          'message',
+          allOf(contains('holdPulsePeriod'), contains('-100 ms')),
+        )),
+        reason: 'a negative cadence disables the feed, so the button lights '
+            'and the machine never jogs',
+      );
+    });
+
+    test('fewer than three missed pulses inverts the tolerance decision', () {
+      expect(
+        () => ClientConfig(holdMissedPulsesBeforeStop: 2),
+        throwsA(isA<ArgumentError>().having(
+          (e) => e.message.toString(),
+          'message',
+          allOf(contains('holdMissedPulsesBeforeStop'), contains('2')),
+        )),
+        reason: 'at two missed pulses a single Wi-Fi retransmit stops the '
+            'machine mid-jog. The plant chose the opposite: up to a second of '
+            'coasting is accepted so that a panel hiccup does not drop the '
+            'output, and a ratio under three turns that decision into its '
+            'opposite while still looking like a safety tightening',
+      );
+    });
+
+    test('exactly three missed pulses is allowed', () {
+      final config = ClientConfig(holdMissedPulsesBeforeStop: 3);
+
+      expect(config.holdMissedPulsesBeforeStop, 3,
+          reason: 'three is the documented bound, and a bound that refuses its '
+              'own minimum is a bound nobody can set');
+      expect(config.holdDeadman, const Duration(milliseconds: 300),
+          reason: 'the deadman follows the ratio it was given rather than the '
+              'default it was not, or it is not derived at all');
+    });
+
+    test('the deadman follows an injected cadence rather than a constant', () {
+      final config = ClientConfig(
+        holdPulsePeriod: const Duration(milliseconds: 50),
+        holdMissedPulsesBeforeStop: 20,
+      );
+
+      expect(config.holdDeadman, const Duration(seconds: 1),
+          reason: 'a panel on a slow link is fed at a cadence of its own, and '
+              'the deadman it reports has to be that cadence times that ratio '
+              '— a hard-coded second would tell the integrator the wrong '
+              'number for every panel that is not on the default');
+    });
+  });
+
   group('the freshness deadline cannot learn a transport period', () {
     test('no field or parameter of the config is derived from the server '
         'cadence', () {
