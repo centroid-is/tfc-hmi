@@ -11,6 +11,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/core/audit_trail_grouping.dart';
+import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
 /// The instant the rows in this file are dated from.
@@ -205,6 +206,191 @@ void main() {
       expect(actions.map((action) => action.actionId), ['A'],
           reason: 'the totals map is a lookup, never a source of actions - a '
               'group with no visible rows has nothing to render');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // strictestGroupName
+  // -------------------------------------------------------------------------
+
+  group('strictestGroupName', () {
+    test(
+        'returns the largest AccessGroup index, not the first or the '
+        'alphabetical one', () {
+      expect(strictestGroupName(['configure', 'users', 'operate']), 'users',
+          reason: 'users is last in the enum and therefore the strictest; '
+              'configure is first in the list and operate is first '
+              'alphabetically, so both wrong answers are available');
+    });
+
+    test('a single recognised name is its own strictest', () {
+      expect(strictestGroupName(['operate']), 'operate');
+    });
+
+    test('no names at all is the empty string', () {
+      expect(strictestGroupName(const []), '');
+    });
+
+    test('all-empty names stay empty rather than defaulting to operate', () {
+      expect(strictestGroupName(['', '']), '',
+          reason: 'auth rows carry an empty group_required. Reporting operate '
+              'for an all-auth action would be an invention - the action '
+              'required no group at all');
+    });
+
+    test('every pair of AccessGroup values ranks by declaration index', () {
+      // Driven from the enum rather than a hand-typed table: a table here would
+      // be a second ranking to keep in step, which is the exact defect
+      // guarded_state_man.dart's _strictest comment warns about.
+      for (final a in AccessGroup.values) {
+        for (final b in AccessGroup.values) {
+          final expected = a.index > b.index ? a.name : b.name;
+          expect(strictestGroupName([a.name, b.name]), expected,
+              reason: 'strictest of ${a.name} and ${b.name} is the one with '
+                  'the larger index, and AccessGroup is declared in '
+                  'increasing privilege');
+        }
+      }
+    });
+
+    test('an unknown group name loses to a known one but is not a crash', () {
+      expect(strictestGroupName(['device', 'quantum']), 'device',
+          reason: 'group_required is stored text and a station on a newer '
+              'build may have written a name this one has never heard of. '
+              'AccessGroup.byName answers null for it, and an unrankable name '
+              'must not outrank a rankable one');
+    });
+
+    test('an all-unknown action is reported verbatim, never dropped', () {
+      expect(strictestGroupName(['quantum']), 'quantum',
+          reason: 'the operator sees the string the database actually holds. '
+              'Substituting operate here would default an unrecognised '
+              'permission downward, which is what byName returning null '
+              'exists to prevent');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // AuditAction.requiredGroupLabel
+  // -------------------------------------------------------------------------
+
+  group('AuditAction.requiredGroupLabel', () {
+    test("is the strictest across the children, not the lead row's value", () {
+      // One human action may span more than one call - dynamic_value_diff.dart
+      // says so in as many words about a recipe apply - so the children's
+      // group_required strings can genuinely differ.
+      final actions = groupAuditRows([
+        row(actionId: 'A', groupRequired: 'operate'),
+        row(actionId: 'A', groupRequired: 'administer'),
+        row(actionId: 'A', groupRequired: 'setpoints'),
+      ]);
+
+      expect(actions.single.requiredGroupLabel, 'administer',
+          reason: 'reading it off rows.first would report operate and the '
+              'parent would under-state what the action needed');
+    });
+
+    test('an all-auth action requires nothing', () {
+      final actions = groupAuditRows([
+        row(
+            actionId: 'A',
+            surface: 'auth',
+            itemKey: 'login',
+            groupRequired: ''),
+        row(
+            actionId: 'A',
+            surface: 'auth',
+            itemKey: 'logout',
+            groupRequired: ''),
+      ]);
+
+      expect(actions.single.requiredGroupLabel, '',
+          reason: 'not operate. The row widget renders no permission for it');
+    });
+
+    test('an unknown child group name reaches the parent unchanged', () {
+      final actions = groupAuditRows([
+        row(actionId: 'A', groupRequired: 'quantum'),
+      ]);
+
+      expect(actions.single.requiredGroupLabel, 'quantum');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // isAuthEntry
+  // -------------------------------------------------------------------------
+
+  group('isAuthEntry', () {
+    test(
+        'is true for the auth surface and false for an empty group_required '
+        'on another surface', () {
+      expect(
+          isAuthEntry(row(
+              actionId: 'A',
+              surface: 'auth',
+              itemKey: 'login',
+              groupRequired: '')),
+          isTrue);
+      expect(
+          isAuthEntry(row(
+              actionId: 'B',
+              surface: 'pref',
+              itemKey: 'mcp.enabled',
+              groupRequired: '')),
+          isFalse,
+          reason: "05-01's store selects the auth leg with surface = 'auth' "
+              'and this predicate reads the same column with the same value. '
+              'An earlier draft keyed the store on an empty group_required and '
+              'this on surface; they agree on every row that exists today, so '
+              'nothing would have caught them diverging. An unbound tag write '
+              'also carries an empty group_required, which is the row that '
+              'would have broken first');
+    });
+
+    test('a write row on the tag surface is not an auth row', () {
+      expect(isAuthEntry(row(actionId: 'A')), isFalse);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The known-surface change detector
+  // -------------------------------------------------------------------------
+
+  group('kKnownAuditSurfaces', () {
+    test('names exactly the four surfaces this build knows about', () {
+      expect(kKnownAuditSurfaces, {'tag', 'pref', 'route', 'auth'},
+          reason: 'This is the one written record of the audit surface '
+              'vocabulary, and it is a change-detector rather than a '
+              'whitelist. If you are reading this failure you have added a '
+              'surface. Add it to kKnownAuditSurfaces in '
+              'lib/core/audit_trail_grouping.dart, then re-check that '
+              "AuditEntryLine's default branch still renders a row carrying "
+              'it sanely. Nothing filters on this set, so an unlisted surface '
+              'is displayed rather than dropped - which is why this assertion '
+              'is the only place the change has to surface.');
+    });
+
+    test('an unlisted surface flows through grouping untouched', () {
+      // Phase 6's 'admin' surface, which does not exist in this build.
+      final actions = groupAuditRows([
+        row(
+            actionId: 'A',
+            surface: 'admin',
+            itemKey: 'role.create',
+            groupRequired: 'users'),
+        row(
+            actionId: 'A',
+            surface: 'admin',
+            itemKey: 'role.update',
+            groupRequired: 'users'),
+      ]);
+
+      expect(actions.single.rows.length, 2,
+          reason: 'nothing in this file gates on surface membership, so a row '
+              'from a station running a newer build still renders');
+      expect(actions.single.requiredGroupLabel, 'users');
+      expect(isAuthEntry(actions.single.lead), isFalse);
     });
   });
 }
