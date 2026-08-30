@@ -84,8 +84,62 @@ final Logger _log = Logger();
 /// The provider therefore has **no dependencies**: nothing can invalidate it,
 /// so nothing can rebuild it, so nothing downstream of it rebuilds either.
 /// That is the property, and it is worth the mutable object.
+///
+/// ## Why it kicks the loader
+///
+/// Having no dependencies is what creates the hole the kick below closes. See
+/// the comment at the kick; it is the reason this plan exists.
 @Riverpod(keepAlive: true)
-TagBindingResolver tagBindingResolver(Ref ref) => TagBindingResolver();
+TagBindingResolver tagBindingResolver(Ref ref) {
+  final resolver = TagBindingResolver();
+
+  // The kick. Nothing in the design above makes the load happen, and that is
+  // the hole.
+  //
+  // Every consumer reads *this* provider rather than the loader: the policy
+  // takes a callback onto it, `tagAccessProvider` reads it, and neither
+  // depends on `accessTemplatesProvider`. So without this line a station with
+  // templates created and keys bound comes up with an empty snapshot,
+  // `groupFor` answers null for every one of them, `guarded_state_man.dart`
+  // permits every write, and the panel is byte-identically indistinguishable
+  // from one nobody ever configured — silently, with every test passing.
+  // Worse, the only thing that would have started the load is opening
+  // `/advanced/key-repository`, which is also the only page that surfaces
+  // unbound keys: bindings would have taken effect only for the person looking
+  // at the screen that reports them missing.
+  //
+  // Forced from here rather than from a caller so that no caller can forget
+  // it. The idiom is `state_man.dart`'s `ref.read(collectorProvider.future)` —
+  // an unawaited read whose value nobody wants, whose purpose is that the
+  // provider runs. It is scheduled rather than called inline because this
+  // provider is mid-build and the loader reads it back.
+  //
+  // **One-way on purpose.** The resolver starts the load; the load never
+  // rebuilds the resolver. Making `accessPolicyProvider` depend on the loader
+  // is the obvious alternative and it is the one thing this design forbids: it
+  // would rebuild the policy on every template edit, rebuild
+  // `stateManProvider`, and drop every OPC UA connection on the panel.
+  scheduleMicrotask(() async {
+    try {
+      await ref.read(accessTemplatesProvider.future);
+    } on Object catch (e) {
+      // Swallowed and logged rather than rethrown: a failed template load must
+      // not take down the provider every guard on the panel depends on. What
+      // is left behind is visible — the resolver stays `neverLoaded`.
+      _log.w('Access templates did not load — every bound key is unrestricted '
+          'until they do (state=${resolver.state}): $e');
+    }
+  });
+
+  // And the window before that load lands answers **null**, not "refused".
+  // Failing closed on `neverLoaded` would refuse every write on a panel that
+  // is merely still booting, and refuse them for ever on a station
+  // commissioned without Postgres, where the load can never complete. What is
+  // not acceptable is that the window be indistinguishable from a configured
+  // station, and `resolver.state` is what fixes that: `neverLoaded` and
+  // `loaded`-with-nothing-bound answer identically and are different values.
+  return resolver;
+}
 
 /// The `users`-gated CRUD over both authorization tables, or null when this
 /// station has no database.
