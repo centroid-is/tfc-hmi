@@ -161,21 +161,73 @@ class GuardedStateMan implements StateMan {
       return _inner.write(key, value);
     }
 
+    final session = _session();
+
+    // The diff comes **before** the decision, and that ordering is the whole
+    // of plan 04-04. One conveyor key carries `p_cmd_JogFwd` and
+    // `p_cfg_ManualFreq` through a single whole-struct write (spec §7b), so a
+    // question asked about the key can only ever have one answer for both. The
+    // question asked about the members that moved can have two.
+    final changes = diffDynamicValue(await _baselineOrNull(resolvedKey), value);
+
     // Through `groupForWireSurface`, never `groupForTag`. The wire-surface
     // lookup is what puts the unmapped-surface branch on a real write path;
     // calling the typed method here would quietly delete that branch's only
     // caller.
-    final group = _policy.groupForWireSurface(_surface, resolvedKey);
-    final session = _session();
+    //
+    // ## The fallback, and the hole in it
+    //
+    // A change with a null member is a value with nothing to compare against:
+    // a bare scalar write, an opaque or array value, or a baseline read that
+    // answered null, threw, or missed [baselineTimeout]. The guard then does
+    // not know which members moved, so it falls back to the key-level
+    // question - the template's whole-key row, or null.
+    //
+    // That is **fail-open**, deliberately. The strict reading - require every
+    // group the template names anywhere - would refuse an anonymous jog
+    // because a PLC read was slow, which takes a working control off the floor
+    // for a reason the operator cannot see or fix. Spec §7's asymmetry is
+    // explicit that tags fail open where preferences fail closed, and tap-time
+    // elevation (plan 04-06) resolves from the template synchronously and
+    // needs no baseline at all, so this guard is the backstop rather than the
+    // operator's path.
+    //
+    // The cost, stated plainly: **a setpoint write lands unchecked here when
+    // the baseline read fails.** This is the one way member gating can be
+    // bypassed. Both halves are pinned in
+    // `guarded_state_man_member_test.dart`, group `the no-baseline fallback -
+    // the one way member gating is bypassed`: the restricted member write is
+    // permitted without a baseline, and the same case *is* gated when the
+    // template carries a whole-key row - so the fallback is the key-level
+    // answer, not the absence of one.
+    final memberGroups = <AccessGroup?>[
+      if (changes.isEmpty || changes.any((c) => c.member == null))
+        _policy.groupForWireSurface(_surface, resolvedKey)
+      else
+        for (final change in changes)
+          _policy.groupForWireSurface(_surface, resolvedKey,
+              member: change.member),
+    ];
 
-    // Null means unrestricted. Tags fail **open** - deliberately, and opposite
-    // to `GuardedPreferences`: binding is explicit per key (spec §7b), so a
-    // key nobody has bound has no group by construction rather than by
-    // omission, and a strict default would lock every control on the plant on
-    // the day the guards merge. Do not "fix" this into a fail-closed default.
-    final permitted = group == null || session.can(group);
+    // Null means unrestricted, per member and per key alike. Tags fail
+    // **open** - deliberately, and opposite to `GuardedPreferences`: binding
+    // is explicit per key and per member (spec §7b), so a key nobody has bound
+    // and a member no rule mentions both have no group by construction rather
+    // than by omission, and a strict default would lock every control on the
+    // plant on the day the guards merge. Do not "fix" this into a fail-closed
+    // default.
+    final required = memberGroups.whereType<AccessGroup>().toList();
+    final missing =
+        required.where((group) => !session.can(group)).toList(growable: false);
 
-    final changes = diffDynamicValue(await _baselineOrNull(resolvedKey), value);
+    // On a refusal the prompt must name **one** permission, not a list, so the
+    // strictest missing group is the one reported. On an allow it is the
+    // strictest group the action actually required. Strictness is
+    // `AccessGroup`'s declaration index - the enum is declared in increasing
+    // privilege and is the single ranking; a second table here would be a
+    // second thing to keep in step.
+    final strictestMissing = _strictest(missing);
+    final strictestRequired = _strictest(required);
 
     // One id per write, so every member row of one action correlates and two
     // actions never collide.
@@ -183,7 +235,7 @@ class GuardedStateMan implements StateMan {
     final at = DateTime.now();
     final who = session.user?.username ?? _anonymousWho;
 
-    if (!permitted) {
+    if (strictestMissing != null) {
       await _recordAll(auditRecordsForChanges(
         // No suppression on this path, ever. See [_denialChanges].
         changes: _denialChanges(changes, value),
@@ -193,14 +245,22 @@ class GuardedStateMan implements StateMan {
         roleName: session.roleName,
         surface: _surface,
         itemKey: resolvedKey,
-        // Non-null here: `permitted` is true whenever `group` is null, so
-        // reaching this branch already means a group was bound.
-        groupRequired: group.name,
+        // One string for the whole row set, because that is
+        // `auditRecordsForChanges`' shape: 03-02 owns it and 03-05's
+        // `GuardedPreferences` shares it, so threading a per-change group
+        // through from here would ripple into a guard this phase has no
+        // reason to touch. The rows therefore carry the strictest group the
+        // action required, and the `member` column plus the bound template
+        // answer the finer question of what each individual member needed.
+        // A stated limitation, not a claim of completeness - if a Phase 5
+        // filter needs per-member groups, the change belongs in
+        // `dynamic_value_diff.dart`.
+        groupRequired: strictestMissing.name,
         allowed: false,
         actionId: actionId,
       ));
 
-      final denial = AccessDenied(resolvedKey, group);
+      final denial = AccessDenied(resolvedKey, strictestMissing);
       try {
         _onDenied?.call(denial);
       } on Object catch (error, stack) {
@@ -226,14 +286,30 @@ class GuardedStateMan implements StateMan {
       roleName: session.roleName,
       surface: _surface,
       itemKey: resolvedKey,
-      // An unbound key carries an empty `groupRequired`, matching the auth
-      // rows' convention for "not gated on a group".
-      groupRequired: group?.name ?? '',
+      // An unbound key - and a write that moved only members no rule
+      // mentions - carries an empty `groupRequired`, matching the auth rows'
+      // convention for "not gated on a group". Otherwise the strictest group
+      // the action required, for the reason spelled out on the deny path.
+      groupRequired: strictestRequired?.name ?? '',
       allowed: true,
       actionId: actionId,
     ));
 
     return _inner.write(key, value);
+  }
+
+  /// The most privileged of [groups], or null when there are none.
+  ///
+  /// Ranked by `AccessGroup`'s declaration index, which is declared in
+  /// increasing privilege. Deliberately not a second ranking table: two
+  /// orderings of the same enum is a defect waiting for somebody to add a
+  /// group to one of them.
+  static AccessGroup? _strictest(Iterable<AccessGroup> groups) {
+    AccessGroup? strictest;
+    for (final group in groups) {
+      if (strictest == null || group.index > strictest.index) strictest = group;
+    }
+    return strictest;
   }
 
   /// The change list a **refusal** records, which is never empty.
