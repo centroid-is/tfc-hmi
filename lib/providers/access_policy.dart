@@ -116,7 +116,7 @@ void reportAccessDenial(Ref ref, AccessDenied denial) {
 /// | `lib/providers/page_manager.dart` | the default page layout, seeded **unawaited** by `PageManager.load()` |
 /// | `lib/providers/alarm.dart` | the empty `alarm_man_config` `AlarmMan.create` would otherwise write |
 /// | `lib/page_creator/assets/recipes.dart` | the empty recipe list written on the **read** path, when an asset is opened |
-/// | `lib/providers/collector.dart` | the default `collector_config` — **owed** |
+/// | `lib/providers/collector.dart` | the default `collector_config`, and the carry-over of a config still only on the device |
 /// | `lib/providers/mcp_bridge.dart` | the config migration's removal of the stale `mcp.config` row — **owed** |
 const List<String> kSystemWriteCallSites = [
   'lib/providers/preferences.dart',
@@ -124,10 +124,6 @@ const List<String> kSystemWriteCallSites = [
   'lib/providers/page_manager.dart',
   'lib/providers/alarm.dart',
   'lib/page_creator/assets/recipes.dart',
-  // TODO(03-09): `collectorProvider` writes its default straight to
-  // `SharedPreferencesAsync`, so it does not pass a guard at all today. Plan
-  // 03-09 owns the file and decides whether it moves onto the guarded store
-  // and through this path, or stays device-local by design.
   'lib/providers/collector.dart',
   // TODO(03-09): `mcpConfigMigrationProvider` removes the stale `mcp.config`
   // row from the **shared** store at boot, with nobody signed in, against an
@@ -144,7 +140,6 @@ const List<String> kSystemWriteCallSites = [
 /// failing today, and closing one is a two-line edit here that the test then
 /// enforces. Plan 03-11's gate catches the mismatch if neither happens.
 const List<String> kSystemWriteCallSitesOwed = [
-  'lib/providers/collector.dart',
   'lib/providers/mcp_bridge.dart',
 ];
 
