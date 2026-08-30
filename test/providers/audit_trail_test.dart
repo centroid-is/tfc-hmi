@@ -308,15 +308,30 @@ void main() {
   });
 
   group('auditTrailEntriesProvider — grouped results', () {
-    test('rows come back grouped by actionId', () async {
-      await seed(at: _now, itemKey: 'a', actionId: 'one');
-      await seed(at: _now, itemKey: 'b', actionId: 'one');
-      await seed(at: _now, itemKey: 'c', actionId: 'two');
+    test('rows come back grouped by actionId, newest action first', () async {
+      // Another station's row lands between the two members of `one`, which is
+      // routine on a site where several stations share one database. The
+      // grouping is map-based for exactly this: adjacency grouping would split
+      // `one` in two and neither half would say so.
+      await seed(
+          at: _now.subtract(const Duration(hours: 1)),
+          itemKey: 'a',
+          actionId: 'one');
+      await seed(
+          at: _now.subtract(const Duration(hours: 2)),
+          itemKey: 'b',
+          actionId: 'two');
+      await seed(
+          at: _now.subtract(const Duration(hours: 3)),
+          itemKey: 'c',
+          actionId: 'one');
 
       final result =
           await wired().read(auditTrailEntriesProvider(defaultQuery()).future);
 
-      expect(result!.actions.map((a) => a.actionId), ['one', 'two']);
+      final List<AuditAction> actions = result!.actions;
+      expect(actions.map((a) => a.actionId), ['one', 'two']);
+      expect(actions.first.rows, hasLength(2));
       expect(result.rowCount, 3,
           reason: 'rowCount is the pre-grouping row count — what the LIMIT '
               'applied to, not what the page draws.');
