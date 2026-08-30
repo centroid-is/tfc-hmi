@@ -1,7 +1,7 @@
 /// One golden: the history view, open to a session holding nothing, with the
 /// delete control **visible and enabled**.
 ///
-/// `history_view_locked_delete.png` — the requirement "no control is ever
+/// `history_view_delete_stays_live.png` — the requirement "no control is ever
 /// greyed and inert" made visible rather than only asserted. Plan 03-10 gated
 /// the two deletes on `configure` at the *store*, not at the widget: the
 /// button stays live for an anonymous session, and pressing through the
@@ -344,7 +344,7 @@ void main() {
 
         await expectLater(
           find.byType(MaterialApp),
-          matchesGoldenFile('goldens/history_view_locked_delete.png'),
+          matchesGoldenFile('goldens/history_view_delete_stays_live.png'),
         );
       });
     });
