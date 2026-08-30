@@ -31,10 +31,13 @@
 /// debounce below, which is one-shot and dies in `dispose`.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:tfc_access/tfc_access.dart';
 
 import '../core/audit_trail_store.dart';
+import 'fuzzy_search_bar.dart';
 
 // ---------------------------------------------------------------------------
 // Copy and keys
@@ -103,6 +106,21 @@ const Key kAuditTrailAuthChipKey = ValueKey<String>('audit-auth-chip');
 
 /// The line carrying [kAuditTrailOperateNote].
 const Key kAuditTrailOperateNoteKey = ValueKey<String>('audit-operate-note');
+
+/// The key-prefix search field.
+const Key kAuditTrailPrefixFieldKey = ValueKey<String>('audit-prefix-field');
+
+/// The author dropdown.
+const Key kAuditTrailWhoDropdownKey = ValueKey<String>('audit-who-dropdown');
+
+/// The all/allowed/denied segmented control.
+const Key kAuditTrailOutcomeKey = ValueKey<String>('audit-outcome-segments');
+
+/// How long the operator has to stop typing before the database is asked.
+///
+/// Long enough that a whole key is typed inside one window, short enough that
+/// the answer feels like it followed the typing.
+const Duration kAuditTrailSearchDebounce = Duration(milliseconds: 300);
 
 /// What one [AccessGroup]'s chip says.
 ///
@@ -271,4 +289,230 @@ class AuditGroupChips extends StatelessWidget {
     ];
     onChanged(filters.copyWith(groupNames: next));
   }
+}
+
+// ---------------------------------------------------------------------------
+// The key-prefix search field
+// ---------------------------------------------------------------------------
+
+/// The `item_key` prefix field, and the only stateful thing in this file.
+///
+/// ## Why this one is debounced when `alarm.dart`'s is not
+///
+/// [FuzzySearchBar.onChanged] fires on every keystroke and is undebounced. That
+/// is right for the alarm page, whose search filters a list already in memory:
+/// six keystrokes there are six cheap passes over a few hundred objects.
+///
+/// Here they are six **database** queries, and each one is potentially over the
+/// whole `audit_entry` table — because CONTEXT's user override rules that this
+/// field escapes the seven-day default: *"the search bar searches the database,
+/// not the loaded page … Searching must answer 'has anyone ever written this
+/// key', not 'did anyone this week'."* `AuditTrailFilters.isSearching` flips
+/// the moment this field is non-empty, and `toQuery` drops the time bound for
+/// it. So the widget's job is to make that escape cheap enough to do per
+/// keystroke without actually doing it per keystroke: one query per pause.
+///
+/// ## The shape of the timer, and the shape that is forbidden
+///
+/// A one-shot `Timer`, cancelled when it is replaced and cancelled again in
+/// `dispose`. That is `history_table_pane.dart`'s `_updateTimer` — the only
+/// debounce this repo has — copied deliberately rather than reinvented.
+///
+/// The repeating form is the forbidden one, and not as a matter of taste: an
+/// always-on repeating timer in this repo's plumbing has broken unrelated
+/// widget tests, and CONTEXT rules there is no timer on this page at all beyond
+/// this debounce. A test reads this file with the comments stripped and fails
+/// if the repeating constructor ever appears in the code.
+///
+/// The trim is not cosmetic. A stray trailing space would make the prefix
+/// `'CN04 '`, whose `LIKE 'CN04 %'` matches nothing — and it would still flip
+/// `isSearching`, so the page would drop its seven-day bound to run a
+/// whole-table scan that cannot hit.
+class AuditPrefixField extends StatefulWidget {
+  const AuditPrefixField({
+    super.key,
+    required this.filters,
+    required this.onChanged,
+    this.searchBarKey,
+    this.debounce = kAuditTrailSearchDebounce,
+  });
+
+  /// The state the parent owns.
+  final AuditTrailFilters filters;
+
+  /// Emitted once per pause, never once per keystroke.
+  final ValueChanged<AuditTrailFilters> onChanged;
+
+  /// The bar's handle on the inner field, so `Clear filters` can empty the box
+  /// through the `GlobalKey<FuzzySearchBarState>.clear()` idiom
+  /// (`alarm.dart:667`, `:879`).
+  final GlobalKey<FuzzySearchBarState>? searchBarKey;
+
+  /// Overridable so a test can drive the window without waiting on the clock.
+  final Duration debounce;
+
+  @override
+  State<AuditPrefixField> createState() => _AuditPrefixFieldState();
+}
+
+class _AuditPrefixFieldState extends State<AuditPrefixField> {
+  /// One-shot. See the class doc for the form this must never take.
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onTyped(String raw) {
+    _debounce?.cancel();
+    _debounce = Timer(widget.debounce, () {
+      if (!mounted) return;
+      widget.onChanged(widget.filters.copyWith(keyPrefix: raw.trim()));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => FuzzySearchBar(
+        key: widget.searchBarKey,
+        hintText: kAuditTrailPrefixHint,
+        onChanged: _onTyped,
+      );
+}
+
+// ---------------------------------------------------------------------------
+// The author dropdown
+// ---------------------------------------------------------------------------
+
+/// The `who` filter: everyone the table has ever recorded, plus `Anyone`.
+///
+/// [options] is a parameter and not a provider read, so the whole bar pumps in
+/// a widget test with no database behind it. In production the page fills it
+/// from `AuditTrailStore.distinctWho`, which is a `SELECT DISTINCT who` over
+/// the whole table with no `LIMIT`: the list of people who have ever touched
+/// one station is small by nature, and a bound there would silently hide the
+/// person somebody is looking for.
+///
+/// A [AuditTrailFilters.who] that is not in [options] falls back to `Anyone`
+/// rather than being passed to `DropdownButton`, which asserts on a value with
+/// no matching item. A filter can outlive the row set that suggested it — the
+/// operator picks a name, then narrows the window past that person's last
+/// write — and the difference between the fallback and no fallback is a stale
+/// filter versus a crash. The filter value itself is left alone; only the
+/// rendering falls back.
+class AuditWhoDropdown extends StatelessWidget {
+  const AuditWhoDropdown({
+    super.key,
+    required this.filters,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final AuditTrailFilters filters;
+
+  /// Every distinct author, sorted. Supplied by the page.
+  final List<String> options;
+
+  final ValueChanged<AuditTrailFilters> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final value = options.contains(filters.who) ? filters.who : null;
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 120, maxWidth: 200),
+      child: DropdownButton<String?>(
+        key: kAuditTrailWhoDropdownKey,
+        value: value,
+        underline: const SizedBox.shrink(),
+        isDense: true,
+        isExpanded: true,
+        icon: Icon(Icons.unfold_more, size: 16, color: scheme.onSurfaceVariant),
+        onChanged: (who) => onChanged(
+          who == null
+              ? filters.copyWith(clearWho: true)
+              : filters.copyWith(who: who),
+        ),
+        items: [
+          // Italic, and first: it is the absence of a filter rather than one of
+          // the people, which is the same distinction `history_view.dart`'s
+          // saved-period dropdown draws with its `None` entry.
+          DropdownMenuItem<String?>(
+            value: null,
+            child: Text(
+              kAuditTrailAnyoneLabel,
+              style: TextStyle(
+                fontSize: 13,
+                fontStyle: FontStyle.italic,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          for (final who in options)
+            DropdownMenuItem<String?>(
+              value: who,
+              child: Text(
+                who,
+                style: const TextStyle(fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The outcome toggle
+// ---------------------------------------------------------------------------
+
+/// What one [AuditOutcomeFilter] segment says.
+String auditOutcomeLabel(AuditOutcomeFilter outcome) => switch (outcome) {
+      AuditOutcomeFilter.any => kAuditTrailOutcomeAnyLabel,
+      AuditOutcomeFilter.allowedOnly => kAuditTrailOutcomeAllowedLabel,
+      AuditOutcomeFilter.deniedOnly => kAuditTrailOutcomeDeniedLabel,
+    };
+
+/// All / Allowed / Denied.
+///
+/// `any` is the default and stays the default: defaulting to denials-only was
+/// offered and rejected, because a page that opens showing only refusals is not
+/// a trail of what the station did. Spec §2's point that a denied write is the
+/// more interesting line is served by making denials *one tap away*, not by
+/// hiding everything else on arrival.
+class AuditOutcomeSegments extends StatelessWidget {
+  const AuditOutcomeSegments({
+    super.key,
+    required this.filters,
+    required this.onChanged,
+  });
+
+  final AuditTrailFilters filters;
+  final ValueChanged<AuditTrailFilters> onChanged;
+
+  @override
+  Widget build(BuildContext context) => SegmentedButton<AuditOutcomeFilter>(
+        key: kAuditTrailOutcomeKey,
+        showSelectedIcon: false,
+        segments: [
+          for (final outcome in AuditOutcomeFilter.values)
+            ButtonSegment<AuditOutcomeFilter>(
+              value: outcome,
+              label: Text(auditOutcomeLabel(outcome)),
+            ),
+        ],
+        selected: {filters.outcome},
+        onSelectionChanged: (selection) =>
+            onChanged(filters.copyWith(outcome: selection.first)),
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: WidgetStatePropertyAll<TextStyle?>(
+            Theme.of(context).textTheme.labelMedium,
+          ),
+        ),
+      );
 }
