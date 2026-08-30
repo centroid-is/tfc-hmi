@@ -521,13 +521,20 @@ void main() {
     testWidgets('two rebuilds that change no filter issue one query, not three',
         (tester) async {
       // T-05-67, which is T-05-21 at the page layer. `clock.now()` called
-      // inside `build` moves `window.end` by microseconds every frame, so
+      // inside `build` moves `window.end` forward on every frame, so
       // `AuditQuery ==` goes false, the autoDispose family swaps instances and
       // the page hits the database on every frame it paints.
       //
-      // Run under the **live** clock on purpose: a frozen clock hides precisely
-      // this defect, because a frozen `now` makes the recomputed query equal to
-      // the old one and the family answers from cache.
+      // **The clock has to be made to move, and simply omitting `withClock` is
+      // not enough.** `testWidgets` runs its body inside `package:fake_async`,
+      // and `FakeAsync` installs its own `clock` — so inside a widget test the
+      // "live" clock is frozen exactly as hard as a `Clock.fixed` one, and it
+      // advances only when a pump is given a duration. A version of this test
+      // that bumped and then called a bare `tester.pump()` passes with
+      // `clock.now()` sitting in the middle of `build`, which was verified by
+      // putting it there. Every rebuild below therefore elapses real fake-time,
+      // which is what gives the defective design a distinct `now` to be caught
+      // with.
       final store = _FakeStore(answer: (_) => _rows(2));
       await _pumpBody(
         tester,
@@ -538,9 +545,9 @@ void main() {
 
       final host = tester.state<_RebuildHostState>(find.byType(_RebuildHost));
       host.bump();
-      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
       host.bump();
-      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
 
       final body =
           tester.state<AuditTrailBodyState>(find.byType(AuditTrailBody));
@@ -557,6 +564,27 @@ void main() {
             'changes no filter must watch the identical value and cost no '
             'round trip (T-05-67)',
       );
+    });
+
+    testWidgets('the window it opened with does not drift as time passes',
+        (tester) async {
+      // The sibling of the test above, stated as the operator sees it: the
+      // seven days on screen are the seven days the page opened with, and they
+      // do not slide out from under a row while it is being read.
+      final store = _FakeStore(answer: (_) => _rows(2));
+      await _pumpBody(
+        tester,
+        store: store,
+        freezeClock: false,
+        child: const _RebuildHost(),
+      );
+      final opened = store.recorded.single.window!.end;
+
+      final host = tester.state<_RebuildHostState>(find.byType(_RebuildHost));
+      host.bump();
+      await tester.pump(const Duration(minutes: 5));
+
+      expect(store.recorded.single.window!.end, opened);
     });
   });
 
