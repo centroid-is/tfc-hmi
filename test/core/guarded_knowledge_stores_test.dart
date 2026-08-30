@@ -14,6 +14,7 @@
 // panel blank with no error anywhere. `PlcCodeIndexExtras` is what keeps them
 // alive, and the "reads pass straight through" group is what says so.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -1140,5 +1141,22 @@ void main() {
       // the same question asked of the real one.
       expect(plcCode, isNot(isA<PlcCodeIndexExtras>()));
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // The source itself
+  // -------------------------------------------------------------------------
+
+  test('the guards forward every member by hand — no catch-all dispatch', () {
+    // A `noSuchMethod` decorator compiles with members missing and answers them
+    // by throwing at runtime, on a plant, the first time somebody calls one.
+    // Forwarding by hand makes the compiler the check instead, so this asserts
+    // nobody quietly bought the shortcut back.
+    final source =
+        File('lib/core/guarded_knowledge_stores.dart').readAsStringSync();
+
+    expect(source, isNot(contains('noSuchMethod')));
+    expect(source, isNot(contains('// ignore:')),
+        reason: 'a missing implementation must not be silenced with an ignore');
   });
 }
