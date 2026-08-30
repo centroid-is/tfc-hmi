@@ -628,6 +628,13 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         // Doc exists with 0 sections — acceptable degradation.
         // User can replace the doc to retry extraction.
       }
+    } on AccessDenied {
+      // A refusal is not a failed upload. Undo the optimistic row and clear the
+      // progress indicator, but leave the message to `AccessDeniedPrompt` — an
+      // "Upload failed: AccessDenied" snackbar reads like a fault.
+      if (!mounted) return;
+      _removePending(name);
+      ref.read(techDocUploadProgressProvider.notifier).state = null;
     } catch (e) {
       // Blob store failed.
       _logger.e('Upload failed for $name: $e');
@@ -652,14 +659,21 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final index = ref.read(techDocIndexProvider);
     if (index == null) return;
 
-    await auditTechDocOperation<void>(
-      action: TechDocAuditAction.rename,
-      user: _currentUser,
-      docId: docId,
-      docName: newName,
-      operation: () => index.renameDocument(docId, newName),
-      logger: _logger,
-    );
+    try {
+      await auditTechDocOperation<void>(
+        action: TechDocAuditAction.rename,
+        user: _currentUser,
+        docId: docId,
+        docName: newName,
+        operation: () => index.renameDocument(docId, newName),
+        logger: _logger,
+      );
+    } on AccessDenied {
+      // The guard has already published the refusal; `AccessDeniedPrompt` is
+      // what says what is missing. Without this arm the exception escapes an
+      // async callback and shows up as an unhandled error instead.
+      return;
+    }
 
     ref.invalidate(dbTechDocsProvider);
   }
@@ -671,7 +685,13 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final index = ref.read(plcCodeIndexProvider);
     if (index == null) return;
 
-    await index.renameAsset(oldAssetKey, newName);
+    try {
+      await index.renameAsset(oldAssetKey, newName);
+    } on AccessDenied {
+      // See `_performRename`. Everything below is the page reacting to a
+      // rename that did not happen.
+      return;
+    }
 
     // Update selection if this asset was selected.
     if (ref.read(selectedPlcAssetProvider) == oldAssetKey) {
@@ -704,22 +724,29 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       return;
     }
 
-    await auditTechDocOperation<void>(
-      action: TechDocAuditAction.replace,
-      user: _currentUser,
-      docId: doc.id,
-      docName: doc.name,
-      operation: () => service.replaceDocument(
+    try {
+      await auditTechDocOperation<void>(
+        action: TechDocAuditAction.replace,
+        user: _currentUser,
         docId: doc.id,
-        pdfBytes: bytes,
-        onProgress: (p) {
-          if (mounted) {
-            ref.read(techDocUploadProgressProvider.notifier).state = p;
-          }
-        },
-      ),
-      logger: _logger,
-    );
+        docName: doc.name,
+        operation: () => service.replaceDocument(
+          docId: doc.id,
+          pdfBytes: bytes,
+          onProgress: (p) {
+            if (mounted) {
+              ref.read(techDocUploadProgressProvider.notifier).state = p;
+            }
+          },
+        ),
+        logger: _logger,
+      );
+    } on AccessDenied {
+      // Clear the progress indicator the replace started, or it spins for ever
+      // on a refusal. `AccessDeniedPrompt` is what explains the refusal.
+      ref.read(techDocUploadProgressProvider.notifier).state = null;
+      return;
+    }
 
     // Update PDF cache with new bytes so viewing is instant.
     ref.read(pdfBytesCacheProvider).put(doc.id, bytes);
