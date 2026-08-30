@@ -31,13 +31,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
+import 'package:tfc/pages/key_repository.dart';
 import 'package:tfc/core/access_template_store.dart';
 import 'package:tfc/pages/access_templates_section.dart';
 import 'package:tfc/providers/access_policy.dart';
 import 'package:tfc/providers/access_templates.dart';
+import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/widgets/access_denied_prompt.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/database_drift.dart';
+import 'package:tfc_dart/core/state_man.dart';
+
+import '../helpers/test_helpers.dart';
 
 // ---------------------------------------------------------------------------
 // Doubles
@@ -125,6 +131,43 @@ class _RacingStore extends _RecordingStore {
     }
     return super.delete(name, origin: origin, reason: reason);
   }
+}
+
+
+/// A `StateMan` that answers one fixed value per key and counts the reads.
+///
+/// The count is the point of one of these tests: the suggestion list must cost
+/// **one** read however many keys are bound.
+class _FakeStateMan implements StateMan {
+  _FakeStateMan({required this.values, this.readThrows});
+
+  final Map<String, DynamicValue> values;
+  final Object? readThrows;
+  final List<String> reads = [];
+
+  @override
+  String resolveKey(String key) => key;
+
+  @override
+  Future<DynamicValue> read(String key) async {
+    reads.add(key);
+    if (readThrows != null) throw readThrows!;
+    final value = values[key];
+    if (value == null) throw StateError('no value for $key');
+    return value;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError(
+        '_FakeStateMan: ${invocation.memberName} not in test scope',
+      );
+}
+
+/// The whole-struct value one conveyor key carries.
+DynamicValue _struct(Map<String, Object?> members) {
+  final value = DynamicValue();
+  members.forEach((key, member) => value[key] = DynamicValue(value: member));
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +631,291 @@ void main() {
       expect(find.text(_conveyorKeyA), findsOneWidget);
       expect(find.byKey(kAccessTemplateConfirmKey), findsNothing);
       expect((await seeder().list()).length, 1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The rules — spec §7d's second bullet
+  // -------------------------------------------------------------------------
+
+  group('the rules', () {
+    Future<void> expand(WidgetTester tester, String name) async {
+      await tester.tap(find.byKey(kAccessTemplateTileKey(name)));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a template expands to its rules, and the whole-key row is '
+        'named in words rather than as a bare *', (tester) async {
+      await seeder().create(AccessTemplate(name: 'conveyor', rules: const {
+        kWholeKeyMember: AccessGroup.device,
+        'p_cmd_JogFwd': AccessGroup.operate,
+      }));
+
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await expand(tester, 'conveyor');
+
+      expect(find.text(kWholeKeyMemberLabel), findsOneWidget);
+      expect(find.text(kWholeKeyMember), findsNothing,
+          reason: '"*" is a storage sentinel, not something to show a person');
+      expect(find.text('p_cmd_JogFwd'), findsOneWidget);
+    });
+
+    testWidgets('the seven groups are offered and no eighth', (tester) async {
+      await seeder().create(_conveyor());
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await expand(tester, 'conveyor');
+
+      final dropdown = tester.widget<DropdownButton<AccessGroup>>(
+          find.byKey(kAccessTemplateRuleGroupKey('p_cmd_JogFwd')));
+      expect(dropdown.items!.map((i) => i.value).toList(), AccessGroup.values);
+      expect(dropdown.items, hasLength(7));
+    });
+
+    testWidgets('changing a row\'s group goes through update with exactly '
+        'that rule', (tester) async {
+      await seeder().create(_conveyor());
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await expand(tester, 'conveyor');
+      store!.calls.clear();
+
+      await tester.tap(find.byKey(kAccessTemplateRuleGroupKey('p_cmd_JogFwd')));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find
+              .byKey(kAccessTemplateRuleGroupOptionKey(
+                  'p_cmd_JogFwd', AccessGroup.force))
+              .last);
+      await tester.pumpAndSettle();
+
+      expect(
+          store!.calls,
+          contains('update:conveyor:'
+              '{"p_cfg_ManualFreq":"device","p_cmd_JogFwd":"force"}'));
+      final stored = await seeder().template('conveyor');
+      expect(stored!.rules, {
+        'p_cfg_ManualFreq': AccessGroup.device,
+        'p_cmd_JogFwd': AccessGroup.force,
+      });
+    });
+
+    testWidgets('removing a row goes through update without it',
+        (tester) async {
+      await seeder().create(_conveyor());
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await expand(tester, 'conveyor');
+      store!.calls.clear();
+
+      await tester
+          .tap(find.byKey(kAccessTemplateRuleRemoveKey('p_cmd_JogFwd')));
+      await tester.pumpAndSettle();
+
+      expect(store!.calls,
+          contains('update:conveyor:{"p_cfg_ManualFreq":"device"}'));
+      final stored = await seeder().template('conveyor');
+      expect(stored!.rules, {'p_cfg_ManualFreq': AccessGroup.device});
+    });
+
+    testWidgets('a session without users may press every rule control and is '
+        'told what it needs', (tester) async {
+      await seeder().create(_conveyor());
+      session = _configureOnly();
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await expand(tester, 'conveyor');
+
+      final remove = tester.widget<IconButton>(
+          find.byKey(kAccessTemplateRuleRemoveKey('p_cmd_JogFwd')));
+      expect(remove.onPressed, isNotNull);
+      final dropdown = tester.widget<DropdownButton<AccessGroup>>(
+          find.byKey(kAccessTemplateRuleGroupKey('p_cmd_JogFwd')));
+      expect(dropdown.onChanged, isNotNull);
+
+      await tester
+          .tap(find.byKey(kAccessTemplateRuleRemoveKey('p_cmd_JogFwd')));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessDeniedGroupNote(AccessGroup.users)),
+          findsOneWidget);
+      final stored = await seeder().template('conveyor');
+      expect(stored!.rules, hasLength(2), reason: 'nothing was re-scoped');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Adding a rule — picking from a list rather than typing from memory
+  // -------------------------------------------------------------------------
+
+  group('adding a rule', () {
+    Future<void> openAddRule(WidgetTester tester, String name) async {
+      await tester.tap(find.byKey(kAccessTemplateTileKey(name)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessTemplateAddRuleKey(name)));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('offers the members already seen on a bound key, and adding '
+        'one goes through update with exactly that rule', (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_conveyorKeyA, 'conveyor');
+      final sm = _FakeStateMan(values: {
+        _conveyorKeyA: _struct(const {
+          'p_cmd_JogFwd': true,
+          'p_cfg_ManualFreq': 12.0,
+          'p_stat_Running': false,
+        })
+      });
+
+      await tester.pumpWidget(host([
+        ...overrides(),
+        stateManProvider.overrideWith((ref) async => sm),
+      ]));
+      await tester.pumpAndSettle();
+      await openAddRule(tester, 'conveyor');
+
+      expect(find.byKey(kAccessTemplateSuggestionKey('p_stat_Running')),
+          findsOneWidget);
+      expect(find.byKey(kAccessTemplateSuggestionKey(kWholeKeyMember)),
+          findsOneWidget,
+          reason: 'the whole-key row is offered too, and by its name');
+      expect(find.text(kAccessTemplateNoSuggestionsNote), findsNothing);
+
+      await tester
+          .tap(find.byKey(kAccessTemplateSuggestionKey('p_stat_Running')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessTemplateNewRuleGroupKey));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find
+              .byKey(kAccessTemplateNewRuleGroupOptionKey(AccessGroup.device))
+              .last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessTemplateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+          store!.calls,
+          contains('update:conveyor:{"p_cfg_ManualFreq":"device",'
+              '"p_cmd_JogFwd":"operate","p_stat_Running":"device"}'));
+      final stored = await seeder().template('conveyor');
+      expect(stored!.rules['p_stat_Running'], AccessGroup.device);
+    });
+
+    testWidgets('reads one bound key, not all of them', (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_conveyorKeyA, 'conveyor');
+      await seed.bind(_conveyorKeyB, 'conveyor');
+      await seed.bind('ST101.CN03', 'conveyor');
+      final sm = _FakeStateMan(values: {
+        _conveyorKeyA: _struct(const {'p_cmd_JogFwd': true}),
+        _conveyorKeyB: _struct(const {'p_cmd_JogFwd': true}),
+        'ST101.CN03': _struct(const {'p_cmd_JogFwd': true}),
+      });
+
+      await tester.pumpWidget(host([
+        ...overrides(),
+        stateManProvider.overrideWith((ref) async => sm),
+      ]));
+      await tester.pumpAndSettle();
+      await openAddRule(tester, 'conveyor');
+
+      expect(sm.reads, hasLength(1),
+          reason: 'a PLC round trip per bound key behind a + button is what '
+              'T-04-41 is about; the members are the same across keys sharing '
+              'a template, which is what a template means');
+    });
+
+    testWidgets('a template with no bound key still lets a rule be typed',
+        (tester) async {
+      await seeder().create(_conveyor());
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openAddRule(tester, 'conveyor');
+
+      expect(find.text(kAccessTemplateNoSuggestionsNote), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await tester.enterText(
+          find.byKey(kAccessTemplateMemberFieldKey), 'p_cfg_AutoFreq');
+      await tester.tap(find.byKey(kAccessTemplateNewRuleGroupKey));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find
+              .byKey(
+                  kAccessTemplateNewRuleGroupOptionKey(AccessGroup.setpoints))
+              .last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessTemplateConfirmKey));
+      await tester.pumpAndSettle();
+
+      final stored = await seeder().template('conveyor');
+      expect(stored!.rules['p_cfg_AutoFreq'], AccessGroup.setpoints,
+          reason: 'a commissioning engineer writes the template before the '
+              'PLC is on the network; free text is not a fallback, it is the '
+              'other half of the design');
+    });
+
+    testWidgets('an unreadable bound key leaves a plain text field, no error '
+        'and no spinner', (tester) async {
+      final seed = seeder();
+      await seed.create(_conveyor());
+      await seed.bind(_conveyorKeyA, 'conveyor');
+
+      await tester.pumpWidget(host([
+        ...overrides(),
+        stateManProvider.overrideWith((ref) async => _FakeStateMan(
+            values: const {}, readThrows: StateError('no such node'))),
+      ]));
+      await tester.pumpAndSettle();
+      await openAddRule(tester, 'conveyor');
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(kAccessTemplateMemberFieldKey), findsOneWidget);
+      expect(find.text(kAccessTemplateNoSuggestionsNote), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('a scalar bound key offers the whole key and nothing else',
+        (tester) async {
+      final seed = seeder();
+      await seed.create(AccessTemplate(name: 'scalar', rules: const {}));
+      await seed.bind(_conveyorKeyA, 'scalar');
+
+      await tester.pumpWidget(host([
+        ...overrides(),
+        stateManProvider.overrideWith((ref) async => _FakeStateMan(values: {
+              _conveyorKeyA: DynamicValue(value: 12.0, typeId: NodeId.double),
+            })),
+      ]));
+      await tester.pumpAndSettle();
+      await openAddRule(tester, 'scalar');
+
+      expect(find.text(kAccessTemplateNoSuggestionsNote), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The mount
+  // -------------------------------------------------------------------------
+
+  group('the mount', () {
+    testWidgets('the key repository carries the section', (tester) async {
+      await tester.pumpWidget(buildTestableKeyRepository());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccessTemplatesSection), findsOneWidget);
+      // The page's own tests all run with no database, so this is also the
+      // no-database line's only trip through the real page.
+      expect(find.byKey(kAccessTemplatesNoDatabaseKey), findsOneWidget);
+      expect(find.text('No keys configured'), findsOneWidget,
+          reason: 'the key list still has room');
+      expect(tester.takeException(), isNull);
     });
   });
 }
