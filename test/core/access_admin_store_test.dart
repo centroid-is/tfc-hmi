@@ -87,8 +87,8 @@ class _RecordingRepository extends AccessRepository {
     required String roleName,
   }) {
     calls.add('createUser:$username');
-    return super.createUser(
-        username: username, password: password, roleName: roleName);
+    return super
+        .createUser(username: username, password: password, roleName: roleName);
   }
 
   @override
@@ -169,9 +169,8 @@ void main() {
       );
 
   Future<int> roleRowCount() async {
-    final row = await db
-        .customSelect('SELECT COUNT(*) AS c FROM app_role')
-        .getSingle();
+    final row =
+        await db.customSelect('SELECT COUNT(*) AS c FROM app_role').getSingle();
     return row.read<int>('c');
   }
 
@@ -206,7 +205,7 @@ void main() {
         AccessGroup.users,
         reason: 'spec §1 gates role and user management on `users`. '
             "docs/access-control-deployment.md §4 says \"screens behind the "
-            '`administer` group, including the screen that creates users\", '
+            '`administer` group, including the screen that creates users", '
             'which is a factual error in the doc — plan 06-05 fixes the '
             'sentence and this assertion is what the code says instead. '
             'Lowering this line to `configure` would let anybody who can edit '
@@ -229,7 +228,8 @@ void main() {
 
   group('the store owns no queries', () {
     test('imports no Drift', () {
-      final source = File('lib/core/access_admin_store.dart').readAsStringSync();
+      final source =
+          File('lib/core/access_admin_store.dart').readAsStringSync();
       expect(
         source.contains('package:drift'),
         isFalse,
@@ -266,7 +266,8 @@ void main() {
 
       final roles = await store.roles();
 
-      expect(roles.map((r) => r.name), containsAll(kSeedRoles.map((r) => r.name)));
+      expect(
+          roles.map((r) => r.name), containsAll(kSeedRoles.map((r) => r.name)));
       expect(sink.rows, isEmpty,
           reason: 'a row per render would bury the writes that matter, and '
               'the route gate is the enforcement for reads.');
@@ -366,7 +367,8 @@ void main() {
               'recorded before anything else can swallow the refusal.');
     });
 
-    test('an onDenied listener that throws does not change what the caller sees',
+    test(
+        'an onDenied listener that throws does not change what the caller sees',
         () async {
       session = _configureOnly();
       final store = AccessAdminStore(
