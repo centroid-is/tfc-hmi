@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
+import 'package:tfc/page_creator/assets/common.dart' show TextPos;
 import 'package:tfc/page_creator/assets/section_button.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/theme.dart' show HmiStateColors;
@@ -13,12 +14,7 @@ import 'package:tfc_dart/core/state_man.dart';
 /// The section button end to end: the face's colours, the pane it opens, and
 /// the `p_cmd_*` bits that leave it — for one section and for several.
 void main() {
-  setUp(() => sectionNow = () => _clockNow);
-  tearDown(() {
-    sectionNow = DateTime.now;
-    _clockNow = _t0;
-    closeSidePane(immediate: true);
-  });
+  tearDown(() => closeSidePane(immediate: true));
 
   Widget wrap(Widget child, {List<Override> overrides = const []}) {
     return ProviderScope(
@@ -37,11 +33,10 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  SectionButtonConfig config(List<String> keys, {String? label}) =>
+  SectionButtonConfig config(List<String> keys, {String? name}) =>
       SectionButtonConfig(
-        label: label ?? 'Before freezers',
         sections: [for (final k in keys) SectionRef(key: k)],
-      );
+      )..text = name ?? 'Before freezers';
 
   Future<void> pumpButton(
     WidgetTester tester,
@@ -60,13 +55,14 @@ void main() {
     await _settle(tester);
   }
 
-  PowerButtonPainter painterOf(WidgetTester tester) {
-    final paint = tester.widget<CustomPaint>(find.descendant(
-      of: find.byType(SectionButton),
-      matching: find.byType(CustomPaint),
-    ));
-    return paint.painter as PowerButtonPainter;
-  }
+  /// The face's own `CustomPaint`, named by its painter rather than by type,
+  /// so it stays the one this asset draws whatever else the tree gains.
+  final faceFinder = find.byWidgetPredicate(
+    (w) => w is CustomPaint && w.painter is PowerButtonPainter,
+  );
+
+  PowerButtonPainter painterOf(WidgetTester tester) =>
+      tester.widget<CustomPaint>(faceFinder).painter as PowerButtonPainter;
 
   HmiStateColors palette(WidgetTester tester) =>
       HmiStateColors.of(tester.element(find.byType(SectionButton)));
@@ -224,11 +220,11 @@ void main() {
       await pumpButton(
         tester,
         fake,
-        cfg: SectionButtonConfig(label: 'Before freezers', sections: [
+        cfg: SectionButtonConfig(sections: [
           SectionRef(key: 'sec/a', label: 'ST101'),
           SectionRef(key: 'sec/b', label: 'ST201'),
           SectionRef(key: 'sec/c', label: 'ST301'),
-        ]),
+        ])..text = 'Before freezers',
       );
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
@@ -420,11 +416,11 @@ void main() {
         ..push('sec/b', enabled: true)
         ..push('sec/c');
       await pumpButton(tester, fake,
-          cfg: SectionButtonConfig(label: 'Before freezers', sections: [
+          cfg: SectionButtonConfig(sections: [
             SectionRef(key: 'sec/a', label: 'ST101'),
             SectionRef(key: 'sec/b', label: 'ST201'),
             SectionRef(key: 'sec/c', label: 'ST301'),
-          ]));
+          ])..text = 'Before freezers');
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
       return fake;
@@ -473,10 +469,10 @@ void main() {
     testWidgets('an unreadable member offers nothing at all', (tester) async {
       final fake = _FakeStateMan()..push('sec/a', enabled: true);
       await pumpButton(tester, fake,
-          cfg: SectionButtonConfig(label: 'Before freezers', sections: [
+          cfg: SectionButtonConfig(sections: [
             SectionRef(key: 'sec/a', label: 'ST101'),
             SectionRef(key: 'sec/b', label: 'ST201'),
-          ]));
+          ])..text = 'Before freezers');
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
 
@@ -497,7 +493,7 @@ void main() {
         ..push('sec/b', enabled: true)
         ..push('sec/c', permissive: false);
       await pumpButton(tester, fake,
-          cfg: SectionButtonConfig(label: 'Before freezers', sections: [
+          cfg: SectionButtonConfig(sections: [
             SectionRef(key: 'sec/a', label: 'ST101'),
             SectionRef(key: 'sec/b', label: 'ST201'),
             SectionRef(
@@ -505,7 +501,7 @@ void main() {
               label: 'ST301',
               holdReason: 'The washdown interlock is open.',
             ),
-          ]));
+          ])..text = 'Before freezers');
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
 
@@ -550,7 +546,7 @@ void main() {
     testWidgets('an unconfigured section explains only what is always true',
         (tester) async {
       final fake = _FakeStateMan()..push('sec/a', permissive: false);
-      await pumpButton(tester, fake, cfg: config(['sec/a'], label: 'Line 1'));
+      await pumpButton(tester, fake, cfg: config(['sec/a'], name: 'Line 1'));
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
 
@@ -566,13 +562,13 @@ void main() {
       await pumpButton(
         tester,
         fake,
-        cfg: SectionButtonConfig(label: 'Box packing film', sections: [
+        cfg: SectionButtonConfig(sections: [
           SectionRef(
             key: 'sec/a',
             holdReason: 'The vacuum mode has the line. Stop it and this one '
                 'is free.',
           ),
-        ]),
+        ])..text = 'Box packing film',
       );
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
@@ -591,10 +587,10 @@ void main() {
       await pumpButton(
         tester,
         fake,
-        cfg: SectionButtonConfig(label: 'Box packing', sections: [
+        cfg: SectionButtonConfig(sections: [
           SectionRef(key: 'sec/a', label: 'ST201', holdReason: 'never shown'),
           SectionRef(key: 'sec/b', label: 'ST301', holdReason: 'Vacuum has it'),
-        ]),
+        ])..text = 'Box packing',
       );
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
@@ -612,9 +608,9 @@ void main() {
       await pumpButton(
         tester,
         fake,
-        cfg: SectionButtonConfig(label: 'Line 1', sections: [
+        cfg: SectionButtonConfig(sections: [
           SectionRef(key: 'sec/a', holdReason: '   '),
-        ]),
+        ])..text = 'Line 1',
       );
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
@@ -622,19 +618,53 @@ void main() {
     });
 
     testWidgets('the whole config round-trips through JSON', (tester) async {
-      final json = SectionButtonConfig(label: 'Before freezers', sections: [
+      final json = (SectionButtonConfig(sections: [
         SectionRef(key: 'sec/a', label: 'ST101', holdReason: 'Vacuum has it'),
         SectionRef(key: 'sec/b'),
-      ]).toJson();
+      ])
+            ..text = 'Before freezers'
+            ..textPos = TextPos.below)
+          .toJson();
 
       final back = SectionButtonConfig.fromJson(json);
-      expect(back.label, 'Before freezers');
+      expect(back.name, 'Before freezers');
+      expect(back.text, 'Before freezers');
+      expect(back.textPos, TextPos.below);
       expect(back.sections.map((s) => s.key), ['sec/a', 'sec/b']);
       expect(back.sections.first.label, 'ST101');
       expect(back.sections.first.holdReason, 'Vacuum has it');
       // Nested keys are invisible to the base class's JSON introspection, so
       // the override is what stops unused-key cleanup deleting them.
       expect(back.allKeys, ['sec/a', 'sec/b']);
+      expect(json.containsKey('label'), isFalse,
+          reason: 'the legacy name field is read, never written back');
+    });
+
+    testWidgets('a page saved with the old `label` keeps its name',
+        (tester) async {
+      // The name used to live in `label` and only titled the pane. Pages on
+      // the plant were saved that way; the button on the mimic must not lose
+      // its caption the day the form gained a field for it.
+      final legacy = (SectionButtonConfig(sections: [SectionRef(key: 'sec/a')])
+            ..text = 'Before freezers')
+          .toJson()
+        ..remove('text')
+        ..remove('textPos')
+        ..['label'] = 'Before freezers';
+
+      final back = SectionButtonConfig.fromJson(legacy);
+      expect(back.text, 'Before freezers',
+          reason: 'migrated onto the mimic, where it can be read and edited');
+      expect(back.textPos, TextPos.below);
+      expect(back.name, 'Before freezers');
+    });
+
+    testWidgets('an unnamed button falls back to the section it drives',
+        (tester) async {
+      final cfg = SectionButtonConfig(
+        sections: [SectionRef(key: 'plant/section.beforeFreezers')],
+      );
+      expect(cfg.name, 'beforeFreezers');
     });
 
     testWidgets('a section with a blank key is not subscribed or listed',
@@ -643,10 +673,10 @@ void main() {
       await pumpButton(
         tester,
         fake,
-        cfg: SectionButtonConfig(label: 'Line 1', sections: [
+        cfg: SectionButtonConfig(sections: [
           SectionRef(key: 'sec/a'),
           SectionRef(key: '   '),
-        ]),
+        ])..text = 'Line 1',
       );
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
@@ -655,100 +685,101 @@ void main() {
     });
   });
 
-  group('mode timer', () {
-    testWidgets('counts up from the moment the state was first seen',
-        (tester) async {
+  group('the face is the button every other asset uses', () {
+    testWidgets('holding it down presses the face', (tester) async {
+      // The shrink and the tightened shadow are `ButtonPainter`'s, off this
+      // one flag — the section button used to paint a flat disc of its own
+      // and never moved under a finger.
       final fake = _FakeStateMan()..push('sec/a', enabled: true);
       await pumpButton(tester, fake);
-      await tester.tap(find.byType(SectionButton));
-      await _settle(tester);
-      expect(find.text('0s'), findsOneWidget);
+      expect(painterOf(tester).isPressed, isFalse);
 
-      _clockNow = _t0.add(const Duration(minutes: 12, seconds: 30));
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.text('12m 30s'), findsOneWidget);
+      final gesture = await tester.startGesture(
+          tester.getCenter(find.byType(SectionButton)));
+      await tester.pump();
+      expect(painterOf(tester).isPressed, isTrue);
+
+      await gesture.up();
+      await _settle(tester);
+      expect(painterOf(tester).isPressed, isFalse);
     });
 
-    testWidgets('the first reading is hedged — it is a floor, not the truth',
+    testWidgets('a button with no sections never looks pressed',
         (tester) async {
-      final fake = _FakeStateMan()..push('sec/a', enabled: true);
-      await pumpButton(tester, fake);
-      await tester.tap(find.byType(SectionButton));
-      await _settle(tester);
-
-      // An earlier `Timer started: when the page opened` row said this in
-      // words nobody could parse. The tile label carries it now.
-      expect(find.text('For at least'), findsOneWidget);
-      expect(find.text('Timer started'), findsNothing);
+      // It opens nothing, so it must not answer a touch as though it did.
+      final fake = _FakeStateMan();
+      await pumpButton(tester, fake, cfg: SectionButtonConfig());
+      final gesture = await tester.startGesture(
+          tester.getCenter(find.byType(SectionButton)));
+      await tester.pump();
+      expect(painterOf(tester).isPressed, isFalse);
+      await gesture.up();
+      await tester.pump();
     });
+  });
 
-    testWidgets('a change restarts the count and stops hedging',
+  group('naming the button', () {
+    Future<void> pumpEditor(
+        WidgetTester tester, SectionButtonConfig cfg) async {
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(builder: (context) => cfg.configure(context)),
+          ),
+        ),
+      ));
+      await tester.pump();
+    }
+
+    testWidgets('the form writes the name onto the mimic, not just the pane',
         (tester) async {
-      final fake = _FakeStateMan()..push('sec/a', enabled: true);
-      await pumpButton(tester, fake);
-      await tester.tap(find.byType(SectionButton));
-      await _settle(tester);
+      // The reported bug: the only name field in the form set `label`, which
+      // titled the pane and nothing else, so the caption on the page could
+      // not be changed at all.
+      final cfg = SectionButtonConfig(sections: [SectionRef(key: 'sec/a')]);
+      await pumpEditor(tester, cfg);
 
-      _clockNow = _t0.add(const Duration(hours: 1));
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.text('1h 0m'), findsOneWidget);
+      await tester.enterText(
+          find.byKey(const Key('section-name')), 'Before freezers');
+      await tester.pump();
 
-      fake.push('sec/a', cleaning: true);
-      await _settle(tester);
-      expect(find.text('0s'), findsOneWidget);
-      expect(find.text('For'), findsOneWidget);
-      expect(find.text('For at least'), findsNothing);
+      expect(cfg.text, 'Before freezers');
+      expect(cfg.textPos, TextPos.below,
+          reason: 'a name with no position is stored and never drawn');
+      expect(cfg.name, 'Before freezers');
     });
 
-    testWidgets('one member changing restarts the group counter',
+    testWidgets('the form starts on the name the config already has',
         (tester) async {
-      final fake = _FakeStateMan()
-        ..push('sec/a', enabled: true)
-        ..push('sec/b', enabled: true);
-      await pumpButton(tester, fake, cfg: config(['sec/a', 'sec/b']));
-      await tester.tap(find.byType(SectionButton));
-      await _settle(tester);
-
-      _clockNow = _t0.add(const Duration(minutes: 30));
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.text('30m 0s'), findsOneWidget);
-
-      // The group is no longer what it was, so the count is no longer of it.
-      fake.push('sec/b');
-      await _settle(tester);
-      expect(find.text('0s'), findsOneWidget);
+      final cfg = SectionButtonConfig(sections: [SectionRef(key: 'sec/a')])
+        ..text = 'Box packing film';
+      await pumpEditor(tester, cfg);
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('section-name')))
+            .initialValue,
+        'Box packing film',
+      );
     });
 
-    testWidgets('closing and reopening the pane does not restart the count',
-        (tester) async {
-      // The counter belongs to the sections, not to the window onto them.
-      final fake = _FakeStateMan()..push('sec/a', enabled: true);
-      await pumpButton(tester, fake);
-      await tester.tap(find.byType(SectionButton));
-      await _settle(tester);
-
-      _clockNow = _t0.add(const Duration(minutes: 5));
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.text('5m 0s'), findsOneWidget);
-
-      await tester.tap(find.byType(SectionButton)); // close
-      await _settle(tester);
-      await tester.tap(find.byType(SectionButton)); // reopen
-      await _settle(tester);
-      expect(find.text('5m 0s'), findsOneWidget);
+    testWidgets('a position already chosen is left alone', (tester) async {
+      final cfg = SectionButtonConfig(sections: [SectionRef(key: 'sec/a')])
+        ..text = 'Before freezers'
+        ..textPos = TextPos.right;
+      await pumpEditor(tester, cfg);
+      await tester.enterText(
+          find.byKey(const Key('section-name')), 'After freezers');
+      await tester.pump();
+      expect(cfg.textPos, TextPos.right);
     });
 
-    testWidgets('no ticker survives the pane', (tester) async {
+    testWidgets('the name titles the pane too', (tester) async {
       final fake = _FakeStateMan()..push('sec/a', enabled: true);
-      await pumpButton(tester, fake);
+      await pumpButton(tester, fake,
+          cfg: config(['sec/a'], name: 'Box packing film'));
       await tester.tap(find.byType(SectionButton));
       await _settle(tester);
-      expect(find.byType(SectionModeTimer), findsOneWidget);
-
-      await tester.tap(find.byType(SectionButton));
-      await _settle(tester);
-      expect(find.byType(SectionModeTimer), findsNothing);
-      // A leaked Timer.periodic fails the test binding at tearDown.
+      expect(find.text('Box packing film'), findsOneWidget);
     });
   });
 
@@ -782,9 +813,9 @@ void main() {
         tester.widget<AssetHitShape>(find.byType(AssetHitShape)).shape()
             .getBounds();
 
-    Rect paintedBox(WidgetTester tester) => tester.getRect(find.descendant(
-          of: find.byType(SectionButton),
-          matching: find.byType(CustomPaint),
+    Rect paintedBox(WidgetTester tester) => tester.getRect(
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is PowerButtonPainter,
         ));
 
     testWidgets('is the disc as drawn, centred in the laid-out box',
@@ -812,17 +843,16 @@ void main() {
 
       final shape = publishedShape(tester);
       expect(shape.center, const Offset(70, 30));
-      expect(shape.width, closeTo(58, 0.01)); // 60/2 - 1, doubled
+      expect(shape.width, closeTo(60, 0.01)); // the shorter side
     });
   });
 }
 
 /// Pumps frames without `pumpAndSettle`.
 ///
-/// The pane carries a one-second [SectionModeTimer], which schedules a frame
-/// forever — `pumpAndSettle` would spin until its own timeout instead of
-/// returning. Ten 100 ms frames outlast every animation in the pane's opening
-/// (the longest is the 220 ms glide) without reaching the first tick.
+/// Ten 100 ms frames outlast every animation in the pane's opening — the
+/// longest is the 220 ms glide — and, unlike `pumpAndSettle`, do not depend on
+/// the whole tree reaching a quiet frame.
 Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 10; i++) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -834,9 +864,6 @@ bool _enabled(WidgetTester tester, Key key) {
   final button = tester.widget(find.byKey(key));
   return (button as dynamic).onPressed != null;
 }
-
-final DateTime _t0 = DateTime.utc(2026, 8, 29, 6, 0, 0);
-DateTime _clockNow = _t0;
 
 typedef _Write = ({String key, DynamicValue value});
 

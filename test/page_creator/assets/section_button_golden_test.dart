@@ -49,12 +49,7 @@ void main() {
       skip: !Platform.isMacOS ? 'Golden tests only run on macOS' : null, () {
     setUpAll(loadRealFont);
 
-    setUp(() => sectionNow = () => _clockNow);
-    tearDown(() {
-      sectionNow = DateTime.now;
-      _clockNow = _t0;
-      closeSidePane(immediate: true);
-    });
+    tearDown(() => closeSidePane(immediate: true));
 
     testWidgets('every state the disc can be in, side by side', (tester) async {
       final fake = _FakeStateMan()
@@ -110,6 +105,54 @@ void main() {
       );
     });
 
+    testWidgets('resting beside held down', (tester) async {
+      // The disc now comes from `ButtonPainter`, the painter behind every
+      // other button on a mimic — so it has the drop shadow, and under a
+      // finger it shrinks and the shadow tightens with it. Before this, the
+      // section button was a flat circle that did not move when pressed.
+      final fake = _FakeStateMan()..push('sec/run', enabled: true);
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < 2; i++)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: SizedBox(
+                        width: 88,
+                        height: 88,
+                        child: SectionButton(
+                          key: ValueKey(i),
+                          config: SectionButtonConfig(
+                            sections: [SectionRef(key: 'sec/run')],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ));
+      await _settle(tester);
+
+      final gesture = await tester.startGesture(
+          tester.getCenter(find.byKey(const ValueKey(1))));
+      addTearDown(() => gesture.up());
+      await _settle(tester);
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/section_button_pressed.png'),
+      );
+    });
+
     group('pane', () {
       // A full app surface with real text: the 0.01% default absorbs painter
       // drift, not the antialiasing of a pane full of letterforms. A real
@@ -123,7 +166,6 @@ void main() {
         bool enabled = false,
         bool cleaning = false,
         bool permissive = true,
-        Duration inMode = const Duration(hours: 3, minutes: 12),
         String? holdReason,
       }) async {
         tester.view.physicalSize = const Size(1400, 1100);
@@ -144,11 +186,10 @@ void main() {
                   height: 88,
                   child: SectionButton(
                     config: SectionButtonConfig(
-                      label: name,
                       sections: [
                         SectionRef(key: 'sec/after', holdReason: holdReason),
                       ],
-                    ),
+                    )..text = name,
                   ),
                 ),
               ),
@@ -159,12 +200,6 @@ void main() {
 
         await tester.tap(find.byType(SectionButton));
         await _settle(tester);
-
-        // The counter is driven by `sectionNow`, so the golden shows a fixed
-        // elapsed time instead of embedding the wall clock and churning on
-        // every run.
-        _clockNow = _t0.add(inMode);
-        await tester.pump(const Duration(seconds: 1));
       }
 
       testWidgets('running', (tester) async {
@@ -176,8 +211,7 @@ void main() {
       });
 
       testWidgets('cleaning', (tester) async {
-        await pumpPane(tester, 'Before freezers',
-            cleaning: true, inMode: const Duration(minutes: 18, seconds: 5));
+        await pumpPane(tester, 'Before freezers', cleaning: true);
         await expectLater(
           find.byType(MaterialApp),
           matchesGoldenFile('goldens/section_pane_cleaning.png'),
@@ -204,13 +238,12 @@ void main() {
                   height: 88,
                   child: SectionButton(
                     config: SectionButtonConfig(
-                      label: 'Before freezers',
                       sections: [
                         SectionRef(key: 'sec/101', label: 'ST101'),
                         SectionRef(key: 'sec/201', label: 'ST201'),
                         SectionRef(key: 'sec/301', label: 'ST301'),
                       ],
-                    ),
+                    )..text = 'Before freezers',
                   ),
                 ),
               ),
@@ -220,8 +253,6 @@ void main() {
         await _settle(tester);
         await tester.tap(find.byType(SectionButton));
         await _settle(tester);
-        _clockNow = _t0.add(const Duration(minutes: 6, seconds: 20));
-        await tester.pump(const Duration(seconds: 1));
 
         await expectLater(
           find.byType(MaterialApp),
@@ -254,7 +285,6 @@ void main() {
                   height: 88,
                   child: SectionButton(
                     config: SectionButtonConfig(
-                      label: 'Before freezers',
                       sections: [
                         SectionRef(key: 'sec/101', label: 'ST101'),
                         SectionRef(key: 'sec/201', label: 'ST201'),
@@ -265,7 +295,7 @@ void main() {
                               'open. Close the guard and it is free.',
                         ),
                       ],
-                    ),
+                    )..text = 'Before freezers',
                   ),
                 ),
               ),
@@ -275,8 +305,6 @@ void main() {
         await _settle(tester);
         await tester.tap(find.byType(SectionButton));
         await _settle(tester);
-        _clockNow = _t0.add(const Duration(minutes: 2, seconds: 5));
-        await tester.pump(const Duration(seconds: 1));
 
         await expectLater(
           find.byType(MaterialApp),
@@ -290,7 +318,6 @@ void main() {
         // actually holds this one.
         await pumpPane(tester, 'Box packing film',
             permissive: false,
-            inMode: const Duration(seconds: 42),
             holdReason: 'The vacuum mode has the line. Stop it and this one '
                 'is free.');
         await expectLater(
@@ -302,16 +329,13 @@ void main() {
   });
 }
 
-/// Pumps frames without `pumpAndSettle`, which would never return against the
-/// pane's one-second mode-duration ticker.
+/// Pumps frames without `pumpAndSettle`, so the pane's opening glide is over
+/// without depending on the whole tree reaching a quiet frame.
 Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 10; i++) {
     await tester.pump(const Duration(milliseconds: 100));
   }
 }
-
-final DateTime _t0 = DateTime.utc(2026, 8, 29, 6, 0, 0);
-DateTime _clockNow = _t0;
 
 class _FakeStateMan implements StateMan {
   final Map<String, BehaviorSubject<DynamicValue>> _streams = {};
