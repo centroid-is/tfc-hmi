@@ -258,6 +258,290 @@ class AccessAdminStore {
     await _recordAllowed(actionId, row);
   }
 
+  /// Replaces [role]'s group set. Requires [kAccessAdminGroup].
+  ///
+  /// **This is the most consequential hand-made write in the product**, and the
+  /// `admin` surface exists for it: it is the one that can hand somebody
+  /// `force` on a running line, and — when the row is `Operator` — hand it to
+  /// every logged-out panel on the floor. The roles screen says so at the point
+  /// of edit; the row says so afterwards.
+  ///
+  /// The current group set is read **before** the gate so that `oldValue` is
+  /// available for the row. Reading before the gate is correct and already the
+  /// convention: a read is not an authorization event, and this store's own
+  /// reads are ungated for the same reason.
+  ///
+  /// Throws [MissingRoleError] when there is no such role — the repository's
+  /// `upsertRole` would insert one, and the row would then say `role.update`
+  /// for a create. Throws [LastUsersHolderException], from inside the
+  /// repository's transaction, when this edit would untick `users` from the
+  /// only role granting it; that refusal is trip route (c), it is not a
+  /// permission failure, and no sign-in resolves it.
+  Future<void> updateRole(
+    AccessRole role, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    final existing = await _repository.role(role.name);
+
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.roleUpdate(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: role.name,
+          // Empty when the role is not there — the only path that reaches the
+          // row with a null `existing` is the deny path, and a refusal for
+          // permission is the honest thing to say about it first.
+          oldGroups: existing?.encodeGroups() ?? '',
+          newGroups: role.encodeGroups(),
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _roleUpdate, row: row);
+
+    if (existing == null) throw MissingRoleError(role.name);
+    await _repository.upsertRole(role);
+    await _recordAllowed(actionId, row);
+  }
+
+  /// Destroys the role named [name]. Requires [kAccessAdminGroup].
+  ///
+  /// The groups it granted are read **before** the gate, so the row still says
+  /// what was lost after the row it described is gone.
+  ///
+  /// Three refusals reach the caller from the repository, unchanged and
+  /// unrecorded, and none of them is an [AccessDenied]: [ProtectedRoleError]
+  /// for `Operator` — an [Error], because reaching it means a screen offered a
+  /// Delete it should not have; [LastUsersHolderException] for trip route (d),
+  /// deleting the only role granting `users`; and [RoleInUseException] when
+  /// accounts still hold it, with the holders named so the dialog can list
+  /// them. That last one is blocked in application code rather than by the
+  /// foreign key, which this build never enables.
+  Future<void> deleteRole(
+    String name, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    final existing = await _repository.role(name);
+
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.roleDelete(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: name,
+          groups: existing?.encodeGroups() ?? '',
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _roleDelete, row: row);
+
+    if (existing == null) throw MissingRoleError(name);
+    await _repository.deleteRole(name);
+    await _recordAllowed(actionId, row);
+  }
+
+  /// Renames the role [from] to [to], carrying its holders with it. Requires
+  /// [kAccessAdminGroup].
+  ///
+  /// The row's `member` is [from] — the string the rest of the trail up to this
+  /// point refers to.
+  ///
+  /// A rename cannot trip the lockout invariant: the role keeps its groups and
+  /// its holders. It can still throw [ProtectedRoleError] at either end,
+  /// [MissingRoleError] for an absent source and [ArgumentError] for a name
+  /// collision, all from the repository and all recorded as nothing.
+  Future<void> renameRole(
+    String from,
+    String to, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.roleRename(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          oldName: from,
+          newName: to,
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _roleRename, row: row);
+
+    await _repository.renameRole(from, to);
+    await _recordAllowed(actionId, row);
+  }
+
+  // ---------------------------------------------------------------------------
+  // User writes
+  // ---------------------------------------------------------------------------
+
+  /// Creates the account [username] in [roleName]. Requires
+  /// [kAccessAdminGroup].
+  ///
+  /// [password] is taken only to hand it straight to the repository, which
+  /// derives the PBKDF2 hash. It is never logged, never interpolated into a
+  /// string and never reaches the row: [AuditRecord.userCreate] has no
+  /// parameter that could carry it, which is the point of the constructor.
+  ///
+  /// Throws [UserExistsException] for a name already taken and
+  /// [MissingRoleError] for a role that is not there, both from inside the
+  /// repository's transaction and both recorded as nothing.
+  Future<void> createUser({
+    required String username,
+    required String password,
+    required String roleName,
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.userCreate(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: username,
+          grantedRole: roleName,
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _userCreate, row: row);
+
+    await _repository.createUser(
+      username: username,
+      password: password,
+      roleName: roleName,
+    );
+    await _recordAllowed(actionId, row);
+  }
+
+  /// Deletes the account [username]. Requires [kAccessAdminGroup].
+  ///
+  /// The role held is read **before** the gate so the row says what the account
+  /// could do, after the account is gone.
+  ///
+  /// The account's own audit rows are untouched, and must stay that way:
+  /// `audit_entry.who` is a denormalised TEXT column with no foreign key
+  /// precisely so the trail survives this by construction.
+  ///
+  /// Throws [UserNotFoundException] for an account that is not there — a silent
+  /// success would put a row in the trail claiming a deletion that did not
+  /// happen — and [LastUsersHolderException] for trip route (a), deleting the
+  /// last account that holds `users`.
+  Future<void> deleteUser(
+    String username, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    final existing = await _repository.user(username);
+
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.userDelete(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: username,
+          heldRole: existing?.roleName ?? '',
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _userDelete, row: row);
+
+    if (existing == null) throw UserNotFoundException(username);
+    await _repository.deleteUser(username);
+    await _recordAllowed(actionId, row);
+  }
+
+  /// Moves [username] onto [roleName]. Requires [kAccessAdminGroup].
+  ///
+  /// The role currently held is read **before** the gate, for the row's
+  /// `oldValue`.
+  ///
+  /// Throws [UserNotFoundException], [MissingRoleError] for a target role that
+  /// does not exist, and [LastUsersHolderException] for trip route (b) — moving
+  /// the last `users` holder onto a role that does not grant it.
+  Future<void> setUserRole(
+    String username,
+    String roleName, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    final existing = await _repository.user(username);
+
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.userRole(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: username,
+          oldRole: existing?.roleName ?? '',
+          newRole: roleName,
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _userRole, row: row);
+
+    if (existing == null) throw UserNotFoundException(username);
+    await _repository.setRole(username, roleName);
+    await _recordAllowed(actionId, row);
+  }
+
+  /// Resets [username]'s password to [password]. Requires [kAccessAdminGroup].
+  ///
+  /// **The credential goes to the repository and nowhere else.** It is not
+  /// logged, not put in the `reason`, not interpolated into any string in this
+  /// method, and it cannot reach the row: [AuditRecord.userPassword] leaves
+  /// both value columns null and has no parameter that could fill them. That
+  /// matters more here than anywhere else in this file, because an admin row is
+  /// not an auth row — `AuditRecord.toString` withholds the value columns only
+  /// for `surface == 'auth'`, so these values do reach log files that live
+  /// longer and travel further than the database does.
+  ///
+  /// No lockout guard: a password is not a permission, so no password can take
+  /// the last holder away. Throws [UserNotFoundException] from the repository.
+  Future<void> setUserPassword(
+    String username,
+    String password, {
+    String origin = _operatorOrigin,
+    String? reason,
+  }) async {
+    AuditRecord row(AccessSession session, String actionId, bool allowed) =>
+        AuditRecord.userPassword(
+          who: _who(session),
+          station: _station,
+          roleName: session.roleName,
+          actionId: actionId,
+          subject: username,
+          allowed: allowed,
+          reason: reason,
+          origin: origin,
+        );
+
+    final actionId = await _requireUsers(itemKey: _userPassword, row: row);
+
+    await _repository.setPassword(username, password);
+    await _recordAllowed(actionId, row);
+  }
+
   // ---------------------------------------------------------------------------
   // The one implementation of the rule
   // ---------------------------------------------------------------------------
@@ -341,4 +625,11 @@ class AccessAdminStore {
   // named test per write asserts the refusal and the row agree — the two
   // spellings are checked against each other rather than trusted.
   static const String _roleCreate = 'role.create';
+  static const String _roleUpdate = 'role.update';
+  static const String _roleDelete = 'role.delete';
+  static const String _roleRename = 'role.rename';
+  static const String _userCreate = 'user.create';
+  static const String _userDelete = 'user.delete';
+  static const String _userRole = 'user.role';
+  static const String _userPassword = 'user.password';
 }

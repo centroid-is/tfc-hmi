@@ -557,8 +557,8 @@ void main() {
         () async {
       final store = buildStore();
 
-      await expectLater(() => store.deleteRole('Nonesuch'),
-          throwsA(isA<MissingRoleError>()));
+      await expectLater(
+          () => store.deleteRole('Nonesuch'), throwsA(isA<MissingRoleError>()));
       expect(sink.rows, isEmpty);
       expect(repository.calls, isEmpty);
     });
@@ -748,7 +748,8 @@ void main() {
       await repository.createUser(
           username: 'bob', password: 'pw', roleName: 'Shift Leader');
       repository.calls.clear();
-      await expectGated('user.role', (s) => s.setUserRole('bob', 'Maintenance'));
+      await expectGated(
+          'user.role', (s) => s.setUserRole('bob', 'Maintenance'));
       expect((await repository.listUsers()).single.roleName, 'Shift Leader');
     });
 
