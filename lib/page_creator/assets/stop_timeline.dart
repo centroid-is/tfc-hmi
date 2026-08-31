@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:tfc_dart/core/stop_interval_source.dart';
 
 import '../../providers/alarm.dart';
 import '../../widgets/alarm.dart' show formatAlarmGroup, parseAlarmGroup;
+import '../../widgets/button_graph.dart' show showSetDatePicker;
 import 'common.dart';
 import 'stop_timeline_geometry.dart';
 import 'stop_timeline_painter.dart';
@@ -124,18 +126,54 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
   bool _loading = true;
   Object? _error;
 
+  /// An absolute range the operator picked, or null for the live rolling
+  /// period. It bounds the fetch as well as the view: loading a shift from
+  /// last week out of a 2000-row newest-first buffer would return rows from
+  /// yesterday and draw an empty chart.
+  DateTimeRange? _range;
+
+  /// A rolling span picked at runtime, or null for [StopTimelineConfig.periodHours].
+  Duration? _interval;
+
+  /// Bumped by every [_load] so a superseded one cannot stomp the winner —
+  /// changing the range twice in a row starts two overlapping fetches.
+  int _generation = 0;
+
   @override
   void initState() {
     super.initState();
     _load();
   }
 
+  /// The stretch of history to fetch: the picked range, or the live one the
+  /// view is about to draw.
+  ///
+  /// Bounding the live fetch too is what makes the row limit go far enough. A
+  /// busy plant can spend all 2000 rows on the last two hours, and an
+  /// unbounded newest-first query then draws a week-long period with six days
+  /// missing — silently, and looking like a week with no stops in it.
+  DateTimeRange _fetchWindow() {
+    final range = _range;
+    if (range != null) return range;
+    final now = DateTime.now();
+    return DateTimeRange(start: now.subtract(_span), end: now);
+  }
+
+  Duration get _span =>
+      _interval ?? Duration(hours: widget.config.periodHours);
+
   Future<void> _load() async {
+    final generation = ++_generation;
     try {
       final man = await ref.read(alarmManProvider.future);
-      final history = await man.getRecentAlarms(limit: 2000);
+      final window = _fetchWindow();
+      final history = await man.getRecentAlarms(
+        limit: 2000,
+        from: window.start,
+        to: window.end,
+      );
       final active = await man.activeAlarms().first;
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _tree = AlarmTree.fromConfigs(man.config.alarms);
         _source =
@@ -143,12 +181,33 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _generation) return;
       setState(() {
         _error = e;
         _loading = false;
       });
     }
+  }
+
+  /// An absolute range, or null to go back to the live rolling period.
+  void _setRange(DateTimeRange? range) {
+    setState(() {
+      _range = range;
+      _error = null;
+      _loading = true;
+    });
+    _load();
+  }
+
+  /// A rolling span ending now. Always live, so it drops any absolute range.
+  void _setInterval(Duration interval) {
+    setState(() {
+      _interval = interval;
+      _range = null;
+      _error = null;
+      _loading = true;
+    });
+    _load();
   }
 
   @override
@@ -168,6 +227,10 @@ class _StopTimelineState extends ConsumerState<StopTimeline> {
       config: widget.config,
       tree: _tree!,
       source: _source,
+      range: _range,
+      interval: _interval,
+      onRangeChanged: _setRange,
+      onIntervalChanged: _setInterval,
     );
   }
 }
@@ -180,12 +243,29 @@ class StopTimelineView extends StatefulWidget {
     required this.config,
     required this.tree,
     required this.source,
+    this.range,
+    this.interval,
+    this.onRangeChanged,
+    this.onIntervalChanged,
     this.clock,
   });
 
   final StopTimelineConfig config;
   final AlarmTree tree;
   final StopIntervalSource source;
+
+  /// An absolute period to show, or null for the live rolling one.
+  final DateTimeRange? range;
+
+  /// The rolling span when [range] is null, or null for the configured
+  /// [StopTimelineConfig.periodHours].
+  final Duration? interval;
+
+  /// Called with the operator's pick from the date-range picker.
+  final ValueChanged<DateTimeRange?>? onRangeChanged;
+
+  /// Called with a rolling span picked off the interval menu.
+  final ValueChanged<Duration>? onIntervalChanged;
 
   /// Fixed clock for tests and goldens. Live when null, which also stops the
   /// per-second repaint that keeps a standing alarm growing.
@@ -217,16 +297,36 @@ class _StopTimelineViewState extends State<StopTimelineView> {
   static const double _groupRowHeight = 38;
   static const double _alarmRowHeight = 30;
 
-  TimelineWindow get _period => TimelineWindow(
-      _now.subtract(Duration(hours: widget.config.periodHours)), _now);
+  /// The span the overview strip covers and panning is clamped to.
+  ///
+  /// A picked range pins it; otherwise it rolls with the clock, at the
+  /// runtime interval if one was picked and the configured one if not.
+  TimelineWindow get _period {
+    final range = widget.range;
+    if (range != null) return TimelineWindow(range.start, range.end);
+    return TimelineWindow(_now.subtract(_liveSpan), _now);
+  }
+
+  Duration get _liveSpan =>
+      widget.interval ?? Duration(hours: widget.config.periodHours);
+
+  /// Where the view starts out. A picked range is shown whole — that is what
+  /// picking it asked for; the live period opens on its last three hours,
+  /// which is the shift-so-far rather than a day squeezed into a lane.
+  TimelineWindow _openingWindow() {
+    final range = widget.range;
+    if (range != null) return TimelineWindow(range.start, range.end);
+    final span =
+        _liveSpan < const Duration(hours: 3) ? _liveSpan : const Duration(hours: 3);
+    return TimelineWindow(
+        _now.subtract(span), _now.add(const Duration(minutes: 10)));
+  }
 
   @override
   void initState() {
     super.initState();
     _now = widget.clock ?? DateTime.now();
-    _window = ValueNotifier(TimelineWindow(
-        _now.subtract(const Duration(hours: 3)),
-        _now.add(const Duration(minutes: 10))));
+    _window = ValueNotifier(_openingWindow());
     // The live edge really is live: an alarm still standing keeps growing.
     // A repaint only, never a refetch. A fixed clock means a test or a
     // golden, where a ticking timer would only cause flake.
@@ -235,6 +335,21 @@ class _StopTimelineViewState extends State<StopTimelineView> {
         if (!mounted) return;
         setState(() => _now = DateTime.now());
       });
+    }
+  }
+
+  @override
+  void didUpdateWidget(StopTimelineView old) {
+    super.didUpdateWidget(old);
+    // A new period is a new question, so the view goes back to the top of it
+    // rather than leaving the old window hanging outside the new bounds --
+    // where `clampTo` would drag it to an edge nobody asked for. The
+    // selection went with the old period too.
+    if (old.range != widget.range || old.interval != widget.interval) {
+      _now = widget.clock ?? DateTime.now();
+      _window.value = _openingWindow();
+      _selected = null;
+      _selectedLabel = null;
     }
   }
 
@@ -376,7 +491,11 @@ class _StopTimelineViewState extends State<StopTimelineView> {
       // guessable from the lanes, keeps its space.
       child: Row(
         children: [
+          // The flex weights are a priority order, not a layout accident: the
+          // severity chips are filter controls and have to stay reachable, so
+          // they outrank the title, which only has to stay recognisable.
           Flexible(
+            flex: 2,
             child: Text(
               widget.config.headerText ?? 'Stop analysis',
               maxLines: 1,
@@ -390,7 +509,7 @@ class _StopTimelineViewState extends State<StopTimelineView> {
           const SizedBox(width: 10),
           if (!compact)
             Flexible(
-              flex: 3,
+              flex: 6,
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 reverse: true,
@@ -413,18 +532,103 @@ class _StopTimelineViewState extends State<StopTimelineView> {
                 maxLines: 1, style: theme.textTheme.labelSmall),
             const SizedBox(width: 10),
           ],
-          ValueListenableBuilder(
-            valueListenable: _window,
-            builder: (context, window, _) => Text(
-              '${_hhmm(window.start)} – ${_hhmm(window.end)}',
-              maxLines: 1,
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
-            ),
-          ),
+          // Deliberately not Flexible: the period is the one thing in this
+          // header that must never be abbreviated -- an elided date reads as
+          // today. The title ellipsises instead, and still says enough.
+          _periodMenu(context),
         ],
       ),
     );
+  }
+
+  /// The period control: a rolling interval, or an absolute range off the
+  /// same picker the trend charts use.
+  ///
+  /// It hangs off the window read-out because that read-out already answers
+  /// "which stretch am I looking at" — the operator who wants a different
+  /// stretch reaches for the thing telling them which one they have. Without
+  /// it the asset could only ever show the last [StopTimelineConfig.periodHours]
+  /// hours, so yesterday's night shift was not reachable from the page at all.
+  Widget _periodMenu(BuildContext context) {
+    final theme = Theme.of(context);
+    final live = widget.range == null;
+
+    return PopupMenuButton<Object>(
+      key: const ValueKey('stop-timeline-period-menu'),
+      tooltip: 'Period shown',
+      position: PopupMenuPosition.under,
+      itemBuilder: (context) => [
+        if (!live)
+          PopupMenuItem<Object>(
+            key: const ValueKey('stop-timeline-period-live'),
+            value: _liveAction,
+            child: const Text('Back to live'),
+          ),
+        if (!live) const PopupMenuDivider(),
+        for (final (label, span) in _intervalPresets)
+          CheckedPopupMenuItem<Object>(
+            key: ValueKey('stop-timeline-interval-${span.inMinutes}'),
+            value: span,
+            checked: live && _liveSpan == span,
+            child: Text(label),
+          ),
+        const PopupMenuDivider(),
+        PopupMenuItem<Object>(
+          key: const ValueKey('stop-timeline-pick-range'),
+          value: _pickRangeAction,
+          child: const Text('Pick a date range…'),
+        ),
+      ],
+      onSelected: (value) {
+        if (value is Duration) {
+          widget.onIntervalChanged?.call(value);
+        } else if (value == _liveAction) {
+          widget.onRangeChanged?.call(null);
+        } else {
+          _pickRange(context);
+        }
+      },
+      child: ValueListenableBuilder(
+        valueListenable: _window,
+        builder: (context, window, _) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(live ? Icons.calendar_month : Icons.history,
+                size: 12, color: theme.colorScheme.onSurface),
+            const SizedBox(width: 4),
+            Text(
+              _windowLabel(window),
+              maxLines: 1,
+              softWrap: false,
+              style: theme.textTheme.labelSmall?.copyWith(
+                  fontFeatures: const [FontFeature.tabularFigures()]),
+            ),
+            Icon(Icons.arrow_drop_down,
+                size: 14, color: theme.colorScheme.onSurface),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickRange(BuildContext context) async {
+    final period = _period;
+    final picked = await showSetDatePicker(
+        context, DateTimeRange(start: period.start, end: period.end));
+    if (picked == null) return;
+    widget.onRangeChanged?.call(picked);
+  }
+
+  /// The window, with the day spelled out whenever "today" would be a guess.
+  String _windowLabel(TimelineWindow window) {
+    final crossesDay = !_sameDay(window.start, window.end);
+    if (!crossesDay && _sameDay(window.end, _now)) {
+      return '${_hhmm(window.start)} – ${_hhmm(window.end)}';
+    }
+    final end = crossesDay
+        ? '${_dayLabel(window.end)} ${_hhmm(window.end)}'
+        : _hhmm(window.end);
+    return '${_dayLabel(window.start)} ${_hhmm(window.start)} – $end';
   }
 
   Widget _viewToggle(BuildContext context) {
@@ -726,7 +930,12 @@ class _StopTimelineViewState extends State<StopTimelineView> {
                 children: [
                   for (final tick in timelineTicks(window, c.maxWidth))
                     Positioned(
-                      left: tick.x - 20,
+                      // Nudged inside rather than clipped: a picked range
+                      // starts on a round hour far more often than a rolling
+                      // one does, and a first tick reading ":00" is worse
+                      // than one sitting a few pixels off its gridline.
+                      left: (tick.x - 20)
+                          .clamp(0.0, math.max(0.0, c.maxWidth - 40)),
                       bottom: 3,
                       width: 40,
                       child: Text(
@@ -990,6 +1199,15 @@ class _StopTimelineViewState extends State<StopTimelineView> {
     });
   }
 
+  /// What day the overview strip covers — a range now that it need not end
+  /// today, so a week-long period does not label itself with one date.
+  String _periodDayLabel() {
+    final period = _period;
+    return _sameDay(period.start, period.end)
+        ? _dayLabel(period.start)
+        : '${_dayLabel(period.start)} – ${_dayLabel(period.end)}';
+  }
+
   Widget _brush(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
@@ -1004,7 +1222,9 @@ class _StopTimelineViewState extends State<StopTimelineView> {
             padding: const EdgeInsets.only(left: 10),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text(_dayLabel(_now),
+              child: Text(_periodDayLabel(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(fontSize: 9)),
             ),
           ),
@@ -1104,6 +1324,27 @@ String _two(int n) => n.toString().padLeft(2, '0');
 String _hhmm(DateTime t) => '${_two(t.hour)}:${_two(t.minute)}';
 String _hhmmss(DateTime t) => '${_hhmm(t)}:${_two(t.second)}';
 String _dayLabel(DateTime t) => '${_two(t.day)}/${_two(t.month)}';
+bool _sameDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
+
+/// Menu value for "back to live", which no [Duration] can stand for.
+const Object _liveAction = 'live';
+
+/// Menu value for the date-range picker.
+const Object _pickRangeAction = 'range';
+
+/// The rolling spans offered off the period menu.
+///
+/// A shift, a day and a week — the stretches a stop analysis is actually
+/// asked about. Anything else is what the date-range picker is for.
+const _intervalPresets = <(String, Duration)>[
+  ('Last hour', Duration(hours: 1)),
+  ('Last 4 hours', Duration(hours: 4)),
+  ('Last 8 hours', Duration(hours: 8)),
+  ('Last 12 hours', Duration(hours: 12)),
+  ('Last 24 hours', Duration(hours: 24)),
+  ('Last 7 days', Duration(days: 7)),
+];
 
 String _durShort(Duration d) {
   if (d.inSeconds < 60) return '${d.inSeconds}s';
