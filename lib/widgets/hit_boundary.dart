@@ -248,6 +248,14 @@ class HitBoundaryStyle {
 
   final double strokeWidth;
 
+  /// How far off the asset the ring stands, in logical pixels.
+  ///
+  /// The lever that decides whether this reads as a mark at all. Drawn tight
+  /// to the shape it is a border the asset appears to have grown, and an
+  /// operator has no reason to read a border as "selected"; given room it is
+  /// plainly a separate ring around the machine, which is the whole message.
+  final double standoff;
+
   /// How long the pattern takes to travel one whole `dash + gap`. One full
   /// turn of the animation, and the length of a loop that closes seamlessly.
   final Duration period;
@@ -292,9 +300,10 @@ class HitBoundaryStyle {
   final bool twoTone;
 
   const HitBoundaryStyle({
-    this.dash = 6,
-    this.gap = 4,
-    this.strokeWidth = 1.6,
+    this.dash = 8,
+    this.gap = 5,
+    this.strokeWidth = 2.4,
+    this.standoff = 7,
     this.period = const Duration(milliseconds: 1200),
     this.pulse = 0,
     this.crawl = true,
@@ -346,6 +355,32 @@ class HitBoundaryStyle {
     inkRole: HmiColorRole.blue,
   );
 
+  /// [pulsing] with more of everything that makes a ring visible: a heavier
+  /// stroke, longer dashes, and more air between it and the machine. For
+  /// deciding how much presence the mark should have, not a different idea
+  /// about what it does.
+  static const pulsingBold = HitBoundaryStyle(
+    dash: 11,
+    gap: 7,
+    strokeWidth: 3.4,
+    standoff: 9,
+    pulse: 0.5,
+    crawl: false,
+    period: Duration(milliseconds: 1800),
+  );
+
+  /// [blueFade] at [pulsingBold]'s weight.
+  static const blueFadeBold = HitBoundaryStyle(
+    dash: 11,
+    gap: 7,
+    strokeWidth: 3.4,
+    standoff: 9,
+    pulse: 0.5,
+    crawl: false,
+    period: Duration(milliseconds: 1800),
+    inkRole: HmiColorRole.blue,
+  );
+
   /// The style the plant view actually marks with.
   static const selection = march;
 
@@ -353,6 +388,7 @@ class HitBoundaryStyle {
     double? dash,
     double? gap,
     double? strokeWidth,
+    double? standoff,
     Duration? period,
     double? pulse,
     bool? crawl,
@@ -363,6 +399,7 @@ class HitBoundaryStyle {
         dash: dash ?? this.dash,
         gap: gap ?? this.gap,
         strokeWidth: strokeWidth ?? this.strokeWidth,
+        standoff: standoff ?? this.standoff,
         period: period ?? this.period,
         pulse: pulse ?? this.pulse,
         crawl: crawl ?? this.crawl,
@@ -376,6 +413,7 @@ class HitBoundaryStyle {
       other.dash == dash &&
       other.gap == gap &&
       other.strokeWidth == strokeWidth &&
+      other.standoff == standoff &&
       other.period == period &&
       other.pulse == pulse &&
       other.crawl == crawl &&
@@ -383,8 +421,8 @@ class HitBoundaryStyle {
       other.inkRole == inkRole;
 
   @override
-  int get hashCode => Object.hash(
-      dash, gap, strokeWidth, period, pulse, crawl, twoTone, inkRole);
+  int get hashCode => Object.hash(dash, gap, strokeWidth, standoff, period,
+      pulse, crawl, twoTone, inkRole);
 }
 
 /// Draws [contours] as a ring of dashes that crawl around the shape.

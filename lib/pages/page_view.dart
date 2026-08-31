@@ -852,9 +852,10 @@ class _OpenPaneMark extends StatefulWidget {
 
 class _OpenPaneMarkState extends State<_OpenPaneMark>
     with SingleTickerProviderStateMixin {
-  /// How far off the asset the outline stands, in logical pixels. Enough to
-  /// read as a mark around the thing rather than a line drawn on it.
-  static const double _standoff = 4;
+  /// How far off the asset the outline stands. A property of the style now —
+  /// how much air the ring is given is half of whether it reads as a mark
+  /// around the machine rather than a border the machine has grown.
+  static double get _standoff => HitBoundaryStyle.selection.standoff;
 
   /// Drives the crawl. Repeating, so it is only ever allowed to run while
   /// there is actually a ring on screen — a ticker that never stops is a

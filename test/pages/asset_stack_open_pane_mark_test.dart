@@ -136,10 +136,11 @@ void main() {
     final outline = markBounds(tester);
     expect(outline.center.dx, closeTo(box.center.dx, 2),
         reason: 'the mark belongs to the asset the pane was opened from');
+    final air = HitBoundaryStyle.selection.standoff * 2;
     expect(outline.width, greaterThan(box.width));
-    expect(outline.width, lessThan(box.width + 20));
+    expect(outline.width, lessThan(box.width + air + 4));
     expect(outline.height, greaterThan(box.height));
-    expect(outline.height, lessThan(box.height + 20));
+    expect(outline.height, lessThan(box.height + air + 4));
 
     // A second asset: the pane swaps, and so does the ring.
     await tester.tap(find.text('right'));
@@ -174,8 +175,11 @@ void main() {
     for (final ring in markOutline(tester)) {
       for (final point in ring) {
         // Every point sits on the rim of the disc, standing off it evenly —
-        // nothing out at the corners of the box.
-        expect((point - centre).distance, closeTo(44, 1.5));
+        // nothing out at the corners of the box. Off the style's standoff
+        // rather than a number, so tuning how much air the ring is given does
+        // not have to be re-typed here.
+        expect((point - centre).distance,
+            closeTo(40 + HitBoundaryStyle.selection.standoff, 1.5));
       }
     }
 
@@ -200,8 +204,9 @@ void main() {
     final bounds = markBounds(tester);
     expect(bounds.center.dx, closeTo(face.center.dx, 1));
     expect(bounds.center.dy, closeTo(face.center.dy, 1));
-    expect(bounds.width, closeTo(face.width + 8, 2));
-    expect(bounds.height, closeTo(face.height + 8, 2));
+    final air = HitBoundaryStyle.selection.standoff * 2;
+    expect(bounds.width, closeTo(face.width + air, 2));
+    expect(bounds.height, closeTo(face.height + air, 2));
   });
 
   testWidgets('closing the pane clears the mark', (tester) async {
