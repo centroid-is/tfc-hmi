@@ -31,7 +31,7 @@ class RouteRegistry {
   /// Declares the group a path needs without registering a builder for it.
   ///
   /// The single write path for [_routeGroups]; [registerRoute] delegates
-  /// here. This exists because the seven routes this app raises live in
+  /// here. This exists because the nine routes this app raises live in
   /// Beamer's table rather than in this registry — see [groupForRoute].
   void declareRouteGroup(String path, AccessGroup group) {
     _routeGroups[path] = group;
@@ -57,7 +57,7 @@ class RouteRegistry {
   /// `registerRoute` currently has no call sites anywhere in the repo. The
   /// `group:` parameter exists because the spec puts the declaration on
   /// `registerRoute` and because pages registered through the registry later
-  /// need somewhere to say it. The seven routes raised today are declared
+  /// need somewhere to say it. The nine routes raised today are declared
   /// through [declareRouteGroup] from `lib/access_routes.dart`.
   AccessGroup groupForRoute(String? path) {
     return _routeGroups[path] ?? AccessGroup.operate;
