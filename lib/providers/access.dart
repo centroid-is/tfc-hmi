@@ -677,6 +677,177 @@ class AccessSessionController extends _$AccessSessionController {
     state = AsyncData(AccessSession.anonymous(await _anonymousGroups(repo)));
   }
 
+  /// Re-resolve the session in force against `app_role` and `app_user`, in
+  /// place, without signing anybody in or out.
+  ///
+  /// ## Who calls this, and why it is not optional
+  ///
+  /// Two call sites, both on the administration screen:
+  ///
+  /// * **After any role write** (06-07). The roles section puts a banner on the
+  ///   `Operator` row saying that ticking a group there grants it to every
+  ///   logged-out panel on the floor. `AccessRepository.anonymousGroups()` is
+  ///   what resolves that claim, and until this method existed its only callers
+  ///   were [_anonymousGroups] — reached at build, at restore and at sign-out.
+  ///   So without this call the banner warns about a change the app does not
+  ///   apply until something else happens to rebuild the session, which is
+  ///   worse than no banner: it is a promise the screen does not keep.
+  /// * **After any user write that can change the caller's own privileges**,
+  ///   which is `setUserRole` and `deleteUser` (06-08). CONTEXT's lockout
+  ///   invariant is "at least one account holds a role granting `users`", not
+  ///   "you may not edit yourself", so an admin may demote or delete their own
+  ///   account whenever a second holder exists.
+  ///
+  /// ## The elevated arm re-reads the row, never the cached name
+  ///
+  /// It resolves [AccessRepository.user] for the signed-in username **first**,
+  /// and then resolves *that row's* `roleName`. Resolving the name the session
+  /// already carries is one call shorter and wrong: that name is exactly what a
+  /// role change writes over, so it would answer the old role and the method
+  /// would silently fail in the one case it exists for.
+  ///
+  /// The username is compared exactly. `app_user.username` is a case-sensitive
+  /// primary key and `user('JON')` deliberately does not find `jon`; nothing
+  /// here folds.
+  ///
+  /// ## Three routes down to anonymous
+  ///
+  /// The `app_user` row has disappeared — the account was deleted, possibly by
+  /// its own holder; the row's role cannot be resolved — deleted or renamed;
+  /// or the repository is unreachable, so neither can be confirmed. A session
+  /// whose account no longer exists is not an elevated session, and leaving it
+  /// holding `users` is the privilege-retention hole this method exists to
+  /// close.
+  ///
+  /// Each of the three does what [signOut] and [_expire] already do on the way
+  /// down: `_detach()`, then `_clearStoredSession()`, then [_toAnonymous].
+  ///
+  /// * The **detach** is not decoration. [_attach] early-returns at
+  ///   `if (_expiry != null)`, so a live subscription left behind would make
+  ///   the next sign-in's `monitor.arm(remaining)` never run, and the new
+  ///   operator would count down the dropped session's leftover remainder until
+  ///   their first pointer-down re-armed it. That is bounded and fail-safe — an
+  ///   early logout, not a retained privilege — which is why it is worth one
+  ///   line and not worth a workaround.
+  /// * The **clear** is the difference between closing the hole and closing it
+  ///   until the next restart. [_restoreOrAnonymous] resolves the *stored*
+  ///   payload's role name and never consults `app_user`, so a payload left
+  ///   behind by a self-delete restores **elevated**, with the deleted
+  ///   account's name and the old role's groups, on any start inside the
+  ///   remaining window. [poke] would not overwrite it either: it returns early
+  ///   on a non-elevated session.
+  ///
+  /// ## What it must not do
+  ///
+  /// It does not call [poke] — an admin saving a role in another tab is not the
+  /// signed-in operator touching the panel, and quietly extending a session
+  /// because somebody re-saved a role is an inactivity timeout that does not
+  /// time out. It does not change `expiresAt`. It **never attaches** the
+  /// inactivity monitor; the anonymous arm and the surviving-elevated arm
+  /// attach and detach nothing.
+  ///
+  /// It writes **no audit row**. `audit.dart`'s four auth itemKeys are `login`,
+  /// `login_failed`, `logout` and `session_timeout`, and re-resolving groups is
+  /// none of them; the role write itself is already recorded by
+  /// `AccessAdminStore` as `role.update`, with the group sets as `old → new`. A
+  /// second row here would be one action producing two unrelated rows.
+  ///
+  /// It has exactly **two** permitted device-local persistence writes, and they
+  /// are named together so a later reader does not take either for an
+  /// oversight:
+  ///
+  /// 1. `_clearStoredSession()` on the three drop routes above.
+  /// 2. [_persist] of the newly published session on the **demotion** route —
+  ///    the row still exists and its role still resolves, but its `role_name`
+  ///    differs from the one the session was carrying — **with the same
+  ///    `expiresAt` the session already had**. Here the session stays elevated,
+  ///    so no drop route fires and nothing clears the payload, while the stored
+  ///    copy keeps the old, wider role name; a restart inside the remaining
+  ///    window would restore through `_roleOrNull(repo, stored.roleName)` with
+  ///    the groups the demotion just removed. Carrying the existing `expiresAt`
+  ///    through unchanged is what keeps "never rewrite a stored `expiresAt`"
+  ///    intact: this rewrites the role, not the clock.
+  ///
+  /// A no-op after dispose, like [_toAnonymous].
+  Future<void> refreshGroupsFromRoles() async {
+    if (_disposed) return;
+    final session = state.valueOrNull;
+    if (session == null) return;
+
+    AccessRepository? repo;
+    try {
+      repo = await ref.read(accessRepositoryProvider.future);
+    } on Object catch (e) {
+      Logger().w('Could not reach the access repository to re-resolve the '
+          'session groups: $e');
+      repo = null;
+    }
+    if (_disposed) return;
+
+    // The anonymous arm. `_anonymousGroups` keeps its own fallback to the
+    // seeded Operator set when there is no repository, which is the same
+    // conservative floor a build resolves on.
+    if (!session.isElevated) {
+      state = AsyncData(AccessSession.anonymous(await _anonymousGroups(repo)));
+      return;
+    }
+
+    final username = session.user!.username;
+
+    /// The one way down from elevated, in the order [signOut] and [_expire]
+    /// use. No audit row: the account being gone is not a logout event, and
+    /// there is nobody to attribute one to.
+    Future<void> drop(String why) async {
+      Logger().w(
+        'Dropping the elevated session for "$username" to anonymous: $why.',
+      );
+      _detach();
+      await _clearStoredSession();
+      await _toAnonymous();
+    }
+
+    if (repo == null) {
+      await drop('the database is unreachable, so the account behind the '
+          'session cannot be confirmed');
+      return;
+    }
+
+    final String roleNameNow;
+    try {
+      final row = await repo.user(username);
+      if (row == null) {
+        await drop('the account no longer exists');
+        return;
+      }
+      roleNameNow = row.roleName;
+    } on Object catch (e) {
+      await drop('the app_user row could not be read: $e');
+      return;
+    }
+
+    final role = await _roleOrNull(repo, roleNameNow);
+    if (role == null) {
+      await drop('the role "$roleNameNow" the account now holds cannot be '
+          'resolved — it was deleted or renamed');
+      return;
+    }
+
+    if (_disposed) return;
+    final next = AccessSession(
+      user: AuthenticatedUser(
+        username: username,
+        roleName: role.name,
+        displayName: session.user!.displayName,
+      ),
+      groups: role.groups,
+      expiresAt: session.expiresAt,
+    );
+    state = AsyncData(next);
+
+    // The demotion route, and the only re-persist. Same clock, new role.
+    if (role.name != session.user!.roleName) await _persist(next);
+  }
+
   // -----------------------------------------------------------------------
   // Device-local persistence
   // -----------------------------------------------------------------------

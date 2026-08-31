@@ -430,7 +430,9 @@ void main() {
     });
 
     test('a deleted role drops the session to anonymous', () async {
-      final h = await _harness();
+      final h = await _harness(users: {
+        'birna': (password: 'a password', roleName: 'Cleaning'),
+      });
       await h.settle();
       await h.repository.upsertRole(const AccessRole(
         name: 'Cleaning',
