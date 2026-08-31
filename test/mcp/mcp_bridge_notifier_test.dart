@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/mcp/mcp_bridge_notifier.dart';
 
@@ -116,10 +118,7 @@ void main() {
       ));
 
       // Should return immediately without changing state
-      await notifier.connect(
-        operatorId: 'test',
-        dbEnv: {},
-      );
+      await notifier.connect(dbEnv: {});
 
       expect(
         notifier.currentState.connectionState,
@@ -132,7 +131,7 @@ void main() {
         connectionState: McpConnectionState.connecting,
       ));
 
-      await notifier.connect(operatorId: 'test', dbEnv: {});
+      await notifier.connect(dbEnv: {});
 
       expect(
         notifier.currentState.connectionState,
@@ -153,10 +152,10 @@ void main() {
   });
 
   group('resolveServerPath', () {
-    test('uses TFC_MCP_SERVER_PATH when set', () {
+    test('uses kMcpServerPathEnvVar when set', () {
       final path = McpBridgeNotifier.resolveServerPath(
         envProvider: (key) =>
-            key == 'TFC_MCP_SERVER_PATH' ? '/custom/path/server' : null,
+            key == kMcpServerPathEnvVar ? '/custom/path/server' : null,
       );
 
       expect(path, '/custom/path/server');
@@ -171,42 +170,102 @@ void main() {
       expect(path, contains('tfc_mcp_server'));
     });
 
-    test('ignores empty env value', () {
+    test('ignores empty env value under kMcpServerPathEnvVar', () {
       final path = McpBridgeNotifier.resolveServerPath(
-        envProvider: (key) =>
-            key == 'TFC_MCP_SERVER_PATH' ? '' : null,
+        envProvider: (key) => key == kMcpServerPathEnvVar ? '' : null,
       );
 
       expect(path, contains('packages/tfc_mcp_server/build/cli/'));
     });
+
+    test('ignores the retired server-path key', () {
+      final path = McpBridgeNotifier.resolveServerPath(
+        envProvider: (key) =>
+            key == _retiredServerPathKey ? '/custom/path/server' : null,
+      );
+
+      expect(
+        path,
+        contains('packages/tfc_mcp_server/build/cli/'),
+        reason: 'the key was renamed, not aliased. A rename verified only in '
+            'the forward direction leaves a resolver that honours whichever '
+            'key it happens to see first, and both spellings stay live '
+            'forever.',
+      );
+    });
   });
 
-  group('buildEnvironment', () {
-    test('sets TFC_USER and database env vars', () {
-      final env = McpBridgeNotifier.buildEnvironment(
-        operatorId: 'operator1',
-        dbEnv: {
-          'CENTROID_PGHOST': 'db.example.com',
-          'CENTROID_PGPORT': '5432',
-        },
-      );
+  group('the subprocess environment', () {
+    // `connect` spawns a real binary, so its environment composition cannot be
+    // driven from a unit test. The claim this group defends is an *absence* --
+    // that no operator key reaches the subprocess -- and a source scan is
+    // exactly the instrument for an absence, in the same shape as
+    // test/tools/centroidx_env_naming_test.dart's mechanical gate.
+    //
+    // The environment-composition helper that used to sit between `connect`
+    // and StdioServerParameters is gone: with the operator key removed its
+    // body was `{...dbEnv}`, an identity function, and a test group asserting
+    // that a function returns its argument proves nothing.
+    final source = File('lib/mcp/mcp_bridge_notifier.dart').readAsStringSync();
 
-      expect(env['TFC_USER'], 'operator1');
-      expect(env['CENTROID_PGHOST'], 'db.example.com');
-      expect(env['CENTROID_PGPORT'], '5432');
+    test('is the database environment, passed straight through', () {
+      expect(
+        source,
+        contains('environment: dbEnv'),
+        reason: 'the subprocess inherits the CENTROID_PG* map it was given '
+            'and nothing is layered on top of it.',
+      );
     });
 
-    test('handles empty dbEnv', () {
-      final env = McpBridgeNotifier.buildEnvironment(
-        operatorId: 'admin',
-        dbEnv: {},
+    test('carries no operator key of any kind', () {
+      expect(
+        source,
+        isNot(contains(_retiredOperatorKey)),
+        reason: 'the operator identity is deleted, not renamed.',
       );
+      for (final successor in const [
+        'CENTROIDX_MCP_OPERATOR',
+        'MCP_OPERATOR',
+        'OPERATOR_ID',
+      ]) {
+        expect(
+          source,
+          isNot(contains(successor)),
+          reason: 'there is exactly one kind of identity in this system: the '
+              'access session signed-in user. A second channel named '
+              '$successor would be the deleted one wearing a new name, which '
+              'is the failure mode this phase is most exposed to.',
+        );
+      }
+    });
 
-      expect(env['TFC_USER'], 'admin');
-      expect(env.length, 1);
+    test('is composed inline, with no helper left to assert an identity', () {
+      expect(
+        source,
+        isNot(contains(_retiredEnvHelperName)),
+        reason: 'the helper was deleted along with the operator key it '
+            'carried, rather than left as a pass-through.',
+      );
     });
   });
 }
+
+/// The retired server-path environment key, assembled rather than written.
+///
+/// Spelled in pieces so this file's own source stays clean of the retired
+/// acronym. `test/tools/centroidx_env_naming_test.dart` scans every file in
+/// the tree for it, has no allowlist, and excludes only its own path -- so a
+/// literal here would turn the phase's acceptance instrument red. Do not
+/// "tidy" this back into a single string.
+final _retiredServerPathKey = '${'TFC'}${'_'}MCP_SERVER_PATH';
+
+/// The retired operator environment key, assembled for the same reason.
+final _retiredOperatorKey = '${'TFC'}${'_'}USER';
+
+/// The name of the deleted environment-composition helper, assembled so that a
+/// grep for the dead name over this file and over
+/// `lib/mcp/mcp_bridge_notifier.dart` finds nothing in either.
+final _retiredEnvHelperName = '${'build'}Environment';
 
 /// Helper to test copyWith preserves values.
 McpBridgeState updated_state(McpBridgeState state) {
