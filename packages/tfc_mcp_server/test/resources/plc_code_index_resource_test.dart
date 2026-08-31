@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/plc_code_index.dart';
 import 'package:tfc_mcp_server/src/server.dart';
 import '../helpers/mock_alarm_reader.dart';
@@ -52,12 +51,7 @@ void main() {
           ),
         ]);
 
-        final identity = EnvOperatorIdentity(
-          environmentProvider: () => {'TFC_USER': 'op1'},
-        );
-
         server = TfcMcpServer(
-          identity: identity,
           database: db,
           stateReader: MockStateReader(),
           alarmReader: MockAlarmReader(),
@@ -118,12 +112,7 @@ void main() {
         db = ServerDatabase.inMemory();
         await db.customStatement('SELECT 1');
 
-        final identity = EnvOperatorIdentity(
-          environmentProvider: () => {'TFC_USER': 'op1'},
-        );
-
         server = TfcMcpServer(
-          identity: identity,
           database: db,
           stateReader: MockStateReader(),
           alarmReader: MockAlarmReader(),
@@ -161,12 +150,7 @@ void main() {
         // Empty index -- isEmpty returns true
         plcCodeIndex = MockPlcCodeIndex();
 
-        final identity = EnvOperatorIdentity(
-          environmentProvider: () => {'TFC_USER': 'op1'},
-        );
-
         server = TfcMcpServer(
-          identity: identity,
           database: db,
           stateReader: MockStateReader(),
           alarmReader: MockAlarmReader(),
