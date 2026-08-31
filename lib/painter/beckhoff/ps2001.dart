@@ -7,10 +7,16 @@
 /// and the measured output volts and amps. So the face is driven, not drawn.
 ///
 /// Geometry follows the PS2001-2410-1001 documentation, section "Front side
-/// and operating elements": a 48 x 124 x 127 mm housing with the mains input
-/// (N, L, PE) at the top, the DC output (2 x +, 3 x -) at the bottom, the
-/// output-voltage potentiometer and DC-OK LED between them, and the EtherCAT
-/// X1 IN / X2 OUT sockets with their LINK/ACT lamps.
+/// and operating elements": a 48 x 124 x 127 mm housing carrying the DC-OK
+/// lamp, the output-voltage potentiometer and the EtherCAT X1 IN / X2 OUT
+/// sockets.
+///
+/// The wiring is deliberately left off. The real front also has the mains
+/// input (N, L, PE) at the top and the DC output (2 x +, 3 x -) at the foot,
+/// and drawing them added five terminal blocks of detail that answer a
+/// question nobody asks a mimic — an electrician landing a wire is standing
+/// at the cabinet with the unit in front of them, not reading a screen. What
+/// is left is what the page is for: the model, the tag, and the two lamps.
 library;
 
 import 'dart:math' as math;
@@ -126,41 +132,14 @@ class PS2001Painter extends CustomPainter {
       tp.paint(canvas, at);
     }
 
-    // One spring-loaded terminal: the square push lever above the round wire
-    // hole, the way the EL terminals draw them, with the pole name under it.
-    void terminal(Offset at, String label, Color labelColor) {
-      const w = 12.0;
-      final lever = Rect.fromLTWH(at.dx, at.dy, w, 4);
-      canvas.drawRect(lever, Paint()..color = Colors.grey.shade300);
-      canvas.drawRect(lever, stroke);
-      final hole = Offset(at.dx + w / 2, at.dy + 8.5);
-      canvas.drawCircle(hole, 2.4, Paint()..color = Colors.grey.shade300);
-      canvas.drawCircle(hole, 2.4, stroke);
-      text(
-        label,
-        Offset(at.dx, at.dy + 11.5),
-        fontSize: 3.4,
-        color: labelColor,
-        width: w,
-        align: TextAlign.center,
-      );
-    }
-
-    // --- (A) Mains input, top: N, L, PE ---
-    const inputLabels = ['N', 'L', 'PE'];
-    final inputColors = [
-      Colors.blue.shade800,
-      Colors.brown.shade700,
-      Colors.green.shade800,
-    ];
-    for (int i = 0; i < 3; i++) {
-      terminal(Offset(4 + i * 13.5, 4), inputLabels[i], inputColors[i]);
-    }
+    // Three groups spread down the 124 mm face — identity, lamps, ports —
+    // rather than crowded under the top edge where the mains terminals used
+    // to hold them.
 
     // --- Wordmark ---
-    text('BECKHOFF', const Offset(4, 22),
+    text('BECKHOFF', const Offset(4, 18),
         fontSize: 5, color: const Color(0xFFE30613));
-    text(name, const Offset(4, 29), fontSize: 4);
+    text(name, const Offset(4, 25), fontSize: 4);
 
     // --- (D) DC-OK LED, and the mimic's own fault lamp beside it ---
     void lamp(Offset at, String label, Color color) {
@@ -170,11 +149,11 @@ class PS2001Painter extends CustomPainter {
       text(label, Offset(at.dx + 6.2, at.dy - 0.4), fontSize: 3.2);
     }
 
-    lamp(const Offset(4, 38), 'DC OK', _dcOkColor);
-    lamp(const Offset(4, 44), 'FAULT', _faultColor);
+    lamp(const Offset(4, 52), 'DC OK', _dcOkColor);
+    lamp(const Offset(4, 60), 'FAULT', _faultColor);
 
     // --- (C) Output voltage potentiometer, factory set to 24.1 V ---
-    const potCentre = Offset(38, 41);
+    const potCentre = Offset(38, 57);
     canvas.drawCircle(potCentre, 4.5, Paint()..color = Colors.grey.shade300);
     canvas.drawCircle(potCentre, 4.5, stroke);
     canvas.drawLine(
@@ -203,18 +182,8 @@ class PS2001Painter extends CustomPainter {
       );
     }
 
-    port(const Offset(6, 54), 'X1 IN');
-    port(const Offset(26, 54), 'X2 OUT');
-
-    // --- (B) DC output, bottom: two positives and three negatives ---
-    // Both poles are internally paralleled, so the drawing shows what an
-    // electrician finds on the front rather than one terminal per pole.
-    for (int i = 0; i < 2; i++) {
-      terminal(Offset(11 + i * 13.5, 82), '+', Colors.red.shade800);
-    }
-    for (int i = 0; i < 3; i++) {
-      terminal(Offset(4 + i * 13.5, 100), '-', Colors.blue.shade800);
-    }
+    port(const Offset(6, 84), 'X1 IN');
+    port(const Offset(26, 84), 'X2 OUT');
 
     canvas.restore();
   }
