@@ -153,17 +153,26 @@ void main() {
   /// so on it every one of these assertions would be about where the page
   /// wraps rather than about what it says. A station is 1920x1080; the
   /// short-window claims below set their own size deliberately.
+  ///
+  /// [settle] is off for the one case that never settles: a spinner animates
+  /// forever, so `pumpAndSettle` on the unresolved-store page times out rather
+  /// than reporting anything about the page.
   Future<void> pumpBody(
     WidgetTester tester,
     List<Override> o, {
     Size size = const Size(1400, 2600),
+    bool settle = true,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(host(o));
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -201,13 +210,13 @@ void main() {
 
     test('the page is const-constructible, so createLocationBuilder can const '
         'it', () {
-      // `const` here is the whole assertion: a page with a field could not be
-      // registered as `const AccessAdminPage()` the way `FirstUserPage` is.
-      const first = AccessAdminPage();
-      const second = AccessAdminPage();
-      expect(identical(first, second), isTrue,
-          reason: 'two const instances of a field-less widget are canonicalised '
-              'to one — a field would break that');
+      // The `const` list below is the whole assertion, and it is a
+      // compile-time one: this stops compiling the moment the page grows a
+      // field that is not `const`-able or a constructor that is not `const`.
+      // `createLocationBuilder` registers `FirstUserPage` exactly this way, and
+      // 06-10 registers this page beside it.
+      const routeTargets = <Widget>[AccessAdminPage()];
+      expect(routeTargets.single, isA<AccessAdminPage>());
     });
   });
 
@@ -261,8 +270,8 @@ void main() {
   group('while the store handle resolves', () {
     testWidgets('the page shows a progress indicator, never a blank',
         (tester) async {
-      await pumpBody(tester, overrides(storeNeverResolves: true));
-      // Not pumpAndSettle past this: the indicator animates forever.
+      await pumpBody(tester, overrides(storeNeverResolves: true),
+          settle: false);
 
       expect(find.byKey(kAccessAdminLoadingKey), findsOneWidget,
           reason: 'first_user.dart: "a progress indicator rather than an empty '
