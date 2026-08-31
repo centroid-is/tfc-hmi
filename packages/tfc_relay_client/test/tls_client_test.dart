@@ -622,6 +622,28 @@ void main() {
               'case proved nothing');
     });
 
+    test('the pinned client bounds the connect it owns', () {
+      // A text pin, for the same reason as the two beside it: what this line
+      // buys has no offline observable. `IOWebSocketChannel.connect` applies
+      // `connectTimeout` as a `Future.timeout` (io.dart:50-53), which
+      // **abandons** the connect rather than cancelling it — 06-07 measured
+      // the residue at fds 36→64 and eight live proxy pairs over six seconds
+      // of redials. The backoff does not bound that: at the 30 s cap a panel
+      // pointed at a gateway that swallows handshakes accumulates for the
+      // whole duration of the fault, which on a night shift crosses the
+      // default descriptor limit and then fails for a reason that has nothing
+      // to do with the network. `HttpClient.connectionTimeout` is the second
+      // bound underneath, and it *cancels*.
+      final code = File('lib/src/remote_state_man.dart').readAsStringSync();
+      expect(code, contains('SecurityContext(withTrustedRoots: false)'),
+          reason: 'anti-vacuity: this pin reads the same construction the '
+              'case below reads, and both are wrong if that moved');
+      expect(code, contains('connectionTimeout = config.connectTimeout'),
+          reason: 'the pinned HttpClient was built with a context and nothing '
+              'else — no connectionTimeout, no idleTimeout — so there was no '
+              'bound underneath the abandoned one at all');
+    });
+
     test('the panel\'s context never consults the machine\'s own trust store',
         () {
       // A text pin, and the reason it has to be one is a measurement: flipping

@@ -128,7 +128,16 @@ final class RemoteStateMan implements StateManApi {
           // the gateway (T-06-20) — which is also why our own gateway is
           // refused by a client that skips this (SEC-02's system-roots arm).
           ..setTrustedCertificates(tls.rootCertPath),
-      );
+      )
+        // The second bound under the abandoned dial.
+        // `IOWebSocketChannel.connect` applies `connectTimeout` as a
+        // `Future.timeout`, which abandons the connect rather than cancelling
+        // it, leaving roughly three descriptors per attempt that nothing
+        // reclaims (06-07: fds 36→64 over six seconds of redials). The
+        // backoff does not bound that — at the 30 s cap a panel pointed at a
+        // gateway that swallows handshakes accumulates for the whole fault —
+        // and `HttpClient.connectionTimeout` *cancels*.
+        ..connectionTimeout = config.connectTimeout;
     }
 
     if (keys.isNotEmpty) {

@@ -237,6 +237,30 @@ final class ClientConfig {
   /// root into the OS store and trust that store) is not available here.
   final ClientTlsConfig? tls;
 
+  /// Whether this panel may send its [token] over an unencrypted dial.
+  ///
+  /// **False, and the default is the whole point.** `ConnectionSupervisor`
+  /// puts [token] on the hello frame unconditionally, so a per-station
+  /// credential that grants `operate` on the plant's PLCs would cross the LAN
+  /// in the clear once per reconnect, for as long as the panel runs — and
+  /// anybody with a span port or a mirrored switch port would have a working
+  /// credential. That is not a hypothetical rollout: design §7.1 presents the
+  /// gateway's `tls` and `auth` as independently nullable "because they rotate
+  /// on different clocks", which is an explicit invitation to turn the token
+  /// file on before TLS.
+  ///
+  /// **What it is for.** The fixtures. Every fault leg that drives the
+  /// credential path — `auth_refusal_test.dart` today, Phase 7's proxy legs
+  /// next — runs over plaintext loopback, and a rule with no way out would
+  /// either take that coverage away or be reverted by whoever needed it back.
+  /// An explicit, greppable opt-in is the difference between a fixture and a
+  /// deployment: `grep -rn allowTokenOverPlaintext` over a plant's
+  /// configuration answers the question in one line.
+  ///
+  /// It does not excuse a pinned root on a plaintext dial. That is a different
+  /// mistake — see [checkDialable].
+  final bool allowTokenOverPlaintext;
+
   /// How long one dial may spend before it is abandoned and the schedule
   /// takes over.
   ///
@@ -271,6 +295,17 @@ final class ClientConfig {
   /// rule about configuration that lived in the class it configures would be
   /// the second place to look.
   ///
+  /// **Three combinations, and the two added later are the mirror of the
+  /// first.** The original rule refused `wss` with no root — an encrypted dial
+  /// the panel cannot verify. Both of its reflections were accepted in
+  /// silence: a pinned root on a `ws` dial (a configuration that *reads* as
+  /// encrypted while the traffic is not, because `RemoteStateMan` builds the
+  /// context and hands it to a dial that never consults it), and a station
+  /// credential on a `ws` dial (which puts a key to the plant's machines on
+  /// the LAN in the clear, once per reconnect, forever). Only the credential
+  /// case has an opt-in, because only that one has a legitimate caller — see
+  /// [allowTokenOverPlaintext].
+  ///
   /// **Why `wss` without a pinned root is refused rather than attempted.**
   /// Measured (06-RESEARCH §A.3, row 6): a client on the system trust store
   /// dialling a gateway whose leaf came from the plant's private CA fails
@@ -289,6 +324,23 @@ final class ClientConfig {
           'an attack rather than a missing file. Mount the root the '
           'integrator provisioned and name it in ClientTlsConfig, or dial ws '
           'deliberately.');
+    }
+    if (uri.scheme != 'wss' && tls != null) {
+      throw ArgumentError('this panel was given a pinned root but dials $uri: '
+          'the root is never consulted on a plaintext dial, so the '
+          'configuration reads as encrypted and the link is not. Every value '
+          'and every write would cross the plant LAN in the clear while the '
+          'config file says otherwise, which is the kind of thing found by a '
+          'packet capture months later. Dial wss, or drop the root '
+          'deliberately.');
+    }
+    if (uri.scheme != 'wss' && token != null && !allowTokenOverPlaintext) {
+      throw ArgumentError('this panel would send its station credential over '
+          '$uri in the clear. Anybody on the plant LAN who can see the frame '
+          'then has a credential that writes to the machines, and the frame '
+          'is re-sent on every reconnect for as long as the panel runs. Dial '
+          'wss, or set allowTokenOverPlaintext explicitly if this is a '
+          'fixture.');
     }
   }
 
@@ -315,6 +367,7 @@ final class ClientConfig {
     this.holdMissedPulsesBeforeStop = 10,
     this.token,
     this.tls,
+    this.allowTokenOverPlaintext = false,
     this.connectTimeout = const Duration(seconds: 10),
   }) {
     if (!(subscriptionStalenessMultiple > 1)) {

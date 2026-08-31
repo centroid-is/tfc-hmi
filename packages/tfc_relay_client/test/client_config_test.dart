@@ -406,6 +406,67 @@ void main() {
       );
     });
 
+    test('a pinned root on a plaintext dial is refused', () {
+      expect(
+        () => ClientConfig(tls: ClientTlsConfig(rootCertPath: rootPath))
+            .checkDialable(Uri.parse('ws://10.104.29.71:8080/')),
+        throwsA(isA<ArgumentError>()
+            .having((e) => '$e', 'message', contains('ws://10.104.29.71:8080'))
+            .having((e) => '$e', 'message', contains('plaintext'))),
+        reason: 'RemoteStateMan builds the pinned SecurityContext and the '
+            'HttpClient from this root and hands them to a dial that never '
+            'consults them. The configuration reads as encrypted and the link '
+            'is not, which is the failure checkDialable was written to '
+            'prevent running in the other direction',
+      );
+    });
+
+    test('a station credential on a plaintext dial is refused', () {
+      expect(
+        () => ClientConfig(token: 'ST101-1nZq4tGm7Yb2Kd8Vw6Rc0Pf3')
+            .checkDialable(Uri.parse('ws://10.104.29.71:8080/')),
+        throwsA(isA<ArgumentError>()
+            .having((e) => '$e', 'message', contains('clear'))
+            .having((e) => '$e', 'message',
+                contains('allowTokenOverPlaintext'))),
+        reason: 'ConnectionSupervisor puts config.token on the hello frame '
+            'unconditionally, so a credential that grants operate on the '
+            'plant\'s PLCs crosses the LAN in the clear once per reconnect '
+            'for as long as the panel runs. Anybody with a span port has a '
+            'working credential. Design §7.1 presents ServerConfig.tls and '
+            'ServerConfig.auth as independently nullable, which is an '
+            'explicit invitation to turn the token file on before TLS',
+      );
+    });
+
+    test('the credential is not refused when it is what a fixture is for', () {
+      expect(
+        () => ClientConfig(
+          token: 'ST101-1nZq4tGm7Yb2Kd8Vw6Rc0Pf3',
+          allowTokenOverPlaintext: true,
+        ).checkDialable(Uri.parse('ws://127.0.0.1:8080/')),
+        returnsNormally,
+        reason: 'the credential path has to stay exercisable over plaintext '
+            'loopback — that is how auth_refusal_test drives the refusal legs '
+            'and how Phase 7 will drive them through the fault proxy. The '
+            'opt-in is explicit and greppable, which is the difference '
+            'between a fixture and a deployment',
+      );
+    });
+
+    test('the escape hatch does not excuse a pinned root', () {
+      expect(
+        () => ClientConfig(
+          tls: ClientTlsConfig(rootCertPath: rootPath),
+          allowTokenOverPlaintext: true,
+        ).checkDialable(Uri.parse('ws://127.0.0.1:8080/')),
+        throwsA(isA<ArgumentError>()),
+        reason: 'the flag says one thing — that this panel deliberately sends '
+            'its credential in the clear. A root that is never consulted is a '
+            'different mistake and has no reason to be forgiven by it',
+      );
+    });
+
     test('an empty root path is refused at construction', () {
       expect(
         () => ClientTlsConfig(rootCertPath: ''),
