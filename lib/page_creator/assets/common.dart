@@ -108,6 +108,16 @@ abstract class Asset {
   /// to override this getter (currently only `ButtonConfig.textColor`).
   Color? get labelColor;
 
+  /// Whether `AssetStack` paints [text] beside the asset on the page.
+  ///
+  /// A name is not always only a caption: an asset that opens a side pane
+  /// titles the pane with the same string, so "has no name" and "does not
+  /// show its name on the mimic" are two different things and cannot share
+  /// one empty field. `BaseAsset` answers `true`, which keeps this additive —
+  /// only an asset that offers the choice (`SectionButtonConfig.showName`)
+  /// overrides it.
+  bool get showLabel;
+
   /// Extra terms the palette's search box matches besides [displayName].
   ///
   /// An asset that stands for several concrete things (the 3rd-party
@@ -257,6 +267,13 @@ abstract class BaseAsset implements Asset {
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   Color? get labelColor => null;
+
+  /// Labels are painted by default; see [Asset.showLabel]. Overriding this is
+  /// how an asset hides its name on the page while keeping it for whatever
+  /// else the name is for.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  bool get showLabel => true;
 
   /// Returns all PLC/OPC-UA tag keys referenced by this asset.
   ///

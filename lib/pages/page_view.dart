@@ -396,8 +396,14 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           }
 
           // 4) measure text size if any
+          //
+          // An asset that hides its label measures as if it had none, so the
+          // rest of the layout does not reserve room for a caption nobody
+          // asked for.
+          final paintsLabel =
+              asset.showLabel && asset.text != null && asset.text!.isNotEmpty;
           Size textSize = Size.zero;
-          if (asset.text != null && asset.text!.isNotEmpty) {
+          if (paintsLabel) {
             textSize = _measureLabel(asset.text!, labelStyle);
           }
 
@@ -680,7 +686,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
           }
 
           // B) add the label (if any)
-          if (asset.text != null && asset.text!.isNotEmpty) {
+          if (paintsLabel) {
             var pos = asset.textPos ?? TextPos.right;
             if (xMirror && (pos == TextPos.left || pos == TextPos.right)) {
               pos = pos == TextPos.left ? TextPos.right : TextPos.left;

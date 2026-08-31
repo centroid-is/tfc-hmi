@@ -26,6 +26,7 @@ SectionButtonConfig _$SectionButtonConfigFromJson(Map<String, dynamic> json) =>
               .toList() ??
           [],
       label: json['label'] as String?,
+      showName: json['show_name'] as bool? ?? true,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -47,6 +48,7 @@ Map<String, dynamic> _$SectionButtonConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'sections': instance.sections.map((e) => e.toJson()).toList(),
+      'show_name': instance.showName,
     };
 
 const _$TextPosEnumMap = {

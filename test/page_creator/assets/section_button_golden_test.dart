@@ -6,7 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue, NodeId;
 import 'package:rxdart/rxdart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
+import 'package:tfc/page_creator/assets/common.dart'
+    show Coordinates, RelativeSize, TextPos;
 import 'package:tfc/page_creator/assets/section_button.dart';
+import 'package:tfc/pages/page_view.dart' show AssetStack;
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart';
@@ -150,6 +156,58 @@ void main() {
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/section_button_pressed.png'),
+      );
+    });
+
+    testWidgets('the same button named and unnamed, on a page',
+        (tester) async {
+      // The one thing the switch changes, and the only way to check it is to
+      // look: two identical running sections laid out by `AssetStack`, one
+      // captioned and one bare. Same disc, same place — the caption is the
+      // whole difference.
+      SharedPreferences.setMockInitialValues({});
+      SharedPreferencesAsyncPlatform.instance =
+          InMemorySharedPreferencesAsync.empty();
+
+      final fake = _FakeStateMan()..push('sec/run', enabled: true);
+
+      SectionButtonConfig button({required double x, required bool showName}) =>
+          SectionButtonConfig(sections: [SectionRef(key: 'sec/run')])
+            ..coordinates = Coordinates(x: x, y: 0.42)
+            ..size = const RelativeSize(width: 0.09, height: 0.28)
+            ..text = 'Before freezers'
+            ..textPos = TextPos.below
+            ..showName = showName;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [stateManProvider.overrideWith((_) async => fake)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 760,
+                height: 260,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => AssetStack(
+                    assets: [
+                      button(x: 0.3, showName: true),
+                      button(x: 0.78, showName: false),
+                    ],
+                    constraints: constraints,
+                    selectedAssets: const {},
+                    mirroringDisabled: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await _settle(tester);
+
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/section_button_name_on_page.png'),
       );
     });
 

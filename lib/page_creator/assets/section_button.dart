@@ -373,7 +373,19 @@ class SectionButtonConfig extends BaseAsset {
   @JsonKey(includeToJson: false)
   String? label;
 
-  SectionButtonConfig({List<SectionRef>? sections, this.label})
+  /// Whether the name is drawn beside the button on the page.
+  ///
+  /// The name is two things at once — the caption on the mimic and the title
+  /// of the pane the button opens — so clearing it to get a bare face would
+  /// also leave the pane titled "Section". This is the switch that separates
+  /// them: off, the mimic shows only the button and the name lives on in the
+  /// pane. True by default, and absent from pages saved before it existed, so
+  /// every button that has a caption today keeps it.
+  @JsonKey(name: 'show_name', defaultValue: true)
+  bool showName = true;
+
+  SectionButtonConfig(
+      {List<SectionRef>? sections, this.label, this.showName = true})
       : sections = sections ?? <SectionRef>[];
 
   SectionButtonConfig.preview() : sections = <SectionRef>[] {
@@ -402,6 +414,13 @@ class SectionButtonConfig extends BaseAsset {
   /// cannot see — without this override the asset reports using no keys at
   /// all, and anything asking which keys a page depends on (unused-key
   /// cleanup, for one) would be told they are free to delete.
+  /// The page paints the caption only when [showName] is on. The pane's
+  /// title comes from [name] either way — hiding the caption does not
+  /// un-name the button.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  @override
+  bool get showLabel => showName;
+
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
   List<String> get allKeys => [
@@ -457,8 +476,8 @@ class _SectionButtonConfigEditorState
             initialValue: widget.config.text,
             decoration: const InputDecoration(
               labelText: 'Button name',
-              helperText: 'Shown beside the button and as the title of the '
-                  'pane, e.g. Before freezers',
+              helperText: 'Titles the pane, and labels the button on the page '
+                  'unless that is switched off below, e.g. Before freezers',
             ),
             onChanged: (v) => setState(() {
               widget.config.text = v;
@@ -469,20 +488,34 @@ class _SectionButtonConfigEditorState
               widget.config.textPos ??= TextPos.below;
             }),
           ),
-          const SizedBox(height: 16),
-          DropdownButton<TextPos>(
-            key: const Key('section-name-position'),
-            value: widget.config.textPos ?? TextPos.below,
-            isExpanded: true,
-            onChanged: (value) =>
-                setState(() => widget.config.textPos = value!),
-            items: TextPos.values
-                .map((e) => DropdownMenuItem<TextPos>(
-                      value: e,
-                      child: Text('Name ${e.name}'),
-                    ))
-                .toList(),
+          SwitchListTile(
+            key: const Key('section-name-visible'),
+            contentPadding: EdgeInsets.zero,
+            value: widget.config.showName,
+            title: const Text('Show the name on the page'),
+            subtitle: const Text(
+              'Off leaves a bare button on the mimic. The pane it opens is '
+              'still titled with the name.',
+            ),
+            onChanged: (v) => setState(() => widget.config.showName = v),
           ),
+          // No position to choose when there is nothing to place.
+          if (widget.config.showName) ...[
+            const SizedBox(height: 16),
+            DropdownButton<TextPos>(
+              key: const Key('section-name-position'),
+              value: widget.config.textPos ?? TextPos.below,
+              isExpanded: true,
+              onChanged: (value) =>
+                  setState(() => widget.config.textPos = value!),
+              items: TextPos.values
+                  .map((e) => DropdownMenuItem<TextPos>(
+                        value: e,
+                        child: Text('Name ${e.name}'),
+                      ))
+                  .toList(),
+            ),
+          ],
           const SizedBox(height: 20),
           Row(
             children: [
