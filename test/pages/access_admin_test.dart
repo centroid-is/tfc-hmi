@@ -32,9 +32,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
-import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 import 'package:tfc/core/access_admin_store.dart';
 import 'package:tfc/pages/access_admin.dart';
 import 'package:tfc/pages/access_roles_section.dart';
@@ -43,7 +40,6 @@ import 'package:tfc/providers/access_admin.dart';
 import 'package:tfc/widgets/base_scaffold.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
-import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
 // ---------------------------------------------------------------------------
@@ -91,12 +87,10 @@ void main() {
   late AccessSession session;
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({});
-    SharedPreferencesAsyncPlatform.instance =
-        InMemorySharedPreferencesAsync.empty();
-    DatabaseConfig.clearPrefsCache();
-    Pbkdf2Kdf.iterationsForTest = 10;
-
+    // No `SharedPreferences` harness and no KDF override, unlike the two
+    // section tests: nothing on this page writes, so no account is hashed, and
+    // the store handle is overridden directly rather than resolved through
+    // `accessRepositoryProvider` and its preference-backed config.
     db = AppDatabase.inMemoryForTest();
     // Force the migration, so the four seeded roles exist before the page asks
     // for them.
@@ -107,7 +101,6 @@ void main() {
   });
 
   tearDown(() async {
-    Pbkdf2Kdf.iterationsForTest = null;
     await db.close();
   });
 
