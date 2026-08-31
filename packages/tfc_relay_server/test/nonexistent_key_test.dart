@@ -41,6 +41,7 @@
 @Tags(['ws'])
 library;
 
+import 'package:json_rpc_2/error_code.dart' as rpc_error;
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 // `KeyRejectKinds` is the server's own vocabulary, not the protocol's, so it
@@ -133,7 +134,140 @@ void main() {
           reason: 'the forced read must carry the reading the source has');
     });
   });
+
+  group('a write to a tag this source does not serve never reaches the plant',
+      () {
+    test('a write to a tag this source does not serve is refused, and does '
+        'not create it', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      fixture.served.setValue(_served, 1200);
+
+      final cmd = newUlid();
+      final error = await fixture.refusal(Methods.write,
+          params: {'cmd': cmd, 'key': _ghost, 'value': 1450},
+          what: 'a write naming a tag the source does not serve');
+
+      // **INVALID_PARAMS, not -32005 forbidden** (06-RESEARCH §E.7 rows 2 and
+      // 3). Those are different facts and the client behaves differently: a
+      // nonexistent tag is a typo to fix, an unauthorized one is a permission
+      // to obtain. 06-08 makes a hidden key take this exact path, and a
+      // "forbidden" here would leak the existence the hiding rule conceals.
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'INVALID_PARAMS on this path means "definitively no effect, '
+              'safe to re-send", which is exactly true of a refusal raised '
+              'before the plant is touched. A code that meant anything else '
+              'would tell the panel to leave the operator\'s action '
+              'unresolved');
+      expect(error.message, _unknownKeyMessage(_ghost),
+          reason: 'the refusal carries the same sentence read and readMany '
+              'produce for the same tag, byte for byte. 06-08 asserts that a '
+              'hidden key is indistinguishable from a nonexistent one, and '
+              'two hand-copied strings cannot hold that property');
+
+      final data = _asMap(error.data);
+      expect(data['request'], isA<String>(),
+          reason: 'RpcException.serialize copies the offending request into '
+              'error.data unless data["request"] is already set, and one '
+              'carrying 1e999 then makes the error itself unencodable — the '
+              'peer drops it and a caller with no deadline waits forever');
+      expect(_asMap(_asMap(data['rejected'])[_ghost])['kind'],
+          KeyRejectKinds.unknownKey,
+          reason: 'the refusal carries the same rejected map, keyed by tag, '
+              'that the read surfaces carry, so one decoder reads all four');
+
+      // **Nothing was sent.**
+      expect(fixture.served.keys, isNot(contains(_ghost)),
+          reason: 'the write created the tag. Before this plan a write to an '
+              'unserved key answered "applied" with a readback and api.keys '
+              'gained the tag — the operator was told a setpoint took on a '
+              'machine that never heard of it, which is the one three-state '
+              'answer nobody can act on');
+      expect(fixture.served.upstreamWriteAttempts(cmd), 0,
+          reason: 'the refusal must be raised above api.write, not below it. '
+              'A device consulted before the refusal makes INVALID_PARAMS a '
+              'lie about a frame that already reached a contactor');
+
+      // **And nothing was remembered.** The refusal sits above the in-flight
+      // pre-record, so the outcome log holds nothing for this cmd — and a
+      // freshly minted ULID inside the window is the one case that earns
+      // `not_received`, the only re-send-safe answer this gateway gives.
+      final status = _asMap(
+          await fixture.request(Methods.writeStatus, params: {'cmds': [cmd]}));
+      final results = status['results']! as List;
+      expect(WriteResult.fromJson(_asMap(results.single)),
+          isA<WriteNotReceived>(),
+          reason: 'writeStatus found something logged for a write that was '
+              'refused before the plant was touched. That means the refusal '
+              'was placed below the in-flight pre-record, and the panel\'s '
+              'reconnect re-query would then answer "unknown" about an action '
+              'that provably never happened');
+    });
+
+    test('a hold-to-run engage on a tag this source does not serve is refused '
+        'before the hold is taken', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+
+      final cmd = newUlid();
+      final error = await fixture.refusal(Methods.write,
+          params: {'cmd': cmd, 'key': _ghost, 'value': 1, 'hold': true},
+          what: 'an engage naming a tag the source does not serve');
+
+      expect(error.code, rpc_error.INVALID_PARAMS);
+      expect(error.message, _unknownKeyMessage(_ghost),
+          reason: 'one check covers both seams, because api.holdToRun is '
+              'reachable only through the write path — so the engage gets the '
+              'same sentence the plain write gets');
+      expect(fixture.served.keys, isNot(contains(_ghost)),
+          reason: 'an engage on a tag nobody serves would put a 1 on a '
+              'deadman tag this gateway invented, and then feed it at 10 Hz');
+      expect(fixture.served.mintedCmds, isEmpty,
+          reason: 'the source was never asked for a handle: the refusal is '
+              'above api.holdToRun, which is where "no device was consulted" '
+              'stops being a claim and starts being a fact');
+    });
+
+    test('a write to a served key is unchanged, replay included', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      await fixture.hello();
+      fixture.served.setValue(_served, 1200);
+
+      final cmd = newUlid();
+      final first = _asMap(await fixture.request(Methods.write,
+          params: {'cmd': cmd, 'key': _served, 'value': 1450}));
+      expect(WriteResult.fromJson(first), isA<WriteApplied>(),
+          reason: 'the existence check must cost an unserved tag and nothing '
+              'else; a served write that stopped applying would be a jog '
+              'button that stopped working');
+
+      // The Stripe semantic, re-asserted here because the new check sits in
+      // the same ladder the idempotency window reads from: one press arriving
+      // twice is still one press, answered from the log with no second
+      // api.write.
+      final replay = _asMap(await fixture.request(Methods.write,
+          params: {'cmd': cmd, 'key': _served, 'value': 1450}));
+      expect(replay, equals(first),
+          reason: 'the replay of an applied write must re-adopt the same '
+              'readback onto the mimic; a different answer under one id is '
+              'two outcomes for one operator action');
+      expect(fixture.served.upstreamWriteAttempts(cmd), 1,
+          reason: 'one press, one movement of the machine');
+    });
+  });
 }
+
+/// The sentence the gateway uses for a tag its source does not serve.
+///
+/// Spelled out here rather than imported: the property under test is that the
+/// server's four surfaces all produce this *same* text, and a test that read
+/// the server's own constant would pass no matter what that constant became.
+String _unknownKeyMessage(String key) =>
+    'this source does not serve "$key" — usually a typo in a page config, '
+    'occasionally a tag renamed upstream';
 
 /// One decoded JSON object, cast where the wire hands back `Object?`.
 Map<String, Object?> _asMap(Object? raw) =>

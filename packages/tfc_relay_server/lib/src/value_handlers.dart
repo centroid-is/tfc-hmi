@@ -351,6 +351,42 @@ final class ValueHandlers {
     if (request.key.trim().isEmpty) {
       throw _refuse(Methods.write, 'write needs a non-empty "key"');
     }
+    // **A tag this source does not serve is refused, not invented** (06-04,
+    // 06-CONTEXT amendment 2, T-06-15). Until this plan `write` consulted
+    // `api.keys` nowhere at all: a write naming a key the source had never
+    // heard of was forwarded, answered `applied` with a readback, and the key
+    // appeared in `api.keys` afterwards. The operator was told a setpoint took
+    // on a machine that never heard of it — a false `applied` is the one
+    // three-state answer nobody downstream can act on, and on a
+    // safety-relevant path silently inventing a tag is the worst option
+    // available.
+    //
+    // **The code is `INVALID_PARAMS`, deliberately, and not `forbidden`**
+    // (06-RESEARCH §E.7 rows 2 and 3). A nonexistent tag and an unauthorized
+    // one are different facts and the client behaves differently about them:
+    // the first is a typo to fix, the second a permission to obtain. 06-08's
+    // hiding rule sends a hidden key down *this* path precisely because
+    // answering "forbidden" would leak the existence it is hiding — which is
+    // also why the message and the `rejected` map are the same ones `read`
+    // and `readMany` produce, from [_unknownKeyMessage], rather than a fourth
+    // hand-copied sentence.
+    //
+    // **Placed here, and the placement is the property.** Above the
+    // fingerprint, above the idempotency window and above the in-flight
+    // `_record` at the bottom of this ladder, so `INVALID_PARAMS` means on
+    // this path exactly what it means everywhere else on it: definitively no
+    // effect, nothing sent, nothing remembered, safe to re-send. A refusal
+    // below the pre-record would still refuse — and would leave `writeStatus`
+    // answering `unknown` about an action that provably never happened, which
+    // is the answer that makes an operator press the button again.
+    //
+    // One check covers `holdToRun` as well: that seam is reachable only
+    // through this method (`:541-556`), so an engage on an unserved tag is
+    // refused before a handle is taken and before anything starts feeding a
+    // deadman counter this gateway invented.
+    if (!api.keys.contains(request.key)) {
+      throw _refuseUnknownKey(Methods.write, request.key);
+    }
     // The hold flag's vocabulary on the *write* path is exactly two values,
     // and this is a pre-plant refusal like the ones above it: raised before
     // `api.holdToRun` and before `api.write`, so `INVALID_PARAMS` here means
@@ -782,6 +818,18 @@ final class ValueHandlers {
   static rpc.RpcException _refuse(String method, String why) =>
       rpc.RpcException(rpc_errors.INVALID_PARAMS, why,
           data: _substitute(method));
+
+  /// The write path's refusal for a tag this source does not serve.
+  ///
+  /// [_refuse]'s armor plus the same `rejected` map the read surfaces carry,
+  /// keyed by tag, so one decoder on the client reads all four answers — and
+  /// so 06-08 can make a hidden key produce this response byte for byte.
+  static rpc.RpcException _refuseUnknownKey(String method, String key) =>
+      rpc.RpcException(rpc_errors.INVALID_PARAMS, _unknownKeyMessage(key),
+          data: {
+            ..._substitute(method),
+            'rejected': {key: _unknownKey(key).toJson()},
+          });
 
   static Map<String, Object?> _substitute(String method) => {
         'method': method,
