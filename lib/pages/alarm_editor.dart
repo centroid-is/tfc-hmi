@@ -105,8 +105,16 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   /// proposalStateProvider -- and only then beams here with the JSON in tow.
   /// Reading state alone would stage nothing and apply nothing, while every
   /// proposal in the batch had already been marked accepted.
+  ///
+  /// Not the payload this editor has already resolved, though. Beamer keeps
+  /// the JSON on the location, so a later mount is handed it again -- with
+  /// state empty, because the proposal was accepted and dropped, which is the
+  /// condition this fallback triggers on. Navigating back would otherwise
+  /// stage an alarm that is already written and put the amber strip back up
+  /// over it, with nothing pending anywhere to take it down.
   void _stageRoutedProposal(String? json) {
     if (json == null) return;
+    if (_routePayloadResolved(json)) return;
     try {
       final decoded = jsonDecode(json);
       if (decoded is! Map<String, dynamic>) return;
@@ -119,6 +127,33 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
     } catch (_) {
       // Malformed JSON: nothing to stage.
     }
+  }
+
+  /// Whether the route payload has already been applied or discarded here.
+  ///
+  /// Through `ref`, because this runs from [initState] where the container
+  /// has not been captured yet.
+  bool _routePayloadResolved(String json) {
+    try {
+      return ref
+          .read(proposalStateProvider.notifier)
+          .isRoutePayloadResolved(json);
+    } catch (_) {
+      // Provider unavailable (tests) -- nothing says it was resolved.
+      return false;
+    }
+  }
+
+  /// Marks the route payload resolved, so a later mount of this page does not
+  /// stage it again. See [_stageRoutedProposal].
+  ///
+  /// Recorded on the notifier because the record has to outlive this State.
+  void _markRoutePayloadResolved([ProviderContainer? container]) {
+    final json = widget.proposalData;
+    if (json == null) return;
+    final scope = container ?? _container;
+    if (scope == null) return;
+    scope.read(proposalStateProvider.notifier).markRoutePayloadResolved(json);
   }
 
   /// Stages every pending alarm proposal in one batch.
@@ -249,6 +284,10 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
   /// The slots go through the stored controllers rather than `ref.read`, for
   /// the same reason the callbacks do; only the rebuild depends on [mounted].
   void _clearStagedBatch() {
+    // Before the lists are emptied is as good as after; what matters is that
+    // the route payload stops being stageable at the same moment the batch
+    // it staged stops existing.
+    _markRoutePayloadResolved();
     _proposedAlarms.clear();
     _proposalIds.clear();
     // Cleared with the alarms it annotates. Left behind, a uid staged for
@@ -337,6 +376,10 @@ class _AlarmEditorPageState extends ConsumerState<AlarmEditorPage> {
     // Through the stored controllers, for the same reason: the accept may
     // have outlived the page, and the banner still has to lose its buttons.
     if (_proposedAlarms.isEmpty) {
+      // The batch the route staged is gone, so the payload must stop being
+      // stageable with it -- otherwise coming back to this page stages the
+      // alarm that was just written and puts the strip back over it.
+      _markRoutePayloadResolved(container);
       _commitSlot?.state = null;
       _discardSlot?.state = null;
     }

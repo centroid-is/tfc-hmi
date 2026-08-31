@@ -464,7 +464,22 @@ void main() {
       // but the queue behind it is what the operator asked to review -- and
       // the banner hides nothing, so anything not staged here shows nowhere.
       expect(source,
-          contains('if (batched == 0) _applyProposalData(widget.proposalData);'));
+          contains('if (batched == 0) _applyRoutedProposal(widget.proposalData);'));
+    });
+
+    test('the route fallback skips a payload already resolved here', () {
+      // Beamer keeps the payload on the location, so a later mount is handed
+      // it again -- with state empty, because the proposal was accepted and
+      // dropped, which is the condition the fallback triggers on. Without
+      // this, navigating back staged a page edit that was already saved.
+      expect(source, contains('isRoutePayloadResolved(proposalJson)'));
+      expect(source, contains('_markRoutePayloadResolved()'));
+    });
+
+    test('the listener does not go through the route fallback', () {
+      // A proposal still sitting in state is live however familiar its JSON
+      // looks; only the route payload is gated.
+      expect(source, contains('_applyProposalData(pageOnly.first.proposalJson)'));
     });
   });
 
