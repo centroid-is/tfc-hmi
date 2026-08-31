@@ -219,18 +219,18 @@ void main() {
       );
     }
 
-    test('allEnabled registers 31 tools (18 read + 13 write)', () async {
+    test('allEnabled registers 32 tools (19 read + 13 write)', () async {
       final server = createServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
         final tools = await client.listTools();
-        expect(tools, hasLength(31));
+        expect(tools, hasLength(32));
       } finally {
         await client.close();
       }
     });
 
-    test('tagsEnabled=false registers 28 tools', () async {
+    test('tagsEnabled=false registers 29 tools', () async {
       final server = createServer(
         toggles: const McpToolToggles(tagsEnabled: false),
       );
@@ -238,7 +238,7 @@ void main() {
       try {
         final tools = await client.listTools();
         final names = tools.map((t) => t.name).toSet();
-        expect(tools, hasLength(28));
+        expect(tools, hasLength(29));
         expect(names, isNot(contains('list_tags')));
         expect(names, isNot(contains('get_tag_value')));
       } finally {
@@ -273,7 +273,7 @@ void main() {
       }
     });
 
-    test('proposalsEnabled=false registers 18 tools', () async {
+    test('proposalsEnabled=false registers 19 tools', () async {
       final server = createServer(
         toggles: const McpToolToggles(proposalsEnabled: false),
       );
@@ -281,7 +281,7 @@ void main() {
       try {
         final tools = await client.listTools();
         final names = tools.map((t) => t.name).toSet();
-        expect(tools, hasLength(18));
+        expect(tools, hasLength(19));
         expect(names, isNot(contains('create_access_template')));
         expect(names, isNot(contains('update_access_template')));
         expect(names, isNot(contains('delete_access_template')));
@@ -317,8 +317,8 @@ void main() {
         // configEnabled for their lookups), create_key_mapping,
         // update_key_mapping, delete_key_mapping, and the four
         // access-template write tools, which validate against the read half.
-        // 31 total - 18 = 13.
-        expect(tools, hasLength(13));
+        // 32 total - 18 = 14.
+        expect(tools, hasLength(14));
         expect(names, isNot(contains('list_pages')));
         expect(names, isNot(contains('list_assets')));
         expect(names, isNot(contains('get_asset_detail')));

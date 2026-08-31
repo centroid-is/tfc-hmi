@@ -110,7 +110,7 @@ void main() {
           'bind_key_access_template',
         ]));
 
-        expect(toolNames, hasLength(31));
+        expect(toolNames, hasLength(32));
       } finally {
         await client.close();
       }
@@ -201,8 +201,8 @@ void main() {
         final tools = await client.listTools();
         final toolNames = tools.map((t) => t.name).toSet();
 
-        // All 31 tools are registered (drawing tools always present)
-        expect(toolNames, hasLength(31));
+        // All 32 tools are registered (drawing tools always present)
+        expect(toolNames, hasLength(32));
         expect(toolNames, contains('search_drawings'));
         expect(toolNames, contains('get_drawing_page'));
       } finally {
