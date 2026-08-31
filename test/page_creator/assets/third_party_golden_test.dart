@@ -11,15 +11,17 @@ import '../../helpers/golden_tolerance.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/widgets/panes/pane_chrome.dart'
-    show PaneStatus, PaneSection, PaneDetailRow;
+    show PaneStatus, PaneSection, PaneGraphTile;
 import 'package:tfc/widgets/panes/side_pane.dart' show SidePane, closeSidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/providers/database.dart';
-import 'package:tfc_dart/core/database.dart' show Database;
+import 'package:tfc_dart/core/database.dart' show Database, TimeseriesData;
+import 'package:tfc_dart/core/collector.dart' show Collector;
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 
 const _key = Key('third_party_golden');
 
@@ -93,6 +95,13 @@ Future<void> loadRealFont() async {
       .asByteData();
   final loader = FontLoader('Roboto')..addFont(Future.value(data));
   await loader.load();
+
+  // The SAME bytes under the family the chart theme names. `lightChartTheme`
+  // and `darkChartTheme` set `fontFamily: 'roboto-mono'` on their axis styles,
+  // and an unregistered family falls back to Ahem in a test — every tick label
+  // on the trend golden rendered as a solid black box.
+  final chartLoader = FontLoader('roboto-mono')..addFont(Future.value(data));
+  await chartLoader.load();
 
   final flutterRoot = Platform.environment['FLUTTER_ROOT'];
   final iconFont = File(
@@ -525,50 +534,42 @@ void main() {
       );
     });
 
-    // The box erector's Status section off the enhanced `BER0n.BER0n` struct,
-    // a mix of diode states: a red fault LIT (a drive has faulted) while the
-    // stopping-line and estop rows are OFF (white), an amber waiting row LIT
-    // (waiting for carton bottoms), the green running row LIT, and several
-    // members absent from the struct — keys this pumped value does not carry —
-    // rendered as the grey `!` unknown rather than claiming "off". The box
-    // erector was the last prefix-backed kind; the enhanced FB moved it onto
-    // the struct system, so this is now a [StructStatusDiodes] pane like the
-    // strapper's, pinning the curated fault-first vocabulary in pixels.
-    testWidgets('boxErector — status pane diodes, every row lit', (tester) async {
+    // The box erector's Status section, every row LIT. Not a state the machine
+    // is ever in -- it cannot be running, stopping the line and out of both
+    // bottoms and tops at once -- but this golden exists to be read as a COLOUR
+    // CHART: one lit diode per row, so the whole vocabulary can be checked down
+    // a single column.
+    //
+    // SIX rows from TWO sources, which is the point of this image. The top four
+    // are the kind's own, read one key per PLC member off the `BER01` prefix.
+    // The bottom two are per-instance [ExtraStatusBit]s, loose keys an engineer
+    // adds in the editor because only BER01's carton chutes are sensed. They
+    // must be indistinguishable from the kind's own rows -- same row shape,
+    // same diode size, no rule between them. An operator is not meant to work
+    // out which four arrived by one route and which two by another.
+    const cartonBits = [
+      ExtraStatusBit(
+          key: 'BER01.NoCartonBottoms',
+          label: 'No carton bottoms',
+          onRole: HmiColorRole.yellow),
+      ExtraStatusBit(
+          key: 'BER01.NoCartonTops',
+          label: 'No carton tops',
+          onRole: HmiColorRole.yellow),
+    ];
+
+    testWidgets('boxErector — status pane diodes, every row lit',
+        (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      // EVERY bit true. Not a state the machine is ever in -- it could not be
-      // faulted, waiting and running at once -- but this golden exists to be
-      // read as a COLOUR CHART: one lit diode per row, so the whole vocabulary
-      // can be checked down a single column. A realistic mixed state leaves
-      // most rows grey, which pins the unknown treatment (already covered by
-      // the Multivac's pane) and pins none of the colours.
-      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
-          m: true,
-        // The permit is INVERTED in its group, so "true" here is the healthy
-        // case -- left true so the golden shows a permit that is fine sitting
-        // beside the two conditions that are not.
-        'q_xOutfeedPermitted': true,
-        // How long each starve has run, so the duration column is in the PNG.
-        'p_stat_tNoBottomsFor': 252000,
-        'p_stat_tNoLidsFor': 45000,
-        'p_stat_tWaitingProductFor': 3780000,
-        // The throughput, in the shape the PLC actually publishes: an FB_BPM
-        // INSTANCE carrying an `hmi : ST_BPM` of rolling averages, not a
-        // scalar. Non-zero on purpose -- 0 is what a stopped machine reads,
-        // and the point of this row is that it is a live rate, not a lamp.
-        'bpmCartonsOut':
-            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-          'hmi': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-            'avgBPM1Minute': 37.0,
-            'avgBPM5Minute': 35.0,
-          })),
-        })),
-      }));
+      final values = <String, bool?>{
+        for (final b
+            in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!)
+          b.suffix: true,
+      };
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -578,7 +579,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 1180,
+                height: 460,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -590,21 +591,19 @@ void main() {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          // The same two blocks `_statusSection` composes for a
-                          // box erector: the throughput figure, then the
-                          // diodes.
-                          PaneDetailRow(
-                            label: 'Cartons per minute',
-                            child: Builder(
-                              builder: (context) => Text(
-                                boxErectorBpmOf(status)!.toStringAsFixed(0),
-                                style: Theme.of(context).textTheme.bodyLarge,
-                              ),
-                            ),
+                          EquipmentStatusDiodes(
+                            bits: kEquipmentStatusBits[
+                                ThirdPartyEquipmentKind.boxErector]!,
+                            values: values,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
                           ),
-                          GroupedStatusDiodes(
-                            status: status,
-                            groups: boxErectorStatusGroups,
+                          ExtraStatusDiodes(
+                            bits: cartonBits,
+                            values: const {
+                              'BER01.NoCartonBottoms': true,
+                              'BER01.NoCartonTops': true,
+                            },
                             machine: equipmentShortName(
                                 ThirdPartyEquipmentKind.boxErector),
                           ),
@@ -624,39 +623,20 @@ void main() {
       );
     });
 
-    // The same pane with two groups OPENED — the half of the design a collapsed
-    // golden cannot show. This is the "exactly what is wrong" half: Drives
-    // breaks into the five not-ready and three not-turning alarms the machine
-    // publishes (a drive can be ready and still not move, so they are different
-    // faults), and Out of material carries HOW LONG each starve has run, off
-    // the FB's own timers.
+    // The state an operator actually meets: the machine is running, both
+    // permits are granted, and it has run out of carton bottoms. Nothing red --
+    // the frustration row is dark because the FB will not raise it while a
+    // starve explains the stop, which is the one piece of the design a colour
+    // chart cannot show.
     //
-    // "Strapper permit off" is dark while the two rows above it are
-    // lit: the permit is INVERTED, so a healthy permit reads as no fault. That
-    // row disagreeing with "Next machine not ready" is how a broken interlock
-    // between the two machines becomes visible.
-    testWidgets('boxErector — status groups opened', (tester) async {
+    // "No carton tops" is OFF (white), not grey: its key is mapped and
+    // answering, and the chute is full. The grey `!` is reserved for a key that
+    // has told us nothing -- see the comms-down golden below.
+    testWidgets('boxErector — running, starved of bottoms', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1600);
+      tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-
-      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
-          m: false,
-        // A believable single fault plus a starve, rather than everything at
-        // once: the carton conveyor is not ready, and the line has been out of
-        // bottoms for four minutes.
-        'p_stat_xDriveError': true,
-        'p_stat_xAlmDriveM101': true,
-        'p_stat_xAlmMotionM101': true,
-        'p_stat_xWaitingBottoms': true,
-        'p_stat_xWaitingLids': false,
-        'p_stat_xWaitingProduct': false,
-        'p_stat_xExtNotReady': true,
-        'q_xOutfeedPermitted': true,
-        'p_stat_tNoBottomsFor': 252000,
-      }));
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -666,7 +646,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 1400,
+                height: 460,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -675,11 +655,31 @@ void main() {
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: GroupedStatusDiodes(
-                        status: status,
-                        groups: boxErectorStatusGroups,
-                        machine: equipmentShortName(
-                            ThirdPartyEquipmentKind.boxErector),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          EquipmentStatusDiodes(
+                            bits: kEquipmentStatusBits[
+                                ThirdPartyEquipmentKind.boxErector]!,
+                            values: const {
+                              'Running': true,
+                              'WaitingFrustration': false,
+                              'PermitInfeed': true,
+                              'PermitOutfeed': true,
+                            },
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                          ExtraStatusDiodes(
+                            bits: cartonBits,
+                            values: const {
+                              'BER01.NoCartonBottoms': true,
+                              'BER01.NoCartonTops': false,
+                            },
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -689,18 +689,101 @@ void main() {
           ),
         ),
       ));
-      // Opened by real taps, so the golden also proves the rows are tappable
-      // and that the state survives the rebuild each tap triggers.
-      await tester.tap(find.text('Drives'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Out of material'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text("Can't send on"));
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_boxErector_starved.png'),
+      );
+    });
+
+    // The Trend section, which no golden covered before -- the box erector's
+    // throughput is the one thing on this pane that is not a lamp, and it was
+    // going out the door unseen.
+    //
+    // Composed exactly as `_trendSection` composes it: a [PaneGraphTile] at the
+    // same 84 px, the compact preview over a 15-minute span, tapping through to
+    // the full chart. What it pins is the change this branch made -- the trace
+    // is read from a PLAIN NUMERIC KEY (`BER01.CartonsPerMinute`), where it
+    // used to be a `sample_members` pick three levels into an FB_BPM instance.
+    //
+    // Timestamps are fixed relative to a fixed `now`, not `DateTime.now()`:
+    // the chart frames its x axis on the newest sample, so real clock values
+    // would move the trace every run and the golden would churn forever.
+    testWidgets('boxErector — throughput trend', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // A believable quarter hour: running near 12/min, a dip to 4 while the
+      // bottom chute ran dry, then recovery. A flat line would pin the axis
+      // and the colour but say nothing about whether the trace is drawn.
+      const rates = <double>[
+        11.4, 12.1, 11.8, 12.4, 12.0, 11.2, 9.6, 6.4, 4.1, 4.0,
+        4.3, 7.8, 10.6, 11.9, 12.2, 12.0,
+      ];
+      final now = DateTime.utc(2026, 1, 1, 12);
+      // The window the preview is framed in: the same quarter hour the samples
+      // span, so the trace fills the plot rather than hugging one edge.
+      final window = DateTimeRange(
+        start: now.subtract(const Duration(minutes: 15)),
+        end: now,
+      );
+      final samples = <TimeseriesData<dynamic>>[
+        for (var i = 0; i < rates.length; i++)
+          TimeseriesData<dynamic>(
+            rates[i],
+            now.subtract(Duration(minutes: (rates.length - 1 - i))),
+          ),
+      ];
+
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: Center(
+              child: RepaintBoundary(
+                key: _key,
+                child: SizedBox(
+                  width: 420,
+                  height: 260,
+                  child: Material(
+                    child: SidePane(
+                      title: 'BER-01',
+                      subtitle: 'Box erector',
+                      icon: Icons.precision_manufacturing,
+                      status: const PaneStatus.running(),
+                      child: PaneSection(
+                        title: 'Trend',
+                        child: PaneGraphTile(
+                          height: 84,
+                          preview: BoxErectorBpmGraph(
+                            collector: _FakeCollector(samples),
+                            keyName: 'BER01.CartonsPerMinute',
+                            showButtons: false,
+                            compact: true,
+                            xRange: window,
+                          ),
+                          expandedTitle: 'Cartons per minute',
+                          expandedBuilder: (context) => BoxErectorBpmGraph(
+                            collector: _FakeCollector(samples),
+                            keyName: 'BER01.CartonsPerMinute',
+                            xRange: window,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
       await tester.pumpAndSettle();
 
       await expectLater(
         find.byKey(_key),
-        matchesGoldenFile('goldens/third_party_boxErector_groups_open.png'),
+        matchesGoldenFile('goldens/third_party_boxErector_trend.png'),
       );
     });
 
@@ -708,37 +791,28 @@ void main() {
     // the gate, the banner and the header badge are all the ones an operator
     // gets -- not three pieces reassembled by the test.
     //
-    // The struct fed in is the dangerous one: every bit still says the machine
-    // is fine ("Running" true, no estop, throughput 37) because
-    // FB_BER01ScadaPoll decodes the Saia's process word unconditionally and
-    // those words simply stop being written when polling fails. Without the
-    // gate this pane would show a confident green "Running" for a machine we
-    // have lost contact with, forever. With it: red banner on top, header
-    // reads "No link", every diode grey, throughput "--".
+    // The values fed in are the dangerous ones: every key still says the
+    // machine is fine ("Running" true, both permits granted, both chutes full)
+    // because FB_BER01ScadaPoll decodes the Saia's process word
+    // unconditionally and those words simply stop being written when polling
+    // fails. One key per PLC member does not help -- six separate
+    // subscriptions to six frozen variables are just as confidently wrong as
+    // one frozen struct. Without the gate this pane would show a green
+    // "Running" for a machine we have lost contact with, forever. With it: red
+    // banner on top, header reads "No link", every diode grey -- INCLUDING the
+    // two extra carton rows, which read the same Saia over the same link.
     testWidgets('boxErector — Modbus link down', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final frozen = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
-          m: true,
-        // The permit is INVERTED in its group, so "true" here is the healthy
-        // case -- left true so the golden shows a permit that is fine sitting
-        // beside the two conditions that are not.
-        'q_xOutfeedPermitted': true,
-        // How long each starve has run, so the duration column is in the PNG.
-        'p_stat_tNoBottomsFor': 252000,
-        'p_stat_tNoLidsFor': 45000,
-        'p_stat_tWaitingProductFor': 3780000,
-        'p_stat_xModbusHealthy': false,
-        'bpmCartonsOut':
-            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-          'hmi': DynamicValue.fromMap(
-              LinkedHashMap<String, dynamic>.from({'avgBPM1Minute': 37.0})),
-        })),
-      }));
+      final frozen = <String, bool?>{
+        for (final b
+            in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!)
+          b.suffix: true,
+        kBoxErectorCommsSuffix: false,
+      };
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -748,7 +822,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 1180,
+                height: 640,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -764,16 +838,19 @@ void main() {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              const PaneDetailRow(
-                                label: 'Cartons per minute',
-                                child: Text('—'),
-                              ),
-                              GroupedStatusDiodes(
-                                // null, exactly as the gate feeds it: the
+                              EquipmentStatusDiodes(
+                                bits: kEquipmentStatusBits[
+                                    ThirdPartyEquipmentKind.boxErector]!,
+                                // Empty, exactly as the gate feeds it: the
                                 // frozen values above are deliberately NOT
                                 // shown.
-                                status: null,
-                                groups: boxErectorStatusGroups,
+                                values: const {},
+                                machine: equipmentShortName(
+                                    ThirdPartyEquipmentKind.boxErector),
+                              ),
+                              ExtraStatusDiodes(
+                                bits: cartonBits,
+                                values: const {},
                                 machine: equipmentShortName(
                                     ThirdPartyEquipmentKind.boxErector),
                               ),
@@ -789,8 +866,8 @@ void main() {
           ),
         ),
       ));
-      // Referenced so the frozen struct is not an unused local: it documents
-      // what the gate is refusing to display.
+      // Referenced so the frozen map is not an unused local: it documents what
+      // the gate is refusing to display.
       expect(boxErectorCommsOf(frozen), isFalse);
       await expectLater(
         find.byKey(_key),
@@ -1006,4 +1083,21 @@ void main() {
       );
     });
   });
+}
+
+/// Hands [BoxErectorBpmGraph] a canned history without a database.
+///
+/// `Collector` is concrete and reaches for a `StateMan` to resolve the key and
+/// a `Database` to read rows, neither of which a golden should need: the chart
+/// takes its collector as a constructor argument, so faking the ONE method it
+/// calls is enough.
+class _FakeCollector extends Fake implements Collector {
+  _FakeCollector(this.samples);
+
+  final List<TimeseriesData<dynamic>> samples;
+
+  @override
+  Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
+          {Duration since = const Duration(days: 1)}) =>
+      Stream.value(samples);
 }

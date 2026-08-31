@@ -942,11 +942,29 @@ void main() {
 
     testWidgets('a struct kind help text names the members one node feeds',
         (tester) async {
-      // The box erector was the last prefix-backed kind; the enhanced BER0n FB
-      // moved it onto the struct system, so every kind now reads one node and
-      // the editor help text names its members rather than listing appended
-      // suffixes. kEquipmentStatusBits is empty, so no kind exercises the old
-      // prefix help text any more — the struct branch is what all kinds show.
+      // A struct kind's key is one NODE, so the help text names the members it
+      // carries — the engineer is picking a node, not composing key names.
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.multivac,
+      );
+      await tester.pumpWidget(wrap(
+        Builder(builder: (context) => config.configure(context)),
+      ));
+      await tester.pumpAndSettle();
+
+      for (final member in structMembersOf(ThirdPartyEquipmentKind.multivac)) {
+        expect(find.textContaining(member), findsOneWidget,
+            reason: 'the struct help text must name every member the one '
+                'subscription feeds.');
+      }
+    });
+
+    testWidgets('a prefix kind help text names the suffixes it appends',
+        (tester) async {
+      // The box erector reads ONE KEY PER PLC MEMBER, so its field is a
+      // PREFIX and the help text has to spell out what gets appended to it —
+      // those are the mappings the engineer then has to create. Naming
+      // members instead would describe a struct that does not exist.
       final config = ThirdPartyEquipmentConfig(
         kind: ThirdPartyEquipmentKind.boxErector,
       );
@@ -955,14 +973,18 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // One help text Text carries every struct member, comma-joined.
-      for (final member in structMembersOf(ThirdPartyEquipmentKind.boxErector)) {
-        expect(find.textContaining(member), findsOneWidget,
-            reason: 'the struct help text must name every member the one '
-                'subscription feeds.');
+      expect(find.textContaining('Status Key Prefix'), findsOneWidget,
+          reason: 'the field is labelled as a prefix, not a struct key.');
+      for (final bit
+          in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!) {
+        expect(find.textContaining('.${bit.suffix}'), findsOneWidget,
+            reason: 'the prefix help text must name every appended suffix.');
       }
-      expect(find.textContaining('.WaitingFrustration'), findsNothing,
-          reason: 'the box erector no longer appends prefix suffixes.');
+      // And the two that are NOT diodes. They are named here or nowhere: an
+      // engineer reading only the diode list would never create them, and the
+      // link gate and the trend would quietly never appear.
+      expect(find.textContaining('.$kBoxErectorCommsSuffix'), findsOneWidget);
+      expect(find.textContaining('.$kBoxErectorBpmSuffix'), findsOneWidget);
     });
   });
 
@@ -999,7 +1021,14 @@ void main() {
 
         expect(
           stateMan.controllers.keys.toSet(),
-          {for (final bit in entry.value) 'CN22.Machine.${bit.suffix}'},
+          {
+            for (final bit in entry.value) 'CN22.Machine.${bit.suffix}',
+            // Not a diode, but it rides the same map and the same teardown:
+            // the link-health key decides whether any of the others may be
+            // believed, so it must be subscribed off the same prefix.
+            if (entry.key == ThirdPartyEquipmentKind.boxErector)
+              'CN22.Machine.$kBoxErectorCommsSuffix',
+          },
           reason: '${entry.key.name}: every diode must subscribe its '
               'prefix.suffix key.',
         );
@@ -1171,17 +1200,25 @@ void main() {
     });
   });
 
-  group('Box erector manual mode colour', () {
-    testWidgets('is the SAME colour a belt in manual gets, in every scheme',
+  group('Box erector carton-chute row colour', () {
+    testWidgets('is the SAME yellow a belt in manual gets, in every scheme',
         (tester) async {
       // Not "a yellow" -- THE yellow. `conveyor.dart` maps DriveState.manual to
       // `HmiStateColors.of(context).yellow` and prints it in the belt legend,
-      // so this diode must resolve to the IDENTICAL Color, per scheme. If the
-      // two ever diverge, a machine under manual control looks like one thing
-      // on a belt and another on a pane, which is the whole reason the colour
-      // was chosen.
-      final manualGroup =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'In manual');
+      // so a waiting row must resolve to the IDENTICAL Color, per scheme. If
+      // the two ever diverge, "stalled but healthy" looks like one thing on a
+      // belt and another on a pane, which is the whole reason the colour was
+      // chosen.
+      //
+      // The carton-chute rows are per-instance [ExtraStatusBit]s -- only BER01
+      // has those sensors -- so this is the colour an engineer picks from the
+      // editor's dropdown, and it has to be the same one the kind's own rows
+      // would have used.
+      const starveRow = ExtraStatusBit(
+        key: 'BER01.NoCartonBottoms',
+        label: 'No carton bottoms',
+        onRole: HmiColorRole.yellow,
+      );
 
       for (final scheme in AppColorScheme.values) {
         for (final theme in [
@@ -1192,9 +1229,9 @@ void main() {
             theme: theme,
             home: Builder(builder: (context) {
               expect(
-                manualGroup.onRole.resolve(context),
+                starveRow.onRole.resolve(context),
                 HmiStateColors.of(context).yellow,
-                reason: 'manual diode must be the scheme yellow ($scheme)',
+                reason: 'a waiting diode must be the scheme yellow ($scheme)',
               );
               return const SizedBox();
             }),

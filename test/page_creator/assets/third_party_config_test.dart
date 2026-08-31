@@ -1160,180 +1160,84 @@ void main() {
   });
 
   group('box erector status bits', () {
-    test('the members are the ones the enhanced BER0n FB publishes, in order',
-        () {
-      // Read off the live line-1 box-erector struct at ns=4;s=BER01.BER01.
-      // Unlike the strapper/Multivac the members sit DIRECTLY under the node as
-      // p_stat_* with no `.hmi` wrapper. A member the struct does not carry
-      // renders as the grey `!` forever -- indistinguishable from a PLC that has
-      // not been rolled out -- so every name is pinned here against
-      // ST101/ST101/BER/FB_BER01ScadaPoll.TcPOU.
-      expect(structMembersOf(ThirdPartyEquipmentKind.boxErector), [
-        'p_stat_WaitingFrustration',
-        'p_stat_xEstopActive',
-        'p_stat_xAlmEstop',
-        'p_stat_xDriveError',
-        'p_stat_xAlmDriveM101',
-        'p_stat_xAlmDriveM102',
-        'p_stat_xAlmDriveM103',
-        'p_stat_xAlmDriveM104',
-        'p_stat_xAlmDriveM105',
-        'p_stat_xAlmMotionM101',
-        'p_stat_xAlmMotionM102',
-        'p_stat_xAlmMotionM103',
-        'p_stat_xWaitingBottoms',
-        'p_stat_xWaitingLids',
-        'p_stat_xWaitingProduct',
-        'p_stat_xOutputBlocked',
-        'p_stat_xExtNotReady',
-        'q_xOutfeedPermitted',
-        'p_stat_xAlmPusherFrontSensor',
-        'p_stat_xAlmPusherRearSensor',
-        'p_stat_xModeManual',
+    final bits = kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!;
+
+    test('one key per PLC member, appended to the prefix', () {
+      // The whole point of this kind: four suffixes off `statusKey`, so
+      // `BER01` yields BER01.Running and friends. Each is a mapping an
+      // engineer can point at and rename, rather than a member name pinned
+      // against a .TcPOU that renders a grey `!` when the PLC moves.
+      expect(bits.map((b) => b.suffix), [
+        'Running',
+        'WaitingFrustration',
+        'PermitInfeed',
+        'PermitOutfeed',
       ]);
+      // The kind reads NO struct: it must be in exactly one routing map, or
+      // the pane would render two Status sections.
+      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector], isNull);
+      expect(isStructBacked(ThirdPartyEquipmentKind.boxErector), isFalse);
+      expect(structMembersOf(ThirdPartyEquipmentKind.boxErector), isEmpty);
     });
 
-    test('six rows collapsed, and the catch-all leads', () {
-      expect(boxErectorStatusGroups.map((g) => g.label), [
-        'Holding up the line',
-        'Emergency stop',
-        'Drives',
-        'Out of material',
-        "Can't send on",
-        'Pusher',
-        'In manual',
-      ]);
-      // The FB raises WaitingFrustration only when running, permitted out, not
-      // ready for product and NOT starved of bottoms or lids -- so it means
-      // "stopped for a reason none of the rows below explain". It leads, red.
-      expect(boxErectorStatusGroups.first.summaryMember,
-          'p_stat_WaitingFrustration');
-      expect(boxErectorStatusGroups.first.onRole, HmiColorRole.red);
-      expect(boxErectorStatusGroups.first.children, isEmpty);
-    });
-
-    test('the drives summary is the machine own roll-up, not our guess', () {
-      final drives =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'Drives');
-      // p_stat_xDriveError is the Saia's process-word roll-up. Deriving the
-      // summary from the children instead would have the HMI second-guessing
-      // the machine about its own drives.
-      expect(drives.summaryMember, 'p_stat_xDriveError');
-      expect(drives.children, hasLength(8),
-          reason: 'five not-ready plus three not-turning');
-      final struct = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        'p_stat_xDriveError': false,
-        'p_stat_xAlmDriveM101': true,
-      }));
-      expect(drives.summaryOf(struct), isFalse,
-          reason: 'the roll-up wins over a child');
-    });
-
-    test('a group summary lights when any child does', () {
-      final material =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'Out of material');
-      expect(material.summaryMember, isNull);
-      DynamicValue struct(Map<String, dynamic> m) =>
-          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
-      expect(material.summaryOf(struct({'p_stat_xWaitingLids': true})), isTrue);
-      expect(material.summaryOf(struct({'p_stat_xWaitingLids': false})), isFalse,
-          reason: 'one readable child that is off means the group is off');
-      // Everything absent is unknown, not off: a group that claimed "no
-      // problem" from a struct it could not read would be the worst answer.
-      expect(material.summaryOf(struct({'p_stat_xRunning': true})), isNull);
-    });
-
-    test('the starve rows carry how long, from the FB own timers', () {
-      final material =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'Out of material');
-      final byMember = {for (final c in material.children) c.member: c};
-      expect(byMember['p_stat_xWaitingBottoms']!.durationMember,
-          'p_stat_tNoBottomsFor');
-      expect(byMember['p_stat_xWaitingLids']!.durationMember,
-          'p_stat_tNoLidsFor');
-      expect(byMember['p_stat_xWaitingProduct']!.durationMember,
-          'p_stat_tWaitingProductFor');
-
-      final struct = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        'p_stat_tNoBottomsFor': 252000,
-      }));
-      expect(structDurationOf(struct, 'p_stat_tNoBottomsFor'),
-          const Duration(minutes: 4, seconds: 12));
-      expect(formatStatusDuration(const Duration(minutes: 4, seconds: 12)),
-          '4m 12s');
-      expect(formatStatusDuration(const Duration(seconds: 45)), '45s');
-      expect(formatStatusDuration(const Duration(hours: 1, minutes: 3)),
-          '1h 03m');
-    });
-
-    test('the summary carries the LONGEST lit wait, so a collapsed pane says it',
-        () {
-      final material =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'Out of material');
-      DynamicValue struct(Map<String, dynamic> m) =>
-          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
-
-      // Out of both: the one waiting longer is the one that stopped the line.
+    test('four rows: is it going, and who is blocking it', () {
+      // The pane briefly drew seventeen struct members in six collapsible
+      // groups. That is a diagnostics dump, not an operator pane -- the
+      // per-drive and pusher faults are alarms. The two carton-chute rows are
+      // per-instance extra bits, not entries here, because only BER01 has
+      // those sensors.
+      expect(bits, hasLength(4));
       expect(
-          material.summaryDurationOf(struct({
-            'p_stat_xWaitingBottoms': true,
-            'p_stat_tNoBottomsFor': 252000,
-            'p_stat_xWaitingLids': true,
-            'p_stat_tNoLidsFor': 45000,
-          })),
-          const Duration(minutes: 4, seconds: 12));
-
-      // A duration on a child that is NOT lit is last time's number -- the FB's
-      // TON holds its ET until the condition returns. It must not be shown.
-      expect(
-          material.summaryDurationOf(struct({
-            'p_stat_xWaitingBottoms': false,
-            'p_stat_tNoBottomsFor': 252000,
-          })),
-          isNull);
-
-      // Nothing lit, nothing to say.
-      expect(material.summaryDurationOf(struct({})), isNull);
-      // Groups whose children carry no timers never show one.
-      final drives =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'Drives');
-      expect(
-          drives.summaryDurationOf(struct({'p_stat_xAlmDriveM101': true})),
-          isNull,
-          reason: 'the FB times only bottoms, lids and product');
+          bits
+              .map((b) => b.labelFor(
+                  equipmentShortName(ThirdPartyEquipmentKind.boxErector)))
+              .toList(),
+          [
+            'Running',
+            'Box erector is stopping the line',
+            'Box erector is ready for product',
+            'Box erector may send boxes on',
+          ]);
     });
 
-    test('the outfeed permit is INVERTED, or a healthy line reads as a fault',
-        () {
-      final group =
-          boxErectorStatusGroups.firstWhere((g) => g.label == "Can't send on");
-      final permit = group.children
-          .firstWhere((c) => c.member == 'q_xOutfeedPermitted');
-      expect(permit.invert, isTrue);
-
-      DynamicValue struct(Map<String, dynamic> m) =>
-          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
-      // Permit ON is the good case: the row is dark and the group stays dark.
-      expect(permit.valueIn(struct({'q_xOutfeedPermitted': true})), isFalse);
-      expect(
-          group.summaryOf(struct({
-            'q_xOutfeedPermitted': true,
-            'p_stat_xOutputBlocked': false,
-            'p_stat_xExtNotReady': false,
-          })),
-          isFalse);
-      // Permit OFF is the fault.
-      expect(permit.valueIn(struct({'q_xOutfeedPermitted': false})), isTrue);
+    test('the colours follow the house vocabulary', () {
+      final bySuffix = {for (final b in bits) b.suffix: b};
+      // Green: running, and every permit -- the rule the whole file keeps.
+      expect(bySuffix['Running']!.onRole, HmiColorRole.green);
+      expect(bySuffix['PermitInfeed']!.onRole, HmiColorRole.green);
+      expect(bySuffix['PermitOutfeed']!.onRole, HmiColorRole.green);
+      // Red: the one row that says something is WRONG.
+      expect(bySuffix['WaitingFrustration']!.onRole, HmiColorRole.red);
     });
 
-    test('the box erector is grouped, and in exactly one routing map', () {
-      expect(kStructStatusGroups[ThirdPartyEquipmentKind.boxErector],
-          same(boxErectorStatusGroups));
-      expect(kStructStatusBits[ThirdPartyEquipmentKind.boxErector], isNull,
-          reason: 'two maps would render two Status sections');
-      expect(kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector], isNull);
-      expect(isStructBacked(ThirdPartyEquipmentKind.boxErector), isTrue,
-          reason: 'grouped is still one struct at one subscription');
+    test('the outfeed permit is the SAME sentence as the strapper', () {
+      // One handshake under two PLC names. Two wordings for it would make one
+      // fact read as two different ones down a column of open panes.
+      final erector = bits.firstWhere((b) => b.suffix == 'PermitOutfeed');
+      final strapper = strappingLineStatusBits
+          .firstWhere((b) => b.member == 'p_stat_OutfeedPermitted');
+      expect(erector.label, strapper.label);
+      expect(erector.onRole, strapper.onRole);
+    });
+
+    test('the frustration row keeps the strapper wording, red', () {
+      final erector = bits.firstWhere((b) => b.suffix == 'WaitingFrustration');
+      final strapper = strappingLineStatusBits
+          .firstWhere((b) => b.member == 'p_stat_WaitingFrustration');
+      expect(erector.label, strapper.label);
+      expect(erector.onRole, strapper.onRole);
+    });
+
+    test('the two non-diode suffixes ride the same prefix', () {
+      // Neither is drawn as a lamp: one decides whether the others may be
+      // believed, the other feeds the trend. They are named here so a prefix
+      // rename moves all six keys together.
+      expect(kBoxErectorCommsSuffix, 'ModbusHealthy');
+      expect(kBoxErectorBpmSuffix, 'CartonsPerMinute');
+      expect(bits.map((b) => b.suffix), isNot(contains(kBoxErectorCommsSuffix)),
+          reason: 'the link-health bit is a gate, not a row');
+      expect(bits.map((b) => b.suffix), isNot(contains(kBoxErectorBpmSuffix)),
+          reason: 'a rate is not a lamp');
     });
   });
 
@@ -1374,103 +1278,51 @@ void main() {
   });
 
   group('Box erector throughput (bpm)', () {
-    test('the member is read off the struct, missing reads unknown', () {
-      // `bpmCartonsOut` is an FB_BPM INSTANCE whose OPC UA surface is
-      // `hmi : ST_BPM` -- five rolling averages. The value is three levels
-      // down, not on the instance itself.
-      final withBpm =
-          DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        'p_stat_xRunning': true,
-        'bpmCartonsOut': DynamicValue.fromMap(
-            LinkedHashMap<String, dynamic>.from({
-          'hmi': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-            'avgBPM1Minute': 42.0,
-            'avgBPM5Minute': 38.0,
-          })),
-        })),
-      }));
-      expect(boxErectorBpmOf(withBpm), 42.0);
-
-      // Reading the INSTANCE as a scalar -- what a bare 'bpmCartonsOut' member
-      // name would do -- must not pass for a number.
-      final instanceOnly = DynamicValue.fromMap(
-          LinkedHashMap<String, dynamic>.from({'bpmCartonsOut': 1.0}));
-      expect(boxErectorBpmOf(instanceOnly), isNull,
-          reason: 'the path is bpmCartonsOut.hmi.avgBPM1Minute, three deep');
-
-      // A struct that does not carry it -- BER02/BER03 until the PLC is
-      // rolled, or a mistyped member name -- is UNKNOWN, not zero. Zero is a
-      // real throughput and would read as "the machine has stopped".
-      final without = DynamicValue.fromMap(
-          LinkedHashMap<String, dynamic>.from({'p_stat_xRunning': true}));
-      expect(boxErectorBpmOf(without), isNull);
-      expect(boxErectorBpmOf(null), isNull);
-    });
-
-    test('a non-numeric value on the member reads unknown, not a throw', () {
-      // `DynamicValue.asDouble` on a string member must not take the pane
-      // down: the member name is unverified against the live PLC.
-      final odd = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        'bpmCartonsOut': DynamicValue.fromMap(
-            LinkedHashMap<String, dynamic>.from({
-          'hmi': DynamicValue.fromMap(
-              LinkedHashMap<String, dynamic>.from({'avgBPM1Minute': 'n/a'})),
-        })),
-      }));
-      expect(() => boxErectorBpmOf(odd), returnsNormally);
-      expect(boxErectorBpmOf(odd), isNull);
-    });
-
-    test('the trend needs the member picked into its own column', () {
-      // The live figure rides the struct subscription for free; HISTORY only
-      // exists if the collector was told to sample this member out.
-      expect(boxErectorBpmTrendAvailable(null), isFalse);
+    test('the trend needs the throughput key collected, nothing more', () {
+      // A plain numeric key now, so an entry for it is the whole requirement.
+      // It used to also have to carry the member in `sample_members`, because
+      // the number lived three levels inside an FB_BPM instance in the status
+      // struct; one key per PLC member retires that.
+      expect(boxErectorBpmTrendAvailable(null), isFalse,
+          reason: 'uncollected: no history exists, so offer no chart');
       expect(
           boxErectorBpmTrendAvailable(
-              CollectEntry(
-                  key: 'BER01.BER01', sampleMembers: const ['p_stat_xRunning'])),
-          isFalse,
-          reason: 'collected, but not this member');
-      expect(
-          boxErectorBpmTrendAvailable(
-              CollectEntry(key: 'BER01.BER01', sampleMembers: const [
-                'bpmCartonsOut.hmi.avgBPM1Minute'
-              ])),
+              CollectEntry(key: 'BER01.CartonsPerMinute')),
           isTrue);
     });
   });
 
   group('Box erector Modbus link gate', () {
-    DynamicValue struct(Map<String, dynamic> m) =>
-        DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from(m));
-
     test('healthy, down, and ABSENT are three different answers', () {
-      expect(boxErectorCommsOf(struct({'p_stat_xModbusHealthy': true})), isTrue);
-      expect(
-          boxErectorCommsOf(struct({'p_stat_xModbusHealthy': false})), isFalse);
+      expect(boxErectorCommsOf({kBoxErectorCommsSuffix: true}), isTrue);
+      expect(boxErectorCommsOf({kBoxErectorCommsSuffix: false}), isFalse);
 
-      // Absent must be null, NOT false. BER02/BER03 run the old flat FB and
-      // never publish this member; treating that as "link down" would blank
-      // two panes that are working fine.
-      expect(boxErectorCommsOf(struct({'p_stat_xRunning': true})), isNull);
-      expect(boxErectorCommsOf(null), isNull);
+      // Absent must be null, NOT false. BER02/BER03 have no ModbusHealthy key
+      // mapped, and nothing has arrived yet on a pane that just opened;
+      // treating either as "link down" would blank a working pane.
+      expect(boxErectorCommsOf({'Running': true}), isNull);
+      expect(boxErectorCommsOf(const {}), isNull);
+      // A key that ERRORED lands as an explicit null, and is likewise unknown.
+      expect(boxErectorCommsOf({kBoxErectorCommsSuffix: null}), isNull);
     });
 
-    test('a frozen struct still reads Running -- which is why the gate exists',
-        () {
-      // The failure this guards. FB_BER01ScadaPoll decodes the Saia process
-      // word unconditionally, so when the link drops the bits hold their last
-      // values: the struct below is exactly what the pane keeps receiving,
-      // indefinitely, and every bit in it still says the machine is fine.
-      final frozen = struct({
-        'p_stat_xModbusHealthy': false,
-        'p_stat_xRunning': true,
-        'p_stat_xEstopActive': false,
-      });
-      expect(structStatusBitOf(frozen, 'p_stat_xRunning'), isTrue,
+    test('every diode can be lit and still be a lie -- hence the gate', () {
+      // The failure this guards. FB_BER01ScadaPoll decodes the Saia's process
+      // word unconditionally, so when the Modbus link drops every published
+      // bit HOLDS its last value. One key per member does not change that:
+      // four separate OPC UA subscriptions to four frozen PLC variables are
+      // just as confidently wrong as one frozen struct, and our subscription
+      // to ST101 stays perfectly healthy throughout.
+      const frozen = <String, bool?>{
+        kBoxErectorCommsSuffix: false,
+        'Running': true,
+        'PermitInfeed': true,
+        'PermitOutfeed': true,
+      };
+      expect(frozen['Running'], isTrue,
           reason: 'the stale bit is indistinguishable from a live one');
       expect(boxErectorCommsOf(frozen), isFalse,
-          reason: 'only the health bit reveals it');
+          reason: 'only the health key reveals it');
     });
   });
 }
