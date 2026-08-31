@@ -17,6 +17,7 @@
 // test that writes rows, so it is enabled in this file only.
 
 import 'dart:convert';
+import 'dart:io';
 
 // `isNull` / `isNotNull` are matchers here, not drift's SQL expressions of the
 // same names.
@@ -114,6 +115,29 @@ Future<void> _rawInsertUser(
       "VALUES ('$username', '$roleName', 'hash', 'salt', "
       "'2026-08-28T00:00:00Z')",
     );
+
+/// Inserts an `audit_entry` row naming [who], with raw SQL.
+///
+/// `audit_entry.who` is a denormalised TEXT column with no foreign key
+/// (`database_drift.dart:142`), which is what makes the trail survive a deleted
+/// account by construction. The test below asserts that property rather than
+/// trusting it.
+Future<void> _rawInsertAudit(AppDatabase db, {required String who}) =>
+    db.customStatement(
+      'INSERT INTO audit_entry '
+      '(at, who, station, role_name, surface, item_key, group_required, '
+      'allowed, action_id) '
+      "VALUES ('2026-08-29T00:00:00Z', '$who', 'ST101', 'Engineering', "
+      "'admin', 'role.update', 'users', 1, 'a1')",
+    );
+
+Future<int> _rawAuditCountFor(AppDatabase db, String who) async {
+  final rows = await db.customSelect(
+    'SELECT COUNT(*) AS c FROM audit_entry WHERE who = ?',
+    variables: [Variable<String>(who)],
+  ).get();
+  return rows.first.read<int>('c');
+}
 
 void main() {
   late AppDatabase db;
@@ -792,6 +816,359 @@ void main() {
         decodeStoredHash(r'pbkdf2-sha256$notanumber$abc', saltB64: 'c2FsdA=='),
         isNull,
       );
+    });
+  });
+
+  group('listUsers', () {
+    test('is empty on a fresh database', () async {
+      expect(await repo.listUsers(), isEmpty);
+    });
+
+    test('returns every row, ordered by username', () async {
+      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
+      await _rawInsertUser(db, username: 'zoe', roleName: 'Operator');
+
+      final users = await repo.listUsers();
+
+      expect(users.map((u) => u.username), ['ada', 'jon', 'zoe']);
+      expect(users.map((u) => u.roleName),
+          ['Maintenance', 'Engineering', 'Operator']);
+    });
+  });
+
+  group('createUser', () {
+    test('creates an account in the role it was given', () async {
+      await repo.createUser(
+          username: 'ada', password: 'hunter2', roleName: 'Maintenance');
+
+      final row = (await repo.user('ada'))!;
+      expect(row.roleName, 'Maintenance',
+          reason: 'unlike createFirstUser, the role is a parameter here');
+      expect(row.createdAt, isNotNull);
+      expect(row.lastLoginAt, isNull);
+    });
+
+    test('stores a hash and a salt, never the password', () async {
+      await repo.createUser(
+          username: 'ada', password: 'hunter2', roleName: 'Maintenance');
+
+      final row = (await repo.user('ada'))!;
+      expect(row.passwordHash, isNot(contains('hunter2')));
+      expect(row.passwordHash, startsWith('pbkdf2-sha256\$'));
+      final decoded = decodeStoredHash(row.passwordHash, saltB64: row.salt)!;
+      expect(
+        await PasswordHasher.verify(
+          password: 'hunter2',
+          hashB64: decoded.hashB64,
+          saltB64: decoded.saltB64,
+          iterations: decoded.iterations,
+        ),
+        isTrue,
+      );
+    });
+
+    test('works after the first-user window has closed', () async {
+      // createUser is not createFirstUser: it neither opens nor closes that
+      // window, and it is reachable only from a `users`-gated screen.
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+
+      await repo.createUser(
+          username: 'ada', password: 'letmein', roleName: 'Shift Leader');
+
+      expect(await _rawUserCount(db), 2);
+    });
+
+    test('is not refused when nobody holds users yet', () async {
+      // Creating an account cannot take a holder away, so createUser
+      // deliberately does not call the lockout guard. On an empty table there
+      // is no holder at all, which is where a misplaced guard would show up.
+      await repo.createUser(
+          username: 'zoe', password: 'hunter2', roleName: 'Operator');
+
+      expect(await _rawUserCount(db), 1);
+    });
+
+    test('a duplicate username is refused, and names it', () async {
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
+
+      await expectLater(
+        () => repo.createUser(
+            username: 'ada', password: 'hunter2', roleName: 'Engineering'),
+        throwsA(isA<UserExistsException>()
+            .having((e) => e.username, 'username', 'ada')),
+      );
+
+      expect(await _rawRoleOf(db, 'ada'), 'Maintenance',
+          reason: 'the transaction rolled back — the existing row is intact');
+    });
+
+    test('an unknown role is named, and nothing is inserted', () async {
+      // The hash was derived before the transaction opened, so this is also
+      // the case that throws one away — which costs nothing, and is why
+      // deriving it early is safe.
+      await expectLater(
+        () => repo.createUser(
+            username: 'ada', password: 'hunter2', roleName: 'Ghost'),
+        throwsA(isA<MissingRoleError>()
+            .having((e) => e.toString(), 'message', contains('Ghost'))),
+      );
+
+      expect(await _rawUserCount(db), 0);
+    });
+
+    test('a blank username is refused and quotes the username', () async {
+      await expectLater(
+        () => repo.createUser(
+            username: '  ', password: 'hunter2', roleName: 'Engineering'),
+        throwsA(isA<ArgumentError>()
+            .having((e) => e.invalidValue, 'invalidValue', '  ')),
+      );
+
+      expect(await _rawUserCount(db), 0);
+    });
+
+    test('an empty password is refused without quoting anything', () async {
+      try {
+        await repo.createUser(
+            username: 'ada', password: '', roleName: 'Engineering');
+        fail('expected an ArgumentError');
+      } on ArgumentError catch (e) {
+        expect(e.invalidValue, isNull,
+            reason: 'ArgumentError.value would put the credential in the '
+                'message, and from there into whatever logs it');
+        expect(e.toString(), isNot(contains('hunter2')));
+      }
+
+      expect(await _rawUserCount(db), 0);
+    });
+
+    test('usernames are trimmed but not case-folded', () async {
+      await repo.createUser(
+          username: ' ada ', password: 'hunter2', roleName: 'Maintenance');
+      await repo.createUser(
+          username: 'ADA', password: 'hunter2', roleName: 'Maintenance');
+
+      expect(await repo.user('ada'), isNotNull);
+      expect(await repo.user('ADA'), isNotNull);
+      expect(await _rawUserCount(db), 2,
+          reason: 'the primary key is case-sensitive TEXT, by decision');
+    });
+  });
+
+  group('deleteUser', () {
+    test('removes the row', () async {
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
+
+      await repo.deleteUser('ada');
+
+      expect(await repo.user('ada'), isNull);
+      expect(await _rawUserCount(db), 1);
+    });
+
+    test('route (a): deleting the last users-holding account is refused',
+        () async {
+      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
+
+      await expectLater(
+        () => repo.deleteUser('jon'),
+        throwsA(isA<LastUsersHolderException>()
+            .having((e) => e.roleName, 'roleName', 'Engineering')
+            .having((e) => e.holders, 'holders', ['jon'])),
+      );
+
+      expect(await _rawUserCount(db), 2,
+          reason: 'the transaction rolled back — the row survives');
+      expect(await _rawRoleOf(db, 'jon'), 'Engineering');
+    });
+
+    test('deleting one of two users-holders is allowed', () async {
+      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Engineering');
+
+      await repo.deleteUser('jon');
+
+      expect(await _rawHoldersOf(db, 'Engineering'), ['ada']);
+    });
+
+    test('an unknown username is refused rather than succeeding quietly',
+        () async {
+      await expectLater(
+        () => repo.deleteUser('ghost'),
+        throwsA(isA<UserNotFoundException>()
+            .having((e) => e.username, 'username', 'ghost')),
+      );
+    });
+
+    test('leaves the deleted account audit rows in place', () async {
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
+      await _rawInsertAudit(db, who: 'ada');
+      await _rawInsertAudit(db, who: 'ada');
+
+      await repo.deleteUser('ada');
+
+      expect(await _rawAuditCountFor(db, 'ada'), 2,
+          reason: 'audit_entry.who is a denormalised TEXT column with no '
+              'foreign key, so the trail survives a deleted account by '
+              'construction. No cascade may ever be added.');
+    });
+  });
+
+  group('setRole', () {
+    test('moves the account onto the role', () async {
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Operator');
+
+      await repo.setRole('ada', 'Maintenance');
+
+      expect(await _rawRoleOf(db, 'ada'), 'Maintenance');
+    });
+
+    test('route (b): moving the last users-holding account off it is refused',
+        () async {
+      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+
+      await expectLater(
+        () => repo.setRole('jon', 'Maintenance'),
+        throwsA(isA<LastUsersHolderException>()
+            .having((e) => e.roleName, 'roleName', 'Engineering')
+            .having((e) => e.holders, 'holders', ['jon'])),
+      );
+
+      expect(await _rawRoleOf(db, 'jon'), 'Engineering',
+          reason: 'the transaction rolled back — role_name is unchanged');
+    });
+
+    test('moving the last holder onto another users-granting role is allowed',
+        () async {
+      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+      await repo.upsertRole(const AccessRole(
+        name: 'Controls',
+        groups: {AccessGroup.operate, AccessGroup.users},
+      ));
+
+      await repo.setRole('jon', 'Controls');
+
+      expect(await _rawRoleOf(db, 'jon'), 'Controls');
+    });
+
+    test('an unknown username is refused', () async {
+      await expectLater(
+        () => repo.setRole('ghost', 'Maintenance'),
+        throwsA(isA<UserNotFoundException>()
+            .having((e) => e.username, 'username', 'ghost')),
+      );
+    });
+
+    test('an unknown role is named', () async {
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
+
+      await expectLater(
+        () => repo.setRole('ada', 'Ghost'),
+        throwsA(isA<MissingRoleError>()
+            .having((e) => e.toString(), 'message', contains('Ghost'))),
+      );
+
+      expect(await _rawRoleOf(db, 'ada'), 'Maintenance');
+    });
+  });
+
+  group('setPassword', () {
+    test('writes a hash and salt that verify against the new password',
+        () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+      final before = (await repo.user('jon'))!;
+
+      await repo.setPassword('jon', 'letmein');
+
+      final after = (await repo.user('jon'))!;
+      expect(after.passwordHash, isNot(before.passwordHash));
+      expect(after.salt, isNot(before.salt),
+          reason: 'a reset writes a fresh salt as well as a fresh hash');
+      expect(after.passwordHash, isNot(contains('letmein')));
+
+      final decoded = decodeStoredHash(after.passwordHash, saltB64: after.salt)!;
+      expect(
+        await PasswordHasher.verify(
+          password: 'letmein',
+          hashB64: decoded.hashB64,
+          saltB64: decoded.saltB64,
+          iterations: decoded.iterations,
+        ),
+        isTrue,
+      );
+      expect(
+        await PasswordHasher.verify(
+          password: 'hunter2',
+          hashB64: decoded.hashB64,
+          saltB64: decoded.saltB64,
+          iterations: decoded.iterations,
+        ),
+        isFalse,
+      );
+    });
+
+    test('does not touch last_login_at, and does not sign anybody out',
+        () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+      final at = DateTime.utc(2026, 8, 29, 6);
+      await repo.touchLastLogin('jon', at);
+
+      await repo.setPassword('jon', 'letmein');
+
+      expect((await repo.user('jon'))!.lastLoginAt!.toUtc(), at);
+      expect((await repo.user('jon'))!.roleName, 'Engineering');
+    });
+
+    test('an unknown username is refused', () async {
+      await expectLater(
+        () => repo.setPassword('ghost', 'letmein'),
+        throwsA(isA<UserNotFoundException>()
+            .having((e) => e.username, 'username', 'ghost')),
+      );
+    });
+
+    test('an empty password is refused without quoting anything', () async {
+      await repo.createFirstUser(username: 'jon', password: 'hunter2');
+      final before = (await repo.user('jon'))!.passwordHash;
+
+      try {
+        await repo.setPassword('jon', '');
+        fail('expected an ArgumentError');
+      } on ArgumentError catch (e) {
+        expect(e.invalidValue, isNull);
+        expect(e.toString(), isNot(contains('hunter2')));
+      }
+
+      expect((await repo.user('jon'))!.passwordHash, before);
+    });
+
+    test('the hash is derived before the transaction opens', () async {
+      // Structural, because the ordering is not observable from outside: the
+      // cost of getting it wrong is a write transaction held open across a
+      // one-second key derivation on the shared Postgres server, not a wrong
+      // answer. createFirstUser states the reasoning; these two methods copy
+      // it, and this test is what keeps them copying it.
+      final source =
+          File('lib/core/access/access_repository.dart').readAsStringSync();
+
+      for (final method in ['createUser', 'setPassword']) {
+        final start = source.indexOf('Future<void> $method(');
+        expect(start, greaterThan(-1), reason: '$method must exist');
+        final body = source.substring(start, source.indexOf('\n  }\n', start));
+
+        final hashAt = body.indexOf('PasswordHasher.hash');
+        final transactionAt = body.indexOf('db.transaction');
+        expect(hashAt, greaterThan(-1), reason: '$method must hash');
+        expect(transactionAt, greaterThan(-1),
+            reason: '$method must write inside a transaction');
+        expect(hashAt, lessThan(transactionAt),
+            reason: '$method must derive the hash before opening the '
+                'transaction, as createFirstUser does');
+      }
     });
   });
 }
