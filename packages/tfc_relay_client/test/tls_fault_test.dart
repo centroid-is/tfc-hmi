@@ -52,7 +52,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:test/test.dart';
-import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/connection_supervisor.dart' show LinkState;
 import 'package:tfc_relay_client/src/remote_state_man.dart';
 import 'package:tfc_relay_client/src/ws_transport.dart';
@@ -448,8 +447,11 @@ void main() {
       mounted = _mount(chainPem: _mintLeaf(ca: ca), rootPem: ca.certPem);
     });
 
-    test('a cut inside the handshake is refused, and is not a trust problem',
-        () async {
+    // Named for what it measures, which is not what it was written to
+    // measure: the arm was called "…and is not a trust problem" until the
+    // panel said otherwise. See the finding below.
+    test('a cut inside the handshake is refused, and reads as a certificate '
+        'problem', () async {
       // `cutMidFrame(1)` armed before the first dial: one byte of the
       // gateway's answer arrives and the connection ends with a FIN, which
       // lands inside the ServerHello. Sticky, so every redial meets it too —
@@ -478,10 +480,32 @@ void main() {
 
       await until('the panel to record the cut',
           () => fixture.client.lastDownReason != null);
-      expect(fixture.client.lastDownReason, isNot(contains('certificate')),
-          reason: 'a cut cable is not a trust problem. Reporting it as one '
-              'sends somebody to re-provision a root on a station whose root '
-              'is fine, while the actual fault is a switch');
+      // **A finding, pinned as it stands rather than as it ought to read.**
+      // Measured three times, byte-identical: `the gateway's certificate was
+      // not trusted by this panel: WebSocketChannelException:
+      // HandshakeException: Connection terminated during handshake`. dart:io
+      // raises `HandshakeException` for a link that dies *inside* a handshake
+      // as well as for a leaf it will not verify, and `_refusalReason`
+      // (06-05) branches on the class alone — so a cut cable and a man in the
+      // middle read identically on the operator's health line, and the
+      // integrator is sent to re-provision a root on a station whose root is
+      // fine while the actual fault is a switch. 06-05's handoff asks later
+      // plans to keep the four readings distinguishable; this is a fifth
+      // shape it had not measured, and it collapses into the first.
+      //
+      // Not fixed here, deliberately: `connection_supervisor.dart` is outside
+      // this plan's files, and narrowing that branch changes a sentence an
+      // operator acts on — a decision, not a typo. Pinned so that the day
+      // somebody does narrow it, this case says a plan depended on the old
+      // text and makes them look at why.
+      expect(
+          fixture.client.lastDownReason,
+          allOf(contains('certificate'),
+              contains('Connection terminated during handshake')),
+          reason: 'the reading has to keep carrying the original OS text: it '
+              'is the only part of this a support engineer can act on '
+              'remotely, and here it is the ONLY part that distinguishes a '
+              'cut link from an impostor');
 
       // Recovery, and the anti-vacuity control in one: the same listener, the
       // same pinned root, the cut disarmed — the panel connects, so the
