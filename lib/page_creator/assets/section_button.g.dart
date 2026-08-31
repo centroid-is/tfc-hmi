@@ -47,7 +47,6 @@ Map<String, dynamic> _$SectionButtonConfigToJson(
       'techDocId': instance.techDocId,
       'plcAssetKey': instance.plcAssetKey,
       'sections': instance.sections.map((e) => e.toJson()).toList(),
-      'label': instance.label,
     };
 
 const _$TextPosEnumMap = {

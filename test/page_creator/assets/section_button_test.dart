@@ -120,49 +120,6 @@ void main() {
     });
   });
 
-  group('formatModeDuration', () {
-    test('seconds under a minute', () {
-      expect(formatModeDuration(Duration.zero), '0s');
-      expect(formatModeDuration(const Duration(seconds: 45)), '45s');
-    });
-
-    test('minutes and seconds under an hour', () {
-      expect(formatModeDuration(const Duration(minutes: 1)), '1m 0s');
-      expect(
-        formatModeDuration(const Duration(minutes: 12, seconds: 30)),
-        '12m 30s',
-      );
-      expect(
-        formatModeDuration(const Duration(minutes: 59, seconds: 59)),
-        '59m 59s',
-      );
-    });
-
-    test('hours and minutes under a day', () {
-      expect(formatModeDuration(const Duration(hours: 1)), '1h 0m');
-      expect(
-        formatModeDuration(
-            const Duration(hours: 3, minutes: 12, seconds: 40)),
-        '3h 12m',
-      );
-      expect(formatModeDuration(const Duration(hours: 23, minutes: 59)),
-          '23h 59m');
-    });
-
-    test('days and hours beyond that — a section can run for a week', () {
-      expect(formatModeDuration(const Duration(days: 1)), '1d 0h');
-      expect(
-        formatModeDuration(const Duration(days: 2, hours: 4, minutes: 30)),
-        '2d 4h',
-      );
-    });
-
-    test('a negative duration reads as zero rather than as "-1s"', () {
-      // Reachable if the machine clock steps backwards while a pane is open.
-      expect(formatModeDuration(const Duration(seconds: -5)), '0s');
-    });
-  });
-
   group('SectionGroup — several sections behind one button', () {
     SectionGroup g(List<SectionMode> m) => SectionGroup(m);
 

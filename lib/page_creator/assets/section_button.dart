@@ -8,6 +8,7 @@ import 'package:logger/logger.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:rxdart/rxdart.dart';
 
+import 'button.dart' show ButtonPainter, ButtonType;
 import 'common.dart';
 import '../../providers/state_man.dart';
 import '../../theme.dart' show HmiStateColors;
@@ -293,25 +294,6 @@ bool canSend(String field, SectionMode mode) {
   return false;
 }
 
-/// How long the sections have been as they are, in operator words.
-///
-/// Two units, largest first, so the number stays readable at a glance on a
-/// pane tile: `45s`, `12m 30s`, `3h 12m`, `2d 4h`.
-String formatModeDuration(Duration duration) {
-  final d = duration.isNegative ? Duration.zero : duration;
-  if (d.inDays > 0) return '${d.inDays}d ${d.inHours % 24}h';
-  if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes % 60}m';
-  if (d.inMinutes > 0) return '${d.inMinutes}m ${d.inSeconds % 60}s';
-  return '${d.inSeconds}s';
-}
-
-/// Clock behind the mode-duration counter.
-///
-/// A test seam, and the only one: a golden of this pane would otherwise embed
-/// a live wall clock and churn on every run. Production code must not set it.
-@visibleForTesting
-DateTime Function() sectionNow = DateTime.now;
-
 // ---------------------------------------------------------------------------
 // Asset config
 // ---------------------------------------------------------------------------
@@ -381,18 +363,39 @@ class SectionButtonConfig extends BaseAsset {
   @JsonKey(defaultValue: <SectionRef>[])
   List<SectionRef> sections;
 
-  /// What the operator calls this button ("Before freezers"). Shown as the
-  /// pane title; the mimic label is the asset's own [text].
+  /// Legacy home of the button's name, read from pages saved before it moved
+  /// to the asset's own [text].
+  ///
+  /// It titled the pane and nothing else, which left the name on the mimic —
+  /// the one an operator actually reads — with no field in the form at all.
+  /// Read on load, migrated into [text] by [fromJson], and never written
+  /// back, so a page saved once is rid of it.
+  @JsonKey(includeToJson: false)
   String? label;
 
   SectionButtonConfig({List<SectionRef>? sections, this.label})
       : sections = sections ?? <SectionRef>[];
 
-  SectionButtonConfig.preview()
-      : sections = <SectionRef>[],
-        label = 'Section' {
+  SectionButtonConfig.preview() : sections = <SectionRef>[] {
     size = const RelativeSize(width: 0.05, height: 0.05);
+    text = 'Section';
     textPos = TextPos.below;
+  }
+
+  /// What the operator calls this button ("Before freezers") — the label on
+  /// the mimic and the title of the pane, which are one name and were never
+  /// worth two fields. Falls back to the first section's own name so a button
+  /// nobody has named still says which line it drives.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  String get name {
+    final t = text?.trim();
+    if (t != null && t.isNotEmpty) return t;
+    final l = label?.trim();
+    if (l != null && l.isNotEmpty) return l;
+    for (final s in sections) {
+      if (s.key.trim().isNotEmpty) return s.displayLabel;
+    }
+    return 'Section';
   }
 
   /// Keys live inside [sections], which the base class's JSON introspection
@@ -406,8 +409,19 @@ class SectionButtonConfig extends BaseAsset {
           if (s.key.trim().isNotEmpty) s.key.trim(),
       ];
 
-  factory SectionButtonConfig.fromJson(Map<String, dynamic> json) =>
-      _$SectionButtonConfigFromJson(json);
+  factory SectionButtonConfig.fromJson(Map<String, dynamic> json) {
+    final config = _$SectionButtonConfigFromJson(json);
+    // Migration, not a fallback: a page saved before the name moved to [text]
+    // has it in `label`, and leaving it there would mean the button on the
+    // mimic silently lost its caption the day the form gained the field.
+    final text = config.text?.trim();
+    final legacy = config.label?.trim();
+    if ((text == null || text.isEmpty) && legacy != null && legacy.isNotEmpty) {
+      config.text = legacy;
+      config.textPos ??= TextPos.below;
+    }
+    return config;
+  }
   @override
   Map<String, dynamic> toJson() => _$SectionButtonConfigToJson(this);
 
@@ -439,12 +453,35 @@ class _SectionButtonConfigEditorState
         mainAxisSize: MainAxisSize.min,
         children: [
           TextFormField(
-            initialValue: widget.config.label,
+            key: const Key('section-name'),
+            initialValue: widget.config.text,
             decoration: const InputDecoration(
               labelText: 'Button name',
-              helperText: 'Title of the pane, e.g. Before freezers',
+              helperText: 'Shown beside the button and as the title of the '
+                  'pane, e.g. Before freezers',
             ),
-            onChanged: (v) => widget.config.label = v,
+            onChanged: (v) => setState(() {
+              widget.config.text = v;
+              // A name typed into a button that has never had one would
+              // otherwise be stored and not drawn: `page_view` paints nothing
+              // without a position. `below` is where the editor puts every
+              // other newly-labelled asset.
+              widget.config.textPos ??= TextPos.below;
+            }),
+          ),
+          const SizedBox(height: 16),
+          DropdownButton<TextPos>(
+            key: const Key('section-name-position'),
+            value: widget.config.textPos ?? TextPos.below,
+            isExpanded: true,
+            onChanged: (value) =>
+                setState(() => widget.config.textPos = value!),
+            items: TextPos.values
+                .map((e) => DropdownMenuItem<TextPos>(
+                      value: e,
+                      child: Text('Name ${e.name}'),
+                    ))
+                .toList(),
           ),
           const SizedBox(height: 20),
           Row(
@@ -584,54 +621,20 @@ class SectionButton extends ConsumerStatefulWidget {
 class _SectionButtonState extends ConsumerState<SectionButton> {
   static final _log = Logger();
 
-  /// The modes the sections were last seen in, and when they were first seen
-  /// that way.
-  ///
-  /// The PLC publishes no timestamp for a transition, so the counter is this:
-  /// the HMI's own observation. It lives on the button rather than in the pane
-  /// so that opening, closing and reopening the pane does not restart a count
-  /// the operator is watching — the pane is a window onto it.
-  List<SectionMode> _modes = const [];
-  DateTime? _modeSince;
+  /// Whether the face is held down, so it wears the same shrink-and-tighten
+  /// as every other button on a mimic. Local: this button writes nothing, so
+  /// there is no PLC state to reflect here.
+  bool _isPressed = false;
 
-  /// False while [_modeSince] is only "when the page opened" — the first value
-  /// to arrive says what the state is, not how long it has been that way. The
-  /// tile hedges accordingly rather than passing a connection time off as a
-  /// transition time.
-  bool _sawTransition = false;
-  bool _sawValue = false;
+  void _setPressed(bool value) {
+    if (_isPressed == value) return;
+    setState(() => _isPressed = value);
+  }
 
   /// Cache so the combined stream is not rebuilt — and every section
   /// re-subscribed — on each frame.
   List<Stream<DynamicValue>>? _sources;
   Stream<List<DynamicValue?>>? _combined;
-
-  /// Records the group's modes and, when they change, restarts the counter.
-  ///
-  /// Called from the button's own stream and from the pane's — both are fed by
-  /// the same subscription, in an order nothing guarantees, and this is
-  /// idempotent so either may be first.
-  ///
-  /// A frame in which no section has reported yet is not an observation: the
-  /// sources are seeded with nulls so the group can render before the slowest
-  /// PLC answers, and counting that seed would make the first real reading
-  /// look like a change the HMI had witnessed.
-  void _observe(List<DynamicValue?> values, List<SectionMode> modes) {
-    if (!values.any((v) => v != null)) return;
-    if (_sawValue && _sameModes(_modes, modes)) return;
-    _sawTransition = _sawValue;
-    _sawValue = true;
-    _modes = List.unmodifiable(modes);
-    _modeSince = sectionNow();
-  }
-
-  static bool _sameModes(List<SectionMode> a, List<SectionMode> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
 
   /// The configured sections that actually name a node.
   List<SectionRef> get _refs => [
@@ -641,12 +644,7 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
 
   String get _paneId => 'section:${identityHashCode(widget.config)}';
 
-  String get _title {
-    final l = widget.config.label?.trim();
-    if (l != null && l.isNotEmpty) return l;
-    final refs = _refs;
-    return refs.isEmpty ? 'Section' : refs.first.displayLabel;
-  }
+  String get _title => widget.config.name;
 
   /// One shared stream per key, combined into a single list that fires as soon
   /// as any member updates.
@@ -771,14 +769,11 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
               ? snapshot.data!
               : List<DynamicValue?>.filled(refs.length, null);
           final modes = [for (final v in values) _modeOf(v)];
-          if (snapshot.hasData && !snapshot.hasError) _observe(values, modes);
           return SectionPane(
             title: _title,
             refs: refs,
             values: values,
             modes: modes,
-            since: _modeSince,
-            sinceIsTransition: _sawTransition,
             onCommand: (field) => _send(refs, values, field),
             onSectionCommand: (i, field) => _sendOne(refs, values, i, field),
           );
@@ -813,9 +808,6 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       stream: _combinedFor(sources),
       builder: (context, snapshot) {
         if (!snapshot.hasData || snapshot.hasError) {
-          // Waiting for the first reading is not an observation of the
-          // sections: recording it would make the first real value look like
-          // a change, and the pane would claim to be counting from one.
           return _face(
             context,
             SectionGroup(
@@ -824,7 +816,6 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
           );
         }
         final modes = [for (final v in snapshot.data!) _modeOf(v)];
-        _observe(snapshot.data!, modes);
         return _face(context, SectionGroup(modes), interactive: true);
       },
     );
@@ -834,15 +825,6 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       {required bool interactive}) {
     final theme = Theme.of(context);
     final states = HmiStateColors.of(context);
-
-    final painter = PowerButtonPainter(
-      disc: sectionModeColor(context, group.busiest),
-      splitWith:
-          group.mixed ? sectionModeColor(context, group.quietest) : null,
-      glyph: states.onState,
-      border: theme.colorScheme.outlineVariant,
-      unreadable: group.anyUnreadable,
-    );
 
     // The box this is laid out in, not the one the config asks for.
     //
@@ -864,6 +846,18 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
             ? Size(constraints.maxWidth, constraints.maxHeight)
             : widget.config.size.toSize(MediaQuery.of(context).size);
 
+        final pressed = interactive && _isPressed;
+
+        final painter = PowerButtonPainter(
+          disc: sectionModeColor(context, group.busiest),
+          splitWith:
+              group.mixed ? sectionModeColor(context, group.quietest) : null,
+          glyph: states.onState,
+          border: theme.colorScheme.outlineVariant,
+          unreadable: group.anyUnreadable,
+          isPressed: pressed,
+        );
+
         // The face is a disc in a square box. Without a hit shape the corners
         // of that box would swallow taps meant for whatever is drawn behind
         // them — and the plant view would outline a square around a round
@@ -874,7 +868,15 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
         );
 
         if (interactive) {
+          // The press feedback is the painter's, not an `InkWell`'s. A
+          // `Material` splash is drawn behind its child, and this child is an
+          // opaque disc — the ripple `button.dart` sets up is invisible there
+          // too. What an operator actually sees is `ButtonPainter` shrinking
+          // the face and tightening its shadow, which is driven from here.
           face = GestureDetector(
+            onTapDown: (_) => _setPressed(true),
+            onTapUp: (_) => _setPressed(false),
+            onTapCancel: () => _setPressed(false),
             onTap: () => _showPane(context),
             child: face,
           );
@@ -939,17 +941,27 @@ class PowerButtonPainter extends CustomPainter {
   /// `!` when it has no keys, no data, or an errored stream.
   final bool unreadable;
 
+  /// Held down. Passed straight to [ButtonPainter], which shrinks the face and
+  /// tightens its shadow; the glyph is scaled with it so the whole button
+  /// moves as one thing rather than a disc sliding under a fixed symbol.
+  final bool isPressed;
+
   const PowerButtonPainter({
     required this.disc,
     required this.glyph,
     required this.border,
     this.splitWith,
     this.unreadable = false,
+    this.isPressed = false,
   });
 
-  /// Radius of the disc drawn into [size], leaving room for the border.
+  /// How much [ButtonPainter] shrinks a pressed face.
+  static const double _pressedScale = 0.95;
+
+  /// Radius of the disc at rest, which is the radius [ButtonPainter] fills a
+  /// circular face to.
   static double radiusFor(Size size) =>
-      math.max(0, math.min(size.width, size.height) / 2 - 1);
+      math.max(0, math.min(size.width, size.height) / 2);
 
   /// The tappable shape: the disc, not the box it is laid out in.
   static Path hitShape(Size size) => Path()
@@ -961,10 +973,19 @@ class PowerButtonPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final r = radiusFor(size);
+    final r = radiusFor(size) * (isPressed ? _pressedScale : 1.0);
     if (r <= 0) return;
 
-    canvas.drawCircle(center, r, Paint()..color = disc);
+    // The face is not drawn here. Shadow, fill, pressed shrink and hairline
+    // are exactly what every other button on a mimic has, and they come from
+    // the one painter that already draws them — a second flat disc of our own
+    // was the same button with the depth missing.
+    ButtonPainter(
+      color: disc,
+      isPressed: isPressed,
+      buttonType: ButtonType.circle,
+      borderColor: border,
+    ).paint(canvas, size);
 
     final second = splitWith;
     if (second != null) {
@@ -992,16 +1013,19 @@ class PowerButtonPainter extends CustomPainter {
           ..strokeWidth = math.max(1, r * 0.07),
       );
       canvas.restore();
-    }
 
-    canvas.drawCircle(
-      center,
-      r,
-      Paint()
-        ..color = border
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = math.max(1, r * 0.04),
-    );
+      // The quieter half was laid over the hairline `ButtonPainter` had
+      // already drawn, so put it back. Same width and colour, so a split
+      // button's edge is indistinguishable from a plain one's.
+      canvas.drawCircle(
+        center,
+        r,
+        Paint()
+          ..color = border
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
 
     if (unreadable) {
       _paintExclamation(canvas, center, r);
@@ -1061,15 +1085,16 @@ class PowerButtonPainter extends CustomPainter {
       old.splitWith != splitWith ||
       old.glyph != glyph ||
       old.border != border ||
-      old.unreadable != unreadable;
+      old.unreadable != unreadable ||
+      old.isPressed != isPressed;
 }
 
 // ---------------------------------------------------------------------------
 // The pane
 // ---------------------------------------------------------------------------
 
-/// The operator pane: what the sections are doing, for how long, and the
-/// commands that change it.
+/// The operator pane: what the sections are doing and the commands that
+/// change it.
 ///
 /// Split out from the asset so it can be pumped on its own in tests and
 /// goldens, and so the layout is readable without the subscription plumbing
@@ -1081,13 +1106,6 @@ class SectionPane extends StatelessWidget {
   final List<SectionRef> refs;
   final List<DynamicValue?> values;
   final List<SectionMode> modes;
-
-  /// When the HMI first saw the sections as they are.
-  final DateTime? since;
-
-  /// Whether [since] is a change the HMI actually witnessed, rather than the
-  /// moment it connected and found the sections already this way.
-  final bool sinceIsTransition;
 
   /// Writes one `p_cmd_*` member, fanned out across every section that can
   /// take it.
@@ -1111,8 +1129,6 @@ class SectionPane extends StatelessWidget {
     required this.onCommand,
     this.onSectionCommand,
     this.values = const [],
-    this.since,
-    this.sinceIsTransition = false,
   });
 
   static String _runningOrNot(bool? value) =>
@@ -1177,9 +1193,15 @@ class SectionPane extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Both wider than the 108 px default: at 108 the label read
-                // `In this …` and the longest state word was cut short. The
-                // pair still fits one row of a 380 px pane.
+                // No "for how long" tile beside it. `ST_Section_HMI` carries
+                // three status bits and no transition timestamp, so the only
+                // clock available was the HMI's own: it started when this
+                // widget was built and went back to zero the moment the
+                // operator navigated away and came back. A counter that
+                // restarts on navigation is worse than no counter, because it
+                // reads as the section having just changed mode. If the PLC
+                // ever publishes the transition time, that is the number that
+                // belongs here.
                 PaneTileRow(
                   children: [
                     PaneMetricTile(
@@ -1187,25 +1209,9 @@ class SectionPane extends StatelessWidget {
                       value: group.label,
                       valueColor: sectionModeColor(context, group.busiest),
                       icon: Icons.bolt,
+                      // Wider than the 108 px default: at 108 the longest
+                      // state word was cut short.
                       width: 170,
-                    ),
-                    // "For at least" is the whole of what an earlier `Timer
-                    // started: when the page opened` row was trying to say, in
-                    // words that need no row of their own. The PLC gives no
-                    // transition timestamp, so a section already running when
-                    // the page opened has only been watched for this long — it
-                    // may have been running since yesterday. When the HMI did
-                    // see the change the number is exact, and the label says
-                    // so by not hedging.
-                    SectionModeTimer(
-                      since: group.anyUnreadable && !group.mixed ? null : since,
-                      builder: (context, elapsed) => PaneMetricTile(
-                        label: sinceIsTransition ? 'For' : 'For at least',
-                        value:
-                            elapsed == null ? '—' : formatModeDuration(elapsed),
-                        icon: Icons.timer_outlined,
-                        width: 150,
-                      ),
                     ),
                   ],
                 ),
@@ -1636,66 +1642,6 @@ class _Note extends StatelessWidget {
           child: Text(text, style: Theme.of(context).textTheme.bodySmall),
         ),
       ],
-    );
-  }
-}
-
-/// Rebuilds [builder] once a second with the time elapsed since [since].
-///
-/// The ticker lives here, in the pane, and nowhere else: the button on the
-/// mimic must not rebuild every second — there can be a dozen of them on a page
-/// and none of them displays the counter. Passing a null [since] gives a null
-/// duration and no timer at all.
-class SectionModeTimer extends StatefulWidget {
-  final DateTime? since;
-  final Widget Function(BuildContext context, Duration? elapsed) builder;
-
-  const SectionModeTimer({
-    super.key,
-    required this.since,
-    required this.builder,
-  });
-
-  @override
-  State<SectionModeTimer> createState() => _SectionModeTimerState();
-}
-
-class _SectionModeTimerState extends State<SectionModeTimer> {
-  Timer? _ticker;
-
-  @override
-  void initState() {
-    super.initState();
-    _syncTicker();
-  }
-
-  @override
-  void didUpdateWidget(SectionModeTimer old) {
-    super.didUpdateWidget(old);
-    if (old.since != widget.since) _syncTicker();
-  }
-
-  void _syncTicker() {
-    _ticker?.cancel();
-    _ticker = widget.since == null
-        ? null
-        : Timer.periodic(const Duration(seconds: 1), (_) {
-            if (mounted) setState(() {});
-          });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final since = widget.since;
-    return widget.builder(
-      context,
-      since == null ? null : sectionNow().difference(since),
     );
   }
 }

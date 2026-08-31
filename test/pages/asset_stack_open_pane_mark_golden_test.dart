@@ -425,7 +425,6 @@ void main() {
         tester,
         [
           SectionButtonConfig(
-            label: 'Before freezers',
             sections: [SectionRef(key: 'sec/a')],
           )
             ..text = 'Before freezers'
