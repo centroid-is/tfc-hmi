@@ -616,6 +616,16 @@ class MyApp extends ConsumerWidget {
           transitionDelegate: MyNoAnimationTransitionDelegate(),
           clearBeamingHistoryOn: clearHistoryOn,
           locationBuilder: (routeInformation, context) => locationBuilder(routeInformation, context),
+        ),
+        // Beamer only swaps the incoming route for [initialPath] when that
+        // route is exactly '/'. The eLinux embedder reports '' instead, so
+        // without this normalization every station booted Home regardless
+        // of the chosen startup page. See normalizeInitialPlatformRoute.
+        routeInformationProvider = PlatformRouteInformationProvider(
+          initialRouteInformation: RouteInformation(
+            uri: Uri.parse(normalizeInitialPlatformRoute(
+                WidgetsBinding.instance.platformDispatcher.defaultRouteName)),
+          ),
         ) {
     // Marionette route logger: emits [ROUTE] /path log entries so agents
     // can verify navigation via getLogs instead of taking screenshots.
@@ -653,6 +663,10 @@ class MyApp extends ConsumerWidget {
   String? _lastPanePath;
 
   final BeamerDelegate routerDelegate;
+
+  /// Feeds the router its first route, normalized so an embedder that
+  /// reports no route (eLinux reports '') still lands on [initialPath].
+  final PlatformRouteInformationProvider routeInformationProvider;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -697,6 +711,7 @@ class MyApp extends ConsumerWidget {
       darkTheme: dark,
       routerDelegate: routerDelegate,
       routeInformationParser: BeamerParser(),
+      routeInformationProvider: routeInformationProvider,
       builder: (context, navigatorChild) {
         return Consumer(
           builder: (context, ref, _) {

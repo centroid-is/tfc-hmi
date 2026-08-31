@@ -118,3 +118,19 @@ String? firstMenuPath(List<MenuItem> items) {
   }
   return null;
 }
+
+/// Normalizes the initial route the platform embedder reports, so
+/// [BeamerDelegate.initialPath] actually gets its turn.
+///
+/// Beamer replaces the incoming route with `initialPath` only when that
+/// route is exactly `/`. Desktop embedders report `/`, but the eLinux
+/// embedder reports an empty string, which sails past that check unchanged
+/// and paints Home no matter what startup page the operator picked — the
+/// station bug behind #354. Anything that is not an absolute path (empty,
+/// or a bare name like `main`) counts as "the platform had no opinion" and
+/// becomes `/`; a genuine deep link starting with `/` passes through.
+String normalizeInitialPlatformRoute(String defaultRouteName) {
+  final name = defaultRouteName.trim();
+  if (name.isEmpty || !name.startsWith('/')) return '/';
+  return name;
+}

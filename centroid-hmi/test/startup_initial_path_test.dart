@@ -1,9 +1,12 @@
 /// The startup-URL boot seam, end to end: a stored URL resolved through
 /// [resolveStartupPath] and handed to a [BeamerDelegate] wired exactly the
 /// way `MyApp` wires it must actually be where the router lands on the
-/// first frame — including nested pages and built-ins, and including the
-/// platform handing Beamer `/` as the initial route the way every desktop
-/// embedder does.
+/// first frame — including nested pages and built-ins, and whatever the
+/// platform reports as the initial route. Desktop embedders report `/`;
+/// the eLinux embedder reports `''`, which defeats Beamer's own
+/// `'/' -> initialPath` swap — the station bug behind #354 — so the router
+/// is wired through the same normalizing RouteInformationProvider MyApp
+/// uses, and every platform flavor is pinned here.
 library;
 
 import 'package:beamer/beamer.dart';
@@ -32,7 +35,16 @@ final _pageMenuItems = <MenuItem>[
 /// against the assembled menu -> BeamerDelegate(initialPath), with the
 /// location builder built from the same menu items. Returns the delegate so
 /// the test can ask where the app actually ended up.
-Future<BeamerDelegate> _boot(WidgetTester tester, String storedUrl) async {
+Future<BeamerDelegate> _boot(
+  WidgetTester tester,
+  String storedUrl, {
+  // What the platform reports as the initial route: '/' on desktop
+  // embedders, '' on eLinux. The router must land on the stored page
+  // either way.
+  String platformRoute = '/',
+}) async {
+  tester.binding.platformDispatcher.defaultRouteNameTestValue = platformRoute;
+  addTearDown(tester.binding.platformDispatcher.clearDefaultRouteNameTestValue);
   final topLevel = buildTopLevelMenuItems(
     god: false,
     isLinux: false,
@@ -64,10 +76,20 @@ Future<BeamerDelegate> _boot(WidgetTester tester, String storedUrl) async {
     clearBeamingHistoryOn: topLevelPaths,
     locationBuilder: (routeInformation, context) => locationBuilder(routeInformation, context),
   );
+  // Mirror MyApp: the initial route travels through the normalizing
+  // provider, not straight from the platform into Beamer.
+  final routeInformationProvider = PlatformRouteInformationProvider(
+    initialRouteInformation: RouteInformation(
+      uri: Uri.parse(normalizeInitialPlatformRoute(
+          tester.binding.platformDispatcher.defaultRouteName)),
+    ),
+  );
+  addTearDown(routeInformationProvider.dispose);
   await tester.pumpWidget(ProviderScope(
     child: MaterialApp.router(
       routerDelegate: delegate,
       routeInformationParser: BeamerParser(),
+      routeInformationProvider: routeInformationProvider,
     ),
   ));
   await tester.pump();
@@ -97,6 +119,26 @@ void main() {
 
   testWidgets('a page deleted since it was chosen falls back to /', (tester) async {
     final delegate = await _boot(tester, '/gone');
+    expect(delegate.configuration.uri.path, '/');
+  });
+
+  testWidgets('eLinux: an empty platform route still boots the stored page', (tester) async {
+    final delegate = await _boot(tester, '/halls/packing', platformRoute: '');
+    expect(delegate.configuration.uri.path, '/halls/packing');
+  });
+
+  testWidgets('a bare platform route name counts as no opinion', (tester) async {
+    final delegate = await _boot(tester, '/halls/packing', platformRoute: 'main');
+    expect(delegate.configuration.uri.path, '/halls/packing');
+  });
+
+  testWidgets('a real deep link from the platform wins over the stored page', (tester) async {
+    final delegate = await _boot(tester, '/halls/packing', platformRoute: '/line');
+    expect(delegate.configuration.uri.path, '/line');
+  });
+
+  testWidgets('eLinux: an empty platform route with nothing stored boots /', (tester) async {
+    final delegate = await _boot(tester, '/', platformRoute: '');
     expect(delegate.configuration.uri.path, '/');
   });
 }
