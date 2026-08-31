@@ -46,6 +46,23 @@
 /// person holds is the same staleness with a different subject.
 ///
 /// **That call goes last, and the ordering is load-bearing.** See [_afterWrite].
+///
+/// ## Two refusals, one dialog, and no override
+///
+/// A role delete can be blocked for two independent reasons: accounts still
+/// hold it, and deleting it would leave nobody holding `users`. Both are
+/// modelled as one state value ([_RoleDeleteBlock]) rather than two booleans,
+/// because two booleans can both be true and then the dialog has to choose a
+/// wording, which is exactly the drift this avoids. Neither refusal is an
+/// `AccessDenied` and no sign-in resolves either, so while one is in force the
+/// confirming action is **absent**, not greyed — `_DeleteTemplateDialog`'s
+/// doctrine, quoted at [_DeleteRoleDialog].
+///
+/// There is no typed-confirmation escape, no control that deletes it anyway,
+/// and no offer to move the holders elsewhere and then delete. 06-CONTEXT's
+/// deferred list rejects the first and the last by name. The override phrasings
+/// are deliberately not spelled out here or below: a grep gate reads this file
+/// as raw text and cannot tell a prohibition from an implementation.
 library;
 
 import 'package:flutter/material.dart';
@@ -179,8 +196,8 @@ const String kAccessOperatorBannerNote =
 /// **Warning two of two.** The confirmation on save, naming what is being
 /// added.
 ///
-/// By [AccessGroupInfo.label], never by enum name: the whole point of 06-01 is
-/// that `force` and `device` are not self-explanatory, and a confirmation
+/// By [AccessGroupInfo.label], never by the persisted identifier: 06-01 exists
+/// because `force` and `device` are not self-explanatory, and a confirmation
 /// reading "force" undoes that.
 String kAccessOperatorConfirmMessage(List<AccessGroup> added) =>
     'Saving this grants ${added.map((g) => g.label).join(', ')} to every panel '
@@ -191,6 +208,21 @@ const String kAccessOperatorConfirmTitle = 'Grant to every logged-out panel?';
 
 /// The confirmation's affirmative. Not "OK": the label says what happens.
 const String kAccessOperatorConfirmLabel = 'Grant';
+
+/// While the delete dialog's two questions are in flight.
+const String kAccessRoleDeleteCheckingNote = 'Checking who holds this role…';
+
+/// The questions could not be asked. "Cannot tell" must not read as "nobody
+/// holds it", so the delete is not offered here either.
+const String kAccessRoleDeleteUnknownNote =
+    'Could not read who holds this role, so deleting it is not offered — it '
+    'might leave accounts pointing at a role that is no longer there.';
+
+/// Nobody holds it and the invariant survives without it, so the delete costs
+/// nothing.
+String kAccessRoleDeleteFreeNote(String name) =>
+    'No account holds "$name", so deleting it changes nothing about what '
+    'anybody may do.';
 
 // ---------------------------------------------------------------------------
 // Keys
@@ -219,6 +251,18 @@ const Key kAccessRoleNameFieldKey = Key('access-role-name-field');
 /// The name dialog's confirming action. One key rather than two: only one of
 /// these dialogs is ever on screen.
 const Key kAccessRoleNameConfirmKey = Key('access-role-name-confirm');
+
+/// The delete dialog's confirming action, present only when nothing blocks it.
+const Key kAccessRoleDeleteConfirmKey = Key('access-role-delete-confirm');
+
+/// The delete dialog's still-asking line.
+const Key kAccessRoleDeleteCheckingKey = Key('access-role-delete-checking');
+
+/// The delete dialog's cannot-tell line.
+const Key kAccessRoleDeleteUnknownKey = Key('access-role-delete-unknown');
+
+/// The delete dialog's nothing-in-the-way line.
+const Key kAccessRoleDeleteFreeKey = Key('access-role-delete-free');
 
 /// The protected row's inline banner.
 ///
@@ -718,8 +762,20 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
   }
 
   Future<void> _delete() async {
-    final wrote = await _write(context, ref, () => store.deleteRole(role.name));
-    if (wrote) await _afterWrite(ref);
+    final deleted = await showDialog<bool>(
+      context: context,
+      builder: (_) => _DeleteRoleDialog(name: role.name, store: store),
+    );
+    // The dialog performs the delete itself, because it is the only widget
+    // that can re-render with the newer data a losing race hands back. All the
+    // caller owes is the refresh — and the invalidate, which the dialog's own
+    // path does not run because it holds no `ref`.
+    if (deleted != true) return;
+    // Everything that needs this widget happens first…
+    ref.invalidate(accessAdminRolesProvider);
+    ref.invalidate(accessAdminUsersProvider);
+    // …and the session refresh last. See [_afterWrite].
+    await _afterWrite(ref);
   }
 }
 
@@ -937,6 +993,247 @@ class _RoleNameDialogState extends State<_RoleNameDialog> {
         ],
       ),
     );
+  }
+}
+
+/// Why a role cannot be deleted, as one value.
+///
+/// One value rather than two booleans: two booleans can both be true and then
+/// the dialog has to choose a wording, which is exactly the drift this avoids.
+/// The names are the reasons, not the UI consequence — a value called `blocked`
+/// tells the next reader nothing about which sentence to expect.
+///
+/// [notYetAsked] and [unreadable] are different states and neither of them is
+/// [nothingInTheWay]: "the question has not come back" and "the question could
+/// not be asked" must never render as "nobody holds it".
+enum _RoleDeleteBlock {
+  /// The two reads are still in flight.
+  notYetAsked,
+
+  /// A read failed, so nothing is known.
+  unreadable,
+
+  /// Nobody holds it and the invariant survives without it.
+  nothingInTheWay,
+
+  /// Accounts still hold it — `RoleInUseException`'s condition.
+  accountsStillHoldIt,
+
+  /// Deleting it would leave nobody able to manage roles and accounts —
+  /// `LastUsersHolderException`'s condition, trip route (d).
+  wouldLeaveNobodyManagingAccess,
+}
+
+/// Delete: who holds it **first**, and no confirming action while anything is
+/// in the way.
+///
+/// ## Why the action is absent rather than present-and-refusing
+///
+/// This is the one exception in this milestone to "never greyed", and it needs
+/// its reason in writing. Quoting `_DeleteTemplateDialog`, whose doc argues it
+/// at length: the "never greyed" rule exists so that a **permission** refusal
+/// is explained rather than hidden — an operator who cannot do something must
+/// still see the control, press it, and be told which permission to go and get.
+/// Neither block here is a permission refusal. `RoleInUseException` and
+/// `LastUsersHolderException` are separate types from `AccessDenied` for
+/// exactly this reason, and an Engineering user holding every group including
+/// `users` gets both. No sign-in resolves either, nothing the operator can be
+/// told to fetch resolves either, and a control that is present and always
+/// refuses teaches the operator to press it twice. So the holders and the
+/// instruction take the action's place.
+///
+/// ## The question, and why it is asked here rather than added to the store
+///
+/// Both answers come from the store's two existing reads. The holders are the
+/// accounts whose role is this one; the lockout is "after this role is gone,
+/// does any remaining account still hold a role granting `users`". No new store
+/// method: the repository's in-transaction guard is still the authority and
+/// this is a **pre-check that can lose a race**, which is what [_delete]'s two
+/// refusal arms are for. Adding a store method for it would look like a second
+/// copy of the rule, and two copies of a rule is how one copy gets edited
+/// alone.
+///
+/// ## No override, anywhere
+///
+/// No typed-confirmation field, no control that deletes it regardless, and no
+/// offer to move the holders somewhere and then delete. 06-CONTEXT's deferred
+/// list rejects the first and the last by name. The dialog says what the state
+/// is; the users section is on the same page.
+class _DeleteRoleDialog extends StatefulWidget {
+  const _DeleteRoleDialog({required this.name, required this.store});
+
+  final String name;
+  final AccessAdminStore store;
+
+  @override
+  State<_DeleteRoleDialog> createState() => _DeleteRoleDialogState();
+}
+
+class _DeleteRoleDialogState extends State<_DeleteRoleDialog> {
+  /// The one state value. Starts at "the question has not come back".
+  _RoleDeleteBlock _block = _RoleDeleteBlock.notYetAsked;
+
+  /// The refusal the block would produce, built by the pre-check or handed over
+  /// by a losing race. Rendering it through [AccessAdminRefusal] rather than
+  /// building a sentence here is what keeps this section's wording and the
+  /// users section's identical.
+  RoleInUseException? _inUse;
+  LastUsersHolderException? _lockout;
+
+  /// Re-entry guard. Deliberately not rendered as a disabled button: a control
+  /// this file draws is never greyed, and a second tap during the round trip is
+  /// simply ignored.
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  /// Asks both questions together and lands on exactly one state.
+  ///
+  /// Awaited together rather than one after the other, so a half-answered
+  /// dialog cannot render as unblocked; a failure of either lands on
+  /// [_RoleDeleteBlock.unreadable].
+  Future<void> _load() async {
+    try {
+      final roles = await widget.store.roles();
+      final users = await widget.store.listUsers();
+      if (!mounted) return;
+      setState(() => _decide(roles, [
+            for (final user in users) (user.username, user.roleName),
+          ]));
+    } on Object {
+      // "Cannot tell" must not read as "nobody holds it".
+      if (mounted) setState(() => _block = _RoleDeleteBlock.unreadable);
+    }
+  }
+
+  /// The pre-check, in the repository's own order.
+  ///
+  /// 06-02 documents it: the lockout check runs **before** the holders check,
+  /// because moving holders off a role is a fix the operator can perform and a
+  /// plant with nobody able to manage roles has no fix inside the application
+  /// at all. Both reasons can be true at once; this order decides which
+  /// sentence the operator reads, and it is the sentence the repository would
+  /// have produced.
+  void _decide(List<AccessRole> roles, List<(String, String)> users) {
+    final granting = {
+      for (final role in roles)
+        if (role.groups.contains(AccessGroup.users)) role.name,
+    };
+    final roleOf = {for (final user in users) user.$1: user.$2};
+
+    final holdersOfUsers = [
+      for (final entry in roleOf.entries)
+        if (granting.contains(entry.value)) entry.key,
+    ]..sort();
+
+    // The guard stands aside when there is no holder to begin with: a freshly
+    // seeded station has roles and no accounts, and a rule that fired there
+    // would make a station unconfigurable out of the box.
+    if (holdersOfUsers.isNotEmpty) {
+      final after = {...granting}..remove(widget.name);
+      if (!roleOf.values.any(after.contains)) {
+        _lockout = LastUsersHolderException(
+          roleOf[holdersOfUsers.first]!,
+          holdersOfUsers,
+        );
+        _block = _RoleDeleteBlock.wouldLeaveNobodyManagingAccess;
+        return;
+      }
+    }
+
+    final holders = [
+      for (final entry in roleOf.entries)
+        if (entry.value == widget.name) entry.key,
+    ]..sort();
+    if (holders.isNotEmpty) {
+      _inUse = RoleInUseException(widget.name, holders);
+      _block = _RoleDeleteBlock.accountsStillHoldIt;
+      return;
+    }
+
+    _block = _RoleDeleteBlock.nothingInTheWay;
+  }
+
+  Future<void> _delete() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      await widget.store.deleteRole(widget.name);
+      if (mounted) Navigator.of(context).pop(true);
+    } on LastUsersHolderException catch (refusal) {
+      // The losing race. Something changed between the question and the
+      // statement, and the repository has just proved a truer answer — so the
+      // same dialog re-renders with it rather than raising an error about a
+      // failed operation.
+      if (mounted) {
+        setState(() {
+          _lockout = refusal;
+          _block = _RoleDeleteBlock.wouldLeaveNobodyManagingAccess;
+        });
+      }
+    } on RoleInUseException catch (refusal) {
+      if (mounted) {
+        setState(() {
+          _inUse = refusal;
+          _block = _RoleDeleteBlock.accountsStillHoldIt;
+        });
+      }
+    } on AccessDenied {
+      // See the note at [_write]. The dialog stays open on purpose: the
+      // operator can sign in from the shared prompt and press Delete again.
+    } on Object catch (error) {
+      if (mounted) _showProblem(context, error);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final blocked = _block != _RoleDeleteBlock.nothingInTheWay;
+    return StandardDialogFrame(
+      title: 'Delete "${widget.name}"',
+      icon: Icons.warning_amber,
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: blocked ? 'Close' : 'Cancel',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        // Absent, not greyed. See the class doc.
+        if (!blocked)
+          PaneAction.destructive(
+            label: 'Delete',
+            buttonKey: kAccessRoleDeleteConfirmKey,
+            onPressed: _delete,
+          ),
+      ],
+      child: _body(context),
+    );
+  }
+
+  Widget _body(BuildContext context) {
+    switch (_block) {
+      case _RoleDeleteBlock.notYetAsked:
+        return _note(context, kAccessRoleDeleteCheckingNote,
+            key: kAccessRoleDeleteCheckingKey);
+      case _RoleDeleteBlock.unreadable:
+        return _note(context, kAccessRoleDeleteUnknownNote,
+            key: kAccessRoleDeleteUnknownKey);
+      case _RoleDeleteBlock.nothingInTheWay:
+        return _note(context, kAccessRoleDeleteFreeNote(widget.name),
+            key: kAccessRoleDeleteFreeKey);
+      // The exception goes straight to the shared widget; this dialog builds no
+      // sentence of its own, which is what keeps the two sections identical.
+      case _RoleDeleteBlock.accountsStillHoldIt:
+        return AccessAdminRefusal.roleInUse(_inUse!);
+      case _RoleDeleteBlock.wouldLeaveNobodyManagingAccess:
+        return AccessAdminRefusal.lastUsersHolder(_lockout!);
+    }
   }
 }
 

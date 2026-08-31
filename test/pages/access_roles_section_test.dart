@@ -1294,9 +1294,8 @@ void main() {
       await openDelete(tester, 'Maintenance');
       await tester.pumpAndSettle();
 
-      final confirm = tester.widget<ButtonStyleButton>(find.ancestor(
-          of: find.byKey(kAccessRoleDeleteConfirmKey),
-          matching: find.byType(ButtonStyleButton)));
+      final confirm = tester
+          .widget<ButtonStyleButton>(find.byKey(kAccessRoleDeleteConfirmKey));
       expect(confirm.onPressed, isNotNull,
           reason: 'a permission refusal is explained, not hidden — the '
               'control stays pressable');
