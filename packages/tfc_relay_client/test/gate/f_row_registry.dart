@@ -34,7 +34,7 @@
 /// manifest with this map emptied, and recorded verbatim in 07-01-SUMMARY.md;
 /// after that the same information lives here, where it is machine-checked in
 /// both directions and shrinks by deletion. This is
-/// `fault_contract_test.dart:301-311`'s "the reachable set and the named gap
+/// `fault_contract_test.dart:228-238`'s "the reachable set and the named gap
 /// account for every check" doctrine, applied to a catalogue instead of a
 /// contract suite.
 library;
@@ -594,7 +594,7 @@ const List<Deviation> gateDeviations = <Deviation>[
     row: 'F7',
     clause: '`blackhole()` right after write frame forwarded',
     reason: 'the lever is killOnce after a stalled write, not blackhole. '
-        'Recorded at fault_contract_test.dart:235-253: a blackhole swallows '
+        'Recorded at write_in_flight_gate_test.dart:23-41: a blackhole swallows '
         'both directions, so the client\'s own close never reaches the gateway '
         'and the replacement session has to establish beside a session the '
         'gateway still believes in — one run in four wedged the reconnect past '

@@ -305,7 +305,7 @@ const _remoteStateManPath = 'lib/src/remote_state_man.dart';
 const _flapKey = 'ST101.CN01.MOT01.setpoint';
 
 /// The budget for "the panel came back": a capped backoff draw, a dial, a
-/// handshake and a snapshot. `fault_contract_test.dart:200-204`'s number and
+/// handshake and a snapshot. `support/gate_bands.dart:64-68`'s number and
 /// its argument — a liveness budget, never a latency measurement.
 const Duration _recovery = Duration(seconds: 5);
 
@@ -315,7 +315,7 @@ const Duration _recovery = Duration(seconds: 5);
 /// establish — that *nothing* further occurred. Polling for a second upstream
 /// attempt would pass the instant it did not find one, which is every instant
 /// before the retry a well-meaning wrapper is about to make.
-/// `fault_contract_test.dart:206-211` is the same constant for the same
+/// `support/gate_bands.dart:70-75` is the same constant for the same
 /// reason.
 const Duration _settle = Duration(milliseconds: 400);
 
