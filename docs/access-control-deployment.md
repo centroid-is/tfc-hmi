@@ -73,14 +73,14 @@ Run as a superuser or as the database owner.
 --    it exists so that the table's owner is not the station.
 CREATE ROLE hmi_audit_owner NOLOGIN;
 
--- 2. A login-less role carrying exactly one privilege.
+-- 2. A login-less role carrying only the trail privileges granted below.
 CREATE ROLE hmi_audit_writer NOLOGIN;
 
 -- 3. Take ownership away from the station.
 --    This step is the one that makes the rest real. In Postgres a table's
 --    owner keeps full rights no matter what you REVOKE, and can simply
 --    GRANT them back to itself. If audit_entry is still owned by
---    hmi_station, steps 5 and 6 are decoration.
+--    hmi_station, steps 5 to 7 are decoration.
 ALTER TABLE audit_entry OWNER TO hmi_audit_owner;
 --    The `id SERIAL` sequence is owned by the column, so the line above
 --    already moved it. Stated explicitly anyway, because it costs nothing and
@@ -91,7 +91,7 @@ ALTER SEQUENCE audit_entry_id_seq OWNER TO hmi_audit_owner;
 REVOKE ALL ON TABLE audit_entry FROM hmi_station;
 REVOKE ALL ON SEQUENCE audit_entry_id_seq FROM hmi_station;
 
--- 5. Grant the writer role its one privilege — and the sequence rights that
+-- 5. Grant the writer role its append privilege — and the sequence rights that
 --    an `id SERIAL` column needs. This is the step that gets forgotten:
 --    without the sequence grant every INSERT fails with
 --    "permission denied for sequence audit_entry_id_seq", and because the
@@ -100,7 +100,12 @@ REVOKE ALL ON SEQUENCE audit_entry_id_seq FROM hmi_station;
 GRANT INSERT ON TABLE audit_entry TO hmi_audit_writer;
 GRANT USAGE, SELECT ON SEQUENCE audit_entry_id_seq TO hmi_audit_writer;
 
--- 6. Let the station act with the writer role's privileges and no others.
+-- 6. And the read the trail viewer needs. `/advanced/audit-trail` reads
+--    audit_entry over the station's own connection, so without this the
+--    viewer cannot read the trail at all.
+GRANT SELECT ON TABLE audit_entry TO hmi_audit_writer;
+
+-- 7. Let the station act with the writer role's privileges and no others.
 --    This relies on hmi_station having INHERIT, which is the default. If it
 --    was created NOINHERIT the station gets nothing here and every audit
 --    INSERT fails: `ALTER ROLE hmi_station INHERIT;`
@@ -110,8 +115,9 @@ GRANT hmi_audit_writer TO hmi_station;
 ### Verifying it
 
 ```sql
--- Should list exactly: hmi_audit_writer=a/hmi_audit_owner (a = INSERT),
--- plus the owner's own entry. No `d` (DELETE) or `w` (UPDATE) for hmi_station.
+-- Should list exactly: hmi_audit_writer=ar/hmi_audit_owner (a = INSERT,
+-- r = SELECT), plus the owner's own entry. No `d` (DELETE) or `w` (UPDATE)
+-- for hmi_station.
 SELECT relname, relacl FROM pg_class WHERE relname = 'audit_entry';
 
 -- Should fail. If it succeeds, step 3 did not happen.
@@ -124,25 +130,17 @@ RESET ROLE;
 
 - **Can** insert a row, including a row that says something untrue. The trail
   can be *forged* by anything holding the station's credential.
+- **Can** read the trail, which is what the viewer at `/advanced/audit-trail`
+  does. `SELECT` does not weaken the property this section is about — reading
+  a row cannot remove it — but it does mean the trail is readable by anything
+  holding the station's credential, which was already true of the whole
+  database.
 - **Cannot** delete a row, update a row, or `TRUNCATE` the table. What is in
   the trail stays in the trail.
 
 That is the whole of the guarantee, and it is worth stating in exactly those
 terms: a doc that promises more than this is worse than no doc, because the
 next person to weigh network segmentation will weigh it against the promise.
-
-### One thing that changes in Phase 5
-
-The trail viewer reads `audit_entry`, and the SQL above grants the station no
-`SELECT`. When that viewer lands, add:
-
-```sql
-GRANT SELECT ON TABLE audit_entry TO hmi_audit_writer;
-```
-
-`SELECT` does not weaken the property this section is about — reading a row
-cannot remove it — but it does mean the trail is readable by anything holding
-the station's credential, which was already true of the whole database.
 
 ---
 
@@ -164,11 +162,65 @@ pass.
 
 ---
 
-## 4. Break-glass recovery
+## 4. Break-glass recovery — and how not to need it
+
+### The commissioning order
+
+Roles are seeded; users are not. So a station that has just opened its
+database has four roles and nobody who can sign in, and the order below is the
+whole of getting from there to a site that runs.
+
+1. **The four roles arrive with schema v6 and need no action.** `Operator`,
+   `Shift Leader`, `Maintenance` and `Engineering` are written by the
+   migration and are ordinary rows afterwards. Read them and re-tick them to
+   suit the site — noting that out of the box **only `Engineering` grants
+   `users`**, which is the group carrying the roles and users screen itself.
+2. **Create the first account.** The page at `/access/first-user` creates one
+   only while `app_user` is empty, and forces it to `Engineering`; a caller
+   cannot ask for anything else. That is why there is no default password on a
+   fresh station and no bootstrap flag left switched on.
+3. **Sign in as it and create the rest from `/advanced/access`.** This step is
+   where a site decides how many people hold `users`. Make it more than one,
+   for the reason the next sub-section gives.
+4. **The first-user window is now closed, and stays closed.** With `app_user`
+   non-empty that page creates nothing, and every later account is made from
+   `/advanced/access` by somebody holding `users`.
+
+Between the first open and that first account the station is claimable by
+whoever reaches it first, so do steps 1 to 3 in one sitting, with somebody
+standing at the panel.
+
+### One account holding `users` is one too few
+
+The application refuses any write that would leave no account holding a role
+that grants `users`, and names the accounts still holding it when it refuses.
+Four routes trip it, and two of them never touch the users list at all:
+
+- deleting the last account whose role grants `users`
+- moving that account onto a role that does not grant it
+- unticking `users` from the only role that grants it
+- deleting that role
+
+There is no override in the interface, deliberately — no typed confirmation,
+no "I know what I am doing". An override is a permanent hole kept open for a
+rare day, which is the same argument that keeps the rest of this section
+documented rather than built.
+
+So the number of holders is a site's decision rather than the app's. Keep
+exactly one and everything below is the recovery for an ordinary event:
+somebody leaves, somebody forgets a password, and the fix is `psql` against a
+running plant. Keep two and it stays the recovery for a rare one.
+
+### When it happens anyway
 
 **The scenario.** The only Engineering account's password is lost, or the
-person holding it has left. Nobody can reach the screens behind the
-`administer` group, including the screen that creates users.
+person holding it has left. Nobody can reach the screens behind the `users`
+group — the roles and users screen at `/advanced/access`, where accounts are
+made, and the audit trail. The first-account page is not one of them: it is
+ungated by design, registered unconditionally, because gating that route on a
+database read would 404 the address while the connection was still coming up.
+It sits behind no group at all — it is offered only while `app_user` is empty,
+which on a commissioned station it is not.
 
 **Break-glass is documented, not built.** There is no recovery code, no
 bootstrap flag and no default password — each of those is a permanent hole
@@ -184,7 +236,7 @@ are the same people who hold the credential that defeats it.
 DELETE FROM app_user WHERE username = 'the.locked.out.account';
 ```
 
-Then re-create it from another account that still has `administer`.
+Then re-create it from another account whose role grants `users`.
 
 **Recovering when no account can get in.** Empty the table:
 
