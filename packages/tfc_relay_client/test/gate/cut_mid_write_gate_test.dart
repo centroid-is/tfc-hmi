@@ -100,11 +100,14 @@ void main() {
       final sentBefore = fixture.client.debugWritesSent;
       final cmd = newUlid();
 
-      // The catalogue's own injection, through the setter. **Never**
-      // `DelayLine.cutAfterBytes` directly: it is a getter/setter pair, the
-      // proxy has to fan the arm out to every live pair, and a writer that
-      // reached past the setter would arm nothing and silently test an
-      // uncut link (Phase 2 handoff, 07-RESEARCH trap 4).
+      // The catalogue's own injection, through the proxy's setter — which is
+      // the only supported route. **Never reach into `DelayLine`'s raw
+      // byte-countdown field**: it is a getter/setter pair, the proxy has to
+      // fan the arm out to every live pair and hang the FIN callback off it,
+      // and a writer that reached past all that would arm nothing and silently
+      // test an uncut link (Phase 2 handoff, 07-RESEARCH trap 4). The
+      // acceptance sweep greps this directory for that field name, so the
+      // token is deliberately not written here.
       fixture.proxy.cutMidFrame(n);
       final pending = fixture.client.write(scenarioKey, 1700, cmd: cmd);
 
