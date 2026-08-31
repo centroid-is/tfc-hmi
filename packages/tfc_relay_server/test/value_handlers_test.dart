@@ -335,6 +335,13 @@ void main() {
         () async {
       final kit = _kit();
       final cmd = kit.mintCmd();
+      // Seeded before the dispose, because `write` consults `api.keys` since
+      // 06-04 and a key with no stored value is not in that list
+      // (`fake_state_man.dart:283-286`). Without the seed this case would die
+      // on the existence check and never reach the disposed source it exists
+      // to drive. The tag is legitimately pre-existing; the source still
+      // throws, which is the shape being asserted.
+      kit.api.setValue('CN01.MOT01.speed', 1200);
       // A disposed source is the cheapest thing that throws from `write`; the
       // shape being asserted is any failure the gateway cannot interpret.
       await kit.api.dispose();
@@ -1088,6 +1095,12 @@ void main() {
         () async {
       final kit = _kit();
       final cmd = kit.mintCmd();
+      // Seeded before the dispose, for the same reason as the plain-write
+      // case above: since 06-04 an engage is refused for a tag `api.keys` does
+      // not list, and `FakeStateMan.keys` lists only keys with a stored value.
+      // The seed makes the tag legitimately pre-existing; the throw out of the
+      // disposed source is still what the case measures.
+      kit.api.setValue('CN01.MOT01.speed', 0);
       // A disposed source is the cheapest thing that throws out of holdToRun;
       // the shape asserted is any failure the gateway cannot interpret.
       await kit.api.dispose();

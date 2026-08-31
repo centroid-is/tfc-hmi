@@ -50,12 +50,14 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 // `subscriptionCount` is an extension on `SessionRegistry`; the registry
 // itself arrives through the harness.
+import 'package:tfc_relay_server/src/error_codes.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/subscription_registry.dart';
 // The catalogue and `oversizeBytes` live behind the channel-harness entry, not
@@ -89,6 +91,30 @@ final _poisonBudget = ceiling * 10;
 /// transfer rather than of a decision, and a budget sized for a decision would
 /// make the case a flaky test of the runner's disk-free memory bandwidth.
 final _oversizeBudget = ceiling * 40;
+
+/// How deeply the poisoned frame nests, against a [maxValueDepth] of 64.
+///
+/// Comfortably past rather than one over: the property is "the sanitizer threw
+/// and the boundary refused", not "the ceiling is exactly 64", and an
+/// off-by-one here would make the case a test of the constant instead of the
+/// behaviour.
+const _pastTheCeiling = 200;
+
+/// How much padding the poisoned frame carries, as the amplification's
+/// measure.
+///
+/// 64 KiB rather than the 1 MiB the ingress ceiling actually permits, because
+/// this case runs on every CI machine and the property does not need the full
+/// megabyte to be visible — a refusal that echoed this would be three orders
+/// of magnitude over [_refusalCeilingBytes].
+const _padBytes = 64 * 1024;
+
+/// How large a refusal for an unsanitizable frame may be.
+///
+/// A parse error with no source is a few hundred bytes of JSON. The bound is
+/// generous enough that a reworded message does not fail the case and tight
+/// enough that any echo of the frame does.
+const _refusalCeilingBytes = 2048;
 
 /// The corruptions this run actually drove, filled by the sweep.
 ///
@@ -434,6 +460,172 @@ void main() {
           refusal: 'invalid-request refusal');
     });
 
+    test('a frame the sanitizer cannot process is refused, and the session '
+        'survives it', () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+      // Deliberately no hello. This is the widest shape in the file: 06-RESEARCH
+      // §H.1 measured that every non-hello method is refused before the
+      // handshake, but `_defuse` runs on the *stream*, in front of the gate and
+      // in front of json_rpc_2's own decode, so it is reachable by anything
+      // that can complete the WebSocket upgrade.
+
+      final sessions = fixture.server.sessions;
+      final priorSessions = sessions.sessionCount;
+      final priorFrames = fixture.inbound.length;
+
+      // The three ingredients §H.2 measured together, and each is load-bearing.
+      // Nested past `maxValueDepth` so `sanitize` throws; `1e999` so the echo
+      // json_rpc_2 would build cannot be encoded; an unknown method so the
+      // answer is built by `Server._tryFallbacks`, whose `data == null` is what
+      // `serialize` fills with the raw request. The pad is the amplification:
+      // up to `maxFrameBytes` of `params` echoed into the priority lane by a
+      // peer that has not authenticated.
+      final pad = 'x' * _padBytes;
+      fixture.client.sink.add('{"jsonrpc":"2.0","id":"unsanitizable-1",'
+          '"method":"nope.notAMethod","params":{"pad":${jsonEncode(pad)},'
+          '"deep":${_nested(_pastTheCeiling, '1e999')}}}');
+
+      expect(await _untilFrame(fixture, '"error"', budget: _poisonBudget),
+          isTrue,
+          reason: 'nothing came back at all. `sanitize` throws on a value '
+              'nested past maxValueDepth, `_defuse` used to answer that by '
+              'returning the frame unchanged, and the frame then reached '
+              'json_rpc_2 intact: answered -32601 with the raw request echoed '
+              'into error.data, which carries an Infinity, which jsonEncode '
+              'refuses. The refusal is discarded inside the Peer and a caller '
+              'without a deadline waits forever — the 02-05 hang, reachable '
+              'before hello by anything that can open a socket');
+
+      final refusals = fixture.inbound
+          .skip(priorFrames)
+          .where((frame) => frame.contains('"error"'))
+          .toList();
+      expect(refusals, isNotEmpty);
+      for (final refusal in refusals) {
+        expect(refusal.contains(pad), isFalse,
+            reason: 'the refusal carried the padding back with it. That is the '
+                'amplification T-06-17 names: ${_padBytes ~/ 1024} KiB in, the '
+                'same out, into the priority lane, from a peer that never '
+                'said hello — and the ingress ceiling allows up to a megabyte '
+                'of it per frame');
+        expect(refusal.length, lessThan(_refusalCeilingBytes),
+            reason: 'the refusal is ${refusal.length} bytes. A refusal must '
+                'cost the sender more than it costs this gateway, and the '
+                'shape that guarantees it is a FormatException with no '
+                'source — exactly what _underCeiling already throws');
+      }
+
+      expect(sessions.sessionCount, priorSessions,
+          reason: 'an unsanitizable frame must cost the request, not the '
+              'panel. That is the property the old pass-through was written '
+              'to protect, and it is kept rather than traded');
+      expect(await _stillAnswers(fixture), isTrue,
+          reason: 'the session stopped answering after a poisoned frame. '
+              'A per-request refusal that wedges the link is not a refusal, '
+              'it is a kill switch reachable before the handshake');
+    }, timeout: const Timeout.factor(2));
+
+    test('every method except hello is refused before the handshake',
+        () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+
+      // A **sweep, not a list** (06-RESEARCH §H.5). Phase 10 adds browse,
+      // timeseries, historyViews and preferences to this table; written as a
+      // literal, this case would keep passing while covering none of them, and
+      // the forgotten one is the method that serves plant data to a peer that
+      // never authenticated.
+      final session = fixture.server.sessions.sessions.single;
+      final registered = session.registeredMethods;
+      final refusable = registered
+          .where((method) =>
+              method != Methods.hello && method != Methods.holdTick)
+          .toList();
+
+      expect(refusable, hasLength(registered.length - 2),
+          reason: 'exactly two names are exempt from the request sweep — '
+              'hello, which is the handshake, and the holdTick notification, '
+              'which has no id for a refusal to name. A third exemption '
+              'appearing here means a method was added outside both, so this '
+              'guard is what keeps the sweep from quietly shrinking');
+      expect(refusable, isNotEmpty,
+          reason: 'a sweep that iterated nothing passes every assertion it '
+              'never made');
+
+      for (final method in refusable) {
+        final error = await fixture.refusal(method,
+            params: const <String, Object?>{},
+            what: 'a pre-hello "$method"');
+        expect(error.code, ServerErrorCodes.helloRequired,
+            reason: '"$method" answered ${error.code} before the handshake. '
+                'An unauthenticated session may do exactly one thing — say '
+                'hello — and every other name must say so with the same code, '
+                'or a client cannot tell "authenticate first" from "this '
+                'server is broken"');
+        expect(error.message, contains('hello_required'),
+            reason: '"$method" refused without naming the reason, so the '
+                'panel has nothing to log and nothing to act on');
+        expect(_asMap(error.data)['request'], isA<String>(),
+            reason: '"$method"\'s pre-hello refusal echoes the request. Every '
+                'refusal on this wire carries a pre-substituted request, or '
+                'one carrying 1e999 makes the refusal itself unencodable');
+      }
+
+      // **The exempt notification is covered rather than merely excluded**
+      // (D-P5-H). Its refusal evaporates — there is no id to answer — so what
+      // is asserted is the other half: it was dropped and counted, and it did
+      // not reach a hold.
+      fixture.client.sink.add(
+          '{"jsonrpc":"2.0","method":"${Methods.holdTick}",'
+          '"params":{"key":"$_key","n":1}}');
+      await pumpEventQueue(times: 5);
+      expect(session.registeredMethods, contains(Methods.holdTick),
+          reason: 'the exempt name must still be on the table this sweep read '
+              'its exemption from');
+
+      expect(fixture.observedClose.closeCode, isNull,
+          reason: 'refusing every method before hello must leave the socket '
+              'open. Home Assistant\'s pre-auth rule, and the reason the '
+              'reaper — not the gate — is what takes an idle unauthenticated '
+              'session back');
+      await fixture.hello();
+    }, timeout: const Timeout.factor(2));
+
+    // The behavioural cases above are what bite; this one is what keeps the
+    // *shape* from coming back. 06-04's plan states the property as a grep
+    // over the whole file — `return frame;` appearing exactly once — but the
+    // file has two more of them that have nothing to do with the decoder
+    // (`_LastSeen.touch`, the liveness tap, and `_underCeiling`'s
+    // under-the-ceiling fast path), so the number in the plan is unreachable
+    // without deleting unrelated code. Scoped to the one method, it is a real
+    // pin and it lives here rather than in a plan document, where it can rot.
+    test('_defuse has no catch-all pass-through left in it', () {
+      final source = File('lib/src/relay_session.dart')
+          .readAsLinesSync()
+          .where((line) => !line.trimLeft().startsWith('//'))
+          .join('\n');
+      final start = source.indexOf('static String _defuse(String frame) {');
+      expect(start, isNot(-1),
+          reason: 'the method this case pins has been renamed or removed; the '
+              'pin has to move with it rather than passing vacuously');
+      final body = source.substring(start, source.indexOf('\n  }', start));
+
+      expect('return frame;'.allMatches(body), hasLength(1),
+          reason: '_defuse has ${'return frame;'.allMatches(body).length} '
+              'pass-through returns. Exactly one is correct — the '
+              '`if (!sanitized.hadNonFinite) return frame;` fast path, which '
+              'is a frame that needed no defusing. A second one is the '
+              'catch-all this plan removed: it hands a frame the sanitizer '
+              'threw on straight to json_rpc_2, which echoes it back '
+              'unencodably, and a peer that never said hello gets both a '
+              'megabyte-scale amplification and the 02-05 hang out of it');
+      expect(body, contains('throw FormatException('),
+          reason: 'the refusal must be a sourceless FormatException — '
+              '_underCeiling\'s shape, and the only one json_rpc_2 answers '
+              'with -32700 while leaving the session alive');
+    });
+
     test('an id that is itself non-finite still produces an answer', () async {
       final fixture = relayFixture();
       await fixture.ready;
@@ -460,6 +652,17 @@ void main() {
 /// A valid JSON-RPC request, as the text a corruption is applied to.
 String _request(String id) =>
     '{"jsonrpc":"2.0","id":"$id","method":"${Methods.ping}"}';
+
+/// [leaf] wrapped in [depth] JSON arrays, as text.
+///
+/// Written rather than built and encoded, for the same reason `1e999` is
+/// written: `jsonEncode` is exactly what refuses the value at the middle of
+/// this, so the frame cannot be produced by the encoder a client would use.
+String _nested(int depth, String leaf) => '${'[' * depth}$leaf${']' * depth}';
+
+/// One decoded JSON object, cast where json_rpc_2 hands back `Object?`.
+Map<String, Object?> _asMap(Object? raw) =>
+    (raw! as Map).cast<String, Object?>();
 
 /// Whether a following **valid** request is answered inside [budget].
 ///

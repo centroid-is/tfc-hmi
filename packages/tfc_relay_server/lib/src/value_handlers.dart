@@ -205,37 +205,43 @@ final class ValueHandlers {
     final decoded = sanitize(params.asMap).value as Map;
     final key = _requireKey(decoded['key'], Methods.read);
 
-    if (!api.keys.contains(key)) {
-      // An answer, not a throw. The caller asked a legitimate question and
-      // "this source does not serve that tag" is the answer to it; a refusal
-      // would make a page editor's key check indistinguishable from a broken
-      // gateway.
-      //
-      // **Keyed by tag, exactly as `readMany` keys it** (04-REVIEW WR-11).
-      // This used to answer `'rejected': <one KeyReject>` while its neighbour
-      // answered `'rejected': {key: KeyReject}`, so a client written against
-      // either decoded the other wrongly — and the wrong decode is silent: a
-      // `kind` read off a map that has none comes back null, and the tag
-      // renders as merely quiet instead of as misconfigured.
-      return {
-        'key': key,
-        'value': WireValue.of(null, quality: Quality.errorConfig).toJson(),
-        'rejected': {
-          key: KeyReject(KeyRejectKinds.unknownKey,
-                  message: 'this source does not serve "$key" — usually a typo '
-                      'in a page config, occasionally a tag renamed upstream')
-              .toJson(),
-        },
-      };
-    }
+    // An answer, not a throw. The caller asked a legitimate question and
+    // "this source does not serve that tag" is the answer to it; a refusal
+    // would make a page editor's key check indistinguishable from a broken
+    // gateway.
+    if (!api.keys.contains(key)) return _unserved(key);
 
     return {'key': key, 'value': _wire(api.read(key)).toJson()};
   }
 
   /// `readFresh`: force the round trip the cache is under suspicion of.
+  ///
+  /// **The existence check is the same one [read] has had all along** (06-04,
+  /// amendment 2 of 06-CONTEXT). Until this plan `readFresh` forwarded the key
+  /// straight to the source and reported whatever came back — `q:258`
+  /// (`uncertainNotYetKnown`) on the fake, with no `rejected` map at all —
+  /// while its neighbour answered `q:770` (`errorConfig`) plus
+  /// `KeyReject(unknownKey)`. Two read methods disagreeing about one tag is
+  /// the divergence 04-REVIEW WR-11 already fixed once between [read] and
+  /// [readMany], and it is worse here: `readFresh` is the method a diagnostics
+  /// page calls precisely *because* it doubts the cache, so "wait, it is
+  /// coming" is the one answer that cannot be right about a tag that will
+  /// never come.
+  ///
+  /// **This changes the answer a client sees**, deliberately, and the two
+  /// codes mean opposite things. 258 is "no reading has arrived yet"; 770 is
+  /// "the source affirmatively said the tag is gone" (STATE.md, Phase 1
+  /// handoff, where `errorConfig` was narrowed to exactly that). The gateway
+  /// knows the second — it has the source's key list in hand — and only the
+  /// second is a sentence an engineer can act on.
+  ///
+  /// The answer is built by [_unserved], the same helper [read] uses, so the
+  /// two cannot drift apart again by editing one of them.
   Future<Object?> readFresh(rpc.Parameters params) async {
     final decoded = sanitize(params.asMap).value as Map;
     final key = _requireKey(decoded['key'], Methods.readFresh);
+
+    if (!api.keys.contains(key)) return _unserved(key);
 
     final value = await api.readFresh(key);
     return {'key': key, 'value': _wire(value).toJson()};
@@ -279,11 +285,7 @@ final class ValueHandlers {
         continue;
       }
       if (!servable.contains(entry)) {
-        rejected[entry] = KeyReject(KeyRejectKinds.unknownKey,
-                message: 'this source does not serve "$entry" — usually a '
-                    'typo in a page config, occasionally a tag renamed '
-                    'upstream')
-            .toJson();
+        rejected[entry] = _unknownKey(entry).toJson();
         continue;
       }
       wanted.add(entry);
@@ -348,6 +350,42 @@ final class ValueHandlers {
     }
     if (request.key.trim().isEmpty) {
       throw _refuse(Methods.write, 'write needs a non-empty "key"');
+    }
+    // **A tag this source does not serve is refused, not invented** (06-04,
+    // 06-CONTEXT amendment 2, T-06-15). Until this plan `write` consulted
+    // `api.keys` nowhere at all: a write naming a key the source had never
+    // heard of was forwarded, answered `applied` with a readback, and the key
+    // appeared in `api.keys` afterwards. The operator was told a setpoint took
+    // on a machine that never heard of it — a false `applied` is the one
+    // three-state answer nobody downstream can act on, and on a
+    // safety-relevant path silently inventing a tag is the worst option
+    // available.
+    //
+    // **The code is `INVALID_PARAMS`, deliberately, and not `forbidden`**
+    // (06-RESEARCH §E.7 rows 2 and 3). A nonexistent tag and an unauthorized
+    // one are different facts and the client behaves differently about them:
+    // the first is a typo to fix, the second a permission to obtain. 06-08's
+    // hiding rule sends a hidden key down *this* path precisely because
+    // answering "forbidden" would leak the existence it is hiding — which is
+    // also why the message and the `rejected` map are the same ones `read`
+    // and `readMany` produce, from [_unknownKeyMessage], rather than a fourth
+    // hand-copied sentence.
+    //
+    // **Placed here, and the placement is the property.** Above the
+    // fingerprint, above the idempotency window and above the in-flight
+    // `_record` at the bottom of this ladder, so `INVALID_PARAMS` means on
+    // this path exactly what it means everywhere else on it: definitively no
+    // effect, nothing sent, nothing remembered, safe to re-send. A refusal
+    // below the pre-record would still refuse — and would leave `writeStatus`
+    // answering `unknown` about an action that provably never happened, which
+    // is the answer that makes an operator press the button again.
+    //
+    // One check covers `holdToRun` as well: that seam is reachable only
+    // through this method (`:541-556`), so an engage on an unserved tag is
+    // refused before a handle is taken and before anything starts feeding a
+    // deadman counter this gateway invented.
+    if (!api.keys.contains(request.key)) {
+      throw _refuseUnknownKey(Methods.write, request.key);
     }
     // The hold flag's vocabulary on the *write* path is exactly two values,
     // and this is a pre-plant refusal like the ones above it: raised before
@@ -720,6 +758,44 @@ final class ValueHandlers {
         WriteNotReceived() => WriteNotReceived(cmd),
       };
 
+  /// What this gateway says about a tag its source does not serve, in one
+  /// place because four surfaces now have to say it identically.
+  ///
+  /// **One string, not four copies** (06-04). `read`, `readMany`, `readFresh`
+  /// and `write` all answer for an unserved key, and 06-08's hiding rule turns
+  /// "byte-identical to a nonexistent key" into a property a test asserts:
+  /// a hidden key must be indistinguishable from one that never existed, or
+  /// the refusal leaks the existence it is trying to conceal. Four
+  /// hand-copied sentences cannot hold that, and the divergence between `read`
+  /// and `readMany` that 04-REVIEW WR-11 fixed is what two copies already
+  /// cost once.
+  ///
+  /// The wording names the two things it actually is, in the order they
+  /// happen: a page config carries ~1500 hand-edited keys, so a typo is the
+  /// usual cause; a tag renamed upstream is the one that arrives without
+  /// anybody touching the page.
+  static String _unknownKeyMessage(String key) =>
+      'this source does not serve "$key" — usually a typo in a page config, '
+      'occasionally a tag renamed upstream';
+
+  /// The rejection itself, keyed by tag wherever it is used.
+  static KeyReject _unknownKey(String key) =>
+      KeyReject(KeyRejectKinds.unknownKey, message: _unknownKeyMessage(key));
+
+  /// The whole read-shaped answer for an unserved tag.
+  ///
+  /// **Keyed by tag, exactly as `readMany` keys it** (04-REVIEW WR-11). `read`
+  /// used to answer `'rejected': <one KeyReject>` while its neighbour answered
+  /// `'rejected': {key: KeyReject}`, so a client written against either
+  /// decoded the other wrongly — and the wrong decode is silent: a `kind` read
+  /// off a map that has none comes back null, and the tag renders as merely
+  /// quiet instead of as misconfigured.
+  static Map<String, Object?> _unserved(String key) => {
+        'key': key,
+        'value': WireValue.of(null, quality: Quality.errorConfig).toJson(),
+        'rejected': {key: _unknownKey(key).toJson()},
+      };
+
   String _requireKey(Object? raw, String method) {
     if (raw is! String || raw.trim().isEmpty) {
       throw _refuse(method,
@@ -742,6 +818,18 @@ final class ValueHandlers {
   static rpc.RpcException _refuse(String method, String why) =>
       rpc.RpcException(rpc_errors.INVALID_PARAMS, why,
           data: _substitute(method));
+
+  /// The write path's refusal for a tag this source does not serve.
+  ///
+  /// [_refuse]'s armor plus the same `rejected` map the read surfaces carry,
+  /// keyed by tag, so one decoder on the client reads all four answers — and
+  /// so 06-08 can make a hidden key produce this response byte for byte.
+  static rpc.RpcException _refuseUnknownKey(String method, String key) =>
+      rpc.RpcException(rpc_errors.INVALID_PARAMS, _unknownKeyMessage(key),
+          data: {
+            ..._substitute(method),
+            'rejected': {key: _unknownKey(key).toJson()},
+          });
 
   static Map<String, Object?> _substitute(String method) => {
         'method': method,
