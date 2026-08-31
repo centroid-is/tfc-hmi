@@ -1152,13 +1152,26 @@ void main() {
       // one-second key derivation on the shared Postgres server, not a wrong
       // answer. createFirstUser states the reasoning; these two methods copy
       // it, and this test is what keeps them copying it.
-      final source =
-          File('lib/core/access/access_repository.dart').readAsStringSync();
+      // Line endings normalised because this test parses the source rather
+      // than merely searching it: the end-of-method marker below is a literal
+      // '\n  }\n', which on a Windows checkout is '\r\n  }\r\n'. Without this
+      // the indexOf returns -1 and the substring throws a RangeError instead
+      // of failing with anything that names the real problem. Cost one CI
+      // round trip on windows-latest.
+      final source = File('lib/core/access/access_repository.dart')
+          .readAsStringSync()
+          .replaceAll('\r\n', '\n');
 
       for (final method in ['createUser', 'setPassword']) {
         final start = source.indexOf('Future<void> $method(');
         expect(start, greaterThan(-1), reason: '$method must exist');
-        final body = source.substring(start, source.indexOf('\n  }\n', start));
+        final end = source.indexOf('\n  }\n', start);
+        expect(end, greaterThan(-1),
+            reason: 'could not find the end of $method — the end-of-method '
+                'marker is a literal newline-two-spaces-brace, so a reindent '
+                'or a stray line ending breaks this parse, not the ordering '
+                'it is checking');
+        final body = source.substring(start, end);
 
         final hashAt = body.indexOf('PasswordHasher.hash');
         final transactionAt = body.indexOf('db.transaction');
