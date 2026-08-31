@@ -52,13 +52,19 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:tfc_relay_client/src/backoff.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/connection_supervisor.dart';
+import 'package:tfc_relay_client/src/freshness_watchdog.dart';
+import 'package:tfc_relay_client/src/readiness_barrier.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';
+import 'package:tfc_relay_client/src/subscription_state.dart';
 import 'package:tfc_relay_client/src/ws_transport.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/faults.dart';
 import 'package:tfc_stateman_contract/testing/fake_state_man.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// A key `FakeStateMan` seeds at construction, so a subscribe against a real
@@ -222,13 +228,18 @@ _Mounted _mount({required String chainPem, required String rootPem}) {
 /// `start()`, the discipline `ws_harness.dart:239-244` states: a server that
 /// never bound must still release its registry.
 Future<({FakeStateMan served, RelayServer server, FaultProxy? proxy, int port})>
-    _gateway({required _Mounted mounted, bool withProxy = false}) async {
+    _gateway({
+  required _Mounted mounted,
+  bool withProxy = false,
+  List<String> allowedOrigins = const [],
+}) async {
   final served = FakeStateMan();
   final server = RelayServer(
     api: served,
     config: ServerConfig(
       tick: ServerConfig.minTick,
       tls: TlsConfig(chainPath: mounted.chainPath, keyPath: mounted.keyPath),
+      allowedOrigins: allowedOrigins,
     ),
     // Several arms here provoke errors on purpose; a collector that printed a
     // stack per provoked error would train everyone to scroll past them.
@@ -308,6 +319,88 @@ Future<void> _assertServesTls(int port) async {
       isA<HttpException>(),
       reason: 'this has to be a wss listener before its refusal of a pinned '
           'panel means anything');
+}
+
+/// Counts dials by wrapping the real one, never by replacing it.
+///
+/// The `dial:` seam's own doc insists an override stay "one attempt in, one
+/// `ConnectAttempt` out, same as the real one", so this delegates to [connect]
+/// rather than fabricating an outcome: a counter that also decided what a dial
+/// returned would be measuring a schedule it had itself invented.
+final class _Dials {
+  _Dials(this._client);
+
+  final HttpClient? _client;
+  int count = 0;
+
+  Future<ConnectAttempt> call(Uri uri) {
+    count++;
+    return connect(uri, client: _client, connectTimeout: _dialBudget);
+  }
+}
+
+/// A dial that sends a browser's `Origin` header.
+///
+/// This is the one thing [connect] cannot express, and deliberately: a panel
+/// is not a browser and sends no `Origin` at all, so the production transport
+/// has no parameter for one. The body below is `connect`'s failure path
+/// verbatim — including the drain of the second copy off the stream — with the
+/// header added, because what the case needs is the *supervisor's* reading of
+/// a 403, and that requires the failure to arrive in the shape the real dial
+/// would hand it.
+Future<ConnectAttempt> _dialAsBrowser(
+  Uri uri,
+  String origin, {
+  required HttpClient client,
+}) async {
+  final ws = IOWebSocketChannel.connect(
+    uri,
+    headers: {'Origin': origin},
+    customClient: client,
+    connectTimeout: _dialBudget,
+  );
+  try {
+    await ws.ready;
+  } catch (error, stack) {
+    ws.stream.listen(null, onError: (Object _) {}, cancelOnError: true);
+    unawaited(ws.sink.done.catchError((Object _) => null));
+    return ConnectFailed(ws, error, stack);
+  }
+  return ConnectSucceeded(ws, wsChannel(ws));
+}
+
+/// A supervisor dialling [uri] through [dial], with one subscription
+/// registered.
+///
+/// One rather than none, for `reconnect_test.dart:128-137`'s reason: with an
+/// empty registry a resync completes without a call reaching the wire. Built
+/// directly rather than through `RemoteStateMan` because what these cases read
+/// — `stopped`, `debugScheduledWaits` — is the schedule itself, and the panel
+/// deliberately does not re-export it.
+ConnectionSupervisor _supervisor(
+  Uri uri,
+  Future<ConnectAttempt> Function(Uri uri) dial,
+) {
+  final stores = <String, ValueStore>{};
+  final supervisor = ConnectionSupervisor(
+    uri: uri,
+    config: _config(),
+    backoff: Backoff(
+      base: const Duration(milliseconds: 40),
+      cap: const Duration(milliseconds: 200),
+    ),
+    barrier: ReadinessBarrier(),
+    watchdog:
+        FreshnessWatchdog(config: _config(), onViewFreshnessChanged: (_) {}),
+    subscriptions: <String, SubscriptionState>{
+      's1': SubscriptionState(subId: 's1', keys: {_seededKey}),
+    },
+    storeFor: (id) => stores.putIfAbsent(id, ValueStore.new),
+    dial: dial,
+  );
+  addTearDown(supervisor.dispose);
+  supervisor.start();
+  return supervisor;
 }
 
 /// Polls [done] until it holds or [budget] runs out, and fails naming [what].
@@ -593,6 +686,126 @@ void main() {
               'in flight, and closing the client under it fails that attempt '
               'with something an operator would read as a certificate '
               'problem');
+    });
+  });
+
+  group('a certificate problem is named, and is deliberately still retried',
+      () {
+    late _Ca ca;
+    late _Mounted trusted;
+
+    setUp(() {
+      ca = _mintCa();
+      trusted = _mount(chainPem: _mintLeaf(ca: ca), rootPem: ca.certPem);
+    });
+
+    /// A gateway the panel cannot verify, and a supervisor pointed at it.
+    ///
+    /// The foreign CA is the arm's one variable; everything else — the pinned
+    /// root, the address, the schedule — is what the connecting arms use.
+    Future<({ConnectionSupervisor supervisor, _Dials dials})>
+        untrustedGateway() async {
+      final elsewhere = _mount(
+        chainPem: _mintLeaf(ca: _mintForeignCa()),
+        rootPem: ca.certPem,
+      );
+      final impostor = await _gateway(mounted: elsewhere);
+      await _assertServesTls(impostor.port);
+
+      final dials = _Dials(_pinnedClient(trusted.rootPath));
+      return (
+        supervisor: _supervisor(
+            Uri.parse('wss://localhost:${impostor.port}'), dials.call),
+        dials: dials,
+      );
+    }
+
+    test('a certificate rejection says the certificate was not trusted',
+        () async {
+      final panel = (await untrustedGateway()).supervisor;
+
+      await _until('the first refusal to be recorded',
+          () => panel.lastDownReason != null);
+
+      expect(panel.lastDownReason, contains('certificate'),
+          reason: '"the gateway did not answer" is actively wrong here: the '
+              'gateway answered, at length, and the panel refused to believe '
+              'it. An integrator reading that sentence checks the cable, the '
+              'switch and the service before anybody thinks of the leaf that '
+              'expired on Sunday');
+      expect(panel.lastDownReason, isNot(contains('did not answer')),
+          reason: 'the two readings are mutually exclusive, and a line that '
+              'said both would send the engineer to the wrong end of the '
+              'plant first anyway');
+      expect(panel.lastDownReason, contains('CERTIFICATE_VERIFY_FAILED'),
+          reason: 'the original OS error text has to survive into the '
+              'message: it is what an integrator pastes into a ticket, and it '
+              'is the only part of this a support engineer can act on '
+              'remotely');
+    });
+
+    test('a certificate rejection keeps the panel retrying', () async {
+      final gateway = await untrustedGateway();
+
+      await _until('the first refusal to be recorded',
+          () => gateway.supervisor.lastDownReason != null);
+      await _until('a second attempt to go out', () => gateway.dials.count >= 2);
+
+      expect(gateway.supervisor.stopped, isFalse,
+          reason: 'a certificate problem is fixed by replacing a file on the '
+              'SERVER, so a panel that keeps trying comes back by itself the '
+              'moment somebody does. This is deliberately the opposite of the '
+              'auth arm in auth_refusal_test.dart, where a refused credential '
+              'is a fact about this panel\'s own secret that retrying cannot '
+              'change — and the difference is the whole reason both arms '
+              'exist');
+      expect(gateway.supervisor.debugScheduledWaits, isNotEmpty,
+          reason: 'the retry has to be on the ordinary backoff schedule, not '
+              'a bespoke path: the same jitter, the same ceiling and the same '
+              'health line every other kind of drop uses');
+    });
+
+    test('an origin refusal reads differently from a certificate rejection',
+        () async {
+      // One thing differs from the arm above: the leaf is the trusted one and
+      // the *request* is wrong. Both dials are refused before the upgrade,
+      // both carry a null close code, and an operator has to be able to tell
+      // them apart — the fix for one is a list in a config file and the fix
+      // for the other is a certificate on the gateway.
+      final gateway = await _gateway(
+        mounted: trusted,
+        allowedOrigins: const ['https://hmi.svn.local'],
+      );
+      final pinned = _pinnedClient(trusted.rootPath);
+      final panel = _supervisor(
+        Uri.parse('wss://localhost:${gateway.port}'),
+        // The pinned root, so the *only* thing wrong with this dial is who it
+        // says it comes from. Without it the handshake would fail first and
+        // the case would measure the arm above all over again.
+        (uri) => _dialAsBrowser(uri, 'https://evil.example', client: pinned),
+      );
+
+      await _until('the refusal to be recorded',
+          () => panel.lastDownReason != null);
+
+      expect(panel.lastDownReason, contains('403'),
+          reason: 'the status is the only thing in this failure that names '
+              'what is wrong, and 06-03 measured it surviving into the '
+              'message');
+      expect(panel.lastDownReason, isNot(contains('certificate')),
+          reason: 'a wrong origin is not a trust problem. Reporting it as one '
+              'sends somebody to re-provision a root on a station whose root '
+              'is fine');
+
+      // Anti-vacuity: the same gateway, the same pinned root, no Origin
+      // header — a panel gets through. Without this the case above would pass
+      // against a gateway that refused everything for some other reason.
+      final panelWithoutOrigin = _supervisor(
+        Uri.parse('wss://localhost:${gateway.port}'),
+        _Dials(pinned).call,
+      );
+      await _until('a panel with no Origin header to reach ready',
+          () => panelWithoutOrigin.state == LinkState.ready);
     });
   });
 }
