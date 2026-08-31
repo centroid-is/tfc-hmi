@@ -58,12 +58,21 @@ const _unlisted = 'https://evil.example';
 
 void main() {
   /// A plaintext gateway on an ephemeral loopback port.
-  Future<RelayServer> startServer({List<String> allowedOrigins = const []}) async {
+  ///
+  /// A null [allowedOrigins] means "say nothing and let `ServerConfig` supply
+  /// its own default" — **not** "configure an empty list". The distinction is
+  /// the whole of the group below: a helper that passed `const []` on the
+  /// caller's behalf would test the helper's default and leave the config's
+  /// unexercised, and the mutation this file exists to catch changes exactly
+  /// that default.
+  Future<RelayServer> startServer({List<String>? allowedOrigins}) async {
     final served = FakeStateMan();
     final server = RelayServer(
       api: served,
-      config: ServerConfig(
-          tick: ServerConfig.minTick, allowedOrigins: allowedOrigins),
+      config: allowedOrigins == null
+          ? ServerConfig(tick: ServerConfig.minTick)
+          : ServerConfig(
+              tick: ServerConfig.minTick, allowedOrigins: allowedOrigins),
       onError: (_, __, ___) {},
     );
     addTearDown(() async {
