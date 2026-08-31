@@ -13,7 +13,6 @@ import 'package:tfc/page_creator/page.dart' show AssetPage;
 import '../chat/asset_context_menu.dart';
 import '../core/feature_flags.dart';
 import '../widgets/proposal_visual.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/page_manager.dart';
 import '../providers/preferences.dart' show localPreferencesProvider;
 import '../providers/state_man.dart';
@@ -637,7 +636,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                                           asset,
                                           details.globalPosition,
                                         )
-                                    : kChatEnabled && isMcpChatAvailable()
+                                    : kChatEnabled
                                         ? (details) {
                                             showEditorAssetContextMenu(
                                               context,
@@ -656,7 +655,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                               // us from swallowing them.
                               behavior: HitTestBehavior.translucent,
                               onSecondaryTapUp:
-                                  kChatEnabled && isMcpChatAvailable()
+                                  kChatEnabled
                                       ? (details) {
                                           showAssetContextMenu(
                                             context,
@@ -758,7 +757,7 @@ class _AssetStackState extends ConsumerState<AssetStack> {
                 ? IgnorePointer(child: Text(asset.text!, style: labelStyle))
                 : GestureDetector(
                     behavior: HitTestBehavior.translucent,
-                    onSecondaryTapUp: kChatEnabled && isMcpChatAvailable()
+                    onSecondaryTapUp: kChatEnabled
                         ? (details) {
                             showAssetContextMenu(
                               context,

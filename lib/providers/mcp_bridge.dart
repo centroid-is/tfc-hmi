@@ -79,16 +79,6 @@ bool isMcpWriteEnabled() {
   return io.Platform.environment.containsKey('TFC_USER');
 }
 
-/// Whether the MCP chat feature is available.
-///
-/// Requires both the [kChatEnabled] build flag and an operator identity.
-/// Call sites that pull in chat widgets should guard with
-/// `kChatEnabled && isMcpChatAvailable()` so the chat code tree-shakes
-/// out of flag-off builds.
-bool isMcpChatAvailable() {
-  return kChatEnabled && io.Platform.environment.containsKey('TFC_USER');
-}
-
 /// Mutable state for the MCP server lifecycle provider.
 final _serverLifecycle = McpLifecycleState();
 
@@ -333,10 +323,11 @@ final proposalFeedbackRelayProvider = Provider<void>((ref) {
 /// Deliberately NOT hung off `chatLifecycleProvider`, for the same reason as
 /// [proposalFeedbackRelayProvider] below it. That provider only runs when the
 /// in-app chat bubble is enabled, and every deployment build is compiled with
-/// `--dart-define=TFC_CHAT=false`; the case this path exists for is precisely
-/// the one where an external client proposes over HTTP and no in-app chat is
-/// involved. The inbound half and the outbound half of the same conversation
-/// with the operator now hang off the same thing: the MCP server's lifecycle.
+/// `--dart-define=CENTROIDX_CHAT=false`; the case this path exists for is
+/// precisely the one where an external client proposes over HTTP and no
+/// in-app chat is involved. The inbound half and the outbound half of the
+/// same conversation with the operator now hang off the same thing: the MCP
+/// server's lifecycle.
 ///
 /// When chat IS on -- development builds, where it defaults to on -- both
 /// listeners stage the same proposal from the same broadcast stream. That is

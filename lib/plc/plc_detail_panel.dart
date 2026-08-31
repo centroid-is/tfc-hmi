@@ -13,7 +13,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
 
 import '../chat/ai_context_action.dart';
 import '../core/feature_flags.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../providers/plc.dart';
 
 /// Builds a structured prompt for the LLM to explain a PLC code block.
@@ -495,7 +494,7 @@ class _TopLevelBlockTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final chatAvailable = kChatEnabled && isMcpChatAvailable();
+    final chatAvailable = kChatEnabled;
 
     // Count referenced function blocks.
     final referencedCount = findReferencedBlocks(block, allBlocks).length;
@@ -698,7 +697,7 @@ class _ReferencedBlockTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final chatAvailable = kChatEnabled && isMcpChatAvailable();
+    final chatAvailable = kChatEnabled;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 4),

@@ -24,8 +24,7 @@ import '../plc/plc_detail_panel.dart';
 import '../providers/access.dart' show stationNameProvider;
 import '../providers/access_policy.dart'
     show RefAuditSink, reportAccessDenial, sessionInForce;
-import '../providers/mcp_bridge.dart'
-    show isMcpChatAvailable, isMcpWriteEnabled;
+import '../providers/mcp_bridge.dart' show isMcpWriteEnabled;
 import '../providers/plc.dart';
 // The adapter below has no `ref`, so it calls the factory. Importing the
 // provider file is what keeps it inside spec §6's one-construction-site rule.
@@ -429,7 +428,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final items = <PopupMenuEntry<String>>[];
 
     // "Chat about this" — only when MCP chat is available.
-    if (kChatEnabled && isMcpChatAvailable()) {
+    if (kChatEnabled) {
       items.add(const PopupMenuItem(
         value: 'chat',
         child: ListTile(
@@ -968,7 +967,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     final items = <PopupMenuEntry<String>>[];
 
     // "Chat about this" — only when MCP chat is available.
-    if (kChatEnabled && isMcpChatAvailable()) {
+    if (kChatEnabled) {
       items.add(const PopupMenuItem(
         value: 'chat',
         child: ListTile(

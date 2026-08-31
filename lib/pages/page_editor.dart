@@ -39,7 +39,6 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../chat/ai_context_action.dart';
 import '../chat/asset_context_menu.dart' show buildEditorAssetMenuItems;
 import '../core/feature_flags.dart';
-import '../providers/mcp_bridge.dart' show isMcpChatAvailable;
 import '../chat/chat_overlay.dart' show ChatContext;
 import '../chat/hamburger_context_menu.dart';
 import '../chat/page_context_menu.dart';
@@ -2668,7 +2667,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     BoxConstraints constraints,
     Offset pasteTarget,
   ) async {
-    final aiItems = kChatEnabled && isMcpChatAvailable()
+    final aiItems = kChatEnabled
         ? buildEditorAssetMenuItems(asset)
         : const <AiMenuItem>[];
 
