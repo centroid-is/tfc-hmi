@@ -467,6 +467,31 @@ ordinary keys — including `PIPE.link_degraded`, `PIPE.data_age_ms`, the
 gateway's event-loop-lag gauge, and cert days-to-expiry (a plant alarm, so
 rotation is a Tuesday ticket, not a Sunday outage).
 
+**`PIPE.cert.days_to_expiry` is built.** It is the first `PIPE.*` key to exist
+and it behaves like a conveyor speed: it is in `keys`, it is in a subscribe
+snapshot, and a change is pushed on the ordinary notification path.
+
+| Property | Value |
+|---|---|
+| Value | whole days from the **mounted leaf** to `notAfter` — the same file the handshake presents, read by path, never cached as bytes |
+| Sign | negative is meaningful: an already-expired leaf reads `-3` |
+| Quality | `errorConfig` with a **null** value when the PEM is missing or unparseable — never `0`, which would read as "expires today" and fire the alarm for a typo in a path |
+| Cadence | recomputed when an hour has elapsed, checked on the read path rather than on a timer (the gateway holds exactly one repeating timer, §5's tick, and a second one would fight it); `readFresh` forces a recompute; a gateway with literally no traffic does not recompute, and there is nobody to push to |
+| Absent | when the gateway is plaintext. A gateway with no certificate has nothing to say about one, and a key answering `0` there would be a lie |
+| Threshold | AlarmMan's, not the pipe's. The pipe ships the number |
+
+**The arithmetic truncates.** A 17-day leaf reads `16`, so an alarm configured
+at 30 days fires on the day the value first reads 29. Keep that sentence next
+to whatever configures the threshold.
+
+Until Phase 8 owns the real `PIPE.*` producer the key comes from a small
+server-wide overlay chained under the per-session policy decorator of §7.5 —
+so the policy filters a key list that already contains it. Phase 8's merge is
+a deletion: the computation moves into `LocalStateMan` and the overlay goes.
+`PIPE.cert.days_to_expiry` has to be on Phase 8's reserved-name list from the
+first day, because `PIPE.` is a reserved *prefix* and a plant keymapping
+claiming a name inside it is rejected.
+
 ## 5. Backpressure and slow links
 
 Design rule from notes §7.6, confirmed by every precedent (Lightstreamer,
@@ -529,34 +554,277 @@ or the web phase measurably needs it. Revisit with data, not taste.
 
 ## 7. TLS and auth
 
-- **Private CA**, generated once, key on the backend host. Server presents a
-  leaf; **native clients ship the root as an asset and pin it**:
-  `SecurityContext(withTrustedRoots: false)..setTrustedCertificatesBytes(...)`.
-  Never `badCertificateCallback` (it disables hostname/expiry/issuer checks
-  together, and pre-Dart-3.13 it receives the wrong certificate —
-  sdk#39425).
-- **Keys are mounted files** (like `timescale_certs`), never persisted into
-  config/prefs — #93's trap.
-- **Web trust story is a deployment decision made now** (browsers give a
-  failed `wss://` no interstitial and no error detail, by design): root
-  pushed via provisioning/GPO — Chrome/Edge ≥133 can scope it to the plant
-  CIDR via `CACertificatesWithConstraints` — or a real domain with DNS-01
-  ACME. Either way the **web bundle is served from the same origin as the
-  WS endpoint** (turns silent socket failure into a debuggable page-level
-  error, kills CORS, one port).
-- **Auth on connect** (token in the `hello`, reusing #93's `users[]`/admin
-  model), `allowedOrigins` set on the server (browser clients can't send
-  `Authorization`; unset origins = CSWSH). Read broadly permitted, writes
-  individually authorized. Sessions **degrade to view-only on inactivity,
-  never to a login prompt** — re-auth per privileged write (PIN/badge on the
-  confirm dialog), which also fixes audit under shared operator accounts.
-  mTLS stays an option for the centrally-managed eLinux panels only
-  (read the client cert before `WebSocketTransformer.upgrade`; enforcement
-  in app code — `bindSecure` can't require it).
-- Close codes: **4000–4999 only** (4001 auth expired, 4002 draining, 4003
-  heartbeat timeout) — standard codes other than 1000 throw in
-  `web_socket_channel`, and `closeCode` is unreliable for self-initiated
-  closes; the client tracks its own.
+Built in Phase 6 and described here as it shipped. This section is written for
+two people: the integrator provisioning a new station, and whoever is standing
+in front of a dark panel at 06:00. Three of the decisions below are **not**
+recoverable by reading the code, which is why they are written down at all.
+
+### 7.1 What is mounted, and where
+
+Four files. Three live on the gateway host, one lives on every panel.
+
+| File | Named by | Where | Rotates |
+|---|---|---|---|
+| `leaf.pem` — the gateway's certificate | `TlsConfig.chainPath` | gateway host | yearly |
+| `leaf-key.pem` — its private key | `TlsConfig.keyPath` (with `keyPassword` if it is encrypted) | gateway host, `0600` | with the leaf |
+| the token file | `AuthConfig.tokenFilePath` | gateway host, `0600` | when a station is added or a panel retired |
+| `ca.pem` — the private root | `ClientTlsConfig.rootCertPath` | **every panel** | ~ten years |
+
+`ServerConfig.tls` and `ServerConfig.auth` are two separate nullable objects,
+and `null` means "not configured": no TLS, no credential checking. They are
+separate rather than one because they rotate on different clocks and fail in
+different ways — a bad leaf stops every panel at once, a pulled token stops
+exactly one. Both default to `null`, which is the whole compatibility story:
+every in-repo fixture keeps binding `ws://` on loopback with an ephemeral port
+and none of them was rewritten for this phase.
+
+**Every one of these config objects holds paths and structurally cannot hold
+bytes.** That is SEC-01, and it is enforced by a test that walks `TlsConfig`'s
+fields and fails if any of them is not a `String` — because a config object
+that *can* carry key material eventually does, and from that moment every
+configuration dump and every pasted support ticket is carrying the plant's
+keys. An empty path is refused by each object's own constructor, so an
+unmountable config cannot be constructed anywhere, not even in a test.
+
+**A missing or unreadable file fails `start()`. There is no downgrade to
+`ws://`.** The token file is loaded first, the `SecurityContext` built second,
+and both happen before the bind — so a gateway that cannot read its
+credentials never opens a port. This matters more than it looks: a gateway
+that quietly served plaintext because a path was misspelled is discovered by a
+packet capture months later, and `tls == null` (a deliberate choice) must stay
+a different thing from a file that did not load.
+
+### 7.2 Minting the certificates
+
+`relay_certs` ships in `tfc_relay_server` and needs no `openssl` on the
+machine. Two runs, in order:
+
+```
+dart run tfc_relay_server:relay_certs --ca --out /etc/relay/pki
+dart run tfc_relay_server:relay_certs --leaf \
+    --ca-cert /etc/relay/pki/ca.pem --ca-key /etc/relay/pki/ca-key.pem \
+    --san relay.svn.local --san 10.104.29.71 --days 365 \
+    --out /etc/relay/pki
+```
+
+The root defaults to ten years, the leaf to one. `--leaf` with no `--san` is
+refused rather than obliged: a leaf that matches no host is refused by every
+panel at the handshake, and producing one silently is worse than not producing
+one. Private keys are written `0600` on POSIX.
+
+**The one thing an integrator must not get wrong: the leaf's SANs must include
+every address a panel dials, and an address dialled as an IP literal needs an
+IP SAN.** The reason is worth one sentence, because the obvious library gets
+it wrong: `basic_utils` encodes every subject-alternative name as a `dNSName`,
+so `10.104.29.71` goes into the certificate as a DNS *string*, which passes a
+hostname test and is refused by every panel in the plant. `relay_certs` writes
+a real `iPAddress` GeneralName (DER tag `0x87`, four octets) and a unit test
+asserts the tag byte on both branches, so a cleanup that unifies them cannot
+reintroduce the defect quietly.
+
+`packages/tfc_dart/bin/generate_certs.dart` still carries that defect. It is a
+follow-up, not a bug being shipped: it mints OPC UA **client** certificates,
+where `dart:io` is not the verifier and nothing today validates their SANs by
+IP. The corrected encoder to copy is `_generalName` in
+`tfc_relay_server/lib/src/tls/mint.dart`.
+
+### 7.3 Where the panel's root lives, and what it costs
+
+A panel trusts exactly one root, loaded from a **file path on that station**:
+
+```dart
+SecurityContext(withTrustedRoots: false)..setTrustedCertificates(tls.rootCertPath)
+```
+
+one `SecurityContext` and one `HttpClient` per panel, built once at
+construction and closed after the link on dispose. Never
+`badCertificateCallback` — it disables hostname, expiry and issuer checks
+together, and pre-Dart-3.13 it receives the wrong certificate (sdk#39425). A
+repo-wide sweep fails the build if the identifier appears in any `.dart` file,
+comments excepted, and the sweep carries its own anti-vacuity arms so it
+cannot pass by reading nothing.
+
+Dialling `wss://` with no pinned root is refused when the panel is
+constructed, not at the handshake, because the handshake failure it would
+otherwise produce is byte-identical to the one a real impostor produces.
+
+**The ops cost is one path in every station's config**, provisioned with the
+image — the `docker/frontend` work owns it. The alternative was installing the
+root into each machine's OS trust store and dialling with
+`withTrustedRoots: true`, which would cost nothing per station. It was
+rejected on security, not on convenience: with the system store in the trust
+path, **anything already in that store can vouch for the gateway** — a
+corporate MITM appliance, a stale internal CA, whatever an installer put there
+in 2019. Pinning one root means the only certificate the panel will accept is
+one this plant's CA signed. The property has no offline behavioural test (it
+takes a leaf signed by a root the machine already trusts, which no test can
+mint), so `withTrustedRoots: false` is pinned by a source-text assertion with
+that measurement recorded beside it.
+
+### 7.4 The token file, rotation and revocation
+
+Identity is **per-station static tokens**: no auth server, no people-identity,
+no expiry clockwork, and it works on a plant LAN with no route to anywhere.
+
+```jsonc
+{"tokens": {"<opaque token>": {"stationId": "ST101", "role": "view"|"operate"}}}
+```
+
+Keyed by token so the lookup is O(1) and nothing scans secrets in a loop. What
+is held in memory is a SHA-256 digest of each token, not the token, so the map
+compares digests and a dump publishes none of the plant's keys; the
+confirmation after the lookup compares two 32-byte buffers in constant time
+whatever the token's length was.
+
+**Four refusals at load, each naming the station and never the credential:** a
+duplicate `stationId`, an unknown role word, a token shorter than 24
+characters, and a file any other account can read. Contents failures are
+`FormatException` and mount failures are `FileSystemException`, so a
+deployment can tell "fix the JSON" from "fix the mount" without reading the
+message. Any of them fails `start()` before the port opens.
+
+The panel presents its token in a typed `token` field on `hello` — deliberately
+not inside `capabilities`, which is an open map the session logs and copies,
+and a credential in a logged map is a credential in a log line. A refused
+credential comes back `-32003` and closes 4001, and the panel **stops**
+redialling: a bad token is a fact about this panel that retrying cannot
+change, and a mistyped one would otherwise be a permanent hello flood against
+the gateway. This is the deliberate opposite of §7.7's rule for a certificate
+rejection.
+
+**Rotation is in-process.** `reloadTokens()` re-reads the file and then sweeps
+the session registry, closing with **4001** every live session whose recorded
+identity no longer validates — token gone, station renamed, *or role narrowed*,
+because a demotion that only takes effect on the next reconnect is a demotion
+an operator can postpone indefinitely by not reconnecting. The revoked
+station's socket closes while every other station keeps receiving plant
+updates. A restart-to-apply design cannot do this: it drains every session with
+4002 and 4001 would never fire.
+
+**The poll or watch that calls `reloadTokens()` belongs to the embedder, and
+nothing in this repository calls it yet.** Two reasons, both deliberate:
+`File.watch` on a bind-mounted path in Docker is unreliable, and the gateway
+argues for exactly one repeating timer (§5's tick) — a second one inside the
+process would fight it. The intended shape is a poll that calls
+`reloadIfChanged()` (digest-compared, so re-saving an identical file costs
+nothing) and then `reloadTokens()`.
+
+A revocation costs the panel **exactly one redial**: the 4001 close carries no
+RPC error, so the supervisor cannot tell it from a gateway restart, redials
+once, presents the same stale token and gets the `-32003` that stops the loop.
+Not zero, and not unbounded.
+
+### 7.5 Authorization, and hiding as architecture
+
+Two synchronous questions, `canSee(key, identity)` and
+`canWrite(key, identity)`, asked by a per-session decorator that wraps the
+whole `StateManApi`. The session's `api` **is** the decorator and the
+unwrapped source is private, so a handler added in a later phase cannot reach
+around the policy — the guarantee is structural, not a convention.
+
+The shipped policy is deliberately trivial: **everything visible, `operate`
+writes, `view` does not**. The seam is the deliverable; the policy data is not.
+The pattern grammar for per-key rules is **not defined in this phase** — that
+is a decision, not an oversight, and whoever defines it inherits a seam that is
+already consulted on every surface.
+
+**The binding rule is that a hidden key must be indistinguishable from a
+nonexistent one**, because "forbidden" is an answer that leaks existence. It is
+implemented in one place — `canSee` filters the key list — and five surfaces
+inherit it. A test compares a hidden key's answer to a never-existent key's on
+six surfaces, field by field, with a companion assertion proving the test
+policy is really hiding something the plant really serves.
+
+That rule is what decides the codes, and the four answers are four different
+facts:
+
+| What happened | Answer | What the client does |
+|---|---|---|
+| bad or absent credential at `hello` | `-32003 unauthorized`, then close **4001** | stop redialling — the credential is wrong and retrying cannot fix it |
+| write to a key this station may see but not actuate | `-32005 forbidden` | never retry; the session is fine, this action is not permitted. Keep the socket, keep reading |
+| any request naming a **hidden** key | `INVALID_PARAMS` + `unknownKey` — byte-identical to a key that does not exist | fix the key name. There is nothing here to ask permission for |
+| token revoked mid-session | close **4001**, no RPC error | one redial, then stop (§7.4) |
+
+Rows two and three must differ, and row three must not be `forbidden`: a
+typo is fixed by correcting the key, a permission is obtained by asking
+somebody. The refusal is raised above the device call, above the outcome log
+and above the idempotency window, so `-32005` inherits the write path's
+standing promise that a refusal means *definitively no effect* — and a later
+`writeStatus` for that command honestly answers `not_received`.
+
+`allowedOrigins` is enforced server-side by `shelf_web_socket`: an
+origin-bearing upgrade that is not on the list gets **HTTP 403** before the
+upgrade, and a native panel, which sends no `Origin` at all, passes. The field
+is non-nullable and defaults to an empty list; making it nullable silently
+disables the check, so three separate mechanisms pin it.
+
+Close codes remain **4000–4999 only** (4001 auth expired, 4002 draining, 4003
+heartbeat timeout, 4004 backpressure overrun, 4005 protocol mismatch) —
+standard codes other than 1000 throw in `web_socket_channel`, and `closeCode`
+is unreliable for self-initiated closes, so the client tracks its own. Every
+one of the five is now observed client-side by a test; there are no exempted
+codes left.
+
+### 7.6 The health key
+
+`PIPE.cert.days_to_expiry`, specified in §4.7. Integer days, recomputed
+hourly, `errorConfig` when the file cannot be read, absent when the gateway is
+plaintext, and truncating — so an alarm at 30 fires at 29.
+
+### 7.7 Two operational notes
+
+**The backend container needs `ca-certificates`.** Dart 3.13 removes the
+compiled-in fallback roots, so the moment the gateway makes any *outbound* TLS
+call of its own — an API, a database over TLS, anything — it has no roots to
+verify with unless the image provides them. It is **irrelevant to the inbound
+pinned path**, which uses only the files we load and would work in a container
+with no trust store at all. That distinction is exactly the sort of thing that
+gets lost, and the failure mode of losing it is a container rebuild that
+"fixes" TLS by accident and a later slim-down that breaks it again.
+
+**Every TLS rejection looks identical.** Wrong CA, expired leaf, SAN mismatch,
+self-signed leaf, and a link cut *inside* the handshake all raise the same
+`HandshakeException` with the same message and a null close code. A support
+ticket saying "certificate error" therefore narrows nothing, and the three have
+to be told apart by changing one thing at a time — dial by IP and by name,
+check `notAfter` on the leaf, check the root on the panel is the one that
+signed it. Never assert *why* a handshake failed by matching its message.
+
+What the health line **can** distinguish is coarser and still useful: `the
+gateway's certificate was not trusted by this panel` (a trust problem, or a cut
+handshake — they read alike), `did not answer: …TimeoutException` (a bounded
+dial that got nothing back), `did not answer: …403` (wrong origin), `did not
+answer: …Connection refused` (nothing listening), `the transport ended` (a
+clean close on a live link), and the credential refusal, which is the only one
+that stops the panel asking.
+
+A certificate rejection **keeps the panel retrying**, on purpose: the fix is a
+file on the gateway, so a panel that keeps trying comes back by itself with
+nobody visiting the station.
+
+### 7.8 Still open, and deliberately
+
+- **Web trust story** — a deployment decision, unchanged and unbuilt (browsers
+  give a failed `wss://` no interstitial and no error detail, by design): root
+  pushed via provisioning/GPO — Chrome/Edge ≥133 can scope it to the plant CIDR
+  via `CACertificatesWithConstraints` — or a real domain with DNS-01 ACME.
+  Either way the **web bundle is served from the same origin as the WS
+  endpoint** (turns a silent socket failure into a debuggable page-level error,
+  kills CORS, one port).
+- **mTLS** stays an option for the centrally-managed eLinux panels only (read
+  the client cert before `WebSocketTransformer.upgrade`; enforcement in app
+  code — `bindSecure` cannot require it). Token-only is the default posture.
+- **Per-key policy data and its pattern grammar** — the seam is built and
+  consulted everywhere; the language is not designed.
+- **Inactivity behaviour.** The earlier plan of degrading a session to
+  view-only on inactivity, with re-auth per privileged write (PIN or badge on
+  the confirm dialog), is **not built** and does not follow from per-station
+  tokens: there is no person in the identity to re-authenticate. It stays a
+  real idea for the day operator identity exists, and it is the answer to audit
+  under shared accounts.
+- **Connection slots are unbounded** for unauthenticated peers, with only an
+  emergent bound (connect rate × the heartbeat deadline). A `maxSessions`
+  ceiling and rate limiting are Phase 7's call.
 
 ## 8. Implementation stack (Dart specifics)
 
