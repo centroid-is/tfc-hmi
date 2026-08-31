@@ -12,10 +12,12 @@ import 'package:open62541/open62541.dart'
         BrowseTreeItem,
         ClientApi,
         ClientState,
+        DataValue,
         DynamicValue,
         MonitoringMode,
         NodeClass,
-        NodeId;
+        NodeId,
+        UA_STATUSCODE_GOOD;
 
 import 'package:tfc/widgets/browse_panel.dart';
 import 'package:tfc/widgets/opcua_browse.dart';
@@ -57,6 +59,15 @@ class FakeClientApi implements ClientApi {
   Future<DynamicValue> read(NodeId nodeId) async {
     readCallCount++;
     return readResults[nodeId] ?? DynamicValue();
+  }
+
+  @override
+  Future<DataValue> readValue(NodeId nodeId) async {
+    readCallCount++;
+    return DataValue(
+      value: readResults[nodeId] ?? DynamicValue(),
+      statusCode: UA_STATUSCODE_GOOD,
+    );
   }
 
   // -- Unused stubs --
@@ -715,6 +726,11 @@ class _FailingReadClient extends FakeClientApi {
 
   @override
   Future<DynamicValue> read(NodeId nodeId) async {
+    throw Exception('buildSchema failed');
+  }
+
+  @override
+  Future<DataValue> readValue(NodeId nodeId) async {
     throw Exception('buildSchema failed');
   }
 }
