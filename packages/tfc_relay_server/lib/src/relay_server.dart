@@ -353,6 +353,71 @@ final class RelayServer {
     )..start();
   }
 
+  /// Re-reads the credential set and disconnects every station that is no
+  /// longer in it, with [CloseCodes.authExpired].
+  ///
+  /// **In-process, and that is what makes revocation real.** A restart-to-
+  /// apply design closes every session with [CloseCodes.serverDraining] (see
+  /// [close]) — a code that tells a panel "reconnect, do not alarm", which is
+  /// the opposite of what a revoked station should be told, and which is why
+  /// 4001 stood as the last unpaid debt in `handler_table_test.dart` from
+  /// Phase 3 until this method existed. It also takes the whole plant down to
+  /// disconnect one panel.
+  ///
+  /// **Production wiring is the embedder's, deliberately.** Whatever already
+  /// watches the deployment's configuration calls [FileTokenValidator
+  /// .reloadIfChanged] and then this — an mtime or digest poll is enough, and
+  /// is what the backend's config-watch pattern does. Three reasons this
+  /// server does not own that loop: `File.watch` on a bind-mounted path in
+  /// Docker is unreliable, the reload cadence is a deployment's business
+  /// rather than a gateway's, and a second timer inside this process would
+  /// fight the one `tick_engine.dart` argues there should only ever be one of.
+  /// Tests call this directly, which is what keeps the 4001 case hermetic —
+  /// no timer, no sleep.
+  ///
+  /// Throws a [StateError] when the live validator cannot reload, rather than
+  /// no-opping: a deployment that believes rotation works and has it silently
+  /// do nothing is worse off than one told at the first attempt.
+  ///
+  /// **The sweep is `TickEngine.reap`'s shape, safety property included.**
+  /// `registry.sessions` is read fresh rather than copied — a session closed
+  /// earlier in this same sweep is already gone, and closing it twice is a
+  /// second teardown for a session with no resources left — and the close is
+  /// `unawaited`, which is safe *precisely* because the registry removal is
+  /// the synchronous half of the teardown (`relay_session.dart:911-915` runs
+  /// `_onClosing?.call(this)` before the first `await`; the `onClosing:`
+  /// argument in [_onConnect] documents why it must stay that way). There is
+  /// deliberately no `await` inside the loop: one would let the next
+  /// iteration observe a registry the previous close had not finished leaving.
+  ///
+  /// **No station→session index**, deliberately. Panels number in the tens, a
+  /// full sweep on a file change is free, and an index would be a second
+  /// place session lifetime is tracked when `_sessions.remove` is the single
+  /// synchronous chokepoint the whole close path depends on.
+  Future<void> reloadTokens() async {
+    final live = validator;
+    if (live is! RevocableTokenValidator) {
+      throw StateError('this gateway\'s validator is a ${live.runtimeType}, '
+          'which cannot reload. Rotation here would be a no-op: the file '
+          'would be edited, nothing would happen, and nothing would say so. '
+          'Configure ServerConfig.auth, or pass a validator that implements '
+          'RevocableTokenValidator');
+    }
+    await live.reload();
+    for (final session in _sessions.sessions) {
+      final identity = session.identity;
+      // A pre-hello session has no credential to revoke. The gate already
+      // holds it to `hello` alone and the heartbeat reaper already reaps it.
+      if (identity == null) continue;
+      if (live.stillValid(identity)) continue;
+      unawaited(session.close(
+          CloseCodes.authExpired,
+          'the credential for station ${identity.stationId} is no longer the '
+          'one this gateway holds; it was removed, or its access was '
+          'narrowed'));
+    }
+  }
+
   /// Builds one session for one upgraded connection.
   ///
   /// Never throws. A wiring failure here would otherwise land in the ambient

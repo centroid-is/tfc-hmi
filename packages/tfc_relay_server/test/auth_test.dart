@@ -22,9 +22,12 @@
 /// chooses to reconnect, which is not revocation.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
+import 'package:stream_channel/stream_channel.dart';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/auth/auth_config.dart';
@@ -32,8 +35,12 @@ import 'package:tfc_relay_server/src/auth/file_token_validator.dart';
 import 'package:tfc_relay_server/src/auth/identity.dart';
 import 'package:tfc_relay_server/src/error_codes.dart';
 import 'package:tfc_relay_server/src/error_reporter.dart';
+import 'package:tfc_relay_server/src/relay_server.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/token_validator.dart';
+import 'package:tfc_relay_server/src/ws_channel.dart';
+import 'package:web_socket_channel/io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'support/ws_harness.dart';
 
@@ -61,13 +68,83 @@ HelloParams _helloWith(String? token) => HelloParams(
 /// configured" — so a `ServerConfig.auth` beside it is not the two-sources-of-
 /// truth configuration the constructor refuses.
 RelayFixture _gatewayOn(Map<String, Object?> tokens, {RelayErrorHandler? onError}) =>
+    _gatewayAt(_writeTokenFile(_tempDir(), tokens), onError: onError);
+
+/// The same, on a token file the case already holds a path to — which is what
+/// a revocation case needs, because it rewrites the file underneath the
+/// running gateway.
+RelayFixture _gatewayAt(String tokenFilePath, {RelayErrorHandler? onError}) =>
     relayFixture(
       config: ServerConfig(
         tick: ServerConfig.minTick,
-        auth: AuthConfig(tokenFilePath: _writeTokenFile(_tempDir(), tokens)),
+        auth: AuthConfig(tokenFilePath: tokenFilePath),
       ),
       onError: onError,
     );
+
+/// A second real client on an already-running gateway.
+///
+/// `relayFixture` owns exactly one socket, and a sweep that closed every
+/// session would pass every single-session test ever written. This is the
+/// other station.
+final class _Panel {
+  _Panel._(this._ws, this.peer, this.inbound, this.done);
+
+  final WebSocketChannel _ws;
+  final rpc.Client peer;
+
+  /// Every frame this panel received, in order.
+  final List<String> inbound;
+
+  /// Completes when this panel's socket has finished, however it finished.
+  final Future<void> done;
+
+  bool get isOpen => _ws.closeCode == null;
+
+  static Future<_Panel> connect(RelayServer server) async {
+    final ws = IOWebSocketChannel.connect(
+        Uri.parse('ws://127.0.0.1:${server.port}'));
+    await ws.ready;
+    final inbound = <String>[];
+    final finished = Completer<void>();
+    final base = wsChannel(ws);
+    final tapped = base.stream
+        .map((frame) {
+          inbound.add(frame);
+          return frame;
+        })
+        .transform(StreamTransformer<String, String>.fromHandlers(
+          handleDone: (sink) {
+            if (!finished.isCompleted) finished.complete();
+            sink.close();
+          },
+        ));
+    final peer = rpc.Client(StreamChannel<String>(tapped, base.sink));
+    unawaited(peer.listen().catchError((Object _) => null));
+    addTearDown(() async {
+      await peer.close();
+      await ws.sink.close().catchError((Object _) {});
+    });
+    return _Panel._(ws, peer, inbound, finished.future);
+  }
+}
+
+/// Waits for [done] to become true, or fails naming [what].
+///
+/// A poll rather than an event, because what these cases wait for — a socket
+/// the server closed, a frame that arrived — has no seam to listen on from
+/// this side. Bounded, so a property that never happens fails by name instead
+/// of hanging the lane.
+Future<void> _until(bool Function() done, String what,
+    {Duration budget = const Duration(seconds: 3)}) async {
+  final deadline = DateTime.now().add(budget);
+  while (!done()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('timed out after ${budget.inMilliseconds} ms waiting for $what');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
 
 /// A temp directory released with the case.
 Directory _tempDir() {
@@ -414,6 +491,112 @@ void main() {
               'StatusParams.error would arrive');
       expect(reported.where((r) => r.contains(presented)), isEmpty,
           reason: 'the gateway\'s error sink — its log on a plant machine');
+    }, tags: 'ws');
+  });
+
+  group('revocation closes the revoked station\'s session', () {
+    test('revoking a station\'s token closes its live session with 4001',
+        () async {
+      final dir = _tempDir();
+      final path = _writeTokenFile(dir, _twoStations());
+      final fixture = _gatewayAt(path);
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(_stationOneToken).toJson(),
+          what: 'ST101\'s hello');
+      expect(fixture.server.sessions.sessions.single.identity?.stationId,
+          'ST101');
+
+      // The apply is in-process and the case drives it directly: no timer, no
+      // sleep, no watcher. Production hangs this off whatever already watches
+      // the file (see `reloadTokens`' doc), and a test that waited for one
+      // would be measuring a poll interval.
+      _writeTokenFile(dir, {
+        'tokens': {
+          _stationTwoToken: {'stationId': 'ST201', 'role': 'view'},
+        },
+      });
+      await fixture.server.reloadTokens();
+
+      final close = await fixture.awaitClose('the revoked station\'s socket',
+          budget: const Duration(seconds: 3));
+      expect(close.closeCode, CloseCodes.authExpired,
+          reason: 'the client has to *observe* 4001 on its own socket. The '
+              'server recording an intention is what the handler-table sweep '
+              'spent this phase refusing to count');
+      expect(close.closeReason, contains('ST101'),
+          reason: 'a panel that goes dark at shift change needs the reason to '
+              'name the station whose credential was pulled');
+    }, tags: 'ws');
+
+    test('revoking one station leaves the other\'s session alone', () async {
+      final dir = _tempDir();
+      final path = _writeTokenFile(dir, _twoStations());
+      final fixture = _gatewayAt(path);
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(_stationOneToken).toJson(),
+          what: 'ST101\'s hello');
+
+      final survivor = await _Panel.connect(fixture.server);
+      await survivor.peer.sendRequest(
+          Methods.hello, _helloWith(_stationTwoToken).toJson());
+      const key = 'CN01.MOT01.speed';
+      fixture.served.setValue(key, 1);
+      await survivor.peer.sendRequest(Methods.subscribe,
+          const SubscribeParams(sub: 'page-1', keys: [key]).toJson());
+      expect(fixture.server.sessions.sessionCount, 2);
+
+      _writeTokenFile(dir, {
+        'tokens': {
+          _stationTwoToken: {'stationId': 'ST201', 'role': 'view'},
+        },
+      });
+      await fixture.server.reloadTokens();
+      await fixture.awaitClose('the revoked station\'s socket',
+          budget: const Duration(seconds: 3));
+
+      expect(survivor.isOpen, isTrue,
+          reason: 'a sweep that closed every session would pass a '
+              'single-session case, which is why there are two here');
+      expect(await survivor.peer.sendRequest(Methods.ping), isA<Map>(),
+          reason: 'still answering, not merely still connected');
+      fixture.served.setValue(key, 2);
+      await _until(
+          () => survivor.inbound.any((f) => f.contains('"method":"u"')),
+          'ST201 still receiving plant updates after ST101 was revoked');
+    }, tags: 'ws');
+
+    test('a session that has not said hello is left alone by the sweep',
+        () async {
+      final dir = _tempDir();
+      final fixture = _gatewayAt(_writeTokenFile(dir, _twoStations()));
+      await fixture.ready;
+      expect(fixture.server.sessions.sessions.single.identity, isNull);
+
+      _writeTokenFile(dir, _oneStation());
+      await fixture.server.reloadTokens();
+
+      expect(fixture.server.sessions.sessionCount, 1,
+          reason: 'a pre-hello session has no identity to revoke. The gate '
+              'already holds it to one method and the heartbeat reaper '
+              'already reaps it, so it is not the revocation\'s business — '
+              'and a sweep that closed it would be closing sockets for a '
+              'credential nobody had presented yet');
+    }, tags: 'ws');
+
+    test('reloadTokens refuses to pretend on a gateway with no token file',
+        () async {
+      final fixture = relayFixture();
+      await fixture.ready;
+
+      await expectLater(
+          fixture.server.reloadTokens(),
+          throwsA(isA<StateError>().having((e) => e.message, 'message',
+              contains('PermissiveTokenValidator'))),
+          reason: 'a silent no-op would let a deployment believe rotation '
+              'works: the operator edits the file, nothing happens, and '
+              'nothing says so');
     }, tags: 'ws');
   });
 
