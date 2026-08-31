@@ -353,6 +353,67 @@ void main() {
               'quality carries the entire answer');
     });
 
+    test('a leaf rotated under a running gateway keeps counting the one being '
+        'served', () async {
+      // The operational sequence this file exists for, run to the end: the
+      // leaf is a month from lapsing, the alarm has fired, somebody mounts
+      // the new one — and defers the restart, because restarting the gateway
+      // takes the plant off its screens. `useCertificateChain` read the PEM
+      // once inside `start()`; every panel keeps validating that leaf until
+      // the process is replaced.
+      final gateway = gatewayFor(days: 29);
+      await gateway.server.start();
+      final overlay = gateway.server.certHealth!;
+      final before = overlay.read(certDaysToExpiryKey)!.value as int;
+      expect(before, lessThan(30),
+          reason: 'the control: the alarm is up before the rotation');
+
+      final at = DateTime.now().toUtc();
+      File(gateway.mounted.chainPath).writeAsStringSync(mintLeaf(
+        ca: ca,
+        notBefore: at.subtract(const Duration(days: 1)),
+        notAfter: at.add(const Duration(days: 365)),
+      ));
+      overlay.refresh();
+
+      final after = overlay.read(certDaysToExpiryKey)!;
+      expect(after.quality, Quality.good);
+      expect(after.value, lessThan(30),
+          reason: 'a value that jumped to 365 here would clear the alarm and '
+              'close the ticket while every panel in the plant is still '
+              'validating the old leaf and still counting down to its '
+              'original notAfter. The plant would then stop on the original '
+              'expiry date with no warning at all — which is the Saturday '
+              'outage this file was written to prevent, reached through the '
+              'one operational sequence it was built for');
+      expect(after.value, before,
+          reason: 'nothing about the certificate being served changed, so '
+              'nothing about the number should have');
+    });
+
+    test('a rotation that shortens the certificate is reported at once',
+        () async {
+      // The other direction. The served leaf and the mounted one are both
+      // read, and the sooner of the two is the honest answer: a leaf mounted
+      // with a nearer notAfter is a deadline the gateway will meet the moment
+      // it is restarted, and a number that ignored it would be optimistic
+      // about the one thing this key exists to be pessimistic about.
+      final gateway = gatewayFor(days: 365);
+      await gateway.server.start();
+      final overlay = gateway.server.certHealth!;
+      expect(overlay.read(certDaysToExpiryKey)!.value, greaterThan(300));
+
+      final at = DateTime.now().toUtc();
+      File(gateway.mounted.chainPath).writeAsStringSync(mintLeaf(
+        ca: ca,
+        notBefore: at.subtract(const Duration(days: 1)),
+        notAfter: at.add(const Duration(days: 10)),
+      ));
+      overlay.refresh();
+
+      expect(overlay.read(certDaysToExpiryKey)!.value, lessThan(30));
+    });
+
     test('a missing certificate file reads bad quality too', () async {
       // The other half of "missing or unparseable": a mount that went away.
       // Same answer, because it is the same statement to an operator.
@@ -414,6 +475,32 @@ void main() {
           reason: 'the number moved and the panel was not told. An expiry '
               'indicator that only re-evaluates when a panel reconnects is an '
               'indicator that updates after the outage');
+    });
+
+    test('a heartbeat is a deadline check, which is what a night shift sends',
+        () async {
+      // The residual the no-timer argument admits to is "a gateway with
+      // literally no traffic". It was wider than that: four of the nine
+      // registered methods never read `api.keys` — `hello`, `ping`,
+      // `unsubscribe` and `writeStatus` — and those four are exactly what an
+      // established, otherwise-idle panel produces. Several connected panels
+      // holding subscriptions and doing nothing else is not an untrafficked
+      // gateway, it is a night shift.
+      var wall = DateTime.now().millisecondsSinceEpoch;
+      final gateway = gatewayFor(days: 365, now: () => wall);
+      await gateway.server.start();
+      final panel = await station(gateway.server, root: ca.certPem);
+      final overlay = gateway.server.certHealth!;
+      final first = overlay.value!.value as int;
+
+      wall += const Duration(days: 2).inMilliseconds;
+      await panel.request(Methods.ping, const <String, Object?>{});
+
+      expect(overlay.value!.value, first - 2,
+          reason: 'the heartbeat is the one request guaranteed to keep '
+              'arriving, so it is the one that has to carry the deadline '
+              'check. Without it the number a panel reads is as old as the '
+              'last time somebody touched a plant tag');
     });
 
     test('the certificate key is excluded from its own freshness accounting',

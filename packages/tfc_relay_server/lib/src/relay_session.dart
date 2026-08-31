@@ -37,6 +37,7 @@ import 'auth/identity.dart';
 import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
+import 'health/cert_health_state_man.dart';
 import 'policy/key_policy.dart';
 import 'policy/policy_state_man.dart';
 import 'server_config.dart';
@@ -144,6 +145,7 @@ final class RelaySession {
     void Function(RelaySession session)? onClosing,
     RelayErrorHandler? onError,
     int Function()? now,
+    CertHealthStateMan? certHealth,
   }) {
     final clock = now ?? () => DateTime.now().millisecondsSinceEpoch;
     final lastSeen = _LastSeen(clock);
@@ -181,8 +183,18 @@ final class RelaySession {
       mintGeneration,
     )
       .._onError = onError
+      .._certHealth = certHealth
       .._start();
   }
+
+  /// The gateway's certificate-health overlay, or null on a plaintext gateway.
+  ///
+  /// Held so [_ping] can touch its deadline. Assigned in the cascade above
+  /// rather than taken through the positional constructor, in [_onError]'s
+  /// style: it is a wiring detail of the server, not part of what a session
+  /// *is*, and every case in this package that builds a session by hand leaves
+  /// it null.
+  CertHealthStateMan? _certHealth;
 
   /// Refuses one inbound frame that is over the ingress ceiling, before
   /// anything decodes it.
@@ -935,7 +947,18 @@ final class RelaySession {
 
   /// The app-level heartbeat. Answers with the server's clock so a client can
   /// re-derive its offset without a second handshake.
-  Future<Object?> _ping(rpc.Parameters _) async => {'serverTime': _now()};
+  ///
+  /// **And it is the gateway's certificate deadline check.** The cert-health
+  /// overlay has no timer, by a ruling `teardown_test.dart` enforces, so it
+  /// recomputes on a deadline consulted by requests that already run — and
+  /// every one of those is a request that reads a *key*. An established panel
+  /// holding its subscriptions sends none of them: `ping` all shift, and a
+  /// `writeStatus` sweep after a reconnect. That is a night shift, not an
+  /// untrafficked gateway, so the heartbeat carries the check.
+  Future<Object?> _ping(rpc.Parameters _) async {
+    _certHealth?.refreshIfDue();
+    return {'serverTime': _now()};
+  }
 
   /// Records [code] and schedules the teardown for after the answer.
   ///

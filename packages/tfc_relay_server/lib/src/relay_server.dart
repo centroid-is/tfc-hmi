@@ -544,6 +544,10 @@ final class RelayServer {
         // meeting is not a double report.
         onClosing: _sessions.remove,
         onError: onError,
+        // So the heartbeat can touch the certificate deadline. Four of the
+        // nine registered methods read no key, and `ping` is the one an
+        // established panel sends all shift — see `_ping`.
+        certHealth: _certHealth,
       );
       connection.session = session;
       _sessions.add(session);

@@ -71,11 +71,20 @@
 ///
 /// So the recompute is on a **deadline, not on a timer** — which is the shape
 /// Finding 8 itself chose over per-session timers: a `lastSeenMs` field plus a
-/// check on a path that already runs. [_refreshIfDue] is called from every
-/// read surface below, and in particular from [keys], which
-/// `value_handlers.dart` consults on `read`, `readFresh`, `readMany` and
-/// `write` and `session_handlers.dart` consults on `subscribe`. Any request
-/// from any panel, after [period] has elapsed, recomputes and notifies.
+/// check on a path that already runs. [refreshIfDue] is called from every read
+/// surface below, and in particular from [keys], which `value_handlers.dart`
+/// consults on `read`, `readFresh`, `readMany` and `write` and
+/// `session_handlers.dart` consults on `subscribe`.
+///
+/// **Which requests are deadline checks, named rather than generalised.** The
+/// claim used to be "every request on the gateway is a deadline check" and it
+/// was false for the traffic that matters most. Four of the nine registered
+/// methods never read `api.keys`: `hello`, `unsubscribe`, `writeStatus` — and
+/// `ping`, which is what an established, otherwise-idle panel produces all
+/// shift. `relay_session.dart`'s `_ping` therefore calls [refreshIfDue]
+/// directly, so the heartbeat — the one request guaranteed to keep arriving —
+/// carries the check. `hello`, `unsubscribe` and `writeStatus` still do not,
+/// and do not need to: none of them is the only thing a connected panel sends.
 ///
 /// Three consequences worth stating rather than discovering:
 ///
@@ -85,7 +94,7 @@
 ///    unknown until the first fault is no indicator at all".
 ///  * **It is never recomputed more often than [period]**, so an idle-loop of
 ///    `read` calls cannot turn a health key into a file-system benchmark.
-///  * **A gateway with no traffic at all does not recompute.** That is the
+///  * **A gateway with no session at all does not recompute.** That is the
 ///    honest residual of having no timer, and it costs nothing: with no
 ///    session there is nobody to push to, and the first request after the hour
 ///    recomputes before it is answered. A deployment that wants the number
@@ -145,7 +154,8 @@ final class CertHealthStateMan implements StateManApi {
     required this.chainPath,
     int Function()? nowMs,
     this.period = const Duration(hours: 1),
-  }) : _nowMs = nowMs ?? _wallClock;
+  })  : _nowMs = nowMs ?? _wallClock,
+        _servedNotAfter = _notAfterOf(chainPath);
 
   static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
 
@@ -184,6 +194,34 @@ final class CertHealthStateMan implements StateManApi {
   /// Closers for the streams [subscribe] has handed out that are still open.
   final _closeHandedOutStreams = <Future<void> Function()>{};
 
+  /// The `notAfter` of the leaf the running gateway is actually presenting,
+  /// read once when this overlay was built.
+  ///
+  /// **Why the number cannot be the file alone.** `SecurityContext
+  /// .useCertificateChain` reads [chainPath] once, inside
+  /// `RelayServer.start()`, and the running `HttpServer` presents that leaf
+  /// until the process is replaced. [_measure] re-reads the file on every
+  /// recompute. So the yearly re-issue — mount the new leaf, defer the restart
+  /// because restarting takes the plant off its screens — would have this key
+  /// jump from 29 days to 365 while every panel keeps validating the old leaf
+  /// and counting down to its original `notAfter`. The alarm clears, the
+  /// ticket is closed, and the plant stops on the original date with no
+  /// warning at all.
+  ///
+  /// This overlay is built by `start()` from the same [TlsConfig], one line
+  /// after the `SecurityContext`, so what it reads here is the file the
+  /// handshake is presenting.
+  ///
+  /// **The operational consequence, stated so nobody has to discover it:** a
+  /// rotation needs a restart, and this key keeps counting the old leaf down
+  /// until it gets one. It is deliberately not cert hot-reload — swapping the
+  /// certificate under a live `HttpServer` is not something dart:io offers,
+  /// and inventing it on the certificate path is not a Phase 6 change.
+  ///
+  /// Null when the chain could not be read at construction, in which case the
+  /// file is the only answer available.
+  final DateTime? _servedNotAfter;
+
   /// When the value was last computed, in epoch ms, or null before the first.
   int? _computedAtMs;
 
@@ -204,15 +242,45 @@ final class CertHealthStateMan implements StateManApi {
 
   /// Recomputes if [period] has elapsed since the last one.
   ///
-  /// On every read surface. See this library's doc for why this and not a
-  /// timer.
-  void _refreshIfDue() {
+  /// On every read surface, and on the heartbeat — `relay_session.dart`'s
+  /// `_ping` calls it, which is why this is public. See this library's doc for
+  /// why a deadline and not a timer, and for the four methods that would
+  /// otherwise never check one.
+  void refreshIfDue() {
     final last = _computedAtMs;
     if (last != null && _nowMs() - last < period.inMilliseconds) return;
     refresh();
   }
 
-  /// Reads the mounted leaf and works out the days.
+  /// The days left on the *earlier* of the leaf being served and the leaf on
+  /// disk.
+  ///
+  /// The file is still re-read on every recompute, because the missing and
+  /// unparseable answers depend on it and because a mount that went away is a
+  /// thing an operator needs told. What the file cannot do on its own is
+  /// answer the question this key asks — see [_servedNotAfter]. Taking the
+  /// earlier of the two is right in both directions: a rotation that has not
+  /// been restarted into keeps counting the certificate the panels are
+  /// validating, and a shorter leaf mounted for a restart that is coming is a
+  /// deadline reported the moment it exists rather than the moment it bites.
+  DynamicValue _measure() {
+    final onDisk = _notAfterOf(chainPath);
+    // Deliberately every failure, and deliberately not rethrown: a missing
+    // mount, a directory where a file should be, a PEM the parser rejects and
+    // a permission error are all the same statement to an operator — this
+    // gateway cannot tell you when its certificate runs out — and none of
+    // them is a reason to fail the request that happened to be first through
+    // the door after the deadline.
+    if (onDisk == null) return _unreadable;
+    final served = _servedNotAfter;
+    final soonest =
+        served == null || onDisk.isBefore(served) ? onDisk : served;
+    final now = DateTime.fromMillisecondsSinceEpoch(_nowMs());
+    return DynamicValue.of(soonest.difference(now).inDays);
+  }
+
+  /// The `notAfter` of the leaf in the PEM at [path], or null when there is no
+  /// answer to give.
   ///
   /// `validity` is non-nullable while `tbsCertificate` is nullable — the
   /// upstream field names in `X509CertificateData` are a known trap (trap 14,
@@ -220,21 +288,13 @@ final class CertHealthStateMan implements StateManApi {
   /// spelled out rather than `!`-ed so a chain the parser accepts but cannot
   /// describe reads as unknown instead of crashing whichever request happened
   /// to trigger the recompute.
-  DynamicValue _measure() {
+  static DateTime? _notAfterOf(String path) {
     try {
-      final pem = File(chainPath).readAsStringSync();
-      final tbs = X509Utils.x509CertificateFromPem(pem).tbsCertificate;
-      if (tbs == null) return _unreadable;
-      final now = DateTime.fromMillisecondsSinceEpoch(_nowMs());
-      return DynamicValue.of(tbs.validity.notAfter.difference(now).inDays);
+      final pem = File(path).readAsStringSync();
+      return X509Utils.x509CertificateFromPem(pem).tbsCertificate?.validity
+          .notAfter;
     } catch (_) {
-      // Deliberately every failure, and deliberately not rethrown: a missing
-      // mount, a directory where a file should be, a PEM the parser rejects
-      // and a permission error are all the same statement to an operator —
-      // this gateway cannot tell you when its certificate runs out — and none
-      // of them is a reason to fail the request that happened to be first
-      // through the door after the deadline.
-      return _unreadable;
+      return null;
     }
   }
 
@@ -250,18 +310,19 @@ final class CertHealthStateMan implements StateManApi {
   ///
   /// A union, not a replacement. This is also the broadest recompute trigger
   /// in the class: `value_handlers.dart` consults it on `read`, `readFresh`,
-  /// `readMany` and `write`, and `session_handlers.dart` on `subscribe`, so
-  /// every request on the gateway is a deadline check.
+  /// `readMany` and `write`, and `session_handlers.dart` on `subscribe`. The
+  /// heartbeat calls [refreshIfDue] itself; see this library's doc for the
+  /// three methods that check no deadline and why that is enough.
   @override
   List<String> get keys {
-    _refreshIfDue();
+    refreshIfDue();
     return <String>{...source.keys, certDaysToExpiryKey}.toList();
   }
 
   @override
   ValueListenable<DynamicValue> listen(String key) {
     if (key != certDaysToExpiryKey) return source.listen(key);
-    _refreshIfDue();
+    refreshIfDue();
     return _store.node(certDaysToExpiryKey);
   }
 
@@ -270,7 +331,7 @@ final class CertHealthStateMan implements StateManApi {
   @override
   Stream<DynamicValue> subscribe(String key) {
     if (key != certDaysToExpiryKey) return source.subscribe(key);
-    _refreshIfDue();
+    refreshIfDue();
     final node = _store.node(certDaysToExpiryKey);
     late final StreamController<DynamicValue> controller;
     void push() => controller.add(node.value);
@@ -296,7 +357,7 @@ final class CertHealthStateMan implements StateManApi {
   @override
   DynamicValue? read(String key) {
     if (key != certDaysToExpiryKey) return source.read(key);
-    _refreshIfDue();
+    refreshIfDue();
     return value;
   }
 
@@ -322,7 +383,7 @@ final class CertHealthStateMan implements StateManApi {
   @override
   Future<Map<String, DynamicValue>> readMany(List<String> keys) async {
     if (!keys.contains(certDaysToExpiryKey)) return source.readMany(keys);
-    _refreshIfDue();
+    refreshIfDue();
     final rest = [
       for (final key in keys)
         if (key != certDaysToExpiryKey) key,

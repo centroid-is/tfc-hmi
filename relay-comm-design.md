@@ -473,16 +473,34 @@ snapshot, and a change is pushed on the ordinary notification path.
 
 | Property | Value |
 |---|---|
-| Value | whole days from the **mounted leaf** to `notAfter` — the same file the handshake presents, read by path, never cached as bytes |
+| Value | whole days to `notAfter` on the **sooner of the leaf being served and the leaf on disk**, both read by path, neither cached as bytes |
 | Sign | negative is meaningful: an already-expired leaf reads `-3` |
 | Quality | `errorConfig` with a **null** value when the PEM is missing or unparseable — never `0`, which would read as "expires today" and fire the alarm for a typo in a path |
-| Cadence | recomputed when an hour has elapsed, checked on the read path rather than on a timer (the gateway holds exactly one repeating timer, §5's tick, and a second one would fight it); `readFresh` forces a recompute; a gateway with literally no traffic does not recompute, and there is nobody to push to |
+| Cadence | recomputed when an hour has elapsed, checked on the read path and on the heartbeat rather than on a timer (the gateway holds exactly one repeating timer, §5's tick, and a second one would fight it); `readFresh` forces a recompute; a gateway with no session does not recompute, and there is nobody to push to |
 | Absent | when the gateway is plaintext. A gateway with no certificate has nothing to say about one, and a key answering `0` there would be a lie |
 | Threshold | AlarmMan's, not the pipe's. The pipe ships the number |
 
 **The arithmetic truncates.** A 17-day leaf reads `16`, so an alarm configured
 at 30 days fires on the day the value first reads 29. Keep that sentence next
 to whatever configures the threshold.
+
+**A rotation needs a restart, and the number says so.** `SecurityContext
+.useCertificateChain` reads the PEM once, at bind, and the running server
+presents that leaf until the process is replaced — there is no certificate
+hot-reload here and none is planned. So the key reports the *sooner* of the
+served leaf and the mounted one. Mount the new leaf and defer the restart and
+the value keeps counting the old one down, which is the true statement: every
+panel is still validating it. The alarm clears when the gateway is restarted,
+not when the file changes. Mount a *shorter* leaf and the number drops at
+once, because that deadline is real the moment the restart happens. Without
+this the yearly re-issue would clear the alarm, close the ticket, and leave
+the plant to stop on the original expiry date with no warning at all.
+
+**Which requests are deadline checks.** Not all of them. `hello`,
+`unsubscribe` and `writeStatus` read no key and check nothing; `ping` is a
+deadline check because it was made one deliberately — an established panel
+holding its subscriptions sends nothing else for a whole shift, and "a gateway
+with no traffic" was not the honest description of the residual.
 
 Until Phase 8 owns the real `PIPE.*` producer the key comes from a small
 server-wide overlay chained under the per-session policy decorator of §7.5 —
@@ -769,7 +787,9 @@ codes left.
 
 `PIPE.cert.days_to_expiry`, specified in §4.7. Integer days, recomputed
 hourly, `errorConfig` when the file cannot be read, absent when the gateway is
-plaintext, and truncating — so an alarm at 30 fires at 29.
+plaintext, and truncating — so an alarm at 30 fires at 29. It measures the
+sooner of the served leaf and the mounted one, so rotating the file without
+restarting the gateway does not clear the alarm.
 
 ### 7.7 Two operational notes
 
