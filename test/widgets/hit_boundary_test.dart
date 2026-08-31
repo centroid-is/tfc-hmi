@@ -185,42 +185,38 @@ void main() {
         painter.shouldRepaint(
             HitBoundaryPainter(contours: contours, phase: 0.25)),
         isTrue,
-        reason: 'the crawl is nothing but a changing phase',
+        reason: 'the animation is nothing but a changing phase',
       );
       expect(
         painter.shouldRepaint(HitBoundaryPainter(
-            contours: contours, style: HitBoundaryStyle.brisk)),
+            contours: contours,
+            style: const HitBoundaryStyle(
+                period: Duration(milliseconds: 600)))),
         isTrue,
       );
       expect(
-        painter.shouldRepaint(HitBoundaryPainter(
-            contours: contours, style: HitBoundaryStyle.pulsing)),
+        painter.shouldRepaint(
+            HitBoundaryPainter(contours: contours, style: const HitBoundaryStyle())),
         isTrue,
-        reason: 'a ring that breathes instead of crawling is a different ring',
+        reason: 'a ring that crawls instead of breathing is a different ring',
       );
     });
 
-    test('the blue option is the fading one, recoloured and nothing else', () {
-      // It is billed as "E in blue", and the two are separate consts, so this
-      // is what stops them drifting into two different animations.
-      const blue = HitBoundaryStyle.blueFade;
-      const fade = HitBoundaryStyle.pulsing;
-      expect(blue.inkRole, HmiColorRole.blue);
-      expect(fade.inkRole, isNull);
-      expect(blue.copyWith(), isNot(fade));
-      expect(
-        HitBoundaryStyle(
-          dash: blue.dash,
-          gap: blue.gap,
-          strokeWidth: blue.strokeWidth,
-          period: blue.period,
-          pulse: blue.pulse,
-          crawl: blue.crawl,
-          twoTone: blue.twoTone,
-        ),
-        fade,
-        reason: 'same geometry, same breath — only the ink differs',
-      );
+    test('a colour is a role, and changes nothing else about the ring', () {
+      // The ink can be swapped for a scheme colour — the mark resolves the
+      // role, because a painter has no context. Everything about the shape
+      // and the motion is meant to be untouched by that, so a recoloured
+      // style must differ from its plain twin in exactly one field.
+      const plain = HitBoundaryStyle.pulsing;
+      final coloured = plain.copyWith(inkRole: HmiColorRole.blue);
+      expect(plain.inkRole, isNull);
+      expect(coloured.inkRole, HmiColorRole.blue);
+      expect(coloured.copyWith().dash, plain.dash);
+      expect(coloured.period, plain.period);
+      expect(coloured.pulse, plain.pulse);
+      expect(coloured.crawl, plain.crawl);
+      expect(coloured.standoff, plain.standoff);
+      expect(coloured, isNot(plain), reason: 'and the painter must notice');
     });
 
     test('a ring that only breathes keeps its dashes where they are', () {
@@ -306,15 +302,12 @@ void main() {
       }
     });
 
-    test('every preset that breathes stays legible throughout', () {
-      for (final style in [
-        HitBoundaryStyle.breathing,
-        HitBoundaryStyle.pulsing,
-        HitBoundaryStyle.marchAndFade,
-        HitBoundaryStyle.blueFade,
-      ]) {
-        expect(1 - style.pulse, greaterThanOrEqualTo(0.5),
-            reason: 'a mark that dims past half is one an operator can miss');
+    test('the mark in use stays legible throughout its cycle', () {
+      const style = HitBoundaryStyle.selection;
+      expect(1 - style.pulse, greaterThanOrEqualTo(0.5),
+          reason: 'a mark that dims past half is one an operator can miss');
+      for (var i = 0; i <= 100; i++) {
+        expect(breathAt(i / 100, style.pulse), greaterThanOrEqualTo(0.5));
       }
     });
   });

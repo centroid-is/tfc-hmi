@@ -311,23 +311,8 @@ class HitBoundaryStyle {
     this.inkRole,
   });
 
-  /// Dashes crawling at a walk. Calm enough to sit on a mimic all shift.
-  static const march = HitBoundaryStyle();
-
-  /// The same ring at twice the pace.
-  static const brisk =
-      HitBoundaryStyle(period: Duration(milliseconds: 600));
-
-  /// Crawling, and breathing while it crawls.
-  static const breathing = HitBoundaryStyle(pulse: 0.35);
-
-  /// Crawling, with the gaps carrying the light tone — the arrangement image
-  /// editors use, and the one that keeps the ring readable over a dark belt.
-  static const twoToneMarch = HitBoundaryStyle(twoTone: true);
-
   /// Still dashes, breathing. The ring is where it was; what moves is how
-  /// present it is. Slower than the crawling styles — a breath at walking
-  /// pace reads as panting.
+  /// present it is.
   ///
   /// It dips to half and no further. The ring is legible at every point of
   /// the cycle, which is the whole difference between a mark that breathes
@@ -335,54 +320,11 @@ class HitBoundaryStyle {
   static const pulsing = HitBoundaryStyle(
     pulse: 0.5,
     crawl: false,
-    period: Duration(milliseconds: 1800),
-  );
-
-  /// Both at once. The fade is shallower than [pulsing]'s because the crawl
-  /// is already carrying half the work.
-  static const marchAndFade = HitBoundaryStyle(
-    pulse: 0.45,
-    period: Duration(milliseconds: 1800),
-  );
-
-  /// [pulsing] in the scheme's blue — the colour selection wears nearly
-  /// everywhere else. Same geometry and same breath; only the ink differs.
-  /// See [inkRole] for what that costs on a plant page.
-  static const blueFade = HitBoundaryStyle(
-    pulse: 0.5,
-    crawl: false,
-    period: Duration(milliseconds: 1800),
-    inkRole: HmiColorRole.blue,
-  );
-
-  /// [pulsing] with more of everything that makes a ring visible: a heavier
-  /// stroke, longer dashes, and more air between it and the machine. For
-  /// deciding how much presence the mark should have, not a different idea
-  /// about what it does.
-  static const pulsingBold = HitBoundaryStyle(
-    dash: 11,
-    gap: 7,
-    strokeWidth: 3.4,
-    standoff: 9,
-    pulse: 0.5,
-    crawl: false,
-    period: Duration(milliseconds: 1800),
-  );
-
-  /// [blueFade] at [pulsingBold]'s weight.
-  static const blueFadeBold = HitBoundaryStyle(
-    dash: 11,
-    gap: 7,
-    strokeWidth: 3.4,
-    standoff: 9,
-    pulse: 0.5,
-    crawl: false,
-    period: Duration(milliseconds: 1800),
-    inkRole: HmiColorRole.blue,
+    period: Duration(milliseconds: 1200),
   );
 
   /// The style the plant view actually marks with.
-  static const selection = march;
+  static const selection = pulsing;
 
   HitBoundaryStyle copyWith({
     double? dash,

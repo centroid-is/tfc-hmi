@@ -35,6 +35,7 @@ import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/pages/page_view.dart';
+import 'package:tfc/widgets/hit_boundary.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/theme.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
@@ -156,6 +157,25 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+
+    /// Carries the mark round to the top of its breath.
+    ///
+    /// The ring dims and brightens for as long as the pane is open, so where
+    /// these pumps happen to land decides how dark the dashes come out. That
+    /// makes the image an accident of the pump schedule — a golden nobody can
+    /// read a change out of, because a fainter ring next time says nothing
+    /// about whether anything moved. Wound forward to phase 0 instead, which
+    /// is full presence and the one pose worth comparing against.
+    Future<void> markAtFullBreath(WidgetTester tester) async {
+      final paint =
+          tester.widget<CustomPaint>(find.byKey(openPaneMarkKey));
+      final phase = (paint.painter as HitBoundaryPainter).phase;
+      final period = HitBoundaryStyle.selection.period.inMicroseconds;
+      // Phase wraps, so the way to zero is always forwards.
+      final remaining = ((1 - phase) % 1) * period;
+      await tester.pump(Duration(microseconds: remaining.round()));
+    }
+
     /// Taps the asset where it actually answers, and settles.
     ///
     /// The centre of a turned belt's box is not on the belt — that is the
@@ -183,7 +203,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
       await tester.pump(const Duration(milliseconds: 16));
       await tester.pump(const Duration(milliseconds: 400));
+      await markAtFullBreath(tester);
     }
+
 
     /// The canvas alone. The pane lives in the app's overlay, outside the
     /// stack, so this frames the mark rather than the sheet beside it.
