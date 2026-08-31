@@ -36,3 +36,9 @@ tags:
   ws:
     # Integration against a real gateway on an ephemeral port. Wall-clock by
     # design, and the only lane that needs a listening socket.
+  gate:
+    # The F1-F21 + G1-G6 resilience catalogue, driven through the real fault
+    # proxy against a real gateway. One case per catalogue row, audited in both
+    # directions by test/gate/gate_manifest_test.dart against the row registry
+    # beside it. Slower than every other lane by design — a flap window is a
+    # flap window — which is why it has its own GATE_LANE_BUDGET arm.
