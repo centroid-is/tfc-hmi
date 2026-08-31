@@ -11,13 +11,14 @@ import '../../helpers/golden_tolerance.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/widgets/panes/pane_chrome.dart'
-    show PaneStatus, PaneSection, PaneDetailRow;
+    show PaneStatus, PaneSection, PaneGraphTile;
 import 'package:tfc/widgets/panes/side_pane.dart' show SidePane, closeSidePane;
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/number.dart';
 import 'package:tfc/page_creator/assets/ratio_number.dart';
 import 'package:tfc/providers/database.dart';
-import 'package:tfc_dart/core/database.dart' show Database;
+import 'package:tfc_dart/core/database.dart' show Database, TimeseriesData;
+import 'package:tfc_dart/core/collector.dart' show Collector;
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
 import 'package:tfc/theme.dart' show HmiColorRole;
@@ -94,6 +95,13 @@ Future<void> loadRealFont() async {
       .asByteData();
   final loader = FontLoader('Roboto')..addFont(Future.value(data));
   await loader.load();
+
+  // The SAME bytes under the family the chart theme names. `lightChartTheme`
+  // and `darkChartTheme` set `fontFamily: 'roboto-mono'` on their axis styles,
+  // and an unregistered family falls back to Ahem in a test — every tick label
+  // on the trend golden rendered as a solid black box.
+  final chartLoader = FontLoader('roboto-mono')..addFont(Future.value(data));
+  await chartLoader.load();
 
   final flutterRoot = Platform.environment['FLUTTER_ROOT'];
   final iconFont = File(
@@ -687,6 +695,98 @@ void main() {
       );
     });
 
+    // The Trend section, which no golden covered before -- the box erector's
+    // throughput is the one thing on this pane that is not a lamp, and it was
+    // going out the door unseen.
+    //
+    // Composed exactly as `_trendSection` composes it: a [PaneGraphTile] at the
+    // same 84 px, the compact preview over a 15-minute span, tapping through to
+    // the full chart. What it pins is the change this branch made -- the trace
+    // is read from a PLAIN NUMERIC KEY (`BER01.CartonsPerMinute`), where it
+    // used to be a `sample_members` pick three levels into an FB_BPM instance.
+    //
+    // Timestamps are fixed relative to a fixed `now`, not `DateTime.now()`:
+    // the chart frames its x axis on the newest sample, so real clock values
+    // would move the trace every run and the golden would churn forever.
+    testWidgets('boxErector — throughput trend', (tester) async {
+      await loadRealFont();
+      tester.view.physicalSize = const Size(900, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // A believable quarter hour: running near 12/min, a dip to 4 while the
+      // bottom chute ran dry, then recovery. A flat line would pin the axis
+      // and the colour but say nothing about whether the trace is drawn.
+      const rates = <double>[
+        11.4, 12.1, 11.8, 12.4, 12.0, 11.2, 9.6, 6.4, 4.1, 4.0,
+        4.3, 7.8, 10.6, 11.9, 12.2, 12.0,
+      ];
+      final now = DateTime.utc(2026, 1, 1, 12);
+      // The window the preview is framed in: the same quarter hour the samples
+      // span, so the trace fills the plot rather than hugging one edge.
+      final window = DateTimeRange(
+        start: now.subtract(const Duration(minutes: 15)),
+        end: now,
+      );
+      final samples = <TimeseriesData<dynamic>>[
+        for (var i = 0; i < rates.length; i++)
+          TimeseriesData<dynamic>(
+            rates[i],
+            now.subtract(Duration(minutes: (rates.length - 1 - i))),
+          ),
+      ];
+
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: Center(
+              child: RepaintBoundary(
+                key: _key,
+                child: SizedBox(
+                  width: 420,
+                  height: 260,
+                  child: Material(
+                    child: SidePane(
+                      title: 'BER-01',
+                      subtitle: 'Box erector',
+                      icon: Icons.precision_manufacturing,
+                      status: const PaneStatus.running(),
+                      child: PaneSection(
+                        title: 'Trend',
+                        child: PaneGraphTile(
+                          height: 84,
+                          preview: BoxErectorBpmGraph(
+                            collector: _FakeCollector(samples),
+                            keyName: 'BER01.CartonsPerMinute',
+                            showButtons: false,
+                            compact: true,
+                            xRange: window,
+                          ),
+                          expandedTitle: 'Cartons per minute',
+                          expandedBuilder: (context) => BoxErectorBpmGraph(
+                            collector: _FakeCollector(samples),
+                            keyName: 'BER01.CartonsPerMinute',
+                            xRange: window,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byKey(_key),
+        matchesGoldenFile('goldens/third_party_boxErector_trend.png'),
+      );
+    });
+
     // The pane with the Modbus link down, driven through the REAL widget so
     // the gate, the banner and the header badge are all the ones an operator
     // gets -- not three pieces reassembled by the test.
@@ -983,4 +1083,21 @@ void main() {
       );
     });
   });
+}
+
+/// Hands [BoxErectorBpmGraph] a canned history without a database.
+///
+/// `Collector` is concrete and reaches for a `StateMan` to resolve the key and
+/// a `Database` to read rows, neither of which a golden should need: the chart
+/// takes its collector as a constructor argument, so faking the ONE method it
+/// calls is enough.
+class _FakeCollector extends Fake implements Collector {
+  _FakeCollector(this.samples);
+
+  final List<TimeseriesData<dynamic>> samples;
+
+  @override
+  Stream<List<TimeseriesData<dynamic>>> collectStream(String key,
+          {Duration since = const Duration(days: 1)}) =>
+      Stream.value(samples);
 }

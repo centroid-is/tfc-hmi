@@ -895,12 +895,28 @@ class BoxErectorBpmGraph extends ConsumerWidget {
   /// tile caption names the chart instead.
   final bool compact;
 
+  /// A FIXED x window, replacing the rolling one [xSpan] describes.
+  ///
+  /// Null in production, and meant to stay that way: a live trend belongs on a
+  /// window that ends now, and [Graph] builds that from `DateTime.now()` on
+  /// every rebuild.
+  ///
+  /// That wall clock is exactly what a golden cannot have. The chart prints
+  /// absolute times along the bottom, so two runs a second apart produce
+  /// different pixels and the image churns forever — the failure mode this repo
+  /// has already been bitten by. Handing in a fixed range is the smallest seam
+  /// that makes the trace goldenable; [Graph] already prefers `xRange` over
+  /// `xSpan`, so nothing new had to be taught to read it.
+  @visibleForTesting
+  final DateTimeRange? xRange;
+
   const BoxErectorBpmGraph({
     required this.collector,
     required this.keyName,
     this.showButtons = true,
     this.xSpan = const Duration(minutes: 15),
     this.compact = false,
+    this.xRange,
     super.key,
   });
 
@@ -949,7 +965,9 @@ class BoxErectorBpmGraph extends ConsumerWidget {
           // Floor pinned at zero: this is a rate, and a chart that rescales its
           // baseline turns a small dip into an apparent stoppage.
           yAxis: GraphAxisConfig(unit: compact ? '' : 'Cartons/min', min: 0),
-          xSpan: xSpan,
+          // A fixed [xRange] wins over the rolling span — see the field.
+          xSpan: xRange == null ? xSpan : null,
+          xRange: xRange,
           legend: false,
         );
 
