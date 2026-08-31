@@ -764,10 +764,28 @@ final x = 1;
       lane.stop();
 
       print('the gate lane ran in ${lane.elapsed.inSeconds} s '
-          '(budget ${_laneBudget.inSeconds} s)');
-      expect(run.exitCode, 0,
-          reason: 'the gate lane is not green, so the time below is the cost '
-              'of a failing suite:\n${run.stdout}\n${run.stderr}');
+          '(budget ${_laneBudget.inSeconds} s, ${byRow.length} rows with a '
+          'case)');
+      if (byRow.isEmpty) {
+        // 07-01 lands this arm before a single row does, and `dart test
+        // test/gate --exclude-tags meta` against a directory holding only this
+        // file selects nothing — package:test exits 79 for "no tests ran",
+        // never 0. Asserting 0 here would make the arm red for the whole of
+        // wave 1 and the first thing the next executor did would be to loosen
+        // it. So the empty lane is a named state with its own exit code, and
+        // the branch closes itself: 07-02 lands six rows and the strict arm
+        // below takes over for good.
+        expect(run.exitCode, 79,
+            reason: 'no row in $_gateDir has a case yet, so the lane selects '
+                'nothing and package:test should report exit 79 ("no tests '
+                'ran"). It reported ${run.exitCode} instead, which means the '
+                'lane is not empty after all and this branch is excusing a '
+                'real failure:\n${run.stdout}\n${run.stderr}');
+      } else {
+        expect(run.exitCode, 0,
+            reason: 'the gate lane is not green, so the time below is the cost '
+                'of a failing suite:\n${run.stdout}\n${run.stderr}');
+      }
       expect(lane.elapsed, lessThan(_laneBudget),
           reason: 'the gate lane took ${lane.elapsed.inSeconds} s against a '
               '${_laneBudget.inSeconds} s budget. The lane is slower than '
