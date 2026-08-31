@@ -65,6 +65,10 @@ library;
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/src/client_config.dart';
 import 'package:tfc_relay_client/src/remote_state_man.dart';
+// `RelayErrorHandler` is not on the server package's public surface — the
+// barrel exports the configuration types and not the reporter — so it is
+// reached through `src/`, the way `error_reporter_test.dart:21` reaches it.
+import 'package:tfc_relay_server/src/error_reporter.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart';
 import 'package:tfc_stateman_contract/channel_harness.dart';
 import 'package:tfc_stateman_contract/faults.dart';
@@ -186,6 +190,19 @@ final class FaultFixture {
 /// `faultFixture` returns is racing the first attempt. Two faults need to be in
 /// place before anybody dials rather than after — a blackholed handshake and a
 /// cut that lands inside one — and for those the race is the whole measurement.
+///
+/// [onError] replaces the gateway's discarding error handler, and exists for
+/// exactly one clause of one row. F2 asserts that a storm is not *also* a log
+/// flood — "no unbounded memory/log growth" — and the only way to count what
+/// the gateway complained about over twenty flap cycles is to be handed the
+/// complaints instead of dropping them. A case that passes this counts; every
+/// case that does not is byte-identical to what it was.
+///
+/// The default stays discarding, with its reason intact: every case in this
+/// directory provokes an error on purpose, and a suite that printed a stack per
+/// provoked error would train everyone to scroll past them. Passing
+/// `reportToStderr` here is therefore a deliberate act with a visible cost, not
+/// a default anybody inherits.
 Future<FaultFixture> faultFixture({
   Set<String> keys = const <String>{},
   ClientConfig? config,
@@ -195,6 +212,7 @@ Future<FaultFixture> faultFixture({
   FaultTls? tls,
   void Function(FaultProxy proxy)? armBeforeDial,
   Duration? connectTimeout,
+  RelayErrorHandler? onError,
 }) async {
   if (tls != null && corrupt != null) {
     throw ArgumentError('a TLS leg has no frame seam, so `corrupt:` would be '
@@ -240,8 +258,9 @@ Future<FaultFixture> faultFixture({
     ),
     // Discards rather than `reportToStderr`: every case here provokes an error
     // on purpose, and a suite that printed a stack per provoked error would
-    // train everyone to scroll past them (`ws_harness.dart:231-235`).
-    onError: (_, __, ___) {},
+    // train everyone to scroll past them (`ws_harness.dart:231-235`). A case
+    // that wants to *count* them passes its own handler; nothing else changes.
+    onError: onError ?? (_, __, ___) {},
   );
   await server.start();
   addTearDown(server.close);
