@@ -46,6 +46,7 @@ import 'package:tfc/providers/access_admin.dart';
 import 'package:tfc/providers/access_policy.dart';
 import 'package:tfc/widgets/access_admin_notice.dart';
 import 'package:tfc/widgets/access_denied_prompt.dart';
+import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 import 'package:tfc_dart/core/database.dart';
@@ -137,6 +138,28 @@ class _RecordingStore extends AccessAdminStore {
   }
 }
 
+/// The `users` gate the composed page puts over this section, in miniature.
+///
+/// Only the part that matters to one claim here: when the session in force
+/// loses `users`, the subtree is swapped out and the section is disposed.
+/// `AccessGate` itself brings a locked page, its own scaffold and a sign-in
+/// opener, none of which this claim needs — and standing all of that up would
+/// make the test about the gate rather than about what runs after the await.
+class _UsersGate extends ConsumerWidget {
+  const _UsersGate({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(accessSessionProvider).valueOrNull;
+    if (session == null || !session.can(AccessGroup.users)) {
+      return const Text('locked');
+    }
+    return child;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
@@ -171,6 +194,7 @@ void main() {
   late AccessSession session;
   late _FakeAuthProvider auth;
   _RecordingStore? store;
+  ProviderContainer? container;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -190,8 +214,10 @@ void main() {
     session = _withUsers();
     auth = _FakeAuthProvider({
       'admin': (password: 'correct horse', roleName: 'Engineering'),
+      'keeper': (password: 'correct horse', roleName: 'Access Admin'),
     });
     store = null;
+    container = null;
   });
 
   tearDown(() async {
@@ -238,16 +264,52 @@ void main() {
 
   /// The section on its own, under a real [AccessDeniedPrompt] — the prompt a
   /// refusal has to reach, rather than a listener of the test's own.
-  Widget host(List<Override> o) => ProviderScope(
-        overrides: o,
-        child: const MaterialApp(
-          home: Scaffold(
-            body: AccessDeniedPrompt(
-              child: SingleChildScrollView(child: AccessRolesSection()),
+  ///
+  /// An explicit container rather than a plain `ProviderScope`, so a test can
+  /// read the real `accessSessionProvider` and assert what a logged-out panel
+  /// may do after a save. [gated] additionally puts the section behind the
+  /// `users` gate the composed page puts it behind, which is what makes a save
+  /// that narrows the caller's own role unmount the widget mid-await.
+  Widget host(List<Override> o, {bool gated = false}) {
+    final c = ProviderContainer(overrides: o);
+    container = c;
+    addTearDown(c.dispose);
+    return UncontrolledProviderScope(
+      container: c,
+      child: MaterialApp(
+        home: Scaffold(
+          body: AccessDeniedPrompt(
+            child: SingleChildScrollView(
+              child: gated
+                  ? const _UsersGate(child: AccessRolesSection())
+                  : const AccessRolesSection(),
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
+
+  AccessSession? sessionInForce() =>
+      container!.read(accessSessionProvider).valueOrNull;
+
+  /// Signs [username] in on the **real** controller, so the session in force is
+  /// elevated and the `users` gate above the section is open.
+  Future<void> signIn(WidgetTester tester, String username) async {
+    final result = await container!
+        .read(accessSessionProvider.notifier)
+        .signIn(username, 'correct horse');
+    expect(result, AccessSignInResult.ok);
+    await tester.pumpAndSettle();
+  }
+
+  /// Cleanup, not part of any claim: an elevated session arms the inactivity
+  /// monitor, and a timer still pending when the test body ends fails the test
+  /// on its way out.
+  Future<void> signOut(WidgetTester tester) async {
+    await container!.read(accessSessionProvider.notifier).signOut();
+    await tester.pumpAndSettle();
+  }
 
   Future<AccessRole?> roleNamed(String name) => repository.role(name);
 
@@ -561,6 +623,418 @@ void main() {
 
       expect(find.text(kAccessRoleDuplicateNameNote), findsOneWidget);
       expect(store!.calls.where((c) => c.startsWith('renameRole')), isEmpty);
+    });
+  });
+
+
+  // -------------------------------------------------------------------------
+  // The seven checkboxes
+  // -------------------------------------------------------------------------
+
+  group('the seven checkboxes', () {
+    testWidgets('are generated from AccessGroup.values, in that order, with '
+        'the label as title and the description as subtitle', (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, 'Maintenance');
+
+      final tiles = tester
+          .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+          .toList();
+
+      expect(tiles.length, AccessGroup.values.length,
+          reason: 'seven, and generated — a hand-written list of seven is how '
+              'an eighth group silently fails to appear');
+      expect(
+        [for (final tile in tiles) (tile.title! as Text).data],
+        [for (final group in AccessGroup.values) group.label],
+        reason: 'the enum is declared in increasing privilege and '
+            'tfc_access/test/access_group_test.dart pins that order precisely '
+            'so consumers can rely on it',
+      );
+      expect(
+        [for (final tile in tiles) (tile.subtitle! as Text).data],
+        [for (final group in AccessGroup.values) group.description],
+        reason: 'AccessGroupInfo.description, verbatim — one wording shared '
+            'with the MCP tools, sourced from the enum\'s own doc comments',
+      );
+    });
+
+    testWidgets('start ticked exactly where the role grants, and Cancel '
+        'discards without writing', (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, 'Shift Leader');
+      store!.calls.clear();
+
+      CheckboxListTile boxFor(AccessGroup group) => tester
+          .widget<CheckboxListTile>(
+              find.byKey(kAccessRoleGroupKey('Shift Leader', group)));
+
+      expect(boxFor(AccessGroup.operate).value, isTrue);
+      expect(boxFor(AccessGroup.setpoints).value, isTrue);
+      expect(boxFor(AccessGroup.force).value, isFalse);
+
+      await tester.tap(
+          find.byKey(kAccessRoleGroupKey('Shift Leader', AccessGroup.force)));
+      await tester.pumpAndSettle();
+      expect(boxFor(AccessGroup.force).value, isTrue,
+          reason: 'the tick is local — the editor holds a draft and does not '
+              'write on every box');
+      expect(store!.calls.where((c) => c.startsWith('updateRole')), isEmpty);
+
+      await tester.tap(find.byKey(kAccessRoleCancelKey('Shift Leader')));
+      await tester.pumpAndSettle();
+      expect((await roleNamed('Shift Leader'))!.groups,
+          {AccessGroup.operate, AccessGroup.setpoints});
+      expect(store!.calls.where((c) => c.startsWith('updateRole')), isEmpty);
+    });
+
+    testWidgets('one Save writes one role.update however many boxes moved',
+        (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, 'Shift Leader');
+      store!.calls.clear();
+
+      for (final group in [AccessGroup.device, AccessGroup.force]) {
+        await tester
+            .tap(find.byKey(kAccessRoleGroupKey('Shift Leader', group)));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(kAccessRoleSaveKey('Shift Leader')));
+      await tester.pumpAndSettle();
+
+      expect(store!.calls.where((c) => c.startsWith('updateRole')).length, 1,
+          reason: 'two boxes, one write, one audit row');
+      expect((await roleNamed('Shift Leader'))!.groups, {
+        AccessGroup.operate,
+        AccessGroup.setpoints,
+        AccessGroup.device,
+        AccessGroup.force,
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Warning one of two: the persistent inline banner
+  // -------------------------------------------------------------------------
+
+  group('the Operator banner', () {
+    testWidgets('is rendered the whole time the protected row is open',
+        (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessOperatorWarningKey), findsNothing,
+          reason: 'nothing is open yet');
+
+      await openEditor(tester, kOperatorRoleName);
+      expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget);
+      expect(find.text(kAccessOperatorBannerNote), findsOneWidget,
+          reason: 'access_repository.dart:90-96 asks for the warning "at the '
+              'point of edit, not in a help page"');
+
+      // Still up after a tick, and after another. A banner that vanished the
+      // moment the operator started editing would be a banner about nothing.
+      await tester.tap(find.byKey(
+          kAccessRoleGroupKey(kOperatorRoleName, AccessGroup.setpoints)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget);
+      await tester.tap(find.byKey(
+          kAccessRoleGroupKey(kOperatorRoleName, AccessGroup.device)));
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget);
+    });
+
+    testWidgets('is not rendered for any other role', (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+
+      for (final name in ['Shift Leader', 'Maintenance', 'Engineering']) {
+        await openEditor(tester, name);
+        expect(find.byKey(kAccessOperatorWarningKey), findsNothing,
+            reason: '$name is an ordinary role; a warning shown everywhere is '
+                'a warning nobody reads');
+        await openEditor(tester, name);
+      }
+    });
+
+    testWidgets('the Operator row is marked as the anonymous identity',
+        (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessRoleAnonymousTagKey), findsOneWidget);
+      expect(find.text(kAccessRoleAnonymousTag), findsOneWidget,
+          reason: 'the row is legible as the anonymous identity rather than '
+              'merely as the row with no controls');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Warning two of two: the confirmation on save
+  // -------------------------------------------------------------------------
+
+  group('the Operator save confirmation', () {
+    testWidgets('names the groups being added by label, and cancelling it '
+        'writes nothing', (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, kOperatorRoleName);
+      store!.calls.clear();
+
+      for (final group in [AccessGroup.setpoints, AccessGroup.force]) {
+        await tester
+            .tap(find.byKey(kAccessRoleGroupKey(kOperatorRoleName, group)));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(kAccessRoleSaveKey(kOperatorRoleName)));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessOperatorConfirmTitle), findsOneWidget);
+      expect(
+        find.text(kAccessOperatorConfirmMessage(
+            const [AccessGroup.setpoints, AccessGroup.force])),
+        findsOneWidget,
+      );
+      expect(find.textContaining(AccessGroup.force.label), findsOneWidget,
+          reason: 'by label. AccessGroup.force.name is "force", which is '
+              'exactly the word 06-01 exists to stop the screen using');
+      expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget,
+          reason: 'both halves at once — the banner does not go away because '
+              'the dialog arrived');
+
+      await tester.tap(find.descendant(
+          of: find.byType(StandardDialog), matching: find.text('Cancel')));
+      await tester.pumpAndSettle();
+
+      expect(store!.calls.where((c) => c.startsWith('updateRole')), isEmpty);
+      expect(
+          (await roleNamed(kOperatorRoleName))!.groups, {AccessGroup.operate});
+      expect(
+        tester
+            .widget<CheckboxListTile>(find.byKey(
+                kAccessRoleGroupKey(kOperatorRoleName, AccessGroup.force)))
+            .value,
+        isTrue,
+        reason: 'the draft is left as the operator left it, so a second Save '
+            'does not need the boxes ticked again',
+      );
+    });
+
+    testWidgets('a save that only removes groups shows the banner and no '
+        'confirmation', (tester) async {
+      await repository.upsertRole(const AccessRole(
+        name: kOperatorRoleName,
+        groups: {AccessGroup.operate, AccessGroup.setpoints},
+        seeded: true,
+      ));
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, kOperatorRoleName);
+
+      expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget);
+
+      await tester.tap(find.byKey(
+          kAccessRoleGroupKey(kOperatorRoleName, AccessGroup.setpoints)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessRoleSaveKey(kOperatorRoleName)));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kAccessOperatorConfirmTitle), findsNothing,
+          reason: 'narrowing is the safe direction, and a confirm on every '
+              'save is a confirm nobody reads');
+      expect(
+          (await roleNamed(kOperatorRoleName))!.groups, {AccessGroup.operate});
+    });
+
+    testWidgets('an ordinary role shows neither warning on save',
+        (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, 'Maintenance');
+
+      await tester.tap(find
+          .byKey(kAccessRoleGroupKey('Maintenance', AccessGroup.configure)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessRoleSaveKey('Maintenance')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessOperatorWarningKey), findsNothing);
+      expect(find.text(kAccessOperatorConfirmTitle), findsNothing);
+      expect((await roleNamed('Maintenance'))!.groups,
+          contains(AccessGroup.configure));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The change the banner warns about, actually taking effect
+  // -------------------------------------------------------------------------
+
+  group('the group change takes effect', () {
+    testWidgets('an anonymous session gains setpoints the moment Operator is '
+        'saved with it — no sign-in and no sign-out', (tester) async {
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+
+      expect(sessionInForce()!.isElevated, isFalse);
+      expect(sessionInForce()!.can(AccessGroup.setpoints), isFalse);
+
+      await openEditor(tester, kOperatorRoleName);
+      await tester.tap(find.byKey(
+          kAccessRoleGroupKey(kOperatorRoleName, AccessGroup.setpoints)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessRoleSaveKey(kOperatorRoleName)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kAccessOperatorConfirmLabel));
+      await tester.pumpAndSettle();
+
+      expect(
+        sessionInForce()!.can(AccessGroup.setpoints),
+        isTrue,
+        reason: 'T-06-65: the banner promises that ticking a group here '
+            'changes what a logged-out panel may do. Without '
+            'refreshGroupsFromRoles it is a promise the app does not keep '
+            'until something else happens to rebuild the session',
+      );
+      expect(sessionInForce()!.isElevated, isFalse,
+          reason: 'still logged out — that is the whole point');
+    });
+
+    testWidgets('a rename re-resolves the session in force too, so the write '
+        'path does not refresh only after an Operator edit', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await signIn(tester, 'admin');
+      expect(sessionInForce()!.user!.roleName, 'Engineering');
+
+      await tester.tap(find.byKey(kAccessRoleRenameKey('Engineering')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.byKey(kAccessRoleNameFieldKey), 'Controls Engineering');
+      await tester.tap(find.byKey(kAccessRoleNameConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        sessionInForce()!.user!.roleName,
+        'Controls Engineering',
+        reason: 'the refresh runs after all four role writes, not only after '
+            'an Operator update — the session was carrying a role name that '
+            'no longer exists',
+      );
+
+      await signOut(tester);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The lockout invariant, surfaced rather than re-implemented
+  // -------------------------------------------------------------------------
+
+  group('the lockout refusal', () {
+    testWidgets('unticking users from the only granting role is refused '
+        'inline, names the holders, and shows no snackbar', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, 'Engineering');
+
+      await tester.tap(
+          find.byKey(kAccessRoleGroupKey('Engineering', AccessGroup.users)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessRoleSaveKey('Engineering')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessAdminRefusalKey), findsOneWidget);
+      expect(find.byKey(kAccessAdminNoticeNameKey('admin')), findsOneWidget,
+          reason: 'naming the remaining holder is what makes the fix obvious');
+      expect(find.text(kAccessAdminBreakGlassNote), findsOneWidget,
+          reason: 'there is no override, and there is a documented way back');
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'a refusal naming accounts must not be in something that '
+              'disappears while it is being read');
+      expect(find.byKey(kAccessDeniedBodyKey), findsNothing,
+          reason: 'this is not an AccessDenied: the account that hits it '
+              'already holds users, so no sign-in resolves it');
+
+      expect((await roleNamed('Engineering'))!.groups,
+          contains(AccessGroup.users));
+      expect(
+        tester
+            .widget<CheckboxListTile>(find
+                .byKey(kAccessRoleGroupKey('Engineering', AccessGroup.users)))
+            .value,
+        isFalse,
+        reason: 'the boxes are left as the operator left them, so they can '
+            'see what they tried',
+      );
+    });
+
+    testWidgets('there is no override anywhere on the refused editor',
+        (tester) async {
+      await makeUser('admin', 'Engineering');
+      await tester.pumpWidget(host(overrides()));
+      await tester.pumpAndSettle();
+      await openEditor(tester, 'Engineering');
+      await tester.tap(
+          find.byKey(kAccessRoleGroupKey('Engineering', AccessGroup.users)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessRoleSaveKey('Engineering')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+            of: find.byKey(kAccessAdminRefusalKey),
+            matching: find.byType(TextField)),
+        findsNothing,
+        reason: '06-CONTEXT rejects a typed-confirmation lockout override by '
+            'name: "no destructive override is offered"',
+      );
+      expect(
+        find.descendant(
+            of: find.byKey(kAccessAdminRefusalKey),
+            matching: find.byType(ButtonStyleButton)),
+        findsNothing,
+      );
+    });
+
+    testWidgets(
+        'narrowing the caller\'s own role while a second granting role is '
+        'still held unmounts the section mid-save and throws nothing',
+        (tester) async {
+      // Route (c) is *permitted* here: a second role grants `users` and
+      // somebody holds it, so the repository does not refuse — the refresh
+      // simply drops the caller below the gate this section sits behind.
+      await repository.upsertRole(
+          const AccessRole(name: 'Access Admin', groups: {AccessGroup.users}));
+      await makeUser('admin', 'Engineering');
+      await makeUser('keeper', 'Access Admin');
+
+      await tester.pumpWidget(host(overrides(), gated: true));
+      await tester.pumpAndSettle();
+      await signIn(tester, 'admin');
+      expect(find.byKey(kAccessRolesSectionKey), findsOneWidget);
+
+      await openEditor(tester, 'Engineering');
+      await tester.tap(
+          find.byKey(kAccessRoleGroupKey('Engineering', AccessGroup.users)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(kAccessRoleSaveKey('Engineering')));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull,
+          reason: 'the refresh goes last and everything after the await is '
+              'guarded, so the unmount is a non-event — an invalidate or a '
+              'setState sequenced after it would run on a disposed element');
+      expect(find.text('locked'), findsOneWidget,
+          reason: 'the caller narrowed their own role and the gate closed, '
+              'which is exactly what the call is for');
+      expect((await roleNamed('Engineering'))!.groups,
+          isNot(contains(AccessGroup.users)));
+
+      await signOut(tester);
     });
   });
 
