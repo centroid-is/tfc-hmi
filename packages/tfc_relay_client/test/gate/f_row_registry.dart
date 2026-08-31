@@ -384,12 +384,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
         'same-socket re-establish — which is G4, owned by 07-06 — so that row '
         'is where this clause gets asserted over a real socket',
   ),
-  'F9': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-06',
-    clause: 'the multi-key page through the proxy, and the clause no test has '
-        'anywhere: no key left with the pre-first-drop value',
-  ),
   'F10': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-08',
