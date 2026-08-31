@@ -629,7 +629,7 @@ void main() {
       final row = (await repo.user('jon'))!;
       expect(row.passwordHash, isNot(contains('hunter2')));
       expect(row.salt, isNotEmpty);
-      expect(row.passwordHash, startsWith('pbkdf2-sha256\$'));
+      expect(row.passwordHash, startsWith('argon2id\$'));
       expect(row.createdAt, isNotNull);
     });
 
@@ -641,21 +641,11 @@ void main() {
       final decoded = decodeStoredHash(row.passwordHash, saltB64: row.salt)!;
 
       expect(
-        await PasswordHasher.verify(
-          password: 'hunter2',
-          hashB64: decoded.hashB64,
-          saltB64: decoded.saltB64,
-          iterations: decoded.iterations,
-        ),
+        await PasswordHasher.verify(password: 'hunter2', stored: decoded),
         isTrue,
       );
       expect(
-        await PasswordHasher.verify(
-          password: 'wrong',
-          hashB64: decoded.hashB64,
-          saltB64: decoded.saltB64,
-          iterations: decoded.iterations,
-        ),
+        await PasswordHasher.verify(password: 'wrong', stored: decoded),
         isFalse,
       );
     });
@@ -783,20 +773,29 @@ void main() {
           decodeStoredHash(encodeStoredHash(hash), saltB64: hash.saltB64);
 
       expect(decoded, hash);
-      expect(decoded!.iterations, 10, reason: 'the test hook value travels');
+      expect(decoded!.memoryKib, 10, reason: 'the test hook value travels');
     });
 
-    test('the encoded form carries the iteration count it was made with',
-        () async {
+    test('the encoded form carries the parameters it was made with', () async {
       final hash = await PasswordHasher.hash('hunter2');
       final stored = encodeStoredHash(hash);
+      final params = Argon2idKdf.params;
 
-      expect(stored, 'pbkdf2-sha256\$10\$${hash.hashB64}');
+      expect(
+        stored,
+        'argon2id\$v=19\$m=${params.memoryKib},t=${params.iterations},'
+        'p=${params.parallelism}\$${hash.hashB64}',
+        reason: 'composed from the constants rather than from literals, so the '
+            'assertion cannot drift away from them',
+      );
 
-      // Raising the ambient default must not change how an existing row reads.
-      // That is the whole reason the count is stored rather than assumed.
+      // Raising the ambient cost must not change how an existing row reads.
+      // That is the whole reason the parameters are stored rather than assumed.
       Pbkdf2Kdf.iterationsForTest = 99;
-      expect(decodeStoredHash(stored, saltB64: hash.saltB64)!.iterations, 10);
+      final reread = decodeStoredHash(stored, saltB64: hash.saltB64)!;
+      expect(reread.memoryKib, params.memoryKib);
+      expect(reread.iterations, params.iterations);
+      expect(reread.parallelism, params.parallelism);
       Pbkdf2Kdf.iterationsForTest = 10;
     });
 
@@ -855,15 +854,10 @@ void main() {
 
       final row = (await repo.user('ada'))!;
       expect(row.passwordHash, isNot(contains('hunter2')));
-      expect(row.passwordHash, startsWith('pbkdf2-sha256\$'));
+      expect(row.passwordHash, startsWith('argon2id\$'));
       final decoded = decodeStoredHash(row.passwordHash, saltB64: row.salt)!;
       expect(
-        await PasswordHasher.verify(
-          password: 'hunter2',
-          hashB64: decoded.hashB64,
-          saltB64: decoded.saltB64,
-          iterations: decoded.iterations,
-        ),
+        await PasswordHasher.verify(password: 'hunter2', stored: decoded),
         isTrue,
       );
     });
@@ -1092,21 +1086,11 @@ void main() {
 
       final decoded = decodeStoredHash(after.passwordHash, saltB64: after.salt)!;
       expect(
-        await PasswordHasher.verify(
-          password: 'letmein',
-          hashB64: decoded.hashB64,
-          saltB64: decoded.saltB64,
-          iterations: decoded.iterations,
-        ),
+        await PasswordHasher.verify(password: 'letmein', stored: decoded),
         isTrue,
       );
       expect(
-        await PasswordHasher.verify(
-          password: 'hunter2',
-          hashB64: decoded.hashB64,
-          saltB64: decoded.saltB64,
-          iterations: decoded.iterations,
-        ),
+        await PasswordHasher.verify(password: 'hunter2', stored: decoded),
         isFalse,
       );
     });

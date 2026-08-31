@@ -391,7 +391,7 @@ class AccessAdminStore {
   /// [kAccessAdminGroup].
   ///
   /// [password] is taken only to hand it straight to the repository, which
-  /// derives the PBKDF2 hash. It is never logged, never interpolated into a
+  /// derives the hash. It is never logged, never interpolated into a
   /// string and never reaches the row: [AuditRecord.userCreate] has no
   /// parameter that could carry it, which is the point of the constructor.
   ///

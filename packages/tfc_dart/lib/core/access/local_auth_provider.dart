@@ -4,7 +4,12 @@ import 'package:tfc_access/tfc_access.dart';
 
 import 'access_repository.dart';
 
-/// Authenticates against `app_user` with PBKDF2.
+/// Authenticates against `app_user` with whichever derivation the stored row
+/// names.
+///
+/// New rows are Argon2id. A `pbkdf2-sha256` row is verified forever, at the
+/// count recorded in the row: existing users must not be locked out by the
+/// change of algorithm.
 ///
 /// The only [AuthProvider] this milestone ships. A second implementation —
 /// OIDC, one day — goes behind the same interface without touching a caller,
@@ -72,12 +77,25 @@ class LocalAuthProvider implements AuthProvider {
       // attacker who can time an HMI login form can also run `psql`. It is
       // here because leaving it out would be a gratuitous difference, not
       // because it defends against a threat this deployment actually faces.
+      //
+      // Built at the *current* Argon2id parameters, because that is what a
+      // real row costs. The residual, stated rather than absorbed: a user who
+      // is still on a `pbkdf2-sha256` row costs a different amount than this
+      // dummy, so the timing distinguishes "not yet migrated" from "does not
+      // exist" until that row is rewritten on its owner's next login. It does
+      // not distinguish existence for anyone already migrated, and it
+      // self-heals as the rows turn over.
       dummyDerivations++;
+      final params = Argon2idKdf.params;
       await PasswordHasher.verify(
         password: password,
-        hashB64: _dummyHashB64,
-        saltB64: _dummySaltB64,
-        iterations: Pbkdf2Kdf.iterations,
+        stored: PasswordHash.argon2id(
+          hashB64: _dummyHashB64,
+          saltB64: _dummySaltB64,
+          memoryKib: params.memoryKib,
+          iterations: params.iterations,
+          parallelism: params.parallelism,
+        ),
       );
       return null;
     }
@@ -96,9 +114,7 @@ class LocalAuthProvider implements AuthProvider {
 
     final ok = await PasswordHasher.verify(
       password: password,
-      hashB64: stored.hashB64,
-      saltB64: stored.saltB64,
-      iterations: stored.iterations,
+      stored: stored,
     );
     if (!ok) return null;
 

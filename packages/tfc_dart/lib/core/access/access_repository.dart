@@ -166,13 +166,15 @@ class UserNotFoundException implements Exception {
 /// layer that reads and writes the column, and a caller should not have to know
 /// which package the encoding lives in.
 ///
-/// The format is `pbkdf2-sha256$<iterations>$<hash_b64>`, with the raw base64
-/// salt in the separate `salt` column. The iteration count travels *with* the
-/// hash because the `AppUser` table (spec §2, quoted as final) has no
-/// iterations column and is not getting one: a later change to
-/// [Pbkdf2Kdf.defaultIterations] would otherwise silently invalidate every
-/// password already stored, and the self-describing form leaves room for a
-/// second algorithm later without another migration.
+/// Two forms: `argon2id$v=19$m=<KiB>,t=<iters>,p=<lanes>$<hash_b64>` for
+/// anything written since Argon2id landed, `pbkdf2-sha256$<iterations>$<hash>`
+/// for everything before it, with the raw base64 salt in the separate `salt`
+/// column either way. The cost parameters travel *with* the hash because the
+/// `AppUser` table (spec §2, quoted as final) has no column for them and is not
+/// getting one: a later change to [Pbkdf2Kdf.defaultIterations] or to
+/// [Argon2idKdf]'s constants would otherwise silently invalidate every password
+/// already stored. The form was written to leave room for a second algorithm
+/// without another migration, and `argon2id` is that second algorithm.
 String encodeStoredHash(PasswordHash hash) => hash.encode();
 
 /// Parse an `AppUser.passwordHash` value, or null if it is unreadable.
@@ -611,8 +613,9 @@ class AccessRepository {
   /// "the door closes behind them" is the whole rule, and a rule with a race in
   /// it is a rule that occasionally does not apply.
   ///
-  /// The hash is derived before the transaction opens. PBKDF2 at production
-  /// iteration counts takes the better part of a second, and holding a write
+  /// The hash is derived before the transaction opens. A key derivation at
+  /// production parameters is a substantial fraction of a second, and holding a
+  /// write
   /// transaction open across it would block every other writer on the shared
   /// Postgres server for that whole time. Nothing is decided by the derivation,
   /// so nothing is lost by doing it early — the loser of a race simply throws
@@ -683,8 +686,9 @@ class AccessRepository {
   ///
   /// The hash is derived before the transaction opens and the checks run
   /// inside it — one decision, in two halves, for the reasons [createFirstUser]
-  /// sets out: PBKDF2 at production iteration counts takes the better part of a
-  /// second and holding a write transaction across it would block every other
+  /// sets out: a key derivation at production parameters is a substantial
+  /// fraction of a second and holding a write transaction across it would block
+  /// every other
   /// writer on the shared Postgres server, while checking beforehand would be a
   /// check-then-act race. The loser of a race throws a hash away, which costs
   /// nothing.

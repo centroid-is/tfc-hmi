@@ -134,7 +134,7 @@ class AppRole extends Table {
 class AppUser extends Table {
   TextColumn get username => text()();
   TextColumn get roleName => text().references(AppRole, #name)();
-  TextColumn get passwordHash => text()();            // PBKDF2, see §4
+  TextColumn get passwordHash => text()();            // self-describing, see §4
   TextColumn get salt => text()();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get lastLoginAt => dateTime().nullable()();
@@ -237,7 +237,17 @@ Do these three things now; do not build anything else for SSO.
 
 ## 4. Passwords
 
-PBKDF2 via `package:cryptography`, per-user random salt, stored base64.
+Argon2id via `package:cryptography`, per-user random salt, stored base64.
+
+The stored value is self-describing and carries its own cost parameters —
+`argon2id$v=19$m=<KiB>,t=<iters>,p=<lanes>$<hash_b64>` — so changing the
+parameters later cannot strand the rows written before the change. Verification
+uses the parameters recorded in the row, never the current constants.
+
+`pbkdf2-sha256$<iterations>$<hash_b64>` rows, and the bare-base64 values older
+than that encoding, are verified **forever**: existing users must not be locked
+out. They are rewritten as `argon2id` transparently, on their owner's next
+successful login, which is the one moment the password is in hand.
 
 The repo already has this pattern: `lib/pages/server_config.dart:50` has
 `kdfIterationsForTest` overriding `_kdfIterations`. **Reuse that hook** — tests

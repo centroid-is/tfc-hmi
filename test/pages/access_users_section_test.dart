@@ -269,9 +269,10 @@ void main() {
     SharedPreferencesAsyncPlatform.instance =
         InMemorySharedPreferencesAsync.empty();
     DatabaseConfig.clearPrefsCache();
-    // PBKDF2 at production iterations is the better part of a second per
-    // account, and nearly every test here creates real rows. The two tests
-    // that care about how long a hash takes clear this for themselves.
+    // A production-strength derivation is the better part of a second per
+    // account, and nearly every test here creates real rows. The one test that
+    // needs a derivation to actually take time raises this for itself rather
+    // than clearing it.
     Pbkdf2Kdf.iterationsForTest = 10;
 
     db = AppDatabase.inMemoryForTest();
@@ -1176,8 +1177,8 @@ void main() {
             .widget<FilledButton>(find.byKey(kAccessUserCreateConfirmKey))
             .onPressed,
         isNull,
-        reason: 'T-06-75: PBKDF2 at production iterations is most of a '
-            'second, and this is about a second tap racing the first — not '
+        reason: 'T-06-75: the write is a key derivation rather than a round '
+            'trip, and this is about a second tap racing the first — not '
             'about a permission, which is the rule that says never grey a '
             'control',
       );
@@ -1199,15 +1200,25 @@ void main() {
       );
     });
 
-    testWidgets('at production iterations a second tap cannot race the first',
-        (tester) async {
+    testWidgets(
+        'a second tap cannot race the first while a real derivation is in '
+        'flight', (tester) async {
       await makeUser('admin', 'Engineering');
       await pumpSection(tester, overrides());
       await openCreate(tester);
       await fillCreate(tester, username: 'newbie', password: 'correct horse');
-      // The busy state exercised against something that actually takes time:
-      // no iteration hook, so this is the real 200 000-round derivation.
-      Pbkdf2Kdf.iterationsForTest = null;
+      // The busy state exercised against something that actually takes time.
+      // 32768 KiB — 32 MiB of Argon2id memory at t=1, p=1 under the cost dial.
+      // Named through the store rather than the Pbkdf2Kdf forwarder, because
+      // this is the one site in the file dialling Argon2id cost up rather than
+      // clamping everything cheap.
+      //
+      // A literal chosen for this test, deliberately independent of the
+      // parameters measured for production: clearing the hook instead would
+      // put an unbounded, rig-measured cost inside a testWidgets timeout.
+      // Both bounds are self-enforcing — too cheap and the single-createUser
+      // assertion below fails, too expensive and this times out.
+      KdfTestCost.iterationsForTest = 32768;
 
       await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
       await tester.tap(find.byKey(kAccessUserCreateConfirmKey),

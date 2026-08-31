@@ -6916,7 +6916,8 @@ class AppUserData extends DataClass implements Insertable<AppUserData> {
   /// Matched to [AppRole.name] by name, never by id — see [AppRole].
   final String roleName;
 
-  /// PBKDF2 over the password with [salt], stored base64.
+  /// Argon2id over the password with [salt], stored self-describing: the value
+  /// carries its own algorithm tag and cost parameters.
   ///
   /// This column and [salt] are the **only** place a credential is stored.
   /// Never in `Preferences` or the `flutter_preferences` table: those are
