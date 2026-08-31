@@ -310,14 +310,17 @@ Future<void> _reissue(FaultFixture fixture, FaultTls good) async {
 
 /// Watches the panel's link so a case can say "it went down, and it came back".
 ///
-/// Attached in the same event-loop turn as the fixture, because a transition
-/// can happen in the turn a connect completes in.
+/// Every case that builds one attaches it while the panel is **already**
+/// `ready`, so a transition to anything else is a genuine drop and is counted
+/// as one. An earlier draft counted a drop only once it had seen a `ready` of
+/// its own, which made `downs` silently zero for exactly those cases — the
+/// vacuous reading a `downs, isZero` assertion cannot tell from the real one.
 final class _Link {
   _Link(RemoteStateMan panel) {
     final states = panel.linkStates.listen((state) {
       if (state == LinkState.ready) {
         readys++;
-      } else if (readys > 0) {
+      } else {
         downs++;
       }
     });
@@ -638,6 +641,81 @@ void main() {
               'backoff schedule like a plaintext one — the handshake is one '
               'more round trip inside the same attempt, not a different '
               'recovery path');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The one mode whose meaning TLS changes. Measured, not fixed.
+  // -------------------------------------------------------------------------
+
+  /// `cutMidFrame(n)` counts **wire** bytes (`delay_line.dart:297,476,554`),
+  /// and on a TLS leg those are ciphertext. So `n` does not select a prefix of
+  /// an application frame: it selects a prefix of a TLS *record*, and a record
+  /// that never completed is discarded whole — the WebSocket layer, and
+  /// therefore the JSON decoder, never sees any of it.
+  ///
+  /// That is TLS doing exactly its job. A record is authenticated as a unit;
+  /// handing up half of one would mean handing up unauthenticated bytes, which
+  /// is the property the whole phase is here to buy. The mode is not broken
+  /// under TLS, it is **measuring a different layer** — and the intent it was
+  /// written for (deliver half a JSON frame to the decoder, `plan 02-07`) is
+  /// unreachable through a TLS proxy at any `n`.
+  ///
+  /// The instrument that still reaches the decoder is `FrameSeam`, one layer
+  /// up, which is where `truncated_write_test.dart` and
+  /// `malformed_contract_test.dart` drive their truncations from and where they
+  /// must stay. Do not "fix" this by teaching the proxy to corrupt bytes:
+  /// `ws_fault_test.dart:32-34` says why, and this group is the measurement
+  /// that says the fix would be aimed at the wrong layer anyway.
+  group('a cut lands in a TLS record, not in an application frame', () {
+    test('a cut inside a TLS record delivers no application bytes at all',
+        () async {
+      final ca = _mintCa();
+      final mounted = _mount(chainPem: _mintLeaf(ca: ca), rootPem: ca.certPem);
+      final fixture = await faultFixture(
+        keys: const {_key},
+        withProxy: true,
+        tls: mounted,
+        seed: (plant) => plant.setValue(_key, _before),
+      );
+      await until('the pinned link', () => fixture.client.isReady);
+      expect(fixture.client.read(_key)?.value, _before,
+          reason: 'the page was not live before the cut, so nothing below is '
+              'about what the cut did');
+      final link = _Link(fixture.client);
+
+      // 64 bytes: comfortably inside the record the update below will travel
+      // in, and far more than a plaintext leg would need to put a recognisable
+      // fragment of `{"method":"u",...}` into the decoder.
+      fixture.proxy.cutMidFrame(64);
+      fixture.served.setValue(_key, _after);
+
+      await until('the cut to end the transport', () => link.downs >= 1);
+
+      expect(fixture.client.read(_key)?.value, _before,
+          reason: '64 bytes crossed the wire and ZERO reached the decoder. '
+              'That is the whole finding: under TLS the cut lands inside a '
+              'record, the record is discarded as a unit, and the panel is '
+              'left holding the last value it was told rather than a '
+              'half-parsed one. An operator seeing a stale number that is '
+              'marked stale is the outcome this project is built for; an '
+              'operator seeing half a number is the one it forbids');
+      expect(fixture.client.complaints, isEmpty,
+          reason: 'a truncated record must not surface as a page problem — '
+              'nothing is wrong with the key list, the link died');
+      expect(fixture.client.lastDownReason, isNot(contains('FormatException')),
+          reason: 'if a partial frame had reached the JSON decoder this is '
+              'where it would show, and it is the reading that would send '
+              'somebody hunting an encoding bug instead of a cut cable');
+
+      // Recovery, and the control that makes the assertion above mean
+      // something: with the cut lifted the very same update crosses the very
+      // same link and arrives whole. Whole record or nothing — never half.
+      fixture.proxy.cutMidFrame(null);
+      await until('the panel to resync once the link stopped being cut',
+          () => fixture.client.read(_key)?.value == _after,
+          budget: _recovery);
+      expect(fixture.client.isReady, isTrue);
     });
   });
 }

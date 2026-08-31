@@ -50,6 +50,23 @@
 /// **Every case that depends on prior state carries an anti-vacuity arm.** A
 /// fault case is the easiest kind of test to write vacuously: cut a link that
 /// was never carrying anything and assert that nothing was lost.
+///
+/// **Every leg here is plaintext, and that is a decision rather than an
+/// oversight.** `faultFixture` grew an opt-in TLS mode in 06-07 and nothing in
+/// this file uses it, for two reasons that both cost something if a future
+/// reader "upgrades" these legs to wss. First, a TLS fixture cannot install a
+/// [FrameSeam]: the seam arrives through `dial:`, and a fixture that passes
+/// `dial:` bypasses the panel's own pinned `HttpClient` — so `fixture.seam`
+/// throws on a TLS leg, and F18's `inject` and every `seam.dials` reading here
+/// would go with it. Second, and less visibly, byte-level truncation stops
+/// meaning what it means here: `cutMidFrame(n)` counts wire bytes, so under TLS
+/// the cut lands inside a TLS record, the record is discarded whole, and the
+/// decoder receives *nothing* rather than a fragment (measured in
+/// `tls_fault_test.dart`'s last group: 64 bytes across the wire, zero bytes to
+/// the decoder). The frame-level truncations these legs and
+/// `truncated_write_test.dart` depend on live one layer above the socket and
+/// must stay there. The TLS failure paths have their own file; this one keeps
+/// the decoder honest.
 @TestOn('vm')
 @Tags(['contract', 'faults'])
 library;
