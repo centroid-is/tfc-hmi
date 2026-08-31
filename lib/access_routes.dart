@@ -68,7 +68,7 @@
 ///
 /// **The `kKnowledgeEnabled` interaction.** `lib/core/feature_flags.dart:32`
 /// defaults the flag to true, so the test suite and every development build
-/// have this route. A `--dart-define=TFC_KNOWLEDGE=false` build has neither
+/// have this route. A `--dart-define=CENTROIDX_KNOWLEDGE=false` build has neither
 /// the route (`centroid-hmi/lib/main.dart`'s statement-level `if`) nor the
 /// menu entry (`centroid-hmi/lib/navigation.dart:68`), and
 /// [installRaisedRoutes] then declares a group nothing resolves — inert
