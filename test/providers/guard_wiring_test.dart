@@ -615,7 +615,10 @@ Set<String> _filesUsingTheSystemWritePath() {
   final found = <String>{};
   for (final entity in Directory('lib').listSync(recursive: true)) {
     if (entity is! File) continue;
-    final path = entity.path;
+    // Separators normalised: the constant this is compared against spells its
+    // paths with forward slashes, and listSync hands back backslashes on
+    // Windows.
+    final path = entity.path.replaceAll(r'\', '/');
     if (!path.endsWith('.dart') || path.endsWith('.g.dart')) continue;
     final code = entity
         .readAsLinesSync()

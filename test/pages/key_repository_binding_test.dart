@@ -783,7 +783,11 @@ void main() {
             .readAsLinesSync()
             .where((line) => !line.trimLeft().startsWith('//'))
             .join('\n');
-        if (code.contains('access_key_binding')) offenders.add(entity.path);
+        // Separators normalised — the expectation below spells its path with
+        // forward slashes, and listSync gives backslashes on Windows.
+        if (code.contains('access_key_binding')) {
+          offenders.add(entity.path.replaceAll(r'\', '/'));
+        }
       }
 
       expect(offenders, ['lib/core/access_template_store.dart'],

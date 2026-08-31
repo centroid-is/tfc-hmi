@@ -1044,10 +1044,16 @@ class _WriteSite {
   final String receiver;
 }
 
+/// Separators normalised to `/`. Every path this census compares against —
+/// `_kHandledWriteSites`, the reason strings, the doc comment beside the
+/// constant — is written with forward slashes, and `listSync` hands back
+/// backslashes on Windows. Without this the walk finds the files, matches
+/// none of them, and the count silently disagrees with the tree on one
+/// platform only.
 List<String> _libDartFiles() => Directory('lib')
     .listSync(recursive: true)
     .whereType<File>()
-    .map((f) => f.path)
+    .map((f) => f.path.replaceAll(r'\', '/'))
     .where((p) => p.endsWith('.dart'))
     .toList()
   ..sort();

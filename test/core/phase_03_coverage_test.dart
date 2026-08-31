@@ -1,6 +1,15 @@
 /// The phase gate: the write-path sweep as a property, and the operator's day
 /// still working.
 ///
+/// **POSIX only, deliberately.** This file shells out to `bash` to run
+/// `scripts/sweep-write-paths.sh`, and to `grep` for two of its structural
+/// checks. Neither exists on a stock Windows runner, so `setUpAll` dies before
+/// a single assertion is reached — a red job that says nothing about the code.
+/// The sweep's *conclusions* are platform-independent and are re-checked on
+/// macOS and ubuntu on every run, so skipping the third platform costs no
+/// coverage. Rewriting the sweep in Dart to gain a third identical answer is
+/// not worth the second implementation of it.
+///
 /// Two things live here, and they are the two halves of the phase's claim.
 ///
 /// **The sweep, re-run and reconciled.** `scripts/sweep-write-paths.sh` is run
@@ -34,6 +43,7 @@
 /// wrapped; this one proves an anonymous panel can still run the line through
 /// them, and that the unmapped-surface branch of `AccessPolicy` sits on the
 /// production write path rather than only in `access_policy_test.dart`.
+@TestOn('!windows')
 library;
 
 import 'dart:io';
