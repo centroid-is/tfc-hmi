@@ -40,6 +40,9 @@ import 'package:tfc/widgets/panes/side_pane.dart' show closeSidePane;
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/guarded_state_man.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
+import 'package:tfc_dart/core/secure_storage/secure_storage.dart';
+
+import '../helpers/test_helpers.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
 // ---------------------------------------------------------------------------
@@ -627,7 +630,15 @@ void main() {
   });
 
   group('end to end, through a real asset', () {
-    setUp(_registerAppMenu);
+    setUp(() {
+      _registerAppMenu();
+      // These cases build a real asset, so a provider reaches DatabaseConfig
+      // and asks for secure storage. `SecureStorage.getInstance` falls back to
+      // `AwsSecureStorage` on Linux and macOS but throws on Windows, so
+      // without this the group passed on two platforms and died on the third
+      // for a reason that had nothing to do with access control.
+      SecureStorage.setInstance(FakeSecureStorage());
+    });
     tearDown(() => RouteRegistry().menuItems.clear());
 
     testWidgets(
