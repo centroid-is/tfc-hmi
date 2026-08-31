@@ -37,7 +37,7 @@
 #   -h, --help           This text.
 #
 # Environment:
-#   TFC_ALLOW_FLUTTER_SKEW=1   Same effect as --warn-only. An escape hatch for
+#   CENTROIDX_ALLOW_FLUTTER_SKEW=1   Same effect as --warn-only. An escape hatch for
 #                              someone who knows they are on the wrong version
 #                              and is deliberately not shipping goldens.
 #
@@ -77,7 +77,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-[ "${TFC_ALLOW_FLUTTER_SKEW:-0}" = "1" ] && warn_only=1
+# Renamed, not exempted: the naming gate has no allowlist to park a key in.
+[ "${CENTROIDX_ALLOW_FLUTTER_SKEW:-0}" = "1" ] && warn_only=1
 
 # Locate `.flutter-version`. Prefer git so the script works from any
 # subdirectory; fall back to the script's own parent for a tarball checkout.
@@ -147,7 +148,7 @@ cat >&2 <<EOF
   with other projects, and moving it is your call. See the "Flutter version"
   section of README.md for the ways to get ${pinned} without disturbing it.
 
-  To proceed anyway (no goldens, no UI changes): set TFC_ALLOW_FLUTTER_SKEW=1
+  To proceed anyway (no goldens, no UI changes): set CENTROIDX_ALLOW_FLUTTER_SKEW=1
   or pass --warn-only.
 
 EOF
