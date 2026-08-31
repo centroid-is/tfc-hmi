@@ -712,8 +712,9 @@ class _AnalogBoxPaneLoaderState extends ConsumerState<_AnalogBoxPaneLoader> {
           // the header names the trace instead.
           label: series.label,
           // Tall enough for a line chart to be readable rather than
-          // decorative — same height as the conveyor's trend tile.
-          height: 100,
+          // decorative — the conveyor's trend height, taken off the shared
+          // constant rather than a literal that happens to match.
+          height: kPaneTrendTileHeight,
           preview: AnalogBoxTrendGraphLoader(
             keyName: series.key,
             member: series.member,
@@ -724,7 +725,7 @@ class _AnalogBoxPaneLoaderState extends ConsumerState<_AnalogBoxPaneLoader> {
             xSpan: const Duration(minutes: 5),
           ),
           expandedTitle: '${_paneTitle(config)} — trend',
-          expandedSize: const Size(820, 520),
+          expandedSize: kPaneTrendDialogSize,
           expandedBuilder: (_) => GraphAsset(gc),
         );
       }

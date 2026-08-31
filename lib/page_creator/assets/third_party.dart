@@ -21,7 +21,7 @@ import 'package:tfc_dart/core/database.dart' show TimeseriesData;
 import '../../providers/collector.dart';
 import '../../widgets/graph.dart';
 import 'graph.dart' show GraphAssetConfig;
-import 'sensor.dart' show SensorConfig, kSensorTrendCompactPadding;
+import 'sensor.dart' show SensorConfig;
 import 'number.dart' show NumberConfig, NumberWidget, showNumberGraphDialog;
 import 'ratio_number.dart'
     show
@@ -527,9 +527,17 @@ class ThirdPartyEquipmentConfig extends BaseAsset {
   @override
   List<String> get allKeys => <String>{
         ...super.allKeys,
-        if (statusKey.isNotEmpty)
+        if (statusKey.isNotEmpty) ...[
           for (final bit in kEquipmentStatusBits[kind] ?? const [])
             '$statusKey.${bit.suffix}',
+          // Subscribed but never DRAWN, so they appear in no bit list -- and a
+          // key that is not discoverable here is a key an unused-key sweep
+          // offers to delete out from under a live pane.
+          if (kind == ThirdPartyEquipmentKind.boxErector) ...[
+            '$statusKey.$kBoxErectorRunSuffix',
+            '$statusKey.$kBoxErectorCommsSuffix',
+          ],
+        ],
         // The extra loose diodes read complete keys of their own, so they are
         // discoverable directly rather than through a prefix.
         for (final bit in extraBits)
@@ -685,7 +693,18 @@ class ExtraStatusBit {
 /// fish", and "Dropped Batch" sat beside "Batch ready" as a dangling fragment.
 /// Blue for Cleaning, green for the rest.
 const List<StructStatusBit> speedBatcherStatusBits = [
-  StructStatusBit('p_stat_Running', 'Running', HmiColorRole.green),
+  // No `p_stat_Running` row. The header badge directly above it is built from
+  // that same member by [speedBatcherPaneStatus], and the machine on the page
+  // carries the run LED -- so the pane stated one bit three times. Dropped for
+  // the same reason the box erector's `Running` row was; leaving it here would
+  // have fixed one machine and left the duplication on the one beside it.
+  //
+  // The member is NOT unsubscribed. This kind reads its whole handshake from
+  // one struct node, so the badge keeps reading `p_stat_Running` at no cost.
+  //
+  // `Cleaning` STAYS. It is a mode, not a run state: it says WHY the machine is
+  // not producing, and it is the row that separates a deliberate stop from a
+  // fault.
   StructStatusBit('p_stat_Cleaning', 'Cleaning', HmiColorRole.blue),
   StructStatusBit('p_stat_BatchReady', 'Batch ready', HmiColorRole.green),
   StructStatusBit('p_stat_DropOk', 'Conveyor may drop', HmiColorRole.green),
@@ -860,8 +879,15 @@ bool? boxErectorCommsOf(Map<String, bool?> statusBits) =>
 /// `kSensorTrendSeries` / `kConveyorFreqSeries`.
 const String kBoxErectorBpmSeries = 'Cartons/min';
 
+/// `Colors.blue`, and NOT `SolarizedColors.blue`, which this used to be.
+///
+/// Every other trend on this HMI draws its primary trace in `Colors.blue` --
+/// `conveyorTrendColors[kConveyorFreqSeries]`, `sensorTrendColors`, the analog
+/// box's `{seriesLabel: Colors.blue}`. A second, darker blue for this one chart
+/// is the kind of near-match that reads as a different product when two panes
+/// are open side by side, which is exactly what was reported.
 const Map<String, Color> boxErectorBpmColors = {
-  kBoxErectorBpmSeries: Color.fromARGB(255, 38, 139, 210),
+  kBoxErectorBpmSeries: Colors.blue,
 };
 
 /// Whether the throughput trend can be drawn — i.e. whether the cartons-per-
@@ -968,13 +994,24 @@ class BoxErectorBpmGraph extends ConsumerWidget {
           // A fixed [xRange] wins over the rolling span — see the field.
           xSpan: xRange == null ? xSpan : null,
           xRange: xRange,
-          legend: false,
+          // Off in the tile -- the [PaneGraphTile] header names the series
+          // instead, which costs a text row rather than a column of the plot's
+          // width -- and ON in the floating chart, where there is room for it.
+          // Exactly what `ConveyorStatsGraph`, `SensorTrendGraph` and the
+          // analog box's trend all do; this one alone said a flat `false`, so
+          // the expanded chart was the only trend on the HMI with no legend.
+          legend: !compact,
         );
 
+        // The single-axis compact gutters, shared with the analog box's numeric
+        // trend. This used to borrow the SENSOR's `kSensorTrendCompactPadding`,
+        // whose 48 px left gutter exists to fit the words "False" and "True";
+        // a cartons/min axis prints bare numbers, so the plot was indented
+        // 14 px further than the conveyor's for no reason a reader could see.
         final theme = compact
             ? (Theme.of(context).brightness == Brightness.dark
-                ? darkChartTheme(padding: kSensorTrendCompactPadding)
-                : lightChartTheme(padding: kSensorTrendCompactPadding))
+                ? darkChartTheme(padding: kCompactChartPaddingSingleAxis)
+                : lightChartTheme(padding: kCompactChartPaddingSingleAxis))
             : ref.watch(chartThemeNotifierProvider);
 
         return Graph(
@@ -1025,6 +1062,47 @@ class BoxErectorBpmGraphLoader extends ConsumerWidget {
     );
   }
 }
+
+/// The box erector's Trend tile -- the SAME tile the conveyor's drive pane
+/// draws, with a different trace in it.
+///
+/// Extracted from `_trendSection` so there is one object a test can compare
+/// against [conveyorTrendTile] field by field. The report this answers is that
+/// the two panes did not look like the same product, and a pair of tiles
+/// hand-tuned in two files to resemble each other is how that happens again in
+/// six months: every presentation decision here is either a shared constant
+/// ([kPaneTrendTileHeight], [kPaneTrendDialogSize]) or spelled the same way in
+/// [conveyorTrendTile], and `pane_trend_parity_test.dart` fails if one of them
+/// drifts.
+///
+/// The one difference that is NOT drift is the span. The conveyor's preview
+/// shows five minutes because a drive's frequency changes second to second;
+/// this key is a one-minute rolling average of finished cartons, so five
+/// minutes is five points and reads as a scribble. Fifteen is what makes the
+/// same SHAPE of chart legible for this quantity -- the window is a fact about
+/// the data, not about the drawing.
+PaneGraphTile boxErectorBpmTrendTile({required String keyName}) =>
+    PaneGraphTile(
+      // The trace is named in the tile header, where naming it costs a text
+      // row instead of a column of the plot's width. The conveyor's tile has
+      // done this since #384; this one had an EMPTY header -- a caption row
+      // holding nothing but the size-up glyph -- which was the most visible
+      // half of "the look is not the same".
+      legend: boxErectorBpmColors,
+      height: kPaneTrendTileHeight,
+      preview: BoxErectorBpmGraphLoader(
+        keyName: keyName,
+        showButtons: false,
+        compact: true,
+        xSpan: const Duration(minutes: 15),
+      ),
+      expandedTitle: 'Cartons per minute',
+      expandedSize: kPaneTrendDialogSize,
+      expandedBuilder: (context) => BoxErectorBpmGraphLoader(
+        keyName: keyName,
+        xSpan: const Duration(hours: 1),
+      ),
+    );
 
 /// One colour vocabulary across every machine, so a glance down any Status
 /// column means the same thing:
@@ -1130,7 +1208,11 @@ class EquipmentStatusBit {
 /// FB (`BERnn.PermitOutfeed`, `BERnn.WaitingFrustration`), so the mappings that
 /// already exist keep reading.
 ///
-/// FOUR rows, not six. The two carton-chute rows are per-instance
+/// THREE rows now, not four: `Running` moved to [kBoxErectorRunSuffix] --
+/// still subscribed, still discoverable, no longer a diode, because the pane
+/// header and the machine's run LED already say it.
+///
+/// Three rows, not six. The two carton-chute rows are per-instance
 /// [ExtraStatusBit]s rather than entries here -- see
 /// [ThirdPartyEquipmentConfig.extraBits]. They belong there because they are
 /// not a property of the KIND: BER01's chutes are sensed, BER02/BER03's are
@@ -1138,9 +1220,10 @@ class EquipmentStatusBit {
 /// the three machines. Declared per instance, they appear only where they are
 /// wired, and the editor already offers key, `{m}` label template and colour.
 ///
-/// Two more suffixes ride this same prefix without being diodes:
-/// [kBoxErectorCommsSuffix] gates the pane, [kBoxErectorBpmSuffix] feeds the
-/// trend.
+/// THREE more suffixes ride this same prefix without being diodes:
+/// [kBoxErectorRunSuffix] feeds the header badge and the run LED,
+/// [kBoxErectorCommsSuffix] gates the pane, and [kBoxErectorBpmSuffix] feeds
+/// the trend.
 ///
 /// Wording is shared, not reinvented. `PermitOutfeed` carries the exact
 /// sentence the strapper's `p_stat_OutfeedPermitted` and the Multivac's loose
@@ -1150,7 +1233,15 @@ class EquipmentStatusBit {
 const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
     kEquipmentStatusBits = {
   ThirdPartyEquipmentKind.boxErector: [
-    EquipmentStatusBit('Running', 'Running', HmiColorRole.green),
+    // No `Running` row. It said what the pane's own header badge and the
+    // machine's run LED on the page already say, and this pane was cut to six
+    // rows on purpose -- a duplicate is the cheapest of the six to lose. The
+    // KEY is untouched: still subscribed, still in [allKeys], still feeding the
+    // badge, through [kBoxErectorRunSuffix] below.
+    //
+    // The same reading the struct-backed kinds already take -- see
+    // [multivacStatusBits] and [fishAlignerStatusBits], whose `p_stat_Run` is
+    // deliberately not drawn because it "feeds the run LED/badge".
     EquipmentStatusBit(
         'WaitingFrustration', '{m} is stopping the line', HmiColorRole.red),
     EquipmentStatusBit(
@@ -1159,6 +1250,26 @@ const Map<ThirdPartyEquipmentKind, List<EquipmentStatusBit>>
         'PermitOutfeed', '{m} may send boxes on', HmiColorRole.green),
   ],
 };
+
+/// The suffix carrying whether the machine is going: `BER01.Running`.
+///
+/// Subscribed, in [ThirdPartyEquipmentConfig.allKeys], and NOT drawn as a
+/// diode. It used to be the first row of [kEquipmentStatusBits]; the row went
+/// because it repeated the pane header and the machine's run LED, and the key
+/// stayed because it is what those two are made of.
+///
+/// Moving it here rather than simply deleting the entry is the point. `allKeys`
+/// composes the diode suffixes onto the prefix, so dropping the bit would have
+/// dropped `BER01.Running` out of key discovery -- and an unused-key sweep
+/// would then have offered to delete a live mapping. It rides the same
+/// subscription map and the same teardown as [kBoxErectorCommsSuffix], at no
+/// new machinery.
+///
+/// It also gives the header badge a source of its own -- see
+/// [boxErectorPaneStatus]. Normally `runKey` names exactly this node and the
+/// two agree; when it is unset, the pane now reads the machine anyway instead
+/// of printing "No key" beside a signal it is already holding.
+const String kBoxErectorRunSuffix = 'Running';
 
 /// The suffix carrying whether the Saia is still answering, appended to the
 /// same prefix as the diodes: `BER01.ModbusHealthy`.
@@ -1370,6 +1481,29 @@ PaneStatus speedBatcherPaneStatus(DynamicValue? status, PaneStatus fallback) {
     );
   }
   switch (structStatusBitOf(status, 'p_stat_Running')) {
+    case true:
+      return const PaneStatus.running();
+    case false:
+      return const PaneStatus.stopped();
+    case null:
+      return fallback;
+  }
+}
+
+/// The box erector's header badge, from the run bit off its key prefix.
+///
+/// The fallback for a machine whose `runKey` is unset or has told us nothing.
+/// [kBoxErectorRunSuffix] is already subscribed for exactly this, so a pane
+/// holding the run bit should not print "No key" beside it.
+///
+/// A FALLBACK, deliberately, where [speedBatcherPaneStatus] is an OVERRIDE:
+/// there the struct knows something the run key cannot say ("Cleaning"); here
+/// the two are the same PLC variable and the run key is the one that carries
+/// [ThirdPartyEquipmentConfig.invertRunPolarity]. So the configured key wins
+/// whenever it has an answer.
+PaneStatus boxErectorPaneStatus(
+    Map<String, bool?> statusBits, PaneStatus fallback) {
+  switch (statusBits[kBoxErectorRunSuffix]) {
     case true:
       return const PaneStatus.running();
     case false:
@@ -1863,8 +1997,13 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       // the same teardown, so the gate costs one key and no new machinery --
       // see [boxErectorCommsOf].
       if (widget.config.kind == ThirdPartyEquipmentKind.boxErector &&
-          prefix.isNotEmpty)
+          prefix.isNotEmpty) ...{
         kBoxErectorCommsSuffix: '$prefix.$kBoxErectorCommsSuffix',
+        // Likewise subscribed and not drawn: the run bit lost its diode
+        // because the header badge above it says the same thing, and this is
+        // where that badge gets it from. See [kBoxErectorRunSuffix].
+        kBoxErectorRunSuffix: '$prefix.$kBoxErectorRunSuffix',
+      },
     };
     for (final suffix in _bitSubs.keys.toList()) {
       if (!wanted.containsKey(suffix)) {
@@ -2174,7 +2313,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// absent section would not. Extra bits, being loose keys, only appear when
   /// declared: an empty [ThirdPartyEquipmentConfig.extraBits] renders exactly
   /// as before.
-  Widget? _statusSection(BuildContext context) {
+  PaneBodySection? _statusSection(BuildContext context) {
     final config = widget.config;
     final rows = <Widget>[];
     // A dead Modbus link makes every bit below a stale latch rather than a
@@ -2212,8 +2351,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
       ));
     }
     if (rows.isEmpty) return null;
-    return PaneSection(
-      title: 'Status',
+    return PaneBodySection.status(
       child: rows.length == 1
           ? rows.single
           : Column(
@@ -2238,11 +2376,11 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
   /// the live one -- the collector entry is what makes this pane show
   /// throughput at all.
   ///
-  /// Placed after Status to match the house section order
-  /// (status -> trend -> manual -> setpoints) that [PaneSectionSlot] defines.
-  /// This pane still composes raw [PaneSection]s rather than a [PaneBody], so
-  /// the order is positional here; converting it is a separate change.
-  Widget? _trendSection(BuildContext context) {
+  /// Placed after Status by the house section order
+  /// (status -> trend -> manual -> setpoints) that [PaneSectionSlot] defines --
+  /// this pane composes a [PaneBody] now, so the slot decides where the section
+  /// lands rather than where it happens to be written.
+  PaneBodySection? _trendSection(BuildContext context) {
     final config = widget.config;
     if (config.kind != ThirdPartyEquipmentKind.boxErector) return null;
     if (config.statusKey.isEmpty) return null;
@@ -2251,25 +2389,7 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     // The throughput key, not the prefix: the chart reads a plain numeric
     // series now, not a member picked out of a status struct.
     final key = _bpmKey;
-    return PaneSection(
-      title: 'Trend',
-      child: PaneGraphTile(
-        // Same height as the sensor's tile: enough for the trace plus the time
-        // row without the two printing over each other.
-        height: 84,
-        preview: BoxErectorBpmGraphLoader(
-          keyName: key,
-          showButtons: false,
-          compact: true,
-          xSpan: const Duration(minutes: 15),
-        ),
-        expandedTitle: 'Cartons per minute',
-        expandedBuilder: (context) => BoxErectorBpmGraphLoader(
-          keyName: key,
-          xSpan: const Duration(hours: 1),
-        ),
-      ),
-    );
+    return PaneBodySection.trend(child: boxErectorBpmTrendTile(keyName: key));
   }
 
   Widget _paneFor(
@@ -2283,6 +2403,14 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
     } else {
       status =
           isRunning ? const PaneStatus.running() : const PaneStatus.stopped();
+    }
+    if (config.kind == ThirdPartyEquipmentKind.boxErector &&
+        (config.runKey.isEmpty || isRunning == null)) {
+      // The run bit off the prefix, when the run key had nothing to say. It is
+      // subscribed either way -- see [kBoxErectorRunSuffix] -- and it is the
+      // badge that replaced this pane's `Running` diode, so it must not be the
+      // weaker of the two readings.
+      status = boxErectorPaneStatus(_statusBits.value, status);
     }
     if (config.kind == ThirdPartyEquipmentKind.speedBatcher) {
       // The handshake struct outranks the bare run bool: it can say
@@ -2320,135 +2448,156 @@ class _ThirdPartyEquipmentState extends ConsumerState<ThirdPartyEquipment> {
           : 'Third-party equipment',
       icon: Icons.precision_manufacturing,
       status: status,
+      // A [PaneBody], not a hand-rolled Column of [PaneSection]s.
+      //
+      // This is the reported "missing division line". `PaneBody` draws a
+      // hairline `Divider` between consecutive sections; a raw Column draws
+      // none, so this pane ran Equipment straight into Status with no rule
+      // between them while every pane composed the house way -- the conveyor
+      // drive's, the sensor's, the analog box's, the EP box's -- had one. It
+      // was missing on all FIVE kinds, not just the box erector: they share
+      // this one build method, which is also why the fix is one edit and not
+      // five.
+      //
+      // Equipment takes the `status` slot rather than `details`. It is live
+      // figures -- accept rates and weights, read now -- and `details` sorts
+      // LAST, which would have thrown the block to the bottom of the pane. Two
+      // sections in one slot keep the order they were written in, which is the
+      // order this pane already had, so nothing moves; only the rules between
+      // the blocks appear.
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Above the body and deliberately outside it: a banner about the
+          // whole pane is not a section of it, so it takes no rule.
           if (commsDown) const CommsLostBanner(),
-          PaneSection(
-            title: 'Equipment',
-            child: Column(
-              children: [
-                PaneDetailRow(
-                  label: 'Machine',
-                  value:
-                      config.kind.labelFor(strapMachines: config.strapMachines),
-                ),
-                // No separate head-count row: the Machine line above already
-                // ends in "N x StrapX", and the pane read the same number
-                // twice. The count is still editable in the config editor.
-                // Live figures, not key names or static wording — the pane
-                // is for reading the machine, not its wiring. Charts stay
-                // behind a tap so the pane itself does not crowd: the accept
-                // figure opens its accept/reject bar chart (the
-                // RatioNumberWidget's own tap-through), the weight opens its
-                // trend.
-                // The window, stated once for both scales rather than
-                // repeated in each figure's label: a rolling average read as
-                // "right now" is the whole reason this asset carries a window,
-                // and one row directly above the figures says it without
-                // pushing every label onto three lines.
-                //
-                // One picker for both, too — they are the same product stream
-                // a few metres apart, and reading them over different windows
-                // would compare nothing to nothing.
-                //
-                // Nothing to pick between: an empty picker is worse than
-                // none, but the window still has to be on the pane.
-                if (acceptRatios.isNotEmpty && acceptOptions.length == 1)
+          PaneBody(sections: [
+            PaneBodySection.status(
+              title: 'Equipment',
+              child: Column(
+                children: [
                   PaneDetailRow(
-                    label: 'Accept rate window',
-                    value: formatAcceptWindow(acceptWindow),
+                    label: 'Machine',
+                    value: config.kind
+                        .labelFor(strapMachines: config.strapMachines),
                   ),
-                if (acceptRatios.isNotEmpty && acceptOptions.length > 1)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    // Full width, and explicitly so: the section's Column
-                    // centres whatever does not stretch, which left this
-                    // block floating a few pixels right of every label
-                    // beside it.
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Accept rate window',
-                              style: Theme.of(context).textTheme.bodyMedium),
-                          const SizedBox(height: 4),
-                          // Literally the chart's picker, one size down.
-                          // Full width rather than in a [PaneDetailRow]'s
-                          // value column, which is too narrow for a ladder of
-                          // chips to reflow in.
-                          Wrap(
-                            spacing: 4,
-                            runSpacing: 4,
-                            children: ratioIntervalChips(
-                              options: acceptOptions,
-                              selectedMinutes: acceptWindow,
-                              onSelected: (m) => _acceptWindow.value = m,
-                              dense: true,
+                  // No separate head-count row: the Machine line above already
+                  // ends in "N x StrapX", and the pane read the same number
+                  // twice. The count is still editable in the config editor.
+                  // Live figures, not key names or static wording — the pane
+                  // is for reading the machine, not its wiring. Charts stay
+                  // behind a tap so the pane itself does not crowd: the accept
+                  // figure opens its accept/reject bar chart (the
+                  // RatioNumberWidget's own tap-through), the weight opens its
+                  // trend.
+                  // The window, stated once for both scales rather than
+                  // repeated in each figure's label: a rolling average read
+                  // as "right now" is the whole reason this asset carries a
+                  // window, and one row directly above the figures says it
+                  // without pushing every label onto three lines.
+                  //
+                  // One picker for both, too — they are the same product stream
+                  // a few metres apart, and reading them over different windows
+                  // would compare nothing to nothing.
+                  //
+                  // Nothing to pick between: an empty picker is worse than
+                  // none, but the window still has to be on the pane.
+                  if (acceptRatios.isNotEmpty && acceptOptions.length == 1)
+                    PaneDetailRow(
+                      label: 'Accept rate window',
+                      value: formatAcceptWindow(acceptWindow),
+                    ),
+                  if (acceptRatios.isNotEmpty && acceptOptions.length > 1)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      // Full width, and explicitly so: the section's Column
+                      // centres whatever does not stretch, which left this
+                      // block floating a few pixels right of every label
+                      // beside it.
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Accept rate window',
+                                style: Theme.of(context).textTheme.bodyMedium),
+                            const SizedBox(height: 4),
+                            // Literally the chart's picker, one size down.
+                            // Full width rather than in a [PaneDetailRow]'s
+                            // value column, which is too narrow for a ladder of
+                            // chips to reflow in.
+                            Wrap(
+                              spacing: 4,
+                              runSpacing: 4,
+                              children: ratioIntervalChips(
+                                options: acceptOptions,
+                                selectedMinutes: acceptWindow,
+                                onSelected: (m) => _acceptWindow.value = m,
+                                dense: true,
+                              ),
                             ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  for (final (i, ratio) in acceptRatios.indexed)
+                    PaneDetailRow(
+                      label: 'Accept rate, checkweigher ${i + 1}',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            height: 22,
+                            child: RatioNumberWidget(
+                              config: ratio,
+                              intervalOverride: Duration(minutes: acceptWindow),
+                              intervalOptions: acceptOptions,
+                            ),
+                          ),
+                          _chartButton(
+                            icon: Icons.bar_chart,
+                            tooltip: 'Accept/reject chart',
+                            // The chart opens on the window the pane is
+                            // showing, not on the configured one — otherwise
+                            // tapping through to explain a figure changes the
+                            // figure.
+                            onPressed: () => showRatioAnalysisDialog(
+                                context, ref, ratio,
+                                interval: Duration(minutes: acceptWindow)),
                           ),
                         ],
                       ),
                     ),
-                  ),
-                for (final (i, ratio) in acceptRatios.indexed)
-                  PaneDetailRow(
-                    label: 'Accept rate, checkweigher ${i + 1}',
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          height: 22,
-                          child: RatioNumberWidget(
-                            config: ratio,
-                            intervalOverride: Duration(minutes: acceptWindow),
-                            intervalOptions: acceptOptions,
+                  for (final (i, weight) in weights.indexed)
+                    PaneDetailRow(
+                      label: 'Weight, checkweigher ${i + 1}',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            height: 22,
+                            child: NumberWidget(config: weight),
                           ),
-                        ),
-                        _chartButton(
-                          icon: Icons.bar_chart,
-                          tooltip: 'Accept/reject chart',
-                          // The chart opens on the window the pane is
-                          // showing, not on the configured one — otherwise
-                          // tapping through to explain a figure changes the
-                          // figure.
-                          onPressed: () => showRatioAnalysisDialog(
-                              context, ref, ratio,
-                              interval: Duration(minutes: acceptWindow)),
-                        ),
-                      ],
+                          _chartButton(
+                            icon: Icons.show_chart,
+                            tooltip: 'Weight trend',
+                            onPressed: () =>
+                                showNumberGraphDialog(context, weight),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                for (final (i, weight) in weights.indexed)
-                  PaneDetailRow(
-                    label: 'Weight, checkweigher ${i + 1}',
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          height: 22,
-                          child: NumberWidget(config: weight),
-                        ),
-                        _chartButton(
-                          icon: Icons.show_chart,
-                          tooltip: 'Weight trend',
-                          onPressed: () =>
-                              showNumberGraphDialog(context, weight),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-          if (_statusSection(context) case final section?) section,
-          if (_trendSection(context) case final section?) section,
-          if (config.notes != null && config.notes!.isNotEmpty)
-            PaneSection(
-              title: 'Notes',
-              child: SelectableText(config.notes!),
-            ),
+            _statusSection(context),
+            _trendSection(context),
+            if (config.notes != null && config.notes!.isNotEmpty)
+              PaneBodySection.details(
+                title: 'Notes',
+                child: SelectableText(config.notes!),
+              ),
+          ]),
         ],
       ),
     );
@@ -2840,15 +2989,17 @@ class _ThirdPartyEquipmentConfigEditorState
                   : 'Feeds the diodes in the side pane\'s Status section: '
                       '${(kEquipmentStatusBits[config.kind] ?? const []).map((b) => '.${b.suffix}').join(', ')} '
                       'are appended to this prefix.'
-                      // The other two keys off this prefix are named here or
-                      // nowhere: neither is a diode, so an engineer reading the
+                      // The other three keys off this prefix are named here
+                      // or nowhere: none is a diode, so an engineer reading the
                       // list above would never learn they exist, and the
-                      // features they carry (the link gate, the trend) would
-                      // just quietly not appear.
-                      '${config.kind == ThirdPartyEquipmentKind.boxErector ? ' Two more ride it without being diodes: '
-                          '.$kBoxErectorCommsSuffix greys the pane out when the '
-                          'machine stops answering, and .$kBoxErectorBpmSuffix '
-                          'draws the throughput trend when it is collected.' : ''}',
+                      // features they carry (the run badge, the link gate, the
+                      // trend) would just quietly not appear.
+                      '${config.kind == ThirdPartyEquipmentKind.boxErector ? ' Three more ride it without being diodes: '
+                          '.$kBoxErectorRunSuffix drives the run lamp and the '
+                          'pane header, .$kBoxErectorCommsSuffix greys the pane '
+                          'out when the machine stops answering, and '
+                          '.$kBoxErectorBpmSuffix draws the throughput trend '
+                          'when it is collected.' : ''}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),

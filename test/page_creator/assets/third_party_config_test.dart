@@ -917,12 +917,13 @@ void main() {
   });
 
   group('SpeedBatcher status bits', () {
-    test('the five diodes match the retired flat asset, in the same order',
-        () {
+    test('the four diodes match the retired flat asset, less Running', () {
       // Same members, labels and colours as speedbatcher.dart, so the pane
-      // reads identically to the widget the operators already know.
+      // reads identically to the widget the operators already know -- with
+      // `p_stat_Running` dropped, because [speedBatcherPaneStatus] builds the
+      // header badge out of that same member and the machine on the page
+      // carries the run LED. One bit, stated three times on one screen.
       expect(speedBatcherStatusBits.map((b) => b.member), [
-        'p_stat_Running',
         'p_stat_Cleaning',
         'p_stat_BatchReady',
         'p_stat_DropOk',
@@ -1163,12 +1164,11 @@ void main() {
     final bits = kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!;
 
     test('one key per PLC member, appended to the prefix', () {
-      // The whole point of this kind: four suffixes off `statusKey`, so
-      // `BER01` yields BER01.Running and friends. Each is a mapping an
+      // The whole point of this kind: suffixes off `statusKey`, so `BER01`
+      // yields BER01.WaitingFrustration and friends. Each is a mapping an
       // engineer can point at and rename, rather than a member name pinned
       // against a .TcPOU that renders a grey `!` when the PLC moves.
       expect(bits.map((b) => b.suffix), [
-        'Running',
         'WaitingFrustration',
         'PermitInfeed',
         'PermitOutfeed',
@@ -1180,30 +1180,51 @@ void main() {
       expect(structMembersOf(ThirdPartyEquipmentKind.boxErector), isEmpty);
     });
 
-    test('four rows: is it going, and who is blocking it', () {
+    test('three rows: who is blocking it, and what it will take', () {
       // The pane briefly drew seventeen struct members in six collapsible
       // groups. That is a diagnostics dump, not an operator pane -- the
       // per-drive and pusher faults are alarms. The two carton-chute rows are
       // per-instance extra bits, not entries here, because only BER01 has
       // those sensors.
-      expect(bits, hasLength(4));
+      expect(bits, hasLength(3));
       expect(
           bits
               .map((b) => b.labelFor(
                   equipmentShortName(ThirdPartyEquipmentKind.boxErector)))
               .toList(),
           [
-            'Running',
             'Box erector is stopping the line',
             'Box erector is ready for product',
             'Box erector may send boxes on',
           ]);
     });
 
+    test('no Running diode -- the header badge and the run LED say it', () {
+      // Jon, on this pane: "we don't need a diode for running, it is in the
+      // top". The struct-backed kinds already read it that way -- see the note
+      // on [multivacStatusBits], whose `p_stat_Run` "feeds the run LED/badge"
+      // and is deliberately not drawn.
+      expect(bits.map((b) => b.suffix), isNot(contains(kBoxErectorRunSuffix)));
+      // But the KEY is untouched. Deleting the bit without moving the key to
+      // [kBoxErectorRunSuffix] would have taken `BER01.Running` out of key
+      // discovery, and an unused-key sweep would then have offered to delete a
+      // live mapping.
+      expect(kBoxErectorRunSuffix, 'Running');
+    });
+
+    test('every non-diode suffix off the prefix stays discoverable', () {
+      final config = ThirdPartyEquipmentConfig(
+        kind: ThirdPartyEquipmentKind.boxErector,
+        statusKey: 'BER01',
+        runKey: '',
+      );
+      expect(config.allKeys, contains('BER01.$kBoxErectorRunSuffix'));
+      expect(config.allKeys, contains('BER01.$kBoxErectorCommsSuffix'));
+    });
+
     test('the colours follow the house vocabulary', () {
       final bySuffix = {for (final b in bits) b.suffix: b};
-      // Green: running, and every permit -- the rule the whole file keeps.
-      expect(bySuffix['Running']!.onRole, HmiColorRole.green);
+      // Green: every permit -- the rule the whole file keeps.
       expect(bySuffix['PermitInfeed']!.onRole, HmiColorRole.green);
       expect(bySuffix['PermitOutfeed']!.onRole, HmiColorRole.green);
       // Red: the one row that says something is WRONG.

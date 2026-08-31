@@ -2982,28 +2982,7 @@ class _ConveyorState extends ConsumerState<Conveyor>
                   // A preview in the pane, the real chart in a floating
                   // dialog the operator can park next to the mimic.
                   PaneBodySection.trend(
-                    child: PaneGraphTile(
-                      // Two traces on two axes, so they do have to be named —
-                      // but up here, where naming them costs a text row
-                      // instead of half the plot's width.
-                      legend: conveyorTrendColors,
-                      // Tall enough for a two-axis line chart to be readable
-                      // rather than decorative, and no taller — the setpoint
-                      // fields below it have to fit on the same screen.
-                      height: 100,
-                      preview: _ConveyorStatsGraphLoader(
-                        keyName: driveKey,
-                        showButtons: false,
-                        compact: true,
-                        xSpan: const Duration(minutes: 5),
-                      ),
-                      expandedTitle: '$driveKey — trend',
-                      expandedSize: const Size(820, 520),
-                      expandedBuilder: (context) => _ConveyorStatsGraphLoader(
-                        keyName: driveKey,
-                        xSpan: const Duration(minutes: 30),
-                      ),
-                    ),
+                    child: conveyorTrendTile(keyName: driveKey),
                   ),
 
                   // --- Manual ----------------------------------------------
@@ -4210,6 +4189,31 @@ const Map<String, Color> conveyorTrendColors = {
   kConveyorFreqSeries: Colors.blue,
   kConveyorCurrentSeries: Colors.orange,
 };
+
+/// The conveyor drive pane's Trend tile -- the reference presentation every
+/// other line trend on this HMI is measured against.
+///
+/// Extracted from `_showDrivePane` so there is one object a test can compare
+/// against `boxErectorBpmTrendTile`; see the doc there for why the two are
+/// pinned to each other rather than left to resemble each other by hand.
+PaneGraphTile conveyorTrendTile({required String keyName}) => PaneGraphTile(
+      // Two traces on two axes, so they do have to be named — but up here,
+      // where naming them costs a text row instead of half the plot's width.
+      legend: conveyorTrendColors,
+      height: kPaneTrendTileHeight,
+      preview: _ConveyorStatsGraphLoader(
+        keyName: keyName,
+        showButtons: false,
+        compact: true,
+        xSpan: const Duration(minutes: 5),
+      ),
+      expandedTitle: '$keyName — trend',
+      expandedSize: kPaneTrendDialogSize,
+      expandedBuilder: (context) => _ConveyorStatsGraphLoader(
+        keyName: keyName,
+        xSpan: const Duration(minutes: 30),
+      ),
+    );
 
 class ConveyorStatsGraph extends ConsumerStatefulWidget {
   final Collector? collector;

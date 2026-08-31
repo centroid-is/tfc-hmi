@@ -816,6 +816,40 @@ class PaneTileRow extends StatelessWidget {
   }
 }
 
+/// Preview height for a LINE trend in a pane — the conveyor's drive stats, the
+/// analog box's value, the box erector's throughput.
+///
+/// Tall enough for a line chart to be readable rather than decorative, and no
+/// taller: whatever sits below the tile has to fit on the same screen. Named
+/// here rather than repeated at each call site because three tiles that nearly
+/// match is what a `84` written next to a `100` produces, and an operator with
+/// two panes open reads the difference as two different products.
+///
+/// The one deliberate exception is [kPaneBooleanTrendTileHeight].
+const double kPaneTrendTileHeight = 100;
+
+/// Preview height for a two-state BOOLEAN timeline — the sensor's blocked/clear
+/// history.
+///
+/// Shorter than [kPaneTrendTileHeight] on purpose, and named so it reads as a
+/// decision rather than as an `84` that someone forgot to make `100`. A
+/// boolean trace only ever occupies two rows, so the height a line chart needs
+/// to show shape is height this chart would spend on empty band; what it does
+/// need is enough room that the "True"/"False" tick labels and the time row do
+/// not print over each other.
+///
+/// A NUMERIC trend must not borrow this. The box erector's cartons/min tile did
+/// — it was built from the sensor's tile as a template — and that is half of why
+/// it and the conveyor's did not read as the same product.
+const double kPaneBooleanTrendTileHeight = 84;
+
+/// Floating-dialog size for a pane trend opened out of a [PaneGraphTile].
+///
+/// Same reasoning as [kPaneTrendTileHeight]: the tap-through from one machine's
+/// pane must not open a visibly smaller window than the tap-through from the
+/// machine beside it.
+const Size kPaneTrendDialogSize = Size(820, 520);
+
 /// A small chart preview that opens the full-size chart in a free-floating
 /// [StandardDialog] when tapped.
 ///
