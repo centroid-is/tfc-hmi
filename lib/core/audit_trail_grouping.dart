@@ -38,14 +38,17 @@ import 'package:tfc_dart/core/database_drift.dart';
 ///
 /// ## Why it exists at all
 ///
-/// Phase 6 adds a fifth surface, `admin`, for role and user administration:
-/// `itemKey`s `role.create` / `role.update` / `role.delete` / `role.rename`
-/// and `user.create` / `user.delete` / `user.role` / `user.password`, all
-/// carrying `groupRequired: 'users'`. That is confirmed, scheduled work. The
-/// point of this constant is that when it lands the phase fails in one obvious
-/// place with instructions attached, instead of in a row widget, a filter bar
-/// and three goldens with no explanation in any of them.
-const Set<String> kKnownAuditSurfaces = {'tag', 'pref', 'route', 'auth'};
+/// It worked. Phase 6 added the fifth surface, `admin`, for role and user
+/// administration — `itemKey`s `role.create` / `role.update` / `role.delete` /
+/// `role.rename` and `user.create` / `user.delete` / `user.role` /
+/// `user.password`, all carrying `groupRequired: 'users'` — and the whole cost
+/// of that arriving was this one line and the one assertion that pins it.
+/// `test/widgets/audit_trail_admin_surface_test.dart` proved beforehand, end to
+/// end through the real store and the real reader, that the viewer renders an
+/// `admin` row with no change of any kind: no new chip either, because the
+/// existing `users` chip already covers rows carrying `groupRequired: 'users'`.
+/// Nothing branched on membership then and nothing branches on it now.
+const Set<String> kKnownAuditSurfaces = {'tag', 'pref', 'route', 'auth', 'admin'};
 
 /// One human action and the rows of it this query could see.
 ///
