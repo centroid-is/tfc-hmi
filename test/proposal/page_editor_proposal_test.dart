@@ -831,35 +831,66 @@ void main() {
       expect(note, contains('on other pages'));
     });
 
-    test('Review all while already open switches to the proposal page', () {
-      // The BeamPage key is constant, so beaming the same route again reuses
-      // the mounted editor -- initState does not run twice. didUpdateWidget is
-      // the only hook that sees the new proposalData; without it a "Review all"
-      // for another page lands the operator on the page they were already on.
+    test('View or Review all while already open switches to the proposal page',
+        () {
+      // Beaming the route again cannot reach a mounted editor: the BeamPage
+      // key is constant, so the route keeps the page it already built and the
+      // freshly built PageEditor -- new proposalData and all -- is discarded.
+      // initState does not run twice and didUpdateWidget does not run at all.
+      // The mounted editor therefore publishes a way in, and the banner uses
+      // it instead of beaming (see page_editor_view_route_test.dart, which
+      // drives this end to end).
+      expect(source, contains('void _reviewProposal(String data)'));
+      final review = bodyOf('void _reviewProposal(String data) {');
+      // Lands on the proposal's own page, then stages that page's batch --
+      // reusing the same page-filtering the cold open uses.
+      expect(review, contains('_focusPageForProposals(pending)'));
+      expect(review, contains('_currentPage = focus'));
+      expect(review, contains('_partitionAssetProposals(pending, _currentPage)'));
+      expect(review, contains('_applyAssetBatch(split.onPage)'));
+      // The proposal handed to a mounted editor is what the focus reads; the
+      // route's own proposalData only ever names the one it was built with.
+      final focus = bodyOf(
+          'String? _focusPageForProposals(List<PendingProposal> pending)');
+      expect(focus, contains('_reviewData ?? widget.proposalData'));
+      // Published while the editor is up, and taken down with it -- otherwise
+      // the banner hands a proposal to a disposed State.
+      expect(source, contains('proposalReviewProvider'));
+      expect(bodyOf('void _publishReviewEntry() {'),
+          contains('enter: _reviewProposal'));
+      expect(bodyOf('void dispose() {'), contains('reviewSlot.state = null'));
+      // The widget-rebuild door is still wired to the same body.
       expect(source, contains('void didUpdateWidget(PageEditor oldWidget)'));
       final upd = bodyOf('void didUpdateWidget(PageEditor oldWidget) {');
       // Only a genuine change of proposal re-routes; an unrelated rebuild with
       // the same proposalData must do nothing.
       expect(upd, contains('data == oldWidget.proposalData'));
-      // Lands on the proposal's own page, then stages that page's batch --
-      // reusing the same page-filtering the cold open uses.
-      expect(upd, contains('_focusPageForProposals(pending)'));
-      expect(upd, contains('_currentPage = focus'));
-      expect(upd, contains('_partitionAssetProposals(pending, _currentPage)'));
-      expect(upd, contains('_applyAssetBatch(split.onPage)'));
+      expect(upd, contains('_reviewProposal(data)'));
     });
 
     test('a re-entry that stages nothing leaves unsaved edits unsaved', () {
-      // didUpdateWidget must not rewrite _savedJson to the current json on the
-      // way out. An operator with unsaved edits who is beamed back in by a
+      // The re-entry must not rewrite _savedJson to the current json on the
+      // way out. An operator with unsaved edits who is sent back in by a
       // proposal that turns out to stage nothing would have those edits marked
       // saved, and the leave guard would then let them walk away silently.
-      final upd = bodyOf('void didUpdateWidget(PageEditor oldWidget) {');
-      expect(upd, isNot(contains("_savedJson = _isProposal ? '' : _currentJson")),
+      final review = bodyOf('void _reviewProposal(String data) {');
+      expect(
+          review, isNot(contains("_savedJson = _isProposal ? '' : _currentJson")),
           reason: 'the not-a-proposal arm of that ternary clears the '
               'unsaved-edits flag for edits nobody saved');
-      expect(upd, contains('if (batched > 0 || _isProposal) {'));
-      expect(upd, contains("_savedJson = '';"));
+      expect(review, contains('if (batched > 0 || _isProposal) {'));
+      expect(review, contains("_savedJson = '';"));
+    });
+
+    test('switching page for a proposal does not go through the leave guard',
+        () {
+      // Deliberate, not an omission: every page lives in _temporaryPages and
+      // a save writes all of them, so moving _currentPage discards nothing.
+      // Putting "Leaving now discards them" in front of an action that
+      // discards nothing teaches operators to hit Discard. The Pages dialog's
+      // own page switching has never asked either.
+      final review = bodyOf('void _reviewProposal(String data) {');
+      expect(review, isNot(contains('_confirmLeave')));
     });
 
     test('the off-page note does not stack on repeated staging', () {

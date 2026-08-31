@@ -210,6 +210,7 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
         // and publishes its commit -- then this button accepts.
         final route = proposals.first.editorRoute;
         if (route == null) return;
+        if (_openEditorTakes(route, proposals.first)) return;
         try {
           final navKey = ref.read(navigatorKeyProvider);
           final ctx = navKey?.currentContext ?? context;
@@ -298,14 +299,14 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
         // Looking is not deciding, but the AI is told the proposal was opened.
         ref.read(proposalStateProvider.notifier).viewProposal(proposal.id);
         final route = proposal.editorRoute;
-        if (route != null) {
-          try {
-            final navKey = ref.read(navigatorKeyProvider);
-            final ctx = navKey?.currentContext ?? context;
-            Beamer.of(ctx).beamToNamed(route, data: proposal.proposalJson);
-          } catch (_) {
-            // Beamer not available -- ignore
-          }
+        if (route == null) return;
+        if (_openEditorTakes(route, proposal)) return;
+        try {
+          final navKey = ref.read(navigatorKeyProvider);
+          final ctx = navKey?.currentContext ?? context;
+          Beamer.of(ctx).beamToNamed(route, data: proposal.proposalJson);
+        } catch (_) {
+          // Beamer not available -- ignore
         }
       },
       style: TextButton.styleFrom(
@@ -316,6 +317,27 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
       ),
       child: const Text('View'),
     );
+  }
+
+  /// Hands [proposal] to the editor for [route] if that editor is already on
+  /// screen, and says whether it took it.
+  ///
+  /// Beaming is how every one of these buttons opens an editor, and it is the
+  /// wrong tool for the one case where the editor is the screen the operator
+  /// is standing on: beaming to the route you are already on rebuilds the
+  /// route builder but not the page it built, so the mounted editor never
+  /// hears about the proposal. That is exactly the case the operator hit --
+  /// page editor open on one page, View on a proposal for another, and the
+  /// editor stayed where it was. The mounted editor publishes
+  /// [proposalReviewProvider] for this; see [ProposalReviewEntry].
+  ///
+  /// The route check matters: a page editor being on screen must not make it
+  /// the destination for an alarm proposal.
+  bool _openEditorTakes(String route, PendingProposal proposal) {
+    final entry = ref.read(proposalReviewProvider);
+    if (entry == null || entry.route != route) return false;
+    entry.enter(proposal.proposalJson);
+    return true;
   }
 
   /// "2 create · 1 edit · 1 delete", listing only the actions present.
