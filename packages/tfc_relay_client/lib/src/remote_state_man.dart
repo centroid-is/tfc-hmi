@@ -45,11 +45,21 @@
 /// is why the maps live here and the supervisor only re-establishes what it is
 /// given.
 ///
+/// **This class owns the panel's one pinned `HttpClient`**, which is what
+/// makes it `dart:io`-only — the same price `ws_transport.dart` pays and for
+/// the same reason: a `SecurityContext` can only be handed to a dial through
+/// an `HttpClient`, and SEC-02 is that context. It is built once here, closed
+/// over by the default dial, and closed in [RemoteStateMan.dispose]; a fresh
+/// one per attempt would re-parse the mounted root and leak a connection pool
+/// on every reconnect, on the one path that only runs when something is
+/// already wrong.
+///
 /// What breaks in the plant without this file: nothing on a panel can read a
 /// tag. It is the whole client surface.
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
@@ -90,6 +100,37 @@ final class RemoteStateMan implements StateManApi {
     void Function(String reason)? onBye,
     Future<ConnectAttempt> Function(Uri uri)? dial,
   }) : _page = page {
+    // First, before anything is allocated and long before anything is dialled.
+    // The combination this refuses — `wss` with no pinned root — cannot be
+    // diagnosed from the failure it produces: every handshake dies with the
+    // same `CERTIFICATE_VERIFY_FAILED` a genuine impostor produces
+    // (06-RESEARCH §A.3). A panel that constructs and then fails forever is a
+    // support call about an attack that is not happening.
+    config.checkDialable(uri);
+
+    // One per panel, built here, closed in [dispose] (T-06-22).
+    //
+    // Not one per attempt. `SecurityContext` parses the root PEM when it is
+    // built, and an `HttpClient` owns a connection pool; a panel on a flapping
+    // link redials all shift, so a context built inside the dial would re-read
+    // the file and leak a pool per attempt — on the one code path that already
+    // only runs when something is wrong. Held here rather than in
+    // `ConnectionSupervisor` because that class's `dial:` seam is documented
+    // as "one attempt in, one `ConnectAttempt` out": hanging an object with a
+    // lifetime off it would make it something else.
+    final tls = config.tls;
+    if (tls != null) {
+      _pinned = HttpClient(
+        context: SecurityContext(withTrustedRoots: false)
+          // The mounted root and nothing else. With `withTrustedRoots: false`
+          // the machine's own store is never consulted, so a rogue root
+          // installed on the station cannot vouch for anything claiming to be
+          // the gateway (T-06-20) — which is also why our own gateway is
+          // refused by a client that skips this (SEC-02's system-roots arm).
+          ..setTrustedCertificates(tls.rootCertPath),
+      );
+    }
+
     if (keys.isNotEmpty) {
       _subscriptions[page] =
           SubscriptionState(subId: page, keys: <String>{...keys});
@@ -126,11 +167,12 @@ final class RemoteStateMan implements StateManApi {
       // The gateway's `preferences.changed` reaches every local listener
       // through the one API that owns the broadcast controller.
       onPreferenceChanged: (key) => preferences.announce(key),
-      // Null in production: the supervisor dials with `connect`. A harness
-      // supplies one so a contract leg can be built synchronously against a
-      // server whose port is only known asynchronously — see
+      // In production this is [_dialGateway]: `connect` with this panel's one
+      // pinned client and its dial ceiling closed over. A harness supplies its
+      // own so a contract leg can be built synchronously against a server
+      // whose port is only known asynchronously — see
       // `connection_supervisor.dart`'s `_dial`.
-      dial: dial,
+      dial: dial ?? _dialGateway,
     );
 
     // Attached **before** `start()`. The supervisor can reach `ready` in the
@@ -215,6 +257,14 @@ final class RemoteStateMan implements StateManApi {
   var _writesSent = 0;
   var _requerying = false;
   var _requeryWanted = false;
+
+  /// The one client every dial of this panel's goes through, or null when
+  /// [ClientConfig.tls] is null and the panel dials plaintext.
+  ///
+  /// Built once in the constructor and closed in [dispose]. Nothing reassigns
+  /// it: a second one would mean a second parse of the root PEM and a second
+  /// connection pool, which is the flapping-link leak T-06-22 names.
+  HttpClient? _pinned;
 
   late final ConnectionSupervisor _supervisor;
   late final StreamSubscription<LinkState> _transitions;
@@ -972,12 +1022,33 @@ final class RemoteStateMan implements StateManApi {
     await _transitions.cancel();
     await _supervisor.dispose();
 
+    // After the supervisor, because until it is disposed a dial may still be
+    // in flight and closing the client under it would fail that attempt with
+    // something that looks like a certificate problem. `force: true` because a
+    // panel closing must not wait on a socket to a gateway that may already be
+    // gone — the same argument `_releaseHolds` makes at the top of this
+    // method. Cleared so a second dispose is still a no-op.
+    _pinned?.close(force: true);
+    _pinned = null;
+
     for (final store in _stores.values) {
       store.dispose();
     }
   }
 
   // ------------------------------------------------------------- internals
+
+  /// How this panel actually reaches the gateway.
+  ///
+  /// One attempt in, one [ConnectAttempt] out — the shape the supervisor's
+  /// `dial:` seam insists on — with the two things only this class knows
+  /// closed over: the pinned client built in the constructor, and the ceiling
+  /// on how long a dial may take before the schedule takes over.
+  Future<ConnectAttempt> _dialGateway(Uri uri) => connect(
+        uri,
+        client: _pinned,
+        connectTimeout: config.connectTimeout,
+      );
 
   /// The store for [sub], created on first use.
   ValueStore _storeFor(String sub) =>

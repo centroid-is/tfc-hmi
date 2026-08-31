@@ -54,10 +54,17 @@
 library;
 
 import 'dart:async';
+// For `HandshakeException` and nothing else: the one failure this file has to
+// name differently from the rest. `ws_transport.dart` is already `dart:io`-only
+// for the same underlying reason — a pinned dial has no other seam — so this
+// costs nothing that was not already spent.
+import 'dart:io' show HandshakeException;
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+import 'package:web_socket_channel/web_socket_channel.dart'
+    show WebSocketChannelException;
 
 import 'backoff.dart';
 import 'client_config.dart';
@@ -338,10 +345,49 @@ final class ConnectionSupervisor {
     // nobody looked at.
     switch (attempt) {
       case ConnectFailed(:final error):
-        _down(gen, 'the gateway did not answer: $error');
+        _down(gen, _refusalReason(error));
       case ConnectSucceeded(:final channel):
         await _serve(gen, channel);
     }
+  }
+
+  /// What to put on the health line for a dial that produced no socket.
+  ///
+  /// **A certificate problem is not silence, and saying it is sends the wrong
+  /// person.** "The gateway did not answer" is what this said for every
+  /// failed dial, and for a `HandshakeException` it is actively wrong: the
+  /// gateway answered, at length, and this panel refused to believe it. An
+  /// integrator reading "did not answer" checks the cable, the switch and the
+  /// service — three things that are all fine — before anybody thinks of the
+  /// leaf that lapsed on Sunday.
+  ///
+  /// One level of unwrapping, because that is where the exception is:
+  /// `web_socket_channel` hands the failure over as a
+  /// `WebSocketChannelException` with the real one in `.inner` (06-RESEARCH
+  /// §A.3). The original text is kept whole — the `OS Error` line is what an
+  /// integrator pastes into a ticket, and it is the only part of this a
+  /// support engineer can act on remotely.
+  ///
+  /// **What it deliberately does not say is *which* certificate problem.**
+  /// Wrong CA, expired leaf and a SAN that does not cover the address are
+  /// byte-identical here (trap 16); a message that guessed would be wrong a
+  /// third of the time and believed every time.
+  ///
+  /// **And no `FailureKind` is added for it**, deliberately against
+  /// 06-RESEARCH §C.5's recommendation. `classifyFailure` sorts *call*
+  /// failures and never sees a `ConnectAttempt` (`failure_taxonomy.dart:
+  /// 120-155`), so a TLS member of that enum would belong to a vocabulary
+  /// nothing can ever produce — a constant that reads like
+  /// coverage, which is the argument `suite_integrity_test.dart:104-108`
+  /// makes about vacuous checks, applied to an enum. The connect path
+  /// produces a link-state reason string, and this is it.
+  static String _refusalReason(Object error) {
+    final inner = error is WebSocketChannelException ? error.inner : null;
+    if (inner is HandshakeException) {
+      return 'the gateway\'s certificate was not trusted by this panel: '
+          '$error';
+    }
+    return 'the gateway did not answer: $error';
   }
 
   /// The socket is up: build the peer, arm it, and drive it to a snapshot.
