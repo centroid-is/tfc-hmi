@@ -525,49 +525,31 @@ void main() {
       );
     });
 
-    // The box erector's Status section off the enhanced `BER0n.BER0n` struct,
-    // a mix of diode states: a red fault LIT (a drive has faulted) while the
-    // stopping-line and estop rows are OFF (white), an amber waiting row LIT
-    // (waiting for carton bottoms), the green running row LIT, and several
-    // members absent from the struct — keys this pumped value does not carry —
-    // rendered as the grey `!` unknown rather than claiming "off". The box
-    // erector was the last prefix-backed kind; the enhanced FB moved it onto
-    // the struct system, so this is now a [StructStatusDiodes] pane like the
-    // strapper's, pinning the curated fault-first vocabulary in pixels.
-    testWidgets('boxErector — status pane diodes, every row lit', (tester) async {
+    // The box erector's Status section off the `BER0n.BER0n` struct, every row
+    // LIT. Not a state the machine is ever in -- it cannot be running, stopping
+    // the line and out of both bottoms and tops at once -- but this golden
+    // exists to be read as a COLOUR CHART: one lit diode per row, so the whole
+    // vocabulary can be checked down a single column, plus the duration column
+    // beside the two starve rows. A realistic mixed state leaves rows grey,
+    // which pins the unknown treatment (already covered by the Multivac's pane)
+    // and pins none of the colours.
+    //
+    // SIX rows. This pane briefly drew seventeen members in six collapsible
+    // groups; the golden is the cheapest place for that to grow back unnoticed,
+    // so it is deliberately short enough to count by eye.
+    testWidgets('boxErector — status pane diodes, every row lit',
+        (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      // EVERY bit true. Not a state the machine is ever in -- it could not be
-      // faulted, waiting and running at once -- but this golden exists to be
-      // read as a COLOUR CHART: one lit diode per row, so the whole vocabulary
-      // can be checked down a single column. A realistic mixed state leaves
-      // most rows grey, which pins the unknown treatment (already covered by
-      // the Multivac's pane) and pins none of the colours.
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
           m: true,
-        // The permit is INVERTED in its group, so "true" here is the healthy
-        // case -- left true so the golden shows a permit that is fine sitting
-        // beside the two conditions that are not.
-        'q_xOutfeedPermitted': true,
         // How long each starve has run, so the duration column is in the PNG.
         'p_stat_tNoBottomsFor': 252000,
         'p_stat_tNoLidsFor': 45000,
-        'p_stat_tWaitingProductFor': 3780000,
-        // The throughput, in the shape the PLC actually publishes: an FB_BPM
-        // INSTANCE carrying an `hmi : ST_BPM` of rolling averages, not a
-        // scalar. Non-zero on purpose -- 0 is what a stopped machine reads,
-        // and the point of this row is that it is a live rate, not a lamp.
-        'bpmCartonsOut':
-            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-          'hmi': DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-            'avgBPM1Minute': 37.0,
-            'avgBPM5Minute': 35.0,
-          })),
-        })),
       }));
 
       await tester.pumpWidget(MaterialApp(
@@ -578,7 +560,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 1180,
+                height: 520,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -587,28 +569,11 @@ void main() {
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // The same two blocks `_statusSection` composes for a
-                          // box erector: the throughput figure, then the
-                          // diodes.
-                          PaneDetailRow(
-                            label: 'Cartons per minute',
-                            child: Builder(
-                              builder: (context) => Text(
-                                boxErectorBpmOf(status)!.toStringAsFixed(0),
-                                style: Theme.of(context).textTheme.bodyLarge,
-                              ),
-                            ),
-                          ),
-                          GroupedStatusDiodes(
-                            status: status,
-                            groups: boxErectorStatusGroups,
-                            machine: equipmentShortName(
-                                ThirdPartyEquipmentKind.boxErector),
-                          ),
-                        ],
+                      child: StructStatusDiodes(
+                        status: status,
+                        bits: boxErectorStatusBits,
+                        machine: equipmentShortName(
+                            ThirdPartyEquipmentKind.boxErector),
                       ),
                     ),
                   ),
@@ -624,38 +589,32 @@ void main() {
       );
     });
 
-    // The same pane with two groups OPENED — the half of the design a collapsed
-    // golden cannot show. This is the "exactly what is wrong" half: Drives
-    // breaks into the five not-ready and three not-turning alarms the machine
-    // publishes (a drive can be ready and still not move, so they are different
-    // faults), and Out of material carries HOW LONG each starve has run, off
-    // the FB's own timers.
+    // The state an operator actually meets: the machine is running, both
+    // permits are granted, and it has been out of carton bottoms for four
+    // minutes. Nothing red -- the frustration row is dark because the FB will
+    // not raise it while a starve explains the stop, which is the one piece of
+    // the design a colour chart cannot show.
     //
-    // "Strapper permit off" is dark while the two rows above it are
-    // lit: the permit is INVERTED, so a healthy permit reads as no fault. That
-    // row disagreeing with "Next machine not ready" is how a broken interlock
-    // between the two machines becomes visible.
-    testWidgets('boxErector — status groups opened', (tester) async {
+    // "No carton tops" is OFF and carries NO duration, even though the struct
+    // below still holds `p_stat_tNoLidsFor` from the last time the chute ran
+    // dry: the FB's TON keeps its elapsed value after the condition clears, so
+    // a duration printed on a dark row would report a starve that is over.
+    testWidgets('boxErector — running, starved of bottoms', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1600);
+      tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
       final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
           m: false,
-        // A believable single fault plus a starve, rather than everything at
-        // once: the carton conveyor is not ready, and the line has been out of
-        // bottoms for four minutes.
-        'p_stat_xDriveError': true,
-        'p_stat_xAlmDriveM101': true,
-        'p_stat_xAlmMotionM101': true,
-        'p_stat_xWaitingBottoms': true,
-        'p_stat_xWaitingLids': false,
-        'p_stat_xWaitingProduct': false,
-        'p_stat_xExtNotReady': true,
+        'p_stat_xRunning': true,
+        'q_xInfeedPermitted': true,
         'q_xOutfeedPermitted': true,
+        'p_stat_xWaitingBottoms': true,
         'p_stat_tNoBottomsFor': 252000,
+        // Stale: the lid chute refilled 20 minutes ago and the TON held its ET.
+        'p_stat_tNoLidsFor': 45000,
       }));
 
       await tester.pumpWidget(MaterialApp(
@@ -666,7 +625,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 1400,
+                height: 520,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -675,9 +634,9 @@ void main() {
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: GroupedStatusDiodes(
+                      child: StructStatusDiodes(
                         status: status,
-                        groups: boxErectorStatusGroups,
+                        bits: boxErectorStatusBits,
                         machine: equipmentShortName(
                             ThirdPartyEquipmentKind.boxErector),
                       ),
@@ -689,18 +648,9 @@ void main() {
           ),
         ),
       ));
-      // Opened by real taps, so the golden also proves the rows are tappable
-      // and that the state survives the rebuild each tap triggers.
-      await tester.tap(find.text('Drives'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Out of material'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text("Can't send on"));
-      await tester.pumpAndSettle();
-
       await expectLater(
         find.byKey(_key),
-        matchesGoldenFile('goldens/third_party_boxErector_groups_open.png'),
+        matchesGoldenFile('goldens/third_party_boxErector_starved.png'),
       );
     });
 
@@ -709,35 +659,26 @@ void main() {
     // gets -- not three pieces reassembled by the test.
     //
     // The struct fed in is the dangerous one: every bit still says the machine
-    // is fine ("Running" true, no estop, throughput 37) because
-    // FB_BER01ScadaPoll decodes the Saia's process word unconditionally and
-    // those words simply stop being written when polling fails. Without the
-    // gate this pane would show a confident green "Running" for a machine we
-    // have lost contact with, forever. With it: red banner on top, header
-    // reads "No link", every diode grey, throughput "--".
+    // is fine ("Running" true, both permits granted) because FB_BER01ScadaPoll
+    // decodes the Saia's process word unconditionally and those words simply
+    // stop being written when polling fails. Without the gate this pane would
+    // show a confident green "Running" for a machine we have lost contact with,
+    // forever. With it: red banner on top, header reads "No link", every diode
+    // grey and no durations.
     testWidgets('boxErector — Modbus link down', (tester) async {
       await loadRealFont();
-      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
       final frozen = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
         for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
           m: true,
-        // The permit is INVERTED in its group, so "true" here is the healthy
-        // case -- left true so the golden shows a permit that is fine sitting
-        // beside the two conditions that are not.
-        'q_xOutfeedPermitted': true,
-        // How long each starve has run, so the duration column is in the PNG.
+        // How long each starve had run when the link died -- numbers that would
+        // now be counting nothing, which is why none of this is drawn.
         'p_stat_tNoBottomsFor': 252000,
         'p_stat_tNoLidsFor': 45000,
-        'p_stat_tWaitingProductFor': 3780000,
         'p_stat_xModbusHealthy': false,
-        'bpmCartonsOut':
-            DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-          'hmi': DynamicValue.fromMap(
-              LinkedHashMap<String, dynamic>.from({'avgBPM1Minute': 37.0})),
-        })),
       }));
 
       await tester.pumpWidget(MaterialApp(
@@ -748,7 +689,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 1180,
+                height: 640,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -761,23 +702,13 @@ void main() {
                         const CommsLostBanner(),
                         PaneSection(
                           title: 'Status',
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              const PaneDetailRow(
-                                label: 'Cartons per minute',
-                                child: Text('—'),
-                              ),
-                              GroupedStatusDiodes(
-                                // null, exactly as the gate feeds it: the
-                                // frozen values above are deliberately NOT
-                                // shown.
-                                status: null,
-                                groups: boxErectorStatusGroups,
-                                machine: equipmentShortName(
-                                    ThirdPartyEquipmentKind.boxErector),
-                              ),
-                            ],
+                          child: StructStatusDiodes(
+                            // null, exactly as the gate feeds it: the frozen
+                            // values above are deliberately NOT shown.
+                            status: null,
+                            bits: boxErectorStatusBits,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
                           ),
                         ),
                       ],

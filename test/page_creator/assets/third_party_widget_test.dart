@@ -1171,17 +1171,17 @@ void main() {
     });
   });
 
-  group('Box erector manual mode colour', () {
-    testWidgets('is the SAME colour a belt in manual gets, in every scheme',
+  group('Box erector starve-row colour', () {
+    testWidgets('is the SAME yellow a belt in manual gets, in every scheme',
         (tester) async {
       // Not "a yellow" -- THE yellow. `conveyor.dart` maps DriveState.manual to
       // `HmiStateColors.of(context).yellow` and prints it in the belt legend,
-      // so this diode must resolve to the IDENTICAL Color, per scheme. If the
-      // two ever diverge, a machine under manual control looks like one thing
-      // on a belt and another on a pane, which is the whole reason the colour
-      // was chosen.
-      final manualGroup =
-          boxErectorStatusGroups.firstWhere((g) => g.label == 'In manual');
+      // so the pane's waiting rows must resolve to the IDENTICAL Color, per
+      // scheme. If the two ever diverge, "stalled but healthy" looks like one
+      // thing on a belt and another on a pane, which is the whole reason the
+      // colour was chosen.
+      final starveRow = boxErectorStatusBits
+          .firstWhere((b) => b.member == 'p_stat_xWaitingBottoms');
 
       for (final scheme in AppColorScheme.values) {
         for (final theme in [
@@ -1192,9 +1192,9 @@ void main() {
             theme: theme,
             home: Builder(builder: (context) {
               expect(
-                manualGroup.onRole.resolve(context),
+                starveRow.onRole.resolve(context),
                 HmiStateColors.of(context).yellow,
-                reason: 'manual diode must be the scheme yellow ($scheme)',
+                reason: 'a waiting diode must be the scheme yellow ($scheme)',
               );
               return const SizedBox();
             }),
