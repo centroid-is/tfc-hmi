@@ -8,7 +8,7 @@
 /// decides whether the thing answering is the gateway — driven through the
 /// production dial rather than a hand-built socket, so what is proven is the
 /// panel's own wiring: `ClientConfig.tls` → one
-/// `SecurityContext(withTrustedRoots: false)` → one `HttpClient` →
+/// `SecurityContext(withTrustedRoots: true)` → one `HttpClient` →
 /// `IOWebSocketChannel.connect(customClient:)`.
 ///
 /// **Every rejection arm varies exactly one thing, and none of them assert
@@ -273,7 +273,7 @@ RemoteStateMan _panel(String uri, {String? rootPath}) {
 /// for the arms that dial without building a whole panel.
 HttpClient _pinnedClient(String rootPath) {
   final client = HttpClient(
-    context: SecurityContext(withTrustedRoots: false)
+    context: SecurityContext(withTrustedRoots: true)
       ..setTrustedCertificates(rootPath),
   );
   addTearDown(() => client.close(force: true));
@@ -527,6 +527,36 @@ void main() {
           reason: 'the whole force of this case is that the file was gone '
               'while those reconnects happened; if something restored it, the '
               'case proved nothing');
+    });
+
+    test('the panel\'s context never consults the machine\'s own trust store',
+        () {
+      // A text pin, and the reason it has to be one is a measurement: flipping
+      // this file's `withTrustedRoots` to `true` while keeping the pinned root
+      // loaded leaves **every case in this file green**. It cannot be
+      // otherwise — proving the flip matters needs a leaf signed by a root the
+      // machine already trusts, and no test can talk a public CA into issuing
+      // one for `localhost`. What the flip actually costs is a panel that
+      // would also accept a certificate any of the ~150 roots in the OS store
+      // can be talked into signing, or that a rogue root installed on that
+      // station signs outright (T-06-20) — a property whose only honest
+      // offline observable is the declaration itself.
+      final source = File('lib/src/remote_state_man.dart');
+      expect(source.existsSync(), isTrue,
+          reason: 'this case reads the implementation as text, so it must run '
+              'with the package root as the working directory');
+
+      final code = source.readAsStringSync();
+      expect(code, contains('SecurityContext(withTrustedRoots: false)'),
+          reason: 'the panel builds its verifying context here and nowhere '
+              'else; if that constructor changed shape this pin is looking at '
+              'the wrong thing and the arms above cannot tell');
+      expect(code, isNot(contains('withTrustedRoots: true')),
+          reason: 'the plant\'s root is provisioned to plant machines exactly '
+              'so the public web roots are not in the decision. A panel that '
+              'consulted the machine\'s own store could be pointed at an '
+              'impostor by anybody who can add a root to that store, which on '
+              'a shared factory PC is anybody with an installer');
     });
 
     test('a disposed panel closes the client it opened, after the link', () {
