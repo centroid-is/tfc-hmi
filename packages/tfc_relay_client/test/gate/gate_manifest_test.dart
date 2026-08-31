@@ -108,6 +108,28 @@ const _laneBudgetEnvVar = 'GATE_LANE_BUDGET';
 /// engineer to read the source to find out what they lost.
 const _skipReasonFloor = 40;
 
+/// Shortest acceptable reason for a deviation, in characters.
+///
+/// Higher than [_skipReasonFloor], because a skip says "this platform cannot
+/// run this" and a deviation says "this gate does not promise this". The second
+/// needs the measurement or the ruling that made it — 07-CONTEXT user ruling 1:
+/// a descope with a number is a finding, one without is an excuse.
+const _deviationReasonFloor = 60;
+
+/// Where a deviation may send a clause the green does not cover.
+///
+/// A closed set on purpose. An open-ended follow-up field becomes a wishlist
+/// within two phases: `'later'` and `'TODO'` are not destinations, nobody can
+/// grep for them at the milestone, and the entry stops being a handover and
+/// becomes a note to self.
+const _followUpDestinations = <String>{
+  'Phase 8',
+  'Phase 9',
+  'Phase 11',
+  'post-milestone',
+  'none — accepted',
+};
+
 /// Getters whose value is derived from a wall clock, and must therefore never
 /// be read at an instant.
 ///
@@ -417,6 +439,91 @@ void main() {
               'clause it descopes is a deviation nobody can check against the '
               'catalogue — the reader cannot tell whether the thing being '
               'given up is the whole row or a corner of it');
+    });
+
+    test('the registry is printed, in full, on every run', () {
+      // The print is the point. RES-01's evidence (07-RESEARCH §F.5 item 3) is
+      // this block quoted in the verification document, and a registry that is
+      // only ever read by an assertion is a registry nobody reads. It goes to
+      // the run report whether or not anything below fails.
+      print('');
+      print('gate deviations — what the green does NOT cover '
+          '(${gateDeviations.length} entries)');
+      print('row · clause · reason · follow-up');
+      for (final deviation in gateDeviations) {
+        print('${deviation.row} · "${deviation.clause}" · '
+            '${deviation.reason} · -> ${deviation.followUp}');
+      }
+      print('');
+
+      expect(gateDeviations, isNotEmpty,
+          reason: 'the deviations registry is empty, so this run reports that '
+              'the gate covers every clause of all ${gateRows.length} '
+              'catalogue rows. That has not been true since before the phase '
+              'started — F20 alone has two clauses no assertion on this '
+              'transport can reach (07-RESEARCH §B.3). An empty registry is '
+              'not a clean gate, it is a gate that stopped saying what it '
+              'gave up');
+
+      final thin = [
+        for (final deviation in gateDeviations)
+          if (deviation.reason.length < _deviationReasonFloor)
+            '${deviation.row}: "${deviation.clause}" '
+                '(${deviation.reason.length} chars)',
+      ];
+      expect(thin, isEmpty,
+          reason: 'these deviation reasons are shorter than '
+              '$_deviationReasonFloor characters: $thin. A reason that short '
+              'names the clause and not the measurement or the ruling behind '
+              'it, which is the difference between a finding and an excuse');
+    });
+
+    test('every deviation goes somewhere the phase can name', () {
+      // The other half of the plan's rule — that no deviation names a row
+      // gateRows does not declare — is asserted by "every deviation quotes a
+      // row the catalogue declares" above. Asserting it twice would fail two
+      // cases for one fault and send the reader to the wrong one first.
+      final adrift = [
+        for (final deviation in gateDeviations)
+          if (!_followUpDestinations.contains(deviation.followUp))
+            '${deviation.row}: "${deviation.followUp}"',
+      ];
+      expect(adrift, isEmpty,
+          reason: 'these deviations name a follow-up outside the closed set '
+              '${_followUpDestinations.toList()}: $adrift. "later" and "TODO" '
+              'are not destinations — nobody can grep for them at the '
+              'milestone, and the entry stops being a handover to a named '
+              'phase and becomes a note to self. If a clause genuinely goes '
+              'nowhere, "none — accepted" says so out loud');
+    });
+  });
+
+  group('the phase measures itself by running its own sweep', () {
+    test('every row is either covered or owed, and the count is printed', () {
+      final covered = [
+        for (final row in gateRows)
+          if (byRow[row.id] != null) row.id,
+      ];
+      final missing = [
+        for (final entry in gateOutstanding.entries)
+          if (entry.value.kind == OutstandingKind.missing) entry.key,
+      ];
+      final partial = [
+        for (final entry in gateOutstanding.entries)
+          if (entry.value.kind == OutstandingKind.partial) entry.key,
+      ];
+
+      print('gate: ${covered.length} of $_declaredRows rows have a case, '
+          '${gateOutstanding.length} outstanding (${partial.length} partial)');
+
+      expect(covered.length + missing.length, _declaredRows,
+          reason: '${covered.length} rows have a case and ${missing.length} '
+              'are listed as missing, which is '
+              '${covered.length + missing.length} of $_declaredRows. The two '
+              'must account for the whole catalogue or the outstanding list is '
+              'not a gap, it is a number somebody stopped maintaining '
+              '(fault_contract_test.dart:301-311). The per-row arms above say '
+              'which rows fell out');
     });
   });
 
