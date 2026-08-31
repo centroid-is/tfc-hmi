@@ -3,7 +3,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/services/tag_service.dart';
 import 'package:tfc_mcp_server/src/tools/tag_tools.dart';
 import 'package:tfc_mcp_server/src/tools/tool_registry.dart';
@@ -43,14 +42,11 @@ void main() {
     }
 
     Future<MockMcpClient> createClientWithTagTools() async {
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       mcpServer = createMcpServer();
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -146,7 +142,9 @@ void main() {
         expect(tools, contains('get_tag_value'));
         // Both should be success
         for (final record in records) {
-          expect(record.operatorId, equals('op1'));
+          // This row records that the MCP server ran a tool, not that a person
+          // authorized one — the person's name is on the approval row.
+          expect(record.operatorId, equals(kMcpAuditOperator));
           expect(record.status, equals('success'));
         }
       } finally {
