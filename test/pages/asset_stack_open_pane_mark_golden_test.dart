@@ -125,6 +125,7 @@ void main() {
       WidgetTester tester,
       List<Asset> assets, {
       Size surface = const Size(800, 600),
+      bool dark = false,
     }) async {
       await tester.binding.setSurfaceSize(surface);
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -140,7 +141,9 @@ void main() {
         overrides: [stateManProvider.overrideWith((_) async => fake)],
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: themesForScheme(AppColorScheme.muted).$1,
+          theme: dark
+              ? themesForScheme(AppColorScheme.muted).$2
+              : themesForScheme(AppColorScheme.muted).$1,
           home: Scaffold(
             body: LayoutBuilder(
               builder: (context, constraints) => AssetStack(
@@ -340,6 +343,27 @@ void main() {
       );
       await tapGlyph(tester, find.byType(Conveyor));
       await expectCanvas(tester, 'hit_boundary_conveyor_turn_rotated');
+    });
+
+    testWidgets('the same belt on the dark scheme: the ink swaps with it',
+        (tester) async {
+      // The pair the old halo was made of, spent as an either/or instead of
+      // as a fringe. Held against `hit_boundary_conveyor_turn`, which is this
+      // belt on the light page: same ring, opposite tone. Drawn in the light
+      // page's near-black it would be 1.1:1 against this background — there,
+      // and invisible.
+      await pump(
+        tester,
+        [
+          _conveyor(
+            turns: [ConveyorTurnEntry(position: 0.45, angle: 70, radius: 1.4)],
+          ),
+        ],
+        surface: const Size(800, 400),
+        dark: true,
+      );
+      await tapGlyph(tester, find.byType(Conveyor));
+      await expectCanvas(tester, 'hit_boundary_conveyor_turn_dark');
     });
 
     testWidgets('a sensor: the glyph, small', (tester) async {

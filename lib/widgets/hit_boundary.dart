@@ -268,7 +268,7 @@ class HitBoundaryStyle {
   final double pulse;
 
   /// The scheme colour to draw the dashes in, or null for
-  /// [HitBoundaryPainter.defaultInk].
+  /// the tone [HitBoundaryPainter.inkFor] picks for the page.
   ///
   /// A role rather than a `Color` so the ring follows a scheme switch the way
   /// every asset does, and so no raw `Colors.*` gets into the mimic. Resolved
@@ -384,13 +384,21 @@ class HitBoundaryStyle {
 /// This used to be a fine dark line laid on a wider light band, and the band
 /// showing either side of it was the contrast guarantee — W3C technique C40:
 /// two colours far enough apart in luminance (~17:1 here) mean at least one of
-/// them clears 3:1 against whatever solid colour they land on, which matters
-/// for a ring drawn half over the page and half over an asset whose fill is a
-/// state colour. Read as a mark it was a white outline around the asset, and
-/// that is what it looked like, so it is gone. [HitBoundaryStyle.twoTone] is
-/// where the guarantee can be had back without it: the light tone goes in the
-/// gaps between the dark dashes rather than around them, alternating along one
-/// line instead of fringing it.
+/// them clears 3:1 against whatever solid colour they land on. Read as a mark
+/// it was a white outline around the asset, and that is what it looked like,
+/// so it is gone. The pair is not: [inkFor] spends it as an either/or on the
+/// page's brightness instead of as a fringe, which is what the ring is mostly
+/// drawn over — it stands off the asset, so all but the stretch that crosses
+/// a neighbour is over the page.
+///
+/// What that does not cover is the stretch that does cross a fill, and on a
+/// dark page nothing can: a mid-tone state colour sits at ~0.32 luminance and
+/// the page at ~0.017, and no single ink clears 3:1 against both — the light
+/// one that carries the page manages ~2.5:1 over a running belt. That is not
+/// a tuning problem, it is why C40 asks for two colours rather than a better
+/// one. [HitBoundaryStyle.twoTone] is where the guarantee can be had in full:
+/// the two tones alternate along one line instead of fringing it, so every
+/// stretch of background has one of them across it.
 ///
 /// Deliberately strokes rather than a [BoxDecoration] with a `boxShadow` —
 /// that shadow is a filled, blurred copy of the shape, and with nothing
@@ -398,16 +406,30 @@ class HitBoundaryStyle {
 /// are strokes, so the middle is left alone: an asset's colour is its
 /// equipment state and has to come through untouched.
 class HitBoundaryPainter extends CustomPainter {
-  /// The dashes.
-  static const Color defaultInk = Color(0xD11A1D1F);
+  /// The dark half of the pair. The dashes on a light page.
+  static const Color darkInk = Color(0xD11A1D1F);
+
+  /// The light half. The dashes on a dark page — and the tone the gaps carry
+  /// under [HitBoundaryStyle.twoTone], whichever way round they are.
+  static const Color lightInk = Color(0xD1F2F4F5);
 
   /// How solid the dashes are, whatever colour they are drawn in. A role
   /// colour resolves fully opaque, and at full opacity the ring stops being a
   /// mark laid over the page and starts being part of the machine.
   static const double inkOpacity = 0xD1 / 0xFF;
 
-  /// The tone the gaps carry under [HitBoundaryStyle.twoTone].
-  static const Color defaultHalo = Color(0xD1F2F4F5);
+  /// The dashes' tone for a page of the given [brightness].
+  ///
+  /// One ink cannot serve both schemes: against the muted light page the dark
+  /// tone is 14.5:1 and the light one 1.1:1, and against the dark page those
+  /// swap almost exactly. A ring drawn in the wrong one of them is not a
+  /// quiet mark, it is an invisible one.
+  static Color inkFor(Brightness brightness) =>
+      brightness == Brightness.dark ? lightInk : darkInk;
+
+  /// The other tone — what the gaps carry under [HitBoundaryStyle.twoTone].
+  static Color haloFor(Brightness brightness) =>
+      brightness == Brightness.dark ? darkInk : lightInk;
 
   /// The rings, already in this painter's coordinates.
   final List<List<Offset>> contours;
@@ -422,8 +444,8 @@ class HitBoundaryPainter extends CustomPainter {
 
   const HitBoundaryPainter({
     required this.contours,
-    this.ink = defaultInk,
-    this.halo = defaultHalo,
+    this.ink = darkInk,
+    this.halo = lightInk,
     this.style = HitBoundaryStyle.selection,
     this.phase = 0,
   });

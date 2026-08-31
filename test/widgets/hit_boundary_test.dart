@@ -15,8 +15,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/rendering.dart';
+import 'package:flutter/widgets.dart' show Brightness;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tfc/theme.dart' show HmiColorRole;
+import 'package:tfc/theme.dart' show HmiColorRole, MutedColors;
 import 'package:tfc/widgets/hit_boundary.dart';
 
 /// Distance from [centre] to the furthest and nearest point of an outline.
@@ -29,6 +30,13 @@ import 'package:tfc/widgets/hit_boundary.dart';
     max = math.max(max, r);
   }
   return (min: min, max: max);
+}
+
+/// WCAG relative contrast between two opaque colours.
+double contrast(Color a, Color b) {
+  double lum(Color c) => c.withValues(alpha: 1).computeLuminance();
+  final (hi, lo) = (math.max(lum(a), lum(b)), math.min(lum(a), lum(b)));
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 Rect _bounds(List<Offset> ring) {
@@ -239,18 +247,65 @@ void main() {
       expect(dashRing(ring, dash: 6, gap: 4, phase: 0), at0);
     });
 
-    test('the two tones are far enough apart to carry any background', () {
-      // W3C technique C40: two colours at least 9:1 apart guarantee that one
-      // of them clears 3:1 against whatever solid colour they land on. The
-      // ring lands on state fills as often as on the page. The halo no longer
-      // surrounds the ink — under `twoTone` it alternates with it along the
-      // same line — but it is the same guarantee and the same pair.
-      double luminance(Color c) => c.withValues(alpha: 1).computeLuminance();
-      final ink = luminance(HitBoundaryPainter.defaultInk);
-      final halo = luminance(HitBoundaryPainter.defaultHalo);
-      final contrast =
-          (math.max(ink, halo) + 0.05) / (math.min(ink, halo) + 0.05);
-      expect(contrast, greaterThan(9));
+    test('the ink follows the page, because one tone cannot serve both', () {
+      // The number that settles it. Against the muted light page the dark
+      // tone is ~14.5:1 and the light one ~1.1:1; against the dark page those
+      // swap almost exactly. A fixed ink is therefore invisible on one of the
+      // two schemes, which is what this picks its way out of.
+      const light = MutedColors.surfaceLight;
+      const dark = MutedColors.surfaceDark;
+
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.light), light),
+          greaterThan(10));
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.dark), dark),
+          greaterThan(10));
+
+      // And each is the wrong choice for the other page, by a mile — this is
+      // the regression that matters, not the win above.
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.light), dark),
+          lessThan(2));
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.dark), light),
+          lessThan(2));
+    });
+
+    test('the gaps carry the opposite tone, whichever page it is', () {
+      for (final brightness in Brightness.values) {
+        final ink = HitBoundaryPainter.inkFor(brightness);
+        final halo = HitBoundaryPainter.haloFor(brightness);
+        expect(halo, isNot(ink));
+        // W3C technique C40: two colours at least 9:1 apart guarantee that one
+        // of them clears 3:1 against whatever solid colour they land on. That
+        // is what `twoTone` spends, and it only works if the pair stays split.
+        expect(contrast(ink, halo), greaterThan(9));
+      }
+    });
+
+    test('a single ink cannot carry a dark page and a belt on it', () {
+      // Not a tuning failure — an arithmetic one, and the reason C40 asks for
+      // two colours rather than a better one. On the dark scheme the page sits
+      // near black and a running belt at mid-tone, and nothing clears 3:1
+      // against both: the light ink carries the page and gives up over the
+      // belt. Left standing because the ring stands 7px off its asset, so all
+      // but the stretch crossing a neighbour is over the page.
+      const page = MutedColors.surfaceDark;
+      const belt = MutedColors.runningGreen;
+      final ink = HitBoundaryPainter.inkFor(Brightness.dark);
+
+      expect(contrast(ink, page), greaterThan(10));
+      expect(contrast(ink, belt), lessThan(3),
+          reason: 'this is the gap twoTone exists to close');
+
+      // No other tone does better at both. Sweep the greys and take the best
+      // worst-case: it never reaches 3:1.
+      var bestWorstCase = 0.0;
+      for (var v = 0; v <= 255; v++) {
+        final candidate = Color.fromARGB(0xFF, v, v, v);
+        final worst = math.min(
+            contrast(candidate, page), contrast(candidate, belt));
+        bestWorstCase = math.max(bestWorstCase, worst);
+      }
+      expect(bestWorstCase, lessThan(3),
+          reason: 'no single ink clears 3:1 against both — hence the pair');
     });
   });
 

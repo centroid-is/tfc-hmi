@@ -1039,16 +1039,29 @@ class _OpenPaneMarkState extends State<_OpenPaneMark>
 
   /// The dashes' colour, resolved here because a painter has no context.
   ///
-  /// A scheme role comes back fully opaque; it is knocked down to the ink's
-  /// own alpha so a coloured ring sits on the page with the same weight the
-  /// neutral one does.
+  /// Off the page's brightness rather than fixed: one ink cannot serve both
+  /// schemes. The dark tone is 14.5:1 against the muted light page and 1.1:1
+  /// against the dark one, and a ring in the wrong one of them is not a quiet
+  /// mark but an invisible one.
+  ///
+  /// A scheme role, where the style names one, wins over both — it is a
+  /// deliberate colour and the theme resolves it per scheme anyway. It comes
+  /// back fully opaque, so it is knocked down to the ink's own alpha and sits
+  /// on the page with the same weight the neutral tones do.
   Color _ink(BuildContext context) {
     final role = HitBoundaryStyle.selection.inkRole;
-    if (role == null) return HitBoundaryPainter.defaultInk;
-    return role
-        .resolve(context)
-        .withValues(alpha: HitBoundaryPainter.inkOpacity);
+    if (role != null) {
+      return role
+          .resolve(context)
+          .withValues(alpha: HitBoundaryPainter.inkOpacity);
+    }
+    return HitBoundaryPainter.inkFor(Theme.of(context).brightness);
   }
+
+  /// The tone the gaps carry when the style asks for two of them — always the
+  /// opposite of [_ink], so the pair keeps its full luminance spread.
+  Color _halo(BuildContext context) =>
+      HitBoundaryPainter.haloFor(Theme.of(context).brightness);
 
   @override
   Widget build(BuildContext context) {
@@ -1082,6 +1095,7 @@ class _OpenPaneMarkState extends State<_OpenPaneMark>
                 contours: outline ?? const [],
                 phase: _march.value,
                 ink: _ink(context),
+                halo: _halo(context),
               ),
             ),
           ),
