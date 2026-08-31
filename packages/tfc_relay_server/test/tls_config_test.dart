@@ -208,10 +208,10 @@ void main() {
     test('every TlsConfig field is a String', () {
       final fields = _fieldsOf(TlsConfig);
 
-      expect(fields.keys, {'chainPath', 'keyPath', 'keyPassword'},
-          reason: 'the sweep below is only as good as what it walks; a field '
-              'added without a line here is a field nobody decided about');
-
+      // The type loop runs *before* the inventory below on purpose. Both bite
+      // when a `List<int> keyBytes` is added, and the one that should report
+      // it is the one that names the offending type — an inventory mismatch
+      // reads as "somebody forgot to update a list".
       for (final entry in fields.entries) {
         expect(_typeName(entry.value), 'String',
             reason: 'SEC-01: TlsConfig.${entry.key} is declared '
@@ -221,6 +221,10 @@ void main() {
                 'toString, log line or crash dump carries it out. A config '
                 'that cannot hold bytes cannot leak them.');
       }
+
+      expect(fields.keys, {'chainPath', 'keyPath', 'keyPassword'},
+          reason: 'the sweep above is only as good as what it walks; a field '
+              'added without a line here is a field nobody decided about');
     });
 
     test('ServerConfig declares no SecurityContext', () {
