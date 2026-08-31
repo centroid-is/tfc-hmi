@@ -33,6 +33,7 @@ import 'package:tfc/page_creator/assets/analog_box.dart';
 import 'package:tfc/page_creator/assets/common.dart';
 import 'package:tfc/page_creator/assets/conveyor.dart';
 import 'package:tfc/page_creator/assets/conveyor_gate.dart';
+import 'package:tfc/page_creator/assets/section_button.dart';
 import 'package:tfc/page_creator/assets/sensor.dart';
 import 'package:tfc/pages/page_view.dart';
 import 'package:tfc/widgets/hit_boundary.dart';
@@ -126,12 +127,14 @@ void main() {
       List<Asset> assets, {
       Size surface = const Size(800, 600),
       bool dark = false,
+      bool appBar = false,
     }) async {
       await tester.binding.setSurfaceSize(surface);
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final fake = _FakeStateMan()
         ..push('gate/state', true)
+        ..pushValue('sec/a', _runningSection())
         // A belt with no reading yet renders grey and takes no taps at all
         // (`!snapshot.hasData` in `Conveyor`), so there would be nothing to
         // mark — and its pane reads the drive struct member by member, so a
@@ -145,6 +148,11 @@ void main() {
               ? themesForScheme(AppColorScheme.muted).$2
               : themesForScheme(AppColorScheme.muted).$1,
           home: Scaffold(
+            // The real app puts every mimic under `BaseScaffold`'s bar, which
+            // makes the canvas shorter than the screen — the gap an asset
+            // sizing itself off `MediaQuery` falls into. Off by default so
+            // the existing frames keep their framing.
+            appBar: appBar ? AppBar(title: const Text('Plant')) : null,
             body: LayoutBuilder(
               builder: (context, constraints) => AssetStack(
                 assets: assets,
@@ -401,7 +409,50 @@ void main() {
       await tapGlyph(tester, find.byType(AnalogBox));
       await expectCanvas(tester, 'hit_boundary_analog_box');
     });
+
+    testWidgets('a section button: the disc, on a canvas short of the screen',
+        (tester) async {
+      // The button is a disc in its box and publishes that disc, so the ring
+      // should sit on the rim with the label clear below it.
+      //
+      // Under an app bar, which is where every mimic in the app actually
+      // lives: the canvas is shorter than the screen, and the button used to
+      // derive its published shape from `MediaQuery` — a fraction of the
+      // whole window rather than of the canvas it is drawn on. That put the
+      // ring low and wide of the disc, over the label. If it ever creeps off
+      // the rim again, this frame says so.
+      await pump(
+        tester,
+        [
+          SectionButtonConfig(
+            label: 'Before freezers',
+            sections: [SectionRef(key: 'sec/a')],
+          )
+            ..text = 'Before freezers'
+            ..textPos = TextPos.below
+            ..coordinates = Coordinates(x: 0.5, y: 0.45)
+            ..size = const RelativeSize(width: 0.16, height: 0.24),
+        ],
+        surface: const Size(600, 400),
+        appBar: true,
+      );
+      await tapGlyph(tester, find.byType(SectionButton));
+      await expectCanvas(tester, 'hit_boundary_section_button');
+    });
   });
+}
+
+/// A section standing in auto with nothing holding it off — the state the
+/// button paints green for, and the one the pane opens on.
+DynamicValue _runningSection() {
+  final section = DynamicValue();
+  section[kSectionStatEnabled] =
+      DynamicValue(value: true, typeId: NodeId.boolean);
+  section[kSectionStatCleanEnabled] =
+      DynamicValue(value: false, typeId: NodeId.boolean);
+  section[kSectionStatPermissive] =
+      DynamicValue(value: true, typeId: NodeId.boolean);
+  return section;
 }
 
 /// An `FB_ATV320` HMI struct for a belt that is running in auto.
