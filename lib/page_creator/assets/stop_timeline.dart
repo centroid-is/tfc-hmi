@@ -59,7 +59,13 @@ class StopTimelineConfig extends BaseAsset {
   StopTimelineConfig.preview()
       : groups = [],
         periodHours = 12,
-        headerText = null;
+        headerText = null {
+    // A timeline is a chart, not a badge: at the 3% square `BaseAsset`
+    // defaults to, the header alone does not fit and there is nothing to
+    // read. Drop it at the size it is meant to be worked with, the way the
+    // other canvas-sized assets do.
+    size = const RelativeSize(width: 0.4, height: 0.3);
+  }
 
   // The asset binds to alarms, not to OPC UA keys, so it contributes nothing
   // to the page's key set.
@@ -1186,6 +1192,19 @@ class _StopTimelineConfigFormState
           decoration: const InputDecoration(labelText: 'Header text'),
           onChanged: (v) =>
               widget.config.headerText = v.isEmpty ? null : v,
+        ),
+        const SizedBox(height: 16),
+        // Every other asset's form ends with these two. Without them the
+        // only way to size a timeline is the canvas grow/shrink pair, in
+        // 10% steps -- which is not a way to size a chart.
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (value) => setState(() => widget.config.size = value),
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (c) => setState(() => widget.config.coordinates = c),
         ),
       ]),
     );
