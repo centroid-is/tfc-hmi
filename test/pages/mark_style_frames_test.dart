@@ -133,10 +133,11 @@ void main() {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
           find.byKey(_sceneKey));
 
-      // 18 frames at 15fps: 1200ms, which is one turn of the slow styles and
-      // two of the brisk one, so every clip is the same length and loops.
-      const frames = 18;
-      const step = Duration(microseconds: 1200000 ~/ frames);
+      // Exactly one period of whatever style is wired in, at 15fps, so every
+      // clip closes onto its own first frame and loops.
+      final micros = HitBoundaryStyle.selection.period.inMicroseconds;
+      final frames = (micros * 15 / 1000000).round();
+      final step = Duration(microseconds: micros ~/ frames);
       for (var i = 0; i < frames; i++) {
         await tester.runAsync(() async {
           final ui.Image image = await boundary.toImage(pixelRatio: 2);

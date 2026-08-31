@@ -227,9 +227,16 @@ class HitBoundaryStyle {
   final Duration period;
 
   /// How far the line's opacity falls at the trough of its breath, 0..1.
-  /// Zero holds it steady, which is what a marching ring normally wants —
-  /// the crawl is already the thing saying "live".
+  /// Zero holds it steady; one takes the ring all the way out and brings it
+  /// back.
   final double pulse;
+
+  /// Whether the dashes travel round the ring.
+  ///
+  /// Off with a [pulse] on, the ring is a fixed dashed outline that fades in
+  /// and out — the motion is the breath rather than the crawl. Off with no
+  /// pulse it is a still dashed outline, which says nothing a border does not.
+  final bool crawl;
 
   /// Paint the gaps in the light tone instead of leaving them empty.
   ///
@@ -246,6 +253,7 @@ class HitBoundaryStyle {
     this.strokeWidth = 1.6,
     this.period = const Duration(milliseconds: 1200),
     this.pulse = 0,
+    this.crawl = true,
     this.twoTone = false,
   });
 
@@ -263,6 +271,21 @@ class HitBoundaryStyle {
   /// editors use, and the one that keeps the ring readable over a dark belt.
   static const twoToneMarch = HitBoundaryStyle(twoTone: true);
 
+  /// Still dashes, breathing all the way in and out. The ring is where it
+  /// was; what moves is how present it is. Slower than the crawling styles —
+  /// a breath at walking pace reads as panting.
+  static const pulsing = HitBoundaryStyle(
+    pulse: 0.85,
+    crawl: false,
+    period: Duration(milliseconds: 1800),
+  );
+
+  /// Both at once, and the fade taken much deeper than [breathing] takes it.
+  static const marchAndFade = HitBoundaryStyle(
+    pulse: 0.75,
+    period: Duration(milliseconds: 1800),
+  );
+
   /// The style the plant view actually marks with.
   static const selection = march;
 
@@ -272,6 +295,7 @@ class HitBoundaryStyle {
     double? strokeWidth,
     Duration? period,
     double? pulse,
+    bool? crawl,
     bool? twoTone,
   }) =>
       HitBoundaryStyle(
@@ -280,6 +304,7 @@ class HitBoundaryStyle {
         strokeWidth: strokeWidth ?? this.strokeWidth,
         period: period ?? this.period,
         pulse: pulse ?? this.pulse,
+        crawl: crawl ?? this.crawl,
         twoTone: twoTone ?? this.twoTone,
       );
 
@@ -291,11 +316,12 @@ class HitBoundaryStyle {
       other.strokeWidth == strokeWidth &&
       other.period == period &&
       other.pulse == pulse &&
+      other.crawl == crawl &&
       other.twoTone == twoTone;
 
   @override
   int get hashCode =>
-      Object.hash(dash, gap, strokeWidth, period, pulse, twoTone);
+      Object.hash(dash, gap, strokeWidth, period, pulse, crawl, twoTone);
 }
 
 /// Draws [contours] as a ring of dashes that crawl around the shape.
@@ -392,7 +418,9 @@ class HitBoundaryPainter extends CustomPainter {
       final fitted =
           fitDashes(perimeter, dash: style.dash, gap: style.gap);
       final period = fitted.dash + fitted.gap;
-      final travelled = phase * period;
+      // A ring that only breathes keeps its dashes where they are; the phase
+      // is still what drives the breath.
+      final travelled = style.crawl ? phase * period : 0.0;
 
       draw(
         dashRing(ring,

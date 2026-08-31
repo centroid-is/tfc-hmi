@@ -191,6 +191,32 @@ void main() {
             contours: contours, style: HitBoundaryStyle.brisk)),
         isTrue,
       );
+      expect(
+        painter.shouldRepaint(HitBoundaryPainter(
+            contours: contours, style: HitBoundaryStyle.pulsing)),
+        isTrue,
+        reason: 'a ring that breathes instead of crawling is a different ring',
+      );
+    });
+
+    test('a ring that only breathes keeps its dashes where they are', () {
+      // The pulsing style animates opacity, not position. Phase still drives
+      // it — that is what makes the breath — so the guard is that the dashes
+      // it cuts do not move with it.
+      final ring = [
+        for (var i = 0; i < 4; i++)
+          Offset(i == 1 || i == 2 ? 100 : 0, i >= 2 ? 100 : 0),
+      ];
+      final still = HitBoundaryStyle.pulsing;
+      expect(still.crawl, isFalse);
+      expect(still.pulse, greaterThan(0));
+
+      // The painter slides the pattern by `phase * period` only when the
+      // style crawls, so a still ring is the phase-0 cut at every phase.
+      final at0 = dashRing(ring, dash: 6, gap: 4, phase: 0);
+      final at7 = dashRing(ring, dash: 6, gap: 4, phase: 7);
+      expect(at7, isNot(at0), reason: 'the cut itself does move with phase');
+      expect(dashRing(ring, dash: 6, gap: 4, phase: 0), at0);
     });
 
     test('the two tones are far enough apart to carry any background', () {
