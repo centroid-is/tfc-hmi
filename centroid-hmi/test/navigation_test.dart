@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart' show Consumer;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/access_routes.dart';
 import 'package:tfc/models/menu_item.dart';
+import 'package:tfc/pages/access_admin.dart';
 import 'package:tfc/pages/alarm_editor.dart';
 import 'package:tfc/pages/audit_trail.dart';
 import 'package:tfc/pages/first_user.dart';
@@ -73,6 +74,13 @@ void main() {
       // hidden entry is a page nobody knows to ask for. The `users` route gate
       // is the access control; god mode is menu decoration.
       expect(paths, contains('/advanced/audit-trail'));
+      // The same decision, taken again for the admin screen and pinned here
+      // rather than left incidental. It surfaces no secret — the user list is
+      // username, role, created and last login, and passwordHash and salt never
+      // reach the widget layer — and it is the commissioning-critical screen:
+      // "create roles, then users, then the first-user window closes" cannot be
+      // followed from a station where the entry is invisible without TFC_GOD.
+      expect(paths, contains('/advanced/access'));
     });
 
     test('god mode reveals them', () {
@@ -276,10 +284,10 @@ void main() {
       expect(lb.routes.containsKey('/draft'), isFalse);
     });
 
-    /// The eight raised routes, proven one at a time.
+    /// The nine raised routes, proven one at a time.
     ///
     /// These are the tests that keep `kRaisedRoutes` and the route table
-    /// spelling the same eight strings: a path mistyped in either place is a
+    /// spelling the same nine strings: a path mistyped in either place is a
     /// route that silently stays open, and nothing else in the repo would
     /// notice. Each group is asserted by its literal path rather than in a
     /// loop over the map, because a loop passes just as happily when the map
@@ -394,6 +402,22 @@ void main() {
         expect(gate.child, isA<AuditTrailPage>());
       });
 
+      testWidgets('access needs users', (tester) async {
+        // The whole of the enforcement for *reading* the admin screen.
+        // AccessAdminStore gates every write and audits every denial, but its
+        // reads are ungated on purpose — a row in the trail every time somebody
+        // opened the roles list would bury the writes that matter. If this gate
+        // is wrong, the account list and every role's group set are open to an
+        // anonymous panel.
+        final lb = createLocationBuilder([_page('Home', '/')]);
+        final gate = await buildGate(tester, lb, '/advanced/access');
+        expect(gate.group.name, 'users');
+        expect(gate.allowWhenRepositoryUnavailable, isFalse,
+            reason: 'with no repository there is no role table, so an exempt '
+                'admin page would edit nothing while looking like it worked');
+        expect(gate.child, isA<AccessAdminPage>());
+      });
+
       testWidgets('server config is the only route open while the repository is unavailable', (tester) async {
         // Catches the helper being changed to a per-call-site boolean: the flag
         // is read off every built gate, not off the declaration it came from.
@@ -407,7 +431,7 @@ void main() {
       });
 
       testWidgets('every declared path is a real route', (tester) async {
-        // Iterates the map rather than repeating the eight, so a typo in
+        // Iterates the map rather than repeating the nine, so a typo in
         // kRaisedRoutes fails here instead of leaving a route quietly open.
         final lb = createLocationBuilder([_page('Home', '/')]);
         for (final path in kRaisedRoutes.keys) {
@@ -431,6 +455,7 @@ void main() {
         expect(accessGroupForRoute('/advanced/ip-settings').name, 'administer');
         expect(accessGroupForRoute('/advanced/preferences').name, 'administer');
         expect(accessGroupForRoute('/advanced/audit-trail').name, 'users');
+        expect(accessGroupForRoute('/advanced/access').name, 'users');
         // A page-manager page is the plant's own page: operate, like everything
         // else on the floor.
         expect(accessGroupForRoute('/chiller').name, 'operate');
