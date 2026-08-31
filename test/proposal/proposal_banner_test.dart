@@ -381,12 +381,16 @@ void main() {
     test('accept-all opens the editor when nothing is staged yet', () {
       final body = acceptAllBody();
       final commit = body.indexOf('final commit = ref.read(proposalCommitProvider);');
-      final beam = body.indexOf('beamToNamed');
+      // Opening the editor is one shared helper now, not an inline beam:
+      // _openEditorTakes hands the proposal to the editor already on screen
+      // and beams only when there is none. Beaming to the route you are
+      // standing on is a no-op, so "Review all" from inside the editor used
+      // to do nothing at all.
+      final open = body.indexOf('_openEditorTakes(proposals.first)');
       expect(commit, greaterThan(-1));
-      expect(beam, greaterThan(-1));
-      expect(commit, lessThan(beam),
+      expect(open, greaterThan(-1));
+      expect(commit, lessThan(open),
           reason: 'a staged batch must be committed, not re-opened');
-      expect(body, contains('proposals.first.editorRoute'));
     });
 
     test('the button says what it will do', () {
@@ -460,8 +464,14 @@ void main() {
     });
 
     test('navigation carries the proposal json to the editor', () {
+      // Every button opens the editor through the same helper, so the json is
+      // threaded in one place -- into the editor already on screen, and into
+      // the beam that opens it when it is not.
+      expect(bannerSource, contains('entry.enter(proposal.proposalJson)'));
       expect(bannerSource, contains('data: proposal.proposalJson'));
-      expect(bannerSource, contains('data: proposals.first.proposalJson'));
+      // ...and the batch buttons reach it by handing over their first
+      // proposal, rather than by repeating the beam with their own json.
+      expect(bannerSource, contains('_openEditorTakes(proposals.first)'));
     });
   });
 }
