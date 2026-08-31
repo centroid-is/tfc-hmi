@@ -20,4 +20,7 @@ library;
 export 'src/relay_server.dart';
 export 'src/server_config.dart';
 export 'src/tls/mint.dart';
+// On the barrel because an embedder configures it: `ServerConfig.tls`'s type
+// has to be nameable by the code that builds a `ServerConfig`.
+export 'src/tls/tls_config.dart';
 export 'src/token_validator.dart';

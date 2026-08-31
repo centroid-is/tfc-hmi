@@ -241,17 +241,44 @@ final class RelayServer {
     return http.port;
   }
 
-  /// Binds loopback on an ephemeral port and starts accepting upgrades.
+  /// Binds [ServerConfig.address] on [ServerConfig.port] and starts accepting
+  /// upgrades, over TLS when [ServerConfig.tls] says so.
   ///
-  /// Loopback specifically (threat T-03-11): exposing the gateway on a public
-  /// interface is a Phase 6 deployment decision with a firewall attached to
-  /// it, not something a default should do quietly. Port 0 so two servers can
-  /// run in one test process without agreeing on a number.
+  /// Loopback and port 0 are still the defaults (threat T-03-11): exposing the
+  /// gateway on a public interface is a deployment decision with a firewall
+  /// attached to it, not something a default should do quietly, and port 0 is
+  /// so two servers can run in one test process without agreeing on a number.
+  /// What Phase 6 adds is the ability for a deployment to *be* deliberate
+  /// about both — the default is still not the deployment.
+  ///
+  /// **The `SecurityContext` is built here, not at config construction.**
+  /// `useCertificateChain` reads a file and `ServerConfig` is pinned pure data
+  /// (`server_config.dart:4-5`). It is also not memoised: `start()` refuses on
+  /// a closed server just below, so a restarted gateway is a new object and
+  /// there is nothing to reuse.
+  ///
+  /// **A missing or unreadable PEM lets its `FileSystemException` out.** There
+  /// is deliberately no plaintext fallback: a gateway that downgraded to
+  /// `ws://` because somebody misspelled a path would keep every panel working
+  /// while carrying the plant's traffic in cleartext, and that is discovered
+  /// by a packet capture months later. `tls == null` is the *other* thing — an
+  /// explicit choice visible in a config diff.
   Future<void> start() async {
     if (_closed) {
       throw StateError('a closed RelayServer cannot be restarted: its sessions '
           'are gone and its registry is disposed. Build a new one');
     }
+    final tls = config.tls;
+    // `withTrustedRoots: false` on the *server* context is not the client-side
+    // pinning posture repeated by mistake. A server context's trust store is
+    // consulted only when verifying client certificates, which this design
+    // does not do, so loading the system roots here would be surface with no
+    // purpose (06-RESEARCH §A.2, measured).
+    final security = tls == null
+        ? null
+        : (SecurityContext(withTrustedRoots: false)
+          ..useCertificateChain(tls.chainPath)
+          ..usePrivateKey(tls.keyPath, password: tls.keyPassword));
     _http = await shelf_io.serve(
       webSocketHandler(
         _onConnect,
@@ -267,8 +294,9 @@ final class RelayServer {
         // heartbeat is the reaper.
         pingInterval: config.pingInterval,
       ),
-      InternetAddress.loopbackIPv4,
-      0,
+      config.address,
+      config.port,
+      securityContext: security,
     );
     // After the bind, so a server that failed to bind has no timer running
     // against an empty registry, and one engine for the whole process — see

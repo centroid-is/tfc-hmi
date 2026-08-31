@@ -30,6 +30,10 @@
 ///   product. A 500 ms tick is a slideshow of the plant.
 library;
 
+import 'dart:io' show InternetAddress;
+
+import 'tls/tls_config.dart';
+
 /// The knobs a gateway is started with.
 ///
 /// Named arguments with defaults, in the style of
@@ -110,6 +114,16 @@ final class ServerConfig {
   /// `Origin`, entirely unaffected (03-RESEARCH Finding 1). Phase 6 supplies
   /// the real list when the web bundle ships; until then an empty list is the
   /// cross-site-WebSocket-hijacking defence, not a gap.
+  ///
+  /// **Not nullable, and that is a tested property** (`origin_test.dart`).
+  /// `shelf_web_socket` skips the check entirely when the list is `null`
+  /// (`web_socket_handler.dart:71-77`: `origin != null && _allowedOrigins !=
+  /// null && …`), measured in 06-RESEARCH §F.1 — so `null` is not "no
+  /// restriction configured yet", it is "cross-site WebSocket hijacking is
+  /// permitted". An empty list and a null list read almost identically in a
+  /// diff and mean opposite things, and the type is the only thing standing
+  /// between them. Anyone tidying `List<String>` into `List<String>?` to
+  /// express "unset" is removing the defence; a structural pin fails first.
   final List<String> allowedOrigins;
 
   /// Ceiling on keys in a single `subscribe` call. A real panel carries about
@@ -142,6 +156,38 @@ final class ServerConfig {
   /// room to spare.
   final Duration writeOutcomeTtl;
 
+  /// The certificate and key the gateway presents, or `null` for plaintext
+  /// `ws://`.
+  ///
+  /// **`null` is the default and it means plaintext.** Not because cleartext
+  /// on a plant LAN is acceptable — it is what SEC-02 exists to end — but
+  /// because the alternative is worse in exactly one way that matters: ten
+  /// bind/dial fixture sites in this package construct a `ServerConfig` with
+  /// no TLS argument and bind loopback on an ephemeral port, and a default
+  /// that made them all TLS would rewrite ten fixtures for no requirement.
+  /// A rewritten fixture is how a suite quietly stops testing what it used to.
+  ///
+  /// `null` here is therefore an **explicit choice, visible in a config
+  /// diff** — and it is a categorically different thing from a gateway that
+  /// was configured with TLS and fell back to plaintext because a path was
+  /// misspelled. There is no such fallback: [RelayServer.start] lets the
+  /// `FileSystemException` out (`tls_test.dart`, "a misspelled certificate
+  /// path fails the start, it does not serve ws").
+  final TlsConfig? tls;
+
+  /// The interface the gateway binds.
+  ///
+  /// Loopback by default (threat T-03-11), and the default is deliberately
+  /// **not** the deployment: exposing the gateway on a plant interface is a
+  /// decision with a firewall attached to it, not something a default should
+  /// do quietly. This field is what lets a deployment be deliberate about it.
+  final InternetAddress address;
+
+  /// The TCP port the gateway binds. `0` asks the operating system for an
+  /// ephemeral one, which is why two servers can run in one test process
+  /// without agreeing on a number.
+  final int port;
+
   /// The tick band's lower bound (SRV-03).
   static const Duration minTick = Duration(milliseconds: 50);
 
@@ -166,7 +212,10 @@ final class ServerConfig {
     this.maxFrameBytes = 1024 * 1024,
     this.maxPendingBytes = 8 * 1024 * 1024,
     this.writeOutcomeTtl = const Duration(seconds: 60),
-  }) {
+    this.tls,
+    InternetAddress? address,
+    this.port = 0,
+  }) : address = address ?? InternetAddress.loopbackIPv4 {
     if (tick < minTick || tick > maxTick) {
       throw ArgumentError('tick (${_ms(tick)}) is outside the supported band '
           '${_ms(minTick)}–${_ms(maxTick)}: below it the server burns a core '
@@ -193,6 +242,16 @@ final class ServerConfig {
           'of time answers every writeStatus with "never received", which is '
           'the one answer that tells an operator it is safe to actuate the '
           'machine a second time');
+    }
+    // Deliberately not `_positive` (trap 7): 0 is not a broken ceiling here,
+    // it is the ephemeral-port request every fixture in the package depends
+    // on. What is refused is a number no `bind` can accept — which otherwise
+    // surfaces as a raw `SocketException` from deep inside `start()`.
+    if (port < 0 || port > 65535) {
+      throw ArgumentError('port ($port) is outside 0-65535: 0 asks the '
+          'operating system for an ephemeral port and anything else must be '
+          'a real one, or the gateway fails to bind at boot on a plant '
+          'machine nobody is standing next to');
     }
     _positive('maxPending', maxPending);
     _positive('peakWindowMs', peakWindowMs);
