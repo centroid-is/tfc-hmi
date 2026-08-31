@@ -3,7 +3,9 @@
 ///
 /// Two of them are on this plant and they share this drawing because they
 /// share a housing: 126 x 30 x 26.5 mm, EtherCAT in and out on M8 at the top,
-/// eight signal sockets down the middle, power in and out at the foot.
+/// eight signal sockets down the middle, power in and out at the foot. Both
+/// end pairs are captioned — two identical rings of round connectors with
+/// 'IN / OUT' under each says nothing about which pair is the bus.
 ///
 ///  * **EP2338-1002** — 8-channel digital combi, each socket usable as an
 ///    input or an output. The PLC publishes it as an `ST_EP2338_0002`
@@ -133,24 +135,29 @@ class EPBoxPainter extends CustomPainter {
     }
 
     // --- EtherCAT in and out, M8, at the top ---
-    socket(const Offset(9, 10), 5);
-    socket(const Offset(21, 10), 5);
-    text('IN', const Offset(3, 16), fontSize: 2.6, width: 12);
-    text('OUT', const Offset(15, 16), fontSize: 2.6, width: 12);
+    // Captioned, because the box has two identical-looking pairs of round
+    // connectors and 'IN / OUT' twice over says nothing about which is the
+    // bus and which is the 24 V. Getting that wrong at the cabinet is a
+    // wasted trip at best.
+    text('ETHERCAT', const Offset(0, 2), fontSize: 2.6, width: design.width);
+    socket(const Offset(9, 11), 5);
+    socket(const Offset(21, 11), 5);
+    text('IN', const Offset(3, 17), fontSize: 2.6, width: 12);
+    text('OUT', const Offset(15, 17), fontSize: 2.6, width: 12);
 
     // --- Wordmark ---
-    text('BECKHOFF', const Offset(0, 20),
+    text('BECKHOFF', const Offset(0, 22),
         fontSize: 3.4, color: const Color(0xFFE30613), width: design.width);
-    text(model, const Offset(0, 24.5), fontSize: 3.0, width: design.width);
+    text(model, const Offset(0, 26.5), fontSize: 3.0, width: design.width);
     if (name.isNotEmpty) {
-      text(name, const Offset(0, 28.5), fontSize: 2.6, width: design.width);
+      text(name, const Offset(0, 30.5), fontSize: 2.6, width: design.width);
     }
 
     // --- The eight signal sockets, two columns of four ---
-    // First row clears the tag above it: a socket at 41 with a 5 mm radius
-    // starts at 36, and the tag's baseline is 31.
-    const firstTop = 41.0;
-    const rowPitch = 17.0;
+    // First row clears the tag above it: a socket at 42 with a 5 mm radius
+    // starts at 37, and the tag's last line ends around 34.
+    const firstTop = 42.0;
+    const rowPitch = 16.0;
     for (int i = 0; i < epBoxChannelCount; i++) {
       final row = i ~/ 2;
       final column = i % 2;
@@ -175,22 +182,23 @@ class EPBoxPainter extends CustomPainter {
       );
     }
 
-    // --- Power in and out at the foot ---
+    // --- Power in and out at the foot, captioned for the same reason ---
+    text('POWER', const Offset(0, 102), fontSize: 2.6, width: design.width);
     socket(const Offset(9, 113), 5.5);
     socket(const Offset(21, 113), 5.5);
-    text('IN', const Offset(3, 119.5), fontSize: 2.6, width: 12);
-    text('OUT', const Offset(15, 119.5), fontSize: 2.6, width: 12);
+    text('IN', const Offset(3, 119), fontSize: 2.6, width: 12);
+    text('OUT', const Offset(15, 119), fontSize: 2.6, width: 12);
 
     // --- "Nothing is arriving" ---
+    // Beside the identity block rather than at the foot: the foot now
+    // carries the POWER caption, and the mark belongs next to the tag it is
+    // talking about anyway.
     if (disconnected) {
       final mark = Paint()
         ..color = Colors.red
         ..style = PaintingStyle.fill;
-      canvas.drawRect(
-        Rect.fromLTWH(design.width / 2 - 0.9, 102.0, 1.8, 4.5),
-        mark,
-      );
-      canvas.drawCircle(Offset(design.width / 2, 108.0), 0.9, mark);
+      canvas.drawRect(Rect.fromLTWH(25.1, 23.0, 1.8, 4.5), mark);
+      canvas.drawCircle(const Offset(26.0, 29.0), 0.9, mark);
     }
 
     canvas.restore();

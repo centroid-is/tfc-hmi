@@ -23,6 +23,8 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 
 import '../../painter/beckhoff/ps2001.dart' show Ps2001FaceState;
 import '../../theme.dart' show HmiStateColors;
+import '../../widgets/graph.dart' show GraphAxisConfig, GraphType;
+import 'graph.dart' show GraphAssetConfig, GraphSeriesConfig;
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
 import 'led.dart' show LEDPainter, LEDType;
@@ -60,6 +62,65 @@ const String ps2001VoltageMember = 'p_stat_Output_voltage';
 
 /// Struct member carrying the measured output current, in amperes.
 const String ps2001CurrentMember = 'p_stat_Output_current';
+
+/// The two measured members over time, on their own axes.
+///
+/// Volts sit around 24 and amps between 0 and 10, so they cannot share a
+/// scale — on one axis the current is a flat line along the bottom and the
+/// trend is useless for the thing an operator opened it for. Voltage takes
+/// the left axis, current the right.
+///
+/// Charting a struct member rather than a scalar key needs the collector to
+/// have picked these two out with `sample_members`; a key collected whole
+/// gives [GraphSeriesConfig.member] nothing to pluck and the trace comes back
+/// empty. That is why the trend is opt-in per asset rather than always on.
+/// One measured member on its own, for a tile-sized sparkline.
+///
+/// The preview is a "something is happening" cue at 90 px; two traces on two
+/// axes in that space is a smudge. Each tile previews its own quantity and
+/// the tap opens [ps2001TrendConfig], where both fit.
+GraphAssetConfig ps2001SeriesConfig({
+  required String stateKey,
+  required String member,
+  required String label,
+  required String unit,
+  Duration window = const Duration(minutes: 30),
+}) =>
+    GraphAssetConfig(
+      graphType: GraphType.timeseries,
+      primarySeries: [
+        GraphSeriesConfig(key: stateKey, label: label, member: member),
+      ],
+      yAxis: GraphAxisConfig(unit: unit),
+      timeWindowMinutes: window,
+    );
+
+GraphAssetConfig ps2001TrendConfig({
+  required String stateKey,
+  String? headerText,
+  Duration window = const Duration(minutes: 30),
+}) =>
+    GraphAssetConfig(
+      graphType: GraphType.timeseries,
+      primarySeries: [
+        GraphSeriesConfig(
+          key: stateKey,
+          label: 'Output',
+          member: ps2001VoltageMember,
+        ),
+      ],
+      secondarySeries: [
+        GraphSeriesConfig(
+          key: stateKey,
+          label: 'Draw',
+          member: ps2001CurrentMember,
+        ),
+      ],
+      yAxis: const GraphAxisConfig(unit: 'V'),
+      yAxis2: const GraphAxisConfig(unit: 'A'),
+      timeWindowMinutes: window,
+      headerText: headerText,
+    );
 
 /// The unit's rated output. Used only to say how much headroom is left —
 /// PS2001-**2410** is the 24 V, 10 A part, which is the only PS2001 variant
@@ -189,9 +250,21 @@ String ps2001Explanation(Ps2001FaceState state) => switch (state) {
 /// A plain [StatelessWidget] fed values — the subscription belongs to the
 /// asset, which outlives the overlay this is built into.
 class Ps2001PaneBody extends StatelessWidget {
-  const Ps2001PaneBody({super.key, required this.status, this.description});
+  const Ps2001PaneBody({
+    super.key,
+    required this.status,
+    this.description,
+    this.trendTile,
+  });
 
   final Ps2001Status status;
+
+  /// The trend block, or null when the page author left the trend out.
+  ///
+  /// Injected as a built widget rather than built here, the way the analog
+  /// box does it: the chart needs the collector provider, and a canned
+  /// preview keeps the pane's own tests provider-free.
+  final Widget? trendTile;
 
   /// What this supply feeds, when the page says. Named so the operator does
   /// not have to work out which rail `ST301.T1` is.
@@ -285,6 +358,8 @@ class Ps2001PaneBody extends StatelessWidget {
             ],
           ),
         ),
+        if (trendTile != null)
+          PaneBodySection.trend(title: 'Over time', child: trendTile!),
       ],
     );
   }
@@ -335,6 +410,7 @@ void showPs2001Pane({
   required String id,
   required String title,
   required Stream<({Ps2001Status status, String? description})> stream,
+  Widget? trendTile,
 }) {
   showSidePane(
     context: context,
@@ -357,6 +433,7 @@ void showPs2001Pane({
           child: Ps2001PaneBody(
             status: status,
             description: data?.description,
+            trendTile: trendTile,
           ),
         );
       },

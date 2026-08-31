@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/beckhoff.dart';
+import 'package:tfc/page_creator/assets/graph.dart' show GraphAssetConfig;
 import 'package:tfc/page_creator/assets/ps2001.dart';
 import 'package:tfc/painter/beckhoff/ps2001.dart'
     show PS2001Widget, Ps2001FaceState;
@@ -168,12 +169,52 @@ void main() {
     });
   });
 
+  group('the trend', () {
+    test('charts both members off the one struct key, on separate axes', () {
+      // Volts sit near 24 and amps between 0 and 10. Sharing an axis flattens
+      // the current into the baseline, which is the trace somebody opened the
+      // trend to read.
+      final chart = ps2001TrendConfig(stateKey: _stateKey);
+
+      expect(chart.primarySeries.single.key, _stateKey);
+      expect(chart.primarySeries.single.member, ps2001VoltageMember);
+      expect(chart.secondarySeries.single.member, ps2001CurrentMember);
+      expect(chart.yAxis.unit, 'V');
+      expect(chart.yAxis2?.unit, 'A');
+    });
+
+    test('a tile chart carries one member, not both', () {
+      final chart = ps2001SeriesConfig(
+        stateKey: _stateKey,
+        member: ps2001CurrentMember,
+        label: 'Draw',
+        unit: 'A',
+      );
+
+      expect(chart.primarySeries.single.member, ps2001CurrentMember);
+      expect(chart.secondarySeries, isEmpty);
+    });
+
+    test('both series name a member — a struct key charted whole plots '
+        'nothing', () {
+      // GraphSeriesConfig.member is what plucks a value out of a
+      // sample_members row. A null member here would silently chart the whole
+      // struct, i.e. an empty trace.
+      final chart = ps2001TrendConfig(stateKey: _stateKey);
+
+      for (final series in [...chart.primarySeries, ...chart.secondarySeries]) {
+        expect(series.member, isNotNull, reason: '${series.label} has no member');
+      }
+    });
+  });
+
   group('BeckhoffPS2001Config', () {
     test('round-trips through JSON', () {
       final config = BeckhoffPS2001Config(
         nameOrId: 'ST301.T1',
         stateKey: _stateKey,
         descriptionKey: _descriptionKey,
+        trend: true,
       );
 
       final restored = BeckhoffPS2001Config.fromJson(config.toJson());
@@ -181,6 +222,21 @@ void main() {
       expect(restored.nameOrId, 'ST301.T1');
       expect(restored.stateKey, _stateKey);
       expect(restored.descriptionKey, _descriptionKey);
+      expect(restored.trend, isTrue);
+    });
+
+    test('the trend is off unless the page author asks for it', () {
+      final config = BeckhoffPS2001Config(nameOrId: 'T1', stateKey: _stateKey);
+
+      expect(config.trend, isFalse);
+
+      // A page saved before the field existed must not gain a trend on load.
+      // The fixture is a real config's JSON with the key taken back out,
+      // which is exactly what those saved pages hold.
+      final legacyJson = Map<String, dynamic>.from(config.toJson())
+        ..remove('trend');
+      expect(legacyJson.containsKey('trend'), isFalse);
+      expect(BeckhoffPS2001Config.fromJson(legacyJson).trend, isFalse);
     });
 
     test('allKeys carries the state key so resubscribe covers it', () {
@@ -333,6 +389,16 @@ void main() {
       );
 
       expect(find.textContaining('hiccup mode'), findsOneWidget);
+    });
+
+    testWidgets('carries no trend section unless one was passed in',
+        (tester) async {
+      await open(
+        tester,
+        struct: _struct(flags: {Ps2001Flag.dcOk: true}),
+      );
+
+      expect(find.text('Over time'), findsNothing);
     });
 
     testWidgets('names the rail in words, never the OPC UA key',

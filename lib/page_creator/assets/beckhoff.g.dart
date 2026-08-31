@@ -318,6 +318,7 @@ BeckhoffPS2001Config _$BeckhoffPS2001ConfigFromJson(
       nameOrId: json['nameOrId'] as String,
       stateKey: json['stateKey'] as String?,
       descriptionKey: json['descriptionKey'] as String?,
+      trend: json['trend'] as bool? ?? false,
     )
       ..variant = json['asset_name'] as String
       ..coordinates =
@@ -341,6 +342,7 @@ Map<String, dynamic> _$BeckhoffPS2001ConfigToJson(
       'nameOrId': instance.nameOrId,
       'stateKey': instance.stateKey,
       'descriptionKey': instance.descriptionKey,
+      'trend': instance.trend,
     };
 
 BeckhoffEL6070Config _$BeckhoffEL6070ConfigFromJson(

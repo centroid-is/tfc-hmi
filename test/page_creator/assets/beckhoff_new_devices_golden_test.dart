@@ -8,9 +8,11 @@ import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/beckhoff.dart';
 import 'package:tfc/page_creator/assets/common.dart' show Asset, RelativeSize;
 import 'package:tfc/page_creator/assets/ep_box.dart' show EPBoxVariant;
-import 'package:tfc/page_creator/assets/ps2001.dart' show Ps2001Flag;
+import 'package:tfc/page_creator/assets/ps2001.dart'
+    show Ps2001Flag, Ps2001PaneBody, Ps2001Status;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
 import 'package:tfc/theme.dart';
+import 'package:tfc/widgets/panes/pane_chrome.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
@@ -69,7 +71,6 @@ const _epBoxDescriptions = 'ST301.ECT.ST301_RM05.Sockets';
 class _BeckhoffStateMan extends Fake implements StateMan {
   _BeckhoffStateMan({
     this.el2912Under = false,
-    this.el2912Over = false,
     this.ps2001Flags = const {},
     this.ps2001Voltage = 24.1,
     this.ps2001Current = 3.2,
@@ -78,7 +79,13 @@ class _BeckhoffStateMan extends Fake implements StateMan {
   });
 
   final bool el2912Under;
-  final bool el2912Over;
+
+  /// Always low here. Over- and underrange render the same face — one red
+  /// lamp — so a second golden would pin nothing the widget tests do not
+  /// already cover; the bit still has to publish, or the combined stream
+  /// never emits.
+  final bool el2912Over = false;
+
   final Map<Ps2001Flag, bool> ps2001Flags;
   final double ps2001Voltage;
   final double ps2001Current;
@@ -286,6 +293,56 @@ void main() {
       await shot('ps2001_pane_strained');
     });
 
+    // The trend block, with a canned preview in place of the real chart —
+    // the collector is not running under `flutter test`, and this golden is
+    // about where the section sits and how the two tiles read, not about
+    // cristalyse's line rendering.
+    testWidgets('PS2001 pane — the trend section', (tester) async {
+      Widget sparkline(Color color) => CustomPaint(
+            painter: _SparklinePainter(color),
+            child: const SizedBox.expand(),
+          );
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          stateManProvider.overrideWith((ref) async => _BeckhoffStateMan()),
+        ],
+        child: MaterialApp(
+          theme: light,
+          home: Scaffold(
+            body: SizedBox(
+              width: 380,
+              child: SingleChildScrollView(
+                child: Ps2001PaneBody(
+                  status: Ps2001Status.read(_stubStruct()),
+                  description: 'Cabinet A1 24 V rail',
+                  trendTile: PaneTileRow(
+                    children: [
+                      PaneGraphTile(
+                        label: 'Output V',
+                        height: 90,
+                        preview: sparkline(Colors.teal),
+                        expandedBuilder: (_) => const SizedBox(),
+                      ),
+                      PaneGraphTile(
+                        label: 'Draw A',
+                        height: 90,
+                        preview: sparkline(Colors.orange),
+                        expandedBuilder: (_) => const SizedBox(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await shot('ps2001_pane_trend');
+    });
+
     // ----- EtherCAT Box -------------------------------------------------
 
     testWidgets('EP2338 face — four sockets carrying', (tester) async {
@@ -381,4 +438,48 @@ void main() {
       await shot('beckhoff_rack_with_new_terminals');
     });
   });
+}
+
+/// A healthy supply, for the trend golden.
+DynamicValue _stubStruct() {
+  final dv = DynamicValue();
+  for (final flag in Ps2001Flag.values) {
+    dv[flag.member] = flag == Ps2001Flag.dcOk;
+  }
+  dv['p_stat_Output_voltage'] = 24.1;
+  dv['p_stat_Output_current'] = 3.2;
+  return dv;
+}
+
+/// A fixed squiggle. Deterministic on purpose — a golden of live chart data
+/// would churn on every run.
+class _SparklinePainter extends CustomPainter {
+  const _SparklinePainter(this.color);
+
+  final Color color;
+
+  static const _points = [
+    0.55, 0.52, 0.58, 0.61, 0.49, 0.44, 0.52, 0.66, 0.71, 0.63,
+    0.58, 0.55, 0.6, 0.68, 0.62,
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path();
+    for (int i = 0; i < _points.length; i++) {
+      final x = size.width * i / (_points.length - 1);
+      final y = size.height * (1 - _points[i]);
+      i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SparklinePainter old) => old.color != color;
 }

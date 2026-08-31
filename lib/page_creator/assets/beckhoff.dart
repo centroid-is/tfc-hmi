@@ -2479,10 +2479,21 @@ class BeckhoffPS2001Config extends BaseAsset {
   /// Optional: which rail this unit feeds, in words.
   String? descriptionKey;
 
+  /// Show the voltage and current over time in the pane.
+  ///
+  /// Off by default, and deliberately a choice rather than something the
+  /// asset assumes. The two figures are struct members, so a trend only has
+  /// anything to draw where the collector picks them out with
+  /// `sample_members`; on a unit collected whole the chart would come back
+  /// empty and read as "the supply stopped reporting".
+  @JsonKey(defaultValue: false)
+  bool trend;
+
   BeckhoffPS2001Config({
     required this.nameOrId,
     this.stateKey,
     this.descriptionKey,
+    this.trend = false,
   });
 
   @override
@@ -2501,6 +2512,7 @@ class BeckhoffPS2001Config extends BaseAsset {
       : nameOrId = "T1",
         stateKey = null,
         descriptionKey = null,
+        trend = false,
         super();
 
   factory BeckhoffPS2001Config.fromJson(Map<String, dynamic> json) =>
@@ -2556,6 +2568,20 @@ class _PS2001ConfigContentState extends State<_PS2001ConfigContent> {
           onChanged: (value) => widget.config.descriptionKey = value,
           label: 'Description Key',
         ),
+        const SizedBox(height: 8),
+        CheckboxListTile(
+          key: const ValueKey('ps2001-trend'),
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: widget.config.trend,
+          onChanged: (value) =>
+              setState(() => widget.config.trend = value ?? false),
+          title: const Text('Trend the voltage and current'),
+          subtitle: const Text(
+            'Needs the collector to sample this struct\'s members — a unit '
+            'collected whole has nothing to plot.',
+          ),
+        ),
       ],
     );
   }
@@ -2581,6 +2607,46 @@ class _BeckhoffPS2001 extends ConsumerWidget {
       status: Ps2001Status.read(data["state"]),
       description:
           (description == null || description.isEmpty) ? null : description,
+    );
+  }
+
+  /// The pane's trend block: a sparkline of each measurement, either of
+  /// which opens the same two-axis chart. Built here rather than in the pane
+  /// because the pane outlives this build — see [showPs2001Pane].
+  Widget? _trendTile() {
+    final key = config.stateKey;
+    if (!config.trend || key == null) return null;
+
+    final chart = ps2001TrendConfig(
+      stateKey: key,
+      headerText: config.nameOrId,
+    );
+
+    Widget tile(String label, String member, String unit) => PaneGraphTile(
+          label: label,
+          height: 90,
+          preview: GraphAsset(
+            ps2001SeriesConfig(
+              stateKey: key,
+              member: member,
+              label: label,
+              unit: unit,
+            ),
+            compact: true,
+          ),
+          // Both tiles open the one chart. Volts and amps are read together
+          // — "it sagged when the draw jumped" is the whole diagnosis — and
+          // splitting them into two dialogs would hide exactly that.
+          expandedTitle: '${config.nameOrId} — output',
+          expandedSize: const Size(820, 520),
+          expandedBuilder: (_) => GraphAsset(chart),
+        );
+
+    return PaneTileRow(
+      children: [
+        tile('Output V', ps2001VoltageMember, 'V'),
+        tile('Draw A', ps2001CurrentMember, 'A'),
+      ],
     );
   }
 
@@ -2612,6 +2678,7 @@ class _BeckhoffPS2001 extends ConsumerWidget {
                     id: _paneId,
                     title: config.nameOrId,
                     stream: _combinedStreamVia(_keys, stateMan).map(_decode),
+                    trendTile: _trendTile(),
                   );
                 },
                 child: PS2001Widget(
