@@ -97,6 +97,24 @@ class _RecordingStore extends AccessAdminStore {
 
   final List<String> calls = [];
 
+  /// Held open, the roster read the delete dialog makes never comes back — the
+  /// only way to observe the "not yet asked" state, which is otherwise one
+  /// microtask wide.
+  Completer<void>? holdReads;
+
+  /// Makes the roster read fail, so the delete dialog can answer neither of
+  /// its two questions. Only `listUsers` and never `roles`: a failing `roles`
+  /// is the section's own unavailable state and would leave no row to press.
+  Object? listUsersThrows;
+
+  /// What the next `deleteRole` throws instead of deleting, once.
+  ///
+  /// The losing race cannot be staged any other way. The dialog's pre-check
+  /// and the repository's in-transaction guard are two different moments, and
+  /// a test cannot get between them from outside. Cleared after it fires, so a
+  /// second attempt behaves normally.
+  Object? deleteThrowsOnce;
+
   @override
   Future<List<AccessRole>> roles() {
     calls.add('roles');
@@ -104,8 +122,12 @@ class _RecordingStore extends AccessAdminStore {
   }
 
   @override
-  Future<List<AppUserData>> listUsers() {
+  Future<List<AppUserData>> listUsers() async {
     calls.add('listUsers');
+    final hold = holdReads;
+    if (hold != null) await hold.future;
+    final boom = listUsersThrows;
+    if (boom != null) throw boom;
     return super.listUsers();
   }
 
@@ -125,8 +147,13 @@ class _RecordingStore extends AccessAdminStore {
 
   @override
   Future<void> deleteRole(String name,
-      {String origin = 'operator', String? reason}) {
+      {String origin = 'operator', String? reason}) async {
     calls.add('deleteRole:$name');
+    final boom = deleteThrowsOnce;
+    if (boom != null) {
+      deleteThrowsOnce = null;
+      throw boom;
+    }
     return super.deleteRole(name, origin: origin, reason: reason);
   }
 
@@ -163,6 +190,11 @@ class _UsersGate extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
+
+/// A panel with nobody signed in. It may open the delete dialog and press
+/// Delete; the store is what refuses, and the shared prompt is what explains.
+AccessSession _anonymous() =>
+    AccessSession.anonymous(const {AccessGroup.operate});
 
 /// The engineer the `users` gate exists for: they may edit a page and must not
 /// be able to re-scope who may write what. Spec §1 separates `users` from
@@ -1034,6 +1066,250 @@ void main() {
           isNot(contains(AccessGroup.users)));
 
       await signOut(tester);
+    });
+  });
+
+
+  // -------------------------------------------------------------------------
+  // The delete dialog: two blocks, one state value, and no way past either
+  // -------------------------------------------------------------------------
+
+  group('the delete dialog', () {
+    /// Opens the dialog for [name] without settling, so a test can observe the
+    /// state before the two reads come back.
+    Future<void> openDelete(WidgetTester tester, String name) async {
+      await tester.tap(find.byKey(kAccessRoleDeleteKey(name)));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+
+    testWidgets('not yet asked: it says the question is in flight and offers '
+        'no Delete', (tester) async {
+      await pumpSection(tester, overrides());
+      store!.holdReads = Completer<void>();
+
+      await openDelete(tester, 'Maintenance');
+
+      expect(find.byKey(kAccessRoleDeleteCheckingKey), findsOneWidget);
+      expect(find.text(kAccessRoleDeleteCheckingNote), findsOneWidget);
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing,
+          reason: 'a half-answered dialog must not render as unblocked');
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsNothing);
+
+      store!.holdReads!.complete();
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsOneWidget);
+    });
+
+    testWidgets('unreadable: "cannot tell" renders its own message and offers '
+        'no Delete — it does not render as "nobody holds it"', (tester) async {
+      await pumpSection(tester, overrides());
+      store!.listUsersThrows = StateError('the roster could not be read');
+
+      await openDelete(tester, 'Maintenance');
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessRoleDeleteUnknownKey), findsOneWidget);
+      expect(find.text(kAccessRoleDeleteUnknownNote), findsOneWidget);
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsNothing,
+          reason: '"could not ask" and "nobody holds it" are different claims '
+              'and only one of them is safe to delete on');
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing);
+      expect(find.text('Close'), findsOneWidget,
+          reason: 'blocked relabels Cancel to Close, because there is nothing '
+              'to cancel');
+    });
+
+    testWidgets('nothing in the way: it says the delete costs nothing, offers '
+        'Delete, and the role goes', (tester) async {
+      await pumpSection(tester, overrides());
+
+      await openDelete(tester, 'Maintenance');
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsOneWidget);
+      expect(find.text(kAccessRoleDeleteFreeNote('Maintenance')),
+          findsOneWidget);
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsOneWidget);
+      expect(find.text('Cancel'), findsOneWidget,
+          reason: 'nothing is blocked, so the negative action is a Cancel');
+
+      await tester.tap(find.byKey(kAccessRoleDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(await roleNamed('Maintenance'), isNull);
+      expect(find.text('Maintenance'), findsNothing);
+    });
+
+    testWidgets('blocked because accounts hold it: the count and every holder '
+        'name, and no confirming action', (tester) async {
+      // A second role grants `users` and somebody holds it, so the lockout
+      // check stands aside and this is unambiguously the holders block.
+      await makeUser('admin', 'Engineering');
+      for (final name in ['gunna', 'jon', 'sigga']) {
+        await makeUser(name, 'Maintenance');
+      }
+      await pumpSection(tester, overrides());
+
+      await openDelete(tester, 'Maintenance');
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessAdminRefusalKey), findsOneWidget);
+      expect(
+        find.text(kAccessAdminRoleInUseNote('Maintenance', 3)),
+        findsOneWidget,
+        reason: '06-CONTEXT: "showing the count and names of the holders". '
+            'The count is in the sentence — a sentence naming three people '
+            'without saying "3" makes the reader count them',
+      );
+      expect(find.textContaining('3'), findsAtLeastNWidgets(1));
+      for (final name in ['gunna', 'jon', 'sigga']) {
+        expect(find.byKey(kAccessAdminNoticeNameKey(name)), findsOneWidget,
+            reason: 'every holder is named, not just counted');
+      }
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing,
+          reason: 'absent, not greyed: no sign-in resolves this, and a '
+              'control that is present and always refuses teaches the '
+              'operator to press it twice');
+      expect(find.text(kAccessAdminBreakGlassNote), findsNothing,
+          reason: 'this is not a lockout; pointing a commissioning engineer '
+              'at DELETE FROM app_user for it would be advice that breaks '
+              'things');
+    });
+
+    testWidgets('blocked because it would leave nobody managing access: the '
+        'count, the holders and the break-glass sentence', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await makeUser('sigga', 'Engineering');
+      await pumpSection(tester, overrides());
+
+      await openDelete(tester, 'Engineering');
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessAdminRefusalKey), findsOneWidget);
+      expect(
+        find.text(kAccessAdminLastUsersHolderNote('Engineering', 2)),
+        findsOneWidget,
+        reason: 'the same count-and-names shape as the holders block — 06-02 '
+            'runs the lockout check first because moving holders off a role '
+            'is a fix the operator can perform and a plant with nobody able '
+            'to manage roles has no fix inside the application at all',
+      );
+      for (final name in ['admin', 'sigga']) {
+        expect(find.byKey(kAccessAdminNoticeNameKey(name)), findsOneWidget);
+      }
+      expect(find.text(kAccessAdminBreakGlassNote), findsOneWidget,
+          reason: 'there is no override, and there is a documented way back');
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing);
+    });
+
+    testWidgets('both blocked states offer zero confirming actions and zero '
+        'text fields', (tester) async {
+      await makeUser('admin', 'Engineering');
+      for (final name in ['gunna', 'jon']) {
+        await makeUser(name, 'Maintenance');
+      }
+      await pumpSection(tester, overrides());
+
+      for (final name in ['Maintenance', 'Engineering']) {
+        await openDelete(tester, name);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing,
+            reason: '$name: the instruction takes the action\'s place');
+        expect(
+          find.descendant(
+              of: find.byType(StandardDialogFrame),
+              matching: find.byType(TextField)),
+          findsNothing,
+          reason: '06-CONTEXT rejects a typed-confirmation override by name — '
+              '"no destructive override is offered" — and there is no '
+              'reassign-then-delete either; both are in its deferred list',
+        );
+        expect(find.text('Close'), findsOneWidget);
+
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+      }
+    });
+
+    testWidgets('the losing race on holders re-renders the same dialog with '
+        'the newer list rather than raising an error', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+
+      await openDelete(tester, 'Maintenance');
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsOneWidget,
+          reason: 'the pre-check saw nobody holding it');
+
+      // Another station moved two accounts onto the role between the question
+      // and the statement.
+      store!.deleteThrowsOnce =
+          const RoleInUseException('Maintenance', ['gunna', 'sigga']);
+      await tester.tap(find.byKey(kAccessRoleDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(StandardDialogFrame), findsOneWidget,
+          reason: 'the same dialog telling the operator a truer thing, not an '
+              'error about a failed operation');
+      expect(find.text(kAccessAdminRoleInUseNote('Maintenance', 2)),
+          findsOneWidget);
+      expect(find.byKey(kAccessAdminNoticeNameKey('gunna')), findsOneWidget);
+      expect(find.byKey(kAccessAdminNoticeNameKey('sigga')), findsOneWidget);
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(await roleNamed('Maintenance'), isNotNull);
+    });
+
+    testWidgets('the losing race on the lockout re-renders the same dialog '
+        'with the newer refusal', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+
+      await openDelete(tester, 'Maintenance');
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsOneWidget);
+
+      // Another station unticked `users` from every other granting role
+      // between the question and the statement.
+      store!.deleteThrowsOnce =
+          const LastUsersHolderException('Maintenance', ['admin']);
+      await tester.tap(find.byKey(kAccessRoleDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(StandardDialogFrame), findsOneWidget);
+      expect(find.text(kAccessAdminLastUsersHolderNote('Maintenance', 1)),
+          findsOneWidget);
+      expect(find.text(kAccessAdminBreakGlassNote), findsOneWidget);
+      expect(find.byKey(kAccessRoleDeleteConfirmKey), findsNothing);
+      expect(await roleNamed('Maintenance'), isNotNull);
+    });
+
+    testWidgets('an AccessDenied leaves the dialog open, so the operator can '
+        'sign in from the shared prompt and press Delete again', (tester) async {
+      session = _anonymous();
+      await pumpSection(tester, overrides());
+
+      await openDelete(tester, 'Maintenance');
+      await tester.pumpAndSettle();
+
+      final confirm = tester.widget<ButtonStyleButton>(find.ancestor(
+          of: find.byKey(kAccessRoleDeleteConfirmKey),
+          matching: find.byType(ButtonStyleButton)));
+      expect(confirm.onPressed, isNotNull,
+          reason: 'a permission refusal is explained, not hidden — the '
+              'control stays pressable');
+
+      await tester.tap(find.byKey(kAccessRoleDeleteConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessDeniedBodyKey), findsOneWidget);
+      expect(find.text(kAccessDeniedGroupNote(AccessGroup.users)),
+          findsOneWidget);
+      expect(find.byKey(kAccessRoleDeleteFreeKey), findsOneWidget,
+          reason: 'the dialog stays open on purpose');
+      expect(await roleNamed('Maintenance'), isNotNull);
     });
   });
 
