@@ -4,7 +4,7 @@
 /// **One page, two sections** (06-CONTEXT, "Roles Screen"). A single
 /// `/advanced/access` route with the roles section above the users section.
 /// `key_repository.dart` already stacks gated sections on one page and is the
-/// analog; two Advanced entries would crowd a menu that is god-gated already.
+/// analog; two Advanced entries would crowd a menu that is already long.
 /// The order is the commissioning order — create roles, then accounts, then
 /// close the first-user window — which is the sequence
 /// `docs/access-control-deployment.md` §4 now spells out.

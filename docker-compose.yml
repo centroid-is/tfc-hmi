@@ -139,7 +139,6 @@ services:
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
       - /var/lib/dbus/machine-id:/var/lib/dbus/machine-id:ro
     environment:
-      # TFC_GOD: true
       XDG_RUNTIME_DIR: /run/user/1000
       WAYLAND_DISPLAY: wayland-1
       SECRET_BACKEND: file

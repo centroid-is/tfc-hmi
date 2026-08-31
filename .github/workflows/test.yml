@@ -95,7 +95,8 @@ jobs:
   # `flutter-test` runs `flutter test test/` from the repo root, which resolves
   # to the ROOT package's test/ directory and never descends into
   # centroid-hmi/. So centroid-hmi/test/navigation_test.dart — 15 tests over
-  # the app's menu shape, god-mode gating and route fallbacks, including the
+  # the app's menu shape, the unconditional Advanced menu and route
+  # fallbacks, including the
   # redirect that stops a deleted Home from dead-ending `/` — had never run in
   # CI. centroid-hmi is also built by four separate build workflows
   # (centroid-hmi.yml, linux.yml, macos.yml, windows.yml) and not one of them
