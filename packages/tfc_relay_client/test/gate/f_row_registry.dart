@@ -384,12 +384,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
         'same-socket re-establish — which is G4, owned by 07-06 — so that row '
         'is where this clause gets asserted over a real socket',
   ),
-  'F6': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-05',
-    clause: 'the arm that arms proxy.cutMidFrame(n) before the write, so a '
-        'genuinely partial frame reaches the gateway\'s decoder over TCP',
-  ),
   'F9': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-06',
@@ -588,6 +582,25 @@ const List<Deviation> gateDeviations = <Deviation>[
         'the WebSocket layer never sees a partial application frame, so the '
         'row\'s actual injection is unreachable there. 06-RESEARCH §C.4; '
         '07-CONTEXT orchestrator ruling 3.',
+    followUp: 'none — accepted',
+  ),
+  Deviation(
+    row: 'F6',
+    clause: 'on the write request',
+    reason: 'the cut lands on the *response*, not the request, because '
+        'cutMidFrame arms the server→client line only — deliberately, and for '
+        'a reason recorded at fault_proxy.dart:973-977: a cut counted across '
+        'both directions would fire on the client\'s own request bytes and end '
+        'the connection before the response existed. No lever in this '
+        'repository truncates client→server, so a partial frame reaching the '
+        '*gateway\'s* decoder is unreachable and the case delivers one to the '
+        'client\'s instead. The row loses nothing an operator feels: because '
+        'the request arrives whole the plant genuinely moves, so the case '
+        'asserts the harder half — the caller is told "unknown" about a write '
+        'that did happen, and the plant\'s attempt counter is 1 before and '
+        'after the recovery. Measured in 07-05: cutting at half a measured '
+        '125-byte frame kills the link in under 100 ms with upstream attempts '
+        'at exactly 1.',
     followUp: 'none — accepted',
   ),
   Deviation(
