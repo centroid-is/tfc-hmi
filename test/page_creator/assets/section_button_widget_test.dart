@@ -781,6 +781,87 @@ void main() {
       await _settle(tester);
       expect(find.text('Box packing film'), findsOneWidget);
     });
+
+    testWidgets('a new button shows its name', (tester) async {
+      // The caption is the default. A switch that started off would silently
+      // strip every button an operator adds from now on.
+      expect(SectionButtonConfig().showName, isTrue);
+      expect(SectionButtonConfig().showLabel, isTrue);
+    });
+
+    testWidgets('the switch hides the caption without clearing the name',
+        (tester) async {
+      final cfg = config(['sec/a'], name: 'Before freezers')
+        ..showName = false;
+      expect(cfg.showLabel, isFalse,
+          reason: 'the page asks showLabel, not showName');
+      expect(cfg.text, 'Before freezers');
+      expect(cfg.name, 'Before freezers',
+          reason: 'the pane is still titled — this hides, it does not unname');
+    });
+
+    testWidgets('a hidden caption still titles the pane', (tester) async {
+      final fake = _FakeStateMan()..push('sec/a', enabled: true);
+      await pumpButton(tester, fake,
+          cfg: config(['sec/a'], name: 'Box packing film')..showName = false);
+      await tester.tap(find.byType(SectionButton));
+      await _settle(tester);
+      expect(find.text('Box packing film'), findsOneWidget);
+    });
+
+    testWidgets('the choice round-trips through JSON', (tester) async {
+      final json = (config(['sec/a'], name: 'Before freezers')
+            ..showName = false)
+          .toJson();
+      expect(json['show_name'], isFalse);
+      expect(SectionButtonConfig.fromJson(json).showName, isFalse);
+    });
+
+    testWidgets('a page saved before the switch existed keeps its caption',
+        (tester) async {
+      final legacy = config(['sec/a'], name: 'Before freezers').toJson()
+        ..remove('show_name');
+      final back = SectionButtonConfig.fromJson(legacy);
+      expect(back.showName, isTrue,
+          reason: 'every button on the plant has a caption today');
+    });
+
+    testWidgets('the form flips the switch and puts the position away',
+        (tester) async {
+      final cfg = SectionButtonConfig(sections: [SectionRef(key: 'sec/a')])
+        ..text = 'Before freezers'
+        ..textPos = TextPos.below;
+      await pumpEditor(tester, cfg);
+      expect(find.byKey(const Key('section-name-position')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('section-name-visible')));
+      await tester.pump();
+
+      expect(cfg.showName, isFalse);
+      expect(cfg.text, 'Before freezers',
+          reason: 'hiding the caption must not throw the name away');
+      expect(find.byKey(const Key('section-name-position')), findsNothing,
+          reason: 'there is no position to choose for a caption that is off');
+    });
+
+    testWidgets('the form starts on the choice the config already has',
+        (tester) async {
+      final cfg = SectionButtonConfig(sections: [SectionRef(key: 'sec/a')])
+        ..text = 'Before freezers'
+        ..showName = false;
+      await pumpEditor(tester, cfg);
+      expect(
+        tester
+            .widget<SwitchListTile>(find.byKey(const Key('section-name-visible')))
+            .value,
+        isFalse,
+      );
+
+      await tester.tap(find.byKey(const Key('section-name-visible')));
+      await tester.pump();
+      expect(cfg.showName, isTrue);
+      expect(find.byKey(const Key('section-name-position')), findsOneWidget);
+    });
   });
 
   group('the published hit shape', () {
