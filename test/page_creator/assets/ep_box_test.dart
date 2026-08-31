@@ -4,7 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/beckhoff.dart';
 import 'package:tfc/page_creator/assets/ep_box.dart';
-import 'package:tfc/painter/beckhoff/ep_box.dart' show EPBoxWidget;
+import 'package:tfc/painter/beckhoff/ep_box.dart'
+    show EPBoxWidget, epBoxSocketCount;
 import 'package:tfc/painter/beckhoff/io8.dart'
     show IOState, bodyColor, twinSafeBodyColor;
 import 'package:tfc/providers/state_man.dart' show stateManProvider;
@@ -13,10 +14,15 @@ import 'package:tfc_dart/core/state_man.dart' show StateMan;
 
 /// One asset, two boxes, and the difference that matters is not the label.
 ///
-/// An EP2338 publishes an `ST_EP2338_0002` and its eight sockets can be lit
+/// An EP2338 publishes an `ST_EP2338_0002` and its eight channels can be lit
 /// from it. An EP1918 is TwinSAFE and publishes nothing at all — its safe
 /// inputs are consumed by TwinSAFE logic and no station's EtherCAT GVL so
 /// much as names one.
+///
+/// The other thing pinned here is the plug arithmetic: an M12 carries two
+/// channels, A on pin 4 and B on pin 2, so eight channels live on four
+/// plugs. A pane that numbered them 'Socket 1' to 'Socket 8' would send an
+/// electrician looking for four plugs that are not on the box.
 ///
 /// So these tests are largely about the EP1918 not borrowing the EP2338's
 /// confidence: no state key offered, no "!" claiming a healthy box is
@@ -55,10 +61,10 @@ void main() {
   });
 
   group('EpBoxChannel.read', () {
-    test('socket n reads I(n-1) and O(n-1)', () {
-      // The struct indexes from zero and the sockets are numbered from one;
-      // an off-by-one here would light the wrong socket on the mimic, which
-      // is exactly the sort of wrong an operator trusts.
+    test('channel n reads I(n-1) and O(n-1)', () {
+      // The struct indexes from zero and the channels are numbered from one;
+      // an off-by-one here would light the wrong lamp on the mimic, which is
+      // exactly the sort of wrong an operator trusts.
       final dv = _struct(inputsHigh: {0}, outputsHigh: {7});
 
       expect(EpBoxChannel.read(dv, 1).input, isTrue);
@@ -75,22 +81,40 @@ void main() {
       expect(channel.isUnknown, isFalse);
     });
 
-    test('a null struct leaves the socket unknown', () {
+    test('a null struct leaves the channel unknown', () {
       final channel = EpBoxChannel.read(null, 1);
 
       expect(channel.isUnknown, isTrue);
       expect(channel.active, isFalse);
     });
 
-    test('a socket is active whichever way it is wired', () {
+    test('a channel is active whichever way it is wired', () {
       expect(EpBoxChannel.read(_struct(inputsHigh: {2}), 3).active, isTrue);
       expect(EpBoxChannel.read(_struct(outputsHigh: {2}), 3).active, isTrue);
       expect(EpBoxChannel.read(_struct(), 3).active, isFalse);
     });
   });
 
+  group('epBoxChannelLabel', () {
+    test('pairs the eight channels onto four plugs, A then B', () {
+      // The M12 plugs carry two channels each. 'Socket 5' would send an
+      // electrician looking for a fifth plug that is not on the box.
+      expect(epBoxChannelLabel(1), 'Plug 1 A');
+      expect(epBoxChannelLabel(2), 'Plug 1 B');
+      expect(epBoxChannelLabel(3), 'Plug 2 A');
+      expect(epBoxChannelLabel(8), 'Plug 4 B');
+    });
+
+    test('never names a plug the box does not have', () {
+      for (int channel = 1; channel <= 8; channel++) {
+        final plug = int.parse(epBoxChannelLabel(channel).split(' ')[1]);
+        expect(plug, inInclusiveRange(1, epBoxSocketCount));
+      }
+    });
+  });
+
   group('epBoxFaceLeds', () {
-    test('lights one lamp per active socket, in socket order', () {
+    test('lights one lamp per active channel, in channel order', () {
       final leds = epBoxFaceLeds(
         epBoxChannelsOf(_struct(inputsHigh: {0}, outputsHigh: {4})),
       );
@@ -204,7 +228,7 @@ void main() {
       return tester.widget<EPBoxWidget>(find.byType(EPBoxWidget));
     }
 
-    testWidgets('an EP2338 lights the sockets its struct says are on',
+    testWidgets('an EP2338 lights the channels its struct says are on',
         (tester) async {
       final face = await pump(
         tester,
@@ -339,8 +363,8 @@ void main() {
 
     tearDown(closeSidePane);
 
-    testWidgets('names sockets rather than numbering them, when the page says',
-        (tester) async {
+    testWidgets('names channels rather than numbering them, when the page '
+        'says', (tester) async {
       await open(
         tester,
         variant: EPBoxVariant.ep2338,
@@ -350,9 +374,11 @@ void main() {
 
       expect(find.text('Erector jam photocell'), findsOneWidget);
       expect(find.text('Erector ready'), findsOneWidget);
-      // The six sockets nobody named fall back to their number.
-      expect(find.text('Socket 3'), findsOneWidget);
-      expect(find.text('Socket 1'), findsNothing);
+      // The six nobody named fall back to where they land on the box, not to
+      // a socket number the box does not have.
+      expect(find.text('Plug 2 A'), findsOneWidget);
+      expect(find.text('Plug 1 A'), findsNothing);
+      expect(find.textContaining('Socket'), findsNothing);
     });
 
     testWidgets('an EP1918 pane explains itself instead of showing lamps',
@@ -360,7 +386,7 @@ void main() {
       await open(tester, variant: EPBoxVariant.ep1918);
 
       expect(find.textContaining('TwinSAFE logic'), findsOneWidget);
-      expect(find.textContaining('Socket'), findsNothing);
+      expect(find.textContaining('Plug'), findsNothing);
     });
   });
 }

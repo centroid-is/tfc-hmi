@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 import 'package:tfc/page_creator/assets/beckhoff.dart';
-import 'package:tfc/page_creator/assets/graph.dart' show GraphAssetConfig;
 import 'package:tfc/page_creator/assets/ps2001.dart';
 import 'package:tfc/painter/beckhoff/ps2001.dart'
     show PS2001Widget, Ps2001FaceState;

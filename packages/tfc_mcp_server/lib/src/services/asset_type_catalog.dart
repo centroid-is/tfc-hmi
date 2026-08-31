@@ -1122,8 +1122,10 @@ class AssetTypeCatalog {
             name: 'descriptionsKey',
             type: 'String?',
             description:
-                'Optional array naming what each of the eight sockets is '
-                'wired to, one entry per socket'),
+                'Optional array naming what each of the eight channels is '
+                'wired to, one entry per channel, in the order plug 1 A, '
+                'plug 1 B, plug 2 A, ... — the four M12 plugs carry two '
+                'channels each'),
       ],
     ),
     AssetTypeInfo(

@@ -9,7 +9,7 @@
 ///    `ST_EP2338_0002` — `I0..I7` on `%I*`, `O0..O7` on `%Q*` — so its
 ///    sockets are lit from live data.
 ///
-///  * **EP1918-0002** — TwinSAFE, 8 safe digital inputs, yellow housing.
+///  * **EP1918-0002** — TwinSAFE, safe digital inputs, yellow housing.
 ///    `ST301.EM01`, `ST301.EM02` and one on device 5. It publishes nothing:
 ///    the safe inputs are consumed by TwinSAFE logic inside the network and
 ///    no station's EtherCAT GVL so much as names one. Its sockets stay dark,
@@ -69,7 +69,18 @@ enum EPBoxVariant {
       this == EPBoxVariant.ep1918 ? twinSafeBodyColor : bodyColor;
 }
 
-/// One socket of an EP2338 as the box last reported it.
+/// Where channel [channel] (1..8) lands on the front of the box, in the
+/// words printed there.
+///
+/// The M12 plugs carry two channels each — A on pin 4, B on pin 2 — so the
+/// eight channels live on four plugs. Numbering them 'Socket 1' through
+/// 'Socket 8' would send an electrician to a plug that is not on the box.
+String epBoxChannelLabel(int channel) {
+  assert(channel >= 1 && channel <= epBoxChannelCount);
+  return 'Plug ${(channel + 1) ~/ 2} ${channel.isOdd ? 'A' : 'B'}';
+}
+
+/// One channel of an EP2338 as the box last reported it.
 ///
 /// Both bits are nullable. The box is a combi and the struct carries an input
 /// and an output member for every channel regardless of how the channel is
@@ -83,7 +94,7 @@ class EpBoxChannel {
     required this.output,
   });
 
-  /// 1..8, as printed beside the socket.
+  /// 1..8. Two channels share a plug — see [epBoxChannelLabel].
   final int channel;
 
   /// `I{n}` — the channel read as an input.
@@ -93,7 +104,7 @@ class EpBoxChannel {
   final bool? output;
 
   /// Reads channel [channel] out of a subscribed `ST_EP2338_0002`. The
-  /// struct indexes from zero and the sockets are numbered from one.
+  /// struct indexes from zero and the channels are numbered from one.
   factory EpBoxChannel.read(DynamicValue? struct, int channel) {
     assert(channel >= 1 && channel <= epBoxChannelCount);
     bool? bit(String member) {
@@ -115,17 +126,18 @@ class EpBoxChannel {
   bool get active => (input ?? false) || (output ?? false);
 }
 
-/// Every socket of a box, unknown, for a box with no key or nothing received.
+/// Every channel of a box, unknown, for a box with no key or nothing
+/// received.
 List<EpBoxChannel> epBoxUnknownChannels() => [
       for (int c = 1; c <= epBoxChannelCount; c++) EpBoxChannel.read(null, c),
     ];
 
-/// Reads all eight sockets out of one subscribed struct.
+/// Reads all eight channels out of one subscribed struct.
 List<EpBoxChannel> epBoxChannelsOf(DynamicValue? struct) => [
       for (int c = 1; c <= epBoxChannelCount; c++) EpBoxChannel.read(struct, c),
     ];
 
-/// The lamp beside each socket on the face.
+/// The lamps on the face, channel order — A then B for plug 1, and so on.
 List<IOState> epBoxFaceLeds(List<EpBoxChannel> channels) => [
       for (final channel in channels)
         channel.active ? IOState.high : IOState.low,
@@ -134,7 +146,7 @@ List<IOState> epBoxFaceLeds(List<EpBoxChannel> channels) => [
 /// The chip the pane header shows.
 ///
 /// A digital I/O box has no state of its own worth a headline — it is not
-/// running or stopped, it is a set of sockets. So the chip answers the only
+/// running or stopped, it is a set of channels. So the chip answers the only
 /// question the box itself can: is anything arriving from it.
 PaneStatus epBoxPaneStatus(
   EPBoxVariant variant,
@@ -168,11 +180,12 @@ class EpBoxPaneBody extends StatelessWidget {
 
   final EPBoxVariant variant;
 
-  /// Socket 1 first.
+  /// Channel 1 first, i.e. plug 1 A, plug 1 B, plug 2 A, and so on.
   final List<EpBoxChannel> channels;
 
-  /// What each socket is wired to, when the page supplies a descriptions key.
-  /// Short of eight entries is fine — a socket without one shows its number.
+  /// What each channel is wired to, when the page supplies a descriptions
+  /// key. Short of eight entries is fine — a channel without one shows where
+  /// it lands instead.
   final List<String> descriptions;
 
   String? _descriptionFor(int channel) {
@@ -193,7 +206,7 @@ class EpBoxPaneBody extends StatelessWidget {
           PaneBodySection.details(
             title: 'Safe inputs',
             child: Text(
-              'This is a TwinSAFE box. Its eight safe inputs are read by the '
+              'This is a TwinSAFE box. Its safe inputs are read by the '
               'TwinSAFE logic on the safety network, not by the standard '
               'PLC, so nothing about their state reaches this page — there '
               'is no variable to subscribe to. The box is drawn here so it '
@@ -209,7 +222,7 @@ class EpBoxPaneBody extends StatelessWidget {
     return PaneBody(
       sections: [
         PaneBodySection.status(
-          title: 'Sockets',
+          title: 'Channels',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
@@ -218,7 +231,7 @@ class EpBoxPaneBody extends StatelessWidget {
                 PaneDetailRow(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   label: _descriptionFor(channel.channel) ??
-                      'Socket ${channel.channel}',
+                      epBoxChannelLabel(channel.channel),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -230,10 +243,11 @@ class EpBoxPaneBody extends StatelessWidget {
                 ),
               const SizedBox(height: 8),
               Text(
-                'Every socket on this box can be wired either way, and the '
-                'terminal publishes both bits for all eight regardless. The '
-                'left diode is the socket read as an input, the right one is '
-                'the socket driven as an output; an unlit pair is a socket '
+                'The four M12 plugs carry two channels each, A on pin 4 and '
+                'B on pin 2. Every channel can be wired either way and the '
+                'terminal publishes both bits for all eight regardless: the '
+                'left diode is the channel read as an input, the right one is '
+                'the channel driven as an output. An unlit pair is a channel '
                 'that is wired but idle.',
                 style: theme.textTheme.bodySmall,
               ),

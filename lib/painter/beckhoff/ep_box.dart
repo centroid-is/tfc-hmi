@@ -3,9 +3,12 @@
 ///
 /// Two of them are on this plant and they share this drawing because they
 /// share a housing: 126 x 30 x 26.5 mm, EtherCAT in and out on M8 at the top,
-/// eight signal sockets down the middle, power in and out at the foot. Both
+/// four M12 signal plugs down the middle, power in and out at the foot. Both
 /// end pairs are captioned — two identical rings of round connectors with
 /// 'IN / OUT' under each says nothing about which pair is the bus.
+///
+/// Each signal plug carries two channels, A on pin 4 and B on pin 2, with a
+/// lamp for each. That is why eight channels are drawn on four sockets.
 ///
 ///  * **EP2338-1002** — 8-channel digital combi, each socket usable as an
 ///    input or an output. The PLC publishes it as an `ST_EP2338_0002`
@@ -25,8 +28,15 @@ import 'io8.dart' show IOState, bodyColor;
 /// The front face in mm — the housing is 30 wide by 126 high.
 const Size epBoxFaceMm = Size(30, 126);
 
-/// Signal sockets on the front of an EtherCAT Box.
+/// Signal channels an EtherCAT Box carries.
 const int epBoxChannelCount = 8;
+
+/// Signal plugs on the front — half the channel count.
+///
+/// The M12 connectors carry two channels each, A on pin 4 and B on pin 2, so
+/// the eight channels of an EP2338 land on four plugs. Drawing eight sockets
+/// would send an electrician to a plug that is not on the box.
+const int epBoxSocketCount = epBoxChannelCount ~/ 2;
 
 class EPBoxPainter extends CustomPainter {
   EPBoxPainter({
@@ -153,33 +163,40 @@ class EPBoxPainter extends CustomPainter {
       text(name, const Offset(0, 30.5), fontSize: 2.6, width: design.width);
     }
 
-    // --- The eight signal sockets, two columns of four ---
-    // First row clears the tag above it: a socket at 42 with a 5 mm radius
-    // starts at 37, and the tag's last line ends around 34.
-    const firstTop = 42.0;
-    const rowPitch = 16.0;
-    for (int i = 0; i < epBoxChannelCount; i++) {
-      final row = i ~/ 2;
-      final column = i % 2;
-      final centre = Offset(9.0 + column * 12.0, firstTop + row * rowPitch);
-      socket(centre, 5);
+    // --- The four signal plugs, one column, two channels each ---
+    // A lamp either side of every plug: A (pin 4) to the left, B (pin 2) to
+    // the right, in [channels] order. The first plug clears the tag above it
+    // — a socket at 43 with a 6 mm radius starts at 37, and the tag's last
+    // line ends around 34.
+    const firstPlug = 44.0;
+    const plugPitch = 16.5;
+    for (int plug = 0; plug < epBoxSocketCount; plug++) {
+      final centre = Offset(design.width / 2, firstPlug + plug * plugPitch);
+      socket(centre, 6);
 
-      // The channel lamp sits beside its socket, inboard, where the real box
-      // puts the per-channel LED.
-      final lamp = Rect.fromCenter(
-        center: centre.translate(column == 0 ? -6.5 : 6.5, 0),
-        width: 2.6,
-        height: 2.6,
-      );
-      canvas.drawRect(lamp, Paint()..color = _lampColor(channels[i]));
-      canvas.drawRect(lamp, stroke);
-
-      text(
-        '${i + 1}',
-        Offset(centre.dx - 6, centre.dy + 5.4),
-        fontSize: 2.6,
-        width: 12,
-      );
+      // The lamp captions carry the plug number as well as the side — '1A',
+      // '1B'. A bare number under each socket sat exactly between its own
+      // plug and the next one's lamps, close enough to either to be read as
+      // belonging to the wrong one.
+      for (int side = 0; side < 2; side++) {
+        final lampX = side == 0 ? 5.0 : 25.0;
+        final lamp = Rect.fromCenter(
+          center: Offset(lampX, centre.dy - 2.5),
+          width: 3,
+          height: 3,
+        );
+        canvas.drawRect(
+          lamp,
+          Paint()..color = _lampColor(channels[plug * 2 + side]),
+        );
+        canvas.drawRect(lamp, stroke);
+        text(
+          '${plug + 1}${side == 0 ? 'A' : 'B'}',
+          Offset(lampX - 3.5, centre.dy + 0.5),
+          fontSize: 2.8,
+          width: 7,
+        );
+      }
     }
 
     // --- Power in and out at the foot, captioned for the same reason ---
