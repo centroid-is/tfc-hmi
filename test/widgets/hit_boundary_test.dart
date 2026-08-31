@@ -6,10 +6,18 @@
 // that matter — the ring keeps the shape, stands the same distance off it all
 // the way round, and moves the edge of a hole into the hole — are properties
 // of the geometry, not of any one conveyor.
+//
+// And then cutting that ring into the dashes that crawl round it. Those are
+// geometry too: a dash pattern that fits the ring exactly, painted runs that
+// lie on the ring and nowhere else, and a phase that returns the picture it
+// started from — which is the whole of what makes the crawl look continuous
+// rather than like a ring being redrawn.
 import 'dart:math' as math;
 
 import 'package:flutter/rendering.dart';
+import 'package:flutter/widgets.dart' show Brightness;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/theme.dart' show HmiColorRole, MutedColors;
 import 'package:tfc/widgets/hit_boundary.dart';
 
 /// Distance from [centre] to the furthest and nearest point of an outline.
@@ -22,6 +30,13 @@ import 'package:tfc/widgets/hit_boundary.dart';
     max = math.max(max, r);
   }
   return (min: min, max: max);
+}
+
+/// WCAG relative contrast between two opaque colours.
+double contrast(Color a, Color b) {
+  double lum(Color c) => c.withValues(alpha: 1).computeLuminance();
+  final (hi, lo) = (math.max(lum(a), lum(b)), math.min(lum(a), lum(b)));
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 Rect _bounds(List<Offset> ring) {
@@ -168,17 +183,317 @@ void main() {
       );
     });
 
-    test('the two tones are far enough apart to carry any background', () {
-      // W3C technique C40: two colours at least 9:1 apart guarantee that one
-      // of them clears 3:1 against whatever solid colour they land on. This
-      // ring lands on state fills as often as on the page, so the guarantee
-      // is the point of there being two.
-      double luminance(Color c) => c.withValues(alpha: 1).computeLuminance();
-      final ink = luminance(HitBoundaryPainter.defaultInk);
-      final halo = luminance(HitBoundaryPainter.defaultHalo);
-      final contrast =
-          (math.max(ink, halo) + 0.05) / (math.min(ink, halo) + 0.05);
-      expect(contrast, greaterThan(9));
+    test('repaints as the dashes move, and when the style changes', () {
+      final contours = <List<Offset>>[
+        [Offset.zero, const Offset(1, 1), const Offset(0, 1)]
+      ];
+      final painter = HitBoundaryPainter(contours: contours);
+
+      expect(
+        painter.shouldRepaint(
+            HitBoundaryPainter(contours: contours, phase: 0.25)),
+        isTrue,
+        reason: 'the animation is nothing but a changing phase',
+      );
+      expect(
+        painter.shouldRepaint(HitBoundaryPainter(
+            contours: contours,
+            style: const HitBoundaryStyle(
+                period: Duration(milliseconds: 600)))),
+        isTrue,
+      );
+      expect(
+        painter.shouldRepaint(
+            HitBoundaryPainter(contours: contours, style: const HitBoundaryStyle())),
+        isTrue,
+        reason: 'a ring that crawls instead of breathing is a different ring',
+      );
+    });
+
+    test('a colour is a role, and changes nothing else about the ring', () {
+      // The ink can be swapped for a scheme colour — the mark resolves the
+      // role, because a painter has no context. Everything about the shape
+      // and the motion is meant to be untouched by that, so a recoloured
+      // style must differ from its plain twin in exactly one field.
+      const plain = HitBoundaryStyle.pulsing;
+      final coloured = plain.copyWith(inkRole: HmiColorRole.blue);
+      expect(plain.inkRole, isNull);
+      expect(coloured.inkRole, HmiColorRole.blue);
+      expect(coloured.copyWith().dash, plain.dash);
+      expect(coloured.period, plain.period);
+      expect(coloured.pulse, plain.pulse);
+      expect(coloured.crawl, plain.crawl);
+      expect(coloured.standoff, plain.standoff);
+      expect(coloured, isNot(plain), reason: 'and the painter must notice');
+    });
+
+    test('a ring that only breathes keeps its dashes where they are', () {
+      // The pulsing style animates opacity, not position. Phase still drives
+      // it — that is what makes the breath — so the guard is that the dashes
+      // it cuts do not move with it.
+      final ring = [
+        for (var i = 0; i < 4; i++)
+          Offset(i == 1 || i == 2 ? 100 : 0, i >= 2 ? 100 : 0),
+      ];
+      final still = HitBoundaryStyle.pulsing;
+      expect(still.crawl, isFalse);
+      expect(still.pulse, greaterThan(0));
+
+      // The painter slides the pattern by `phase * period` only when the
+      // style crawls, so a still ring is the phase-0 cut at every phase.
+      final at0 = dashRing(ring, dash: 6, gap: 4, phase: 0);
+      final at7 = dashRing(ring, dash: 6, gap: 4, phase: 7);
+      expect(at7, isNot(at0), reason: 'the cut itself does move with phase');
+      expect(dashRing(ring, dash: 6, gap: 4, phase: 0), at0);
+    });
+
+    test('the ink follows the page, because one tone cannot serve both', () {
+      // The number that settles it. Against the muted light page the dark
+      // tone is ~14.5:1 and the light one ~1.1:1; against the dark page those
+      // swap almost exactly. A fixed ink is therefore invisible on one of the
+      // two schemes, which is what this picks its way out of.
+      const light = MutedColors.surfaceLight;
+      const dark = MutedColors.surfaceDark;
+
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.light), light),
+          greaterThan(10));
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.dark), dark),
+          greaterThan(10));
+
+      // And each is the wrong choice for the other page, by a mile — this is
+      // the regression that matters, not the win above.
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.light), dark),
+          lessThan(2));
+      expect(contrast(HitBoundaryPainter.inkFor(Brightness.dark), light),
+          lessThan(2));
+    });
+
+    test('the gaps carry the opposite tone, whichever page it is', () {
+      for (final brightness in Brightness.values) {
+        final ink = HitBoundaryPainter.inkFor(brightness);
+        final halo = HitBoundaryPainter.haloFor(brightness);
+        expect(halo, isNot(ink));
+        // W3C technique C40: two colours at least 9:1 apart guarantee that one
+        // of them clears 3:1 against whatever solid colour they land on. That
+        // is what `twoTone` spends, and it only works if the pair stays split.
+        expect(contrast(ink, halo), greaterThan(9));
+      }
+    });
+
+    test('a single ink cannot carry a dark page and a belt on it', () {
+      // Not a tuning failure — an arithmetic one, and the reason C40 asks for
+      // two colours rather than a better one. On the dark scheme the page sits
+      // near black and a running belt at mid-tone, and nothing clears 3:1
+      // against both: the light ink carries the page and gives up over the
+      // belt. Left standing because the ring stands 7px off its asset, so all
+      // but the stretch crossing a neighbour is over the page.
+      const page = MutedColors.surfaceDark;
+      const belt = MutedColors.runningGreen;
+      final ink = HitBoundaryPainter.inkFor(Brightness.dark);
+
+      expect(contrast(ink, page), greaterThan(10));
+      expect(contrast(ink, belt), lessThan(3),
+          reason: 'this is the gap twoTone exists to close');
+
+      // No other tone does better at both. Sweep the greys and take the best
+      // worst-case: it never reaches 3:1.
+      var bestWorstCase = 0.0;
+      for (var v = 0; v <= 255; v++) {
+        final candidate = Color.fromARGB(0xFF, v, v, v);
+        final worst = math.min(
+            contrast(candidate, page), contrast(candidate, belt));
+        bestWorstCase = math.max(bestWorstCase, worst);
+      }
+      expect(bestWorstCase, lessThan(3),
+          reason: 'no single ink clears 3:1 against both — hence the pair');
+    });
+  });
+
+  group('breathAt', () {
+    /// The fraction of one cycle the ring spends at or above [level] of full.
+    double timeAbove(double level, double pulse) {
+      const steps = 2000;
+      var above = 0;
+      for (var i = 0; i < steps; i++) {
+        if (breathAt(i / steps, pulse) >= level) above++;
+      }
+      return above / steps;
+    }
+
+    test('is more in than out', () {
+      // The complaint that produced the shaping: a plain raised cosine spends
+      // as long dim as bright, so the mark read as mostly absent with brief
+      // appearances. It has to read the other way round.
+      const pulse = 0.5;
+      expect(timeAbove(0.8, pulse), greaterThan(0.5),
+          reason: 'most of the cycle is near full, not near the trough');
+      expect(timeAbove(0.95, pulse), greaterThan(timeAbove(0.55, pulse) / 2),
+          reason: 'the dwell is at the bright end');
+    });
+
+    test('never goes out, and never past the depth asked for', () {
+      for (final pulse in [0.35, 0.45, 0.5]) {
+        for (var i = 0; i <= 100; i++) {
+          final v = breathAt(i / 100, pulse);
+          expect(v, lessThanOrEqualTo(1 + 1e-9));
+          expect(v, greaterThanOrEqualTo(1 - pulse - 1e-9));
+        }
+        // Half is the floor the presets settle on: legible at every point of
+        // the cycle is the difference between breathing and blinking.
+        expect(breathAt(0.5, pulse), closeTo(1 - pulse, 1e-9));
+      }
+    });
+
+    test('starts and ends full, so the loop closes', () {
+      expect(breathAt(0, 0.5), 1);
+      expect(breathAt(1, 0.5), closeTo(1, 1e-9));
+      // Symmetric about the trough — it comes back the way it went.
+      expect(breathAt(0.25, 0.5), closeTo(breathAt(0.75, 0.5), 1e-9));
+    });
+
+    test('no pulse is a steady ring', () {
+      for (var i = 0; i <= 10; i++) {
+        expect(breathAt(i / 10, 0), 1);
+      }
+    });
+
+    test('the mark in use stays legible throughout its cycle', () {
+      const style = HitBoundaryStyle.selection;
+      expect(1 - style.pulse, greaterThanOrEqualTo(0.5),
+          reason: 'a mark that dims past half is one an operator can miss');
+      for (var i = 0; i <= 100; i++) {
+        expect(breathAt(i / 100, style.pulse), greaterThanOrEqualTo(0.5));
+      }
+    });
+  });
+
+  group('fitDashes', () {
+    test('scales the pattern so a whole number of it fits the ring', () {
+      // 100 wants ten 6+4s and gets them.
+      expect(fitDashes(100, dash: 6, gap: 4), (dash: 6.0, gap: 4.0));
+
+      // 93 does not. Nine periods is the nearest fit, so every dash and every
+      // gap gives by the same fraction rather than one runt taking all of it.
+      final fitted = fitDashes(93, dash: 6, gap: 4);
+      expect(93 / (fitted.dash + fitted.gap), closeTo(9, 1e-9));
+      expect(fitted.dash / fitted.gap, closeTo(6 / 4, 1e-9),
+          reason: 'the pattern keeps its proportions');
+    });
+
+    test('a ring too short for one period still gets one', () {
+      final fitted = fitDashes(3, dash: 6, gap: 4);
+      expect(fitted.dash + fitted.gap, closeTo(3, 1e-9));
+    });
+
+    test('leaves a degenerate ring alone', () {
+      expect(fitDashes(0, dash: 6, gap: 4), (dash: 6.0, gap: 4.0));
+    });
+  });
+
+  group('dashRing', () {
+    /// A square, walked corner to corner — perimeter 400.
+    List<Offset> square([double side = 100]) => [
+          Offset.zero,
+          Offset(side, 0),
+          Offset(side, side),
+          Offset(0, side),
+        ];
+
+    double runLength(List<Offset> run) {
+      var length = 0.0;
+      for (var i = 1; i < run.length; i++) {
+        length += (run[i] - run[i - 1]).distance;
+      }
+      return length;
+    }
+
+    test('cuts the ring into runs of the length asked for', () {
+      final runs = dashRing(square(), dash: 6, gap: 4);
+      expect(runs, hasLength(40), reason: '400 / (6 + 4)');
+      for (final run in runs) {
+        expect(runLength(run), closeTo(6, 1e-6));
+      }
+    });
+
+    test('every run lies on the ring it was cut from', () {
+      // The dashes are the outline, not an approximation drawn near it: a run
+      // that left the ring would be a second opinion about the asset's shape,
+      // which is the thing this whole file exists to prevent.
+      final ring = square();
+      for (final run in dashRing(ring, dash: 6, gap: 4, phase: 3.7)) {
+        for (final point in run) {
+          final onEdge = (point.dy.abs() < 1e-6 || (point.dy - 100).abs() < 1e-6)
+                  && point.dx >= -1e-6 && point.dx <= 100 + 1e-6 ||
+              (point.dx.abs() < 1e-6 || (point.dx - 100).abs() < 1e-6) &&
+                  point.dy >= -1e-6 && point.dy <= 100 + 1e-6;
+          expect(onEdge, isTrue, reason: '$point is off the square');
+        }
+      }
+    });
+
+    test('a run turns the corner rather than cutting it', () {
+      // A dash straddling a corner keeps the corner point, so it bends with
+      // the ring. Cutting straight across would round every corner of every
+      // marked asset by however long a dash is.
+      final ring = square();
+      // Phase 0 puts a dash boundary on the corner at 100; 97 lands a dash
+      // across it.
+      final runs = dashRing(ring, dash: 6, gap: 4, phase: -97);
+      final turning = runs.where((r) => r.length > 2).toList();
+      expect(turning, isNotEmpty);
+      expect(
+        turning.any((r) => r.any((p) => (p - const Offset(100, 0)).distance < 1e-6)),
+        isTrue,
+      );
+    });
+
+    test('one whole period of phase is the same picture again', () {
+      // What makes the crawl read as a ring of dashes moving rather than as a
+      // ring being redrawn — and what lets the animation loop.
+      String shape(List<List<Offset>> runs) => runs
+          .map((r) => r
+              .map((p) => '${p.dx.toStringAsFixed(4)},${p.dy.toStringAsFixed(4)}')
+              .join(';'))
+          .join('|');
+
+      final ring = square();
+      expect(
+        shape(dashRing(ring, dash: 6, gap: 4, phase: 10)),
+        shape(dashRing(ring, dash: 6, gap: 4, phase: 0)),
+      );
+      // Half a period along, every dash sits where its own gap was.
+      expect(
+        shape(dashRing(ring, dash: 6, gap: 4, phase: 5)),
+        isNot(shape(dashRing(ring, dash: 6, gap: 4, phase: 0))),
+      );
+    });
+
+    test('the dashes and their gaps tile the ring without overlapping', () {
+      // The two-tone arrangement: the light runs are the same pattern slid on
+      // by one dash, so together the two cover the ring exactly once.
+      final ring = square();
+      final dashes = dashRing(ring, dash: 6, gap: 4, phase: 2);
+      final gaps = dashRing(ring, dash: 4, gap: 6, phase: 2 - 6);
+      final covered = dashes.fold(0.0, (sum, r) => sum + runLength(r)) +
+          gaps.fold(0.0, (sum, r) => sum + runLength(r));
+      expect(covered, closeTo(400, 1e-4));
+    });
+
+    test('a pattern with no gap is the whole closed ring', () {
+      final runs = dashRing(square(), dash: 6, gap: 0);
+      expect(runs, hasLength(1));
+      expect(runLength(runs.single), closeTo(400, 1e-6));
+    });
+
+    test('nothing to cut gives nothing', () {
+      expect(dashRing(const [Offset.zero], dash: 6, gap: 4), isEmpty);
+      expect(dashRing(square(), dash: 0, gap: 4), isEmpty);
+      expect(
+        dashRing(const [Offset.zero, Offset.zero, Offset.zero],
+            dash: 6, gap: 4),
+        isEmpty,
+        reason: 'a ring of no length',
+      );
     });
   });
 }

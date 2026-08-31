@@ -60,10 +60,16 @@ void main() {
     String what,
   ) async {
     await tester.tapAt(globalPos);
-    await tester.pumpAndSettle();
+    // Pumped rather than settled: the plant view rings the asset whose pane
+    // is open, and the ring's dashes crawl for as long as it is up — there is
+    // no settled state to wait for while a pane is showing. Two frames is the
+    // pane's own build and the post-frame trace of the asset's hit test.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
     expect(find.byType(SidePane), findsOneWidget,
         reason: 'Tapping the $what must open the details pane.');
     closeSidePane();
+    // Settles again once it is closed: the crawl stops with the ring.
     await tester.pumpAndSettle();
   }
 

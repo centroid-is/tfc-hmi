@@ -24,7 +24,11 @@
 /// operator's.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
+
+import '../theme.dart' show HmiColorRole;
 
 /// Moves every point of [ring] [distance] away from the region it encloses.
 ///
@@ -127,85 +131,389 @@ List<List<Offset>> flattenPath(Path path, {double step = 2}) {
   return rings;
 }
 
-/// Draws [contours] as a quiet ring: a fine dark line on a light band.
+/// Cuts [ring] into the painted runs of a dash pattern.
 ///
-/// Two tones, not one, and neither of them a hue. Every colour on a plant
-/// page is spoken for — green running, yellow manual, blue cleaning, grey
-/// stopped, red faulted, violet unreadable, orange forced — and ISA-101
-/// practice is to spend colour on abnormal conditions and nothing else, so a
-/// mark in any of them would read as a seventh state. Cyan is the one hue
-/// left in the palette, and at glyph size it is a coin-flip against cleaning
-/// blue.
+/// [phase] slides the pattern along the ring, in the same units as [dash] and
+/// [gap]; advancing it by `dash + gap` puts every dash exactly where its
+/// neighbour was, which is what makes the ants march without the ring ever
+/// looking like it moved.
 ///
-/// So the ring says "selected" by shape and tone instead. The pair is the
-/// one image editors and CAD marquees have used forever, and for the reason
-/// W3C technique C40 gives: two colours far enough apart in luminance
-/// (~17:1 here) guarantee that at least one of them clears 3:1 against
-/// whatever solid colour it lands on. That matters because this ring is
-/// drawn half over the page and half over an asset whose fill is a state
-/// colour — a single ink has no such guarantee, and the theme's own
-/// `onSurface` cannot provide one either: Solarized keeps it deliberately
-/// close to the background (2.79:1 on dark), where it would all but
-/// disappear over a dark belt.
+/// The ring is closed — the segment from its last point back to its first is
+/// walked like any other — so a pattern that fits it a whole number of times
+/// (see [fitDashes]) comes back round onto itself with no seam.
+List<List<Offset>> dashRing(
+  List<Offset> ring, {
+  required double dash,
+  required double gap,
+  double phase = 0,
+}) {
+  if (ring.length < 2 || dash <= 0) return const [];
+  final period = dash + gap;
+  if (gap <= 0) return [ring.toList()..add(ring.first)];
+
+  // Arc length at each point, with the closing segment on the end, so a
+  // distance can be turned into a position by one walk rather than by
+  // re-measuring the ring for every dash.
+  final marks = <double>[0];
+  for (var i = 1; i <= ring.length; i++) {
+    final to = ring[i % ring.length];
+    marks.add(marks[i - 1] + (to - ring[i - 1]).distance);
+  }
+  final perimeter = marks.last;
+  if (perimeter == 0) return const [];
+
+  Offset at(double distance, int index) {
+    final span = marks[index + 1] - marks[index];
+    final t = span == 0 ? 0.0 : (distance - marks[index]) / span;
+    return Offset.lerp(ring[index], ring[(index + 1) % ring.length], t)!;
+  }
+
+  final runs = <List<Offset>>[];
+  // Back far enough that the dash straddling the ring's start is drawn whole
+  // rather than clipped to it.
+  for (var start = -(phase % period) - period;
+      start < perimeter;
+      start += period) {
+    final from = math.max(start, 0.0);
+    final to = math.min(start + dash, perimeter);
+    if (to <= from) continue;
+
+    final run = <Offset>[];
+    for (var i = 0; i < ring.length; i++) {
+      if (marks[i + 1] < from || marks[i] > to) continue;
+      if (run.isEmpty) run.add(at(from, i));
+      run.add(marks[i + 1] <= to ? ring[(i + 1) % ring.length] : at(to, i));
+    }
+    if (run.length > 1) runs.add(run);
+  }
+  return runs;
+}
+
+/// Scales a wanted dash pattern so a whole number of it fits [perimeter].
 ///
-/// Not strictly C40, which wants each band at least 2px: that would be a 6px
-/// ring, far too loud for a mimic an operator watches all shift. The bands
-/// here are 1.6px and a ~0.9px fringe either side of it, which is the
-/// quietest arrangement that still puts a light tone and a dark tone across
-/// every edge.
+/// Both lengths move by the same factor, so the pattern keeps its proportions
+/// and only its size gives — by at most half a dash on a ring long enough to
+/// carry several. Without this the ring closes onto a runt dash that never
+/// matches its neighbours and sits still while the rest of them march past
+/// it, which is the one thing that gives a marching outline away as a drawing.
+({double dash, double gap}) fitDashes(
+  double perimeter, {
+  required double dash,
+  required double gap,
+}) {
+  final period = dash + gap;
+  if (perimeter <= 0 || period <= 0) return (dash: dash, gap: gap);
+  final repeats = math.max(1, (perimeter / period).round());
+  final scale = perimeter / (repeats * period);
+  return (dash: dash * scale, gap: gap * scale);
+}
+
+/// The opacity multiplier for a ring that breathes, at [phase] of one cycle.
 ///
-/// Deliberately two strokes rather than a [BoxDecoration] with a `boxShadow`
-/// — that shadow is a filled, blurred copy of the shape, and with nothing
+/// Full at phase 0, faintest at half way, back to full at 1, so it closes onto
+/// itself and can be looped.
+///
+/// Not a plain raised cosine, which is what this was first: that spends as
+/// long dim as it does bright, and a mark whose job is to say "this one" then
+/// reads as mostly absent with brief appearances rather than present with a
+/// pulse in it. Cubing the swing pushes the dwell to the bright end — the ring
+/// sits at better than 80% of full for well over half the cycle and passes
+/// through the trough rather than resting in it — while leaving the shape
+/// smooth and the two endpoints exactly equal.
+///
+/// [pulse] is how far it falls at the trough, so the ring never goes below
+/// `1 - pulse` of full. It is not meant to reach zero: an outline that
+/// disappears entirely stops marking anything for as long as it is gone, and
+/// on a page an operator glances at, that is a mark that is simply not there
+/// when they look.
+double breathAt(double phase, double pulse) {
+  if (pulse <= 0) return 1;
+  final swing = 0.5 - 0.5 * math.cos(2 * math.pi * phase);
+  return 1 - pulse * swing * swing * swing;
+}
+
+/// How the mark is drawn and how it moves.
+///
+/// Presets rather than a free-for-all: the ring is one thing on one page, and
+/// the choice between these is a design decision taken once. [selection] is
+/// the one in use; the others are kept so the decision can be re-taken by
+/// looking at them side by side rather than by re-deriving the numbers.
+@immutable
+class HitBoundaryStyle {
+  /// The painted run, before [fitDashes] scales it to the ring.
+  final double dash;
+
+  /// The unpainted run between them.
+  final double gap;
+
+  final double strokeWidth;
+
+  /// How far off the asset the ring stands, in logical pixels.
+  ///
+  /// The lever that decides whether this reads as a mark at all. Drawn tight
+  /// to the shape it is a border the asset appears to have grown, and an
+  /// operator has no reason to read a border as "selected"; given room it is
+  /// plainly a separate ring around the machine, which is the whole message.
+  final double standoff;
+
+  /// How long the pattern takes to travel one whole `dash + gap`. One full
+  /// turn of the animation, and the length of a loop that closes seamlessly.
+  final Duration period;
+
+  /// How far the line's opacity falls at the trough of its breath, 0..1.
+  ///
+  /// Zero holds it steady. The presets keep well clear of one: see [breathAt]
+  /// for why a ring that goes all the way out is a worse mark than one that
+  /// only ever dims.
+  final double pulse;
+
+  /// The scheme colour to draw the dashes in, or null for
+  /// the tone [HitBoundaryPainter.inkFor] picks for the page.
+  ///
+  /// A role rather than a `Color` so the ring follows a scheme switch the way
+  /// every asset does, and so no raw `Colors.*` gets into the mimic. Resolved
+  /// by the widget that owns the ring — a painter has no `BuildContext`.
+  ///
+  /// Spending a hue on this cuts against the reasoning on
+  /// [HitBoundaryPainter]: on a plant page green is running, yellow manual,
+  /// blue cleaning, grey stopped, red faulted, violet unreadable and orange
+  /// forced, so a ring in any of them is a colour the operator has already
+  /// been taught to read as an equipment state. Blue in particular is what a
+  /// belt in cleaning looks like. That is the trade being made, not an
+  /// oversight.
+  final HmiColorRole? inkRole;
+
+  /// Whether the dashes travel round the ring.
+  ///
+  /// Off with a [pulse] on, the ring is a fixed dashed outline that fades in
+  /// and out — the motion is the breath rather than the crawl. Off with no
+  /// pulse it is a still dashed outline, which says nothing a border does not.
+  final bool crawl;
+
+  /// Paint the gaps in the light tone instead of leaving them empty.
+  ///
+  /// This is where the old halo's contrast guarantee goes when the halo is
+  /// dropped: a light run and a dark run alternate along the same line, so
+  /// every stretch of background still has one of the two tones across it
+  /// (see the note on [HitBoundaryPainter]). Off, the ring is one dark ink
+  /// and disappears where it crosses a dark asset.
+  final bool twoTone;
+
+  const HitBoundaryStyle({
+    this.dash = 8,
+    this.gap = 5,
+    this.strokeWidth = 2.4,
+    this.standoff = 7,
+    this.period = const Duration(milliseconds: 1200),
+    this.pulse = 0,
+    this.crawl = true,
+    this.twoTone = false,
+    this.inkRole,
+  });
+
+  /// Still dashes, breathing. The ring is where it was; what moves is how
+  /// present it is.
+  ///
+  /// It dips to half and no further. The ring is legible at every point of
+  /// the cycle, which is the whole difference between a mark that breathes
+  /// and one that blinks.
+  static const pulsing = HitBoundaryStyle(
+    pulse: 0.5,
+    crawl: false,
+    period: Duration(milliseconds: 1200),
+  );
+
+  /// The style the plant view actually marks with.
+  static const selection = pulsing;
+
+  HitBoundaryStyle copyWith({
+    double? dash,
+    double? gap,
+    double? strokeWidth,
+    double? standoff,
+    Duration? period,
+    double? pulse,
+    bool? crawl,
+    bool? twoTone,
+    HmiColorRole? inkRole,
+  }) =>
+      HitBoundaryStyle(
+        dash: dash ?? this.dash,
+        gap: gap ?? this.gap,
+        strokeWidth: strokeWidth ?? this.strokeWidth,
+        standoff: standoff ?? this.standoff,
+        period: period ?? this.period,
+        pulse: pulse ?? this.pulse,
+        crawl: crawl ?? this.crawl,
+        twoTone: twoTone ?? this.twoTone,
+        inkRole: inkRole ?? this.inkRole,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is HitBoundaryStyle &&
+      other.dash == dash &&
+      other.gap == gap &&
+      other.strokeWidth == strokeWidth &&
+      other.standoff == standoff &&
+      other.period == period &&
+      other.pulse == pulse &&
+      other.crawl == crawl &&
+      other.twoTone == twoTone &&
+      other.inkRole == inkRole;
+
+  @override
+  int get hashCode => Object.hash(dash, gap, strokeWidth, standoff, period,
+      pulse, crawl, twoTone, inkRole);
+}
+
+/// Draws [contours] as a ring of dashes that crawl around the shape.
+///
+/// Neither tone here is a hue. Every colour on a plant page is spoken for —
+/// green running, yellow manual, blue cleaning, grey stopped, red faulted,
+/// violet unreadable, orange forced — and ISA-101 practice is to spend colour
+/// on abnormal conditions and nothing else, so a mark in any of them would
+/// read as a seventh state. Cyan is the one hue left in the palette, and at
+/// glyph size it is a coin-flip against cleaning blue.
+///
+/// So the ring says "selected" by shape and motion instead. Dashes that crawl
+/// are the mark image editors and CAD marquees have used forever, and they
+/// carry the meaning on their own: nothing else on a mimic moves along a
+/// contour, so no still state can be mistaken for one.
+///
+/// This used to be a fine dark line laid on a wider light band, and the band
+/// showing either side of it was the contrast guarantee — W3C technique C40:
+/// two colours far enough apart in luminance (~17:1 here) mean at least one of
+/// them clears 3:1 against whatever solid colour they land on. Read as a mark
+/// it was a white outline around the asset, and that is what it looked like,
+/// so it is gone. The pair is not: [inkFor] spends it as an either/or on the
+/// page's brightness instead of as a fringe, which is what the ring is mostly
+/// drawn over — it stands off the asset, so all but the stretch that crosses
+/// a neighbour is over the page.
+///
+/// What that does not cover is the stretch that does cross a fill, and on a
+/// dark page nothing can: a mid-tone state colour sits at ~0.32 luminance and
+/// the page at ~0.017, and no single ink clears 3:1 against both — the light
+/// one that carries the page manages ~2.5:1 over a running belt. That is not
+/// a tuning problem, it is why C40 asks for two colours rather than a better
+/// one. [HitBoundaryStyle.twoTone] is where the guarantee can be had in full:
+/// the two tones alternate along one line instead of fringing it, so every
+/// stretch of background has one of them across it.
+///
+/// Deliberately strokes rather than a [BoxDecoration] with a `boxShadow` —
+/// that shadow is a filled, blurred copy of the shape, and with nothing
 /// filling the shape on top of it the asset ends up under a grey wash. These
 /// are strokes, so the middle is left alone: an asset's colour is its
 /// equipment state and has to come through untouched.
 class HitBoundaryPainter extends CustomPainter {
-  /// The fine line.
-  static const Color defaultInk = Color(0xD11A1D1F);
+  /// The dark half of the pair. The dashes on a light page.
+  static const Color darkInk = Color(0xD11A1D1F);
 
-  /// The band it sits on.
-  static const Color defaultHalo = Color(0xD1F2F4F5);
+  /// The light half. The dashes on a dark page — and the tone the gaps carry
+  /// under [HitBoundaryStyle.twoTone], whichever way round they are.
+  static const Color lightInk = Color(0xD1F2F4F5);
+
+  /// How solid the dashes are, whatever colour they are drawn in. A role
+  /// colour resolves fully opaque, and at full opacity the ring stops being a
+  /// mark laid over the page and starts being part of the machine.
+  static const double inkOpacity = 0xD1 / 0xFF;
+
+  /// The dashes' tone for a page of the given [brightness].
+  ///
+  /// One ink cannot serve both schemes: against the muted light page the dark
+  /// tone is 14.5:1 and the light one 1.1:1, and against the dark page those
+  /// swap almost exactly. A ring drawn in the wrong one of them is not a
+  /// quiet mark, it is an invisible one.
+  static Color inkFor(Brightness brightness) =>
+      brightness == Brightness.dark ? lightInk : darkInk;
+
+  /// The other tone — what the gaps carry under [HitBoundaryStyle.twoTone].
+  static Color haloFor(Brightness brightness) =>
+      brightness == Brightness.dark ? darkInk : lightInk;
 
   /// The rings, already in this painter's coordinates.
   final List<List<Offset>> contours;
 
   final Color ink;
   final Color halo;
+  final HitBoundaryStyle style;
+
+  /// Where the pattern has got to, 0..1 of one `dash + gap`. Wraps, so 0 and
+  /// 1 are the same picture.
+  final double phase;
 
   const HitBoundaryPainter({
     required this.contours,
-    this.ink = defaultInk,
-    this.halo = defaultHalo,
+    this.ink = darkInk,
+    this.halo = lightInk,
+    this.style = HitBoundaryStyle.selection,
+    this.phase = 0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (contours.isEmpty) return;
-    final path = Path();
-    for (final ring in contours) {
-      if (ring.length < 2) continue;
-      path.moveTo(ring.first.dx, ring.first.dy);
-      for (final point in ring.skip(1)) {
-        path.lineTo(point.dx, point.dy);
+
+    // Faintest half way through the pattern, so the ring dips once per turn
+    // rather than twice.
+    final breath = breathAt(phase, style.pulse);
+
+    Paint stroke(Color color) => Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = style.strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..color = color.withValues(alpha: color.a * breath);
+
+    void draw(List<List<Offset>> runs, Paint paint) {
+      if (runs.isEmpty) return;
+      final path = Path();
+      for (final run in runs) {
+        path.moveTo(run.first.dx, run.first.dy);
+        for (final point in run.skip(1)) {
+          path.lineTo(point.dx, point.dy);
+        }
       }
-      path.close();
+      canvas.drawPath(path, paint);
     }
 
-    Paint stroke(Color color, double width) => Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = width
-      ..strokeJoin = StrokeJoin.round
-      ..color = color;
+    for (final ring in contours) {
+      if (ring.length < 2) continue;
+      var perimeter = 0.0;
+      for (var i = 0; i < ring.length; i++) {
+        perimeter += (ring[(i + 1) % ring.length] - ring[i]).distance;
+      }
+      final fitted =
+          fitDashes(perimeter, dash: style.dash, gap: style.gap);
+      final period = fitted.dash + fitted.gap;
+      // A ring that only breathes keeps its dashes where they are; the phase
+      // is still what drives the breath.
+      final travelled = style.crawl ? phase * period : 0.0;
 
-    // Widest first: the light band, then the line on top of it, leaving the
-    // band showing as a fringe either side.
-    canvas.drawPath(path, stroke(halo, 3.4));
-    canvas.drawPath(path, stroke(ink, 1.6));
+      draw(
+        dashRing(ring,
+            dash: fitted.dash, gap: fitted.gap, phase: travelled),
+        stroke(ink),
+      );
+      if (style.twoTone) {
+        // The complement: the same pattern slid on by one dash, so the light
+        // runs land in the gaps the dark ones left.
+        draw(
+          dashRing(ring,
+              dash: fitted.gap,
+              gap: fitted.dash,
+              phase: travelled - fitted.dash),
+          stroke(halo),
+        );
+      }
+    }
   }
 
   @override
   bool shouldRepaint(HitBoundaryPainter oldDelegate) =>
       oldDelegate.ink != ink ||
       oldDelegate.halo != halo ||
+      oldDelegate.style != style ||
+      oldDelegate.phase != phase ||
       !identical(oldDelegate.contours, contours);
 }

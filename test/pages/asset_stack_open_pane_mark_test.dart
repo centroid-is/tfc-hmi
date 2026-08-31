@@ -19,6 +19,10 @@
 //   - a pane opened from outside any asset (the page editor's config pane,
 //     the database stats pane) marks nothing;
 //   - the mark never takes a tap meant for the asset underneath it.
+//
+// The ring's dashes crawl while it is up, so nothing here settles once a pane
+// is open — see `pumpMarked`. What the crawl itself does is
+// `hit_boundary_test`'s business; this file is about which asset is ringed.
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -97,6 +101,19 @@ void main() {
 
   Offset markCentre(WidgetTester tester) => markBounds(tester).center;
 
+  /// Settles everything about an open pane that can be settled.
+  ///
+  /// Not `pumpAndSettle`: the ring's dashes crawl for as long as it is up, so
+  /// there is no settled state to wait for and settling would sit there until
+  /// it timed out. These are the three waits that actually matter — a frame
+  /// for the pane's own build, one past the post-frame trace of the asset's
+  /// hit test, and one long enough to clear the mark's 180ms fade.
+  Future<void> pumpMarked(WidgetTester tester) async {
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
   testWidgets('a pane opened from an asset marks that asset', (tester) async {
     // Both well clear of the right edge: the pane docks over it, and a tap
     // meant for the second asset would land on the pane instead.
@@ -108,7 +125,7 @@ void main() {
     expect(markOpacity(tester), 0, reason: 'nothing is open yet');
 
     await tester.tap(find.text('left'));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
 
     expect(isSidePaneOpen(id: 'pane:left'), isTrue);
     expect(markOpacity(tester), 1);
@@ -119,14 +136,15 @@ void main() {
     final outline = markBounds(tester);
     expect(outline.center.dx, closeTo(box.center.dx, 2),
         reason: 'the mark belongs to the asset the pane was opened from');
+    final air = HitBoundaryStyle.selection.standoff * 2;
     expect(outline.width, greaterThan(box.width));
-    expect(outline.width, lessThan(box.width + 20));
+    expect(outline.width, lessThan(box.width + air + 4));
     expect(outline.height, greaterThan(box.height));
-    expect(outline.height, lessThan(box.height + 20));
+    expect(outline.height, lessThan(box.height + air + 4));
 
     // A second asset: the pane swaps, and so does the ring.
     await tester.tap(find.text('right'));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
 
     expect(markOpacity(tester), 1);
     expect(
@@ -149,7 +167,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(discKey));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
     expect(asset.taps, 1, reason: 'the tap landed inside the disc');
 
     final bounds = markBounds(tester);
@@ -157,8 +175,11 @@ void main() {
     for (final ring in markOutline(tester)) {
       for (final point in ring) {
         // Every point sits on the rim of the disc, standing off it evenly —
-        // nothing out at the corners of the box.
-        expect((point - centre).distance, closeTo(44, 1.5));
+        // nothing out at the corners of the box. Off the style's standoff
+        // rather than a number, so tuning how much air the ring is given does
+        // not have to be re-typed here.
+        expect((point - centre).distance,
+            closeTo(40 + HitBoundaryStyle.selection.standoff, 1.5));
       }
     }
 
@@ -175,7 +196,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('one'));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
 
     expect(markOpacity(tester), 1);
     // Its face, stood off from it — four corners, near enough square.
@@ -183,8 +204,9 @@ void main() {
     final bounds = markBounds(tester);
     expect(bounds.center.dx, closeTo(face.center.dx, 1));
     expect(bounds.center.dy, closeTo(face.center.dy, 1));
-    expect(bounds.width, closeTo(face.width + 8, 2));
-    expect(bounds.height, closeTo(face.height + 8, 2));
+    final air = HitBoundaryStyle.selection.standoff * 2;
+    expect(bounds.width, closeTo(face.width + air, 2));
+    expect(bounds.height, closeTo(face.height + air, 2));
   });
 
   testWidgets('closing the pane clears the mark', (tester) async {
@@ -192,7 +214,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('one'));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
     expect(markOpacity(tester), 1);
 
     closeSidePane();
@@ -234,13 +256,13 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('one'));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
     expect(asset.taps, 1);
     expect(markOpacity(tester), 1);
 
     // Straight through the middle of the ring, into the asset.
     await tester.tapAt(markCentre(tester));
-    await tester.pumpAndSettle();
+    await pumpMarked(tester);
     expect(asset.taps, 2);
   });
 }
