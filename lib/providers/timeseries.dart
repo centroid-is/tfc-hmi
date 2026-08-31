@@ -91,6 +91,17 @@ class TimeseriesKeyTracker extends ChangeNotifier {
   /// Whether the NOTIFY stream is believed to be delivering.
   bool _notifyAlive = false;
 
+  /// Consecutive failed subscribe attempts, and how many sweep ticks to sit
+  /// out before the next one. A subscription that cannot be established —
+  /// the trigger will not install, session after session — must not mean a
+  /// retry plus a full-window fetch every tick forever; attempts double
+  /// their spacing up to [_maxRetrySkipTicks] (5 minutes of 30 s ticks). The
+  /// data does not back off with it: skipped ticks still merge the cheap
+  /// reconciling slice, so the readout stays current from polling alone.
+  int _subscribeFailures = 0;
+  int _ticksUntilRetry = 0;
+  static const _maxRetrySkipTicks = 9;
+
   /// When the last visible handle went hidden, so the sweep on resume can
   /// cover the whole stretch nobody was looking.
   DateTime? _quietSince;
@@ -129,6 +140,8 @@ class TimeseriesKeyTracker extends ChangeNotifier {
     _notifySub?.cancel();
     _notifySub = null;
     _notifyAlive = false;
+    _subscribeFailures = 0;
+    _ticksUntilRetry = 0;
     _sweepTimer?.cancel();
     _sweepTimer = null;
     unawaited(_initData(db));
@@ -210,10 +223,19 @@ class TimeseriesKeyTracker extends ChangeNotifier {
       );
       _notifySub = sub;
       _notifyAlive = true;
+      _subscribeFailures = 0;
+      _ticksUntilRetry = 0;
     } catch (e) {
       // Table may not exist yet, or the database is unreachable. The sweep
-      // polls this key and retries the subscription every tick.
-      _log.d('NOTIFY subscription for "$tsKey" not available yet: $e');
+      // polls this key and retries the subscription, backing off while the
+      // failures repeat.
+      _subscribeFailures++;
+      final skip = (1 << _subscribeFailures) - 1;
+      _ticksUntilRetry =
+          skip < _maxRetrySkipTicks ? skip : _maxRetrySkipTicks;
+      _log.d('NOTIFY subscription for "$tsKey" not available yet '
+          '(failure $_subscribeFailures, next attempt in '
+          '${_ticksUntilRetry + 1} tick(s)): $e');
     }
   }
 
@@ -275,9 +297,19 @@ class TimeseriesKeyTracker extends ChangeNotifier {
           }
         }
       } else {
-        await _subscribe(sm);
-        if (!_alive) return;
-        final missed = await _merge(sm, DateTime.now().subtract(maxWindow));
+        if (_ticksUntilRetry > 0) {
+          _ticksUntilRetry--;
+        } else {
+          await _subscribe(sm);
+          if (!_alive) return;
+        }
+        // A successful (re)subscribe earns the full-window fetch that closes
+        // whatever gap the outage left. While attempts are backing off, the
+        // cheap slice keeps the readout current from polling alone.
+        final span = _notifyAlive
+            ? maxWindow
+            : (window < maxWindow ? window : maxWindow);
+        final missed = await _merge(sm, DateTime.now().subtract(span));
         if ((missed?.added ?? 0) > 0) changed = true;
       }
       if (!_alive) return;

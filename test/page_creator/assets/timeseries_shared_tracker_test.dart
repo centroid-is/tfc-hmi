@@ -55,6 +55,20 @@ class _FakeAppDatabase extends Fake implements AppDatabase {
       }));
 }
 
+/// A database whose NOTIFY trigger can never be installed — a table the
+/// collector owns with permissions gone wrong, say. The one shape of failure
+/// that would otherwise retry (with a full-window fetch each time) every
+/// sweep forever.
+class _FailingAppDatabase extends _FakeAppDatabase {
+  int attempts = 0;
+
+  @override
+  Future<String> enableNotificationChannel(String tableName) async {
+    attempts++;
+    throw StateError('permission denied for table $tableName');
+  }
+}
+
 class _FakeDatabase extends Fake implements Database {
   _FakeDatabase(this.db);
 
@@ -254,6 +268,43 @@ void main() {
     expect(database.fetches.length, fetchesBefore,
         reason: 'and the sweep with it');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'a subscription that keeps failing backs off instead of hammering, '
+      'while the display stays fed from cheap merges', (tester) async {
+    final failing = _FailingAppDatabase();
+    database = _FakeDatabase(failing);
+    database.rows.add(ago(const Duration(minutes: 10)));
+
+    await tester.pumpWidget(harness(const [pageReadout]));
+    await tester.pumpAndSettle();
+    expect(failing.attempts, 1, reason: 'the initial subscribe attempt');
+    expect(states(tester).single.count, 1,
+        reason: 'no NOTIFY, but history still fetched');
+
+    // Attempts must space out: not one per tick.
+    final attemptsPerTick = <int>[];
+    for (var i = 0; i < 8; i++) {
+      final before = failing.attempts;
+      await tester.pump(_tick);
+      await tester.pumpAndSettle();
+      attemptsPerTick.add(failing.attempts - before);
+    }
+    final total = attemptsPerTick.fold(0, (a, b) => a + b);
+    expect(total, lessThan(5),
+        reason: '8 ticks of a hopeless subscription must not mean 8 attempts '
+            '(got $attemptsPerTick)');
+    expect(total, greaterThan(0), reason: 'but it must keep trying');
+
+    // Meanwhile every tick still reconciled: a fresh row is picked up by the
+    // next sweep even while the subscription is backing off.
+    final countBefore = states(tester).single.count;
+    database.rows.add(DateTime.now());
+    await tester.pump(_tick);
+    await tester.pumpAndSettle();
+    expect(states(tester).single.count, countBefore + 1,
+        reason: 'backing off the subscribe must not back off the data');
   });
 
   testWidgets('a readout with a wider window grows the shared cache',
