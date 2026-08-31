@@ -13,6 +13,39 @@
 /// else: visible, tappable, explained, never greyed. A control is not disabled
 /// because the session may not use it — it is pressed, and the shared
 /// `AccessDeniedPrompt` says which group to go and get.
+///
+/// ## The `Operator` row, and the one footgun this model creates
+///
+/// Anonymous **is** the role named `Operator`, by construction. So editing that
+/// row changes what an *unauthenticated* panel may do: ticking a group there
+/// grants it to every logged-out panel on the floor. That is allowed — it is
+/// the knob a site turns when it wants a permissive line — and
+/// `AccessRepository`'s class doc has asked since Phase 1 that "the Phase 6
+/// roles screen must say so at the point of edit, not in a help page". The long
+/// form of the argument is there; the same words appear in
+/// `packages/tfc_access/lib/src/access_role.dart` and in
+/// `docs/access-control-deployment.md` §5. This screen does not add a fourth
+/// phrasing. It says the short version **twice**, because a banner alone is
+/// read once and then ignored:
+///
+///  1. [kAccessOperatorBannerNote] — a persistent inline banner, rendered the
+///     whole time the protected row's editor is open.
+///  2. [kAccessOperatorConfirmMessage] — a confirmation on save, naming the
+///     groups being added by their labels.
+///
+/// Both, always. Neither is conditional on the other, and each has its own
+/// passing test.
+///
+/// ## A role write is not finished when the row is written
+///
+/// `ref.invalidate(accessAdminRolesProvider)` refreshes the *list*. What the
+/// running app permits is re-resolved by
+/// `AccessSessionController.refreshGroupsFromRoles`, and this section calls it
+/// after **all four** role writes — create, update, rename and delete — not
+/// only after an `Operator` edit. Deleting or re-scoping the role the signed-in
+/// person holds is the same staleness with a different subject.
+///
+/// **That call goes last, and the ordering is load-bearing.** See [_afterWrite].
 library;
 
 import 'package:flutter/material.dart';
@@ -21,7 +54,9 @@ import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 
 import '../core/access_admin_store.dart';
+import '../providers/access.dart';
 import '../providers/access_admin.dart';
+import '../widgets/access_admin_notice.dart';
 import '../widgets/panes/pane_chrome.dart';
 import '../widgets/panes/standard_dialog.dart';
 
@@ -126,6 +161,36 @@ const String kAccessRoleDuplicateNameNote =
 const String kAccessRoleProtectedNameNote =
     '"Operator" is the role a panel with nobody signed in resolves to, so no '
     'other role may take that name in any capitalisation.';
+
+/// **Warning one of two.** The persistent inline banner, rendered the whole
+/// time the protected row's editor is open.
+///
+/// Short on purpose. The full argument is in `access_repository.dart`'s class
+/// doc — "Ticking `setpoints` on Operator silently grants it to every panel on
+/// the floor with nobody signed in […] the one footgun this simplification
+/// creates" — and exists in the same words twice more, in `access_role.dart`
+/// and in `docs/access-control-deployment.md` §5. The screen's job is to make
+/// the reader stop, not to reproduce the reasoning, so this cites one and adds
+/// no fourth phrasing.
+const String kAccessOperatorBannerNote =
+    'This is the role a panel with nobody signed in resolves to. A group '
+    'ticked here is granted to every logged-out panel on the floor.';
+
+/// **Warning two of two.** The confirmation on save, naming what is being
+/// added.
+///
+/// By [AccessGroupInfo.label], never by enum name: the whole point of 06-01 is
+/// that `force` and `device` are not self-explanatory, and a confirmation
+/// reading "force" undoes that.
+String kAccessOperatorConfirmMessage(List<AccessGroup> added) =>
+    'Saving this grants ${added.map((g) => g.label).join(', ')} to every panel '
+    'on the floor with nobody signed in, immediately and without a sign-in.';
+
+/// The confirmation's title. A question, because it is one.
+const String kAccessOperatorConfirmTitle = 'Grant to every logged-out panel?';
+
+/// The confirmation's affirmative. Not "OK": the label says what happens.
+const String kAccessOperatorConfirmLabel = 'Grant';
 
 // ---------------------------------------------------------------------------
 // Keys
@@ -355,11 +420,12 @@ class AccessRolesSection extends ConsumerWidget {
       ),
     );
     if (name == null || !context.mounted) return;
-    await _write(
+    final wrote = await _write(
       context,
       ref,
       () => store.createRole(AccessRole(name: name, groups: const {})),
     );
+    if (wrote) await _afterWrite(ref);
   }
 }
 
@@ -399,6 +465,15 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
   /// A local set, not a write per tick: ticking six boxes must be one audit row
   /// and one `role.update`, not six — and Cancel must be able to mean it.
   Set<AccessGroup>? _draft;
+
+  /// The lockout refusal the last save came back with, rendered inline in place
+  /// of a snackbar so the operator can see it beside the boxes they left as
+  /// they were.
+  ///
+  /// The rule it reports is **not** re-implemented here. It lives in
+  /// `AccessRepository`, inside the transaction that would otherwise perform
+  /// the write; this field only holds what that transaction threw.
+  LastUsersHolderException? _refusal;
 
   /// Re-entry guard. Deliberately not rendered as a disabled button: a control
   /// this file draws is never greyed, and a second tap during the round trip is
@@ -482,6 +557,7 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
           _draft = {...role.groups};
         } else {
           _draft = null;
+          _refusal = null;
         }
       });
 
@@ -496,12 +572,23 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
   /// tick boxes; Save is what asks, and the refusal reaches the shared prompt —
   /// signing in from there and pressing Save again is the intended flow.
   Widget _editor(BuildContext context, Set<AccessGroup> draft) {
+    final refusal = _refusal;
     return Padding(
       padding: const EdgeInsets.only(left: 16, bottom: 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Warning one of two, and it is up the whole time this row is open —
+          // not only at the moment of saving. See the library doc.
+          if (_protected)
+            AccessAdminWarning(
+              blockKey: kAccessOperatorWarningKey,
+              text: kAccessOperatorBannerNote,
+              // Something becoming *less* restricted, matching
+              // `_WarningBlock`'s own choice for the rename warning.
+              icon: Icons.lock_open_outlined,
+            ),
           for (final group in AccessGroup.values)
             CheckboxListTile(
               key: kAccessRoleGroupKey(role.name, group),
@@ -521,8 +608,19 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
                 } else {
                   draft.remove(group);
                 }
+                // The refusal described the *previous* attempt. Clearing it on
+                // the next tick keeps it from reading as a verdict on what is
+                // on screen now.
+                _refusal = null;
               }),
             ),
+          if (refusal != null) ...[
+            const SizedBox(height: 8),
+            // The exception goes straight to the shared widget; this file
+            // builds no sentence of its own, which is what keeps this
+            // section's wording and the users section's identical.
+            AccessAdminRefusal.lastUsersHolder(refusal),
+          ],
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
@@ -545,19 +643,62 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
     );
   }
 
-  /// Writes the draft as one `role.update`.
+  /// Writes the draft as one `role.update`, after the second half of the
+  /// `Operator` warning.
+  ///
+  /// The confirmation fires only when the protected row is **gaining** groups.
+  /// A save that only removes them still shows the banner and needs no dialog:
+  /// narrowing is the safe direction, and a confirmation on every save is a
+  /// confirmation nobody reads. That is a judgement, not an omission.
   Future<void> _save(Set<AccessGroup> draft) async {
     if (_saving) return;
+
+    if (_protected) {
+      final added = [
+        for (final group in AccessGroup.values)
+          if (draft.contains(group) && !role.groups.contains(group)) group,
+      ];
+      if (added.isNotEmpty) {
+        // Warning two of two. Not `destructive: true` — nothing is being
+        // deleted — so it keeps the default icon.
+        final confirmed = await showConfirmDialog(
+          context: context,
+          title: kAccessOperatorConfirmTitle,
+          message: kAccessOperatorConfirmMessage(added),
+          confirmLabel: kAccessOperatorConfirmLabel,
+        );
+        if (!confirmed || !mounted) return;
+      }
+    }
+
     _saving = true;
     final wrote = await _write(
       context,
       ref,
       () => store.updateRole(
           AccessRole(name: role.name, groups: draft, seeded: role.seeded)),
+      onRefused: (refusal) {
+        // Inline, in place of a snackbar, with the boxes left as the operator
+        // left them so they can see what they tried. This `setState` runs
+        // before any refresh — see [_afterWrite] for why that ordering is the
+        // rule rather than an accident.
+        if (refusal is LastUsersHolderException && mounted) {
+          setState(() => _refusal = refusal);
+        }
+      },
     );
     _saving = false;
     if (!wrote) return;
-    if (mounted) setState(() => _draft = null);
+
+    // Everything that needs this widget happens first…
+    if (mounted) {
+      setState(() {
+        _draft = null;
+        _refusal = null;
+      });
+    }
+    // …and the session refresh last, because it can unmount this subtree.
+    await _afterWrite(ref);
   }
 
   Future<void> _rename() async {
@@ -571,11 +712,14 @@ class _RoleTileState extends ConsumerState<_RoleTile> {
       ),
     );
     if (to == null || to == role.name || !mounted) return;
-    await _write(context, ref, () => store.renameRole(role.name, to));
+    final wrote =
+        await _write(context, ref, () => store.renameRole(role.name, to));
+    if (wrote) await _afterWrite(ref);
   }
 
   Future<void> _delete() async {
-    await _write(context, ref, () => store.deleteRole(role.name));
+    final wrote = await _write(context, ref, () => store.deleteRole(role.name));
+    if (wrote) await _afterWrite(ref);
   }
 }
 
@@ -646,6 +790,39 @@ Future<bool> _write(
   ref.invalidate(accessAdminRolesProvider);
   ref.invalidate(accessAdminUsersProvider);
   return true;
+}
+
+/// Re-resolves the session in force against the rows that were just written.
+///
+/// **This is the last thing any write path does, and the ordering is the rule.**
+///
+/// Invalidate the lists, close whatever dialog is open and finish every
+/// `setState` **before** awaiting this; guard anything that must happen after
+/// it with `context.mounted`. The reason is that this section can unmount
+/// itself mid-await: unticking `users` from the role the signed-in person holds
+/// is *permitted* whenever a second granting role still has a holder — only the
+/// last-holder case throws — so the refresh drops the caller below the `users`
+/// gate while this widget is still inside its own async callback. The page is
+/// `users`-gated, so `AccessGate` swaps the subtree out and the section is
+/// disposed; a `ref.invalidate`, a `setState` or a `ScaffoldMessenger` call
+/// sequenced after this would then run on a disposed element.
+///
+/// Doing it **last** makes the unmount a non-event: everything that needed the
+/// widget has already happened, and the one thing left is the session drop,
+/// which is the point of the call. Nothing in this file touches `ref` or
+/// `context` after awaiting it.
+///
+/// It is called after **all four** role writes — the section's create, and the
+/// row's save, rename and delete — and is never inside an "is this my own
+/// role?" conditional. Such a conditional would make the exception go away by
+/// not making the call, and the call is the only thing that stops an admin who
+/// has just narrowed their own role from keeping the groups they removed.
+///
+/// The notifier is read synchronously, before the await, so a caller that is
+/// disposed by the refresh never reaches back into `ref`.
+Future<void> _afterWrite(WidgetRef ref) {
+  final controller = ref.read(accessSessionProvider.notifier);
+  return controller.refreshGroupsFromRoles();
 }
 
 void _showProblem(BuildContext context, Object error) {

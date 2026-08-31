@@ -164,9 +164,6 @@ class _UsersGate extends ConsumerWidget {
 // Sessions
 // ---------------------------------------------------------------------------
 
-AccessSession _anonymous() =>
-    AccessSession.anonymous(const {AccessGroup.operate});
-
 /// The engineer the `users` gate exists for: they may edit a page and must not
 /// be able to re-scope who may write what. Spec §1 separates `users` from
 /// `configure` for exactly this person.
@@ -290,8 +287,35 @@ void main() {
     );
   }
 
-  AccessSession? sessionInForce() =>
-      container!.read(accessSessionProvider).valueOrNull;
+  /// Pumps the section on a panel-sized surface.
+  ///
+  /// The default 800×600 test window cannot fit an open editor — seven
+  /// checkboxes with subtitles, plus the banner and the action row — and a tap
+  /// on a control laid out below the fold fails rather than scrolling to it.
+  /// A station is 1920×1080 and the composed page scrolls; the point of the
+  /// larger surface is that these tests are about what the screen says, not
+  /// about where it wraps.
+  Future<void> pumpSection(
+    WidgetTester tester,
+    List<Override> o, {
+    bool gated = false,
+  }) async {
+    tester.view.physicalSize = const Size(1400, 2600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(host(o, gated: gated));
+    await tester.pumpAndSettle();
+  }
+
+  /// The session the real controller currently publishes.
+  ///
+  /// Through `.future` rather than `.valueOrNull`, because the first read of a
+  /// provider nothing has listened to yet lands on `AsyncLoading` — and
+  /// `pumpSection` deliberately does not listen to the session unless the test
+  /// asked for the gate.
+  Future<AccessSession> sessionInForce() =>
+      container!.read(accessSessionProvider.future);
 
   /// Signs [username] in on the **real** controller, so the session in force is
   /// elevated and the `users` gate above the section is open.
@@ -333,8 +357,7 @@ void main() {
   group('the four terminal states', () {
     testWidgets('still loading renders nothing — not a spinner that flashes',
         (tester) async {
-      await tester.pumpWidget(host(overrides(storeNeverResolves: true)));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides(storeNeverResolves: true));
 
       expect(find.byKey(kAccessRolesSectionKey), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing,
@@ -348,9 +371,8 @@ void main() {
 
     testWidgets('the store errored says the list is untrustworthy',
         (tester) async {
-      await tester.pumpWidget(
-          host(overrides(storeError: StateError('no connection'))));
-      await tester.pumpAndSettle();
+      await pumpSection(
+          tester, overrides(storeError: StateError('no connection')));
 
       expect(find.byKey(kAccessRolesUnavailableKey), findsOneWidget);
       expect(find.text(kAccessRolesUnavailableNote), findsOneWidget);
@@ -360,8 +382,7 @@ void main() {
 
     testWidgets('no database says why, rather than showing an empty list',
         (tester) async {
-      await tester.pumpWidget(host(overrides(noDatabase: true)));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides(noDatabase: true));
 
       expect(find.byKey(kAccessRolesNoDatabaseKey), findsOneWidget);
       expect(find.text(kAccessRolesNoDatabaseNote), findsOneWidget);
@@ -378,9 +399,8 @@ void main() {
       // The one state the real loader cannot produce: the v6 migration seeds
       // four roles and `Operator` cannot be deleted. Overridden here precisely
       // because the copy's claim is that reaching it means something is wrong.
-      await tester.pumpWidget(
-          host(overrides(roles: Future.value(const <AccessRole>[]))));
-      await tester.pumpAndSettle();
+      await pumpSection(
+          tester, overrides(roles: Future.value(const <AccessRole>[])));
 
       expect(find.byKey(kAccessRolesEmptyKey), findsOneWidget);
       expect(find.text(kAccessRolesEmptyNote), findsOneWidget);
@@ -396,8 +416,7 @@ void main() {
   group('the list', () {
     testWidgets('names every seeded role and what it grants, by label',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       expect(find.text(kAccessRolesHeadline), findsOneWidget);
       for (final role in kSeedRoles) {
@@ -422,8 +441,7 @@ void main() {
       await makeUser('sigga', 'Shift Leader');
       await makeUser('gunna', 'Shift Leader');
 
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       expect(store!.calls.where((c) => c == 'listUsers').length, 1,
           reason: 'four roles on a seeded station, one roster read — a count '
@@ -444,8 +462,7 @@ void main() {
   group('Operator', () {
     testWidgets('the Operator row offers no Rename and no Delete at all',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       expect(find.byKey(kAccessRoleRenameKey(kOperatorRoleName)), findsNothing,
           reason: 'absent, not disabled: an unauthenticated panel resolves to '
@@ -470,8 +487,7 @@ void main() {
             AppRoleCompanion.insert(name: ' operator ', groups: '["operate"]'),
           );
 
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       expect(find.byKey(kAccessRoleTileKey(' operator ')), findsOneWidget);
       expect(find.byKey(kAccessRoleRenameKey(' operator ')), findsNothing);
@@ -490,8 +506,7 @@ void main() {
   group('create', () {
     testWidgets('a users session creates a role and the list shows it',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       await tester.tap(find.byKey(kAccessRolesCreateKey));
       await tester.pumpAndSettle();
@@ -509,8 +524,7 @@ void main() {
 
     testWidgets('a duplicate name is refused inside the dialog, without the '
         'store being called', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       store!.calls.clear();
 
       await tester.tap(find.byKey(kAccessRolesCreateKey));
@@ -530,8 +544,7 @@ void main() {
     });
 
     testWidgets('a blank name is refused inside the dialog', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       store!.calls.clear();
 
       await tester.tap(find.byKey(kAccessRolesCreateKey));
@@ -546,8 +559,7 @@ void main() {
 
     testWidgets('a name that is a capitalisation of Operator is refused '
         'inside the dialog', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       store!.calls.clear();
 
       await tester.tap(find.byKey(kAccessRolesCreateKey));
@@ -565,8 +577,7 @@ void main() {
     testWidgets('a configure-only session is refused, reaches the shared '
         'prompt, and the list is unchanged', (tester) async {
       session = _configureOnly();
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       final create =
           tester.widget<OutlinedButton>(find.byKey(kAccessRolesCreateKey));
@@ -594,8 +605,7 @@ void main() {
     testWidgets('a users session renames a role and its holders come with it',
         (tester) async {
       await makeUser('sigga', 'Shift Leader');
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       await tester.tap(find.byKey(kAccessRoleRenameKey('Shift Leader')));
       await tester.pumpAndSettle();
@@ -610,8 +620,7 @@ void main() {
 
     testWidgets('the rename dialog refuses a name already taken, without the '
         'store being called', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       store!.calls.clear();
 
       await tester.tap(find.byKey(kAccessRoleRenameKey('Shift Leader')));
@@ -634,8 +643,7 @@ void main() {
   group('the seven checkboxes', () {
     testWidgets('are generated from AccessGroup.values, in that order, with '
         'the label as title and the description as subtitle', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, 'Maintenance');
 
       final tiles = tester
@@ -662,8 +670,7 @@ void main() {
 
     testWidgets('start ticked exactly where the role grants, and Cancel '
         'discards without writing', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, 'Shift Leader');
       store!.calls.clear();
 
@@ -692,8 +699,7 @@ void main() {
 
     testWidgets('one Save writes one role.update however many boxes moved',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, 'Shift Leader');
       store!.calls.clear();
 
@@ -723,8 +729,7 @@ void main() {
   group('the Operator banner', () {
     testWidgets('is rendered the whole time the protected row is open',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       expect(find.byKey(kAccessOperatorWarningKey), findsNothing,
           reason: 'nothing is open yet');
@@ -748,8 +753,7 @@ void main() {
     });
 
     testWidgets('is not rendered for any other role', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       for (final name in ['Shift Leader', 'Maintenance', 'Engineering']) {
         await openEditor(tester, name);
@@ -762,8 +766,7 @@ void main() {
 
     testWidgets('the Operator row is marked as the anonymous identity',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
       expect(find.byKey(kAccessRoleAnonymousTagKey), findsOneWidget);
       expect(find.text(kAccessRoleAnonymousTag), findsOneWidget,
@@ -779,8 +782,7 @@ void main() {
   group('the Operator save confirmation', () {
     testWidgets('names the groups being added by label, and cancelling it '
         'writes nothing', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, kOperatorRoleName);
       store!.calls.clear();
 
@@ -798,7 +800,11 @@ void main() {
             const [AccessGroup.setpoints, AccessGroup.force])),
         findsOneWidget,
       );
-      expect(find.textContaining(AccessGroup.force.label), findsOneWidget,
+      expect(
+          find.descendant(
+              of: find.byType(StandardDialog),
+              matching: find.textContaining(AccessGroup.force.label)),
+          findsOneWidget,
           reason: 'by label. AccessGroup.force.name is "force", which is '
               'exactly the word 06-01 exists to stop the screen using');
       expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget,
@@ -830,8 +836,7 @@ void main() {
         groups: {AccessGroup.operate, AccessGroup.setpoints},
         seeded: true,
       ));
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, kOperatorRoleName);
 
       expect(find.byKey(kAccessOperatorWarningKey), findsOneWidget);
@@ -851,8 +856,7 @@ void main() {
 
     testWidgets('an ordinary role shows neither warning on save',
         (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, 'Maintenance');
 
       await tester.tap(find
@@ -875,11 +879,10 @@ void main() {
   group('the group change takes effect', () {
     testWidgets('an anonymous session gains setpoints the moment Operator is '
         'saved with it — no sign-in and no sign-out', (tester) async {
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
 
-      expect(sessionInForce()!.isElevated, isFalse);
-      expect(sessionInForce()!.can(AccessGroup.setpoints), isFalse);
+      expect((await sessionInForce()).isElevated, isFalse);
+      expect((await sessionInForce()).can(AccessGroup.setpoints), isFalse);
 
       await openEditor(tester, kOperatorRoleName);
       await tester.tap(find.byKey(
@@ -891,24 +894,23 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        sessionInForce()!.can(AccessGroup.setpoints),
+        (await sessionInForce()).can(AccessGroup.setpoints),
         isTrue,
         reason: 'T-06-65: the banner promises that ticking a group here '
             'changes what a logged-out panel may do. Without '
             'refreshGroupsFromRoles it is a promise the app does not keep '
             'until something else happens to rebuild the session',
       );
-      expect(sessionInForce()!.isElevated, isFalse,
+      expect((await sessionInForce()).isElevated, isFalse,
           reason: 'still logged out — that is the whole point');
     });
 
     testWidgets('a rename re-resolves the session in force too, so the write '
         'path does not refresh only after an Operator edit', (tester) async {
       await makeUser('admin', 'Engineering');
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await signIn(tester, 'admin');
-      expect(sessionInForce()!.user!.roleName, 'Engineering');
+      expect((await sessionInForce()).user!.roleName, 'Engineering');
 
       await tester.tap(find.byKey(kAccessRoleRenameKey('Engineering')));
       await tester.pumpAndSettle();
@@ -918,7 +920,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        sessionInForce()!.user!.roleName,
+        (await sessionInForce()).user!.roleName,
         'Controls Engineering',
         reason: 'the refresh runs after all four role writes, not only after '
             'an Operator update — the session was carrying a role name that '
@@ -937,8 +939,7 @@ void main() {
     testWidgets('unticking users from the only granting role is refused '
         'inline, names the holders, and shows no snackbar', (tester) async {
       await makeUser('admin', 'Engineering');
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, 'Engineering');
 
       await tester.tap(
@@ -975,8 +976,7 @@ void main() {
     testWidgets('there is no override anywhere on the refused editor',
         (tester) async {
       await makeUser('admin', 'Engineering');
-      await tester.pumpWidget(host(overrides()));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides());
       await openEditor(tester, 'Engineering');
       await tester.tap(
           find.byKey(kAccessRoleGroupKey('Engineering', AccessGroup.users)));
@@ -1012,8 +1012,7 @@ void main() {
       await makeUser('admin', 'Engineering');
       await makeUser('keeper', 'Access Admin');
 
-      await tester.pumpWidget(host(overrides(), gated: true));
-      await tester.pumpAndSettle();
+      await pumpSection(tester, overrides(), gated: true);
       await signIn(tester, 'admin');
       expect(find.byKey(kAccessRolesSectionKey), findsOneWidget);
 
@@ -1045,8 +1044,7 @@ void main() {
 
   testWidgets('no warning and no refusal is rendered by a list at rest',
       (tester) async {
-    await tester.pumpWidget(host(overrides()));
-    await tester.pumpAndSettle();
+    await pumpSection(tester, overrides());
 
     expect(find.byKey(kAccessOperatorWarningKey), findsNothing);
     expect(find.byKey(kAccessAdminRefusalKey), findsNothing);
