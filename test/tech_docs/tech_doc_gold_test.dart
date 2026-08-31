@@ -16,7 +16,12 @@ import 'package:tfc_mcp_server/src/services/drift_tech_doc_index.dart';
 import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show TechDocSummary, TechDocSection;
 
+import 'package:tfc_access/tfc_access.dart';
+
+import 'package:tfc/core/guarded_knowledge_stores.dart'
+    show kKnowledgeWriteGroup;
 import 'package:tfc/drawings/drawing_overlay.dart';
+import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/tech_doc.dart';
 import 'package:tfc/tech_docs/tech_doc_library_section.dart';
 import 'package:tfc/tech_docs/tech_doc_section_detail_panel.dart';
@@ -131,6 +136,34 @@ Widget _buildLibraryWidget({
   );
 }
 
+/// An [accessSessionProvider] that answers one fixed session and never calls
+/// the database.
+///
+/// The repository-wide idiom for pinning a session in a widget test —
+/// `test/pages/history_view_guard_test.dart:144`,
+/// `test/providers/access_templates_test.dart:67` and four more all declare the
+/// same three lines locally, so this is a copy on purpose rather than a shared
+/// helper nobody owns.
+class _FixedSession extends AccessSessionController {
+  _FixedSession(this._session);
+
+  final AccessSession _session;
+
+  @override
+  Future<AccessSession> build() async => _session;
+}
+
+/// A session that does **not** hold [kKnowledgeWriteGroup]: nobody signed in,
+/// holding `operate` only.
+AccessSession _readerSession() =>
+    AccessSession.anonymous(const {AccessGroup.operate});
+
+/// A signed-in session that **does** hold [kKnowledgeWriteGroup].
+AccessSession _writerSession() => const AccessSession(
+      user: AuthenticatedUser(username: 'jon', roleName: 'Engineer'),
+      groups: {AccessGroup.operate, kKnowledgeWriteGroup},
+    );
+
 /// Suppress RenderFlex overflow errors (common in narrow test widths).
 void suppressOverflow() {
   final origHandler = FlutterError.onError;
@@ -187,8 +220,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Widget renders — upload button won't show without TFC_USER, but
-      // the empty state and column headers should be present.
+      // The widget renders, without the upload row. This harness overrides no
+      // access session, so the write affordance resolves on
+      // `kSessionWhileLoading` (`lib/providers/access_policy.dart:183`) — the
+      // strict floor, seeded-Operator groups only, which does not hold
+      // `kKnowledgeWriteGroup` (`AccessGroup.configure`). That, and not any
+      // ambient process state, is why the button is absent here. What must be
+      // present for a reader either way is the empty state and the headers.
       expect(find.text('No resources found'), findsOneWidget);
       expect(find.text('Name'), findsOneWidget);
     });
@@ -221,9 +259,62 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Progress message is shown only when TFC_USER is set (write enabled).
-      // Without TFC_USER the upload row is hidden, so just verify no crash.
+      // The progress message lives inside the upload row, which only a session
+      // holding `kKnowledgeWriteGroup` sees. This harness overrides no session
+      // either, so the guard again resolves on the `kSessionWhileLoading`
+      // floor and the row — progress indicator included — is hidden. All this
+      // test can therefore prove is that an upload in flight does not break the
+      // widget for somebody who may not upload. The affordance itself is
+      // asserted on both sides of the gate in "GOLD 1b" below.
       expect(find.byType(TechDocLibrarySection), findsOneWidget);
+    });
+  });
+
+  // =========================================================================
+  // 1b. Write affordance — both sides of the session gate
+  // =========================================================================
+  //
+  // The upload row is convenience; `kKnowledgeWriteGroup` at the store level
+  // (`lib/core/guarded_knowledge_stores.dart:84`) is the security boundary. The
+  // two have to agree or the UI lies about what the signed-in user may do, so
+  // the rule is asserted here in both directions.
+  //
+  // The deny side was already true before this group existed — but incidentally,
+  // because the harness happens to build no session. A regression that hid the
+  // upload row from *everyone* would have passed every assertion in this file.
+  // That is what the allow-side test closes.
+  group('GOLD 1b — Upload affordance vs the access session', () {
+    testWidgets('hidden for a session that does not hold configure',
+        (tester) async {
+      suppressOverflow();
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_readerSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TechDocLibrarySection), findsOneWidget);
+      expect(find.text('Upload PDF'), findsNothing);
+      expect(find.text('Upload PLC Project'), findsNothing);
+    });
+
+    testWidgets('appears for a session holding kKnowledgeWriteGroup',
+        (tester) async {
+      suppressOverflow();
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_writerSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Upload PDF'), findsOneWidget);
+      expect(find.text('Upload PLC Project'), findsOneWidget);
     });
   });
 

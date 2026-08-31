@@ -1,3 +1,22 @@
+// Chat availability is a **compile-time** question in this repository:
+// `kChatEnabled` is `bool.fromEnvironment('CENTROIDX_CHAT', defaultValue: true)`
+// and nothing else decides it — no access group, no ambient environment
+// variable.
+//
+// Until phase 07 this file gated seven tests on an environment variable that CI
+// never sets, so CI ran the four "chat is unavailable" tests and had **never
+// once executed** the three that exercise the real flow. No test in this file
+// may read process state for any reason.
+//
+// The only `skip:` left is `skip: kChatEnabled`, on the two tests that describe
+// a build compiled with `--dart-define=CENTROIDX_CHAT=false`. Note the
+// inversion: `skip:` takes *when to skip*, so "runs only when chat is compiled
+// out" is written `skip: kChatEnabled`. Those two are dead weight in a normal
+// CI run and load-bearing as a smoke test for the shipped, flag-off binary.
+//
+// `dart:io` survives only for `File` and `Directory` in the source assertions
+// at the bottom of the file; nothing here touches the process environment.
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,6 +24,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/chat/ai_context_action.dart';
 import 'package:tfc/chat/chat_overlay.dart';
+import 'package:tfc/core/feature_flags.dart';
 import 'package:tfc/llm/conversation_models.dart';
 import 'package:tfc/llm/llm_models.dart';
 import 'package:tfc/providers/chat.dart';
@@ -74,12 +94,6 @@ class _TrackingChatNotifier extends ChatNotifier {
 
 // ─── Test helpers ────────────────────────────────────────────────────────
 
-/// Whether MCP chat features are available in this test run.
-///
-/// [isMcpChatAvailable] checks the TFC_USER environment variable.
-/// Tests that exercise the full flow (not just the gate) require this.
-final _mcpAvailable = Platform.environment.containsKey('TFC_USER');
-
 /// Wraps a child in a ProviderScope with tracking notifier and preferences.
 Widget _wrapWithTracking({
   required _TrackingChatNotifier notifier,
@@ -132,7 +146,6 @@ void main() {
   group('AiContextAction.openChat', () {
     testWidgets(
       'creates new conversation and sets prefill text',
-      skip: !_mcpAvailable,
       (tester) async {
         final notifier = _TrackingChatNotifier();
         bool chatOpened = false;
@@ -182,9 +195,15 @@ void main() {
       },
     );
 
+    // Kept, and it only runs in a flag-off build. `openChat` is the one of the
+    // four entry points whose return value a caller actually branches on —
+    // `debugAsset` in `lib/chat/asset_context_menu.dart` does `if (!opened)
+    // return;` before it spends anything gathering context. That contract is
+    // worth a test even though every UI path into it is separately guarded by
+    // `kChatEnabled`.
     testWidgets(
-      'returns false when MCP chat is not available',
-      skip: _mcpAvailable,
+      'returns false, and creates nothing, in a chat-flag-off build',
+      skip: kChatEnabled,
       (tester) async {
         final notifier = _TrackingChatNotifier();
         bool? result;
@@ -220,7 +239,6 @@ void main() {
   group('AiContextAction.openChatAndSend', () {
     testWidgets(
       'creates new conversation and sends message immediately',
-      skip: !_mcpAvailable,
       (tester) async {
         final notifier = _TrackingChatNotifier();
 
@@ -254,81 +272,20 @@ void main() {
       },
     );
 
-    testWidgets(
-      'returns false when MCP is not available',
-      skip: _mcpAvailable,
-      (tester) async {
-        final notifier = _TrackingChatNotifier();
-        bool? result;
-
-        await tester.pumpWidget(
-          _wrapWithTracking(
-            notifier: notifier,
-            child: Consumer(
-              builder: (context, ref, _) {
-                return ElevatedButton(
-                  onPressed: () async {
-                    result = await AiContextAction.openChatAndSend(
-                      ref: ref,
-                      message: 'test',
-                    );
-                  },
-                  child: const Text('Send'),
-                );
-              },
-            ),
-          ),
-        );
-
-        await tester.tap(find.text('Send'));
-        await tester.pumpAndSettle();
-
-        expect(result, false);
-        expect(notifier.newConversationCalls, 0);
-        expect(notifier.sentMessages, isEmpty);
-      },
-    );
+    // A companion "returns false when MCP is not available" test was deleted
+    // here. It asserted the return value of `openChatAndSend`, and every one of
+    // its five call sites — `plc_detail_panel.dart:541` and `:768`,
+    // `tech_doc_library_section.dart:527` and `:1087`, `page_editor.dart:3566` —
+    // discards that value without even awaiting it. All it proved was that the
+    // ambient gate closed, and that gate no longer exists.
   });
 
   group('AiContextAction.showMenuAndChat', () {
-    testWidgets(
-      'returns false when MCP is not available',
-      skip: _mcpAvailable,
-      (tester) async {
-        final notifier = _TrackingChatNotifier();
-        bool? result;
-
-        await tester.pumpWidget(
-          _wrapWithTracking(
-            notifier: notifier,
-            child: Consumer(
-              builder: (context, ref, _) {
-                return ElevatedButton(
-                  onPressed: () async {
-                    result = await AiContextAction.showMenuAndChat(
-                      context: context,
-                      ref: ref,
-                      position: const Offset(100, 100),
-                      menuItems: const [
-                        AiMenuItem(label: 'Test', prefillText: 'test'),
-                      ],
-                    );
-                  },
-                  child: const Text('Menu'),
-                );
-              },
-            ),
-          ),
-        );
-
-        await tester.tap(find.text('Menu'));
-        await tester.pumpAndSettle();
-
-        expect(result, false);
-        expect(notifier.newConversationCalls, 0);
-      },
-    );
-
+    // A "returns false when MCP is not available" test was deleted here. Its
+    // whole content — `showMenuAndChat` takes an early `return false` and shows
+    // no menu — is already asserted, on a condition that still exists, by the
+    // empty-menuItems test below. What it added over that one was the ambient
+    // gate, and nothing else.
     testWidgets('returns false when menuItems is empty', (tester) async {
       final notifier = _TrackingChatNotifier();
       bool? result;
@@ -362,9 +319,15 @@ void main() {
   });
 
   group('AiContextMenuWrapper', () {
+    // Kept, and it only runs in a flag-off build. Unlike the three action
+    // helpers, this asserts a property of the **widget tree**: the wrapper is
+    // transparent rather than merely inert. The child is still rendered and no
+    // GestureDetector is interposed, so the child's own gestures still reach
+    // it. A flag-off build that swallowed taps would be a broken panel, not a
+    // panel without chat.
     testWidgets(
-      'renders child directly when MCP is not available',
-      skip: _mcpAvailable,
+      'renders the child transparently in a chat-flag-off build',
+      skip: kChatEnabled,
       (tester) async {
         await tester.pumpWidget(
           ProviderScope(
@@ -382,15 +345,14 @@ void main() {
         );
 
         expect(find.text('Hello'), findsOneWidget);
-        // Should NOT have a GestureDetector wrapping the child
-        // (the wrapper returns child directly when MCP is unavailable)
+        // Should NOT have a GestureDetector wrapping the child: the wrapper
+        // returns the child directly when chat is compiled out.
         expect(find.byType(GestureDetector), findsNothing);
       },
     );
 
     testWidgets(
-      'wraps child in GestureDetector when MCP is available',
-      skip: !_mcpAvailable,
+      'wraps child in GestureDetector when chat is compiled in',
       (tester) async {
         final notifier = _TrackingChatNotifier();
 
