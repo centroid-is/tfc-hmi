@@ -2,6 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
 const bodyColor = Color(0xFFF7F5E6);
+
+/// The housing Beckhoff gives its TwinSAFE hardware — EL2912 in the rack,
+/// EP1918 out in the field. Safety terminals are yellow and everything else
+/// is cream, which is how an electrician picks them out of a rack from across
+/// the room, so the mimic keeps the distinction.
+const twinSafeBodyColor = Color(0xFFF2C200);
+
 const ioLabelColor = Color(0xFFC0C040);
 
 enum IOState { low, high, forcedLow, forcedHigh, error }
@@ -15,6 +22,12 @@ class IO8Widget extends AnimatedWidget {
   final List<String> ioLabels;
   final List<Color> ioLabelColors;
   final String name;
+
+  /// Housing colour. Beckhoff's TwinSAFE terminals (EL2912, EP1918) are
+  /// yellow rather than the cream every other EL terminal wears, and on a
+  /// rack mimic that colour is the fastest way to tell a safety terminal
+  /// from a standard one.
+  final Color housingColor;
   IO8Widget({
     required this.ledStates,
     this.height = 300,
@@ -33,6 +46,7 @@ class IO8Widget extends AnimatedWidget {
       ioLabelColor,
     ],
     required this.name,
+    this.housingColor = bodyColor,
     required Animation<int> animation,
   })  : assert(ledStates.length == 8 || ledStates.length == 6),
         super(listenable: animation);
@@ -53,6 +67,7 @@ class IO8Widget extends AnimatedWidget {
           animation: animation,
           ioLabels: ioLabels,
           ioLabelColors: ioLabelColors,
+          housingColor: housingColor,
         ),
       ),
     );
@@ -70,6 +85,9 @@ class IO8Painter extends CustomPainter {
   final String bottomLabel;
   final Animation<int> animation;
   final String name;
+
+  /// Housing colour — see [IO8Widget.housingColor].
+  final Color housingColor;
   IO8Painter({
     required this.ledStates,
     this.disconnected = false,
@@ -91,6 +109,7 @@ class IO8Painter extends CustomPainter {
       ioLabelColor,
     ],
     this.bottomLabel = 'BECKHOFF',
+    this.housingColor = bodyColor,
     required this.animation,
     required this.name,
   });
@@ -99,7 +118,6 @@ class IO8Painter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final strokeWidth = size.width * 0.03;
     // Colors
-    final bodyColor = Color(0xFFF7F5E6);
     final outerBorderPaint = Paint()
       ..color = selected ? Colors.orange : Colors.grey.shade700
       ..style = PaintingStyle.stroke
@@ -108,7 +126,7 @@ class IO8Painter extends CustomPainter {
       ..color = Colors.grey.shade700
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
-    final fillPaint = Paint()..color = bodyColor;
+    final fillPaint = Paint()..color = housingColor;
 
     // Draw module body
     final moduleRect = RRect.fromRectAndRadius(
@@ -340,7 +358,8 @@ class IO8Painter extends CustomPainter {
       old.name != name ||
       old.animation.value != animation.value ||
       !listEquals(old.ioLabels, ioLabels) ||
-      !listEquals(old.ioLabelColors, ioLabelColors);
+      !listEquals(old.ioLabelColors, ioLabelColors) ||
+      old.housingColor != housingColor;
 }
 
 // Base class with shared functionality
