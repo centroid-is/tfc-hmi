@@ -286,6 +286,66 @@ void _expectProtected(_Scan scan, Directory root, String relativePath) {
   );
 }
 
+/// The retired acronym, followed by an underscore.
+///
+/// Assembled from two pieces rather than written as one literal for two
+/// reasons. First, so this file's own source stays clean of the token it
+/// forbids and a future variant of the gate — or a reviewer's `grep` — can
+/// scan it like any other file. Second, so the doc comment at the top can name
+/// the retired keys in prose, which it must, without the assembly picking them
+/// up. The `guards the guard` group asserts the result is four characters and
+/// that it does appear in this file's text, so a typo in the assembly fails
+/// loudly instead of quietly disabling every assertion below.
+final _retiredPrefix = '${'TFC'}${'_'}';
+
+/// The replacement for each retired key, rendered into the failure message.
+///
+/// The two deletions matter more than the five renames. A reader who reaches
+/// `TFC_USER` and looks for a new spelling has misunderstood the phase.
+const _fixTable = '''
+  TFC_CHAT               -> CENTROIDX_CHAT
+  TFC_KNOWLEDGE          -> CENTROIDX_KNOWLEDGE
+  TFC_MCP_SERVER_PATH    -> CENTROIDX_MCP_SERVER_PATH
+  TFC_MCP_TOGGLES        -> CENTROIDX_MCP_TOGGLES
+  TFC_ALLOW_FLUTTER_SKEW -> CENTROIDX_ALLOW_FLUTTER_SKEW
+  TFC_USER               -> deleted outright, no successor key
+  TFC_GOD                -> deleted outright, no successor key
+
+  There is no CENTROIDX_MCP_OPERATOR to move TFC_USER to. The MCP subprocess
+  gets no identity of its own, because the access session's signed-in user is
+  the only identity in this system: MCP write tools return proposals, a human
+  with the right permission authorizes them at approval, and the audit row
+  names that approver rather than the proposer.
+
+  There is no allowlist: rename it or delete it.''';
+
+/// Every occurrence of [token] in every scanned file — not the first per file.
+///
+/// `.github/workflows/windows.yml` is the reason this returns all of them: it
+/// builds twice, the exe at `:119`/`:121` and the MSIX at `:219`/`:221`, and
+/// the MSIX defines sit inside a quoted `--windows-build-args` string. A
+/// first-match-per-file check reports line 119 and ships line 221.
+List<({String path, int line, String text})> _offenders(
+  _Scan scan,
+  String token, {
+  bool Function(String line)? onlyLinesWhere,
+}) {
+  final hits = <({String path, int line, String text})>[];
+  for (final file in scan.files) {
+    for (var i = 0; i < file.lines.length; i++) {
+      final line = file.lines[i];
+      if (!line.contains(token)) continue;
+      if (onlyLinesWhere != null && !onlyLinesWhere(line)) continue;
+      hits.add((path: file.path, line: i + 1, text: line.trim()));
+    }
+  }
+  return hits;
+}
+
+String _render(List<({String path, int line, String text})> hits) => hits
+    .map((h) => '  ${h.path}:${h.line}: ${h.text}')
+    .join('\n');
+
 void main() {
   final root = _repoRoot();
   final scan = _scanRepo(root);
@@ -399,6 +459,56 @@ void main() {
         reason: 'this file names the retired acronym in prose and must not '
             'report itself. If it appears in the scanned set the exclusion '
             'path has drifted from the real filename.',
+      );
+    });
+
+    test('the forbidden token assembled correctly', () {
+      expect(
+        _retiredPrefix.length,
+        4,
+        reason: 'the token is assembled from pieces rather than written as a '
+            'literal, so a typo there would leave every assertion below '
+            'searching for the wrong string and passing forever.',
+      );
+      expect(
+        File('${root.path}/$_selfPath').readAsStringSync(),
+        contains(_retiredPrefix),
+        reason: 'this file names the retired keys in prose, so the assembled '
+            'token must match that text. If it does not, the assembly is '
+            'producing something other than the string being hunted.',
+      );
+    });
+  });
+
+  group('no legacy env keys or dart-defines survive', () {
+    test('no file carries the retired acronym prefix', () {
+      final hits = _offenders(scan, _retiredPrefix);
+      final files = hits.map((h) => h.path).toSet();
+      expect(
+        hits,
+        isEmpty,
+        reason: '${hits.length} occurrences of the retired prefix survive in '
+            '${files.length} files:\n\n${_render(hits)}\n\nThe fix, per key:\n'
+            '$_fixTable',
+      );
+    });
+
+    test('the dart-define surface specifically is clean', () {
+      final hits = _offenders(
+        scan,
+        _retiredPrefix,
+        onlyLinesWhere: (line) => line.contains('--dart-define='),
+      );
+      final files = hits.map((h) => h.path).toSet();
+      expect(
+        hits,
+        isEmpty,
+        reason: 'this is the silent-ship hazard, stated on its own. Both '
+            'feature flags default to true, so each of these ${hits.length} '
+            'defines across ${files.length} files is ignored rather than '
+            'rejected once the constant is renamed, and the build ships with '
+            'the feature compiled in:\n\n${_render(hits)}\n\nThe fix, per '
+            'key:\n$_fixTable',
       );
     });
   });
