@@ -410,11 +410,21 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
   ),
   'F13': Outstanding(
     kind: OutstandingKind.partial,
-    owner: '07-05',
-    clause: 'the case runs at a flat 100 ms one-way delay with no jitter '
-        'against the catalogue\'s 500 ms ± 200 ms, and the "staleness age '
-        '(rule 4) reflects real delay" clause is not asserted at all — only '
-        'that a slow answer stays good quality and costs no redial',
+    owner: '07-11',
+    clause: 'the *age* half of "staleness age (rule 4) reflects real delay". '
+        '07-05 uprated the case to the catalogue\'s 500 ms ± 200 ms and added '
+        'the operator-visible clause it could assert — that no staleness or '
+        'link transition occurs at all across a slow window, judged over '
+        'collected transitions and corroborated by a provoked one. What it '
+        'could not assert is an age *number*, because the client publishes '
+        'none: viewIsStale and staleSubscriptions are a boolean and a set, and '
+        'DynamicValue.sourceTime is null on this path (measured). The only '
+        'per-subscription age in the client is FreshnessWatchdog._evaluatedAt, '
+        'kept in the gateway\'s clock and exposed solely as the verdict '
+        'derived from it (freshness_watchdog.dart:217). 07-11 wires the '
+        'staleness surface (07-CONTEXT ruling 1); when it carries an age, this '
+        'row asserts that the age tracks the injected delay. No getter was '
+        'invented here to make the clause look asserted',
   ),
   'F14': Outstanding(
     kind: OutstandingKind.missing,
