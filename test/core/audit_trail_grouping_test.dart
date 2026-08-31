@@ -358,8 +358,8 @@ void main() {
   // -------------------------------------------------------------------------
 
   group('kKnownAuditSurfaces', () {
-    test('names exactly the four surfaces this build knows about', () {
-      expect(kKnownAuditSurfaces, {'tag', 'pref', 'route', 'auth'},
+    test('names exactly the five surfaces this build knows about', () {
+      expect(kKnownAuditSurfaces, {'tag', 'pref', 'route', 'auth', 'admin'},
           reason: 'This is the one written record of the audit surface '
               'vocabulary, and it is a change-detector rather than a '
               'whitelist. If you are reading this failure you have added a '
@@ -372,16 +372,20 @@ void main() {
     });
 
     test('an unlisted surface flows through grouping untouched', () {
-      // Phase 6's 'admin' surface, which does not exist in this build.
+      // A surface no build has ever declared, standing in for the row a
+      // station running a newer build writes into the same database. It is
+      // deliberately not 'admin' any more: 'admin' is listed now, and a
+      // change-detector's companion test has to use a value that is genuinely
+      // absent from the set or it stops proving anything.
       final actions = groupAuditRows([
         row(
             actionId: 'A',
-            surface: 'admin',
+            surface: 'from-a-newer-build',
             itemKey: 'role.create',
             groupRequired: 'users'),
         row(
             actionId: 'A',
-            surface: 'admin',
+            surface: 'from-a-newer-build',
             itemKey: 'role.update',
             groupRequired: 'users'),
       ]);
