@@ -467,12 +467,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the late joiner reaching a complete view over a throttled, '
         'flapping link',
   ),
-  'G3': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-06',
-    clause: 'resyncs coalesced and counted server-side, with the ??=-to-= '
-        'sabotage',
-  ),
   'G4': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-06',

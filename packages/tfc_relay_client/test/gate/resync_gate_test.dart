@@ -37,7 +37,11 @@
 @Tags(['gate', 'faults'])
 library;
 
+import 'dart:convert';
+
 import 'package:test/test.dart';
+import 'package:tfc_relay_client/tfc_relay_client.dart';
+import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../support/fault_fixture.dart';
 import '../support/gate_bands.dart';
@@ -55,6 +59,42 @@ import '../support/gate_bands.dart';
 /// because the answer is still one frame.
 const int _f9PageSize = 40;
 
+/// How many sequence gaps G3a induces in one burst.
+///
+/// Eight, injected in one synchronous loop so that every one of them lands
+/// while the first resync is still in flight — which is the only window in
+/// which there is anything to coalesce. A client that started an establish per
+/// gap would answer eight; the coalescing one answers one, and an
+/// order-of-magnitude difference is a result rather than a margin.
+const int _g3Gaps = 8;
+
+/// How long G3b keeps killing connections before their snapshot can arrive.
+///
+/// Three seconds is seven attempts of the schedule below (20 + 40 + 80 + 160 +
+/// 320 + 640 + 1280 ms of expected waiting) and about forty of a schedule that
+/// restarted at the base every time the socket answered. The two numbers are
+/// what the arm discriminates between, and three seconds is where they are
+/// furthest apart per second of lane.
+const Duration _g3StormWindow = Duration(seconds: 3);
+
+/// The backoff schedule G3b's bound is computed from, restated here rather than
+/// read off the config the fixture builds.
+///
+/// 07-04's lesson, and it is the whole reason the bound has teeth: a ceiling
+/// that recomputed itself from whatever the client was actually handed would
+/// rise to meet a client that had been made to hammer, which is the one failure
+/// it exists to catch. These two must move with `faultClientConfig`'s, and the
+/// arm says so if they stop agreeing about the shape of the storm.
+const Duration _g3BackoffBase = Duration(milliseconds: 40);
+const Duration _g3BackoffCap = Duration(seconds: 2);
+
+/// What one attempt costs beyond its backoff wait: a dial, a WebSocket
+/// handshake and a `hello` round trip over loopback. Measured at 40-60 ms on
+/// macOS across the runs in 07-06-SUMMARY; 40 ms is the conservative end,
+/// because a *smaller* overhead makes the ceiling below larger and the bound
+/// weaker only in the direction that cannot produce a false red.
+const Duration _g3AttemptOverhead = Duration(milliseconds: 40);
+
 /// The page F9 drives, as `ST101.CNnn.MOT01.setpoint`.
 ///
 /// The plant's own naming (`AREAnn.DEVnn.SUBnn`), so the page reads like a page
@@ -71,6 +111,66 @@ List<String> _pageKeys(int n) => [
 /// the hot-path `u` frame (`messages.dart:263-323`), so this matches the answer
 /// and never an update.
 bool _isSnapshotAnswer(String frame) => frame.contains('"generation"');
+
+/// The gateway's own count of how many times it has rebuilt this page.
+///
+/// The generation is minted by `SubscriptionRegistry.nextGeneration()` once per
+/// subscribe, from a counter that spans the whole gateway
+/// (`subscription_registry.dart:190-205`), so with one client on one page the
+/// delta across a window **is** the number of subscribes the gateway served in
+/// it. Read off the server's registry rather than off the client or the resync
+/// engine's `_inFlight` map: the property G3 is about is how many times the
+/// *gateway* was asked to rebuild the page, and a case that read the private map
+/// would be asserting an implementation that is allowed to change while the
+/// property stays.
+int _rebuildsServed(FaultFixture fixture, String sub) {
+  final session = fixture.server.sessions.sessions.single;
+  final state = session.subscriptions.get(sub);
+  if (state == null) {
+    fail('the gateway holds no subscription named "$sub", so there is nothing '
+        'to count rebuilds of');
+  }
+  return state.generation;
+}
+
+/// A real frame off the wire with its sequence and generation stamps replaced.
+///
+/// The envelope, the handles and the values are the gateway's own; only the two
+/// numbers under test are chosen. Composing a whole frame instead would assert
+/// against a shape somebody guessed, which is the argument F18's arms already
+/// make for capturing rather than writing one.
+String restamped(String frame, {required int seq, required int generation}) {
+  final decoded = jsonDecode(frame) as Map<String, Object?>;
+  final params = (decoded['params']! as Map).cast<String, Object?>();
+  params['seq'] = seq;
+  params['g'] = generation;
+  decoded['params'] = params;
+  return jsonEncode(decoded);
+}
+
+/// How many attempts a schedule that is **never reset** fits into [window].
+///
+/// Full jitter draws uniformly from `[0, min(cap, base * 2^n))`, so attempt *n*
+/// waits half that window on average, and each attempt also costs one dial and
+/// one `hello` round trip. The walk at 40 ms base and a 2 s cap is 20, 40, 80,
+/// 160, 320, 640, 1280, 1000… ms of waiting, so a three-second window holds
+/// eight attempts.
+///
+/// **A full-jitter schedule has no hard ceiling** — every draw can come back
+/// near zero — so the only honest bound is this expectation with a margin, and
+/// the margin is applied at the call site where it is visible.
+int _attemptsIn(Duration window, Duration base, Duration cap, Duration cost) {
+  var elapsed = 0;
+  var attempts = 0;
+  var next = base.inMilliseconds;
+  while (elapsed < window.inMilliseconds) {
+    attempts++;
+    elapsed += next ~/ 2 + cost.inMilliseconds;
+    final doubled = next * 2;
+    next = doubled > cap.inMilliseconds ? cap.inMilliseconds : doubled;
+  }
+  return attempts;
+}
 
 /// What was true at the instant the second kill fired.
 ///
@@ -227,6 +327,208 @@ void main() {
               'pre-drop value, so the comparison above was partly against '
               'values that never changed and could not have caught a client '
               'that kept them');
+    });
+  });
+
+  group('G3 — a resync storm coalesces instead of stacking', () {
+    test('G3a: a burst of sequence gaps on one page costs one resync, not a '
+        'stack', () async {
+      final fixture = await faultFixture(
+        keys: const {scenarioKey},
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      // A real frame off the wire, so the storm is made of frames the gateway
+      // genuinely sent rather than of a shape somebody guessed.
+      fixture.served.setValue(scenarioKey, 1300);
+      await until('an update frame',
+          () => fixture.client.read(scenarioKey)?.value == 1300);
+      final captured = fixture.seam.lastMatching(
+          (message) => message.contains('"method":"${Methods.update}"'));
+      expect(captured, isNotNull,
+          reason: 'no update frame was captured, so the storm below would '
+              'inject nothing and every count in this case would be zero');
+
+      final rebuiltBefore = _rebuildsServed(fixture, defaultPageSubscription);
+      final answersBefore =
+          fixture.seam.inbound.where(_isSnapshotAnswer).length;
+      final serverSeq = fixture
+          .server.sessions.sessions.single.subscriptions
+          .get(defaultPageSubscription)!
+          .seq;
+
+      // The lever is repeated sequence gaps rather than repeated kills, and the
+      // choice is the row's: a kill storm is a *reconnect* storm, whose
+      // recoveries the supervisor serialises one per connection, so it cannot
+      // put two recoveries in flight for one subscription and has nothing to
+      // coalesce (07-04 measured the same thing from the other side: under a
+      // flap neither guard in `onUpdate` fires at all, because the peer is
+      // retired before a frame can reach it). Gaps arrive on a live socket,
+      // which is the only place `_inFlight` can have two callers.
+      for (var i = 1; i <= _g3Gaps; i++) {
+        fixture.seam.inject(restamped(captured!,
+            seq: serverSeq + i * 10, generation: rebuiltBefore));
+      }
+
+      await until('the page to be rebuilt at least once',
+          () => _rebuildsServed(fixture, defaultPageSubscription) >
+              rebuiltBefore,
+          budget: recovery);
+      // Spent on purpose: a client that stacked its resyncs would serve the
+      // remaining seven here, and an absence is only worth the window it was
+      // watched over.
+      await Future<void>.delayed(settle);
+
+      final rebuilt =
+          _rebuildsServed(fixture, defaultPageSubscription) - rebuiltBefore;
+      final answers =
+          fixture.seam.inbound.where(_isSnapshotAnswer).length - answersBefore;
+      print('G3a: $_g3Gaps gaps induced, $rebuilt rebuilds served by the '
+          'gateway, $answers snapshot answers on the wire; '
+          'complaints ${fixture.client.complaints.length}, sessions '
+          '${fixture.server.sessions.sessionCount}, subscriptions '
+          '${fixture.server.sessions.sessions.single.subscriptions.count}');
+
+      // Anti-vacuity: something did resync. Eight gaps that cost nothing at all
+      // would satisfy every bound below while measuring an absence of load.
+      expect(rebuilt, greaterThanOrEqualTo(1),
+          reason: 'the gateway rebuilt the page $rebuilt times across '
+              '$_g3Gaps sequence gaps, so nothing was coalesced because '
+              'nothing happened — the injected frames were not read as gaps at '
+              'all and this case is measuring an absence of load');
+      expect(rebuilt, lessThan(_g3Gaps),
+          reason: 'the gateway rebuilt the page $rebuilt times for $_g3Gaps '
+              'gaps. Resyncs are stacking rather than coalescing: one flapping '
+              'panel turns one broken stream into a rebuild per gap against a '
+              'gateway serving the whole plant, which is the denial of service '
+              'Sparkplug rebirth and Ably re-attach both rate-limit for');
+      // Bounded by the recoveries that *completed*, not by the gaps: every
+      // rebuild the gateway served came back as a snapshot the client applied,
+      // so none was left in flight.
+      expect(rebuilt, answers,
+          reason: 'the gateway served $rebuilt rebuilds and the client saw '
+              '$answers snapshot answers. A rebuild with no answer is a resync '
+              'the gateway paid for and nobody completed, which is the '
+              'unbounded-growth half of the row');
+
+      // No unbounded growth: one session, one subscription, no complaints, and
+      // the page still current.
+      expect(fixture.server.sessions.sessionCount, lessThanOrEqualTo(1),
+          reason: 'the storm left more than one session on the gateway');
+      expect(
+          fixture.server.sessions.sessions.single.subscriptions.count, 1,
+          reason: 'the gateway holds more subscriptions than the client asked '
+              'for, so a re-establish registered beside its predecessor '
+              'instead of replacing it');
+      expect(fixture.client.complaints, isEmpty,
+          reason: 'the resync engine complained during the storm: '
+              '${fixture.client.complaints}. A refused or failed recovery '
+              'leaves the page unestablished, and a case whose storm ends with '
+              'the page gone is not measuring coalescing');
+      final value = await fixture.client.readFresh(scenarioKey).timeout(recovery);
+      expect(value.value, 1300,
+          reason: 'a forced round trip after the storm did not answer with the '
+              'plant\'s value, so the page did not survive its own recovery');
+    });
+
+    test('G3b: the backoff does not restart until a resync completes',
+        () async {
+      final keys = _pageKeys(_f9PageSize);
+      final fixture = await faultFixture(
+        keys: keys.toSet(),
+        withProxy: true,
+        seed: (plant) {
+          for (var i = 0; i < keys.length; i++) {
+            plant.setValue(keys[i], 100 + i);
+          }
+        },
+      );
+      await until('the link', () => fixture.client.isReady);
+
+      // `LinkState.connecting`, not `seam.dials`: a dial counts a socket whose
+      // handshake finished, and the number this arm is about is how often the
+      // client *tried* (07-04, measured — the same sabotage moved dials 5 to 9
+      // while attempts went 42 to 420).
+      final attemptAt = <DateTime>[];
+      final states = fixture.client.linkStates.listen((state) {
+        if (state == LinkState.connecting) attemptAt.add(DateTime.now());
+      });
+      addTearDown(states.cancel);
+
+      // Every connection is killed on its first inbound frame — the `hello`
+      // answer — so the socket answers the phone every time and the snapshot
+      // never lands. `LinkState.ready` is entered only after the resync
+      // completes (`connection_supervisor.dart:470,508`) and that is the one
+      // place `backoff.reset()` is called, so a schedule that grew here is a
+      // schedule that was not reset by the socket coming up. The page is forty
+      // keys for the reason F9 needs it to be: it puts ~49 ms between the
+      // `hello` answer and the snapshot, which is the room this loop has to
+      // fire in.
+      final stormFrom = fixture.seam.inbound.length;
+      var mark = fixture.seam.inbound.length;
+      final started = DateTime.now();
+      fixture.proxy.killOnce();
+      var kills = 1;
+      while (DateTime.now().difference(started) < _g3StormWindow) {
+        if (fixture.seam.inbound.length > mark) {
+          mark = fixture.seam.inbound.length;
+          fixture.proxy.killOnce();
+          kills++;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      final during = fixture.seam.inbound.sublist(stormFrom);
+      final completed = during.where(_isSnapshotAnswer).length;
+      final attempts = attemptAt.length;
+      final intervals = [
+        for (var i = 1; i < attemptAt.length; i++)
+          attemptAt[i].difference(attemptAt[i - 1]).inMilliseconds,
+      ];
+      final ceiling = _attemptsIn(
+              _g3StormWindow, _g3BackoffBase, _g3BackoffCap, _g3AttemptOverhead) *
+          2;
+
+      print('G3b: ${_g3StormWindow.inSeconds}s of killing every connection on '
+          'its first frame: $kills kills, $attempts attempts, $completed '
+          'resyncs completed, ${during.length} frames; intervals $intervals ms '
+          '(last ${intervals.isEmpty ? 'none' : intervals.last}); ceiling '
+          '$ceiling attempts for a schedule that is never reset, against the '
+          '${(_g3StormWindow.inMilliseconds / (_g3BackoffBase.inMilliseconds / 2 + _g3AttemptOverhead.inMilliseconds)).round()} '
+          'a schedule reset at every connection would fit');
+
+      // The precondition the clause rests on: not one recovery completed, so
+      // the backoff never earned its reset.
+      expect(completed, 0,
+          reason: '$completed snapshots were served during the storm, so a '
+              'recovery completed, the backoff was legitimately reset, and the '
+              'growth this arm measures would be measuring the kill loop '
+              'instead');
+      // Anti-vacuity: the storm happened.
+      expect(attempts, greaterThan(2),
+          reason: 'only $attempts reconnect attempts were made in '
+              '${_g3StormWindow.inSeconds} s, so the client was not in a '
+              'reconnect loop at all and the bound below judges nothing');
+      expect(attempts, lessThan(ceiling),
+          reason: 'the client made $attempts attempts in '
+              '${_g3StormWindow.inSeconds} s against a ceiling of $ceiling '
+              'computed from a 40 ms base and a 2 s cap. A schedule restarted '
+              'at the base every time the socket answered fits about '
+              '${(_g3StormWindow.inMilliseconds / (_g3BackoffBase.inMilliseconds / 2 + _g3AttemptOverhead.inMilliseconds)).round()} '
+              'attempts in the same window, which is what this bound is '
+              'between: the backoff is reset when a page is delivered, never '
+              'when a socket answers the phone (`connection_supervisor.dart:'
+              '712-721`)');
+
+      // The positive control: with the storm over, the client recovers. Without
+      // it, a client that had given up entirely would satisfy every bound
+      // above.
+      await until('the recovery once the storm stops',
+          () => fixture.client.isReady, budget: const Duration(seconds: 10));
+      await until('the whole page',
+          () => keys.every((key) => fixture.client.read(key) != null),
+          budget: recovery);
     });
   });
 }
