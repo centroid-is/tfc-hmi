@@ -24,6 +24,12 @@ library;
 export 'src/auth/auth_config.dart';
 export 'src/auth/file_token_validator.dart';
 export 'src/auth/identity.dart';
+// On the barrel for the same reason `token_validator.dart` is: an embedder
+// supplies a policy at construction, so `RelayServer(policy:)`'s type has to
+// be nameable by the code that builds the server. The decorator that consults
+// it is *not* exported — that is an internal seam, and an embedder configures
+// a policy rather than wrapping a source by hand.
+export 'src/policy/key_policy.dart';
 export 'src/relay_server.dart';
 export 'src/server_config.dart';
 export 'src/tls/mint.dart';

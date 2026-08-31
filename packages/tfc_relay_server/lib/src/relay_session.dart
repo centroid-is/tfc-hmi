@@ -36,6 +36,7 @@ import 'auth/identity.dart';
 import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
+import 'policy/key_policy.dart';
 import 'server_config.dart';
 import 'session_handlers.dart';
 import 'subscription_registry.dart';
@@ -92,6 +93,7 @@ final class RelaySession {
     this.handles,
     this.buffer,
     this.validator,
+    this.policy,
     this._gate,
     this._lastSeen,
     this._now,
@@ -131,6 +133,7 @@ final class RelaySession {
     required HandleTable handles,
     required ConflatingSendBuffer buffer,
     TokenValidator validator = const PermissiveTokenValidator(),
+    KeyPolicy policy = const AllVisibleOperatorWrites(),
     List<String> serverSupported = const [protocolVersion],
     WriteOutcomeLog? writeOutcomes,
     int Function()? mintGeneration,
@@ -164,6 +167,7 @@ final class RelaySession {
       handles,
       buffer,
       validator,
+      policy,
       HelloGate(serverSupported: serverSupported),
       lastSeen,
       clock,
@@ -307,6 +311,15 @@ final class RelaySession {
   final int Function()? _mintGeneration;
 
   final TokenValidator validator;
+
+  /// Which tags this session's station may see and actuate.
+  ///
+  /// Held here rather than reached for through the server, because the session
+  /// deliberately does not know what a server is (see this library's doc) —
+  /// the same reason [validator] is a field. What consults it is the
+  /// `PolicyStateMan` built in [_start]; nothing else in this class asks it a
+  /// question directly.
+  final KeyPolicy policy;
 
   final HelloGate _gate;
   final _LastSeen _lastSeen;
