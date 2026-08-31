@@ -2,14 +2,45 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart';
 import 'package:meta/meta.dart';
 
-/// The one PBKDF2 derivation in the repository, and the one iteration hook.
+/// The one KDF cost hook in the repository.
+///
+/// Production-strength derivation is tens of seconds per call in the debug-mode
+/// test VM, which turns any test that hashes or encrypts into a minutes-long
+/// run. This single field is what every suite reaches for instead.
+///
+/// [Pbkdf2Kdf.iterationsForTest] and `SecureEnvelope.kdfIterationsForTest` are
+/// forwarding getter/setter pairs onto this field, **not** second stores. That
+/// shape is the point and not an accident of it: roughly twenty setter sites
+/// across four suites spell the hook `Pbkdf2Kdf.iterationsForTest`, and they
+/// keep compiling *and* keep meaning what they meant because the forwarder
+/// exists. Do not "simplify" it away.
+///
+/// Setting this makes PBKDF2 cheap **and** selects Argon2id's cheap parameter
+/// set — see [Argon2idKdf.params]. A second hook is how a suite ends up running
+/// real derivations somewhere nobody noticed, and the symptom — "the tests got
+/// slow" — never points at the cause.
+///
+/// It is a cost **dial**, not a switch. [Pbkdf2Kdf.iterations] reads the value
+/// as an iteration count; [Argon2idKdf.params] reads the same value as KiB of
+/// memory. Cost is monotone in it for both algorithms, so a flip from one
+/// non-null value to another is a real parameter change rather than a silent
+/// no-op.
+abstract final class KdfTestCost {
+  @visibleForTesting
+  static int? iterationsForTest;
+}
+
+/// The one PBKDF2 derivation in the repository.
 ///
 /// This used to live in `lib/pages/server_config.dart` as part of
 /// `SecureEnvelope`. It is here because a provider must not import a page file,
-/// and because password hashing needs the same derivation — having two copies
-/// is how the two drift apart.
+/// and because password hashing needed the same derivation — having two copies
+/// is how the two drift apart. Since Argon2id landed, passwords are hashed with
+/// [Argon2idKdf] and this serves the config-export envelope plus the
+/// verification of every `pbkdf2-sha256` row written before the change.
 ///
 /// ## On the accelerated backend
 ///
@@ -21,27 +52,28 @@ import 'package:meta/meta.dart';
 /// from this package's pubspec. Naming it here would break
 /// `test/package_purity_test.dart` and the relay's server target for no gain;
 /// the string is left unwritten on purpose, since that test reads file text.
+/// That backend implements no Argon2 at all, so unlike PBKDF2 the password path
+/// runs pure Dart wherever it runs, panel included.
 abstract final class Pbkdf2Kdf {
   /// Tune per device; higher = slower/stronger. This is the value
   /// `SecureEnvelope` has always used, and every envelope already written
   /// records its own count, so changing it here does not strand them.
   static const int defaultIterations = 200000;
 
-  /// Test hook: production-strength PBKDF2 takes tens of seconds per
-  /// derivation in the debug-mode test VM, which turns any test that
-  /// encrypts into a minutes-long run. Decrypt reads the iteration count
-  /// out of the envelope, so envelopes made with this set still round-trip.
+  /// Forwards onto [KdfTestCost.iterationsForTest], which is the one store.
   ///
-  /// **This is the only KDF iteration hook in the repository.**
-  /// `SecureEnvelope.kdfIterationsForTest` is a forwarding getter/setter onto
-  /// this field, not a second store. A second hook is how a suite ends up
-  /// running real 200k-iteration derivations somewhere nobody noticed, and the
-  /// symptom — "the tests got slow" — never points at the cause.
+  /// Kept under this name because roughly twenty setter sites across four
+  /// suites already spell it this way, and none of them changes meaning.
   @visibleForTesting
-  static int? iterationsForTest;
+  static int? get iterationsForTest => KdfTestCost.iterationsForTest;
+
+  @visibleForTesting
+  static set iterationsForTest(int? value) =>
+      KdfTestCost.iterationsForTest = value;
 
   /// The iteration count to use when a caller does not name one.
-  static int get iterations => iterationsForTest ?? defaultIterations;
+  static int get iterations =>
+      KdfTestCost.iterationsForTest ?? defaultIterations;
 
   /// PBKDF2-HMAC-SHA256 over [passphrase] and [salt].
   ///
@@ -67,28 +99,242 @@ abstract final class Pbkdf2Kdf {
   }
 }
 
+/// The parameters an Argon2id hash was, or will be, derived at.
+///
+/// The first three ride in the stored value (see [PasswordHash.encode]); the
+/// fourth is implied by the length of the hash itself.
+typedef Argon2idParams = ({
+  int memoryKib,
+  int iterations,
+  int parallelism,
+  int hashLength,
+});
+
+/// The one Argon2id derivation in the repository — the password path.
+///
+/// Three facts decided this, each of which a later reader would otherwise have
+/// to re-derive:
+///
+/// 1. **Argon2id is memory-hard and PBKDF2 is not**, and the 200 000 iterations
+///    [Pbkdf2Kdf.defaultIterations] carries is below current OWASP guidance for
+///    PBKDF2-HMAC-SHA256 (600 000). Those two together are why the algorithm
+///    changed rather than the count.
+/// 2. **The accelerated Flutter backend implements no Argon2.** PBKDF2 picks up
+///    a native implementation through the process-global `Cryptography.instance`
+///    when the app installs one; Argon2 gets nothing, so this runs pure Dart on
+///    the panel. (The plugin's package name is deliberately left unwritten in
+///    this file — see [Pbkdf2Kdf]'s doc.)
+/// 3. **The parameters were measured on the panel, not copied from OWASP.** A
+///    sign-in derives in **151 ms median on `hq-skjar`, AOT, with zero missed
+///    frames**. OWASP's own figures assume a native implementation, and a
+///    developer Mac is roughly 2.2x faster than the panel, so choosing there
+///    would have chosen wrong.
+abstract final class Argon2idKdf {
+  /// 32 MiB. 1.7x OWASP's memory floor, and the largest step that still leaves
+  /// a 6.6x margin under the one-second stop-and-report threshold for a station
+  /// slower than the rig. The next step up, 64 MiB, is where measured jank
+  /// starts (one dropped frame, 30 ms worst gap).
+  static const int memoryKib = 32768;
+
+  /// RFC 9106's second-recommended pass count. Going from 2 to 3 at this memory
+  /// costs 43 ms on the rig and buys a 1.5x work factor.
+  static const int iterations = 3;
+
+  /// RFC 9106's recommended lane count. Worth it for speed rather than for the
+  /// event loop: `p=1` measured 232.6 ms against `p=4`'s 150.0 ms for the same
+  /// memory and passes.
+  static const int parallelism = 4;
+
+  /// 256 bits. [PasswordHash] has always stored a 32-byte hash and
+  /// [PasswordHasher.constantTimeEquals] documents that; changing the width is
+  /// a different decision, and the stored form does not carry it.
+  static const int hashLength = 32;
+
+  /// One isolate per lane. Named rather than left null so the value does not
+  /// silently depend on the package default staying 8: the implementation
+  /// computes `min(parallelism, maxIsolates ?? 8)`, so anything at or above
+  /// [parallelism] behaves identically today and would not tomorrow. Turning
+  /// isolates off measured 226.8 ms against 150.0 ms *and* moved the mixing
+  /// onto the calling isolate, where [blocksPerProcessingChunk] becomes
+  /// load-bearing.
+  static const int maxIsolates = 4;
+
+  /// How often the mixing loop yields. Chosen from the missed-frame column
+  /// rather than the wall-time one, and inert in the shipping configuration
+  /// because the isolates run the loop. It is the only thing standing between a
+  /// login and a frozen screen if the isolate path is ever unavailable: with
+  /// isolates off, never yielding dropped 13 frames on the rig while this value
+  /// kept the worst gap at ticker noise, for no measurable cost.
+  static const int blocksPerProcessingChunk = 128;
+
+  /// The six above, as one value, for comparison and for [params].
+  static const Argon2idParams productionParams = (
+    memoryKib: memoryKib,
+    iterations: iterations,
+    parallelism: parallelism,
+    hashLength: hashLength,
+  );
+
+  /// Argon2's own lower bound: `memory >= 8 * parallelism`. Named because
+  /// [params] floors the hook against it and [PasswordHasher.verify] rejects a
+  /// stored row that violates it.
+  static const int minMemoryKibPerLane = 8;
+
+  /// The passes used when [KdfTestCost.iterationsForTest] is set. One is the
+  /// minimum the algorithm allows, which is the point: the hook's own value is
+  /// the dial, and holding `t` and `p` fixed keeps that dial one-dimensional.
+  static const int testIterations = 1;
+
+  /// The lane count used when [KdfTestCost.iterationsForTest] is set.
+  static const int testParallelism = 1;
+
+  /// The parameters to derive a *new* hash at.
+  ///
+  /// With the hook clear this is [productionParams]. With the hook set, the
+  /// hook's value is read as KiB of memory — floored at
+  /// `minMemoryKibPerLane * testParallelism`, because a suite that clamps the
+  /// hook to 1 must still produce a parameter set the KDF accepts — at
+  /// [testIterations] passes and [testParallelism] lanes.
+  ///
+  /// Deliberately a function of the hook value rather than a fixed cheap set. A
+  /// fixed set would make every non-null-to-non-null flip in the suite a silent
+  /// no-op, and the assertions that depend on such a flip would keep passing
+  /// while testing nothing. It is also what lets one bounded, clearly
+  /// non-production value be genuinely slow where a test needs a derivation
+  /// that actually takes time.
+  static Argon2idParams get params {
+    final hook = KdfTestCost.iterationsForTest;
+    if (hook == null) return productionParams;
+    return (
+      memoryKib: max(hook, minMemoryKibPerLane * testParallelism),
+      iterations: testIterations,
+      parallelism: testParallelism,
+      hashLength: hashLength,
+    );
+  }
+
+  /// Argon2id over [password] and [salt] at exactly [params].
+  ///
+  /// Callers verifying a stored hash must pass the parameters recorded in the
+  /// row rather than the ambient ones — otherwise a later change to the
+  /// constants above locks every existing user out, which is the whole reason
+  /// the parameters ride in the stored value.
+  static Future<List<int>> deriveBytes({
+    required String password,
+    required List<int> salt,
+    required Argon2idParams params,
+  }) async {
+    // DartArgon2id from package:cryptography/dart.dart, not the `Argon2id(...)`
+    // factory. The factory takes only the four core parameters and routes
+    // through Cryptography.instance, which puts maxIsolates and
+    // blocksPerProcessingChunk out of reach — two of the six measured constants
+    // would silently vanish, including the one that keeps the screen alive if
+    // the isolate path is ever unavailable.
+    final kdf = DartArgon2id(
+      parallelism: params.parallelism,
+      memory: params.memoryKib,
+      iterations: params.iterations,
+      hashLength: params.hashLength,
+      maxIsolates: maxIsolates,
+      blocksPerProcessingChunk: blocksPerProcessingChunk,
+    );
+    final key = await kdf.deriveKey(
+      secretKey: SecretKey(utf8.encode(password)),
+      nonce: salt, // salt
+    );
+    return key.extractBytes();
+  }
+}
+
 /// The algorithm tag in the stored [PasswordHash.encode] form.
 const String _pbkdf2Sha256Tag = 'pbkdf2-sha256';
+const String _argon2idTag = 'argon2id';
+
+/// The Argon2 version field, second of the four `$`-separated parts.
+///
+/// `Argon2id.version` is `@nonVirtual` and always 19. [PasswordHash.decode]
+/// requires exactly this and throws otherwise: a future Argon2 version is not
+/// something this code can verify, and guessing is how a login silently returns
+/// the wrong answer.
+const String _argon2idVersionField = 'v=19';
+
+/// Which derivation produced a [PasswordHash].
+enum PasswordHashAlgorithm {
+  pbkdf2Sha256(_pbkdf2Sha256Tag),
+  argon2id(_argon2idTag);
+
+  const PasswordHashAlgorithm(this.tag);
+
+  /// The tag as it appears in the stored value.
+  final String tag;
+}
 
 /// A derived password hash together with everything needed to re-derive it.
 ///
-/// ## Why the iteration count is a field
+/// ## Why the parameters are fields
 ///
 /// The `AppUser` table (access-control spec §2, quoted as final) has
-/// `passwordHash` and `salt` and no iterations column. Rather than add one, the
-/// count rides inside `passwordHash` in the PHC-ish form
-/// `pbkdf2-sha256$<iterations>$<hash_b64>` — see [encode] / [decode]. The count
-/// has to travel with the hash somehow: a later change to
-/// [Pbkdf2Kdf.defaultIterations] would otherwise lock every existing user out,
-/// and the self-describing form leaves room for a second algorithm later
-/// without another migration.
+/// `passwordHash` and `salt` and no column for a cost parameter. Rather than
+/// add one, the parameters ride inside `passwordHash` in the PHC-ish forms
+///
+///     pbkdf2-sha256$<iterations>$<hash_b64>
+///     argon2id$v=19$m=<KiB>,t=<iters>,p=<lanes>$<hash_b64>
+///
+/// — see [encode] / [decode]. They have to travel with the hash somehow: a
+/// later change to [Pbkdf2Kdf.defaultIterations] or to [Argon2idKdf]'s
+/// constants would otherwise lock every existing user out. The self-describing
+/// form left room for a second algorithm without another migration, and the
+/// `argon2id` tag is that second algorithm.
 @immutable
 class PasswordHash {
+  /// A `pbkdf2-sha256` record.
+  ///
+  /// Kept as the unnamed constructor, with this shape, so every existing
+  /// `const PasswordHash(hashB64:, saltB64:, iterations:)` in the tree keeps
+  /// compiling.
   const PasswordHash({
+    required String hashB64,
+    required String saltB64,
+    required int iterations,
+  }) : this._(
+          algorithm: PasswordHashAlgorithm.pbkdf2Sha256,
+          hashB64: hashB64,
+          saltB64: saltB64,
+          iterations: iterations,
+          memoryKib: null,
+          parallelism: null,
+        );
+
+  /// An `argon2id` record.
+  ///
+  /// [iterations] carries Argon2's `t` here. The field's name predates the
+  /// second algorithm; it is the number of passes, not a PBKDF2 round count.
+  const PasswordHash.argon2id({
+    required String hashB64,
+    required String saltB64,
+    required int memoryKib,
+    required int iterations,
+    required int parallelism,
+  }) : this._(
+          algorithm: PasswordHashAlgorithm.argon2id,
+          hashB64: hashB64,
+          saltB64: saltB64,
+          iterations: iterations,
+          memoryKib: memoryKib,
+          parallelism: parallelism,
+        );
+
+  const PasswordHash._({
+    required this.algorithm,
     required this.hashB64,
     required this.saltB64,
     required this.iterations,
+    required this.memoryKib,
+    required this.parallelism,
   });
+
+  /// Which derivation produced [hashB64].
+  final PasswordHashAlgorithm algorithm;
 
   /// Base64 of the derived key bytes.
   final String hashB64;
@@ -96,19 +342,32 @@ class PasswordHash {
   /// Base64 of the per-user salt. Stored in `AppUser.salt` raw, not prefixed.
   final String saltB64;
 
-  /// The iteration count this hash was derived with — not necessarily the
-  /// current [Pbkdf2Kdf.defaultIterations].
+  /// The cost this hash was derived at — not necessarily the current one.
+  ///
+  /// PBKDF2 rounds for [PasswordHashAlgorithm.pbkdf2Sha256], Argon2's `t` for
+  /// [PasswordHashAlgorithm.argon2id].
   final int iterations;
 
+  /// Argon2's `m`, in KiB. Null for a PBKDF2 record.
+  final int? memoryKib;
+
+  /// Argon2's `p`, the lane count. Null for a PBKDF2 record.
+  final int? parallelism;
+
   /// The value to write into `AppUser.passwordHash`.
-  String encode() => '$_pbkdf2Sha256Tag\$$iterations\$$hashB64';
+  String encode() => switch (algorithm) {
+        PasswordHashAlgorithm.pbkdf2Sha256 =>
+          '$_pbkdf2Sha256Tag\$$iterations\$$hashB64',
+        PasswordHashAlgorithm.argon2id => '$_argon2idTag\$$_argon2idVersionField'
+            '\$m=$memoryKib,t=$iterations,p=$parallelism\$$hashB64',
+      };
 
   /// Parse a value read out of `AppUser.passwordHash`.
   ///
   /// [saltB64] comes from the row's separate `salt` column.
   ///
   /// A value with no `$` in it is a legacy bare-base64 hash written before this
-  /// encoding existed; it is taken to have been made at the ambient default,
+  /// encoding existed; it is taken to be PBKDF2 at the ambient default,
   /// [Pbkdf2Kdf.iterations].
   ///
   /// Throws [FormatException] on a prefixed value that is malformed or names an
@@ -124,24 +383,70 @@ class PasswordHash {
       );
     }
     final parts = stored.split(r'$');
-    if (parts.length != 3) {
-      throw FormatException('malformed password hash', stored);
+    switch (parts[0]) {
+      case _pbkdf2Sha256Tag:
+        if (parts.length != 3) {
+          throw FormatException('malformed password hash', stored);
+        }
+        final iterations = int.tryParse(parts[1]);
+        if (iterations == null || iterations < 1) {
+          throw FormatException('bad iteration count "${parts[1]}"', stored);
+        }
+        return PasswordHash(
+          hashB64: parts[2],
+          saltB64: saltB64,
+          iterations: iterations,
+        );
+      case _argon2idTag:
+        // Four parts, not three: the version and the parameter group are their
+        // own fields.
+        if (parts.length != 4) {
+          throw FormatException('malformed password hash', stored);
+        }
+        if (parts[1] != _argon2idVersionField) {
+          throw FormatException(
+            'unsupported argon2 version "${parts[1]}"',
+            stored,
+          );
+        }
+        final group = parts[2].split(',');
+        if (group.length != 3) {
+          throw FormatException(
+            'malformed argon2id parameter group "${parts[2]}"',
+            stored,
+          );
+        }
+        return PasswordHash.argon2id(
+          hashB64: parts[3],
+          saltB64: saltB64,
+          memoryKib: _argon2idParam(group[0], 'm', stored),
+          iterations: _argon2idParam(group[1], 't', stored),
+          parallelism: _argon2idParam(group[2], 'p', stored),
+        );
+      default:
+        throw FormatException(
+          'unsupported password hash algorithm "${parts[0]}"',
+          stored,
+        );
     }
-    if (parts[0] != _pbkdf2Sha256Tag) {
+  }
+
+  /// One `<name>=<positive int>` slot of the argon2id parameter group, in the
+  /// order the encoding fixes: `m`, then `t`, then `p`.
+  static int _argon2idParam(String field, String name, String stored) {
+    const separator = '=';
+    if (!field.startsWith('$name$separator')) {
       throw FormatException(
-        'unsupported password hash algorithm "${parts[0]}"',
+        'expected "$name$separator" in the argon2id parameter group, '
+        'got "$field"',
         stored,
       );
     }
-    final iterations = int.tryParse(parts[1]);
-    if (iterations == null || iterations < 1) {
-      throw FormatException('bad iteration count "${parts[1]}"', stored);
+    final value = int.tryParse(field.substring(name.length + 1));
+    if (value == null || value < 1) {
+      throw FormatException('bad argon2id parameter "$field"', stored);
     }
-    return PasswordHash(
-      hashB64: parts[2],
-      saltB64: saltB64,
-      iterations: iterations,
-    );
+    return value;
   }
 
   /// [decode], returning null instead of throwing.
@@ -156,18 +461,27 @@ class PasswordHash {
   @override
   bool operator ==(Object other) =>
       other is PasswordHash &&
+      other.algorithm == algorithm &&
       other.hashB64 == hashB64 &&
       other.saltB64 == saltB64 &&
-      other.iterations == iterations;
+      other.iterations == iterations &&
+      other.memoryKib == memoryKib &&
+      other.parallelism == parallelism;
 
   @override
-  int get hashCode => Object.hash(hashB64, saltB64, iterations);
+  int get hashCode =>
+      Object.hash(algorithm, hashB64, saltB64, iterations, memoryKib,
+          parallelism);
 
   /// Deliberately does not print [hashB64]. A hash in a log line is not a
   /// password, but it is not something to scatter through the trail either.
   @override
-  String toString() =>
-      'PasswordHash($_pbkdf2Sha256Tag, iterations: $iterations)';
+  String toString() => switch (algorithm) {
+        PasswordHashAlgorithm.pbkdf2Sha256 =>
+          'PasswordHash($_pbkdf2Sha256Tag, iterations: $iterations)',
+        PasswordHashAlgorithm.argon2id => 'PasswordHash($_argon2idTag, '
+            'm: $memoryKib, t: $iterations, p: $parallelism)',
+      };
 }
 
 /// Password hashing for the local auth provider.
@@ -177,6 +491,10 @@ class PasswordHash {
 /// station's Postgres password can rewrite `app_user` directly. What this buys
 /// is that a shoulder-surfed screen, a shared workstation or a mistyped
 /// username does not hand over somebody else's role.
+///
+/// New hashes are Argon2id. `pbkdf2-sha256` rows are verified forever — an
+/// existing user must never be locked out by the change — and [needsRehash]
+/// answers whether a row is due to be rewritten.
 abstract final class PasswordHasher {
   static final Random _rng = Random.secure();
 
@@ -185,55 +503,119 @@ abstract final class PasswordHasher {
   /// password do not get the same hash.
   static const int saltBytes = 16;
 
+  /// The shortest hash Argon2 will produce. Below this the KDF's own guard is
+  /// an `assert`, so a stored row that short has to be rejected here.
+  static const int minHashLength = 4;
+
   static List<int> _rand(int n) =>
       List<int>.generate(n, (_) => _rng.nextInt(256));
 
-  /// Hash [password] with a fresh random salt at the current iteration count.
+  /// Hash [password] with a fresh random salt, at the current Argon2id
+  /// parameters.
   static Future<PasswordHash> hash(String password) async {
-    // Read once: the count that goes into the record must be the count that
-    // was actually used, even if the hook is changed mid-run.
-    final iterations = Pbkdf2Kdf.iterations;
+    // Read once: the parameters that go into the record must be the ones that
+    // were actually used, even if the hook is changed mid-run.
+    final params = Argon2idKdf.params;
     final salt = _rand(saltBytes);
-    final key = await Pbkdf2Kdf.deriveKey(
-      passphrase: password,
+    final derived = await Argon2idKdf.deriveBytes(
+      password: password,
       salt: salt,
-      iterations: iterations,
+      params: params,
     );
-    return PasswordHash(
-      hashB64: base64Encode(await key.extractBytes()),
+    return PasswordHash.argon2id(
+      hashB64: base64Encode(derived),
       saltB64: base64Encode(salt),
-      iterations: iterations,
+      memoryKib: params.memoryKib,
+      iterations: params.iterations,
+      parallelism: params.parallelism,
     );
   }
 
-  /// Re-derive with the stored salt and iteration count and compare.
+  /// Re-derive with the salt and parameters [stored] carries, and compare.
+  ///
+  /// Takes the decoded record rather than four loose values on purpose: with
+  /// loose values a caller can hand an Argon2id row's hash and salt to a
+  /// function that derives PBKDF2 over them and returns false — a wrong answer
+  /// that looks like a wrong password, on the login path. The thing that reads
+  /// the tag has to be the thing that does the deriving.
+  ///
+  /// Derives at the parameters **in the row**, never at the current ones, so a
+  /// later change to [Argon2idKdf]'s constants cannot strand a stored hash.
   ///
   /// Returns false for a wrong password, and also for a row that cannot be
-  /// decoded at all — a hash or salt mangled by hand in `psql` must fail a
-  /// login, not take the app down with a [FormatException] on the login screen.
+  /// decoded or whose parameters are out of range — a hash, salt or cost
+  /// mangled by hand in `psql` must fail a login, not take the app down with a
+  /// [FormatException] on the login screen. The range checks are real checks
+  /// rather than a reliance on `DartArgon2id`'s own guards, which are `assert`s
+  /// and do not run in a release AOT build.
   static Future<bool> verify({
     required String password,
-    required String hashB64,
-    required String saltB64,
-    required int iterations,
+    required PasswordHash stored,
   }) async {
     try {
-      if (iterations < 1) return false;
-      final expected = base64Decode(hashB64);
-      final salt = base64Decode(saltB64);
+      if (stored.iterations < 1) return false;
+      final expected = base64Decode(stored.hashB64);
+      final salt = base64Decode(stored.saltB64);
       if (expected.isEmpty || salt.isEmpty) return false;
-      final key = await Pbkdf2Kdf.deriveKey(
-        passphrase: password,
-        salt: salt,
-        iterations: iterations,
-        bits: 256,
-      );
-      return constantTimeEquals(await key.extractBytes(), expected);
+
+      final List<int> derived;
+      switch (stored.algorithm) {
+        case PasswordHashAlgorithm.pbkdf2Sha256:
+          final key = await Pbkdf2Kdf.deriveKey(
+            passphrase: password,
+            salt: salt,
+            iterations: stored.iterations,
+            bits: 256,
+          );
+          derived = await key.extractBytes();
+        case PasswordHashAlgorithm.argon2id:
+          final memoryKib = stored.memoryKib;
+          final parallelism = stored.parallelism;
+          if (memoryKib == null || parallelism == null) return false;
+          if (parallelism < 1) return false;
+          if (memoryKib < Argon2idKdf.minMemoryKibPerLane * parallelism) {
+            return false;
+          }
+          // The hash length is not in the stored form; the hash itself is the
+          // record of it, which is what keeps a width change from stranding
+          // rows the way a parameter change would.
+          if (expected.length < minHashLength) return false;
+          derived = await Argon2idKdf.deriveBytes(
+            password: password,
+            salt: salt,
+            params: (
+              memoryKib: memoryKib,
+              iterations: stored.iterations,
+              parallelism: parallelism,
+              hashLength: expected.length,
+            ),
+          );
+      }
+      return constantTimeEquals(derived, expected);
     } on FormatException {
       return false;
     } on ArgumentError {
       return false;
     }
+  }
+
+  /// Whether [stored] is due to be rewritten at the current parameters.
+  ///
+  /// The single place that answers "is this row stale", so the login path can
+  /// ask rather than re-derive the rule. True for every `pbkdf2-sha256` row —
+  /// those are the migration — and for an `argon2id` row whose `m`, `t` or `p`
+  /// differ from [Argon2idKdf.params].
+  ///
+  /// Deliberately ignores [Argon2idKdf.maxIsolates] and
+  /// [Argon2idKdf.blocksPerProcessingChunk]: they change what it costs to
+  /// compute the hash, not the hash, so moving either must not trigger a
+  /// rewrite of every row in the table.
+  static bool needsRehash(PasswordHash stored) {
+    if (stored.algorithm != PasswordHashAlgorithm.argon2id) return true;
+    final current = Argon2idKdf.params;
+    return stored.memoryKib != current.memoryKib ||
+        stored.iterations != current.iterations ||
+        stored.parallelism != current.parallelism;
   }
 
   /// Compare two byte lists without returning early on the first mismatch.
