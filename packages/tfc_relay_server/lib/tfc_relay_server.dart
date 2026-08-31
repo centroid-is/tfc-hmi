@@ -24,6 +24,13 @@ library;
 export 'src/auth/auth_config.dart';
 export 'src/auth/file_token_validator.dart';
 export 'src/auth/identity.dart';
+// On the barrel because `RelayServer.certHealth` is public and an embedder
+// that wants the number recomputed on its own cadence has to be able to name
+// the type — and because `certDaysToExpiryKey` is the string Phase 8's HLTH-03
+// reserved list and any AlarmMan configuration both have to spell exactly.
+// Unlike `PolicyStateMan` this is not a seam an embedder wraps a source with;
+// the gateway builds it, and the embedder reads it.
+export 'src/health/cert_health_state_man.dart';
 // On the barrel for the same reason `token_validator.dart` is: an embedder
 // supplies a policy at construction, so `RelayServer(policy:)`'s type has to
 // be nameable by the code that builds the server. The decorator that consults
