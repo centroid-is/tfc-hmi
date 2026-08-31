@@ -5,7 +5,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/drawing_index.dart';
 import 'package:tfc_mcp_server/src/services/drawing_service.dart';
 import 'package:tfc_mcp_server/src/tools/drawing_tools.dart';
@@ -46,8 +45,6 @@ void main() {
         componentName: 'relay K7',
       ));
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -59,7 +56,6 @@ void main() {
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -184,8 +180,6 @@ void main() {
         ],
       );
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
 
       mcpServer = McpServer(
@@ -197,7 +191,6 @@ void main() {
 
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
