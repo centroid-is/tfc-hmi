@@ -74,6 +74,51 @@ const Duration recovery = Duration(seconds: 5);
 /// shape a poll cannot establish.
 const Duration settle = Duration(milliseconds: 400);
 
+/// The link deadline the half-open cases configure: how long the socket may go
+/// without a frame of any kind before the client stops believing in it.
+///
+/// **Platform-scaled for the same reason [slack] is, and it is not a weaker
+/// assertion.** The mechanism is `FreshnessWatchdog.sawFrame` arming a plain
+/// `Timer(freshnessDeadline)` that any inbound frame resets, and the fault
+/// injected against it — a blackhole — is *instantaneous*. What the case
+/// measures is therefore "no frame for a whole deadline is noticed", which is
+/// the same claim at 500 ms and at 1500 ms; the longer number costs a second of
+/// wall clock and proves the identical mechanism.
+///
+/// What the longer number buys is the difference between a real fault and a
+/// runner. At 500 ms on a hosted macOS or Windows box, a GC or a neighbouring
+/// case's teardown stalls the isolate for longer than the deadline and the
+/// watchdog fires on a link with nothing wrong with it — which is 07-RESEARCH
+/// §E.2's parked F5 flake exactly, one full-suite run in three. A deadline
+/// shorter than the platform's ordinary stalls does not measure the watchdog,
+/// it measures the scheduler, and it reports the difference as a product fault.
+///
+/// **Scaling the deadline is not the fix on its own** and must not be read as
+/// one: the fix is that nothing derives a verdict from an instant read of a
+/// wall-clock boolean (see the `until()` windows in
+/// `half_open_gate_test.dart`). This number widens the gap a stall has to clear
+/// before it fires at all; the windows are what make a stall that does fire
+/// harmless.
+final Duration freshnessDeadline = Platform.isLinux
+    ? const Duration(milliseconds: 500)
+    : const Duration(milliseconds: 1500);
+
+/// The budget for "the freshness deadline fired and the view went stale".
+///
+/// Derived from [freshnessDeadline] rather than from [recovery], because the
+/// thing being bounded *is* the deadline: budgeted at the flat recovery number,
+/// a watchdog that had quietly slowed to four seconds would still pass, and
+/// "the deadline fires" is the clause of the F4/F5 catalogue rows an operator
+/// feels.
+///
+/// One whole deadline of margin, and no less. The mechanism promises the
+/// transition at exactly one deadline after the last frame; the margin has to
+/// absorb the poll granularity, the dial of the case's own scheduling, and the
+/// isolate stalls that made the flake — which were themselves about the length
+/// of a deadline. Anything tighter re-creates the failure this constant exists
+/// to end, and reports a runner as a broken watchdog.
+final Duration freshnessTransition = freshnessDeadline * 2;
+
 /// The one-way delay F13 imposes. A round trip therefore costs twice this.
 const Duration f13Latency = Duration(milliseconds: 100);
 
