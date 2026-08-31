@@ -512,6 +512,19 @@ void main() {
       expect(FakeStateMan.healthKeys, isNot(contains(certDaysToExpiryKey)));
     });
 
+    test('the key is spelled the way every deployment spells it', () {
+      // The one place the literal appears in this file, deliberately: every
+      // other case names the constant, so a rename would compile and every
+      // case would keep passing while every AlarmMan configuration in the
+      // plant quietly stopped matching anything. The key name is a
+      // deployment contract — it is in alarm configs, it will be on Phase 8's
+      // HLTH-03 reserved list — and it is not ours to change silently.
+      expect(certDaysToExpiryKey, 'PIPE.cert.days_to_expiry',
+          reason: 'renaming this key does not break a build anywhere; it '
+              'breaks the alarm, in the field, and the first symptom is a '
+              'certificate expiring with nobody warned');
+    });
+
     test('the key lives in the reserved PIPE namespace', () {
       // Phase 8's HLTH-03 will reject a plant keymapping claiming a name
       // inside `PIPE.` (`freshness_contract.dart:60-64`), so this key has to
