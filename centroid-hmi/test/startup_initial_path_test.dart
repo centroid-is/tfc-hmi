@@ -46,7 +46,6 @@ Future<BeamerDelegate> _boot(
   tester.binding.platformDispatcher.defaultRouteNameTestValue = platformRoute;
   addTearDown(tester.binding.platformDispatcher.clearDefaultRouteNameTestValue);
   final topLevel = buildTopLevelMenuItems(
-    god: false,
     isLinux: false,
     pageMenuItems: _pageMenuItems,
   );
