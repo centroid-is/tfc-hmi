@@ -483,7 +483,7 @@ RoutesLocationBuilder createLocationBuilder(
   //    explicitly out of scope (docs/access-control-spec.md §Scope, §11).
   //
   //    '/advanced/knowledge-base' was on that list until 2026-08-30 and is
-  //    now the seventh gated route, at `configure`.
+  //    now gated at `configure`.
   //    docs/access-control-write-path-sweep.md §3.1 found three raw-Drift
   //    index classes behind that page — twenty-six statements — and a caller
   //    that rewrites `page_editor_data`, the key the configure-gated page
