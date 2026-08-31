@@ -7,7 +7,6 @@ import 'package:test/test.dart';
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
 import 'package:tfc_mcp_server/src/expression/expression_validator.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/safety/proposal_declined_exception.dart';
 import 'package:tfc_mcp_server/src/safety/risk_gate.dart';
 import 'package:tfc_mcp_server/src/services/config_service.dart';
@@ -38,12 +37,9 @@ void main() {
         ),
       );
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -76,12 +72,9 @@ void main() {
         ),
       );
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
@@ -114,12 +107,9 @@ void main() {
         ),
       );
 
-      final env = {'TFC_USER': 'op1'};
-      final identity = EnvOperatorIdentity(environmentProvider: () => env);
       final auditService = AuditLogService(db);
       final registry = ToolRegistry(
         mcpServer: mcpServer,
-        identity: identity,
         auditLogService: auditService,
       );
 
