@@ -163,6 +163,17 @@ Future<void> _until(String what, bool Function() done,
 Future<void> _settle() =>
     Future<void>.delayed(const Duration(milliseconds: 300));
 
+/// Errors the fake gateway's script threw while answering, across the whole
+/// file's run.
+///
+/// Collected rather than thrown, for the reason
+/// `mode_integrity_test.dart:146-153` gives: the script runs inside a socket's
+/// `listen` callback, in the ambient zone, long after the case that provoked
+/// the request may have finished. Thrown from there it fails whichever case is
+/// running — a red naming a file that is working, over a fault in one that is
+/// not. Gathered here and read once at the end.
+final List<String> _escaped = <String>[];
+
 void main() {
   group('construction and the readiness barrier', () {
     test('constructing with nothing listening does not throw', () async {
@@ -1027,6 +1038,115 @@ void main() {
       expect(framesOf(gateway, Methods.holdTick), isEmpty);
     });
   });
+
+  group('the fake gateway itself', () {
+    test('a link that closed its own socket is never written to again',
+        () async {
+      // The parked "Bad state: StreamSink is closed" flake, reduced to a
+      // sequence (05 deferred-items; 07-RESEARCH §E.1). `dart:io` closes the
+      // outgoing sink *synchronously* inside `close()` and only moves
+      // `readyState` when the close handshake completes, so a **self**-initiated
+      // close leaves a window — measured at ~3 ms with a peer listening — in
+      // which `readyState` reads `open` and `add` throws. `dropLive()` self-
+      // closes while a scripted answer to an in-flight request is still queued,
+      // which is why the flake was one standalone run in six: a 3 ms window.
+      //
+      // Deterministic here because the send happens in the same turn as the
+      // close, which is inside the window every time rather than one time in
+      // six. Nothing about the client is under test; this is the scaffolding
+      // proving it cannot throw into whichever case happens to be running.
+      final gateway = await _FakeGateway.start((link, method, id, params) {
+        link.result(id, null);
+      });
+      final peer = await WebSocket.connect('ws://127.0.0.1:${gateway.port}');
+      peer.listen((Object? _) {}, onError: (Object _) {}, cancelOnError: true);
+      addTearDown(() => peer.close().catchError((Object _) => null));
+      await _until('the gateway to accept the peer', () => gateway.accepted == 1);
+      final link = gateway._links.last;
+
+      // No `await` between these three statements on purpose: the window opens
+      // the instant `close()` is called and the point is to be inside it.
+      final dropping = gateway.dropLive();
+      expect(link.socket.readyState, WebSocket.open,
+          reason: 'the socket already reads closed here, so the send below is '
+              'not inside the window this case exists to cover and a guard on '
+              'readyState alone would be enough after all');
+      expect(
+          () => link._send(const {
+                'jsonrpc': '2.0',
+                'method': 'tick',
+                'params': <String, Object?>{},
+              }),
+          returnsNormally,
+          reason: 'the fake gateway threw while answering a request on a '
+              'socket it had just closed itself. A scaffold throw is never the '
+              'finding: it escapes into the ambient zone and is attributed to '
+              'whichever case is running, so the report names a file that is '
+              'working over a fault in one that is not');
+      await dropping;
+    });
+
+    test('and it is the close flag holding, not the catch', () async {
+      // Anti-vacuity for the case above. Without this arm, `returnsNormally`
+      // is satisfied by a `_send` that never reaches the socket at all — or by
+      // a window that closed on its own between two Dart releases — and the
+      // guard would look like it was holding long after it stopped being what
+      // held.
+      //
+      // The same sequence with the flag forced back off: `readyState` still
+      // says `open`, the sink is still gone, and the throw the flag was
+      // preventing lands in `swallowed` instead of the zone.
+      final gateway = await _FakeGateway.start((link, method, id, params) {
+        link.result(id, null);
+      });
+      final peer = await WebSocket.connect('ws://127.0.0.1:${gateway.port}');
+      peer.listen((Object? _) {}, onError: (Object _) {}, cancelOnError: true);
+      addTearDown(() => peer.close().catchError((Object _) => null));
+      await _until('the gateway to accept the peer', () => gateway.accepted == 1);
+      final link = gateway._links.last;
+
+      final dropping = gateway.dropLive();
+      expect(link.socket.readyState, WebSocket.open,
+          reason: 'the socket reads closed already, so the readyState guard '
+              'would have caught this on its own and the arm is measuring '
+              'nothing');
+
+      // Flag on: the frame never reaches the sink at all.
+      link._send(const {'jsonrpc': '2.0', 'method': 'tick'});
+      expect(link.swallowed, isEmpty,
+          reason: 'the frame reached the sink and the catch is what stopped '
+              'the throw, not the close flag. The catch is belt and braces; a '
+              'scaffold relying on it is one guard away from the flake being '
+              'back and invisible');
+
+      // Flag off, same sequence, same turn: the throw the flag was preventing.
+      link._closing = false;
+      link._send(const {'jsonrpc': '2.0', 'method': 'tick'});
+
+      expect(link.swallowed, hasLength(1),
+          reason: 'with the close flag off the sink accepted a frame after '
+              'this side had closed it, which means the window the flag exists '
+              'for is gone and the guard above is now passing for a reason '
+              'nobody chose. If dart:io has genuinely fixed this, delete the '
+              'flag deliberately rather than leaving a guard whose failure is '
+              'invisible');
+      expect(link.swallowed.single, isStateError);
+      link._closing = true;
+      await dropping;
+    });
+
+    test('no scripted answer escaped into the zone', () async {
+      // Read once, at the end, and only meaningful in a full-file run: an
+      // error thrown from the script lands whenever the frame that provoked it
+      // arrives, which can be after the case that sent it has passed.
+      await _settle();
+      expect(_escaped, isEmpty,
+          reason: 'the fake gateway threw while answering a request and the '
+              'throw escaped into the ambient zone: $_escaped. That is the '
+              'parked "StreamSink is closed" flake\'s shape — a scaffold fault '
+              'failing whichever case happened to be running, one run in six');
+    });
+  });
 }
 
 /// The source lines of the member whose declaration begins [member], in
@@ -1111,7 +1231,12 @@ final class _FakeGateway {
   /// does. The client's answer to that is always to come back.
   Future<void> dropLive() async {
     if (_links.isEmpty) return;
-    await _links.last.socket.close().catchError((Object _) => null);
+    final link = _links.last;
+    // Marked **before** the close, not after: the window [_FakeLink._closing]
+    // documents opens the instant `close()` is called, and a flag set after the
+    // await is a flag set on the far side of it.
+    link._closing = true;
+    await link.socket.close().catchError((Object _) => null);
   }
 
   Future<void> _accept() async {
@@ -1128,8 +1253,19 @@ final class _FakeGateway {
           final method = frame['method'];
           if (id is! int || method is! String) return;
           final params = frame['params'];
-          _script(link, method, id,
-              params is Map ? params.cast<String, Object?>() : const {});
+          // The script answers on a socket this gateway may be closing under
+          // it. A throw here has nowhere to go: `listen`'s callback runs in the
+          // ambient zone, so it fails whichever *case* is running rather than
+          // this one, which is how a scaffold defect gets read as a product
+          // defect in another file. Collected and read once at the end of the
+          // run instead — `mode_integrity_test.dart:296-304`'s shape.
+          try {
+            _script(link, method, id,
+                params is Map ? params.cast<String, Object?>() : const {});
+          } catch (error, stack) {
+            _escaped.add('the fake gateway\'s script answering $method: '
+                '${error.runtimeType} — $error\n$stack');
+          }
         },
         onError: (Object _) {},
         cancelOnError: true,
@@ -1138,6 +1274,13 @@ final class _FakeGateway {
   }
 
   Future<void> shutdown() async {
+    // Every link is marked before any of them is closed. Closing one link can
+    // let the client's next frame through to another, and a gateway that
+    // marked them one at a time would have the same window on link two that
+    // [_FakeLink._closing] exists to close on link one.
+    for (final link in _links) {
+      link._closing = true;
+    }
     for (final link in _links) {
       await link.socket.close().catchError((Object _) => null);
     }
@@ -1150,6 +1293,32 @@ final class _FakeLink {
   _FakeLink(this.socket);
 
   final WebSocket socket;
+
+  /// Whether *this* side is the one that asked for the close.
+  ///
+  /// **`dart:io` will not tell you this, so track it.** `close()` closes the
+  /// outgoing sink synchronously and `readyState` only moves when the close
+  /// handshake completes, which leaves a window — measured at ~3 ms with a peer
+  /// listening, indefinitely without one (07-RESEARCH §E.1) — where
+  /// `readyState` reads `open` and `add` throws `Bad state: StreamSink is
+  /// closed`. This is the same defect class CLAUDE.md already lists for the
+  /// client adapter: *"`closeCode` null after self-initiated close
+  /// (dart-lang/http#1698) → track own close codes"*, and the same guard
+  /// `frame_seam.dart:109` makes with `if (!incoming.isClosed)`.
+  ///
+  /// **Do not simplify this back to a bare `readyState` read.** That is what is
+  /// already here as the second condition, it was added in 04-08 *before* the
+  /// flake was recorded in Phase 5, and it is the thing that did not hold. It
+  /// stays because it is measured-correct for the other direction: across ~2
+  /// million attempts after a *peer*-initiated close or a peer that vanished
+  /// without a close frame, `readyState` never once read `open` over a sink
+  /// that threw.
+  bool _closing = false;
+
+  /// `StateError`s the sink threw anyway, if the guards above ever let one
+  /// through. Empty is the claim; the anti-vacuity arm in the meta group is
+  /// what proves the guard rather than the catch is holding.
+  final List<Object> swallowed = <Object>[];
 
   void result(int id, Object? value) => _send({
         'jsonrpc': '2.0',
@@ -1178,7 +1347,18 @@ final class _FakeLink {
       });
 
   void _send(Object? frame) {
+    // Own intent first, then the socket's opinion. See [_closing] for why the
+    // order is the whole fix and why the second condition stays.
+    if (_closing) return;
     if (socket.readyState != WebSocket.open) return;
-    socket.add(jsonEncode(frame));
+    try {
+      socket.add(jsonEncode(frame));
+    } on StateError catch (error) {
+      // Belt and braces. The same window exists for any future self-close path
+      // somebody adds here, and a fake gateway throwing at teardown is never
+      // the finding — but it is recorded rather than dropped, because a guard
+      // that has quietly stopped working looks exactly like one that works.
+      swallowed.add(error);
+    }
   }
 }
