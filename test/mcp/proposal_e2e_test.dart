@@ -70,12 +70,8 @@ void main() {
 
   test('MCP create_alarm tool → proposal callback → routable proposal',
       () async {
-    final env = {'TFC_USER': 'test-operator'};
-    final identity = EnvOperatorIdentity(environmentProvider: () => env);
-
     final delivered = <Map<String, dynamic>>[];
     final server = TfcMcpServer(
-      identity: identity,
       database: db,
       stateReader: _EmptyStateReader(),
       alarmReader: _EmptyAlarmReader(),
