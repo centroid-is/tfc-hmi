@@ -1,10 +1,11 @@
-/// The eight raised routes. This map is the entire blast radius of route
+/// The nine raised routes. This map is the entire blast radius of route
 /// gating: a path that is missing from it, or spelled differently from
 /// `centroid-hmi/lib/main.dart`, is a route that silently stays open.
 library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/access_routes.dart';
+import 'package:tfc/core/access_admin_store.dart';
 import 'package:tfc/core/audit_trail_store.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:tfc_access/tfc_access.dart';
@@ -24,7 +25,7 @@ void main() {
   });
 
   group('kRaisedRoutes', () {
-    test('names exactly the eight routes, each with its group', () {
+    test('names exactly the nine routes, each with its group', () {
       // Spelled literally rather than derived, so that a change to the map
       // has to be made twice on purpose.
       expect(kRaisedRoutes, {
@@ -36,11 +37,12 @@ void main() {
         '/advanced/ip-settings': AccessGroup.administer,
         '/advanced/preferences': AccessGroup.administer,
         '/advanced/audit-trail': AccessGroup.users,
+        '/advanced/access': AccessGroup.users,
       });
     });
 
-    test('has exactly eight entries', () {
-      expect(kRaisedRoutes, hasLength(8));
+    test('has exactly nine entries', () {
+      expect(kRaisedRoutes, hasLength(9));
     });
 
     test('the three editors need configure', () {
@@ -84,12 +86,31 @@ void main() {
               'between them is a page open to the wrong people');
     });
 
-    test('the audit trail is the only users route', () {
+    test('the admin screen needs users', () {
+      // The second `users` entry, and the one whose route gate is the whole of
+      // the enforcement for *reading*: `AccessAdminStore` gates every write,
+      // but its reads are deliberately ungated, because a row in the trail
+      // every time somebody opened the roles list would bury the writes that
+      // matter. So this line is what stops an anonymous panel from reading the
+      // account list and every role's group set.
+      expect(kRaisedRoutes[kAccessAdminRoute], AccessGroup.users);
+      expect(kAccessAdminRoute, '/advanced/access');
+    });
+
+    test('the admin route and kAccessAdminGroup are one decision', () {
+      expect(kRaisedRoutes[kAccessAdminRoute], kAccessAdminGroup,
+          reason: 'the store names the group and the map spells it; a drift '
+              'between them is a screen open to the wrong people');
+    });
+
+    test('exactly two routes are raised to users', () {
+      // The audit trail and the admin screen, in map order. A third arriving
+      // without a decision behind it fails here rather than shipping.
       final users = kRaisedRoutes.entries
           .where((e) => e.value == AccessGroup.users)
           .map((e) => e.key);
 
-      expect(users, [kAuditTrailRoute]);
+      expect(users, [kAuditTrailRoute, kAccessAdminRoute]);
     });
 
     test('no entry is operate', () {
@@ -134,6 +155,13 @@ void main() {
       expect(exempt, [kServerConfigRoute]);
     });
 
+    test('answers false for the admin screen', () {
+      // The page where an exemption would be worst: with no repository there
+      // is no role table, so an exempt admin page would edit nothing while
+      // looking like it worked.
+      expect(routeAllowedWhenRepositoryUnavailable(kAccessAdminRoute), isFalse);
+    });
+
     test('answers false for the audit trail', () {
       // No exemption, and the reason is not symmetry: the trail *is* the
       // database, so "readable while the database is down" would be
@@ -151,7 +179,7 @@ void main() {
   });
 
   group('installRaisedRoutes', () {
-    test('declares each of the eight into the registry', () {
+    test('declares each of the nine into the registry', () {
       installRaisedRoutes();
 
       kRaisedRoutes.forEach((path, group) {
