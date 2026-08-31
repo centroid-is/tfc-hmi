@@ -137,18 +137,20 @@ Directory _packageRoot() {
   }
 }
 
-/// The parameter list of `factory AuditRecord.[name]`, from the opening
-/// parenthesis to the `}) =>` that closes it.
+/// The parameter list of `factory AuditRecord.[name]` — everything after the
+/// opening parenthesis, up to the `}) =>` that closes it.
 ///
-/// The signature only, not the body: `user.password` is a legitimate itemKey
-/// *string* inside `userPassword`'s body, and the thing worth forbidding is a
-/// credential arriving as an argument.
+/// The parameters only, and deliberately not the factory's own name or its
+/// body. `userPassword` has `password` in its name and `user.password` in its
+/// body, and both are correct; the thing worth forbidding is a credential
+/// arriving as an argument.
 String _factorySignature(String source, String name) {
-  final start = source.indexOf('factory AuditRecord.$name(');
+  final declaration = 'factory AuditRecord.$name(';
+  final start = source.indexOf(declaration);
   expect(start, isNot(-1), reason: 'AuditRecord.$name should exist');
   final end = source.indexOf('}) =>', start);
   expect(end, isNot(-1), reason: 'AuditRecord.$name should be a factory');
-  return source.substring(start, end);
+  return source.substring(start + declaration.length, end);
 }
 
 void main() {
