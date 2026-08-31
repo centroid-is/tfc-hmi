@@ -52,6 +52,9 @@ Then provide a summary of what this document covers and how it relates to the sy
 
 final _logger = Logger(printer: SimplePrinter(printTime: false));
 
+/// The `who` recorded when nobody is signed in.
+const String _anonymousWho = 'anonymous';
+
 /// Knowledge Base section showing tech docs and PLC code in a unified list.
 ///
 /// Renders as an ExpansionTile with a master-detail layout:
@@ -113,34 +116,35 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       ref.watch(accessSessionProvider).valueOrNull?.can(kKnowledgeWriteGroup) ??
       false;
 
-  /// Who a write is attributed to: the signed-in username, or a refusal.
+  /// Who a write is attributed to: the signed-in username, or [_anonymousWho].
   ///
   /// This used to read a process environment variable and fall back to a fixed
   /// placeholder, so an unattended panel signed its audit rows with a name
   /// nobody holds -- the sharpest instance of the defect this milestone
-  /// removes. There is no honest substitute for a missing signature, so there
-  /// is no fallback here -- and in particular not the `'anonymous'` constant in
-  /// `guarded_knowledge_stores.dart`, which records a *permitted anonymous
-  /// read*. A write is neither.
+  /// removes. The session is the only identity in this system, so it is the
+  /// only thing that may sign a row.
+  ///
+  /// [_anonymousWho] when nobody is signed in, because that is what every guard
+  /// in this repo already records for an unattended station -- allowed and
+  /// denied, reads and writes alike (`guarded_knowledge_stores.dart:254` puts
+  /// it on every row it builds, and six other files declare the same const).
+  /// "Nobody was signed in" is a true and useful thing to record; refusing here
+  /// instead would record nothing at all.
+  ///
+  /// That case is reachable, not theoretical. `AccessSession.anonymous`
+  /// (`packages/tfc_access/lib/src/access_session.dart`) builds its groups from
+  /// the customer-editable `Operator` role, so an admin who ticks `configure`
+  /// on that row hands [kKnowledgeWriteGroup] to every panel on the floor with
+  /// nobody signed in. On such a station the affordances render and the writes
+  /// the configured policy permits must go through. [_isWriteEnabled] still
+  /// gates them, so an anonymous session *without* `configure` never reaches
+  /// this getter.
   ///
   /// `read`, not `watch`: this answers "who is signing this write" once, at the
   /// instant of the write. Only [_isWriteEnabled] has to stay live.
-  ///
-  /// The throw is unreachable on today's call graph -- all four callers sit
-  /// behind [_isWriteEnabled], and no session holds [kKnowledgeWriteGroup]
-  /// without a signed-in user. It is here because "unreachable" is a claim
-  /// about the call graph, and what happens when such a claim lapses is an
-  /// audit row signed by nobody. [AccessDenied] specifically, because all four
-  /// callers already handle it: it is what the store guard one layer down
-  /// throws.
-  String get _writeUser {
-    final username =
-        ref.read(accessSessionProvider).valueOrNull?.user?.username;
-    if (username == null) {
-      throw const AccessDenied('tech_doc.write', kKnowledgeWriteGroup);
-    }
-    return username;
-  }
+  String get _writeUser =>
+      ref.read(accessSessionProvider).valueOrNull?.user?.username ??
+      _anonymousWho;
 
   @override
   Widget build(BuildContext context) {
