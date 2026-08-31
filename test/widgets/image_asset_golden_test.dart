@@ -134,7 +134,14 @@ void main() {
 
   setUp(setUpEditorEnvironment);
 
-  testWidgets('canvas with PNG, SVG and a rotated translucent BMP',
+  // testGoldenWidgets, not testWidgets: these capture the whole MaterialApp,
+  // app bar included, and the bar carries a live clock. Under plain
+  // testWidgets it renders the wall-clock time, so the committed PNG only ever
+  // matched by staying under the 0.01% tolerance -- which it stopped doing
+  // once the clock grew. The harness pins the clock so the pixels under review
+  // are the only thing the comparison can disagree about.
+
+  testGoldenWidgets('canvas with PNG, SVG and a rotated translucent BMP',
       (tester) async {
     await _pumpEditorWithImages(tester, theme: dark);
     await expectLater(
@@ -143,7 +150,7 @@ void main() {
     );
   });
 
-  testWidgets('config pane on the labelled PNG', (tester) async {
+  testGoldenWidgets('config pane on the labelled PNG', (tester) async {
     await _pumpEditorWithImages(tester, theme: dark);
     await chooseFromAssetMenu(tester, 0.28, 0.33, 'Edit');
     await expectLater(
@@ -152,7 +159,7 @@ void main() {
     );
   });
 
-  testWidgets('config pane — light', (tester) async {
+  testGoldenWidgets('config pane — light', (tester) async {
     await _pumpEditorWithImages(tester, theme: light);
     await chooseFromAssetMenu(tester, 0.28, 0.33, 'Edit');
     await expectLater(
@@ -161,7 +168,7 @@ void main() {
     );
   });
 
-  testWidgets('palette filtered to the Image tile', (tester) async {
+  testGoldenWidgets('palette filtered to the Image tile', (tester) async {
     await _pumpEditorWithImages(tester, theme: dark);
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
