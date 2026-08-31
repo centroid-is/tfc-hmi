@@ -39,6 +39,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_client/src/ws_transport.dart';
@@ -155,6 +156,44 @@ final class FrameSeam {
     if (incoming == null || incoming.isClosed) return;
     inbound.add(message);
     incoming.add(message);
+  }
+
+  /// A captured `u` frame with its sequence and generation stamps replaced.
+  ///
+  /// **Why this belongs beside [inject] rather than in one case.** F18b captures
+  /// a frame off the wire and replays it as it was; G4 needs the same frame with
+  /// *chosen* stamps, because its whole claim is about which of the two guards
+  /// in `resync_engine.onUpdate` rejects it — a frame whose sequence the
+  /// sequence check would also have refused proves nothing about the generation
+  /// check. The envelope, the handles and the values stay the gateway's own; two
+  /// integers are chosen. Composing the whole frame instead would assert against
+  /// a shape somebody guessed, which is the argument [lastMatching] already
+  /// makes for capturing rather than writing one.
+  ///
+  /// `seq` and `g` are the wire's own spellings (`messages.dart:301-322`) — `g`
+  /// abbreviated because `u` is the hot path.
+  static String restamped(String frame,
+      {required int seq, required int generation}) {
+    final decoded = jsonDecode(frame) as Map<String, Object?>;
+    final params = (decoded['params']! as Map).cast<String, Object?>();
+    params['seq'] = seq;
+    params['g'] = generation;
+    decoded['params'] = params;
+    return jsonEncode(decoded);
+  }
+
+  /// The `(generation, seq)` a captured `u` frame carries.
+  ///
+  /// Read off the frame rather than off the client, so a case can say which
+  /// establishment a frame belongs to without reaching into the subscription
+  /// state it is trying to judge.
+  static ({int generation, int seq}) stampOf(String frame) {
+    final params =
+        ((jsonDecode(frame) as Map)['params']! as Map).cast<String, Object?>();
+    return (
+      generation: (params['g']! as num).toInt(),
+      seq: (params['seq']! as num).toInt(),
+    );
   }
 
   /// The last inbound message satisfying [when], or null if none has arrived.

@@ -37,13 +37,12 @@
 @Tags(['gate', 'faults'])
 library;
 
-import 'dart:convert';
-
 import 'package:test/test.dart';
 import 'package:tfc_relay_client/tfc_relay_client.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import '../support/fault_fixture.dart';
+import '../support/frame_seam.dart';
 import '../support/gate_bands.dart';
 
 /// How many keys F9's page carries.
@@ -131,21 +130,6 @@ int _rebuildsServed(FaultFixture fixture, String sub) {
         'to count rebuilds of');
   }
   return state.generation;
-}
-
-/// A real frame off the wire with its sequence and generation stamps replaced.
-///
-/// The envelope, the handles and the values are the gateway's own; only the two
-/// numbers under test are chosen. Composing a whole frame instead would assert
-/// against a shape somebody guessed, which is the argument F18's arms already
-/// make for capturing rather than writing one.
-String restamped(String frame, {required int seq, required int generation}) {
-  final decoded = jsonDecode(frame) as Map<String, Object?>;
-  final params = (decoded['params']! as Map).cast<String, Object?>();
-  params['seq'] = seq;
-  params['g'] = generation;
-  decoded['params'] = params;
-  return jsonEncode(decoded);
 }
 
 /// How many attempts a schedule that is **never reset** fits into [window].
@@ -367,7 +351,7 @@ void main() {
       // retired before a frame can reach it). Gaps arrive on a live socket,
       // which is the only place `_inFlight` can have two callers.
       for (var i = 1; i <= _g3Gaps; i++) {
-        fixture.seam.inject(restamped(captured!,
+        fixture.seam.inject(FrameSeam.restamped(captured!,
             seq: serverSeq + i * 10, generation: rebuiltBefore));
       }
 
