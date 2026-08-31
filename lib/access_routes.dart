@@ -2,13 +2,14 @@
 ///
 /// Every other route in the app declares nothing and therefore answers
 /// [AccessGroup.operate] — what an anonymous session already holds — so this
-/// map is the entire blast radius of route gating. Eight entries are raised:
-/// seven because they configure the station rather than run the line, and one
-/// — the audit trail — because of what it puts on the screen. Nothing on the
-/// floor changes, with one exception, Knowledge Base, which is spelled out
-/// below because it does take something away from an operator.
+/// map is the entire blast radius of route gating. Nine entries are raised:
+/// seven because they configure the station rather than run the line, and two
+/// — the audit trail and the access administration screen — because of the
+/// data they put on the screen. Nothing on the floor changes, with one
+/// exception, Knowledge Base, which is spelled out below because it does take
+/// something away from an operator.
 ///
-/// **The eight, and why each one.**
+/// **The nine, and why each one.**
 ///
 /// * Page Editor, Alarm Editor and Key Repository need `configure`: they
 ///   author what the station shows and how it alarms, and the key repository
@@ -18,9 +19,13 @@
 ///   the read surface its menu label suggests.
 /// * Server Config, IP Settings and Preferences need `administer`: they point
 ///   the station at a database, a PLC and a network.
-/// * The audit trail needs `users`, and it is the only entry here raised for
+/// * The audit trail needs `users`, and it is the first entry here raised for
 ///   what it *shows* rather than for what it writes. The paragraph below says
 ///   why.
+/// * The access administration screen needs `users` too, and it is the entry
+///   where both halves of the argument point the same way: it *reads* the
+///   account list and every role's group set, and it *writes* both. The
+///   paragraph below says why the read half is the one that matters here.
 ///
 /// **`/advanced/preferences` is a deliberate amendment to the spec's five**,
 /// decided by the user on 2026-08-29 after plan review;
@@ -112,14 +117,28 @@
 /// [kAuditTrailGroup]; the entry below spells it, and
 /// `test/access_routes_test.dart` asserts the two agree.
 ///
+/// **The admin screen is `users` because its reads are ungated on purpose.**
+/// `lib/core/access_admin_store.dart` gates every *write* it offers, and
+/// refuses and audits a caller who does not hold [kAccessAdminGroup]. Its
+/// reads take no such gate, deliberately: a guarded read would put a row in
+/// the trail every time somebody opened the roles list, burying the writes
+/// that are the reason the trail exists. That makes the entry below the whole
+/// of the enforcement for *reading* the screen, and what it reads is the
+/// account list — username, role, created, last login — beside the group set
+/// of every role on the station, which is the map of who may do what. A typo
+/// in the path here is that page, open to an anonymous panel. The word is
+/// named once, in the store's [kAccessAdminGroup]; the entry below spells it,
+/// and `test/access_routes_test.dart` asserts the two agree.
+///
 /// **What stays open, on purpose.** About Linux, Alarm View and History View
-/// read rather than configure. The audit trail also reads and is raised anyway,
-/// which is not an inconsistency but this doc's own standard applied twice: a
-/// route is judged by what its call sites reach, not by the label on its menu
-/// entry. Those three reach system information and plant telemetry; the audit
-/// trail reaches the record of every write on the station. The first-account
-/// route stays open because gating it is the deadlock the whole design exists
-/// to avoid.
+/// read rather than configure. The audit trail and the admin screen also read
+/// and are raised anyway, which is not an inconsistency but this doc's own
+/// standard applied twice: a route is judged by what its call sites reach, not
+/// by the label on its menu entry. Those three reach system information and
+/// plant telemetry; the audit trail reaches the record of every write on the
+/// station, and the admin screen reaches the accounts and the roles. The
+/// first-account route stays open because gating it is the deadlock the whole
+/// design exists to avoid.
 ///
 /// Knowledge Base used to be on that list and is not any more; so was
 /// History View, whose destructive Drift deletes plan 03-10 closes at the
@@ -160,7 +179,19 @@ const String kServerConfigRoute = '/advanced/server-config';
 /// equals `kAuditTrailGroup` in `lib/core/audit_trail_store.dart`.
 const String kAuditTrailRoute = '/advanced/audit-trail';
 
-/// The eight routes raised above `operate`, and the group each one needs.
+/// The access administration route — the second `users` entry, and
+/// deliberately **not** exempt while the access repository is unavailable.
+///
+/// This is the page where an exemption would be worst, not merely
+/// inconsistent: with no repository there is no role table and no account
+/// list, so an exempt admin page would edit nothing while looking like it
+/// worked. See [routeAllowedWhenRepositoryUnavailable].
+///
+/// Named as a constant because two tests spell it and one of them asserts it
+/// equals `kAccessAdminGroup` in `lib/core/access_admin_store.dart`.
+const String kAccessAdminRoute = '/advanced/access';
+
+/// The nine routes raised above `operate`, and the group each one needs.
 ///
 /// One const map so that the route table and the navigation menu can never
 /// disagree about which entries are locked. Paths are spelled exactly as in
@@ -175,6 +206,7 @@ const Map<String, AccessGroup> kRaisedRoutes = {
   '/advanced/ip-settings': AccessGroup.administer,
   '/advanced/preferences': AccessGroup.administer,
   kAuditTrailRoute: AccessGroup.users,
+  kAccessAdminRoute: AccessGroup.users,
 };
 
 /// Whether [path] stays reachable while the access repository is unavailable.
