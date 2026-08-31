@@ -208,6 +208,30 @@ List<List<Offset>> dashRing(
   return (dash: dash * scale, gap: gap * scale);
 }
 
+/// The opacity multiplier for a ring that breathes, at [phase] of one cycle.
+///
+/// Full at phase 0, faintest at half way, back to full at 1, so it closes onto
+/// itself and can be looped.
+///
+/// Not a plain raised cosine, which is what this was first: that spends as
+/// long dim as it does bright, and a mark whose job is to say "this one" then
+/// reads as mostly absent with brief appearances rather than present with a
+/// pulse in it. Cubing the swing pushes the dwell to the bright end — the ring
+/// sits at better than 80% of full for well over half the cycle and passes
+/// through the trough rather than resting in it — while leaving the shape
+/// smooth and the two endpoints exactly equal.
+///
+/// [pulse] is how far it falls at the trough, so the ring never goes below
+/// `1 - pulse` of full. It is not meant to reach zero: an outline that
+/// disappears entirely stops marking anything for as long as it is gone, and
+/// on a page an operator glances at, that is a mark that is simply not there
+/// when they look.
+double breathAt(double phase, double pulse) {
+  if (pulse <= 0) return 1;
+  final swing = 0.5 - 0.5 * math.cos(2 * math.pi * phase);
+  return 1 - pulse * swing * swing * swing;
+}
+
 /// How the mark is drawn and how it moves.
 ///
 /// Presets rather than a free-for-all: the ring is one thing on one page, and
@@ -229,8 +253,10 @@ class HitBoundaryStyle {
   final Duration period;
 
   /// How far the line's opacity falls at the trough of its breath, 0..1.
-  /// Zero holds it steady; one takes the ring all the way out and brings it
-  /// back.
+  ///
+  /// Zero holds it steady. The presets keep well clear of one: see [breathAt]
+  /// for why a ring that goes all the way out is a worse mark than one that
+  /// only ever dims.
   final double pulse;
 
   /// The scheme colour to draw the dashes in, or null for
@@ -284,24 +310,29 @@ class HitBoundaryStyle {
       HitBoundaryStyle(period: Duration(milliseconds: 600));
 
   /// Crawling, and breathing while it crawls.
-  static const breathing = HitBoundaryStyle(pulse: 0.45);
+  static const breathing = HitBoundaryStyle(pulse: 0.35);
 
   /// Crawling, with the gaps carrying the light tone — the arrangement image
   /// editors use, and the one that keeps the ring readable over a dark belt.
   static const twoToneMarch = HitBoundaryStyle(twoTone: true);
 
-  /// Still dashes, breathing all the way in and out. The ring is where it
-  /// was; what moves is how present it is. Slower than the crawling styles —
-  /// a breath at walking pace reads as panting.
+  /// Still dashes, breathing. The ring is where it was; what moves is how
+  /// present it is. Slower than the crawling styles — a breath at walking
+  /// pace reads as panting.
+  ///
+  /// It dips to half and no further. The ring is legible at every point of
+  /// the cycle, which is the whole difference between a mark that breathes
+  /// and one that blinks.
   static const pulsing = HitBoundaryStyle(
-    pulse: 0.85,
+    pulse: 0.5,
     crawl: false,
     period: Duration(milliseconds: 1800),
   );
 
-  /// Both at once, and the fade taken much deeper than [breathing] takes it.
+  /// Both at once. The fade is shallower than [pulsing]'s because the crawl
+  /// is already carrying half the work.
   static const marchAndFade = HitBoundaryStyle(
-    pulse: 0.75,
+    pulse: 0.45,
     period: Duration(milliseconds: 1800),
   );
 
@@ -309,7 +340,7 @@ class HitBoundaryStyle {
   /// everywhere else. Same geometry and same breath; only the ink differs.
   /// See [inkRole] for what that costs on a plant page.
   static const blueFade = HitBoundaryStyle(
-    pulse: 0.85,
+    pulse: 0.5,
     crawl: false,
     period: Duration(milliseconds: 1800),
     inkRole: HmiColorRole.blue,
@@ -421,11 +452,9 @@ class HitBoundaryPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (contours.isEmpty) return;
 
-    // Half a turn out of phase with the crawl, so the ring is at its faintest
-    // once per pattern rather than twice.
-    final breath = style.pulse == 0
-        ? 1.0
-        : 1 - style.pulse * (0.5 - 0.5 * math.cos(2 * math.pi * phase));
+    // Faintest half way through the pattern, so the ring dips once per turn
+    // rather than twice.
+    final breath = breathAt(phase, style.pulse);
 
     Paint stroke(Color color) => Paint()
       ..style = PaintingStyle.stroke

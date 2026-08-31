@@ -258,6 +258,67 @@ void main() {
     });
   });
 
+  group('breathAt', () {
+    /// The fraction of one cycle the ring spends at or above [level] of full.
+    double timeAbove(double level, double pulse) {
+      const steps = 2000;
+      var above = 0;
+      for (var i = 0; i < steps; i++) {
+        if (breathAt(i / steps, pulse) >= level) above++;
+      }
+      return above / steps;
+    }
+
+    test('is more in than out', () {
+      // The complaint that produced the shaping: a plain raised cosine spends
+      // as long dim as bright, so the mark read as mostly absent with brief
+      // appearances. It has to read the other way round.
+      const pulse = 0.5;
+      expect(timeAbove(0.8, pulse), greaterThan(0.5),
+          reason: 'most of the cycle is near full, not near the trough');
+      expect(timeAbove(0.95, pulse), greaterThan(timeAbove(0.55, pulse) / 2),
+          reason: 'the dwell is at the bright end');
+    });
+
+    test('never goes out, and never past the depth asked for', () {
+      for (final pulse in [0.35, 0.45, 0.5]) {
+        for (var i = 0; i <= 100; i++) {
+          final v = breathAt(i / 100, pulse);
+          expect(v, lessThanOrEqualTo(1 + 1e-9));
+          expect(v, greaterThanOrEqualTo(1 - pulse - 1e-9));
+        }
+        // Half is the floor the presets settle on: legible at every point of
+        // the cycle is the difference between breathing and blinking.
+        expect(breathAt(0.5, pulse), closeTo(1 - pulse, 1e-9));
+      }
+    });
+
+    test('starts and ends full, so the loop closes', () {
+      expect(breathAt(0, 0.5), 1);
+      expect(breathAt(1, 0.5), closeTo(1, 1e-9));
+      // Symmetric about the trough — it comes back the way it went.
+      expect(breathAt(0.25, 0.5), closeTo(breathAt(0.75, 0.5), 1e-9));
+    });
+
+    test('no pulse is a steady ring', () {
+      for (var i = 0; i <= 10; i++) {
+        expect(breathAt(i / 10, 0), 1);
+      }
+    });
+
+    test('every preset that breathes stays legible throughout', () {
+      for (final style in [
+        HitBoundaryStyle.breathing,
+        HitBoundaryStyle.pulsing,
+        HitBoundaryStyle.marchAndFade,
+        HitBoundaryStyle.blueFade,
+      ]) {
+        expect(1 - style.pulse, greaterThanOrEqualTo(0.5),
+            reason: 'a mark that dims past half is one an operator can miss');
+      }
+    });
+  });
+
   group('fitDashes', () {
     test('scales the pattern so a whole number of it fits the ring', () {
       // 100 wants ten 6+4s and gets them.
