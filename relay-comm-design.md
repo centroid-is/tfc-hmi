@@ -604,6 +604,18 @@ configuration dump and every pasted support ticket is carrying the plant's
 keys. An empty path is refused by each object's own constructor, so an
 unmountable config cannot be constructed anywhere, not even in a test.
 
+**The one exception is `keyPassword`, and it is redacted rather than
+excluded.** A passphrase is a `String`, so the field-type guard cannot see it:
+the single field on `TlsConfig` whose purpose is to hold a secret satisfies
+the test that exists to keep secrets out of the config. `TlsConfig.toString()`
+is therefore written out rather than left to the default, and renders
+`keyPassword: <redacted>` or `keyPassword: none` — the second half is the
+useful one, because a deployment debugging a start failure needs to know
+whether the gateway thinks the key is encrypted. Nothing in the shipped
+provisioning sets it: `relay_certs` writes unencrypted keys behind `0600`,
+since a passphrase the gateway must know is a passphrase living in a config
+file next to the key.
+
 **A missing or unreadable file fails `start()`. There is no downgrade to
 `ws://`.** The token file is loaded first, the `SecurityContext` built second,
 and both happen before the bind — so a gateway that cannot read its

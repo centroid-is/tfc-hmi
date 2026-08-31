@@ -227,6 +227,45 @@ void main() {
               'added without a line here is a field nobody decided about');
     });
 
+    test('the one field that is a secret is redacted when rendered', () {
+      // The type sweep above cannot see this one. Its reasoning is "a config
+      // holding *bytes* is a config holding key material", and a passphrase
+      // is a `String` — so the single field on this class whose entire
+      // purpose is to hold a secret satisfies the test that exists to keep
+      // secrets out of the config. Design §7.1's narrower claim
+      // ("structurally cannot hold bytes") is exactly true and is not the
+      // same claim as the section's framing.
+      //
+      // Nothing leaks today, and both halves of that are held by omission:
+      // nothing in the shipped provisioning sets `keyPassword`, and the class
+      // declared no `toString()`, so a dump rendered `Instance of
+      // 'TlsConfig'`. 06-03's sabotage arm 4 shows how fast a `toString()`
+      // appears once somebody wants a config dump.
+      const secret = 'PASSPHRASE-c41d8f0e2b7a934655';
+      final tls = TlsConfig(
+        chainPath: '/etc/relay/pki/leaf.pem',
+        keyPath: '/etc/relay/pki/leaf-key.pem',
+        keyPassword: secret,
+      );
+
+      expect(tls.toString(), isNot(contains(secret)),
+          reason: 'a passphrase in a `toString()` is a passphrase in a log '
+              'line and in the support ticket that pastes it');
+      expect(tls.toString(), contains('<redacted>'),
+          reason: 'saying that there *is* one is the useful half: a '
+              'deployment debugging a start failure needs to know whether the '
+              'gateway thinks the key is encrypted');
+      expect(tls.toString(), contains('/etc/relay/pki/leaf.pem'),
+          reason: 'the paths are the whole point of the class and a '
+              'toString() that hid them would be a toString() nobody uses, '
+              'which is a toString() somebody replaces');
+      expect(
+          TlsConfig(chainPath: 'a.pem', keyPath: 'b.pem').toString(),
+          contains('none'),
+          reason: '"none" and "<redacted>" have to read differently, or the '
+              'rendering answers neither question');
+    });
+
     test('ServerConfig declares no SecurityContext', () {
       for (final entry in _fieldsOf(ServerConfig).entries) {
         expect(_typeName(entry.value), isNot('SecurityContext'),

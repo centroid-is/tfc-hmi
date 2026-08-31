@@ -59,6 +59,26 @@ final class TlsConfig {
     _mountable('keyPath', keyPath);
   }
 
+  /// The paths, and whether there is a passphrase — never the passphrase.
+  ///
+  /// **Declared rather than omitted.** The SEC-01 guard next door asserts that
+  /// every field on this class is a `String`, on the reasoning that a config
+  /// holding *bytes* is a config holding key material — and [keyPassword] is a
+  /// `String`, so the one field here whose entire purpose is to hold a secret
+  /// satisfies the test that exists to keep secrets out of the config. Until
+  /// now the leak was prevented only by this class having no `toString()` at
+  /// all, which renders `Instance of 'TlsConfig'` and is a property held by
+  /// omission: 06-03's sabotage arm 4 shows how quickly a `toString()` appears
+  /// once somebody wants a config dump. Writing one that redacts is what turns
+  /// the guard from a rule about types into a rule about secrets.
+  ///
+  /// `none` and `<redacted>` read differently on purpose. A deployment
+  /// debugging a start failure needs to know whether the gateway believes the
+  /// key is encrypted; that is the useful half, and it is not the secret.
+  @override
+  String toString() => 'TlsConfig(chainPath: $chainPath, keyPath: $keyPath, '
+      'keyPassword: ${keyPassword == null ? 'none' : '<redacted>'})';
+
   static void _mountable(String name, String value) {
     if (value.isEmpty) {
       throw ArgumentError('$name is empty: an empty path reaches '
