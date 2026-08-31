@@ -303,7 +303,6 @@ Future<void> _startApp([bool debugMode = false]) async {
   // Built-ins (Alarm View, History View) and the pages share one persisted
   // top-level order, editable in the page editor's Pages dialog.
   final topLevelMenuItems = buildTopLevelMenuItems(
-    god: environmentVariableIsGod,
     isLinux: Platform.isLinux,
     pageMenuItems: extraMenuItems,
     // History View sits under Advanced unless the operator promoted it to

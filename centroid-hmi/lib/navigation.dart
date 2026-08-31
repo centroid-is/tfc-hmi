@@ -1,10 +1,8 @@
 /// The navigation menu's shape, separated from `main.dart` so it can be
 /// tested without booting the app: which built-ins sit at the top level,
-/// what god mode reveals under Advanced, and where `/` falls back to when
-/// the Home page has been deleted.
+/// why the Advanced menu is unconditional and the route gate decides access,
+/// and where `/` falls back to when the Home page has been deleted.
 library;
-
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -41,15 +39,24 @@ List<MenuItem> builtinTopLevelMenuItems({required bool historyAtTopLevel}) => [
 /// built-ins, then Advanced pinned last. The persisted top-level order is
 /// applied afterwards by `PageManager.sortTopLevel` on the registry.
 ///
-/// God mode (`TFC_GOD=true`) only controls menu visibility — the gated
-/// entries' routes stay registered either way, matching how the Page Editor
-/// has always been gated. Server Config stays visible without god mode:
-/// commissioning a Windows HMI (pointing it at a PLC) must not require an
-/// environment variable, and on non-Linux non-god installs it is the only
-/// thing keeping Advanced alive. Key Repository surfaces stored secrets, so
-/// it is god-gated.
+/// Every Advanced child is listed unconditionally. `kRaisedRoutes` in
+/// `lib/access_routes.dart` and `AccessLockBadge` decide who may open one, so
+/// a raised entry stays *visible and locked*, never hidden — a hidden entry
+/// is a page nobody knows to ask for, and the lock badge built for these
+/// routes would never appear on the station that needs it. That reasoning was
+/// first recorded per-entry for the three entries never hidden: commissioning
+/// a Windows HMI (pointing it at a PLC) must not require an environment
+/// variable; the audit trail surfaces no secret, because no constructor on an
+/// audit record takes a password and the trail withholds values on auth rows
+/// on purpose; and the access screen is the *commissioning-critical* one —
+/// the deployment doc's order is "create roles, then users, then the
+/// first-user window closes", which cannot be followed from a station where
+/// the entry is invisible — with a user list of username, role, created and
+/// last login, `passwordHash` and `salt` never reaching the widget layer. It
+/// now governs the whole function. The icons follow from it: Access carries a
+/// people glyph rather than a lock or a shield, because a lock is what
+/// `AccessLockBadge` draws over an entry the session cannot open.
 List<MenuItem> buildTopLevelMenuItems({
-  required bool god,
   required bool isLinux,
   required List<MenuItem> pageMenuItems,
   bool historyAtTopLevel = false,
@@ -57,40 +64,15 @@ List<MenuItem> buildTopLevelMenuItems({
   final advancedChildren = <MenuItem>[
     if (isLinux) MenuItem(label: 'IP Settings', path: '/advanced/ip-settings', icon: Icons.settings_ethernet),
     if (isLinux) MenuItem(label: 'About Linux', path: '/advanced/about-linux', icon: Icons.info),
-    if (god) MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
-    if (god) MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
-    if (god) MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
+    MenuItem(label: 'Page Editor', path: '/advanced/page-editor', icon: Icons.edit),
+    MenuItem(label: 'Preferences', path: '/advanced/preferences', icon: Icons.settings),
+    MenuItem(label: 'Alarm Editor', path: '/advanced/alarm-editor', icon: Icons.alarm),
     // History View's default home (its pre-#154 spot). The operator can
     // promote it to the top level from the page editor.
     if (!historyAtTopLevel) historyViewMenuItem,
     MenuItem(label: 'Server Config', path: '/advanced/server-config', icon: FontAwesomeIcons.server.data),
-    if (god) MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
-    // Not god-gated, and the first entry here that is neither
-    // commissioning-critical nor Linux-conditional — so the reasoning is
-    // recorded rather than left to be inferred from the majority above. The
-    // rule stated in this function's doc is to god-gate what surfaces secrets
-    // or is a developer tool. The audit trail is neither: no constructor on an
-    // audit record takes a password and the trail withholds values on auth
-    // rows on purpose. And a raised entry stays *visible and locked*, never
-    // hidden — a hidden entry is a page nobody knows to ask for, and a god
-    // gate here would make the viewer invisible on every production station,
-    // which is the one place anybody needs it. The `users` gate on
-    // '/advanced/audit-trail' is the access control; the menu shows a lock
-    // badge to everyone who does not hold it.
+    MenuItem(label: 'Key Repository', path: '/advanced/key-repository', icon: FontAwesomeIcons.key.data),
     MenuItem(label: 'Audit Trail', path: '/advanced/audit-trail', icon: Icons.receipt_long),
-    // Not god-gated either, and for the same reasons one step stronger. The
-    // rule stated in this function's doc is to god-gate what surfaces secrets
-    // or is a developer tool. This page surfaces no secret: the user list is
-    // username, role, created and last login, `passwordHash` and `salt` never
-    // reach the widget layer, and the set-password dialog writes without
-    // reading. And it is the *commissioning-critical* screen — the deployment
-    // doc's order is "create roles, then users, then the first-user window
-    // closes", which cannot be followed from a station where the entry is
-    // invisible without `TFC_GOD=true`. A raised entry stays visible and
-    // locked, never hidden. The `users` gate on '/advanced/access' is the
-    // access control; god mode here is only menu decoration. The icon is a
-    // people glyph rather than a lock or a shield, because a lock is what
-    // `AccessLockBadge` draws over an entry the session cannot open.
     MenuItem(label: 'Access', path: '/advanced/access', icon: Icons.manage_accounts),
     if (kKnowledgeEnabled)
       MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
@@ -109,9 +91,6 @@ List<MenuItem> buildTopLevelMenuItems({
       ),
   ];
 }
-
-/// Whether this process runs in god mode.
-bool get environmentVariableIsGod => Platform.environment['TFC_GOD'] == 'true';
 
 /// Resolves this station's stored startup URL against the assembled menu.
 ///
