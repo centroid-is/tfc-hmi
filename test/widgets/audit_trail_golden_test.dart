@@ -10,10 +10,11 @@
 /// * `audit_trail_unavailable.png`    — no database: the unavailable copy, and no filter bar at all. 1100x500, deliberately the same size as the empty image so the two can be laid side by side and must not look alike.
 /// * `audit_trail_denied.png`         — `AccessLockedBody(group: users)`, which the route gate renders and this page never does. 900x600, matching `access_locked_page.png` so the two locked bodies are comparable.
 ///
-/// **The muted (ISA-101) palette, not a bare `MaterialApp`.** `HmiStateColors`
-/// falls back to `solarizedLight` outside a themed app (`lib/theme.dart:134`),
-/// which would put a violet-and-magenta palette into images whose entire subject
-/// is one saturated red on a page that carries no other colour. The denial mark
+/// **The muted (ISA-101) palette, not a bare `MaterialApp`.**
+/// `HmiStateColors.of` falls back to the Solarized light palette when the theme
+/// carries no extension (`lib/theme.dart:134`), so a bare `MaterialApp` here
+/// would put a violet-and-magenta palette into images whose entire subject is
+/// one saturated red on a page that carries no other colour. The denial mark
 /// and the orange sign-in mark are what these pictures are *of*; drawn from the
 /// wrong palette they would be pictures of nothing this build ships.
 ///
@@ -23,6 +24,27 @@
 /// Ahem, so every themed `Text` would capture as a solid rectangle. Same helper
 /// as `test/page_creator/assets/aircab_golden_test.dart:105-125` and
 /// `access_gate_golden_test.dart`.
+///
+/// **The transition arrow is missing from these images, and it is a font gap
+/// rather than a widget one.** `AuditEntryLine` renders
+/// `old $kAuditTransitionArrow new` — the assertion below finds the string
+/// `operate, users → operate` on screen, so the widget emits it — but
+/// `lib/fonts/roboto-mono/RobotoMono-Regular.ttf` has no glyph for U+2192, and
+/// neither does the Roboto in the SDK's `material_fonts` cache. Both fonts
+/// carry the em dash and the middle dot this page also draws, so the gap is
+/// specific to the arrow. In the baselines a transition therefore reads
+/// `20   35` with a blank where the arrow belongs.
+///
+/// It is left that way on purpose. The two fixes available are both worse than
+/// the gap: loading a macOS system font would make every one of these images
+/// depend on an OS update, and changing `kAuditTransitionArrow` would change a
+/// rendering decision that belongs to `lib/widgets/audit_trail_row.dart` to
+/// suit a test font. The arrow's presence is pinned textually here and in
+/// `audit_trail_row_test.dart`, which is where a character's presence belongs.
+/// Note also that `roboto-mono` is declared in no `pubspec.yaml` in this repo,
+/// so at runtime the theme's family is unresolved and the platform font — which
+/// does have the arrow — draws it. These images are the test environment's
+/// rendering, not the station's.
 ///
 /// **The `RepaintBoundary` is deliberately not the direct child of
 /// `Scaffold.body`.** Scaffold paints its background outside that subtree, and a
@@ -68,6 +90,7 @@ import 'package:tfc/pages/audit_trail.dart';
 import 'package:tfc/providers/access.dart';
 import 'package:tfc/providers/audit_trail.dart';
 import 'package:tfc/theme.dart' show muted;
+import 'package:tfc/widgets/access_gate.dart';
 import 'package:tfc/widgets/audit_trail_filters.dart';
 import 'package:tfc/widgets/audit_trail_row.dart';
 import 'package:tfc_access/tfc_access.dart';
@@ -143,20 +166,30 @@ List<Override> _accessOverrides() => <Override>[
 /// that re-filtered in Dart would be modelling a code path the page does not
 /// have.
 class _GoldenStore extends Fake implements AuditTrailStore {
-  _GoldenStore({this.rows = const <AuditEntryData>[]});
+  _GoldenStore({
+    this.rows = const <AuditEntryData>[],
+    this.totals = const <String, int>{},
+  });
 
   final List<AuditEntryData> rows;
+
+  /// What `memberCountsByAction` answers.
+  ///
+  /// Empty is the flat case: every action's true row count equals its visible
+  /// one, so nothing is partial and no `N of M hidden` line appears. The
+  /// expanded image supplies a map saying nine against three visible rows,
+  /// which is the only way that number can exist — the six excluded siblings
+  /// are not in the result set at all.
+  final Map<String, int> totals;
 
   @override
   Future<List<AuditEntryData>> entries(AuditQuery query) async => rows;
 
-  /// Every action's true row count equals its visible one, so no action is
-  /// partial and no `N of M hidden` line appears. The partial case arrives with
-  /// its own image and its own totals.
   @override
   Future<Map<String, int>> memberCountsByAction(
     Iterable<String> actionIds,
   ) async {
+    if (totals.isNotEmpty) return totals;
     final ids = actionIds.toList();
     return {for (final id in ids) id: ids.where((other) => other == id).length};
   }
@@ -193,12 +226,20 @@ Widget _bodyHost({
       theme: theme,
       home: Scaffold(
         backgroundColor: theme.colorScheme.surface,
-        // Center -> RepaintBoundary -> ColoredBox -> SizedBox. The boundary is
+        // Center -> RepaintBoundary -> Material -> SizedBox. The boundary is
         // not the direct child of `Scaffold.body`; see the library doc.
+        //
+        // `Material` and not `ColoredBox`, which is what
+        // `access_gate_golden_test.dart` uses: an opaque non-`Material` box
+        // between a `ListTile` and its ink controller trips
+        // `_debugCheckHasMaterialInkController`, and the expanded image's
+        // `ExpansionTile` is a `ListTile`. `Material` paints the same opaque
+        // surface — which is what stops the captured image being transparent —
+        // and is an ink controller as well.
         body: Center(
           child: RepaintBoundary(
             key: _boundary,
-            child: ColoredBox(
+            child: Material(
               color: theme.colorScheme.surface,
               child: SizedBox(
                 width: size.width,
@@ -233,7 +274,7 @@ Widget _filterBarHost({
         body: Center(
           child: RepaintBoundary(
             key: _boundary,
-            child: ColoredBox(
+            child: Material(
               color: theme.colorScheme.surface,
               child: SizedBox(
                 width: size.width,
@@ -261,6 +302,46 @@ Widget _filterBarHost({
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// [AccessLockedBody] for the group the audit trail route requires.
+///
+/// The denied image **reuses** the locked body rather than rebuilding a locked
+/// state: `kRaisedRoutes['/advanced/audit-trail']` renders it before the page is
+/// reached, and `lib/pages/audit_trail.dart` never builds one — a second,
+/// weaker check on the page could disagree with the first and the disagreement
+/// would be an open page (T-05-60).
+///
+/// `AccessGroup.users` is a parameter of the body, so this is
+/// `access_locked_page.png` with one argument changed and not a new widget.
+Widget _lockedHost({
+  required ThemeData theme,
+  required Size size,
+  required AccessGroup group,
+}) {
+  return ProviderScope(
+    overrides: _accessOverrides(),
+    child: MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: theme,
+      home: Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        body: Center(
+          child: RepaintBoundary(
+            key: _boundary,
+            child: Material(
+              color: theme.colorScheme.surface,
+              child: SizedBox(
+                width: size.width,
+                height: size.height,
+                child: AccessLockedBody(group: group),
               ),
             ),
           ),
@@ -411,6 +492,133 @@ void main() {
       await expectLater(
         find.byKey(_boundary),
         matchesGoldenFile('goldens/audit_trail_filter_bar.png'),
+      );
+    });
+
+    testWidgets('a partly filtered action, open on arrival', (tester) async {
+      _sizeView(tester, const Size(1100, 700));
+      await tester.pumpWidget(_bodyHost(
+        theme: light,
+        store: _GoldenStore(
+          rows: auditGoldenPartialGroupRows(),
+          totals: auditGoldenPartialGroupTotals(),
+        ),
+        size: const Size(1100, 700),
+      ));
+      await _settle(tester);
+
+      expect(find.byKey(kAuditTrailListKey), findsOneWidget);
+      expect(find.byKey(kAuditTrailEmptyKey), findsNothing);
+      expect(find.byKey(kAuditTrailUnavailableKey), findsNothing);
+
+      // **No `tester.tap` anywhere in this test, deliberately.** 05-04 opens a
+      // partial group on arrival — the operator filtered for one of those
+      // children and making them tap again to see the row they searched for is
+      // the behaviour CONTEXT's clause exists to prevent. The three member rows
+      // below are asserted against the frame as it landed, so the image is of
+      // the arrival state rather than of an interaction.
+      expect(find.byType(AuditEntryLine), findsNWidgets(3));
+      expect(find.byKey(kAuditHiddenMembersKey), findsOneWidget);
+      expect(
+        find.text(kAuditHiddenMembersNote(6, kAuditGoldenGroupTotal)),
+        findsOneWidget,
+      );
+      // A partly filtered action that read as complete would be a false record,
+      // so the parent still says what the whole action did.
+      expect(
+        find.text(kAuditMembersChangedLabel(kAuditGoldenGroupTotal)),
+        findsOneWidget,
+      );
+
+      await expectLater(
+        find.byKey(_boundary),
+        matchesGoldenFile('goldens/audit_trail_expanded_group.png'),
+      );
+    });
+
+    testWidgets('the query ran and matched nothing', (tester) async {
+      _sizeView(tester, const Size(1100, 500));
+      // A store that answers an empty list: a real answer from a database that
+      // was reached, and a different thing entirely from the null below.
+      await tester.pumpWidget(_bodyHost(
+        theme: light,
+        store: _GoldenStore(),
+        size: const Size(1100, 500),
+      ));
+      await _settle(tester);
+
+      expect(find.byKey(kAuditTrailEmptyKey), findsOneWidget);
+      expect(find.byKey(kAuditTrailListKey), findsNothing);
+      expect(find.byKey(kAuditTrailUnavailableKey), findsNothing);
+      expect(find.text(kAuditTrailEmptyUnderFilters), findsOneWidget);
+
+      // The bar stays above the message precisely so the operator can see and
+      // undo what excluded everything. This copy claims nothing about the
+      // table, only about the filters, so the controls have to be in frame.
+      expect(find.byType(AuditTrailFilterBar), findsOneWidget);
+
+      // Exactly one `Clear filters`, never zero and never two. Under **default**
+      // filters 05-05's bar renders none and this page's empty body renders its
+      // own; the two together cover every state once.
+      expect(find.byKey(kAuditTrailClearFiltersKey), findsNothing);
+      expect(find.byKey(kAuditTrailEmptyClearFiltersKey), findsOneWidget);
+      expect(find.text(kAuditTrailClearFiltersLabel), findsOneWidget);
+
+      await expectLater(
+        find.byKey(_boundary),
+        matchesGoldenFile('goldens/audit_trail_empty.png'),
+      );
+    });
+
+    testWidgets('the trail is unavailable', (tester) async {
+      _sizeView(tester, const Size(1100, 500));
+      // **Null, not a throw and not an empty list.** Null is what a station
+      // with no Postgres actually produces: `databaseProvider` answers null,
+      // `auditTrailStoreProvider` answers null, and
+      // `auditTrailEntriesProvider` resolves null. An error is the *other*
+      // cause of the same screen and belongs to the widget test, not here — the
+      // whole reason this image exists is that it must not look like the empty
+      // one, and picturing it from the cause that actually happens on a
+      // station is what makes the comparison honest.
+      await tester.pumpWidget(_bodyHost(
+        theme: light,
+        store: null,
+        size: const Size(1100, 500),
+      ));
+      await _settle(tester);
+
+      expect(find.byKey(kAuditTrailUnavailableKey), findsOneWidget);
+      expect(find.byKey(kAuditTrailEmptyKey), findsNothing);
+      expect(find.byKey(kAuditTrailListKey), findsNothing);
+      expect(find.text(kAuditTrailUnavailable), findsOneWidget);
+
+      // No bar over an unreachable database: there is nothing to filter, and
+      // controls that cannot change the answer would invite trying.
+      expect(find.byType(AuditTrailFilterBar), findsNothing);
+
+      await expectLater(
+        find.byKey(_boundary),
+        matchesGoldenFile('goldens/audit_trail_unavailable.png'),
+      );
+    });
+
+    testWidgets('the locked body the route gate renders', (tester) async {
+      _sizeView(tester, const Size(900, 600));
+      await tester.pumpWidget(_lockedHost(
+        theme: light,
+        size: const Size(900, 600),
+        group: kAuditTrailGroup,
+      ));
+      await _settle(tester);
+
+      expect(find.byKey(kAccessLockedBodyKey), findsOneWidget);
+      // The repository is present, so this is the ordinary shut page rather
+      // than the no-database variant, which has its own image next door.
+      expect(find.byKey(kAccessLockedNoDatabaseKey), findsNothing);
+
+      await expectLater(
+        find.byKey(_boundary),
+        matchesGoldenFile('goldens/audit_trail_denied.png'),
       );
     });
   });
