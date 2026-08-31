@@ -109,8 +109,16 @@ ArgParser _parser() => ArgParser()
           'is written as an iPAddress; anything else as a DNS name. Repeat '
           'for each. The panels dial addresses, so include them.',
       valueHelp: 'name-or-ip')
+  // **No `defaultsTo` here, and that is the whole of it.**
+  // `ArgResults.option` is `option.valueOrDefault(_parsed[name])`, so a
+  // parser-level default is returned even when the flag is absent — which
+  // means `_days`'s per-mode `fallback` is never reached and one number
+  // silently wins for both subcommands. A 365-day root reads healthy for a
+  // year and then stops every panel in the plant on the same morning, with
+  // the days-to-expiry key measuring the leaf and reporting nothing wrong.
   ..addOption('days',
-      help: 'Validity in days.', valueHelp: 'n', defaultsTo: '365')
+      help: 'Validity in days. Defaults to 3650 for --ca and 365 for --leaf.',
+      valueHelp: 'n')
   ..addFlag('help', abbr: 'h', negatable: false, help: 'Show this usage.');
 
 int _mintRoot(ArgResults options, StringSink out) {
@@ -182,7 +190,13 @@ Directory _outDirectory(ArgResults options) {
         'should be written to.');
   }
   final dir = Directory(path);
-  if (!dir.existsSync()) dir.createSync(recursive: true);
+  if (!dir.existsSync()) {
+    dir.createSync(recursive: true);
+    // Only a directory this tool created. An integrator who pointed `--out`
+    // at somewhere that already exists chose its mode, and silently changing
+    // it is a surprise on a path that may hold other things.
+    _restrict(dir.path, '700');
+  }
   return dir;
 }
 
@@ -213,17 +227,45 @@ int _days(ArgResults options, {required int fallback}) {
   return days;
 }
 
+/// Writes [contents] to `dir/name`, restricting a private key **before** the
+/// bytes go in.
+///
+/// The order is the point. `writeAsStringSync` creates a file at
+/// `0666 & ~umask` — 0644 on a normal account — so a write-then-chmod leaves
+/// the gateway's identity readable by every account on the machine for the
+/// interval in between. Creating the file empty, restricting it, and only then
+/// writing means the window contains nothing worth reading.
 void _write(Directory dir, String name, String contents, StringSink out,
     {bool private = false}) {
   final path = '${dir.path}${Platform.pathSeparator}$name';
-  File(path).writeAsStringSync(contents);
-  if (private && !Platform.isWindows) {
-    // 0600. The key is readable by the account that runs the gateway and by
-    // nobody else on the box; POSIX permissions are the only thing standing
-    // between a shared plant machine and the gateway's identity.
-    Process.runSync('chmod', ['600', path]);
-  }
+  final file = File(path)..createSync();
+  if (private) _restrict(path, '600', onFailure: file.deleteSync);
+  file.writeAsStringSync(contents);
   out.writeln('wrote $path');
+}
+
+/// Restricts [path] to [mode], or refuses.
+///
+/// **Both halves are load-bearing.** A discarded `ProcessResult` is a `chmod`
+/// that may never have run — a missing binary, a container with a trimmed
+/// image — and exit 0 on its own is not evidence either: a filesystem that
+/// does not carry POSIX modes (a bind mount, a FAT stick) reports success and
+/// leaves the file exactly as it was. So the result is checked and the mode is
+/// then read back. Either failure is a non-zero exit naming the file, never a
+/// `wrote /etc/relay/pki/ca-key.pem` the integrator has no reason to doubt.
+void _restrict(String path, String mode, {void Function()? onFailure}) {
+  if (Platform.isWindows) return;
+  final chmod = Process.runSync('chmod', [mode, path]);
+  if (chmod.exitCode == 0 && FileStat.statSync(path).mode & 0x3F == 0) return;
+  final why = chmod.exitCode == 0
+      ? 'the mode did not take — this filesystem does not carry POSIX '
+          'permissions'
+      : 'chmod exited ${chmod.exitCode} (${'${chmod.stderr}'.trim()})';
+  onFailure?.call();
+  throw _Refused('could not restrict $path to $mode: $why. Refusing to leave '
+      'key material on a path this machine cannot protect; mount the PKI '
+      'directory on a filesystem that carries modes, or provision on the '
+      'gateway host.');
 }
 
 /// An operator-facing refusal: one sentence, no stack trace, exit 1.

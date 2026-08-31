@@ -49,6 +49,22 @@ ASN1Sequence _tbsOf(String path) {
 Uint8List _der(ASN1Object object) => Uint8List.fromList(object.encodedBytes!
     .sublist(0, object.valueStartPosition + object.valueByteLength!));
 
+/// The `notAfter` of the certificate at [path].
+///
+/// `Validity ::= SEQUENCE { notBefore Time, notAfter Time }` is element 4 of
+/// the tbsCertificate, after the explicit `[0]` version — a v1 certificate
+/// would put it one slot earlier, which is one more reason [mintCertificate]
+/// always writes v3.
+DateTime _notAfter(String path) {
+  final validity = _tbsOf(path).elements![4] as ASN1Sequence;
+  final end = validity.elements![1];
+  return switch (end) {
+    ASN1UtcTime(:final time?) => time.toUtc(),
+    ASN1GeneralizedTime(:final dateTimeValue?) => dateTimeValue.toUtc(),
+    _ => throw StateError('notAfter is a ${end.runtimeType} with no date'),
+  };
+}
+
 /// The GeneralName tag bytes in the subjectAltName extension.
 List<int> _sanTags(String path) {
   final tagged = _tbsOf(path).elements!.firstWhere((e) => e.tag == 0xA3);
@@ -94,7 +110,10 @@ void main() {
     return dir;
   }
 
-  Future<int> mintLeafInto(Directory dir, {List<String> sans = const []}) =>
+  // `days` is nullable so a case can leave `--days` off the command line
+  // entirely, which is the only way to see what each mode defaults to.
+  Future<int> mintLeafInto(Directory dir,
+          {List<String> sans = const [], String? days = '365'}) =>
       cli.run([
         '--leaf',
         '--ca-cert',
@@ -102,8 +121,7 @@ void main() {
         '--ca-key',
         '${caDir.path}/ca-key.pem',
         for (final s in sans) ...['--san', s],
-        '--days',
-        '365',
+        if (days != null) ...['--days', days],
         '--out',
         dir.path,
       ], out: out, err: err);
@@ -115,6 +133,130 @@ void main() {
     expect(File('${caDir.path}/ca-key.pem').existsSync(), isTrue);
     expect(File('${caDir.path}/ca.pem').readAsStringSync(),
         startsWith('-----BEGIN CERTIFICATE-----'));
+  });
+
+  group('how long each mode signs for', () {
+    // The setUpAll root was minted with no `--days`, which is exactly the run
+    // an integrator makes.
+    test('--ca defaults to a root that outlives the provisioning visit', () {
+      final years =
+          _notAfter('${caDir.path}/ca.pem').difference(DateTime.now().toUtc());
+
+      expect(years.inDays, greaterThan(365 * 9),
+          reason: 'the root is provisioned once to every panel in the plant '
+              'and is not re-issued yearly (06-CONTEXT decision 3, design '
+              '§7.2, this file\'s own header). A 365-day root stops every '
+              'panel at once a year after the visit, and the days-to-expiry '
+              'health key cannot warn about it because it measures the leaf, '
+              'which is being re-issued on schedule and reads healthy the '
+              'whole way down');
+    });
+
+    test('--leaf defaults to one year, not to the root\'s ten', () async {
+      final dir = freshOut();
+      expect(await mintLeafInto(dir, sans: ['localhost'], days: null), 0,
+          reason: '$err');
+
+      final left =
+          _notAfter('${dir.path}/leaf.pem').difference(DateTime.now().toUtc());
+
+      expect(left.inDays, lessThan(400),
+          reason: 'the two modes want different defaults, which is why '
+              '`_days` takes a per-mode fallback. A parser-level default '
+              'shadows both of them: `ArgResults.option` is '
+              '`valueOrDefault(_parsed[name])`, so the fallback is never '
+              'reached and whichever number the parser carries silently wins '
+              'for both subcommands');
+      expect(left.inDays, greaterThan(300),
+          reason: 'a leaf shorter than the year 06-CONTEXT decided on turns '
+              'the yearly Tuesday ticket into a quarterly one nobody has '
+              'scheduled');
+    });
+
+    test('an explicit --days still wins over both defaults', () async {
+      final dir = freshOut();
+      expect(await mintLeafInto(dir, sans: ['localhost'], days: '30'), 0,
+          reason: '$err');
+
+      expect(
+          _notAfter('${dir.path}/leaf.pem')
+              .difference(DateTime.now().toUtc())
+              .inDays,
+          lessThan(31),
+          reason: 'the near-expiry fixtures in `health_cert_test.dart` mint '
+              'short-lived leaves through this option; a default that could '
+              'not be overridden would take that away');
+    });
+  });
+
+  group('the private key is never readable by anybody else, even briefly', () {
+    test('both key files are 0600 and the created directory is 0700', () async {
+      final parent = Directory.systemTemp.createTempSync('relay-certs-mode-');
+      addTearDown(() => parent.deleteSync(recursive: true));
+      // A path the CLI has to create itself: `createSync` applies the process
+      // umask, so a directory the test made would prove nothing.
+      final dir = Directory('${parent.path}/pki');
+
+      expect(await cli.run(['--ca', '--out', dir.path], out: out, err: err), 0,
+          reason: '$err');
+      expect(
+          await cli.run([
+            '--leaf',
+            '--ca-cert',
+            '${dir.path}/ca.pem',
+            '--ca-key',
+            '${dir.path}/ca-key.pem',
+            '--san',
+            'localhost',
+            '--out',
+            dir.path,
+          ], out: out, err: err),
+          0,
+          reason: '$err');
+
+      for (final name in ['ca-key.pem', 'leaf-key.pem']) {
+        expect(File('${dir.path}/$name').statSync().mode & 0x3F, 0,
+            reason: 'a private key readable by group or other is the exact '
+                'exposure `FileTokenValidator._refuseLoosePermissions` '
+                'refuses to tolerate for the less valuable of the two '
+                'secrets. `writeAsStringSync` creates a file at '
+                '`0666 & ~umask` — 0644 on a normal account — so the '
+                'restriction has to be applied to an empty file before the '
+                'bytes go into it, not to a full one afterwards');
+      }
+      expect(dir.statSync().mode & 0x3F, 0,
+          reason: 'the PKI directory the tool created holds the plant\'s CA '
+              'key; a directory every account can list is a directory every '
+              'account can watch for the moment a key appears in it');
+    }, skip: Platform.isWindows ? 'POSIX modes' : null);
+
+    test('a restriction that cannot be applied is a refusal, not a log line',
+        () {
+      final source = File('bin/relay_certs.dart')
+          .readAsLinesSync()
+          .where((l) => !l.trimLeft().startsWith('//'))
+          .join('\n');
+
+      // Sabotage arm, run by hand and recorded here: replacing the two checks
+      // below with a bare `Process.runSync('chmod', ...)` leaves `ca-key.pem`
+      // at 0644 permanently on any filesystem that does not carry POSIX modes
+      // — a bind mount, a FAT stick, a machine with no `chmod` binary — while
+      // the tool prints `wrote …` and exits 0. There is no failure the
+      // integrator can see, and no behavioural case can produce one portably,
+      // so the property is pinned structurally.
+      expect(source, contains('chmod.exitCode == 0 &&'),
+          reason: 'a discarded ProcessResult is a chmod that may never have '
+              'happened, and success has to require its exit code rather '
+              'than merely mention it');
+      expect(source, contains('statSync(path).mode & 0x3F'),
+          reason: 'exit 0 is not evidence: a filesystem that ignores modes '
+              'reports success and leaves the key world-readable. The mode '
+              'has to be read back');
+      expect(source, contains('deleteSync'),
+          reason: 'a key the machine cannot protect must not be left on '
+              'disk — a refusal that leaves the file behind is a refusal an '
+              'integrator works around by ignoring it');
+    });
   });
 
   test('a leaf the CLI produced verifies against the CA the CLI produced',
