@@ -802,37 +802,15 @@ class ChatNotifier extends Notifier<ChatState> {
   /// Extracts proposal JSON from a tool result and adds it to the
   /// [ProposalStateNotifier].
   ///
-  /// A proposal is a JSON object containing `_proposal_type`.
+  /// A proposal is a JSON object containing `_proposal_type`. The parsing
+  /// lives on [PendingProposal] because `proposalIngestProvider` stages the
+  /// very same proposals when the chat is compiled out, and two copies of
+  /// this that drifted apart would show the operator two different titles
+  /// for one change.
   void _surfaceProposalFromToolResult(String resultText) {
-    if (!resultText.contains('_proposal_type')) return;
-
-    try {
-      final decoded = jsonDecode(resultText);
-      if (decoded is Map<String, dynamic> &&
-          decoded.containsKey('_proposal_type')) {
-        final proposalType = decoded['_proposal_type'] as String? ?? 'unknown';
-        final title = decoded['title'] as String? ??
-            decoded['key'] as String? ??
-            'Proposal';
-
-        ref.read(proposalStateProvider.notifier).addProposal(
-              PendingProposal(
-                // A local handle. The same proposal reaching here twice (once
-                // from the server callback, once from the tool result of an
-                // in-app call) gets two different ids; addProposal
-                // deduplicates on the JSON, which is identical.
-                id: nextLocalProposalId(),
-                proposalType: proposalType,
-                title: title,
-                proposalJson: resultText,
-                operatorId: 'local',
-                createdAt: DateTime.now(),
-              ),
-            );
-      }
-    } catch (_) {
-      // Not valid JSON or missing fields — not a proposal.
-    }
+    final proposal = PendingProposal.tryParse(resultText);
+    if (proposal == null) return;
+    ref.read(proposalStateProvider.notifier).addProposal(proposal);
   }
 
   /// Injects a proposal into the chat as an assistant message.

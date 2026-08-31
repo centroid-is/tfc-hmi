@@ -50,6 +50,44 @@ class PendingProposal {
     required this.createdAt,
   });
 
+  /// Reads a proposal off the wire, or null if this is not one.
+  ///
+  /// A proposal is a JSON object carrying `_proposal_type`; the title is
+  /// whatever the write tool called the thing it wants to change, which is
+  /// `title` for alarms, pages and assets and `key` for key mappings.
+  ///
+  /// One parser for both ends of the delivery path -- the in-app tool loop
+  /// reading its own tool result, and the ingest that stages proposals from
+  /// an external MCP client. They stage the same proposal when both are
+  /// live, and [ProposalStateNotifier.addProposal] can only tell that if
+  /// [proposalJson] is byte-identical on both, so the raw text is kept
+  /// exactly as it arrived rather than re-encoded from the decoded map.
+  static PendingProposal? tryParse(String proposalJson,
+      {String operatorId = 'local'}) {
+    if (!proposalJson.contains('_proposal_type')) return null;
+    try {
+      final decoded = jsonDecode(proposalJson);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (!decoded.containsKey('_proposal_type')) return null;
+      return PendingProposal(
+        // A local handle, minted per arrival. The same proposal reaching the
+        // notifier twice gets two different ids; addProposal deduplicates on
+        // the JSON, which is identical.
+        id: nextLocalProposalId(),
+        proposalType: decoded['_proposal_type'] as String? ?? 'unknown',
+        title: decoded['title'] as String? ??
+            decoded['key'] as String? ??
+            'Proposal',
+        proposalJson: proposalJson,
+        operatorId: operatorId,
+        createdAt: DateTime.now(),
+      );
+    } catch (_) {
+      // Not valid JSON, or not shaped like a proposal.
+      return null;
+    }
+  }
+
   String get editorLabel {
     switch (proposalType) {
       case 'alarm':
