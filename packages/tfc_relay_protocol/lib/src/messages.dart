@@ -30,12 +30,35 @@ final class HelloParams {
   /// last seen sequence per subscription.
   final SessionResume? session;
 
+  /// The station's credential, presented on the first frame. Null when the
+  /// deployment runs no token file — every fixture in this workspace does.
+  ///
+  /// **Typed, and not an entry in [capabilities].** `capabilities` is an open
+  /// map: the session logs it and copies it into its own record, so a
+  /// credential put there is a credential in a log line, and no amount of care
+  /// downstream takes it back out. A named field costs one key on the wire and
+  /// buys three things — `toJson` can omit it by name from a diagnostic dump,
+  /// a reviewer can see at the declaration that this is secret, and "does
+  /// anything print the token?" becomes a grep for one identifier instead of
+  /// an audit of every map that ever held it.
+  ///
+  /// It is a *station's* credential, not a person's: it says which panel is
+  /// speaking, never who is standing at it.
+  ///
+  /// Omitted from [toJson] when null rather than emitted as `null`, so a
+  /// tokenless hello is byte-identical to the frame this build sent before the
+  /// field existed — which is what makes the field compatible in both
+  /// directions with no version negotiation (see the library doc: decoders
+  /// ignore unknown keys, encoders omit absent optionals).
+  final String? token;
+
   const HelloParams({
     required this.protocol,
     required this.supported,
     required this.client,
     this.capabilities = const {},
     this.session,
+    this.token,
   });
 
   factory HelloParams.fromJson(Map<String, Object?> json) => HelloParams(
@@ -48,6 +71,7 @@ final class HelloParams {
         session: json['session'] == null
             ? null
             : SessionResume.fromJson((json['session'] as Map).cast()),
+        token: json['token'] as String?,
       );
 
   Map<String, Object?> toJson() => {
@@ -56,6 +80,7 @@ final class HelloParams {
         'client': client.toJson(),
         if (capabilities.isNotEmpty) 'capabilities': capabilities,
         if (session != null) 'session': session!.toJson(),
+        if (token != null) 'token': token,
       };
 }
 

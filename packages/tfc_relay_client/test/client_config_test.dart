@@ -318,6 +318,36 @@ void main() {
     });
   });
 
+  group('the station credential', () {
+    test('a panel with no credential configured still constructs', () {
+      final config = ClientConfig();
+
+      expect(config.token, isNull,
+          reason: 'null is the shipped default and every fixture in this '
+              'workspace depends on it: a gateway running the permissive '
+              'validator is what the whole existing suite dials. A default of '
+              'anything else — an empty string most of all — would send a '
+              'credential the integrator never configured, and the day a real '
+              'token file is mounted every panel would be refused at once');
+    });
+
+    test('the credential is carried verbatim, not judged here', () {
+      // Deliberately short and odd-looking. A length or shape rule in
+      // `ClientConfig` would be a second opinion about a secret whose only
+      // real judge is the gateway, and a panel that refuses to construct
+      // because its mounted credential looks wrong is a dark screen at shift
+      // start instead of a refusal an operator can read.
+      final config = ClientConfig(token: 'x');
+
+      expect(config.token, 'x',
+          reason: 'the panel presents what it was mounted with. A config that '
+              'trimmed, padded or rejected the credential would turn a '
+              'provisioning mistake into a fault that reproduces nowhere, '
+              'because the string on disk and the string on the wire would no '
+              'longer be the same string');
+    });
+  });
+
   group('the freshness deadline cannot learn a transport period', () {
     test('no field or parameter of the config is derived from the server '
         'cadence', () {

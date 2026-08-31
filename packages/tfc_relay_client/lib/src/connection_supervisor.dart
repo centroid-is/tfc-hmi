@@ -389,6 +389,10 @@ final class ConnectionSupervisor {
           protocol: protocolVersion,
           supported: const [protocolVersion],
           client: client,
+          // Null on a gateway with no token file, and then omitted from the
+          // frame entirely, so this line changes nothing for a deployment
+          // that has not configured one.
+          token: config.token,
         ).toJson(),
         deadline: config.controlDeadline,
       );
