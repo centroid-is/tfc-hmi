@@ -38,6 +38,28 @@ dependencies:
   # The wire shapes, the DTOs and the pure cores (ConflatingSendBuffer,
   # HelloGate) this server is assembled from.
   tfc_relay_protocol: {path: ../tfc_relay_protocol}
+  # RSA keygen, private-key PEM encoding and certificate PEM *parsing* for the
+  # provisioning helper — and deliberately NOT certificate construction.
+  # `X509Utils.generateSelfSignedCertificate` encodes every subject-alternative
+  # name as a dNSName (`X509Utils.dart:480-484`), so `10.104.29.71` becomes the
+  # literal DNS string "10.104.29.71" and a panel dialling that IP is answered
+  # with CERTIFICATE_VERIFY_FAILED (06-RESEARCH §B.2, measured). The panels dial
+  # IPs, so the certificate bytes are ours; only the key plumbing is this
+  # package's. Already a direct dependency of the repository root at ^5.7.0,
+  # resolved 5.8.2, and already imported by
+  # `packages/tfc_dart/bin/generate_certs.dart` — nothing new enters the solve.
+  basic_utils: ^5.8.2
+  # The ASN.1 DER writer and the SHA-256/RSA signer the certificate is actually
+  # built from. This is `basic_utils`' own and only dependency, so it is already
+  # resolved in the repository's lockfile at 4.0.0 and already loaded by shipping
+  # code: a transitive edge becoming direct, not a new package. Not `asn1lib` —
+  # the two libraries share names and not APIs (06-RESEARCH trap 13).
+  pointycastle: ^4.0.0
+  # The `relay_certs` CLI's option parsing, at the version `tfc_dart` and
+  # `tfc_mcp_server` already pin. An integrator provisioning a plant runs a
+  # command; a command with hand-rolled argv parsing is a command that reports a
+  # missing --ca-key as a stack trace.
+  args: ^2.4.2
 
 dev_dependencies:
   # Same analyzer-recommended lint set as the other two relay packages.
