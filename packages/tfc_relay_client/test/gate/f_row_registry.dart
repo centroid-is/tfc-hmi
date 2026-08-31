@@ -426,12 +426,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
         'row asserts that the age tracks the injected delay. No getter was '
         'invented here to make the clause look asserted',
   ),
-  'F14': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-05',
-    clause: 'both legs compared as one observable, with the blackhole-pre-'
-        'connect leg bounded by connectTimeout',
-  ),
   'F15': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-12',

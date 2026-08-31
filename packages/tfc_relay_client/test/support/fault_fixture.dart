@@ -275,7 +275,14 @@ Future<FaultFixture> faultFixture({
 
   // No seam on a TLS leg, and no `dial:` either: the panel's own dial is what
   // carries the pinned client, and an override would test this file instead.
-  final seam = tls == null ? FrameSeam(corrupt: corrupt) : null;
+  // `connectTimeout` is handed to the seam because the seam *is* the dial on a
+  // plaintext leg: passing `dial:` replaces the path that would otherwise apply
+  // `config.connectTimeout`, so a seam built without it silently un-bounds a
+  // dial that production bounds. See `frame_seam.dart`'s field doc — F14b is
+  // the row that could not be written until this line existed.
+  final seam = tls == null
+      ? FrameSeam(corrupt: corrupt, connectTimeout: clientConfig.connectTimeout)
+      : null;
   final port = proxy?.port ?? server.port;
   final url = tls == null ? 'ws://127.0.0.1:$port' : 'wss://127.0.0.1:$port';
   final client = RemoteStateMan(
