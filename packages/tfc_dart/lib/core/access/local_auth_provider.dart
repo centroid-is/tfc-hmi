@@ -11,6 +11,16 @@ import 'access_repository.dart';
 /// count recorded in the row: existing users must not be locked out by the
 /// change of algorithm.
 ///
+/// ## The migration
+///
+/// A successful login also upgrades the row it authenticated against, if the
+/// stored form is stale. That is transparent — nothing is asked of the user and
+/// nothing is said to them — and it is the only moment it can happen, because
+/// the password is in hand exactly once, here. A write-back that fails is
+/// logged and ignored: the user typed the right password, and refusing them
+/// over a rewrite they never asked for would be the migration locking out the
+/// very people it exists to carry forward.
+///
 /// The only [AuthProvider] this milestone ships. A second implementation —
 /// OIDC, one day — goes behind the same interface without touching a caller,
 /// which is the whole reason the interface exists.
@@ -133,6 +143,39 @@ class LocalAuthProvider implements AuthProvider {
     }
 
     await repository.touchLastLogin(row.username, DateTime.now().toUtc());
+
+    if (PasswordHasher.needsRehash(stored)) {
+      // The migration, and the only moment it can happen: the password is in
+      // hand exactly once, here, and never again. Nothing asks anybody for
+      // anything and nobody is told.
+      //
+      // Deliberately awaited rather than fired and forgotten. A detached future
+      // that errors attaches no handler and would surface as an unhandled async
+      // error on a panel; its closure would hold the plaintext alive past the
+      // frame that has a reason to hold it; and nothing could deterministically
+      // assert the row was rewritten. The cost is one slower login per user,
+      // once.
+      try {
+        await repository.rehashPassword(
+          row.username,
+          await PasswordHasher.hash(password),
+        );
+      } catch (e) {
+        // Catching everything here is the opposite of the rule stated at the
+        // top of this file, and it is deliberate. That rule — never turn an
+        // infrastructure failure into a null — exists so a database outage is
+        // not recorded as somebody's failed login. This block is not on that
+        // path: the credentials have already been judged, the answer is "yes",
+        // and the only thing that can fail is a housekeeping write nobody asked
+        // for. Letting a throw escape would turn a correct password into a
+        // failed login, which is precisely what the migration exists to avoid.
+        _logger.w(
+          'Signed "$name" in, but could not upgrade their stored password '
+          'hash to the current algorithm: $e. The login stands; the upgrade '
+          'will be retried on their next one.',
+        );
+      }
+    }
 
     return AuthenticatedUser(
       username: row.username,

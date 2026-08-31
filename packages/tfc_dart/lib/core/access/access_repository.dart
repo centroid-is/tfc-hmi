@@ -823,6 +823,42 @@ class AccessRepository {
     });
   }
 
+  /// Rewrite [username]'s stored hash as [hash], returning the number of rows
+  /// updated.
+  ///
+  /// The migration write-back: a user on a `pbkdf2-sha256` row is carried onto
+  /// Argon2id on their next successful login, because that is the one moment
+  /// the password is in hand. `LocalAuthProvider` is the only caller, and it
+  /// asks [PasswordHasher.needsRehash] first.
+  ///
+  /// Four things this deliberately does not do. Each looks like an omission
+  /// and none of them is:
+  ///
+  /// * **No derivation.** It takes an already-derived [PasswordHash]. The
+  ///   derive-before-transaction discipline the three other writers keep by
+  ///   convention is structural here, and it is also what lets the caller
+  ///   decide *whether* a rewrite is due before paying for one.
+  /// * **No transaction.** A single `UPDATE` is atomic on its own. The other
+  ///   writers open one only to check a precondition first; opening one here
+  ///   would put a round trip on every migrating login for nothing.
+  /// * **No existence check.** The caller read this row moments ago on the
+  ///   login path, so a zero-row result means the account was deleted in
+  ///   between — a legitimate outcome, not an error. Hence the count rather
+  ///   than the [UserNotFoundException] [setPassword] correctly throws, whose
+  ///   caller has no such guarantee.
+  /// * **Not a password change.** It rewrites the stored form of a password the
+  ///   user already has, so it must not grow [setPassword]'s validation: there
+  ///   is no new password here to validate.
+  Future<int> rehashPassword(String username, PasswordHash hash) async {
+    final updated =
+        await (db.update(db.appUser)..where((t) => t.username.equals(username)))
+            .write(AppUserCompanion(
+      passwordHash: Value(encodeStoredHash(hash)),
+      salt: Value(hash.saltB64),
+    ));
+    return updated;
+  }
+
   AccessRole _toRole(AppRoleData row) => AccessRole.fromDb(
         name: row.name,
         groupsJson: row.groups,
