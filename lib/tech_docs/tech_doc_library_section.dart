@@ -18,13 +18,13 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
 import '../chat/ai_context_action.dart';
 import '../core/feature_flags.dart';
 import '../core/guarded_knowledge_stores.dart'
-    show GuardedPrefsReader, PlcCodeIndexExtras;
+    show GuardedPrefsReader, PlcCodeIndexExtras, kKnowledgeWriteGroup;
 import '../plc/plc_code_upload_dialog.dart';
 import '../plc/plc_detail_panel.dart';
-import '../providers/access.dart' show stationNameProvider;
+import '../providers/access.dart'
+    show accessSessionProvider, stationNameProvider;
 import '../providers/access_policy.dart'
     show RefAuditSink, reportAccessDenial, sessionInForce;
-import '../providers/mcp_bridge.dart' show isMcpWriteEnabled;
 import '../providers/plc.dart';
 // The adapter below has no `ref`, so it calls the factory. Importing the
 // provider file is what keeps it inside spec §6's one-construction-site rule.
@@ -59,7 +59,8 @@ final _logger = Logger(printer: SimplePrinter(printTime: false));
 /// - Right: Section detail panel when a document is selected
 ///
 /// All write operations go through [auditTechDocOperation] (locked decision).
-/// TFC_USER gates write operations (upload, rename, delete, replace).
+/// Write operations (upload, rename, delete, replace) need
+/// [kKnowledgeWriteGroup] -- the one place that answer lives.
 class TechDocLibrarySection extends ConsumerStatefulWidget {
   const TechDocLibrarySection({super.key, this.embedded = true});
 
@@ -92,9 +93,54 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     super.dispose();
   }
 
-  bool get _isWriteEnabled => isMcpWriteEnabled();
+  /// Whether this session may write to the knowledge base.
+  ///
+  /// Literally the store guard's own predicate -- `guarded_knowledge_stores`
+  /// asks `session.can(kKnowledgeWriteGroup)` before every one of its eleven
+  /// writes -- so the button and the write it offers cannot disagree.
+  ///
+  /// `watch`, not `read`: this getter feeds `build`, and the upload affordance
+  /// has to appear when somebody signs in and go away when the session times
+  /// out, without a restart. `base_scaffold.dart:248` is the precedent; the
+  /// `ref.read`-only rule in `access_policy.dart` is about *providers* holding
+  /// connections, not about widgets.
+  ///
+  /// `?? false` while the session loads or errors, rather than resolving
+  /// through `sessionInForce`: no narrower, since `kSessionWhileLoading` does
+  /// not hold [kKnowledgeWriteGroup] either, and it answers without awaiting a
+  /// chain that reaches the database.
+  bool get _isWriteEnabled =>
+      ref.watch(accessSessionProvider).valueOrNull?.can(kKnowledgeWriteGroup) ??
+      false;
 
-  String get _currentUser => io.Platform.environment['TFC_USER'] ?? 'operator';
+  /// Who a write is attributed to: the signed-in username, or a refusal.
+  ///
+  /// This used to read a process environment variable and fall back to a fixed
+  /// placeholder, so an unattended panel signed its audit rows with a name
+  /// nobody holds -- the sharpest instance of the defect this milestone
+  /// removes. There is no honest substitute for a missing signature, so there
+  /// is no fallback here -- and in particular not the `'anonymous'` constant in
+  /// `guarded_knowledge_stores.dart`, which records a *permitted anonymous
+  /// read*. A write is neither.
+  ///
+  /// `read`, not `watch`: this answers "who is signing this write" once, at the
+  /// instant of the write. Only [_isWriteEnabled] has to stay live.
+  ///
+  /// The throw is unreachable on today's call graph -- all four callers sit
+  /// behind [_isWriteEnabled], and no session holds [kKnowledgeWriteGroup]
+  /// without a signed-in user. It is here because "unreachable" is a claim
+  /// about the call graph, and what happens when such a claim lapses is an
+  /// audit row signed by nobody. [AccessDenied] specifically, because all four
+  /// callers already handle it: it is what the store guard one layer down
+  /// throws.
+  String get _writeUser {
+    final username =
+        ref.read(accessSessionProvider).valueOrNull?.user?.username;
+    if (username == null) {
+      throw const AccessDenied('tech_doc.write', kKnowledgeWriteGroup);
+    }
+    return username;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -190,7 +236,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         ),
         const SizedBox(height: 8),
 
-        // Upload buttons + progress (TFC_USER only)
+        // Upload buttons + progress (kKnowledgeWriteGroup only)
         if (_isWriteEnabled) ...[
           Wrap(
             spacing: 8,
@@ -342,7 +388,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
           child: Row(
             children: [
-              // Name column (editable if TFC_USER and editing)
+              // Name column (editable if kKnowledgeWriteGroup and editing)
               Expanded(
                 flex: 3,
                 child: _editingDocId == doc.id
@@ -594,7 +640,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
       // Phase 1: Store blob + name in DB.
       final docId = await auditTechDocOperation<int>(
         action: TechDocAuditAction.upload,
-        user: _currentUser,
+        user: _writeUser,
         docId: null,
         docName: name,
         operation: () => index.storeDocument(
@@ -661,7 +707,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     try {
       await auditTechDocOperation<void>(
         action: TechDocAuditAction.rename,
-        user: _currentUser,
+        user: _writeUser,
         docId: docId,
         docName: newName,
         operation: () => index.renameDocument(docId, newName),
@@ -726,7 +772,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     try {
       await auditTechDocOperation<void>(
         action: TechDocAuditAction.replace,
-        user: _currentUser,
+        user: _writeUser,
         docId: doc.id,
         docName: doc.name,
         operation: () => service.replaceDocument(
@@ -798,7 +844,7 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
     try {
       await auditTechDocOperation<void>(
         action: TechDocAuditAction.delete,
-        user: _currentUser,
+        user: _writeUser,
         docId: doc.id,
         docName: doc.name,
         operation: () => service.deleteAndCleanAssets(
@@ -891,7 +937,8 @@ class _TechDocLibrarySectionState extends ConsumerState<TechDocLibrarySection> {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         child: Row(
           children: [
-            // Name column with code icon (editable if TFC_USER and editing)
+            // Name column with code icon (editable if kKnowledgeWriteGroup
+            // and editing)
             Expanded(
               flex: 3,
               child: _editingPlcAssetKey == plc.assetKey

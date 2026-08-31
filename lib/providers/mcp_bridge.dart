@@ -15,7 +15,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         migrateMcpConfigToDeviceLocal,
         readMcpConfigFromPreferences;
 
-import '../core/feature_flags.dart';
 import '../mcp/alarm_man_alarm_reader.dart';
 import '../mcp/app_screen_capturer.dart';
 import '../mcp/mcp_lifecycle_state.dart';
@@ -68,15 +67,6 @@ Map<String, String> getMcpServerEnv() {
     if (env['CENTROID_PGPASSWORD'] != null)
       'CENTROID_PGPASSWORD': env['CENTROID_PGPASSWORD']!,
   };
-}
-
-/// Whether an operator identity is present (TFC_USER environment variable).
-///
-/// This gates write-style operations that need an attributable operator —
-/// e.g. tech-doc upload/rename/delete. It is independent of [kChatEnabled]:
-/// disabling the chat build flag must not revoke write permissions.
-bool isMcpWriteEnabled() {
-  return io.Platform.environment.containsKey('TFC_USER');
 }
 
 /// Mutable state for the MCP server lifecycle provider.
