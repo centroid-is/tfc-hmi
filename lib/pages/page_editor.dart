@@ -3849,7 +3849,14 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// other change made in this dialog.
   void _setStartupUrl(String path, StateSetter dialogSetState) {
     _startupUrl = _startupUrl == path ? startupUrlDefault : path;
-    unawaited(writeStartupUrl(ref.read(localPreferencesProvider), _startupUrl));
+    // Fire-and-forget on purpose (the toggle must feel instant), but a
+    // failed write means the lit rocket is lying — say so somewhere.
+    unawaited(
+      writeStartupUrl(ref.read(localPreferencesProvider), _startupUrl)
+          .catchError((Object e) {
+        debugPrint('startup URL write failed: $e');
+      }),
+    );
     dialogSetState(() {});
   }
 

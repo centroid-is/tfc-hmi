@@ -300,10 +300,17 @@ Future<void> _startApp([bool debugMode = false]) async {
   // different equipment — and validated against the assembled menu so a
   // startup page deleted or unpublished since it was picked falls back
   // to '/'.
+  final storedStartupUrl = await readStartupUrl(prefs);
   final startupPath = resolveStartupPath(
-    await readStartupUrl(prefs),
+    storedStartupUrl,
     menuItems: topLevelMenuItems,
   );
+  // One line that settles "why didn't it open on my page": whether the
+  // choice ever reached this device's store, and whether validation kept it.
+  logger.i(startupPath == storedStartupUrl
+      ? 'Startup page: $startupPath'
+      : 'Startup page: $storedStartupUrl is stored but no longer routable '
+          '— falling back to $startupPath');
 
   // Paths at which Beamer should clear its beaming history. Landing on a
   // top-level destination means there is nowhere to go "back" to, so we drop
@@ -609,6 +616,16 @@ class MyApp extends ConsumerWidget {
           transitionDelegate: MyNoAnimationTransitionDelegate(),
           clearBeamingHistoryOn: clearHistoryOn,
           locationBuilder: (routeInformation, context) => locationBuilder(routeInformation, context),
+        ),
+        // Beamer only swaps the incoming route for [initialPath] when that
+        // route is exactly '/'. The eLinux embedder reports '' instead, so
+        // without this normalization every station booted Home regardless
+        // of the chosen startup page. See normalizeInitialPlatformRoute.
+        routeInformationProvider = PlatformRouteInformationProvider(
+          initialRouteInformation: RouteInformation(
+            uri: Uri.parse(normalizeInitialPlatformRoute(
+                WidgetsBinding.instance.platformDispatcher.defaultRouteName)),
+          ),
         ) {
     // Marionette route logger: emits [ROUTE] /path log entries so agents
     // can verify navigation via getLogs instead of taking screenshots.
@@ -646,6 +663,10 @@ class MyApp extends ConsumerWidget {
   String? _lastPanePath;
 
   final BeamerDelegate routerDelegate;
+
+  /// Feeds the router its first route, normalized so an embedder that
+  /// reports no route (eLinux reports '') still lands on [initialPath].
+  final PlatformRouteInformationProvider routeInformationProvider;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -690,6 +711,7 @@ class MyApp extends ConsumerWidget {
       darkTheme: dark,
       routerDelegate: routerDelegate,
       routeInformationParser: BeamerParser(),
+      routeInformationProvider: routeInformationProvider,
       builder: (context, navigatorChild) {
         return Consumer(
           builder: (context, ref, _) {
