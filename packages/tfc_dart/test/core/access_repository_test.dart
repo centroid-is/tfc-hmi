@@ -37,6 +37,43 @@ Future<AppDatabase> _openDb() async {
   return db;
 }
 
+/// Opens an in-memory database exactly as [_openDb] does, but **without** the
+/// foreign-key pragma.
+///
+/// This is what every connection in this build looks like outside these tests.
+/// The pragma is per-connection and SQLite defaults it off, and it is issued in
+/// exactly five files — this one, `access_schema_test.dart` (twice),
+/// `access_template_table_test.dart` and `local_auth_provider_test.dart`, all
+/// of them tests. Nothing under any `lib/` turns it on.
+///
+/// So a rule that only holds when foreign keys are on is not a rule this build
+/// has. The tests that use this opener are the ones that prove the rule is
+/// enforced by [AccessRepository] itself.
+Future<AppDatabase> _openDbForeignKeysOff() async {
+  final db = AppDatabase.inMemoryForTest();
+  await db.customSelect('SELECT 1').getSingle();
+  return db;
+}
+
+/// The usernames holding [roleName], read with raw SQL, sorted.
+Future<List<String>> _rawHoldersOf(AppDatabase db, String roleName) async {
+  final rows = await db.customSelect(
+    'SELECT username FROM app_user WHERE role_name = ?',
+    variables: [Variable<String>(roleName)],
+  ).get();
+  return rows.map((r) => r.read<String>('username')).toList()..sort();
+}
+
+/// The `role_name` column of [username], read with raw SQL, or null.
+Future<String?> _rawRoleOf(AppDatabase db, String username) async {
+  final rows = await db.customSelect(
+    'SELECT role_name FROM app_user WHERE username = ?',
+    variables: [Variable<String>(username)],
+  ).get();
+  if (rows.isEmpty) return null;
+  return rows.first.read<String>('role_name');
+}
+
 /// The groups of the role named [name], read with raw SQL.
 ///
 /// Deliberately not through [AccessRepository]: a test that asserts on the
@@ -344,25 +381,193 @@ void main() {
     });
   });
 
-  group('referential integrity', () {
-    test('deleting a role a user still holds fails and the user survives',
-        () async {
-      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+  group('deleting a role accounts still hold', () {
+    // This group used to assert `SqliteException(787): FOREIGN KEY constraint
+    // failed`. It passed only because this file turns the pragma on; on the
+    // SQLite demo backend — where nothing turns it on — the delete succeeded
+    // and left the holder pointing at a role that was no longer there. The
+    // refusal now lives in [AccessRepository.deleteRole], and these tests
+    // assert that refusal rather than the database engine's message.
+
+    test('is refused in application code, with the holders named', () async {
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'jon', roleName: 'Maintenance');
+      await _rawInsertUser(db, username: 'ada', roleName: 'Maintenance');
 
       await expectLater(
-        () => repo.deleteRole('Engineering'),
-        // Message-matched rather than isA<Exception>(): a typo'd table name
-        // would also throw and would pass a bare type check.
-        throwsA(isA<Object>().having(
-          (e) => e.toString().toUpperCase(),
-          'message',
-          contains('FOREIGN KEY'),
-        )),
+        () => repo.deleteRole('Maintenance'),
+        throwsA(isA<RoleInUseException>()
+            .having((e) => e.roleName, 'roleName', 'Maintenance')
+            // Sorted, so the dialog reads the same twice running.
+            .having((e) => e.holders, 'holders', ['ada', 'jon'])),
       );
 
-      expect(await _rawUserCount(db), 1,
+      expect(await _rawRoleNames(db), contains('Maintenance'));
+      expect(await _rawUserCount(db), 3,
           reason: 'the user must not be orphaned by a refused delete');
+    });
+
+    test('is refused with foreign keys off — every production connection',
+        () async {
+      // The whole point of the trap: with the pragma off the database refuses
+      // nothing, so the refusal has to be ours.
+      await db.close();
+      db = await _openDbForeignKeysOff();
+      repo = AccessRepository(db);
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'jon', roleName: 'Maintenance');
+
+      await expectLater(
+        () => repo.deleteRole('Maintenance'),
+        throwsA(isA<RoleInUseException>()
+            .having((e) => e.holders, 'holders', ['jon'])),
+      );
+
+      expect(await _rawRoleNames(db), contains('Maintenance'),
+          reason: 'the role row survives the refusal');
+      expect(await _rawRoleOf(db, 'jon'), 'Maintenance',
+          reason: 'and so does the user row, still pointing at it');
+    });
+
+    test('names the holders in its message, so a dialog can quote it',
+        () async {
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'jon', roleName: 'Maintenance');
+
+      await expectLater(
+        () => repo.deleteRole('Maintenance'),
+        throwsA(isA<RoleInUseException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('Maintenance'), contains('jon')),
+        )),
+      );
+    });
+
+    test('a role nobody holds still deletes', () async {
+      await _rawInsertUser(db, username: 'eng', roleName: 'Engineering');
+
+      await repo.deleteRole('Maintenance');
+
+      expect(await _rawRoleNames(db), isNot(contains('Maintenance')));
+    });
+  });
+
+  group('the last users-holder invariant', () {
+    // Of the four seeded roles only Engineering grants `users`, so one account
+    // holding Engineering is the whole of the plant's ability to manage roles
+    // and accounts. Every trip route below starts from exactly that fixture.
+    const engineeringWithoutUsers = AccessRole(
+      name: 'Engineering',
+      groups: {
+        AccessGroup.operate,
+        AccessGroup.setpoints,
+        AccessGroup.device,
+        AccessGroup.force,
+        AccessGroup.configure,
+        AccessGroup.administer,
+      },
+    );
+
+    setUp(() => _rawInsertUser(db, username: 'jon', roleName: 'Engineering'));
+
+    test('route (c): unticking users from the only role granting it is refused',
+        () async {
+      await expectLater(
+        () => repo.upsertRole(engineeringWithoutUsers),
+        throwsA(isA<LastUsersHolderException>()
+            .having((e) => e.roleName, 'roleName', 'Engineering')
+            .having((e) => e.holders, 'holders', ['jon'])),
+      );
+
+      expect(await _rawGroups(db, 'Engineering'), contains(AccessGroup.users),
+          reason: 'the transaction rolled back — the stored set is unchanged');
+    });
+
+    test('route (d): deleting the only users-granting role is refused',
+        () async {
+      await expectLater(
+        () => repo.deleteRole('Engineering'),
+        throwsA(allOf(
+          isA<LastUsersHolderException>()
+              .having((e) => e.holders, 'holders', ['jon']),
+          isNot(isA<RoleInUseException>()),
+        )),
+        reason: 'both rules trip here, and the lockout refusal is the one the '
+            'operator must be told about: moving the holders off a role is a '
+            'fix they can perform, and being locked out of the roles screen is '
+            'not — it has no recovery inside the application at all',
+      );
+
       expect(await _rawRoleNames(db), contains('Engineering'));
+      expect(await _rawRoleOf(db, 'jon'), 'Engineering');
+    });
+
+    test(
+        'the refusal points at the deployment doc rather than offering an '
+        'override', () async {
+      await expectLater(
+        () => repo.deleteRole('Engineering'),
+        throwsA(isA<LastUsersHolderException>().having(
+          (e) => e.toString(),
+          'message',
+          allOf(contains('jon'), contains('access-control-deployment.md')),
+        )),
+      );
+    });
+
+    test('renaming the only users-granting role still succeeds', () async {
+      // The guard refuses lockouts, not role administration. A rename carries
+      // its holders with it, so the invariant is untouched; a guard here would
+      // be a guard that refuses something safe.
+      await repo.renameRole('Engineering', 'Controls');
+
+      expect(await _rawRoleNames(db), contains('Controls'));
+      expect(await _rawRoleOf(db, 'jon'), 'Controls');
+      expect(await _rawHoldersOf(db, 'Controls'), ['jon']);
+    });
+
+    test('unticking users is allowed while another role still grants it',
+        () async {
+      await repo.upsertRole(const AccessRole(
+        name: 'Controls',
+        groups: {AccessGroup.operate, AccessGroup.users},
+      ));
+      await _rawInsertUser(db, username: 'ada', roleName: 'Controls');
+
+      await repo.upsertRole(engineeringWithoutUsers);
+
+      expect(await _rawGroups(db, 'Engineering'),
+          isNot(contains(AccessGroup.users)));
+    });
+
+    test(
+        'a user whose role names no role contributes nothing, and throws '
+        'nothing', () async {
+      // Reachable with foreign keys off, which is every production connection.
+      await db.close();
+      db = await _openDbForeignKeysOff();
+      repo = AccessRepository(db);
+      await _rawInsertUser(db, username: 'jon', roleName: 'Engineering');
+      await _rawInsertUser(db, username: 'ghost', roleName: 'Nonexistent');
+
+      await expectLater(
+        () => repo.upsertRole(engineeringWithoutUsers),
+        throwsA(isA<LastUsersHolderException>()
+            .having((e) => e.holders, 'holders', ['jon'])),
+      );
+    });
+
+    test('with no accounts at all the guard does not fire', () async {
+      // A fresh station before anyone has commissioned it holds `users`
+      // nowhere, so there is nothing for a change to take away. The recovery
+      // from that state is the first-user window, not this guard, and a guard
+      // that fired here would make a station unconfigurable out of the box.
+      await db.customStatement('DELETE FROM app_user');
+
+      await repo.deleteRole('Engineering');
+
+      expect(await _rawRoleNames(db), isNot(contains('Engineering')));
     });
   });
 
