@@ -34,6 +34,7 @@ import 'package:tfc/pages/about_linux.dart';
 import 'package:tfc/pages/tech_doc_library.dart';
 import 'package:tfc/pages/first_user.dart';
 import 'package:tfc/pages/audit_trail.dart';
+import 'package:tfc/pages/access_admin.dart';
 import 'package:tfc/transition_delegate.dart';
 import 'package:tfc/providers/theme.dart';
 import 'package:tfc/core/feature_flags.dart';
@@ -467,10 +468,14 @@ RoutesLocationBuilder createLocationBuilder(
         child: child,
       );
 
-  // Eight routes are gated, and only eight. The eighth, '/advanced/audit-trail',
-  // is the one raised for what it *displays* rather than what it writes: the
-  // trail is every write anybody ever made, with old and new values, so it sits
-  // at `users` beside the roles that govern it. Left open on purpose:
+  // Nine routes are gated, and only nine. Two of them sit at `users`.
+  // '/advanced/audit-trail' is raised for what it *displays* rather than what
+  // it writes: the trail is every write anybody ever made, with old and new
+  // values, so it sits beside the roles that govern it. '/advanced/access'
+  // reads and writes the role table and the account list, which is the
+  // definition of `users`-grade — and its store gates the writes but leaves the
+  // reads ungated on purpose, so this gate is the whole of the enforcement for
+  // reading it. Left open on purpose:
   //
   //  - '/advanced/about-linux' reads system information and changes nothing.
   //  - '/advanced/history-view', AppRoutes.historyView and
@@ -598,6 +603,10 @@ RoutesLocationBuilder createLocationBuilder(
         key: const ValueKey('/advanced/audit-trail'),
         title: 'Audit Trail',
         child: gated('/advanced/audit-trail', 'Audit Trail', const AuditTrailPage())),
+    '/advanced/access': (context, state, args) => BeamPage(
+        key: const ValueKey('/advanced/access'),
+        title: 'Access',
+        child: gated('/advanced/access', 'Access', const AccessAdminPage())),
   };
 
   // Statement-level const guard rather than a collection-if inside the map

@@ -78,6 +78,20 @@ List<MenuItem> buildTopLevelMenuItems({
     // '/advanced/audit-trail' is the access control; the menu shows a lock
     // badge to everyone who does not hold it.
     MenuItem(label: 'Audit Trail', path: '/advanced/audit-trail', icon: Icons.receipt_long),
+    // Not god-gated either, and for the same reasons one step stronger. The
+    // rule stated in this function's doc is to god-gate what surfaces secrets
+    // or is a developer tool. This page surfaces no secret: the user list is
+    // username, role, created and last login, `passwordHash` and `salt` never
+    // reach the widget layer, and the set-password dialog writes without
+    // reading. And it is the *commissioning-critical* screen — the deployment
+    // doc's order is "create roles, then users, then the first-user window
+    // closes", which cannot be followed from a station where the entry is
+    // invisible without `TFC_GOD=true`. A raised entry stays visible and
+    // locked, never hidden. The `users` gate on '/advanced/access' is the
+    // access control; god mode here is only menu decoration. The icon is a
+    // people glyph rather than a lock or a shield, because a lock is what
+    // `AccessLockBadge` draws over an entry the session cannot open.
+    MenuItem(label: 'Access', path: '/advanced/access', icon: Icons.manage_accounts),
     if (kKnowledgeEnabled)
       MenuItem(label: 'Knowledge Base', path: '/advanced/knowledge-base', icon: Icons.library_books),
   ];
