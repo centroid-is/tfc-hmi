@@ -85,6 +85,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:logger/logger.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
 import 'package:tfc_dart/core/database_drift.dart' show AppUserData;
@@ -220,6 +221,69 @@ String kAccessUserVanishedNote(String username) =>
     'There is no account named "$username" any more — somebody else removed it. '
     'The list has been refreshed.';
 
+// ---- The two dialogs where a password is in hand --------------------------
+//
+// The validation sentences are `first_user.dart`'s, in `first_user.dart`'s
+// order and register: one sentence per branch, each of them something the
+// operator can act on. A single "invalid input" covering three different
+// mistakes is a support call.
+
+/// The create dialog's title and affirmative.
+const String kAccessUserCreateTitle = 'New account';
+const String kAccessUserCreateConfirmLabel = 'Create account';
+
+/// One line above the create form. Says what holding a role means before the
+/// picker asks the operator to choose one.
+const String kAccessUserCreateNote =
+    'The account can be used the moment it is created, and it may do whatever '
+    'the role picked below grants. There is no password policy and no expiry.';
+
+/// The set-password dialog's title and affirmative.
+String kAccessUserSetPasswordTitle(String username) =>
+    'Set a new password for "$username"';
+const String kAccessUserSetPasswordConfirmLabel = 'Set password';
+
+/// One line above the set-password form.
+///
+/// Says the two things the operator would otherwise have to guess: the old
+/// password stops working at once, and there is nothing to force the person
+/// into afterwards — there is no change-password flow to send them to, and
+/// password self-service is out of scope for this milestone.
+const String kAccessUserSetPasswordNote =
+    'The new password works immediately and the old one stops working. The '
+    'account is not signed out and is not asked to change it again.';
+
+/// The username field was blank. First of the three checks.
+const String kAccessUserBlankUsernameNote = 'Enter a username.';
+
+/// The password field was blank. Second of the three checks.
+const String kAccessUserBlankPasswordNote = 'Enter a password.';
+
+/// The two password fields disagree. Third of the three checks.
+const String kAccessUserMismatchNote = 'The passwords do not match.';
+
+/// The name is taken.
+///
+/// Refused inside the dialog, before the store is asked, for the reason
+/// `_TemplateNameDialog`'s `taken` field gives: an exception surfaced as a
+/// snackbar after the dialog closed would make the operator retype everything.
+/// The same sentence covers the race, when another station took the name
+/// between the loaded roster and the transaction.
+String kAccessUserDuplicateNote(String username) =>
+    'An account named "$username" already exists.';
+
+/// The create failed for a reason this dialog will not repeat.
+///
+/// **The exception is not in it.** See the library doc: this is the screen
+/// where a password is in hand, and an `ArgumentError` raised on a bad
+/// credential can carry the credential in its message.
+const String kAccessUserCreateFailedNote =
+    'The account could not be created. The log has the details.';
+
+/// The password change failed. Same rule, same reason.
+const String kAccessUserSetPasswordFailedNote =
+    'The password could not be changed. The log has the details.';
+
 // ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------
@@ -256,9 +320,39 @@ Key kAccessUserLastLoginKey(String username) =>
 Key kAccessUserChangeRoleKey(String username) =>
     Key('access-user-change-role-$username');
 
+/// One account's reset-password control.
+Key kAccessUserSetPasswordKey(String username) =>
+    Key('access-user-set-password-$username');
+
 /// One account's delete control.
 Key kAccessUserDeleteKey(String username) =>
     Key('access-user-delete-$username');
+
+/// The create control. Present whenever there is a table to create into.
+const Key kAccessUsersCreateKey = Key('access-users-create');
+
+/// The create dialog's three fields, and the set-password dialog's two.
+///
+/// One key per field rather than two sets: only one of these dialogs is ever on
+/// screen, and the set-password dialog has no username field at all — which a
+/// test asserts.
+const Key kAccessUserUsernameFieldKey = Key('access-user-username-field');
+const Key kAccessUserPasswordFieldKey = Key('access-user-password-field');
+const Key kAccessUserConfirmFieldKey = Key('access-user-confirm-field');
+
+/// The two confirming actions. Separate keys, because "the create is disabled
+/// while its write is in flight" and "the password reset is" are two claims.
+const Key kAccessUserCreateConfirmKey = Key('access-user-create-confirm');
+const Key kAccessUserPasswordConfirmKey = Key('access-user-password-confirm');
+
+/// One key per validation branch, so a test asserting "the blank-username
+/// sentence" cannot pass on the mismatch sentence.
+const Key kAccessUserBlankUsernameKey = Key('access-user-blank-username');
+const Key kAccessUserBlankPasswordKey = Key('access-user-blank-password');
+const Key kAccessUserMismatchKey = Key('access-user-mismatch');
+const Key kAccessUserDuplicateKey = Key('access-user-duplicate');
+const Key kAccessUserNoRoleKey = Key('access-user-no-role');
+const Key kAccessUserFailedKey = Key('access-user-failed');
 
 /// One role in the picker. A function of the role name, following
 /// `access_templates_section.dart`'s discipline: a test asserts that *this*
@@ -309,6 +403,9 @@ class AccessUsersSection extends ConsumerWidget {
 
     final store = storeAsync.requireValue;
     if (store == null) {
+      // No create control, and that is not a permission decision: there is no
+      // table to create into. The "never greyed" rule exists so a *permission*
+      // refusal is explained rather than hidden.
       return _frame(
         context,
         child: _note(context, kAccessUsersNoDatabaseNote,
@@ -320,15 +417,6 @@ class AccessUsersSection extends ConsumerWidget {
     if (!usersAsync.hasValue && !usersAsync.hasError) {
       return const SizedBox.shrink();
     }
-    if (usersAsync.hasError && !usersAsync.hasValue) {
-      return _frame(
-        context,
-        child: _note(context, kAccessUsersUnavailableNote,
-            key: kAccessUsersUnavailableKey),
-      );
-    }
-
-    final users = usersAsync.requireValue;
 
     // The roles the picker may offer. Read once for the whole section rather
     // than per row, and empty rather than null when the roster of roles cannot
@@ -337,8 +425,26 @@ class AccessUsersSection extends ConsumerWidget {
     final roles =
         ref.watch(accessAdminRolesProvider).valueOrNull ?? const <AccessRole>[];
 
+    if (usersAsync.hasError && !usersAsync.hasValue) {
+      return _frame(
+        context,
+        onCreate: () => _create(context, ref, store, const [], roles),
+        child: _note(context, kAccessUsersUnavailableNote,
+            key: kAccessUsersUnavailableKey),
+      );
+    }
+
+    final users = usersAsync.requireValue;
+
     return _frame(
       context,
+      onCreate: () => _create(
+        context,
+        ref,
+        store,
+        [for (final user in users) user.username],
+        roles,
+      ),
       child: users.isEmpty
           ? _note(context, kAccessUsersEmptyNote, key: kAccessUsersEmptyKey)
           : Column(
@@ -360,8 +466,12 @@ class AccessUsersSection extends ConsumerWidget {
     );
   }
 
-  /// The card and its header.
-  Widget _frame(BuildContext context, {required Widget child}) {
+  /// The card, its header and the create control.
+  Widget _frame(
+    BuildContext context, {
+    required Widget child,
+    VoidCallback? onCreate,
+  }) {
     final theme = Theme.of(context);
     return Card(
       key: kAccessUsersSectionKey,
@@ -380,6 +490,13 @@ class AccessUsersSection extends ConsumerWidget {
                   child: Text(kAccessUsersHeadline,
                       style: theme.textTheme.titleSmall),
                 ),
+                if (onCreate != null)
+                  OutlinedButton.icon(
+                    key: kAccessUsersCreateKey,
+                    icon: const Icon(Icons.person_add_alt, size: 16),
+                    label: const Text('New account'),
+                    onPressed: onCreate,
+                  ),
               ],
             ),
             const SizedBox(height: 4),
@@ -419,6 +536,32 @@ class AccessUsersSection extends ConsumerWidget {
       ),
     );
   }
+
+  /// Creates an account, from the dialog that holds the typed password.
+  ///
+  /// **No `refreshGroupsFromRoles` here, deliberately.** A new account holds no
+  /// session, so this cannot change the caller's own groups; making the call
+  /// anyway would be one unnecessary re-resolution per created account for
+  /// something it cannot affect. The two writes that *can* change them are in
+  /// [_UserTileState], and both make it unconditionally.
+  Future<void> _create(
+    BuildContext context,
+    WidgetRef ref,
+    AccessAdminStore store,
+    List<String> taken,
+    List<AccessRole> roles,
+  ) async {
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (_) => _CreateUserDialog(
+        store: store,
+        taken: taken.toSet(),
+        roles: roles,
+      ),
+    );
+    if (created != true || !context.mounted) return;
+    ref.invalidate(accessAdminUsersProvider);
+  }
 }
 
 /// The column widths, declared once so the headings and the cells cannot drift
@@ -426,7 +569,7 @@ class AccessUsersSection extends ConsumerWidget {
 const int _kNameFlex = 3;
 const int _kRoleFlex = 3;
 const int _kWhenFlex = 3;
-const double _kActionsWidth = 96;
+const double _kActionsWidth = 144;
 
 // ---------------------------------------------------------------------------
 // One row
@@ -513,6 +656,12 @@ class _UserTileState extends ConsumerState<_UserTile> {
                       icon: const Icon(Icons.badge_outlined, size: 18),
                       tooltip: 'Change role',
                       onPressed: _changeRole,
+                    ),
+                    IconButton(
+                      key: kAccessUserSetPasswordKey(user.username),
+                      icon: const Icon(Icons.password_outlined, size: 18),
+                      tooltip: 'Set password',
+                      onPressed: _setPassword,
                     ),
                     IconButton(
                       key: kAccessUserDeleteKey(user.username),
@@ -607,6 +756,25 @@ class _UserTileState extends ConsumerState<_UserTile> {
     // mid-await, which is a non-event precisely because nothing follows.
     // Unconditional, for the same reason as in [_changeRole] (T-06-77).
     await _afterWrite(ref);
+  }
+
+  /// Resets the account's password, from the dialog that holds the typed one.
+  ///
+  /// **No `refreshGroupsFromRoles` here, deliberately.** A password is not a
+  /// permission, so this alters no privilege and cannot change the caller's own
+  /// groups — the repository's own `setPassword` doc makes the same point, and
+  /// carries no lockout guard for the same reason.
+  Future<void> _setPassword() async {
+    if (_busy) return;
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SetPasswordDialog(
+        username: user.username,
+        store: widget.store,
+      ),
+    );
+    if (changed != true || !mounted) return;
+    ref.invalidate(accessAdminUsersProvider);
   }
 
   /// Renders the transaction's refusal beside the row that caused it.
@@ -819,6 +987,463 @@ class _RolePickerDialogState extends State<_RolePickerDialog> {
               subtitle: Text(kAccessUserRoleGrants(role.groups)),
               onTap: () => setState(() => _selected = role.name),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The two dialogs where a password is in hand
+// ---------------------------------------------------------------------------
+
+/// What is wrong with what was typed, as one value.
+///
+/// One enum shared by both dialogs rather than a validation rule each, for
+/// `_TemplateNameDialog`'s stated reason: two nearly identical dialogs is how
+/// two validation rules start disagreeing. The set-password dialog simply never
+/// reaches [blankUsername], [duplicate] or [noRole].
+///
+/// The values are named after the mistake, not after the sentence, and there is
+/// no `unknown`: [failed] is the one arm that covers something this file did
+/// not anticipate, and it is also the one that must never say what it was.
+enum _CredentialProblem {
+  /// The username field was blank. First of the three checks.
+  blankUsername,
+
+  /// The password field was blank. Second.
+  blankPassword,
+
+  /// The two password fields disagree. Third.
+  mismatch,
+
+  /// The name is already in the loaded roster, or the transaction said so.
+  duplicate,
+
+  /// No role could be read, so there is nothing to create the account into.
+  noRole,
+
+  /// The write threw. **What it threw does not appear on screen.**
+  failed,
+}
+
+/// The inline sentence for [problem], in the error colour, keyed by branch.
+///
+/// [failureNote] is the dialog's own fixed failure sentence — fixed, because
+/// this is the one screen in the milestone where a credential is in hand and an
+/// exception raised on a bad one can carry it in its message. See the library
+/// doc; `first_user.dart` argues it at length.
+Widget _problemLine(
+  BuildContext context,
+  _CredentialProblem problem, {
+  required String subject,
+  required String failureNote,
+}) {
+  final theme = Theme.of(context);
+  final (Key key, String text) = switch (problem) {
+    _CredentialProblem.blankUsername => (
+        kAccessUserBlankUsernameKey,
+        kAccessUserBlankUsernameNote,
+      ),
+    _CredentialProblem.blankPassword => (
+        kAccessUserBlankPasswordKey,
+        kAccessUserBlankPasswordNote,
+      ),
+    _CredentialProblem.mismatch => (
+        kAccessUserMismatchKey,
+        kAccessUserMismatchNote,
+      ),
+    _CredentialProblem.duplicate => (
+        kAccessUserDuplicateKey,
+        kAccessUserDuplicateNote(subject),
+      ),
+    _CredentialProblem.noRole => (
+        kAccessUserNoRoleKey,
+        kAccessUserRoleDialogEmptyNote,
+      ),
+    _CredentialProblem.failed => (kAccessUserFailedKey, failureNote),
+  };
+  return Text(
+    text,
+    key: key,
+    maxLines: null,
+    overflow: TextOverflow.visible,
+    style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
+  );
+}
+
+/// Create an account: a username, a password typed twice, and a role.
+///
+/// ## The password never leaves this widget except downwards
+///
+/// It lives in a [TextEditingController] for the life of the dialog and is
+/// handed to [AccessAdminStore.createUser], which hands it to the repository,
+/// which derives the hash. It is never put into a provider, a field on the
+/// section, a `reason`, a log line or an audit row — `AuditRecord.userCreate`
+/// has no parameter that could carry it, which is the point of the constructor.
+///
+/// ## Nothing here renders an exception
+///
+/// `_showProblem` is right for the role change and the delete and wrong here,
+/// and the difference is the credential in hand. A failure goes to `Logger().e`
+/// with a fixed message and the screen shows [kAccessUserCreateFailedNote].
+/// There is no snackbar on this path at all.
+///
+/// ## The busy state is not the never-greyed rule
+///
+/// The confirming action is disabled **while a write is in flight**, and that
+/// is a different thing from greying a control because the session may not use
+/// it. The milestone's rule is about *refusing*: a permission refusal must be
+/// pressed and then explained, never hidden. This is about a second tap racing
+/// the first across a key derivation that takes the better part of a second at
+/// `Pbkdf2Kdf.defaultIterations`. `first_user.dart` draws the same distinction
+/// on the same grounds.
+class _CreateUserDialog extends StatefulWidget {
+  const _CreateUserDialog({
+    required this.store,
+    required this.taken,
+    required this.roles,
+  });
+
+  final AccessAdminStore store;
+
+  /// The usernames already in the loaded roster.
+  ///
+  /// The duplicate is refused **here**, before the store is called, and
+  /// compared **exactly**: `app_user.username` is a case-sensitive primary key,
+  /// so a dialog that refused a capitalisation of an existing name would be
+  /// refusing something the database would have accepted.
+  final Set<String> taken;
+
+  /// Every role the picker may offer, so it cannot offer one that is not there.
+  final List<AccessRole> roles;
+
+  @override
+  State<_CreateUserDialog> createState() => _CreateUserDialogState();
+}
+
+class _CreateUserDialogState extends State<_CreateUserDialog> {
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+
+  /// The role the new account will hold.
+  ///
+  /// Defaults to the **first** role the store returned rather than to anything
+  /// this file names. On a seeded database that is `Operator`, the narrowest
+  /// one there is, which is the right default for a control that hands out
+  /// privilege: widening it is a deliberate act by the person creating the
+  /// account.
+  late String? _role = widget.roles.isEmpty ? null : widget.roles.first.name;
+
+  /// What is wrong with what was typed, or null.
+  _CredentialProblem? _problem;
+
+  /// The name the duplicate sentence is about — the typed one for the
+  /// pre-check, the exception's for the race.
+  String _subject = '';
+
+  /// True while a `createUser` call is outstanding. See the class doc.
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _username.dispose();
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final username = _username.text.trim();
+    final password = _password.text;
+
+    // `first_user.dart`'s order, and its wording: three checks means three
+    // sentences the operator can act on.
+    if (username.isEmpty) {
+      setState(() => _problem = _CredentialProblem.blankUsername);
+      return;
+    }
+    if (password.isEmpty) {
+      setState(() => _problem = _CredentialProblem.blankPassword);
+      return;
+    }
+    if (password != _confirm.text) {
+      setState(() => _problem = _CredentialProblem.mismatch);
+      return;
+    }
+    if (widget.taken.contains(username)) {
+      setState(() {
+        _subject = username;
+        _problem = _CredentialProblem.duplicate;
+      });
+      return;
+    }
+    final role = _role;
+    if (role == null) {
+      setState(() => _problem = _CredentialProblem.noRole);
+      return;
+    }
+
+    setState(() {
+      _problem = null;
+      _submitting = true;
+    });
+
+    try {
+      await widget.store.createUser(
+        username: username,
+        password: password,
+        roleName: role,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on UserExistsException catch (taken) {
+      // The race the pre-check cannot win: another station inserted the name
+      // between the roster this dialog was given and this transaction. The
+      // dialog re-renders holding what was typed rather than closing.
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _subject = taken.username;
+        _problem = _CredentialProblem.duplicate;
+      });
+    } on AccessDenied {
+      // See the note at [_write]: the shared prompt naming the `users` group is
+      // already on screen. The dialog stays open, so signing in from there and
+      // pressing Create again is the intended flow.
+      if (mounted) setState(() => _submitting = false);
+    } on Object catch (thrown, stack) {
+      // The exception goes to the log, never to the screen — the library doc
+      // and `first_user.dart` both say why.
+      Logger().e('createUser failed', error: thrown, stackTrace: stack);
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _problem = _CredentialProblem.failed;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final problem = _problem;
+    return StandardDialogFrame(
+      title: kAccessUserCreateTitle,
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: 'Cancel',
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+        ),
+        PaneAction.primary(
+          label: kAccessUserCreateConfirmLabel,
+          buttonKey: kAccessUserCreateConfirmKey,
+          onPressed: _submitting ? null : _submit,
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _note(context, kAccessUserCreateNote),
+          const SizedBox(height: 12),
+          TextField(
+            key: kAccessUserUsernameFieldKey,
+            controller: _username,
+            autofocus: true,
+            enabled: !_submitting,
+            decoration: const InputDecoration(
+              labelText: 'Username',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: kAccessUserPasswordFieldKey,
+            controller: _password,
+            obscureText: true,
+            enabled: !_submitting,
+            decoration: const InputDecoration(
+              labelText: 'Password',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: kAccessUserConfirmFieldKey,
+            controller: _confirm,
+            obscureText: true,
+            enabled: !_submitting,
+            onSubmitted: _submitting ? null : (_) => _submit(),
+            decoration: const InputDecoration(
+              labelText: 'Confirm password',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (widget.roles.isEmpty)
+            _note(context, kAccessUserRoleDialogEmptyNote)
+          else
+            for (final role in widget.roles)
+              ListTile(
+                key: kAccessUserRoleChoiceKey(role.name),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                enabled: !_submitting,
+                selected: role.name == _role,
+                leading: Icon(
+                  role.name == _role
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                ),
+                title: Text(role.name),
+                subtitle: Text(kAccessUserRoleGrants(role.groups)),
+                onTap: () => setState(() => _role = role.name),
+              ),
+          if (problem != null) ...[
+            const SizedBox(height: 12),
+            _problemLine(
+              context,
+              problem,
+              subject: _subject,
+              failureNote: kAccessUserCreateFailedNote,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Reset an account's password: the new one, typed twice.
+///
+/// No username field and no current-password field. There is no verify-current
+/// flow to run and password self-service is out of scope for this milestone —
+/// 06-CONTEXT fixes this at "an admin types the new password directly", and
+/// there is no "force a change on next login" either, because there is nothing
+/// to force somebody into.
+///
+/// Every rule in [_CreateUserDialog]'s doc applies here unchanged: the password
+/// goes to the store and nowhere else, no exception is ever rendered, and the
+/// confirming action is disabled for the duration of the derivation rather than
+/// for lack of a permission.
+class _SetPasswordDialog extends StatefulWidget {
+  const _SetPasswordDialog({required this.username, required this.store});
+
+  final String username;
+  final AccessAdminStore store;
+
+  @override
+  State<_SetPasswordDialog> createState() => _SetPasswordDialogState();
+}
+
+class _SetPasswordDialogState extends State<_SetPasswordDialog> {
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+
+  _CredentialProblem? _problem;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final password = _password.text;
+
+    if (password.isEmpty) {
+      setState(() => _problem = _CredentialProblem.blankPassword);
+      return;
+    }
+    if (password != _confirm.text) {
+      setState(() => _problem = _CredentialProblem.mismatch);
+      return;
+    }
+
+    setState(() {
+      _problem = null;
+      _submitting = true;
+    });
+
+    try {
+      await widget.store.setUserPassword(widget.username, password);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on AccessDenied {
+      if (mounted) setState(() => _submitting = false);
+    } on Object catch (thrown, stack) {
+      // The exception goes to the log, never to the screen.
+      Logger().e('setUserPassword failed', error: thrown, stackTrace: stack);
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _problem = _CredentialProblem.failed;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final problem = _problem;
+    return StandardDialogFrame(
+      title: kAccessUserSetPasswordTitle(widget.username),
+      showClose: false,
+      actions: [
+        PaneAction(
+          label: 'Cancel',
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+        ),
+        PaneAction.primary(
+          label: kAccessUserSetPasswordConfirmLabel,
+          buttonKey: kAccessUserPasswordConfirmKey,
+          onPressed: _submitting ? null : _submit,
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _note(context, kAccessUserSetPasswordNote),
+          const SizedBox(height: 12),
+          TextField(
+            key: kAccessUserPasswordFieldKey,
+            controller: _password,
+            obscureText: true,
+            autofocus: true,
+            enabled: !_submitting,
+            decoration: const InputDecoration(
+              labelText: 'New password',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: kAccessUserConfirmFieldKey,
+            controller: _confirm,
+            obscureText: true,
+            enabled: !_submitting,
+            onSubmitted: _submitting ? null : (_) => _submit(),
+            decoration: const InputDecoration(
+              labelText: 'Confirm new password',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          if (problem != null) ...[
+            const SizedBox(height: 12),
+            _problemLine(
+              context,
+              problem,
+              subject: widget.username,
+              failureNote: kAccessUserSetPasswordFailedNote,
+            ),
+          ],
         ],
       ),
     );
