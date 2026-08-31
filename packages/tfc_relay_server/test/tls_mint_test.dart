@@ -23,6 +23,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:basic_utils/basic_utils.dart';
@@ -30,6 +31,8 @@ import 'package:pointycastle/asn1.dart';
 import 'package:test/test.dart';
 import 'package:tfc_relay_server/src/tls/mint.dart';
 import 'package:tfc_relay_server/tfc_relay_server.dart' as barrel;
+
+import 'support/certs.dart';
 
 /// `id-ce-keyUsage`, `id-ce-basicConstraints`, `id-ce-subjectAltName`,
 /// `id-ce-extKeyUsage` — spelled as the numbers a DER dump shows, because a
@@ -76,6 +79,50 @@ List<({int tag, Uint8List value})> _subjectAltNames(String pem) {
 /// The serial number as the certificate carries it.
 BigInt _serialOf(String pem) =>
     (_tbsOf(pem).elements![1] as ASN1Integer).integer!;
+
+/// The issuer distinguished name, rendered the way a DER dump renders it.
+String _issuerOf(String pem) {
+  final parsed = X509Utils.x509CertificateFromPem(pem);
+  return parsed.tbsCertificate!.issuer.values.join('/');
+}
+
+/// The repository root, found by walking up from wherever `dart test` was
+/// invoked. `.git` is a **file** inside a worktree and a directory in the main
+/// checkout, so both count — this repository's agents run in worktrees.
+Directory _repositoryRoot() {
+  var dir = Directory.current.absolute;
+  while (true) {
+    final isRoot = Directory('${dir.path}/packages').existsSync() &&
+        (Directory('${dir.path}/.git').existsSync() ||
+            File('${dir.path}/.git').existsSync());
+    if (isRoot) return dir;
+    final parent = dir.parent;
+    if (parent.path == dir.path) {
+      fail('no repository root above ${Directory.current.path} — this sweep '
+          'is scanning nothing and would pass on an empty answer');
+    }
+    dir = parent;
+  }
+}
+
+/// Every `.pem` committed anywhere under `packages/`, ignoring build output.
+List<String> _pemFilesInRepository() {
+  final found = <String>[];
+  void walk(Directory dir) {
+    for (final entry in dir.listSync(followLinks: false)) {
+      final name = entry.path.split(Platform.pathSeparator).last;
+      if (entry is Directory) {
+        if (name == '.dart_tool' || name == '.git' || name == 'build') continue;
+        walk(entry);
+      } else if (entry is File && name.endsWith('.pem')) {
+        found.add(entry.path);
+      }
+    }
+  }
+
+  walk(Directory('${_repositoryRoot().path}/packages'));
+  return found;
+}
 
 void main() {
   late RelayKeyPair caKeys;
@@ -264,6 +311,113 @@ void main() {
               'client-side fixtures against this same function rather than '
               "reaching into another package's src/");
       expect(barrel.generateKeyPair, isA<Function>());
+    });
+  });
+
+  // The fixture every later TLS plan mints from. It is tested here rather than
+  // trusted, because 06-03, 06-05, 06-07 and 06-09 all bind or dial against
+  // whatever it produces: a fixture that quietly mints a hostname-only leaf
+  // would make four plans' rejection arms pass for the wrong reason.
+  group('the certificate fixture', () {
+    test('certKeyPairs generates once and hands the same pair back', () {
+      final first = certKeyPairs();
+      final second = certKeyPairs();
+
+      expect(identical(first.ca, second.ca), isTrue,
+          reason: 'an RSA-2048 keypair costs 158-201 ms here and closer to a '
+              'second on the Windows runner; regenerating per case turns a '
+              'TLS suite into the slowest lane in CI');
+      expect(identical(first.leaf, second.leaf), isTrue);
+      expect(first.ca.privateKey.modulus, isNot(first.leaf.privateKey.modulus),
+          reason: 'the CA and the leaf must not share a key — a leaf holding '
+              'the signing key is the CA, whatever its basicConstraints say');
+    });
+
+    test('mintLeaf defaults to a hostname and an IP subject-alternative name',
+        () {
+      final sans = _subjectAltNames(mintLeaf(ca: mintCa()));
+
+      expect(sans.map((s) => s.tag), [0x82, 0x87],
+          reason: "06-07's proxy is dialled at 127.0.0.1:<proxy port>, so the "
+              'IP SAN in the default is load-bearing, not decoration — '
+              'without it every fault-harness leg fails the handshake instead '
+              'of the fault it was written for');
+      expect(sans.last.value, Uint8List.fromList([127, 0, 0, 1]));
+    });
+
+    test('a foreign CA signs a leaf no pinned client should accept', () {
+      final trusted = mintCa();
+      final foreign = mintForeignCa();
+      final foreignLeaf = mintLeaf(ca: foreign);
+
+      expect(_issuerOf(foreignLeaf), isNot(_issuerOf(mintLeaf(ca: trusted))),
+          reason: "the rejection arms in 06-03 and 06-05 prove a client "
+              'refuses a leaf from another authority; if the two roots were '
+              'the same authority those arms would pass while pinning was '
+              'switched off entirely');
+      expect(foreign.keyPem, isNot(trusted.keyPem),
+          reason: 'a foreign CA that shares the trusted key is not foreign');
+    });
+
+    test('a near-expiry leaf is a notAfter argument, not a second keygen', () {
+      final before = certKeyPairs();
+      final pem = mintLeaf(
+        ca: mintCa(),
+        notAfter: DateTime.now().toUtc().add(const Duration(days: 17)),
+      );
+
+      final notAfter =
+          X509Utils.x509CertificateFromPem(pem).tbsCertificate!.validity.notAfter;
+      expect(notAfter.difference(DateTime.now()).inDays, inInclusiveRange(16, 17),
+          reason: "SEC-04's 30-day alarm is verified against a certificate "
+              'like this one; a fixture that cannot express "expires soon" '
+              'means the alarm ships untested');
+      expect(identical(certKeyPairs().leaf, before.leaf), isTrue,
+          reason: 'expressing a different validity must not cost another '
+              'keypair — that is the whole reason the two are separate calls');
+    });
+
+    test('writeCertFixture releases its directory when the case ends', () {
+      var directory = '';
+      // Registered BEFORE the fixture on purpose: teardowns run last-in
+      // first-out, so this one runs *after* the recursive delete the fixture
+      // registers at acquisition. Registered after, it would run first and
+      // assert against a directory nobody had removed yet.
+      addTearDown(() {
+        expect(Directory(directory).existsSync(), isFalse,
+            reason: 'a fixture that leaves its temp directory behind leaks a '
+                'private key PEM onto the machine and, over a full suite, '
+                'enough descriptors to make an unrelated case fail');
+      });
+
+      final ca = mintCa();
+      final paths = writeCertFixture(
+        chainPem: mintLeaf(ca: ca),
+        keyPem: leafKeyPem(),
+        rootPem: ca.certPem,
+      );
+      directory = paths.directory;
+
+      expect(File(paths.chainPath).existsSync(), isTrue);
+      expect(File(paths.keyPath).existsSync(), isTrue);
+      expect(File(paths.rootPath!).existsSync(), isTrue);
+      expect(paths.directory.startsWith(_repositoryRoot().path), isFalse,
+          reason: 'fixtures are written to the system temp directory, not '
+              'into the checkout, so a crashed run cannot leave key material '
+              'where `git add` will find it');
+    });
+
+    test('the suite mints its own certificates and commits none', () {
+      // The fixture is exercised first so this is not a case that passes
+      // because nothing ever minted anything.
+      final ca = mintCa();
+      expect(mintLeaf(ca: ca), startsWith('-----BEGIN CERTIFICATE-----'));
+
+      expect(_pemFilesInRepository(), isEmpty,
+          reason: 'a committed certificate rots on a schedule nobody watches: '
+              'the day it expires, every relay test fails at the handshake '
+              'with an error indistinguishable from a wrong CA, and the fix '
+              'is a commit rather than a rerun');
     });
   });
 }
