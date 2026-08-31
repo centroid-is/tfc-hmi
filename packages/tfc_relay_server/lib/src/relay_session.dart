@@ -37,6 +37,7 @@ import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
 import 'policy/key_policy.dart';
+import 'policy/policy_state_man.dart';
 import 'server_config.dart';
 import 'session_handlers.dart';
 import 'subscription_registry.dart';
@@ -88,7 +89,7 @@ final class _LastSeen {
 final class RelaySession {
   RelaySession._(
     this.peer,
-    this.api,
+    this._source,
     this.config,
     this.handles,
     this.buffer,
@@ -280,9 +281,36 @@ final class RelaySession {
     return jsonEncode(sanitized.value);
   }
 
-  /// The source being served. Untouched by this plan's two methods; 03-05's
-  /// `subscribe` is the first handler that reads it.
-  final StateManApi api;
+  /// The shared source this gateway serves, **before** the policy.
+  ///
+  /// Private, and that privacy is the T-06-38 mitigation rather than style.
+  /// Everything inside this class reaches the plant through [api], which is
+  /// the policed view of this field; a handler added in Phase 10 therefore
+  /// cannot forget the policy consultation, because there is no unwrapped
+  /// source in scope for it to forget with. If this ever needs to become
+  /// public again, that is the property being given up.
+  final StateManApi _source;
+
+  /// The source being served, seen through this session's [policy].
+  ///
+  /// Every handler this session builds is handed *this*, never [_source]:
+  /// `SessionHandlers` and `ValueHandlers` both take it in [_start], so
+  /// `subscribe`, `read`, `readFresh`, `readMany`, `write` and `holdToRun` all
+  /// reach the plant through one object that knows which station is asking.
+  ///
+  /// `late` because the decorator reads the identity through a callback and
+  /// the field initializer runs on first use, which is inside [_start] — after
+  /// [policy] and [_source] are set and long before `_hello` mints anything.
+  /// Typed as the concrete decorator rather than as `StateManApi` so [_start]
+  /// can build the write predicate from its `canWrite`, which keeps the
+  /// null-identity decision in exactly one place.
+  late final PolicyStateMan api = PolicyStateMan(
+    source: _source,
+    policy: policy,
+    // Late-read, the `epochOf` / `ownerOf` idiom below: the identity is minted
+    // by `_hello`, which cannot have run when this object is built.
+    identityOf: () => _identity,
+  );
 
   /// The JSON-RPC endpoint. Exposed so a test can assert on its state.
   final rpc.Peer peer;
