@@ -26,7 +26,12 @@ import 'database.dart' show databaseProvider;
 import 'plc.dart' show plcCodeIndexProvider;
 import 'preferences.dart' show localPreferencesProvider, preferencesProvider;
 import 'proposal.dart' show describeProposalFeedback;
-import 'proposal_state.dart' show ProposalFeedback, proposalFeedbackProvider;
+import 'proposal_state.dart'
+    show
+        PendingProposal,
+        ProposalFeedback,
+        proposalFeedbackProvider,
+        proposalStateProvider;
 import 'state_man.dart';
 
 export '../mcp/mcp_bridge_notifier.dart'
@@ -271,6 +276,51 @@ final proposalFeedbackRelayProvider = Provider<void>((ref) {
   ref.onDispose(sub.cancel);
 });
 
+/// Stages the proposals a write tool produced, so the operator sees a banner.
+///
+/// A proposal is never stored anywhere: `create_alarm`, `propose_asset` and
+/// the rest hand one to [McpBridgeNotifier.proposalStream] and return. If
+/// nobody is listening on that stream the proposal is gone the instant it is
+/// made, while the tool still reports success to the client -- which is
+/// exactly what shipped builds did, because the only listener lived inside
+/// `chatLifecycleProvider`.
+///
+/// Deliberately NOT hung off `chatLifecycleProvider`, for the same reason as
+/// [proposalFeedbackRelayProvider] below it. That provider only runs when the
+/// in-app chat bubble is enabled, and every deployment build is compiled with
+/// `--dart-define=TFC_CHAT=false`; the case this path exists for is precisely
+/// the one where an external client proposes over HTTP and no in-app chat is
+/// involved. The inbound half and the outbound half of the same conversation
+/// with the operator now hang off the same thing: the MCP server's lifecycle.
+///
+/// When chat IS on -- development builds, where it defaults to on -- both
+/// listeners stage the same proposal from the same broadcast stream. That is
+/// harmless: [ProposalStateNotifier.addProposal] deduplicates on the proposal
+/// JSON, and both paths carry the stream's string through unchanged.
+final proposalIngestProvider = Provider<void>((ref) {
+  final bridge = ref.read(mcpBridgeProvider);
+
+  final sub = bridge.proposalStream.listen(
+    (String proposalJson) {
+      final proposal = PendingProposal.tryParse(proposalJson);
+      if (proposal == null) {
+        io.stderr.writeln(
+            'proposalIngestProvider: not a proposal, dropped: $proposalJson');
+        return;
+      }
+      try {
+        ref.read(proposalStateProvider.notifier).addProposal(proposal);
+      } catch (e) {
+        io.stderr.writeln('proposalIngestProvider: staging failed: $e');
+      }
+    },
+    onError: (Object e) {
+      io.stderr.writeln('proposalIngestProvider: proposalStream error: $e');
+    },
+  );
+  ref.onDispose(sub.cancel);
+});
+
 /// Manages the MCP SSE server lifecycle based on the enabled preference.
 ///
 /// When [mcpEnabledProvider] is true, starts the SSE server on the configured
@@ -280,10 +330,12 @@ final proposalFeedbackRelayProvider = Provider<void>((ref) {
 ///
 /// Also watches config preference changes for debounced server restart.
 final mcpServerLifecycleProvider = Provider<void>((ref) {
-  // Keep the decision return path alive for as long as the server is. It is
-  // mounted here rather than in main.dart so it cannot be forgotten: an MCP
-  // server whose clients never learn what the operator decided is the gap
-  // this exists to close.
+  // Keep both directions of the proposal conversation alive for as long as
+  // the server is. They are mounted here rather than in main.dart so they
+  // cannot be forgotten: a proposal nobody stages never reaches the
+  // operator's banner, and an MCP server whose clients never learn what the
+  // operator decided is the other half of the same gap.
+  ref.watch(proposalIngestProvider);
   ref.watch(proposalFeedbackRelayProvider);
 
   // Watch enabled state changes.
