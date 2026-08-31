@@ -55,6 +55,7 @@ import 'package:json_rpc_2/error_code.dart' as rpc_errors;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'error_codes.dart';
 import 'server_config.dart';
 import 'session_handlers.dart' show KeyRejectKinds;
 import 'write_outcome_log.dart';
@@ -72,8 +73,19 @@ final class ValueHandlers {
     required this.now,
     WriteOutcomeLog? outcomes,
     this.ownerOf,
+    this.canWriteKey = _anyKeyWritable,
   }) : outcomes =
             outcomes ?? WriteOutcomeLog(ttl: config.writeOutcomeTtl, now: now);
+
+  /// The default [canWriteKey]: every key is writable.
+  ///
+  /// Not "no policy configured" written as a null check, but the same
+  /// posture `PermissiveTokenValidator` takes and for the same reason — a
+  /// `ValueHandlers` built directly by a test (`surface_test.dart:146-163`
+  /// builds exactly that, as do the unit kits in `value_handlers_test.dart`)
+  /// must behave as it did before this argument existed. Production never
+  /// gets this: `RelaySession` always passes the session's own predicate.
+  static bool _anyKeyWritable(String key) => true;
 
   final StateManApi api;
   final ServerConfig config;
@@ -93,6 +105,22 @@ final class ValueHandlers {
   /// the session's `_start` and the session id is minted later, by `hello` —
   /// the same reason `SessionHandlers` reads its epoch through one.
   final String? Function()? ownerOf;
+
+  /// Whether the station this session speaks for may actuate a given key.
+  ///
+  /// A predicate rather than a policy object plus an identity, and read
+  /// **late** on every call — the [ownerOf] idiom exactly (`relay_session
+  /// .dart:576`), for the identical reason: these handlers are built during
+  /// the session's `_start` and the identity is minted afterwards, by
+  /// `_hello`. `RelaySession` supplies its `PolicyStateMan`'s own `canWrite`,
+  /// which is the same object every read surface is already served through,
+  /// so there is exactly one place that decides what a null identity means.
+  ///
+  /// It answers only about **writability**, never about visibility. A key the
+  /// station may not see is refused as nonexistent by the existence check
+  /// above this gate and never reaches it — see the comment at the call site,
+  /// which is where that ordering is load-bearing.
+  final bool Function(String key) canWriteKey;
 
   /// How many outcomes are being held. Read by the test that proves the log
   /// is bounded (T-04-06); nothing in production depends on it.
@@ -386,6 +414,43 @@ final class ValueHandlers {
     // deadman counter this gateway invented.
     if (!api.keys.contains(request.key)) {
       throw _refuseUnknownKey(Methods.write, request.key);
+    }
+    // **The authorization gate, and its two neighbours are both load-bearing**
+    // (06-08, SEC-03, T-06-35).
+    //
+    // **Below the existence check, and that ordering is the hiding rule.** A
+    // key this station may not *see* has already been filtered out of
+    // `api.keys` by the session's `PolicyStateMan`, so it was refused one line
+    // above as a tag this source does not serve — byte-identically to a tag
+    // that never existed — and it never reaches this question. Swap the two
+    // and a hidden key is answered `forbidden`, which says it exists: ask
+    // about a thousand names, keep the ones answered `forbidden` rather than
+    // `unknownKey`, and the plant's address space has been enumerated by a
+    // station that may not read a byte of it (T-06-37). The two refusals are
+    // two different facts — a typo to fix, versus a permission to obtain —
+    // and `policy_test.dart` asserts the codes differ.
+    //
+    // **Above the fingerprint, the idempotency window and the in-flight
+    // `_record`**, exactly like the unserved-tag refusal it follows, so
+    // `-32005` inherits what `INVALID_PARAMS` means everywhere on this ladder:
+    // definitively no effect, nothing sent, nothing remembered. A `writeStatus`
+    // about this cmd afterwards answers `not_received` and is entitled to. A
+    // gate a few lines lower would refuse just as loudly and leave a
+    // reconnecting panel told "unknown" about a setpoint that never moved.
+    //
+    // One check covers `holdToRun` too (ruling OQ5): that seam is reachable
+    // only through this method, so a `view` station's engage is refused before
+    // a handle is taken and before anything feeds a deadman counter.
+    if (!canWriteKey(request.key)) {
+      throw rpc.RpcException(
+          ServerErrorCodes.forbidden,
+          'this station may see "${request.key}" but may not actuate it. '
+          'Nothing was sent: no device was consulted and no outcome was '
+          'recorded, so this action definitively did not happen. Do not '
+          'retry — the session is fine and reading continues; what is missing '
+          'is a permission, and permissions change in the gateway\'s token '
+          'file rather than on the next attempt',
+          data: _substitute(Methods.write));
     }
     // The hold flag's vocabulary on the *write* path is exactly two values,
     // and this is a pre-plant refusal like the ones above it: raised before

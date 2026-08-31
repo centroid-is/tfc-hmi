@@ -50,11 +50,13 @@ library;
 import 'dart:async';
 import 'dart:mirrors';
 
+import 'package:json_rpc_2/error_code.dart' as rpc_error;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:tfc_relay_server/src/auth/identity.dart';
+import 'package:tfc_relay_server/src/error_codes.dart';
 import 'package:tfc_relay_server/src/policy/key_policy.dart';
 import 'package:tfc_relay_server/src/policy/policy_state_man.dart';
 import 'package:tfc_relay_server/src/relay_server.dart';
@@ -253,6 +255,107 @@ final class _Station {
 /// One decoded JSON object, cast where the wire hands back `Object?`.
 Map<String, Object?> _asMap(Object? raw) =>
     (raw! as Map).cast<String, Object?>();
+
+// ---------------------------------------------------------------------------
+// The six surfaces, as one comparable answer each.
+// ---------------------------------------------------------------------------
+
+/// One surface, and how to ask it about a tag.
+///
+/// A list rather than six hand-written comparisons, so that adding a surface
+/// in Phase 10 — `browse` is the obvious next one — is one entry here and the
+/// indistinguishability case covers it automatically. That is the "cannot rot"
+/// half of the property: a new way to ask about a tag is a new way to leak
+/// that it exists, and the check should not have to be remembered.
+typedef _Surface = ({
+  String name,
+  Future<Object?> Function(_Gateway gateway, _Station station, String key) ask,
+});
+
+const List<_Surface> _surfaces = [
+  (name: 'read', ask: _askRead),
+  (name: 'readFresh', ask: _askReadFresh),
+  (name: 'readMany', ask: _askReadMany),
+  (name: 'subscribe', ask: _askSubscribe),
+  (name: 'write', ask: _askWrite),
+  (name: 'keys', ask: _askKeys),
+];
+
+/// Whatever the gateway said, refusal or answer, in one comparable shape.
+///
+/// Both outcomes are captured rather than one being allowed to throw, because
+/// "one surface refused and the other answered" is precisely the difference
+/// the case is hunting and it should be *reported* rather than thrown out of
+/// the loop.
+Future<Object?> _outcome(
+    Future<Object?> Function() ask, String key) async {
+  try {
+    return _withoutKeyName({'answered': await ask()}, key);
+  } on rpc.RpcException catch (error) {
+    return _withoutKeyName({
+      'refused': {
+        'code': error.code,
+        'message': error.message,
+        'data': error.data,
+      },
+    }, key);
+  }
+}
+
+Future<Object?> _askRead(_Gateway gateway, _Station station, String key) =>
+    _outcome(() => station.request(Methods.read, params: {'key': key}), key);
+
+Future<Object?> _askReadFresh(_Gateway gateway, _Station station, String key) =>
+    _outcome(
+        () => station.request(Methods.readFresh, params: {'key': key}), key);
+
+Future<Object?> _askReadMany(_Gateway gateway, _Station station, String key) =>
+    _outcome(
+        () => station.request(Methods.readMany, params: {
+              'keys': [key]
+            }),
+        key);
+
+/// `subscribe`, minus the bookkeeping that is about the *subscription* rather
+/// than about the tag.
+///
+/// `sub` is the name the caller chose, `epoch` and `seq` belong to the
+/// session, and `generation` is a server-global counter that increments on
+/// every establishment — so two subscribes can never agree on it and none of
+/// the four is a statement about the key. What is left is exactly the part
+/// that carries existence: a key the gateway serves appears in `handles`,
+/// `meta` and `snapshot`; a key it does not appears in `rejected` and in none
+/// of the other three.
+Future<Object?> _askSubscribe(
+        _Gateway gateway, _Station station, String key) =>
+    _outcome(() async {
+      final answer = _asMap(await station.request(Methods.subscribe, params: {
+        'sub': 'probe-${DateTime.now().microsecondsSinceEpoch}',
+        'keys': [key],
+      }));
+      return {
+        'handles': answer['handles'],
+        'meta': answer['meta'],
+        'snapshot': answer['snapshot'],
+        'rejected': answer['rejected'],
+      };
+    }, key);
+
+Future<Object?> _askWrite(_Gateway gateway, _Station station, String key) =>
+    _outcome(
+        () => station.request(Methods.write,
+            params: {'cmd': newUlid(), 'key': key, 'value': 1450}),
+        key);
+
+/// The key list, read off the production decorator.
+///
+/// Not on the wire — the handler table is nine names and none of them returns
+/// a key list — so this one is asked of the object the gateway is actually
+/// serving through rather than over the socket. It is in the loop because it
+/// is the surface the other five inherit their answer from, and a
+/// regression here would show up as five failures with no obvious cause.
+Future<Object?> _askKeys(_Gateway gateway, _Station station, String key) async =>
+    {'present': gateway.served.keys.contains(key)};
 
 void main() {
   group('the shipped policy is trivial, and honestly named', () {
@@ -483,6 +586,179 @@ void main() {
       expect(_asMap(answer['value'])['v'], 1200,
           reason: 'the surviving station can still read. An open socket over '
               'a disposed source is the quieter half of the same failure');
+    });
+  });
+
+  group('a hidden key is a key that does not exist', () {
+    test('a hidden key is indistinguishable from a key that does not exist',
+        () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      gateway.plant.setValue(_key, 1200);
+      gateway.plant.setValue(_hidden, 900);
+      final station = await gateway.station();
+
+      for (final surface in _surfaces) {
+        final forHidden = await surface.ask(gateway, station, _hidden);
+        final forGhost = await surface.ask(gateway, station, _ghost);
+
+        expect(forHidden, equals(forGhost),
+            reason: '${surface.name} told a station apart. "$_hidden" is a tag '
+                'the policy hides and "$_ghost" is a tag that never existed, '
+                'and this surface answered them differently — so a station '
+                'that may not know the first one exists can find out by '
+                'asking, and by asking a thousand more it has the plant\'s '
+                'address space. That is the whole of what 06-CONTEXT decision '
+                '2 locks: hiding means "does not exist for you", not '
+                '"exists, but no". Compared structurally with only the tag '
+                'name normalized, so a later phase changing the nonexistent '
+                'shape has to change both answers rather than this literal');
+      }
+    });
+
+    test('the test policy really hides something', () async {
+      // **The anti-vacuity companion.** Without it the case above passes
+      // against a policy that hides nothing at all — both answers would be
+      // the nonexistent answer, because neither tag would be served. This is
+      // the same gateway and the same tag under the *shipped* policy, and it
+      // must be visible and readable there.
+      final gateway = await _Gateway.start();
+      gateway.plant.setValue(_hidden, 900);
+      final station = await gateway.station();
+
+      expect(gateway.served.keys, contains(_hidden),
+          reason: 'the tag the hiding case conceals is not servable in the '
+              'first place, so that case is comparing two nonexistent keys '
+              'and asserting nothing');
+
+      final answer =
+          _asMap(await station.request(Methods.read, params: {'key': _hidden}));
+      expect(_asMap(answer['value'])['v'], 900,
+          reason: 'and it must be *readable* under the shipped policy, not '
+              'merely listed. A tag present in keys but unreadable would let '
+              'the hiding case pass for the wrong reason too');
+      expect(answer.containsKey('rejected'), isFalse,
+          reason: 'a served tag carries no rejection map — the state the '
+              'hidden one is being compared against is a genuinely healthy '
+              'read');
+    });
+
+    test('a hidden key\'s write is not answered forbidden', () async {
+      final gateway = await _Gateway.start(policy: const _HidesTags({_hidden}));
+      gateway.plant.setValue(_hidden, 900);
+      final station = await gateway.station();
+
+      final error = await station.refusal(Methods.write,
+          params: {'cmd': newUlid(), 'key': _hidden, 'value': 1450},
+          what: 'a write naming a tag this station may not see');
+
+      expect(error.code, isNot(ServerErrorCodes.forbidden),
+          reason: 'the gateway answered -32005 forbidden for a hidden tag, '
+              'and forbidden means "this exists and you may not touch it". '
+              'That is the leak the whole hiding architecture exists to '
+              'close: it distinguishes a concealed tag from a misspelled one '
+              'in a single round trip. The two refusals must stay different '
+              'facts — a typo to fix versus a permission to obtain '
+              '(06-RESEARCH §E.7 rows 2 and 3)');
+      expect(error.code, rpc_error.INVALID_PARAMS,
+          reason: 'and it must be the nonexistent-key refusal exactly, not '
+              'merely something other than forbidden');
+      expect(error.message, contains('does not serve'),
+          reason: 'the sentence is _unknownKeyMessage\'s, read from the one '
+              'place all four surfaces read it from (06-04). A hidden tag and '
+              'a nonexistent one cannot be byte-identical if this refusal '
+              'writes its own');
+    });
+  });
+
+  group('a station that may not actuate is refused before the plant', () {
+    test('a view station\'s write is refused before the device layer',
+        () async {
+      final gateway = await _Gateway.start(identity: _display);
+      gateway.plant.setValue(_key, 1200);
+      final station = await gateway.station();
+
+      final cmd = newUlid();
+      final error = await station.refusal(Methods.write,
+          params: {'cmd': cmd, 'key': _key, 'value': 1450},
+          what: 'a write from a station whose role is view');
+
+      expect(error.code, ServerErrorCodes.forbidden,
+          reason: 'a visible tag this station may not actuate is -32005, and '
+              'the code has to be its own: the client behaves differently '
+              'about it than about anything else on this path. Do not retry, '
+              'the session is fine, keep reading — this action needs a '
+              'permission the station does not have. INVALID_PARAMS would say '
+              '"fix the request", and there is nothing wrong with the request');
+
+      // **Nothing was sent.**
+      expect(gateway.plant.upstreamWriteAttempts(cmd), 0,
+          reason: 'the refusal must be raised above api.write. A device '
+              'consulted before the refusal makes the whole gate a report '
+              'about a frame that already reached a contactor');
+      expect(gateway.plant.read(_key)?.value, 1200,
+          reason: 'and the tag still reads what it read before. This is the '
+              'one assertion an operator would recognise');
+
+      // **And nothing was remembered.** The gate sits above the in-flight
+      // pre-record, so a freshly minted ULID inside the window earns
+      // `not_received` — the only re-send-safe answer this gateway gives, and
+      // the honest one about an action that provably never happened.
+      final status = _asMap(await station
+          .request(Methods.writeStatus, params: {'cmds': [cmd]}));
+      expect(
+          WriteResult.fromJson(_asMap((status['results']! as List).single)),
+          isA<WriteNotReceived>(),
+          reason: 'writeStatus found something logged for a write that was '
+              'refused before the plant was touched, so the gate was placed '
+              'below the in-flight pre-record. The panel\'s reconnect '
+              're-query would then answer "unknown" about an action that '
+              'never happened, and an unknown on a setpoint is what makes an '
+              'operator press the button again');
+    });
+
+    test('a view station\'s hold-to-run engage is refused before the hold is '
+        'taken', () async {
+      final gateway = await _Gateway.start(identity: _display);
+      gateway.plant.setValue(_key, 0);
+      final station = await gateway.station();
+
+      final error = await station.refusal(Methods.write,
+          params: {'cmd': newUlid(), 'key': _key, 'value': 1, 'hold': true},
+          what: 'an engage from a station whose role is view');
+
+      expect(error.code, ServerErrorCodes.forbidden,
+          reason: 'one canWrite gates both write and holdToRun (ruling OQ5), '
+              'because the engage seam is reachable only through the write '
+              'path. A station that may not set a setpoint certainly may not '
+              'jog the machine by hand');
+      expect(gateway.plant.mintedCmds, isEmpty,
+          reason: 'the source was never asked for a handle: the gate is above '
+              'api.holdToRun, which is where "no device was consulted" stops '
+              'being a claim and becomes a fact');
+      expect(gateway.plant.read(_key)?.value, 0,
+          reason: 'nothing was put on the deadman tag');
+    });
+
+    test('an operate station\'s write is unchanged in every respect',
+        () async {
+      final gateway = await _Gateway.start();
+      gateway.plant.setValue(_key, 1200);
+      final station = await gateway.station();
+
+      final cmd = newUlid();
+      final answer = _asMap(await station.request(Methods.write,
+          params: {'cmd': cmd, 'key': _key, 'value': 1450}));
+
+      expect(WriteResult.fromJson(answer), isA<WriteApplied>(),
+          reason: 'the gate must cost a view station and nothing else. A '
+              'panel that stopped writing is a jog button that stopped '
+              'working, and PermissiveTokenValidator grants operate precisely '
+              'so every fixture in this workspace keeps writing through the '
+              'new gate');
+      expect(gateway.plant.upstreamWriteAttempts(cmd), 1,
+          reason: 'one press, one movement of the machine — the gate adds no '
+              'second attempt and swallows no first one');
+      expect(gateway.plant.read(_key)?.value, 1450);
     });
   });
 }

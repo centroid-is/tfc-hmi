@@ -615,6 +615,17 @@ final class RelaySession {
       // Minted by `hello`, which cannot have run yet — read through a callback
       // for the same reason the epoch is.
       ownerOf: () => _sessionId,
+      // The session's own policy view answers, so the null-identity decision
+      // lives in exactly one place (`policy_state_man.dart`'s `identityOf`)
+      // and the read surfaces and the write gate cannot drift apart about it.
+      //
+      // **`canWrite` alone, deliberately — not `canSee && canWrite`.** A key
+      // this station may not see is already gone from `api.keys` and is
+      // refused as nonexistent *above* this gate, so anding in visibility
+      // would be dead code in the good case and, if the two checks were ever
+      // reordered, would answer `forbidden` for a hidden key — the one answer
+      // that leaks the existence the hiding rule conceals.
+      canWriteKey: api.canWrite,
     );
     // Kept, unlike `handlers`, because this object owns state with a lifetime:
     // the hold-to-run map. `_teardown` has to be able to release it, and the
