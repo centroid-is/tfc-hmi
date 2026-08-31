@@ -36,6 +36,8 @@ import 'auth/identity.dart';
 import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
+import 'policy/key_policy.dart';
+import 'policy/policy_state_man.dart';
 import 'server_config.dart';
 import 'session_handlers.dart';
 import 'subscription_registry.dart';
@@ -87,11 +89,12 @@ final class _LastSeen {
 final class RelaySession {
   RelaySession._(
     this.peer,
-    this.api,
+    this._source,
     this.config,
     this.handles,
     this.buffer,
     this.validator,
+    this.policy,
     this._gate,
     this._lastSeen,
     this._now,
@@ -131,6 +134,7 @@ final class RelaySession {
     required HandleTable handles,
     required ConflatingSendBuffer buffer,
     TokenValidator validator = const PermissiveTokenValidator(),
+    KeyPolicy policy = const AllVisibleOperatorWrites(),
     List<String> serverSupported = const [protocolVersion],
     WriteOutcomeLog? writeOutcomes,
     int Function()? mintGeneration,
@@ -164,6 +168,7 @@ final class RelaySession {
       handles,
       buffer,
       validator,
+      policy,
       HelloGate(serverSupported: serverSupported),
       lastSeen,
       clock,
@@ -276,9 +281,36 @@ final class RelaySession {
     return jsonEncode(sanitized.value);
   }
 
-  /// The source being served. Untouched by this plan's two methods; 03-05's
-  /// `subscribe` is the first handler that reads it.
-  final StateManApi api;
+  /// The shared source this gateway serves, **before** the policy.
+  ///
+  /// Private, and that privacy is the T-06-38 mitigation rather than style.
+  /// Everything inside this class reaches the plant through [api], which is
+  /// the policed view of this field; a handler added in Phase 10 therefore
+  /// cannot forget the policy consultation, because there is no unwrapped
+  /// source in scope for it to forget with. If this ever needs to become
+  /// public again, that is the property being given up.
+  final StateManApi _source;
+
+  /// The source being served, seen through this session's [policy].
+  ///
+  /// Every handler this session builds is handed *this*, never [_source]:
+  /// `SessionHandlers` and `ValueHandlers` both take it in [_start], so
+  /// `subscribe`, `read`, `readFresh`, `readMany`, `write` and `holdToRun` all
+  /// reach the plant through one object that knows which station is asking.
+  ///
+  /// `late` because the decorator reads the identity through a callback and
+  /// the field initializer runs on first use, which is inside [_start] — after
+  /// [policy] and [_source] are set and long before `_hello` mints anything.
+  /// Typed as the concrete decorator rather than as `StateManApi` so [_start]
+  /// can build the write predicate from its `canWrite`, which keeps the
+  /// null-identity decision in exactly one place.
+  late final PolicyStateMan api = PolicyStateMan(
+    source: _source,
+    policy: policy,
+    // Late-read, the `epochOf` / `ownerOf` idiom below: the identity is minted
+    // by `_hello`, which cannot have run when this object is built.
+    identityOf: () => _identity,
+  );
 
   /// The JSON-RPC endpoint. Exposed so a test can assert on its state.
   final rpc.Peer peer;
@@ -307,6 +339,15 @@ final class RelaySession {
   final int Function()? _mintGeneration;
 
   final TokenValidator validator;
+
+  /// Which tags this session's station may see and actuate.
+  ///
+  /// Held here rather than reached for through the server, because the session
+  /// deliberately does not know what a server is (see this library's doc) —
+  /// the same reason [validator] is a field. What consults it is the
+  /// `PolicyStateMan` built in [_start]; nothing else in this class asks it a
+  /// question directly.
+  final KeyPolicy policy;
 
   final HelloGate _gate;
   final _LastSeen _lastSeen;
@@ -574,6 +615,17 @@ final class RelaySession {
       // Minted by `hello`, which cannot have run yet — read through a callback
       // for the same reason the epoch is.
       ownerOf: () => _sessionId,
+      // The session's own policy view answers, so the null-identity decision
+      // lives in exactly one place (`policy_state_man.dart`'s `identityOf`)
+      // and the read surfaces and the write gate cannot drift apart about it.
+      //
+      // **`canWrite` alone, deliberately — not `canSee && canWrite`.** A key
+      // this station may not see is already gone from `api.keys` and is
+      // refused as nonexistent *above* this gate, so anding in visibility
+      // would be dead code in the good case and, if the two checks were ever
+      // reordered, would answer `forbidden` for a hidden key — the one answer
+      // that leaks the existence the hiding rule conceals.
+      canWriteKey: api.canWrite,
     );
     // Kept, unlike `handlers`, because this object owns state with a lifetime:
     // the hold-to-run map. `_teardown` has to be able to release it, and the

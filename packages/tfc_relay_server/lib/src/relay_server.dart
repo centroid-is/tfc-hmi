@@ -40,6 +40,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'auth/file_token_validator.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
+import 'policy/key_policy.dart';
 import 'relay_session.dart';
 import 'server_config.dart';
 import 'session_sink.dart';
@@ -139,6 +140,7 @@ final class RelayServer {
     ServerConfig? config,
     HandleTable? handles,
     TokenValidator validator = permissiveDefault,
+    this.policy = const AllVisibleOperatorWrites(),
     this.serverSupported = const [protocolVersion],
     this.onError = reportToStderr,
     int Function()? now,
@@ -232,6 +234,21 @@ final class RelayServer {
 
   /// The validator [start] read out of [ServerConfig.auth], if there was one.
   TokenValidator? _loaded;
+
+  /// Which tags each station may see and actuate (SEC-03, CONTEXT decision 2).
+  ///
+  /// A construction argument in [validator]'s style, and for the same two
+  /// reasons: a deployment supplies its own, and the shipped default stays
+  /// legible in a config diff because it is named for what it does. Unlike
+  /// the validator there is no both-sources-of-truth refusal to make — a
+  /// policy has no `ServerConfig` counterpart, since 06-CONTEXT deliberately
+  /// does not define a pattern grammar this phase.
+  ///
+  /// Handed to every session, where a per-session `PolicyStateMan` wraps the
+  /// shared [api] with it. The wrapping is per session because the question is
+  /// per *identity* — [api] is one instance shared by every panel on this
+  /// gateway, which is the whole reason the policy cannot live inside it.
+  final KeyPolicy policy;
 
   /// The protocol versions this build can speak, newest last.
   final List<String> serverSupported;
@@ -464,6 +481,11 @@ final class RelayServer {
         handles: handles,
         buffer: buffer,
         validator: validator,
+        // Forwarded exactly as `validator` is, and read off `this` rather than
+        // captured for the same reason: one gateway, one policy, and a session
+        // built against something else would be a panel this server's
+        // configuration does not describe.
+        policy: policy,
         serverSupported: serverSupported,
         // One log for the whole gateway: a reconnecting panel is a new session
         // asking about a write the previous one issued.

@@ -15,6 +15,29 @@
 /// A code exists so the client can *behave differently*. Two failures that
 /// call for the same client behaviour share a code; a failure with no distinct
 /// response deserves no constant of its own.
+///
+/// ## What the write path's codes inherit, and why [ServerErrorCodes.forbidden]
+/// fits without an exception
+///
+/// On `write`, a JSON-RPC error means one specific thing —
+/// `write_result.dart:6-8` — **definitively no effect, safe to re-send**. It
+/// is not a third outcome beside applied/rejected/unknown; it is the statement
+/// that the operator's action never left the gateway. Every refusal on that
+/// ladder is therefore raised before the plant is touched: the non-finite
+/// guard, the shape checks, the unserved-tag refusal (06-04), the idempotency
+/// window's mismatch, the second-engage refusal.
+///
+/// [ServerErrorCodes.forbidden] joins that ladder and inherits the promise
+/// intact, which is the pleasing part: an unauthorized write is refused above
+/// `api.write`, above the in-flight `_record` and above the idempotency
+/// window, so nothing was sent to a machine and nothing was written into the
+/// outcome log. A later `writeStatus` about that command therefore answers
+/// `not_received` — the one re-send-safe verdict — rather than `unknown`, and
+/// it is *entitled* to, because the action provably never happened. A gate
+/// placed a few lines lower would still refuse and would still look correct,
+/// and the only visible symptom would be a reconnecting panel told "unknown"
+/// about a setpoint that never moved, which is the answer that makes an
+/// operator press the button a second time.
 library;
 
 abstract final class ServerErrorCodes {
@@ -43,6 +66,26 @@ abstract final class ServerErrorCodes {
   /// client that cannot tell "wrong version" from "wrong credential" retries
   /// the one case that can never succeed.
   static const versionMismatch = -32004;
+
+  /// The identity may **see** this tag but may not actuate it.
+  ///
+  /// Do not retry: the session is fine, reading continues, and nothing about
+  /// this request will get a different answer next time. What is missing is a
+  /// permission the station does not have — a `view` panel asked to write —
+  /// and obtaining it is an edit to the gateway's token file, not something a
+  /// client can wait out. Kept distinct from the envelope's −32602 for exactly
+  /// the reason at the top of this file: a client behaves differently. −32602
+  /// on this path says "the request was malformed, fix the call"; there is
+  /// nothing wrong with this call.
+  ///
+  /// **Never sent for a tag the identity may not see.** That case is
+  /// `INVALID_PARAMS` plus `KeyReject(unknownKey)` — byte-identical to a tag
+  /// that does not exist — because answering "forbidden" would tell the asker
+  /// the tag is real, which is the enumeration the hiding rule exists to
+  /// prevent (06-CONTEXT decision 2, T-06-37). The two refusals are two
+  /// different facts and the client acts on them differently: fix the tag
+  /// name, versus obtain the permission.
+  static const forbidden = -32005;
 
   /// The request's params were the wrong shape for the method. A client bug,
   /// deterministic: fix the call, do not retry it. Kept distinct from the
