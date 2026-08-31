@@ -43,6 +43,84 @@ class MissingRoleError extends Error {
   String toString() => 'MissingRoleError: there is no role named "$roleName".';
 }
 
+/// A role was not deleted because accounts still hold it.
+///
+/// **Deliberately not an `AccessDenied`**, for the reason `TemplateInUseException`
+/// gives at length: `AccessDenied` means "you may not", and is answered by
+/// signing in as somebody who may. This means "not until those accounts are
+/// moved", and an Engineering user holding every group gets it too — no sign-in
+/// resolves it. Rendering it through the shared locked prompt would send an
+/// operator to find somebody who cannot help either.
+///
+/// [holders] is what lets the roles screen list the accounts in the refusal
+/// instead of saying that something, somewhere, is in the way.
+class RoleInUseException implements Exception {
+  const RoleInUseException(this.roleName, this.holders);
+
+  /// The role that was not deleted.
+  final String roleName;
+
+  /// The usernames still holding it, sorted, read at the moment of the attempt.
+  ///
+  /// Sorted for the same reason `TemplateInUseException.boundKeys` is: an
+  /// unsorted list makes the dialog's text change between two reads of the same
+  /// state, and a message that moves reads as a message that is guessing.
+  final List<String> holders;
+
+  @override
+  String toString() => 'RoleInUseException: the role "$roleName" is still held '
+      'by ${holders.length} account(s): ${holders.join(', ')}. Move them to '
+      'another role first — deleting it would leave every one of them pointing '
+      'at a role that is no longer there.';
+}
+
+/// A change was refused because it would leave nobody able to manage roles and
+/// accounts.
+///
+/// The invariant is one sentence: **at least one account holds a role granting
+/// [AccessGroup.users]**. Four changes can break it — deleting the last holder,
+/// moving that holder to a role without `users`, unticking `users` from the
+/// only role that grants it, and deleting that role — and the last two never
+/// touch `app_user` at all. That is why the rule lives in one method here
+/// rather than on the two screens that call it: two copies of a rule is how one
+/// copy gets edited alone.
+///
+/// **There is no override.** No `force`, no `allowLockout`, no typed
+/// confirmation. The state this refuses has no recovery inside the application;
+/// the only way back is the documented break-glass in
+/// `docs/access-control-deployment.md` §4, which the message points at. A
+/// parameter that skipped this check would be that escape hatch under another
+/// name.
+///
+/// Like [RoleInUseException] it is not an `AccessDenied`: the account that hits
+/// it is, by definition, one that already holds `users`.
+class LastUsersHolderException implements Exception {
+  const LastUsersHolderException(this.roleName, this.holders);
+
+  /// The role that grants [holders] the `users` group.
+  ///
+  /// Single-valued rather than a list because a trip implies it: the change is
+  /// refused only when no account would hold `users` afterwards, and that can
+  /// happen only when every account that holds it today holds this one role.
+  final String roleName;
+
+  /// The accounts that would have been the last ones, sorted.
+  ///
+  /// Named rather than counted, because naming them makes the fix obvious: a
+  /// shift that can read who is left knows who to ask.
+  final List<String> holders;
+
+  @override
+  String toString() =>
+      'LastUsersHolderException: refused — this would leave no account able to '
+      'manage roles and users. "$roleName" is the only role granting the users '
+      'group, and ${holders.join(', ')} '
+      '${holders.length == 1 ? 'is the only account holding' : 'are the only accounts holding'}'
+      ' it. Grant users to another role, or move another account onto this one, '
+      'first. There is no override: recovery from a lockout is the break-glass '
+      'procedure in docs/access-control-deployment.md §4.';
+}
+
 /// The stored form of a password hash, for `AppUser.passwordHash`.
 ///
 /// Thin wrappers over [PasswordHash.encode] / [PasswordHash.tryDecode], which
@@ -69,6 +147,68 @@ String encodeStoredHash(PasswordHash hash) => hash.encode();
 /// crashing the login screen.
 PasswordHash? decodeStoredHash(String stored, {required String saltB64}) =>
     PasswordHash.tryDecode(stored, saltB64: saltB64);
+
+/// Which of the four writes a [_PendingChange] describes.
+enum _PendingChangeKind {
+  /// Trip route (a): the last account holding `users` is deleted.
+  userDeleted,
+
+  /// Trip route (b): that account is moved to a role without `users`.
+  userRoleChanged,
+
+  /// Trip route (c): `users` is unticked from the only role that grants it.
+  roleGroupsReplaced,
+
+  /// Trip route (d): that role is deleted.
+  roleDeleted,
+}
+
+/// One write, described before it happens, so
+/// [AccessRepository._requireAUsersHolderRemains] can apply it in Dart and look
+/// at the result.
+///
+/// One type with four named constructors rather than four boolean parameters on
+/// the guard. A call site cannot then express two changes at once — no write in
+/// this class deletes an account *and* replaces a role's groups, and a shape
+/// that can say it is a shape somebody eventually says it in.
+class _PendingChange {
+  const _PendingChange._(this.kind, {this.username, this.roleName, this.groups});
+
+  /// [username] is about to be deleted — trip route (a).
+  factory _PendingChange.userDeleted(String username) =>
+      _PendingChange._(_PendingChangeKind.userDeleted, username: username);
+
+  /// [username] is about to be moved onto [roleName] — trip route (b).
+  factory _PendingChange.userRoleChanged({
+    required String username,
+    required String roleName,
+  }) =>
+      _PendingChange._(
+        _PendingChangeKind.userRoleChanged,
+        username: username,
+        roleName: roleName,
+      );
+
+  /// [roleName]'s group set is about to become [groups] — trip route (c).
+  factory _PendingChange.roleGroupsReplaced({
+    required String roleName,
+    required Set<AccessGroup> groups,
+  }) =>
+      _PendingChange._(
+        _PendingChangeKind.roleGroupsReplaced,
+        roleName: roleName,
+        groups: groups,
+      );
+
+  /// [roleName] is about to be deleted — trip route (d).
+  factory _PendingChange.roleDeleted(String roleName) =>
+      _PendingChange._(_PendingChangeKind.roleDeleted, roleName: roleName);
+
+  final _PendingChangeKind kind;
+  final String? username;
+  final String? roleName;
+  final Set<AccessGroup>? groups;
+}
 
 /// Reads and writes for `app_role` and `app_user`.
 ///
@@ -164,6 +304,10 @@ class AccessRepository {
   ///
   /// `seeded` is left as it was on an update. It records where the row came
   /// from, and editing a seeded role does not make it stop having been seeded.
+  ///
+  /// An update runs [_requireAUsersHolderRemains] first, inside the same
+  /// transaction: unticking `users` from the only role that grants it locks the
+  /// plant out of the roles screen without touching `app_user` at all.
   Future<void> upsertRole(AccessRole role) async {
     final name = role.name.trim();
     if (name.isEmpty) {
@@ -182,6 +326,13 @@ class AccessRepository {
               ),
             );
       } else {
+        // The update arm only. Creating a role cannot remove a holder, so the
+        // insert above needs no guard; replacing a group set can drop `users`
+        // from the only role that grants it, which is trip route (c).
+        await _requireAUsersHolderRemains(_PendingChange.roleGroupsReplaced(
+          roleName: name,
+          groups: role.groups,
+        ));
         await (db.update(db.appRole)..where((t) => t.name.equals(name)))
             .write(AppRoleCompanion(groups: Value(role.encodeGroups())));
       }
@@ -194,11 +345,121 @@ class AccessRepository {
   /// and whitespace-tolerantly, via [isProtectedRoleName], so neither
   /// `operator` nor `' Operator '` slips past.
   ///
-  /// A role that a user still holds is refused by the foreign key rather than
-  /// orphaning the user, provided the connection has foreign keys enabled.
+  /// A role that accounts still hold is refused in application code, with the
+  /// holders named — [RoleInUseException] — and the check runs inside the
+  /// transaction that would otherwise perform the delete.
+  ///
+  /// It is **not** left to the foreign key. `app_user.role_name` does reference
+  /// `app_role.name`, but SQLite enforces that only on a connection whose
+  /// `foreign_keys` pragma is on. The pragma is per-connection, defaults off,
+  /// and in this repository it is issued in five test files and in no
+  /// production code anywhere. So on the SQLite demo backend the delete would
+  /// succeed and silently orphan the holder, whose `role_name` then resolves to
+  /// nothing. The header of `access_repository_test.dart` explains why the
+  /// pragma is enabled per test file; this comment exists because the sentence
+  /// it replaced claimed an enforcement this build does not have.
+  ///
+  /// Two checks run, in this order: [_requireAUsersHolderRemains] and then the
+  /// holders check. Deleting the only `users`-granting role that anybody holds
+  /// trips both, and the lockout refusal is the one the operator must be told
+  /// about — moving holders off a role is a fix they can perform, and a plant
+  /// with nobody able to manage roles has no fix inside the application at all.
   Future<void> deleteRole(String name) async {
     if (isProtectedRoleName(name)) throw ProtectedRoleError(name);
-    await (db.delete(db.appRole)..where((t) => t.name.equals(name))).go();
+    await db.transaction(() async {
+      await _requireAUsersHolderRemains(_PendingChange.roleDeleted(name));
+
+      final holders = await _holdersOf(name);
+      if (holders.isNotEmpty) throw RoleInUseException(name, holders);
+
+      await (db.delete(db.appRole)..where((t) => t.name.equals(name))).go();
+    });
+  }
+
+  /// The usernames holding [roleName], sorted.
+  ///
+  /// Read inside the transaction that is about to act on the role, so the list
+  /// a refusal names is the list the database held at the moment of the
+  /// attempt rather than a moment earlier.
+  Future<List<String>> _holdersOf(String roleName) async {
+    final rows = await (db.select(db.appUser)
+          ..where((t) => t.roleName.equals(roleName)))
+        .get();
+    return rows.map((r) => r.username).toList()..sort();
+  }
+
+  /// Refuse [change] when applying it would leave no account holding a role
+  /// that grants [AccessGroup.users].
+  ///
+  /// **Call this only from inside a `db.transaction` callback**, immediately
+  /// before the write it describes. Checking beforehand is a check-then-act
+  /// race, exactly as it is for the first-user window — see [createFirstUser],
+  /// which argues it at length for the same reason. A rule with a race in it is
+  /// a rule that occasionally does not apply, and this is the rule whose
+  /// failure has no recovery inside the application.
+  ///
+  /// There is one of these methods and every write that could remove a holder
+  /// calls it: [deleteRole], [upsertRole]'s update arm, [deleteUser] and
+  /// [setRole]. Two copies of this rule is how one copy gets edited alone.
+  ///
+  /// The invariant is computed in Dart, not in SQL. "A role granting `users`"
+  /// is `AccessRole.decodeGroups(row.groups).contains(AccessGroup.users)` over
+  /// a JSON TEXT column; [anonymousGroups] reads a role row and decodes it in
+  /// Dart for the same reason. There are a handful of role rows and this is not
+  /// a performance question.
+  ///
+  /// A user row whose `role_name` names no existing role holds nothing. With
+  /// the `foreign_keys` pragma off — which is every connection outside the
+  /// tests — that state is reachable, and it must read as "holds nothing"
+  /// rather than as an exception.
+  ///
+  /// The guard refuses changes that *take away* the last holder. When there is
+  /// no holder to begin with there is nothing to preserve and it stands aside:
+  /// a freshly seeded station has roles but no accounts, its recovery is the
+  /// first-user window, and a guard that fired there would make a station
+  /// unconfigurable out of the box.
+  Future<void> _requireAUsersHolderRemains(_PendingChange change) async {
+    final roleRows = await db.select(db.appRole).get();
+    final userRows = await db.select(db.appUser).get();
+
+    final granting = <String>{
+      for (final r in roleRows)
+        if (AccessRole.decodeGroups(r.groups).contains(AccessGroup.users))
+          r.name,
+    };
+    final roleOf = <String, String>{
+      for (final u in userRows) u.username: u.roleName,
+    };
+
+    final holdersNow = roleOf.entries
+        .where((e) => granting.contains(e.value))
+        .map((e) => e.key)
+        .toList()
+      ..sort();
+    if (holdersNow.isEmpty) return;
+
+    final grantingAfter = {...granting};
+    switch (change.kind) {
+      case _PendingChangeKind.userDeleted:
+        roleOf.remove(change.username);
+      case _PendingChangeKind.userRoleChanged:
+        roleOf[change.username!] = change.roleName!;
+      case _PendingChangeKind.roleGroupsReplaced:
+        if (change.groups!.contains(AccessGroup.users)) {
+          grantingAfter.add(change.roleName!);
+        } else {
+          grantingAfter.remove(change.roleName!);
+        }
+      case _PendingChangeKind.roleDeleted:
+        grantingAfter.remove(change.roleName!);
+    }
+
+    if (roleOf.values.any(grantingAfter.contains)) return;
+
+    // Every holder holds the same role whenever this fires: the change is
+    // refused only when nobody holds `users` afterwards, which cannot happen
+    // while a second `users`-granting role still has somebody on it.
+    throw LastUsersHolderException(roleOf[holdersNow.first]!, holdersNow);
   }
 
   /// Rename the role [from] to [to], carrying its users with it.
