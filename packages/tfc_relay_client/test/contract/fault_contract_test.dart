@@ -86,6 +86,7 @@ import 'package:tfc_stateman_contract/tfc_stateman_contract.dart';
 
 import '../support/client_harness.dart';
 import '../support/fault_fixture.dart';
+import '../support/gate_bands.dart';
 
 // ---------------------------------------------------------------------------
 // The suite, through the proxy.
@@ -205,32 +206,9 @@ StateManApi _proxiedServedFake({
 // The named scenarios.
 // ---------------------------------------------------------------------------
 
-/// The key every scenario case drives. Seeded before the gateway starts, so it
-/// is in the address space by the time the client subscribes.
-const _key = 'ST101.CN01.MOT01.setpoint';
-
-/// How far either side of an expected instant a real event may land.
-///
-/// STATE's Phase 2 handoff bands, and `bands.dart` in the server package is the
-/// same two numbers with the same argument: the Linux leg is a quiet dedicated
-/// runner, the hosted macOS and Windows ones are neither, and tens of
-/// milliseconds of event-loop jitter there is ordinary.
-final Duration _slack = Platform.isLinux
-    ? const Duration(milliseconds: 20)
-    : const Duration(milliseconds: 75);
-
-/// The budget for "the panel came back", named once and used everywhere.
-///
-/// A liveness budget rather than a latency measurement: it has to cover a
-/// capped backoff draw, a dial, a handshake and a snapshot.
-const Duration _recovery = Duration(seconds: 5);
-
-/// Long enough for anything the gateway was going to send to have arrived, on a
-/// tick configured at `ServerConfig.minTick`.
-///
-/// Used only where the property is that *nothing* happened, which is the one
-/// shape a poll cannot establish.
-const Duration _settle = Duration(milliseconds: 400);
+// The scenario cases' timing vocabulary — `scenarioKey`, `slack`, `recovery`,
+// `settle` and the F13 pair — now lives in `../support/gate_bands.dart`, so the
+// gate files and this leg cannot drift apart about what "on time" means.
 
 // **A recovery arm ends its outage with a kill, never by lifting a
 // blackhole.** Measured, not preferred.
@@ -251,14 +229,6 @@ const Duration _settle = Duration(milliseconds: 400);
 // The blackhole survives in exactly one place, the `not_received` arm, where
 // swallowing the outbound frame *is* the fault being injected; that arm
 // restores forwarding before it cuts.
-
-/// The one-way delay F13 imposes. A round trip therefore costs twice this.
-const Duration _f13Latency = Duration(milliseconds: 100);
-
-/// The control deadline F13's client is given: comfortably above the round trip
-/// the case imposes, which is the whole point — a link that is merely slow must
-/// not read as a link that is gone.
-const Duration _f13Deadline = Duration(milliseconds: 1500);
 
 void main() {
   var ran = 0;
@@ -339,15 +309,15 @@ void main() {
     test('F1: a clean drop mid-subscription reconnects, resyncs, and delivers '
         'what changed while it was down', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
       // Anti-vacuity: the page has to have been live before the drop, or
       // "it came back" is a statement about a client that never worked.
-      expect(fixture.client.read(_key)?.value, 1200,
+      expect(fixture.client.read(scenarioKey)?.value, 1200,
           reason: 'the subscription was not carrying the seeded value before '
               'the link was cut, so nothing below is about a recovery');
       final dialsBefore = fixture.seam.dials;
@@ -359,12 +329,12 @@ void main() {
       // Changed while the link is down, which is F8's half of F1 and the only
       // reason the recovery assertion is not vacuous: a client that resynced
       // and re-delivered the *old* value would look identical without it.
-      fixture.served.setValue(_key, 1500);
+      fixture.served.setValue(scenarioKey, 1500);
 
       await until(
           'the resync to deliver the value that changed during the outage',
-          () => fixture.client.read(_key)?.value == 1500,
-          budget: _recovery);
+          () => fixture.client.read(scenarioKey)?.value == 1500,
+          budget: recovery);
 
       expect(fixture.seam.dials, greaterThan(dialsBefore),
           reason: 'the value arrived without a second dial, so the link was '
@@ -378,7 +348,7 @@ void main() {
     test('F4: a link that withholds answers degrades honestly — nothing is '
         'aged into looking current', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
         config: faultClientConfig(control: const Duration(milliseconds: 400)),
         // Stamped, unlike the other cases' seeds: the gateway puts `t` on the
@@ -387,10 +357,10 @@ void main() {
         // cached reading rather than its value. A real PLC reading always
         // carries one.
         seed: (plant) =>
-            plant.setValue(_key, 1200, sourceTime: DateTime.now().toUtc()),
+            plant.setValue(scenarioKey, 1200, sourceTime: DateTime.now().toUtc()),
       );
       await until('the link', () => fixture.client.isReady);
-      final held = fixture.client.read(_key);
+      final held = fixture.client.read(scenarioKey);
       expect(held?.sourceTime, isNotNull,
           reason: 'the cached reading carries no source time, so the '
               'assertion below that its age did not move is comparing two '
@@ -404,7 +374,7 @@ void main() {
       final started = DateTime.now();
       Object? failure;
       await fixture.client
-          .readFresh(_key)
+          .readFresh(scenarioKey)
           .then<void>((_) {}, onError: (Object error) => failure = error);
       final took = DateTime.now().difference(started);
 
@@ -414,19 +384,19 @@ void main() {
               'one thing it must never do is quietly answer from the cache, '
               'because then a panel behind a withheld link shows an operator a '
               'reading it has no current evidence for');
-      expect(took, greaterThan(const Duration(milliseconds: 400) - _slack),
+      expect(took, greaterThan(const Duration(milliseconds: 400) - slack),
           reason: 'the call failed in ${took.inMilliseconds} ms, well inside '
               'its own deadline, so something other than the deadline ended '
               'it and the withhold is not what this measured');
-      expect(took, lessThan(const Duration(milliseconds: 400) + _recovery),
+      expect(took, lessThan(const Duration(milliseconds: 400) + recovery),
           reason: 'the deadline did not bound the call: a request that '
               'outlives its deadline is the spinner the deadline exists to '
               'prevent');
 
-      expect(fixture.client.read(_key)?.value, held?.value,
+      expect(fixture.client.read(scenarioKey)?.value, held?.value,
           reason: 'the cached value moved while nothing was arriving, which '
               'means it came from somewhere other than the gateway');
-      expect(fixture.client.read(_key)?.sourceTime, held?.sourceTime,
+      expect(fixture.client.read(scenarioKey)?.sourceTime, held?.sourceTime,
           reason: 'the cached reading\'s source time advanced during an outage '
               'in which no frame arrived. That is the product\'s one '
               'unforgivable failure: a value that ages itself into looking '
@@ -435,22 +405,22 @@ void main() {
       // And the fault is survivable: releasing the direction brings the client
       // back without a reconnect, because the socket never went away.
       fixture.proxy.bufferServerToClient = false;
-      fixture.served.setValue(_key, 1500);
+      fixture.served.setValue(scenarioKey, 1500);
       await until('the value after the withhold was released',
-          () => fixture.client.read(_key)?.value == 1500,
-          budget: _recovery);
+          () => fixture.client.read(scenarioKey)?.value == 1500,
+          budget: recovery);
     });
 
     test('F5: a total half-open resolves a write as unknown rather than '
         'refused, and the link recovers', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
         config: faultClientConfig(write: const Duration(milliseconds: 400)),
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
-      expect(fixture.client.read(_key)?.value, 1200,
+      expect(fixture.client.read(scenarioKey)?.value, 1200,
           reason: 'the page was not live before the blackhole, so the '
               'recovery arm at the end is about nothing');
 
@@ -458,7 +428,7 @@ void main() {
       // project is built against, and the one no `onDone` will ever report.
       fixture.proxy.blackhole();
 
-      final outcome = await fixture.client.write(_key, 1500).timeout(_recovery);
+      final outcome = await fixture.client.write(scenarioKey, 1500).timeout(recovery);
 
       expect(outcome, isA<WriteUnknown>(),
           reason: 'the write came back $outcome. Nobody knows whether the '
@@ -480,10 +450,10 @@ void main() {
               'outcome nobody will ever establish');
 
       fixture.proxy.blackhole(enabled: false);
-      fixture.served.setValue(_key, 1500);
+      fixture.served.setValue(scenarioKey, 1500);
       await until('the link recovering after the blackhole lifted',
-          () => fixture.client.read(_key)?.value == 1500,
-          budget: _recovery);
+          () => fixture.client.read(scenarioKey)?.value == 1500,
+          budget: recovery);
     });
 
     test('F5: a half-open link stops reading ready, and says so', () async {
@@ -493,10 +463,10 @@ void main() {
       // LinkState.ready, isReady true, Quality.good, and no observable of any
       // kind for as long as the panel stayed on.
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
         config: faultClientConfig(freshness: const Duration(milliseconds: 500)),
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
       expect(fixture.client.viewIsStale, isFalse,
@@ -511,13 +481,13 @@ void main() {
 
       await until('the view to be reported stale',
           () => fixture.client.viewIsStale,
-          budget: _recovery);
+          budget: recovery);
       expect(transitions, contains(true),
           reason: 'the freshness stream never emitted, so nothing above this '
               'client could render the staleness it had detected');
       await until('the link to stop reading ready',
           () => !fixture.client.isReady,
-          budget: _recovery);
+          budget: recovery);
       expect(fixture.client.linkState, isNot(LinkState.ready),
           reason: 'a socket that has said nothing for a whole freshness '
               'deadline is one this client must stop believing in; leaving it '
@@ -528,20 +498,20 @@ void main() {
       // safe: the reconnect loop is the same one every other kind of drop uses.
       fixture.proxy.blackhole(enabled: false);
       await until('the reconnect', () => fixture.client.isReady,
-          budget: _recovery);
+          budget: recovery);
       expect(fixture.client.viewIsStale, isFalse);
-      fixture.served.setValue(_key, 1500);
+      fixture.served.setValue(scenarioKey, 1500);
       await until('values flowing again',
-          () => fixture.client.read(_key)?.value == 1500,
-          budget: _recovery);
+          () => fixture.client.read(scenarioKey)?.value == 1500,
+          budget: recovery);
     });
 
     test('F6/F7: the link dies with a write in flight — unknown, held, and '
         'never re-actuated', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
@@ -549,10 +519,10 @@ void main() {
       // out, rather than before it left or after it came back — the ordering
       // `dropUpstreamUnderAWriteInFlight` exists to get right on the other leg.
       fixture.served.stallWrites();
-      final pending = fixture.client.write(_key, 1500);
+      final pending = fixture.client.write(scenarioKey, 1500);
       await until('the write to reach the plant',
           () => fixture.served.writesInFlight > 0,
-          budget: _recovery);
+          budget: recovery);
       expect(fixture.served.writesInFlight, greaterThan(0),
           reason: 'nothing was parked at the plant, so the cut below would '
               'have hit an idle link and the case would be F1 wearing F6\'s '
@@ -560,7 +530,7 @@ void main() {
 
       fixture.proxy.killOnce();
 
-      final outcome = await pending.timeout(_recovery);
+      final outcome = await pending.timeout(recovery);
       expect(outcome, isA<WriteUnknown>(),
           reason: 'the write came back $outcome. It was out on the wire when '
               'the link died: the device may have taken it, and the only '
@@ -577,7 +547,7 @@ void main() {
       // The recovery asks; it does not re-actuate.
       await until('the writeStatus re-query after the reconnect',
           () => fixture.client.debugWriteStatusQueries.isNotEmpty,
-          budget: _recovery);
+          budget: recovery);
       expect(fixture.client.debugWriteStatusQueries.first, contains(outcome.cmd),
           reason: 'the re-query went out without asking about the one command '
               'whose fate is unknown');
@@ -594,7 +564,7 @@ void main() {
       // it is safe to press the button again.
       await until('the re-query to be answered',
           () => fixture.client.debugWriteStatusAnswers.isNotEmpty,
-          budget: _recovery);
+          budget: recovery);
       final answered = fixture.client.debugWriteStatusAnswers
           .firstWhere((result) => result.cmd == outcome.cmd,
               orElse: () => fail('the re-query came back with no answer about '
@@ -628,9 +598,9 @@ void main() {
       // walked out to look at the machine and came back is told what
       // happened. Nothing drove that path before this arm.
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
@@ -647,10 +617,10 @@ void main() {
       // Stalled at the plant, so the cut lands with the write genuinely
       // upstream rather than before it left.
       fixture.served.stallWrites();
-      final pending = fixture.client.write(_key, 1500);
+      final pending = fixture.client.write(scenarioKey, 1500);
       await until('the write to reach the plant',
           () => fixture.served.writesInFlight > 0,
-          budget: _recovery);
+          budget: recovery);
 
       // `killOnce`, the same lever the case above uses, and **not** a
       // blackhole. Driven at a blackhole this arm wedged the reconnect for
@@ -659,7 +629,7 @@ void main() {
       // replacement session tries to establish. The kill is the fault this arm
       // is about anyway, and it is the one the rest of this file is built on.
       fixture.proxy.killOnce();
-      final outcome = await pending.timeout(_recovery);
+      final outcome = await pending.timeout(recovery);
       expect(outcome, isA<WriteUnknown>(),
           reason: 'the write came back $outcome with the link cut under it; '
               'nobody could know yet');
@@ -674,7 +644,7 @@ void main() {
       // machine" rather than "never received".
       await until('the first re-query after the reconnect to be answered',
           () => answersAbout(outcome.cmd).isNotEmpty,
-          budget: _recovery);
+          budget: recovery);
       expect(answersAbout(outcome.cmd).first, isA<WriteUnknown>(),
           reason: 'the first answer was '
               '${answersAbout(outcome.cmd).first}, not unknown — the write is '
@@ -684,7 +654,7 @@ void main() {
       expect(resolved.where((result) => result.cmd == outcome.cmd), isEmpty,
           reason: 'an unknown answer settles nothing and must not be announced '
               'to the operator as a resolution');
-      expect(fixture.client.read(_key)?.value, isNot(1500),
+      expect(fixture.client.read(scenarioKey)?.value, isNot(1500),
           reason: 'the client already shows the new value, so the plant took '
               'the write before this case released it and the resolution '
               'below is a subscription update wearing a re-query\'s clothes');
@@ -693,7 +663,7 @@ void main() {
       fixture.served.releaseWrites();
       await until('the plant to take the write',
           () => fixture.served.writesInFlight == 0,
-          budget: _recovery);
+          budget: recovery);
 
       // The next entry to `ready` is what asks again — the re-query goes out
       // there and nowhere else. Counted rather than watched for `isReady`
@@ -703,7 +673,7 @@ void main() {
       await until(
           'the re-query that goes out after the write had landed',
           () => answersAbout(outcome.cmd).length > answersBefore,
-          budget: _recovery);
+          budget: recovery);
 
       final answered = answersAbout(outcome.cmd).last;
       expect(answered, isA<WriteApplied>(),
@@ -720,7 +690,7 @@ void main() {
       // isolate `_adoptReadback` from the resync — the same shape 04-REVIEW
       // WR-01 recorded rather than pretended away. What it does isolate is
       // everything below: one emission, and the command settled.
-      expect(fixture.client.read(_key)?.value, 1500,
+      expect(fixture.client.read(scenarioKey)?.value, 1500,
           reason: 'the resolution never reached the store, so the mimic still '
               'shows the setpoint the operator typed over');
       expect(resolved.where((result) => result.cmd == outcome.cmd), hasLength(1),
@@ -747,9 +717,9 @@ void main() {
       // one verdict the re-send-safe getter is true for, which makes this the
       // arm where being wrong sends an operator back to a button.
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
@@ -769,7 +739,7 @@ void main() {
       // before it will say "never received" (`value_handlers.dart`,
       // `_statusOf`). Forgetting is not evidence.
       fixture.proxy.blackhole();
-      final outcome = await fixture.client.write(_key, 1500).timeout(_recovery);
+      final outcome = await fixture.client.write(scenarioKey, 1500).timeout(recovery);
 
       expect(outcome, isA<WriteUnknown>(),
           reason: 'the write came back $outcome into a swallowed link');
@@ -797,7 +767,7 @@ void main() {
           'the re-query to come back with an answer about ${outcome.cmd}',
           () => fixture.client.debugWriteStatusAnswers
               .any((result) => result.cmd == outcome.cmd),
-          budget: _recovery);
+          budget: recovery);
 
       final answered = fixture.client.debugWriteStatusAnswers
           .firstWhere((result) => result.cmd == outcome.cmd);
@@ -836,16 +806,16 @@ void main() {
       // means definitively no effect — because a refusal that might have
       // actuated is a button an operator presses twice.
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
       final cmd = newUlid();
       final first = await fixture.client
-          .write(_key, 1500, cmd: cmd)
-          .timeout(_recovery);
+          .write(scenarioKey, 1500, cmd: cmd)
+          .timeout(recovery);
       expect(first, isA<WriteApplied>(),
           reason: 'the first write under this id came back $first, so the '
               'collision below would be a collision with nothing');
@@ -858,8 +828,8 @@ void main() {
       // one action id, which 05-03 deliberately keeps a refusal rather than
       // folding into the replay window (D-P5-B).
       final second = await fixture.client
-          .write(_key, 1600, cmd: cmd)
-          .timeout(_recovery);
+          .write(scenarioKey, 1600, cmd: cmd)
+          .timeout(recovery);
 
       expect(second, isA<WriteRejected>(),
           reason: 'a duplicate-id collision came back as $second. Rejected is '
@@ -885,7 +855,7 @@ void main() {
               'INVALID_PARAMS on the write path does not mean "no effect" — '
               'and every refusal this client has ever reported as definitive '
               'stops being one');
-      expect(fixture.served.read(_key)?.value, 1500,
+      expect(fixture.served.read(scenarioKey)?.value, 1500,
           reason: 'the tag carries the refused value, so the second write '
               'reached the device after all');
       expect(fixture.client.debugWritesSent, 2,
@@ -900,38 +870,38 @@ void main() {
 
     test('F13: a slow link is slow, not down', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        config: faultClientConfig(control: _f13Deadline, write: _f13Deadline),
-        seed: (plant) => plant.setValue(_key, 1200),
+        config: faultClientConfig(control: f13Deadline, write: f13Deadline),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
       final dialsBefore = fixture.seam.dials;
 
       // Live: it reaches the connection that is already open, which is the
       // only shape "the link degrades while the panel is connected" comes in.
-      fixture.proxy.latency = _f13Latency;
+      fixture.proxy.latency = f13Latency;
 
       final started = DateTime.now();
-      final value = await fixture.client.readFresh(_key).timeout(_recovery);
+      final value = await fixture.client.readFresh(scenarioKey).timeout(recovery);
       final took = DateTime.now().difference(started);
 
       expect(value.quality, Quality.good,
           reason: 'a slow answer is still an answer; degrading its quality '
               'because it took 200 ms would grey a healthy plant');
-      expect(took, greaterThan(_f13Latency * 2 - _slack),
+      expect(took, greaterThan(f13Latency * 2 - slack),
           reason: 'the round trip took ${took.inMilliseconds} ms, less than '
               'the two one-way delays the proxy was told to impose. The lever '
               'did not reach the open connection, so this case is measuring an '
               'ordinary link');
-      expect(took, lessThan(_f13Deadline),
+      expect(took, lessThan(f13Deadline),
           reason: 'a round trip of ${took.inMilliseconds} ms exceeded the '
               'deadline it was given. That is not a fault report, it is a '
               'false one: the gateway answered');
 
       // And no false disconnect over a window. Instants are useless here —
       // the whole point is that nothing happens for a while.
-      await Future<void>.delayed(_settle);
+      await Future<void>.delayed(settle);
       expect(fixture.seam.dials, dialsBefore,
           reason: 'the client redialled during a link that was merely slow. A '
               'panel that reconnects on latency turns a congested switch into '
@@ -944,9 +914,9 @@ void main() {
     test('F18: a stale frame from a stream that has moved on is discarded, '
         'never applied', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
@@ -956,9 +926,9 @@ void main() {
       // — one character on purpose, it is the hot path — so the marker comes
       // from the constant rather than from the word "update", which appears
       // nowhere on the wire.
-      fixture.served.setValue(_key, 1300);
+      fixture.served.setValue(scenarioKey, 1300);
       await until('an update frame carrying the older value',
-          () => fixture.client.read(_key)?.value == 1300);
+          () => fixture.client.read(scenarioKey)?.value == 1300);
       final staleFrame = fixture.seam.lastMatching(
           (message) => message.contains('"method":"${Methods.update}"'));
       expect(staleFrame, isNotNull,
@@ -966,18 +936,18 @@ void main() {
               'deliver nothing and this case would pass by doing nothing');
 
       // The stream moves on, so the captured frame is now genuinely behind it.
-      fixture.served.setValue(_key, 1500);
+      fixture.served.setValue(scenarioKey, 1500);
       await until('the current value',
-          () => fixture.client.read(_key)?.value == 1500);
+          () => fixture.client.read(scenarioKey)?.value == 1500);
 
       // Re-delivered: the framing bug, the store-and-forward peer, the
       // reconnect that replayed a queue. Injected rather than provoked because
       // TCP does not duplicate frames on its own — the only way to drive this
       // against a real client is to be the peer that sends it.
       fixture.seam.inject(staleFrame!);
-      await Future<void>.delayed(_settle);
+      await Future<void>.delayed(settle);
 
-      expect(fixture.client.read(_key)?.value, 1500,
+      expect(fixture.client.read(scenarioKey)?.value, 1500,
           reason: 'the reading fell back to a value the stream had already '
               'moved past. That is the F18 failure exactly: a number from two '
               'batches ago rendered under good quality, with nothing on screen '
@@ -1004,7 +974,7 @@ void main() {
       // leaves is written up in the 04-11 SUMMARY, because closing it is a
       // decision about what `subscribe` means on a live session and not
       // something a test may make on its own.
-      final fresh = await fixture.client.readFresh(_key).timeout(_recovery);
+      final fresh = await fixture.client.readFresh(scenarioKey).timeout(recovery);
       expect(fresh.value, 1500,
           reason: 'a forced round trip after the replay did not come back with '
               'the current reading, so the failed resubscribe took something '
@@ -1015,16 +985,16 @@ void main() {
 
     test('F18: an old-generation frame after a reconnect is dropped', () async {
       final fixture = await faultFixture(
-        keys: const {_key},
+        keys: const {scenarioKey},
         withProxy: true,
-        seed: (plant) => plant.setValue(_key, 1200),
+        seed: (plant) => plant.setValue(scenarioKey, 1200),
       );
       await until('the link', () => fixture.client.isReady);
 
       // A real frame from *this* establishment, captured off the wire.
-      fixture.served.setValue(_key, 1300);
+      fixture.served.setValue(scenarioKey, 1300);
       await until('an update frame from the first session',
-          () => fixture.client.read(_key)?.value == 1300);
+          () => fixture.client.read(scenarioKey)?.value == 1300);
       final beforeTheDrop = fixture.seam.lastMatching(
           (message) => message.contains('"method":"${Methods.update}"'));
       expect(beforeTheDrop, isNotNull,
@@ -1036,16 +1006,16 @@ void main() {
       // the socket, a generation the captured frame cannot match.
       fixture.proxy.killOnce();
       await until('the reconnect', () => fixture.client.isReady,
-          budget: _recovery);
-      fixture.served.setValue(_key, 1500);
+          budget: recovery);
+      fixture.served.setValue(scenarioKey, 1500);
       await until('the current value after the reconnect',
-          () => fixture.client.read(_key)?.value == 1500,
-          budget: _recovery);
+          () => fixture.client.read(scenarioKey)?.value == 1500,
+          budget: recovery);
 
       fixture.seam.inject(beforeTheDrop!);
-      await Future<void>.delayed(_settle);
+      await Future<void>.delayed(settle);
 
-      expect(fixture.client.read(_key)?.value, 1500,
+      expect(fixture.client.read(scenarioKey)?.value, 1500,
           reason: 'a reading from the session before the drop went onto the '
               'mimic under good quality. Worse than the number itself: it '
               'takes the sequence baseline with it, so the genuine frame at '
