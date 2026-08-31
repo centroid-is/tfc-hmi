@@ -64,16 +64,18 @@ bool isTopLevelDestinationPath(String? path) {
 // BaseScaffold Widget
 // ===================
 
-String formatTimestamp(DateTime timestamp) {
-  String twoLetter(int value) => value < 10 ? '0$value' : '$value';
-  final day = twoLetter(timestamp.day);
-  final month = twoLetter(timestamp.month);
-  final year = timestamp.year;
-  final hour = twoLetter(timestamp.hour);
-  final minute = twoLetter(timestamp.minute);
-  final second = twoLetter(timestamp.second);
-  return '$day-$month-$year $hour:$minute:$second';
-}
+String _twoLetter(int value) => value < 10 ? '0$value' : '$value';
+
+/// `dd-MM-yyyy`.
+String formatDate(DateTime timestamp) =>
+    '${_twoLetter(timestamp.day)}-${_twoLetter(timestamp.month)}-${timestamp.year}';
+
+/// `HH:mm:ss`.
+String formatTimeOfDay(DateTime timestamp) =>
+    '${_twoLetter(timestamp.hour)}:${_twoLetter(timestamp.minute)}:${_twoLetter(timestamp.second)}';
+
+String formatTimestamp(DateTime timestamp) =>
+    '${formatDate(timestamp)} ${formatTimeOfDay(timestamp)}';
 
 class BaseScaffold extends ConsumerStatefulWidget {
   final Widget body;
@@ -90,6 +92,16 @@ class BaseScaffold extends ConsumerStatefulWidget {
   @override
   ConsumerState<BaseScaffold> createState() => _BaseScaffoldState();
 }
+
+/// Width reserved for the app-bar clock.
+///
+/// roboto-mono advances 0.6em, so the widest line -- the 26pt time, 8 chars at
+/// 15.6px -- is ~125px, and the 18pt `dd-MM-yyyy` is 10 * 10.8 = 108px. 140 of
+/// text plus an 8px gutter on each side makes 156, which is also the centred
+/// alarm banner's left inset: one fixed number rather than two that can drift
+/// apart. The gutter matters on a top-level page, where there is no back arrow
+/// and the time would otherwise sit flush against the window edge.
+const double _clockWidth = 156;
 
 class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
   // Static, not per-build: `Logger()` constructs a filter, a printer and an
@@ -141,7 +153,59 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
     }
   }
 
-  Widget _buildClockOrAlarm(BuildContext context, WidgetRef ref) {
+  /// The date over the time, on the left of the bar.
+  ///
+  /// Two lines rather than one, so the 14pt single line this replaces becomes
+  /// an 18pt date over a 26pt time -- readable from across the packing hall
+  /// within the same 56px toolbar. Explicit sizes rather than text-theme ones
+  /// for that reason: the clock wants to be as large as the bar allows, not as
+  /// large as body copy.
+  ///
+  /// It also no longer shares a slot with the alarm banner. The clock used to
+  /// be the banner's `else` branch, so an active alarm took the time away.
+  Widget _buildClock(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return StreamBuilder(
+      stream: Stream.periodic(const Duration(seconds: 1)),
+      builder: (context, snapshot) {
+        // clock.now(), not DateTime.now(): a golden that renders the
+        // scaffold otherwise churns every run on the ticking header
+        // clock. Tests pin it with withClock(); in the app this is
+        // DateTime.now().
+        final currentTime = clock.now();
+        // scaleDown, and both lines unwrappable: the sizes below are picked
+        // for roboto-mono in a 56px toolbar, but a wider fallback font or an
+        // operator's text scaling would otherwise wrap `dd-MM-yyyy` onto two
+        // lines and overflow the bar. Shrinking to fit is the graceful
+        // failure; a yellow-and-black overflow stripe is not.
+        return FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                formatDate(currentTime),
+                maxLines: 1,
+                softWrap: false,
+                style:
+                    textTheme.titleMedium?.copyWith(fontSize: 18, height: 1.1),
+              ),
+              Text(
+                formatTimeOfDay(currentTime),
+                maxLines: 1,
+                softWrap: false,
+                style: textTheme.titleLarge?.copyWith(
+                    fontSize: 26, height: 1.1, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAlarmBanner(BuildContext context, WidgetRef ref) {
     return StreamBuilder<(AlarmMan, List<AlarmActive>)>(
         stream: _alarmStream,
         builder: (context, snapshot) {
@@ -172,11 +236,16 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                       text: TextSpan(
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize:
-                              Theme.of(context).textTheme.bodySmall!.fontSize,
-                        ),
+                        // bodyLarge, not a bare TextStyle: RichText does not
+                        // read the ambient DefaultTextStyle, so a hand-rolled
+                        // style left the banner in the Material default font
+                        // while the rest of the HMI is roboto-mono. Taking the
+                        // theme style also takes its 16pt -- the old 12pt
+                        // bodySmall was too small to read at a glance.
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyLarge!
+                            .copyWith(color: textColor),
                         children: [
                           TextSpan(
                             text:
@@ -204,20 +273,7 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
               ),
             );
           }
-          return StreamBuilder(
-            stream: Stream.periodic(const Duration(seconds: 1)),
-            builder: (context, snapshot) {
-              // clock.now(), not DateTime.now(): a golden that renders the
-              // scaffold otherwise churns every run on the ticking header
-              // clock. Tests pin it with withClock(); in the app this is
-              // DateTime.now().
-              final currentTime = clock.now();
-              return Text(
-                formatTimestamp(currentTime),
-                style: Theme.of(context).textTheme.bodyMedium,
-              );
-            },
-          );
+          return const SizedBox.shrink();
         });
   }
 
@@ -252,12 +308,14 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                     // with aspect ratio ~4.2 => ~210px wide, plus 16px right
                     // padding, plus ~48px theme toggle IconButton = ~274px.
                     // Use 280 for a small safety buffer.
+                    // Left margin: ~48px back-arrow IconButton plus the clock,
+                    // which is [_clockWidth] wide.
                     Positioned.fill(
-                      left: 120,
+                      left: 48 + _clockWidth,
                       right: 280,
                       child: Align(
                         alignment: Alignment.center,
-                        child: _buildClockOrAlarm(context, ref),
+                        child: _buildAlarmBanner(context, ref),
                       ),
                     ),
                     // LEFT SIDE: Back arrow (if available) + injected custom widget + fullscreen button.
@@ -292,6 +350,14 @@ class _BaseScaffoldState extends ConsumerState<BaseScaffold> {
                                 context.beamBack();
                               }),
                             ),
+                          SizedBox(
+                            width: _clockWidth,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              child: _buildClock(context),
+                            ),
+                          ),
                           globalLeftProvider?.buildAppBarLeftWidgets(context) ??
                               const SizedBox.shrink(),
                           if (Platform.isAndroid || Platform.isIOS)
