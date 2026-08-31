@@ -834,7 +834,6 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       {required bool interactive}) {
     final theme = Theme.of(context);
     final states = HmiStateColors.of(context);
-    final size = widget.config.size.toSize(MediaQuery.of(context).size);
 
     final painter = PowerButtonPainter(
       disc: sectionModeColor(context, group.busiest),
@@ -845,25 +844,47 @@ class _SectionButtonState extends ConsumerState<SectionButton> {
       unreadable: group.anyUnreadable,
     );
 
-    // The face is a disc in a square box. Without a hit shape the corners of
-    // that box would swallow taps meant for whatever is drawn behind them —
-    // and the plant view would outline a square around a round button while
-    // its pane is open.
-    Widget face = AssetHitShape(
-      shape: () => PowerButtonPainter.hitShape(size),
-      child: CustomPaint(size: size, painter: painter),
-    );
+    // The box this is laid out in, not the one the config asks for.
+    //
+    // `AssetStack` sizes an asset off the CANVAS it is drawing on, while
+    // `RelativeSize.toSize(MediaQuery…)` sizes it off the whole SCREEN — and
+    // the canvas is the screen less the app bar, the nav rail and whatever a
+    // docked side pane is covering. The painter is handed the real box either
+    // way (`paint` gets the size it was laid out at), so the disc was always
+    // drawn in the middle of the button; only the published hit shape was
+    // derived from the config's size, which put its centre and its radius
+    // somewhere the disc is not. On a canvas shorter than the screen that is
+    // exactly what the plant view drew: a ring low and wide of the button
+    // whose pane was open. Same arrangement as `conveyor_gate.dart` — take
+    // the constraints, fall back to the config only when nothing bounds us
+    // (an asset built outside a stack, e.g. the editor's palette preview).
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.hasBoundedWidth && constraints.hasBoundedHeight
+            ? Size(constraints.maxWidth, constraints.maxHeight)
+            : widget.config.size.toSize(MediaQuery.of(context).size);
 
-    if (interactive) {
-      face = GestureDetector(
-        onTap: () => _showPane(context),
-        child: face,
-      );
-    }
-    return Semantics(
-      button: interactive,
-      label: '$_title — ${group.label}',
-      child: face,
+        // The face is a disc in a square box. Without a hit shape the corners
+        // of that box would swallow taps meant for whatever is drawn behind
+        // them — and the plant view would outline a square around a round
+        // button while its pane is open.
+        Widget face = AssetHitShape(
+          shape: () => PowerButtonPainter.hitShape(size),
+          child: CustomPaint(size: size, painter: painter),
+        );
+
+        if (interactive) {
+          face = GestureDetector(
+            onTap: () => _showPane(context),
+            child: face,
+          );
+        }
+        return Semantics(
+          button: interactive,
+          label: '$_title — ${group.label}',
+          child: face,
+        );
+      },
     );
   }
 }

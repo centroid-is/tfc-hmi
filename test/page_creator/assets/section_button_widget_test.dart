@@ -6,6 +6,7 @@ import 'package:rxdart/rxdart.dart';
 import 'package:tfc/page_creator/assets/section_button.dart';
 import 'package:tfc/providers/state_man.dart';
 import 'package:tfc/theme.dart' show HmiStateColors;
+import 'package:tfc/widgets/hit_boundary.dart';
 import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc_dart/core/state_man.dart';
 
@@ -748,6 +749,70 @@ void main() {
       await _settle(tester);
       expect(find.byType(SectionModeTimer), findsNothing);
       // A leaked Timer.periodic fails the test binding at tearDown.
+    });
+  });
+
+  group('the published hit shape', () {
+    // The shape the plant view rings while this button's pane is open. It is
+    // published in the coordinates of the box the button is laid out in, so
+    // it has to be derived from THAT box — not from
+    // `RelativeSize.toSize(MediaQuery…)`, which is a fraction of the whole
+    // screen while `AssetStack` sizes assets off the canvas (the screen less
+    // the app bar, the nav rail, and whatever a docked pane covers). Deriving
+    // it from the screen put the ring low and wide of the disc on every page
+    // whose canvas is not the full window.
+    Future<void> pumpInBox(WidgetTester tester, Size box) async {
+      tester.view.physicalSize = const Size(1400, 1100);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(wrap(
+        SizedBox(
+          width: box.width,
+          height: box.height,
+          child: SectionButton(config: config(['sec/a'])),
+        ),
+        overrides: [
+          stateManProvider.overrideWith((_) async => _FakeStateMan())
+        ],
+      ));
+      await _settle(tester);
+    }
+
+    Rect publishedShape(WidgetTester tester) =>
+        tester.widget<AssetHitShape>(find.byType(AssetHitShape)).shape()
+            .getBounds();
+
+    Rect paintedBox(WidgetTester tester) => tester.getRect(find.descendant(
+          of: find.byType(SectionButton),
+          matching: find.byType(CustomPaint),
+        ));
+
+    testWidgets('is the disc as drawn, centred in the laid-out box',
+        (tester) async {
+      // A box the config's own numbers cannot produce: 0.05 of a 1400x1100
+      // screen is 70x55, and nothing about 96x96 follows from it.
+      await pumpInBox(tester, const Size(96, 96));
+
+      final shape = publishedShape(tester);
+      final box = paintedBox(tester);
+      expect(box.size, const Size(96, 96));
+      expect(shape.center, Offset(box.width / 2, box.height / 2),
+          reason: 'the ring goes round the disc, which is in the middle');
+      expect(shape.width / 2,
+          PowerButtonPainter.radiusFor(box.size));
+      expect(shape.height / 2,
+          PowerButtonPainter.radiusFor(box.size));
+    });
+
+    testWidgets('follows an oblong box rather than the screen it is on',
+        (tester) async {
+      // The disc is inscribed in the box's shorter side; the shape has to say
+      // the same thing the painter draws.
+      await pumpInBox(tester, const Size(140, 60));
+
+      final shape = publishedShape(tester);
+      expect(shape.center, const Offset(70, 30));
+      expect(shape.width, closeTo(58, 0.01)); // 60/2 - 1, doubled
     });
   });
 }
