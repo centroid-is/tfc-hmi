@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:clock/clock.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:test/test.dart';
@@ -5,6 +7,149 @@ import 'package:test/test.dart';
 /// A password-shaped string. If this ever appears in an audit row, the trail
 /// has become the thing it was meant to protect against.
 const _password = 'hunter2-correct-horse-battery-staple';
+
+/// The encoded group set of a role that can operate, as `AppRole.groups` holds
+/// it. Built through [AccessRole.encodeGroups] rather than hand-written, so the
+/// admin rows carry the one encoding this codebase uses.
+final String _maintenanceGroups = const AccessRole(
+  name: 'Maintenance',
+  groups: {AccessGroup.operate},
+).encodeGroups();
+
+/// The same role after somebody ticked `force` — the edit the admin surface
+/// exists to make legible as `["operate"] -> ["operate","force"]`.
+final String _maintenanceGroupsWithForce = const AccessRole(
+  name: 'Maintenance',
+  groups: {AccessGroup.operate, AccessGroup.force},
+).encodeGroups();
+
+/// The eight admin factory names, in itemKey order.
+const _adminFactoryNames = <String>[
+  'roleCreate',
+  'roleUpdate',
+  'roleDelete',
+  'roleRename',
+  'userCreate',
+  'userDelete',
+  'userRole',
+  'userPassword',
+];
+
+/// One row from each of the eight admin constructors, in itemKey order.
+///
+/// Built as a list rather than asserted one constructor at a time so that a
+/// ninth admin constructor added without a row here is visible as a length
+/// mismatch, not as a silently unasserted vocabulary entry.
+List<AuditRecord> _adminRows({required bool allowed}) => [
+      AuditRecord.roleCreate(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'Maintenance',
+        groups: _maintenanceGroups,
+        allowed: allowed,
+      ),
+      AuditRecord.roleUpdate(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'Maintenance',
+        oldGroups: _maintenanceGroups,
+        newGroups: _maintenanceGroupsWithForce,
+        allowed: allowed,
+      ),
+      AuditRecord.roleDelete(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'Maintenance',
+        groups: _maintenanceGroups,
+        allowed: allowed,
+      ),
+      AuditRecord.roleRename(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        oldName: 'Maintenance',
+        newName: 'Servicing',
+        allowed: allowed,
+      ),
+      AuditRecord.userCreate(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'gudrun',
+        grantedRole: 'Maintenance',
+        allowed: allowed,
+      ),
+      AuditRecord.userDelete(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'gudrun',
+        heldRole: 'Maintenance',
+        allowed: allowed,
+      ),
+      AuditRecord.userRole(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'gudrun',
+        oldRole: 'Operator',
+        newRole: 'Maintenance',
+        allowed: allowed,
+      ),
+      AuditRecord.userPassword(
+        who: 'jon',
+        station: 'st101',
+        roleName: 'Engineering',
+        actionId: 'a' * 32,
+        subject: 'gudrun',
+        allowed: allowed,
+      ),
+    ];
+
+/// Walk up to the `tfc_access` package root, so the source-reading test below
+/// works whether `dart test` was invoked from the package or from the repo
+/// root. A source assertion that silently passes because it could not find the
+/// file is worse than no assertion.
+Directory _packageRoot() {
+  var dir = Directory.current.absolute;
+  while (true) {
+    final pubspec = File('${dir.path}/pubspec.yaml');
+    if (pubspec.existsSync() &&
+        pubspec.readAsStringSync().contains('name: tfc_access')) {
+      return dir;
+    }
+    final parent = dir.parent;
+    if (parent.path == dir.path) {
+      fail('could not locate the tfc_access package root from '
+          '${Directory.current.path}');
+    }
+    dir = parent;
+  }
+}
+
+/// The parameter list of `factory AuditRecord.[name]`, from the opening
+/// parenthesis to the `}) =>` that closes it.
+///
+/// The signature only, not the body: `user.password` is a legitimate itemKey
+/// *string* inside `userPassword`'s body, and the thing worth forbidding is a
+/// credential arriving as an argument.
+String _factorySignature(String source, String name) {
+  final start = source.indexOf('factory AuditRecord.$name(');
+  expect(start, isNot(-1), reason: 'AuditRecord.$name should exist');
+  final end = source.indexOf('}) =>', start);
+  expect(end, isNot(-1), reason: 'AuditRecord.$name should be a factory');
+  return source.substring(start, end);
+}
 
 void main() {
   group('newActionId', () {
@@ -328,6 +473,341 @@ void main() {
       );
       expect(record.toString(), contains('50'));
       expect(record.toString(), contains('35'));
+    });
+  });
+
+  group('AuditRecord.roleCreate', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.roleCreate(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: 'a' * 32,
+          subject: 'Maintenance',
+          groups: _maintenanceGroups,
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'role.create');
+    });
+
+    test('the role created is the member, not part of the itemKey', () {
+      // The itemKey vocabulary is a closed set of eight strings that Phase 5
+      // filters on. Folding the subject into it (`role.create.Maintenance`)
+      // would make it unbounded, and an unbounded itemKey is an unfilterable
+      // one.
+      final record = build();
+      expect(record.member, 'Maintenance');
+      expect(record.itemKey, isNot(contains('Maintenance')));
+    });
+
+    test('newValue is the encoded group set of the new role', () {
+      expect(build().newValue, _maintenanceGroups);
+      expect(build().oldValue, isNull);
+    });
+  });
+
+  group('AuditRecord.roleUpdate', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.roleUpdate(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: 'b' * 32,
+          subject: 'Maintenance',
+          oldGroups: _maintenanceGroups,
+          newGroups: _maintenanceGroupsWithForce,
+        allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'role.update');
+    });
+
+    test('carries both encoded group sets, so the row reads old -> new', () {
+      // AccessRole.encodeGroups emits AccessGroup.values order, so
+      // ["operate"] -> ["operate","force"] is legible in Phase 5's generic
+      // write row with no viewer change.
+      final record = build();
+      expect(record.oldValue, _maintenanceGroups);
+      expect(record.newValue, _maintenanceGroupsWithForce);
+    });
+
+    test('the role edited is the member', () {
+      expect(build().member, 'Maintenance');
+    });
+  });
+
+  group('AuditRecord.roleDelete', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.roleDelete(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: 'c' * 32,
+          subject: 'Maintenance',
+          groups: _maintenanceGroups,
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'role.delete');
+    });
+
+    test('oldValue is what the deleted role granted', () {
+      final record = build();
+      expect(record.oldValue, _maintenanceGroups);
+      expect(record.newValue, isNull);
+      expect(record.member, 'Maintenance');
+    });
+  });
+
+  group('AuditRecord.roleRename', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.roleRename(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: 'd' * 32,
+          oldName: 'Maintenance',
+          newName: 'Servicing',
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'role.rename');
+    });
+
+    test('carries both names, and the member is the role as it was named', () {
+      final record = build();
+      expect(record.oldValue, 'Maintenance');
+      expect(record.newValue, 'Servicing');
+      expect(record.member, 'Maintenance');
+    });
+  });
+
+  group('AuditRecord.userCreate', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.userCreate(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: 'e' * 32,
+          subject: 'gudrun',
+          grantedRole: 'Maintenance',
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'user.create');
+    });
+
+    test('newValue is the role granted, and the account is the member', () {
+      final record = build();
+      expect(record.newValue, 'Maintenance');
+      expect(record.member, 'gudrun');
+    });
+
+    test('nothing about the password reaches the row', () {
+      // The structural half is the signature: userCreate takes no password, so
+      // a call passing one would not compile and this file would not run.
+      final record = build();
+      expect(record.oldValue, isNull);
+      expect(record.toString(), isNot(contains(_password)));
+    });
+  });
+
+  group('AuditRecord.userDelete', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.userDelete(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: 'f' * 32,
+          subject: 'gudrun',
+          heldRole: 'Maintenance',
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'user.delete');
+    });
+
+    test('oldValue is the role the deleted account held', () {
+      final record = build();
+      expect(record.oldValue, 'Maintenance');
+      expect(record.newValue, isNull);
+      expect(record.member, 'gudrun');
+    });
+  });
+
+  group('AuditRecord.userRole', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.userRole(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: '1' * 32,
+          subject: 'gudrun',
+          oldRole: 'Operator',
+          newRole: 'Maintenance',
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'user.role');
+    });
+
+    test('reads as a transition on the account named in member', () {
+      // itemKey `user.role` plus member `gudrun` is what makes Phase 5's
+      // generic row read correctly with no viewer change.
+      final record = build();
+      expect(record.member, 'gudrun');
+      expect(record.oldValue, 'Operator');
+      expect(record.newValue, 'Maintenance');
+    });
+  });
+
+  group('AuditRecord.userPassword', () {
+    AuditRecord build({bool allowed = true}) => AuditRecord.userPassword(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: '2' * 32,
+          subject: 'gudrun',
+          allowed: allowed,
+        );
+
+    test('fixes the admin vocabulary', () {
+      final record = build();
+      expect(record.surface, 'admin');
+      expect(record.itemKey, 'user.password');
+    });
+
+    test('records that the password was set, on the account in member', () {
+      expect(build().member, 'gudrun');
+    });
+
+    test('oldValue and newValue are both null and not parameterisable', () {
+      // toString withholds the value columns only when isAuthEvent — that is,
+      // surface == 'auth'. An admin row's values are NOT withheld, which is
+      // correct for a group set and is exactly why this constructor leaves
+      // both fields null by construction rather than by discipline.
+      final record = build();
+      expect(record.oldValue, isNull,
+          reason: "toString's withholding is keyed on surface == 'auth', so an "
+              'admin row prints its values into log files that outlive the '
+              'database');
+      expect(record.newValue, isNull,
+          reason: "toString's withholding is keyed on surface == 'auth', so an "
+              'admin row prints its values into log files that outlive the '
+              'database');
+    });
+  });
+
+  group('the admin surface as a whole', () {
+    test('the vocabulary is exactly these eight itemKeys', () {
+      expect(
+        _adminRows(allowed: true).map((r) => r.itemKey).toList(),
+        [
+          'role.create',
+          'role.update',
+          'role.delete',
+          'role.rename',
+          'user.create',
+          'user.delete',
+          'user.role',
+          'user.password',
+        ],
+      );
+    });
+
+    test('every admin row requires the users group', () {
+      for (final record in _adminRows(allowed: true)) {
+        expect(record.groupRequired, AccessGroup.users.name,
+            reason: 'this is what puts admin rows behind Phase 5\'s existing '
+                'users chip, with no change to its viewer. An empty '
+                'groupRequired would fall outside every group filter');
+      }
+    });
+
+    test('every admin row carries the admin surface', () {
+      for (final record in _adminRows(allowed: true)) {
+        expect(record.surface, 'admin');
+      }
+    });
+
+    test('each constructor can record a refusal as well as a grant', () {
+      // allowed is a parameter on all eight, not a hardcoded true. An admin
+      // action refused by the users gate is a row worth having, and if the
+      // constructors could not build one the store would hand-build denial
+      // rows — the vocabulary drifting on day one.
+      final denied = _adminRows(allowed: false);
+      expect(denied, hasLength(8));
+      for (final record in denied) {
+        expect(record.allowed, isFalse);
+      }
+      for (final record in _adminRows(allowed: true)) {
+        expect(record.allowed, isTrue);
+      }
+    });
+
+    test('isAuthEvent is false for every admin row', () {
+      for (final record in _adminRows(allowed: true)) {
+        expect(record.isAuthEvent, isFalse);
+      }
+    });
+
+    test('at defaults to the current clock', () {
+      final fixed = DateTime.utc(2026, 8, 30, 9);
+      final record = withClock(
+        Clock.fixed(fixed),
+        () => AuditRecord.userPassword(
+          who: 'jon',
+          station: 'st101',
+          roleName: 'Engineering',
+          actionId: '3' * 32,
+          subject: 'gudrun',
+          allowed: true,
+        ),
+      );
+      expect(record.at, fixed);
+    });
+
+    test('no admin constructor takes a password, a hash or a salt', () {
+      // The structural half is the eight signatures: every call site above
+      // compiles, and none of them passes a credential. This is the other
+      // half — a source read of the eight parameter lists, so that adding a
+      // "just the hash, for debugging" parameter fails here rather than
+      // shipping.
+      final source = File('${_packageRoot().path}/lib/src/audit.dart')
+          .readAsStringSync();
+      for (final name in _adminFactoryNames) {
+        final signature = _factorySignature(source, name);
+        for (final forbidden in ['password', 'hash', 'salt']) {
+          expect(signature.toLowerCase(), isNot(contains(forbidden)),
+              reason: 'AuditRecord.$name must record that an account changed, '
+                  'never the credential. A trail that leaks credentials is '
+                  'worse than no trail');
+        }
+      }
+    });
+
+    test('AccessSurface was not extended to carry admin', () {
+      // AccessSurface is what the policy answers questions about. Nothing ever
+      // gates on an admin row, so adding it there would make byWireName claim
+      // a surface the policy never consults. 'auth' set that precedent and
+      // 'admin' follows it: a private literal on AuditRecord.
+      expect(AccessSurface.values, hasLength(3));
+      expect(AccessSurface.byWireName('admin'), isNull);
     });
   });
 
