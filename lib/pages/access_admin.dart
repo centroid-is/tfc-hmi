@@ -45,6 +45,75 @@ import 'access_users_section.dart';
 const String kAccessAdminTitle = 'Access';
 
 // ---------------------------------------------------------------------------
+// The honesty note
+//
+// PROJECT.md's `## What This Is Not` and `docs/access-control-spec.md` §8 both
+// require this text in *"the admin screen's own help text"*, and this is that
+// screen. It is not a disclaimer and it is not legal cover: a softened version
+// of it is the failure mode it exists to prevent, which is a site reading "the
+// HMI has access control" and moving network segmentation down the list.
+//
+// So: no reassuring hedge, no "for more information" pointer to a document
+// nobody at a panel can open, no dismiss control, and no gate. Every sentence
+// below is PROJECT.md's or `docs/access-control-deployment.md` §1's, kept at
+// its own bluntness.
+//
+// It also must not contradict `first_user.dart`'s `_kHonesty` — *"Signing in
+// records who changed what. It is a guardrail, not a security boundary."* —
+// which is the same claim in one line. [kAccessAdminHonestySummary] is the
+// longer screen's version of that sentence, and a test pins both halves of it.
+// ---------------------------------------------------------------------------
+
+/// The collapsed title, and therefore the whole note as far as a reader who
+/// never opens it is concerned.
+///
+/// It is written to be **true on its own**. A title that teased the body — "A
+/// note about what this screen is" — would make the collapsed state a lie
+/// about the expanded one, and the collapsed state is the one almost everybody
+/// sees.
+const String kAccessAdminHonestySummary =
+    'This screen records who changed what. It is a guardrail, not a security '
+    'boundary.';
+
+/// What the milestone does. Every level, and refusals as well as changes.
+const String kAccessAdminHonestyRecords =
+    'What it records: every hand-made change on this station, at every level — '
+    'setpoints, device parameters, forces, page and key configuration, and the '
+    'roles and accounts on this screen — written against whoever was signed in '
+    'at the time. A refusal leaves a row as surely as a change does. The trail '
+    'is append-only, and nothing on this screen can prune it or export it.';
+
+/// What it does not do, and the three credentials that are the reason.
+///
+/// The three are named rather than gestured at, because "some credentials are
+/// held by the station" is exactly the vague version this paragraph replaces.
+/// The wording follows `docs/access-control-deployment.md` §1's table.
+const String kAccessAdminHonestyCredentials =
+    'What it does not do: stop anybody. Three credentials are held by this '
+    'station rather than by a person — the OPC UA session, the Postgres '
+    'password, and the D-Bus credential behind system settings — and every one '
+    'of them authenticates the station, never a person. Anyone with UaExpert '
+    'or psql reaches the plant and the database without passing anything on '
+    'this screen. A username and a password here tell you who was standing at '
+    'the panel; they do not stop anybody who is not.';
+
+/// The actual failure mode, in PROJECT.md's own words.
+const String kAccessAdminHonestyDanger =
+    'The danger is not the guardrail. The danger is somebody concluding that '
+    'the HMI has logins and deprioritising network segmentation on the '
+    'strength of it. The network segmentation is the control. This is the '
+    'guardrail inside it.';
+
+/// When this stops being true — in the good direction, so the note ends on a
+/// condition somebody can work towards rather than on a warning.
+const String kAccessAdminHonestyWhen =
+    'That changes, in the good direction, when the relay pipe takes over '
+    'preferences and credentials come off the client. Until then this is what '
+    'it is: an accurate account of accident and shift confusion, which is the '
+    'realistic failure in a plant, and no defence at all against somebody who '
+    'would rather not be recorded.';
+
+// ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------
 
@@ -54,6 +123,23 @@ const String kAccessAdminTitle = 'Access';
 /// sections may each show a spinner of their own inside a dialog, and a test
 /// meaning "the page has not decided yet" must not pass on one of those.
 const Key kAccessAdminLoadingKey = Key('access-admin-loading');
+
+/// The honesty note's card.
+const Key kAccessAdminHonestyKey = Key('access-admin-honesty');
+
+/// The collapsed title. Also the tap target that opens the note.
+const Key kAccessAdminHonestySummaryKey = Key('access-admin-honesty-summary');
+
+/// The four body paragraphs, one key each.
+///
+/// Separate keys rather than one for the body: each paragraph makes a different
+/// claim, and a test meaning "the credentials are named" must not pass on a
+/// screen that only said the trail is append-only.
+const Key kAccessAdminHonestyRecordsKey = Key('access-admin-honesty-records');
+const Key kAccessAdminHonestyCredentialsKey =
+    Key('access-admin-honesty-credentials');
+const Key kAccessAdminHonestyDangerKey = Key('access-admin-honesty-danger');
+const Key kAccessAdminHonestyWhenKey = Key('access-admin-honesty-when');
 
 // ---------------------------------------------------------------------------
 // Heights
@@ -78,18 +164,21 @@ const Key kAccessAdminLoadingKey = Key('access-admin-loading');
 /// | gap | 16 |
 /// | users card frame — margins, header row, subtitle | 136 |
 /// | gap | 16 |
-/// | the honesty note, collapsed | 64 |
+/// | the honesty note, collapsed | 66 |
 ///
-/// 392 px. The two card frames were derived rather than eyeballed: the seeded
-/// roles card measures 421 px with four role rows summing to 285 px, and the
-/// seeded users card 268 px with a 28 px header and two 52 px rows — 136 px of
-/// frame each way, from two independent measurements that agree.
+/// 394 px, rounded up to 400. The two card frames were derived rather than
+/// eyeballed: the seeded roles card measures 421 px with four role rows summing
+/// to 285 px, and the seeded users card 268 px with a 28 px header and two
+/// 52 px rows — 136 px of frame each way, from two independent measurements
+/// that agree.
 ///
-/// The note's 64 px is a collapsed Material [ExpansionTile] (56 px) inside a
-/// [Card] (4 px of margin each way). **Adding a paragraph to the note does not
-/// move this number**, because an [ExpansionTile]'s collapsed height does not
-/// depend on its children, and the note ships collapsed.
-const double kAccessAdminChromeHeight = 392;
+/// The note's 66 px is its collapsed [ExpansionTile] inside a [Card], measured
+/// rather than assumed — a bare Material tile is 56 px and this one is taller
+/// because its title is a wrapping sentence rather than a label.
+/// **Adding a paragraph to the note does not move this number**, because an
+/// [ExpansionTile]'s collapsed height does not depend on its children and the
+/// note ships collapsed.
+const double kAccessAdminChromeHeight = 400;
 
 /// The room the two lists are worth showing in at all: the four seeded roles,
 /// and a commissioned station's two accounts under their column header.
@@ -191,6 +280,8 @@ class AccessAdminBody extends ConsumerWidget {
           AccessRolesSection(),
           SizedBox(height: _kSectionGap),
           AccessUsersSection(),
+          SizedBox(height: _kSectionGap),
+          _HonestyNote(),
         ],
       ),
     );
@@ -226,4 +317,82 @@ class AccessAdminBody extends ConsumerWidget {
       },
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// The note
+// ---------------------------------------------------------------------------
+
+/// One short expandable note at the foot of the page — the milestone's honesty
+/// requirement, discharged on the screen `docs/access-control-spec.md` §8
+/// names.
+///
+/// **Collapsed is the settled default, on purpose.** `initiallyExpanded` is
+/// false and nothing toggles it, so the page reaches a resting state in one
+/// frame. 06-11 captures this page in four goldens and every one of them
+/// depends on that: an [ExpansionTile] that opened itself would make each
+/// capture a function of how many frames the harness pumped.
+///
+/// **Not gated, not conditional, not dismissible.** It renders for every
+/// session that can see the page, in every state of the store, and there is no
+/// "do not show again" — that would be a preference key, which is a
+/// `configure`-classified write, hiding the one paragraph the spec requires.
+/// There is also no link out: the station that most needs this paragraph is
+/// the one standing in a plant room with no way to open a document.
+class _HonestyNote extends StatelessWidget {
+  const _HonestyNote();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      key: kAccessAdminHonestyKey,
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        leading: Icon(Icons.info_outline,
+            size: 20, color: theme.colorScheme.onSurfaceVariant),
+        title: Text(
+          kAccessAdminHonestySummary,
+          key: kAccessAdminHonestySummaryKey,
+          // The title is the note for most readers, so it wraps rather than
+          // truncating for the same reason every paragraph below does.
+          maxLines: null,
+          style: theme.textTheme.titleSmall,
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _note(context, kAccessAdminHonestyRecords,
+              key: kAccessAdminHonestyRecordsKey),
+          const SizedBox(height: 8),
+          _note(context, kAccessAdminHonestyCredentials,
+              key: kAccessAdminHonestyCredentialsKey),
+          const SizedBox(height: 8),
+          _note(context, kAccessAdminHonestyDanger,
+              key: kAccessAdminHonestyDangerKey),
+          const SizedBox(height: 8),
+          _note(context, kAccessAdminHonestyWhen,
+              key: kAccessAdminHonestyWhenKey),
+        ],
+      ),
+    );
+  }
+}
+
+/// A secondary line, never ellipsised. Every sentence of the note goes through
+/// here so none of them can quietly become one clipped line — `find.text`
+/// passing is not the same as the operator being able to read it, and a
+/// warning the eye skips because it was cut short has not been given.
+///
+/// The same helper both sections carry, by the same argument.
+Widget _note(BuildContext context, String text, {Key? key}) {
+  final theme = Theme.of(context);
+  return Text(
+    text,
+    key: key,
+    maxLines: null,
+    overflow: TextOverflow.visible,
+    style: theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+  );
 }

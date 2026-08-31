@@ -490,6 +490,11 @@ void main() {
           tester.widget<Text>(find.byKey(k)).data,
       ];
 
+      // A bare frame between the two pumps. `pumpWidget` reuses elements when
+      // the root widget type is unchanged, so without this the second page
+      // inherits the first one's *expanded* ExpansionTile and `expand` closes
+      // it again.
+      await tester.pumpWidget(const SizedBox.shrink());
       session = _configureOnly();
       await pumpBody(tester, overrides());
       await expand(tester);
