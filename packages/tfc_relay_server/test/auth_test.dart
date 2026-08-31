@@ -49,6 +49,11 @@ import 'support/ws_harness.dart';
 const _stationOneToken = 'ST101-1nZq4tGm7Yb2Kd8Vw6Rc0Pf3';
 const _stationTwoToken = 'ST201-9aXe5uHj1Lo4Nm7Bs2Tv8Qi6';
 
+/// What an operator mints for ST101 after its token leaked: a new secret for
+/// the same station with the same role, which is the remediation path the
+/// whole of the revocation sweep exists to serve.
+const _stationOneReplacement = 'ST101-4hYp8sWk2Cf6Nx1Dj9Ur5Lz7';
+
 /// The `hello` a station sends, with or without its credential.
 ///
 /// Local rather than `ws_harness.dart`'s `helloParams()`, which takes no
@@ -297,20 +302,25 @@ void main() {
       final path = _writeTokenFile(dir, _twoStations());
       final validator = await FileTokenValidator.load(path);
 
-      const one = Identity(stationId: 'ST101', role: Role.operate);
-      const two = Identity(stationId: 'ST201', role: Role.view);
-      expect(validator.stillValid(one), isTrue);
-      expect(validator.stillValid(two), isTrue);
+      // Through `validate`, because that is how a live session comes by the
+      // pair the sweep asks about: an identity and the digest of the
+      // credential that bought it.
+      final one = await validator.validate(_helloWith(_stationOneToken))
+          as TokenAccepted;
+      final two = await validator.validate(_helloWith(_stationTwoToken))
+          as TokenAccepted;
+      expect(validator.stillValid(one.identity, one.credentialDigest), isTrue);
+      expect(validator.stillValid(two.identity, two.credentialDigest), isTrue);
 
       _writeTokenFile(dir, _oneStation());
-      expect(validator.stillValid(two), isTrue,
+      expect(validator.stillValid(two.identity, two.credentialDigest), isTrue,
           reason: 'nothing has been reloaded yet — a validator that answered '
               'from the disk on every call would be doing file I/O on the '
               'hello path');
 
       await validator.reload();
-      expect(validator.stillValid(one), isTrue);
-      expect(validator.stillValid(two), isFalse,
+      expect(validator.stillValid(one.identity, one.credentialDigest), isTrue);
+      expect(validator.stillValid(two.identity, two.credentialDigest), isFalse,
           reason: 'ST201\'s token is gone from the file, so its live session '
               'is the one the sweep must close');
     });
@@ -321,9 +331,15 @@ void main() {
       final path = _writeTokenFile(dir, _oneStation());
       final validator = await FileTokenValidator.load(path);
 
-      const operating = Identity(stationId: 'ST101', role: Role.operate);
-      expect(validator.stillValid(operating), isTrue);
+      final operating = await validator.validate(_helloWith(_stationOneToken))
+          as TokenAccepted;
+      expect(operating.identity.role, Role.operate);
+      expect(
+          validator.stillValid(operating.identity, operating.credentialDigest),
+          isTrue);
 
+      // Same token, narrower role: the digest still resolves, and what it
+      // resolves to is no longer the identity the session is carrying.
       _writeTokenFile(dir, {
         'tokens': {
           _stationOneToken: {'stationId': 'ST101', 'role': 'view'},
@@ -331,10 +347,55 @@ void main() {
       });
       await validator.reload();
 
-      expect(validator.stillValid(operating), isFalse,
+      expect(
+          validator.stillValid(operating.identity, operating.credentialDigest),
+          isFalse,
           reason: 'a session minted before the demotion is still carrying '
               'Role.operate. Leaving it live is the demotion not taking '
               'effect until the panel happens to reconnect');
+    });
+
+    test('a replaced token is no longer the credential the session holds',
+        () async {
+      final dir = _tempDir();
+      final path = _writeTokenFile(dir, _oneStation());
+      final validator = await FileTokenValidator.load(path);
+
+      final accepted = await validator.validate(_helloWith(_stationOneToken))
+          as TokenAccepted;
+      expect(
+          validator.stillValid(accepted.identity, accepted.credentialDigest),
+          isTrue);
+
+      // The remediation a leaked credential actually gets: mint a new secret,
+      // same station, same role, edit the file, push it to the panel.
+      _writeTokenFile(dir, {
+        'tokens': {
+          _stationOneReplacement: {'stationId': 'ST101', 'role': 'operate'},
+        },
+      });
+      await validator.reload();
+
+      expect(
+          validator.stillValid(accepted.identity, accepted.credentialDigest),
+          isFalse,
+          reason: 'the session is holding the leaked credential. Nothing '
+              'about its Identity changed — same station, same role — which '
+              'is exactly why comparing identities could not see this, and '
+              'why the digest of the accepted credential travels beside it');
+      expect(validator.stillValid(accepted.identity, null), isTrue,
+          reason: 'stated rather than hidden: with no digest to compare, the '
+              'answer falls back to the station lookup and cannot tell a '
+              'replacement from a re-save. Every session this gateway '
+              'authenticates carries one; a null here means the validator '
+              'that accepted the session was not this one');
+      expect(
+          (await validator.validate(_helloWith(_stationOneReplacement))
+                  as TokenAccepted)
+              .credentialDigest,
+          isNot(accepted.credentialDigest),
+          reason: 'the new credential resolves to the same identity through a '
+              'different digest — which is the whole mechanism');
     });
 
     test('reloadIfChanged re-reads only when the file changed', () async {
@@ -350,7 +411,8 @@ void main() {
       _writeTokenFile(dir, _oneStation());
       expect(await validator.reloadIfChanged(), isTrue);
       expect(
-          validator.stillValid(const Identity(stationId: 'ST201', role: Role.view)),
+          validator.stillValid(
+              const Identity(stationId: 'ST201', role: Role.view), null),
           isFalse);
     });
   });
@@ -527,6 +589,49 @@ void main() {
       expect(close.closeReason, contains('ST101'),
           reason: 'a panel that goes dark at shift change needs the reason to '
               'name the station whose credential was pulled');
+    }, tags: 'ws');
+
+    test('replacing a station\'s token closes the session holding the old one',
+        () async {
+      final dir = _tempDir();
+      final path = _writeTokenFile(dir, _twoStations());
+      final fixture = _gatewayAt(path);
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(_stationOneToken).toJson(),
+          what: 'ST101\'s hello');
+
+      final survivor = await _Panel.connect(fixture.server);
+      await survivor.peer.sendRequest(
+          Methods.hello, _helloWith(_stationTwoToken).toJson());
+      expect(fixture.server.sessions.sessionCount, 2);
+
+      // ST101's token leaked. The operator does the obvious thing: a new
+      // secret for the same station with the same role. ST101's Identity is
+      // untouched by that edit, which is what made this the one revocation
+      // path the sweep could not see.
+      _writeTokenFile(dir, {
+        'tokens': {
+          _stationOneReplacement: {'stationId': 'ST101', 'role': 'operate'},
+          _stationTwoToken: {'stationId': 'ST201', 'role': 'view'},
+        },
+      });
+      await fixture.server.reloadTokens();
+
+      final close = await fixture.awaitClose(
+          'the session still holding the leaked credential',
+          budget: const Duration(seconds: 3));
+      expect(close.closeCode, CloseCodes.authExpired,
+          reason: 'a leaked credential is remediated by replacing it, not by '
+              'deleting the station. A session that keeps its operate role '
+              'for as long as its heartbeat holds is the primary incident '
+              'surviving its own primary remediation');
+      expect(close.closeReason, contains('ST101'));
+      expect(survivor.isOpen, isTrue,
+          reason: 'ST201\'s entry is byte-identical across the edit; a sweep '
+              'that closed it would be reacting to the file changing rather '
+              'than to the credential changing');
+      expect(await survivor.peer.sendRequest(Methods.ping), isA<Map>());
     }, tags: 'ws');
 
     test('revoking one station leaves the other\'s session alone', () async {

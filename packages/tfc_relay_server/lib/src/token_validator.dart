@@ -17,6 +17,8 @@
 /// path that will matter — with a validator that says no.
 library;
 
+import 'dart:typed_data';
+
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
 import 'auth/identity.dart';
@@ -44,9 +46,32 @@ sealed class TokenVerdict {
 }
 
 final class TokenAccepted extends TokenVerdict {
-  const TokenAccepted(this.identity);
+  const TokenAccepted(this.identity, {this.credentialDigest});
 
   final Identity identity;
+
+  /// A one-way digest of the credential that was accepted, when the validator
+  /// has one — never the credential.
+  ///
+  /// **What it is for.** [Identity] is `{stationId, role}` and is deliberately
+  /// credential-free, which means two different tokens that name the same
+  /// station with the same role are *equal* identities. That is the right
+  /// shape for everything downstream of the handshake, and it is blind to the
+  /// one revocation an operator actually performs: a leaked token is
+  /// remediated by **replacing** it, and the session holding the leaked one
+  /// then still matches what the file says about its station. Carrying the
+  /// digest beside the identity is what lets
+  /// `RevocableTokenValidator.stillValid` tell "this station is still
+  /// entitled" from "this *credential* is still the one".
+  ///
+  /// **Safe to hold and to log**, by the same argument [Identity] is: a
+  /// SHA-256 of a token at or above the loader's 24-character floor is not
+  /// reversible, and the digest is already what the loaded credential set is
+  /// keyed by (`file_token_validator.dart`'s library doc).
+  ///
+  /// Null from a validator that has no such thing —
+  /// [PermissiveTokenValidator] accepted no credential at all.
+  final Uint8List? credentialDigest;
 }
 
 /// Refused. [reason] is for the server's log and for the error message the

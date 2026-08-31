@@ -456,7 +456,7 @@ final class RelayServer {
       // A pre-hello session has no credential to revoke. The gate already
       // holds it to `hello` alone and the heartbeat reaper already reaps it.
       if (identity == null) continue;
-      if (live.stillValid(identity)) continue;
+      if (live.stillValid(identity, session.credentialDigest)) continue;
       unawaited(session.close(
           CloseCodes.authExpired,
           'the credential for station ${identity.stationId} is no longer the '

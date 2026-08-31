@@ -26,6 +26,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:json_rpc_2/error_code.dart' as rpc_errors;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
@@ -434,6 +435,18 @@ final class RelaySession {
   Identity? get identity => _identity;
   Identity? _identity;
 
+  /// A one-way digest of the credential this session authenticated with, when
+  /// the validator produced one.
+  ///
+  /// Set at the same moment as [identity] and never separately — the pair is
+  /// what `RelayServer.reloadTokens`' sweep asks about. Without it the sweep
+  /// can see a station whose token was removed, renamed or demoted and cannot
+  /// see one whose token was **replaced**, which is what a leaked credential
+  /// is actually remediated with. Never the credential itself; see
+  /// [TokenAccepted.credentialDigest] for why the digest is safe to hold.
+  Uint8List? get credentialDigest => _credentialDigest;
+  Uint8List? _credentialDigest;
+
   /// How many hold-to-run ticks this session dropped — malformed, naming a
   /// hold it never engaged, or arriving before the handshake.
   ///
@@ -834,7 +847,7 @@ final class RelaySession {
         throw rpc.RpcException(
             ServerErrorCodes.unauthorized, 'hello refused: $reason',
             data: _substitute(Methods.hello));
-      case TokenAccepted(:final identity):
+      case TokenAccepted(:final identity, :final credentialDigest):
         // Here rather than in the `GateAccept` arm below, which is what keeps
         // the ordering this method already argues for true by construction:
         // the identity is recorded the moment the credential is accepted and
@@ -849,7 +862,15 @@ final class RelaySession {
         // view station could otherwise talk itself into an operate identity on
         // a handshake the server then refuses, and the refusal would not
         // matter, because the damage is the field rather than the answer.
-        _identity ??= identity;
+        //
+        // Written as one guard rather than two `??=` because the identity and
+        // the digest that bought it are one fact: a session carrying the first
+        // hello's identity and the second hello's digest is a session the
+        // revocation sweep would judge on a credential it is not using.
+        if (_identity == null) {
+          _identity = identity;
+          _credentialDigest = credentialDigest;
+        }
     }
 
     final action = _gate.negotiate(hello);
