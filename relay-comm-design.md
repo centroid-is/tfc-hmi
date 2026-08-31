@@ -596,6 +596,26 @@ exactly one. Both default to `null`, which is the whole compatibility story:
 every in-repo fixture keeps binding `ws://` on loopback with an ephemeral port
 and none of them was rewritten for this phase.
 
+**Independently nullable does not mean the panel side is free to combine them
+any way it likes.** Turning the token file on before TLS is the obvious
+rollout order and it puts a credential that grants `operate` on the plant's
+machines onto the LAN in cleartext, once per reconnect, for as long as the
+panel runs. `ClientConfig.checkDialable` therefore refuses three combinations
+rather than one: `wss` with no pinned root (an encrypted dial the panel cannot
+verify), a pinned root on a `ws` dial (a configuration that reads as encrypted
+while the traffic is not — the root is never consulted), and a token on a `ws`
+dial. Only the last has an escape hatch, `allowTokenOverPlaintext`, because
+only it has a legitimate caller: the fault fixtures that drive the credential
+path over plaintext loopback. Plaintext with neither a token nor a root — every
+existing fixture — is untouched.
+
+**A gateway binding off loopback with neither half configured warns.** Not a
+refusal: cleartext and unauthenticated behind a firewall on a segmented
+network is a real deployment and the gateway cannot tell whether it is in one.
+But every other misconfiguration this phase can produce is refused with a
+paragraph attached, and `ServerConfig(address: anyIPv4)` with both halves null
+was the one that was accepted in silence.
+
 **Every one of these config objects holds paths and structurally cannot hold
 bytes.** That is SEC-01, and it is enforced by a test that walks `TlsConfig`'s
 fields and fails if any of them is not a `String` — because a config object
@@ -723,21 +743,32 @@ the gateway. This is the deliberate opposite of §7.7's rule for a certificate
 rejection.
 
 **Rotation is in-process.** `reloadTokens()` re-reads the file and then sweeps
-the session registry, closing with **4001** every live session whose recorded
-identity no longer validates — token gone, station renamed, *or role narrowed*,
-because a demotion that only takes effect on the next reconnect is a demotion
-an operator can postpone indefinitely by not reconnecting. The revoked
-station's socket closes while every other station keeps receiving plant
-updates. A restart-to-apply design cannot do this: it drains every session with
-4002 and 4001 would never fire.
+the session registry, closing with **4001** every live session whose
+credential no longer buys the identity it is carrying. Four cases, and the
+fourth is the one that matters most: token gone, station renamed, role
+narrowed (a demotion that only takes effect on the next reconnect is a
+demotion an operator can postpone indefinitely by not reconnecting), and token
+**replaced** — which is what a leaked credential is actually remediated with,
+and which no comparison of identities can see, because the station and its
+role are exactly what the operator keeps. The session therefore records a
+one-way digest of the credential it authenticated with, beside its identity
+and never instead of it, and the sweep asks whether *that digest* still
+resolves to *that identity*. The revoked station's socket closes while every
+other station keeps receiving plant updates. A restart-to-apply design cannot
+do this: it drains every session with 4002 and 4001 would never fire.
 
 **The poll or watch that calls `reloadTokens()` belongs to the embedder, and
 nothing in this repository calls it yet.** Two reasons, both deliberate:
 `File.watch` on a bind-mounted path in Docker is unreliable, and the gateway
 argues for exactly one repeating timer (§5's tick) — a second one inside the
-process would fight it. The intended shape is a poll that calls
-`reloadIfChanged()` (digest-compared, so re-saving an identical file costs
-nothing) and then `reloadTokens()`.
+process would fight it. The call that poll should make is
+`reloadTokensIfChanged()`: **one** read of the file, digest-compared so
+re-saving an identical file costs nothing, and the sweep only when the bytes
+changed. The two-call sequence it replaces (`reloadIfChanged()` then
+`reloadTokens()`) parsed the file twice per change, and the two reads can
+disagree — a file edited between them, or half-written by an editor that does
+not write atomically, leaves the sweep running against a set the caller never
+saw.
 
 A revocation costs the panel **exactly one redial**: the 4001 close carries no
 RPC error, so the supervisor cannot tell it from a gateway restart, redials

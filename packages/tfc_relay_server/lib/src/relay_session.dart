@@ -853,36 +853,49 @@ final class RelaySession {
     final decoded = sanitize(params.asMap).value as Map;
     final hello = HelloParams.fromJson(decoded.cast<String, Object?>());
 
-    switch (await validator.validate(hello)) {
-      case TokenRejected(:final reason):
-        _requestClose(CloseCodes.authExpired, 'credential rejected');
-        throw rpc.RpcException(
-            ServerErrorCodes.unauthorized, 'hello refused: $reason',
-            data: _substitute(Methods.hello));
-      case TokenAccepted(:final identity, :final credentialDigest):
-        // Here rather than in the `GateAccept` arm below, which is what keeps
-        // the ordering this method already argues for true by construction:
-        // the identity is recorded the moment the credential is accepted and
-        // before the protocol is, so nothing can observe a session with a
-        // protocol and no identity.
-        //
-        // **`??=`, and that is not defensiveness.** The credential check runs
-        // *before* the gate, deliberately (see this method's doc), so a second
-        // `hello` carrying a different station's token reaches the validator
-        // and is accepted by it — the gate refuses the handshake afterwards,
-        // which is too late for a field that has already been overwritten. A
-        // view station could otherwise talk itself into an operate identity on
-        // a handshake the server then refuses, and the refusal would not
-        // matter, because the damage is the field rather than the answer.
-        //
-        // Written as one guard rather than two `??=` because the identity and
-        // the digest that bought it are one fact: a session carrying the first
-        // hello's identity and the second hello's digest is a session the
-        // revocation sweep would judge on a credential it is not using.
-        if (_identity == null) {
+    // **The credential is checked once per session, and the guard is around
+    // the check rather than around its result.**
+    //
+    // It has to be *before* the gate — a rejected credential must not spend
+    // the one `hello` the session allows — which means a second `hello`
+    // reaches the validator on a session that already has an identity. There
+    // is nothing left for the validator to decide there, and two things went
+    // wrong when it was consulted anyway. A second `hello` carrying another
+    // station's *valid* token would overwrite the field: a view station could
+    // talk itself into an operate identity on a handshake the gate then
+    // refuses, and the refusal would not matter, because the damage is the
+    // field rather than the answer. A second `hello` carrying an *invalid*
+    // token reached `TokenRejected` and closed the socket with 4001 — tearing
+    // down a session that authenticated correctly and has been serving the
+    // plant, for a frame that gets `alreadyHelloed` when the token happens to
+    // be good. Only the peer can do that to itself, but a client with a state
+    // bug should not be able to disconnect itself over a field the server has
+    // already decided.
+    //
+    // Skipping the check answers both: the gate answers `alreadyHelloed`, the
+    // identity and its digest are what the accepted handshake set, and the
+    // session lives.
+    if (_identity == null) {
+      switch (await validator.validate(hello)) {
+        case TokenRejected(:final reason):
+          _requestClose(CloseCodes.authExpired, 'credential rejected');
+          throw rpc.RpcException(
+              ServerErrorCodes.unauthorized, 'hello refused: $reason',
+              data: _substitute(Methods.hello));
+        case TokenAccepted(:final identity, :final credentialDigest):
+          // Here rather than in the `GateAccept` arm below, which is what
+          // keeps the ordering this method argues for true by construction:
+          // the identity is recorded the moment the credential is accepted
+          // and before the protocol is, so nothing can observe a session with
+          // a protocol and no identity.
+          //
+          // The two assignments are one fact and are written together: a
+          // session carrying one hello's identity and another's digest is a
+          // session the revocation sweep would judge on a credential it is
+          // not using.
           _identity = identity;
           _credentialDigest = credentialDigest;
-        }
+      }
     }
 
     final action = _gate.negotiate(hello);

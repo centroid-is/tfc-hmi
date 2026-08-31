@@ -348,6 +348,15 @@ final class RelayServer {
     if (auth != null) {
       _loaded = await FileTokenValidator.load(auth.tokenFilePath);
     }
+    // Before the bind, so it is the first thing in the log rather than a line
+    // after the port is already open. `StackTrace.empty` is this package's
+    // "condition, not defect" marker (05-REVIEW WR-03): it is a statement
+    // about the configuration, already complete in the message, and a trace
+    // would be noise.
+    final exposure = exposureWarning(config);
+    if (exposure != null) {
+      onError(StateError(exposure), StackTrace.empty, 'bind');
+    }
     final tls = config.tls;
     // `withTrustedRoots: false` on the *server* context is not the client-side
     // pinning posture repeated by mistake. A server context's trust store is
@@ -466,18 +475,93 @@ final class RelayServer {
           'RevocableTokenValidator');
     }
     await live.reload();
+    _sweepRevoked(live);
+  }
+
+  /// [reloadTokens]' cheaper sibling: one read of the file, and a sweep only
+  /// when the bytes changed. Answers whether they did.
+  ///
+  /// **The call an embedder's poll should make.** [reloadTokens]' own doc, and
+  /// design §7.4, tell the embedder to call
+  /// [FileTokenValidator.reloadIfChanged] first — and then [reloadTokens]
+  /// re-reads the file anyway, so the intended production sequence parses it
+  /// twice per change. The two reads can disagree: a file edited between them,
+  /// or half-written by an editor that does not write atomically, leaves the
+  /// sweep running against a credential set the `reloadIfChanged` caller never
+  /// saw.
+  ///
+  /// Narrower than [reloadTokens] by necessity: `reloadIfChanged` is on
+  /// [FileTokenValidator] and deliberately not on [RevocableTokenValidator]
+  /// (an in-memory implementation has no digest to compare, and an interface
+  /// member only one implementation can mean gets implemented as `=> true`).
+  /// A gateway whose validator is something else gets the same [StateError]
+  /// [reloadTokens] gives, for the same reason.
+  Future<bool> reloadTokensIfChanged() async {
+    final live = validator;
+    if (live is! FileTokenValidator) {
+      throw StateError('this gateway\'s validator is a ${live.runtimeType}, '
+          'which does not read a file and so cannot tell whether one '
+          'changed. Configure ServerConfig.auth, or drive the reload yourself '
+          'through reloadTokens()');
+    }
+    if (!await live.reloadIfChanged()) return false;
+    _sweepRevoked(live);
+    return true;
+  }
+
+  /// Closes every session whose credential [live] no longer honours.
+  ///
+  /// Synchronous, and that is the property: see [reloadTokens] on why there is
+  /// no `await` in here.
+  void _sweepRevoked(RevocableTokenValidator live) {
     for (final session in _sessions.sessions) {
       final identity = session.identity;
       // A pre-hello session has no credential to revoke. The gate already
       // holds it to `hello` alone and the heartbeat reaper already reaps it.
       if (identity == null) continue;
       if (live.stillValid(identity, session.credentialDigest)) continue;
-      unawaited(session.close(
-          CloseCodes.authExpired,
-          'the credential for station ${identity.stationId} is no longer the '
-          'one this gateway holds; it was removed, or its access was '
-          'narrowed'));
+      // Short on purpose: a close reason is capped at 123 bytes and the
+      // station id is the variable part (see `_Connection._clampReason`, which
+      // is the belt to this brace).
+      unawaited(session.close(CloseCodes.authExpired,
+          'credential revoked for station ${identity.stationId}'));
     }
+  }
+
+  /// What an operator should be told about a gateway binding off loopback
+  /// with neither TLS nor a credential file, or null when there is nothing to
+  /// say.
+  ///
+  /// A **warning, not a refusal**: cleartext and unauthenticated on a
+  /// segmented network behind a firewall is a legitimate deployment, and this
+  /// class has no way to know whether that is the one it is in. What it should
+  /// not be is quiet — every other misconfiguration this phase can produce is
+  /// refused with a paragraph attached (an empty path, a port out of range,
+  /// two sources of credential truth, `wss` with no root), and
+  /// `ServerConfig(address: InternetAddress.anyIPv4, port: 8443)` with both
+  /// nullable halves left null was accepted in silence: cleartext,
+  /// unauthenticated, writable, on every interface, with
+  /// [PermissiveTokenValidator] granting `operate` to every peer that can
+  /// reach the port.
+  ///
+  /// Static and public so a deployment can ask the question before it binds,
+  /// and so a case can ask it without one.
+  static String? exposureWarning(ServerConfig config) {
+    if (config.address.isLoopback) return null;
+    final missing = [
+      if (config.tls == null) 'TLS',
+      if (config.auth == null) 'a token file',
+    ];
+    if (missing.isEmpty) return null;
+    return 'binding ${config.address.address}:${config.port} with no '
+        '${missing.join(' and no ')}. Every peer that can reach this port is '
+        'a panel with ${config.auth == null ? 'operate rights' : 'a credential'}'
+        '${config.tls == null ? ', and every value and every write crosses '
+            'the network in cleartext' : ''}. That is a legitimate deployment '
+        'behind a firewall on a segmented network and this gateway cannot '
+        'tell whether it is in one — so this is a warning, not a refusal. If '
+        'it is deliberate, it is worth writing down somewhere the next person '
+        'will look.';
   }
 
   /// Builds one session for one upgraded connection.
@@ -744,12 +828,38 @@ final class _Connection {
     flushPriority();
     _finished = true;
     try {
-      await _ws.sink.close(code, reason);
+      await _ws.sink.close(code, _clampReason(reason));
     } catch (_) {
       // The far end is already gone. That is the ordinary shape of a
       // disconnect, not news.
     }
   }
+
+  /// RFC 6455 caps a close reason at 123 bytes, and `package:web_socket`
+  /// enforces it with an `ArgumentError` (`utils.dart:18`).
+  ///
+  /// **Clamped here rather than at each site that composes a reason, because
+  /// the failure is silent and severe.** The throw lands inside the `try`
+  /// above, is swallowed as "the far end is already gone", and the socket is
+  /// never closed — so a close code the gateway believes it sent was never
+  /// sent, and the session lives on. The revocation reason is one station id
+  /// away from that today: a thirteen-character `stationId` is enough to push
+  /// it over, and the panel holding the pulled credential would simply keep
+  /// its socket. The cap belongs to the transport, so it is applied where the
+  /// transport is.
+  static String _clampReason(String reason) {
+    final bytes = utf8.encode(reason);
+    if (bytes.length <= _maxCloseReasonBytes) return reason;
+    var cut = _maxCloseReasonBytes;
+    // Back off to a code-point boundary — a UTF-8 continuation byte is
+    // `10xxxxxx`, and a cut through the middle of a sequence is not a string.
+    while (cut > 0 && (bytes[cut] & 0xC0) == 0x80) {
+      cut--;
+    }
+    return utf8.decode(bytes.sublist(0, cut));
+  }
+
+  static const int _maxCloseReasonBytes = 123;
 
   /// Releases the connection and reports how it ended.
   ///

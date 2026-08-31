@@ -521,6 +521,35 @@ void main() {
               'the field, not the answer');
     }, tags: 'ws');
 
+    test('a second hello with a bad credential does not close a session that '
+        'authenticated correctly', () async {
+      final fixture = _gatewayOn(_oneStation());
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(_stationOneToken).toJson(),
+          what: 'the first hello');
+      final session = fixture.server.sessions.sessions.single;
+
+      final second = await fixture.refusal(Methods.hello,
+          params: _helloWith('NOT-A-CREDENTIAL-THIS-GATEWAY-KNOWS').toJson(),
+          what: 'a second hello carrying a credential the gateway never '
+              'issued');
+
+      expect(second.code, ServerErrorCodes.alreadyHelloed,
+          reason: 'the same frame with a *good* token already gets this '
+              'answer. Reaching the validator first meant a bad one produced '
+              'a 4001 instead, tearing down a session that authenticated '
+              'correctly and has been serving the plant — a self-inflicted '
+              'disconnect by a client with a state bug, and the credential '
+              'check has nothing left to decide on a session that already '
+              'has an identity');
+      expect(session.identity?.stationId, 'ST101');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(fixture.server.sessions.sessionCount, 1,
+          reason: 'a 4001 would have been scheduled by now; the socket is '
+              'still here');
+    }, tags: 'ws');
+
     test('the credential appears in no message, close reason, status frame or '
         'log', () async {
       // Distinctive enough that a substring hit cannot be a coincidence, and
@@ -690,6 +719,76 @@ void main() {
               'credential nobody had presented yet');
     }, tags: 'ws');
 
+    test('reloadTokensIfChanged reads the file once, and sweeps only on a '
+        'change', () async {
+      final dir = _tempDir();
+      final path = _writeTokenFile(dir, _twoStations());
+      final fixture = _gatewayAt(path);
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(_stationOneToken).toJson(),
+          what: 'ST101\'s hello');
+
+      expect(await fixture.server.reloadTokensIfChanged(), isFalse,
+          reason: 'the documented sequence was reloadIfChanged() then '
+              'reloadTokens(), which parses the file twice per change and '
+              'lets the two reads disagree — a file edited between them, or '
+              'half-written by an editor that does not write atomically, '
+              'leaves the sweep running against a set the caller never saw');
+      expect(fixture.server.sessions.sessionCount, 1,
+          reason: 'nothing changed, so nothing is swept');
+
+      _writeTokenFile(dir, {
+        'tokens': {
+          _stationTwoToken: {'stationId': 'ST201', 'role': 'view'},
+        },
+      });
+
+      expect(await fixture.server.reloadTokensIfChanged(), isTrue);
+      final close = await fixture.awaitClose('the revoked station\'s socket',
+          budget: const Duration(seconds: 3));
+      expect(close.closeCode, CloseCodes.authExpired,
+          reason: 'one call, one read, and the sweep still happens — this is '
+              'the call an embedder\'s poll makes');
+    }, tags: 'ws');
+
+    test('a station with a long name is still closed, not silently kept',
+        () async {
+      // Found by the review fix, not by the review. RFC 6455 caps a close
+      // reason at 123 bytes and `package:web_socket` throws above it; the
+      // throw lands in `_Connection.closeSocket`'s catch, which reads it as
+      // "the far end is already gone", and the socket is then **never
+      // closed**. The gateway believes it revoked the station and the panel
+      // keeps its credential. The old reason was 116 bytes with `ST101` in
+      // it, so a thirteen-character station id was enough.
+      const long = 'BAADER-FILLETING-LINE-3-PANEL-EAST';
+      const token = 'BAADER3E-7pQ2xL9mR4vK1nT6wS3yB8dF';
+      final dir = _tempDir();
+      final path = _writeTokenFile(dir, {
+        'tokens': {
+          token: {'stationId': long, 'role': 'operate'},
+        },
+      });
+      final fixture = _gatewayAt(path);
+      await fixture.ready;
+      await fixture.request(Methods.hello,
+          params: _helloWith(token).toJson(), what: 'the long station\'s hello');
+
+      _writeTokenFile(dir, {
+        'tokens': {
+          _stationTwoToken: {'stationId': 'ST201', 'role': 'view'},
+        },
+      });
+      await fixture.server.reloadTokens();
+
+      final close = await fixture.awaitClose('the revoked station\'s socket',
+          budget: const Duration(seconds: 3));
+      expect(close.closeCode, CloseCodes.authExpired,
+          reason: 'a revocation that depends on how long the station is '
+              'called is not a revocation');
+      expect(close.closeReason, contains(long));
+    }, tags: 'ws');
+
     test('reloadTokens refuses to pretend on a gateway with no token file',
         () async {
       final fixture = relayFixture();
@@ -804,20 +903,31 @@ void main() {
               'behind it — and keep this a lookup. Found:\n$body');
     });
 
-    test('the sweep still runs with no await in its loop', () {
+    test('the sweep itself awaits nothing', () {
       final server = File('lib/src/relay_server.dart').readAsStringSync();
-      final body = _methodBody(server, 'Future<void> reloadTokens()');
-      expect(body, contains('_sessions.sessions'),
-          reason: 'anti-vacuity');
+      final sweep =
+          _methodBody(server, 'void _sweepRevoked(RevocableTokenValidator');
+      expect(sweep, contains('_sessions.sessions'),
+          reason: 'anti-vacuity: the pin is reading the wrong span');
       // Word-bounded: `unawaited(` contains the string and is the opposite of
       // what this is counting.
-      expect(RegExp(r'\bawait\b').allMatches(body), hasLength(1),
-          reason: 'exactly one await, the reload. A second one inside the '
-              'loop would let the next iteration observe a registry the '
-              'previous close had not finished leaving — the property '
-              '`unawaited(session.close(...))` depends on, which is only safe '
-              'because the registry removal is the synchronous half of the '
-              'teardown. Found:\n$body');
+      expect(RegExp(r'\bawait\b').allMatches(sweep), isEmpty,
+          reason: 'an await inside the loop would let the next iteration '
+              'observe a registry the previous close had not finished leaving '
+              '— the property `unawaited(session.close(...))` depends on, '
+              'which is only safe because the registry removal is the '
+              'synchronous half of the teardown. Found:\n$sweep');
+
+      for (final entry in {
+        'reloadTokens': _methodBody(server, 'Future<void> reloadTokens()'),
+        'reloadTokensIfChanged':
+            _methodBody(server, 'Future<bool> reloadTokensIfChanged()'),
+      }.entries) {
+        expect(RegExp(r'\bawait\b').allMatches(entry.value), hasLength(1),
+            reason: '${entry.key} has more than the one await its reload '
+                'needs, and the sweep is ordered behind whatever the second '
+                'one waits for. Found:\n${entry.value}');
+      }
     });
   });
 }

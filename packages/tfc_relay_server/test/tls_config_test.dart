@@ -42,6 +42,7 @@ import 'dart:mirrors';
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:test/test.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
+import 'package:tfc_relay_server/src/auth/auth_config.dart';
 import 'package:tfc_relay_server/src/relay_server.dart';
 import 'package:tfc_relay_server/src/server_config.dart';
 import 'package:tfc_relay_server/src/tls/tls_config.dart';
@@ -201,6 +202,68 @@ void main() {
         served.keys.join('\n'),
         for (final key in served.keys) '${served.read(key)}',
       ]);
+    });
+  });
+
+  // Every other misconfiguration this phase can produce is refused with a
+  // paragraph attached: an empty path, a port out of range, two sources of
+  // credential truth, `wss` with no root. `ServerConfig(address:
+  // InternetAddress.anyIPv4, port: 8443)` with neither `tls` nor `auth` is
+  // accepted in silence — cleartext, unauthenticated, writable, on every
+  // interface. A warning rather than a refusal: the combination is legitimate
+  // on a segmented network. It just should not be quiet.
+  group('a gateway that is exposed and unprotected says so', () {
+    test('binding off loopback with neither TLS nor auth warns', () {
+      final warning = RelayServer.exposureWarning(
+          ServerConfig(address: InternetAddress.anyIPv4, port: 8443));
+
+      expect(warning, isNotNull);
+      expect(warning, contains('0.0.0.0:8443'),
+          reason: 'the operator has to be able to tell which gateway this is '
+              'about without reading the source');
+      expect(warning, allOf(contains('TLS'), contains('token')),
+          reason: 'both halves are missing, and a message that named one '
+              'would be half fixed and still wide open');
+    });
+
+    test('loopback is silent, and so is either protection', () {
+      expect(RelayServer.exposureWarning(ServerConfig()), isNull,
+          reason: 'the default is loopback on an ephemeral port, which is '
+              'every fixture in this workspace. A warning there would be '
+              'noise a deployment learns to filter, and the filter is what '
+              'silences the real one');
+      expect(
+          RelayServer.exposureWarning(ServerConfig(
+              address: InternetAddress.anyIPv4,
+              tls: TlsConfig(chainPath: 'leaf.pem', keyPath: 'key.pem'),
+              auth: AuthConfig(tokenFilePath: 'tokens.json'))),
+          isNull);
+    });
+
+    test('a warned gateway still starts, and the warning reaches onError',
+        () async {
+      final reported = <String>[];
+      final served = FakeStateMan();
+      final server = RelayServer(
+        api: served,
+        // Port 0 so the case cannot collide with anything; the address is
+        // what the check reads.
+        config: ServerConfig(
+            tick: ServerConfig.minTick, address: InternetAddress.anyIPv4),
+        onError: (error, stack, where) => reported.add('$where: $error'),
+      );
+      addTearDown(() async {
+        await server.close();
+        await served.dispose();
+      });
+
+      await server.start();
+
+      expect(server.port, greaterThan(0),
+          reason: 'a warning, not a refusal — the combination is legitimate '
+              'on a segmented network');
+      expect(reported, hasLength(1));
+      expect(reported.single, contains('0.0.0.0'));
     });
   });
 
