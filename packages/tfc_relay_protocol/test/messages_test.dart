@@ -38,6 +38,51 @@ void main() {
     expect(r.serverTime, 1786000000123);
   });
 
+  test('a hello carries the panel\'s credential in a typed field', () {
+    final params = HelloParams(
+      protocol: protocolVersion,
+      supported: const [protocolVersion],
+      client: const PeerInfo('centroid-hmi', '1.4.0'),
+      token: 'station-ST101-0123456789abcdef',
+    );
+
+    final wire = params.toJson();
+    expect(wire['token'], 'station-ST101-0123456789abcdef',
+        reason: 'the credential rides in its own key, not folded into '
+            '`capabilities` — an open map the session logs and copies. A '
+            'typed field is what makes "does anything log the token?" a grep '
+            'rather than an audit');
+
+    final p = HelloParams.fromJson(viaJson(wire));
+    expect(p.token, 'station-ST101-0123456789abcdef',
+        reason: 'a credential that does not survive the round trip is a panel '
+            'the gateway refuses for a reason nobody can diagnose, because '
+            'the token was sent and simply never arrived');
+  });
+
+  test('a hello with no credential carries no token key', () {
+    final params = HelloParams(
+      protocol: protocolVersion,
+      supported: const [protocolVersion],
+      client: const PeerInfo('centroid-hmi', '1.4.0'),
+    );
+
+    final wire = params.toJson();
+    expect(wire.containsKey('token'), isFalse,
+        reason: 'an absent credential must be absent, not an empty string: a '
+            'diagnostic dump of a tokenless hello that shows `token: ""` '
+            'tells the integrator the station was configured with a blank '
+            'credential when it was configured with none, and those are two '
+            'different faults with two different fixes. It is also the '
+            'compatibility property — encoders omit absent optionals, so a '
+            'tokenless hello is byte-identical to the one this build sent '
+            'before the field existed');
+
+    expect(HelloParams.fromJson(viaJson(wire)).token, isNull,
+        reason: 'a hello with no token key decodes to no token; anything else '
+            'invents a credential the panel never presented');
+  });
+
   test('SubscribeResult: handles, snapshot, meta, and per-key rejection', () {
     final result = SubscribeResult(
       sub: 's1',

@@ -179,6 +179,35 @@ final class ClientConfig {
   /// A parameter rather than a constant on purpose; see the library doc.
   final Duration deadlineFloor;
 
+  /// The credential this station presents on the first frame, or null when the
+  /// gateway it dials runs no token file.
+  ///
+  /// **What it is.** A per-station secret the integrator mounts alongside the
+  /// panel's other configuration — one opaque string that tells the gateway
+  /// *which panel* is speaking and, through the gateway's own map, whether
+  /// that panel may write or only watch.
+  ///
+  /// **What it is not: a person's identity.** Nobody logs in to a panel. The
+  /// screen by the filleting line is used by whoever is standing at it, all
+  /// shift, with wet gloves on — a credential that identified people would be
+  /// a credential shared by everyone on the shift within a day, which is worse
+  /// than no claim at all because it would look like an audit trail. This
+  /// string answers "which station", and the plant's own supervision answers
+  /// who was at it.
+  ///
+  /// **Null is the shipped default and stays supported.** Every fixture in
+  /// this workspace dials a gateway running the permissive validator, and a
+  /// panel with no token still sends a well-formed hello — the field is simply
+  /// absent from the frame. So switching a gateway to a real token file is a
+  /// deployment change, not a protocol change.
+  ///
+  /// **Not validated here.** A length or shape rule in this constructor would
+  /// be a second opinion about a secret whose only real judge is the gateway,
+  /// and a panel that refuses to construct because its mounted credential
+  /// looks wrong is a dark screen at shift start instead of a refusal an
+  /// operator can read. The gateway decides; this class carries.
+  final String? token;
+
   /// Ten measured round trips. The default [deadlineFloor].
   static const Duration defaultDeadlineFloor = Duration(milliseconds: 500);
 
@@ -200,6 +229,7 @@ final class ClientConfig {
     this.subscriptionStalenessMultiple = 30,
     this.holdPulsePeriod = const Duration(milliseconds: 100),
     this.holdMissedPulsesBeforeStop = 10,
+    this.token,
   }) {
     if (!(subscriptionStalenessMultiple > 1)) {
       throw ArgumentError('subscriptionStalenessMultiple '

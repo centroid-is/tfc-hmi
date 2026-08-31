@@ -97,6 +97,15 @@ enum LinkState {
 /// `reconnect_test.dart` drives it verbatim.
 const int _versionMismatch = -32004;
 
+/// The JSON-RPC error code the gateway refuses a credential with.
+///
+/// Declared here for the same reason [_versionMismatch] is, and the reason has
+/// not changed: the server's `ServerErrorCodes` lives in a package this one
+/// depends on only for its tests, and a production file may not reach into a
+/// dev dependency. The number is the contract, and `auth_refusal_test.dart`
+/// drives it verbatim against a scripted gateway, end to end.
+const int _unauthorized = -32003;
+
 /// The code this client reports its own handler failures under.
 const int _handlerFailed = -32000;
 
@@ -389,6 +398,10 @@ final class ConnectionSupervisor {
           protocol: protocolVersion,
           supported: const [protocolVersion],
           client: client,
+          // Null on a gateway with no token file, and then omitted from the
+          // frame entirely, so this line changes nothing for a deployment
+          // that has not configured one.
+          token: config.token,
         ).toJson(),
         deadline: config.controlDeadline,
       );
@@ -418,6 +431,24 @@ final class ConnectionSupervisor {
       // double signal is one event, and the number on the close means nothing.
       if (error.code == _versionMismatch) {
         _stop('the gateway refused this build\'s protocol version: '
+            '${error.message}');
+        return;
+      }
+      // The second answer that will not change on the next attempt. A refused
+      // credential is not a transient fault: the gateway has already decided
+      // about this token, and `error_codes.dart:31-34` says so from its end —
+      // "reconnecting with the same token will be refused again, so a backoff
+      // loop around it is a busy loop". Without this arm one mistyped station
+      // token is a rejected hello every backoff ceiling, forever, against the
+      // single process serving every screen in the factory, with nothing on
+      // the panel to distinguish it from a pulled cable.
+      //
+      // The message is the gateway's, unmodified. This side holds the
+      // credential in `config.token` and must never splice it in: `stopReason`
+      // is displayed at the panel, and a panel stands where anybody can read
+      // it.
+      if (error.code == _unauthorized) {
+        _stop('the gateway refused this panel\'s credential: '
             '${error.message}');
         return;
       }
