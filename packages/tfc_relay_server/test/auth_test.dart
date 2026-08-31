@@ -288,4 +288,84 @@ void main() {
       expect(() => AuthConfig(tokenFilePath: ''), throwsArgumentError);
     });
   });
+
+  // A security property no behavioural case can see. The sabotage arm proved
+  // it: replacing the accumulator with an early-exit compare — the exact
+  // "simplification" a later reader makes — leaves every other case in this
+  // file green, because early exit is *correct*, it is only not constant
+  // time. A timing assertion would be a flake on a shared CI runner, so the
+  // pin is structural instead, and it is stated plainly rather than implied
+  // by a comment nobody has to keep true.
+  group('the credential comparison does not exit early', () {
+    final source =
+        File('lib/src/auth/file_token_validator.dart').readAsStringSync();
+
+    test('the source the pin reads is the real one', () {
+      // Anti-vacuity: every assertion below passes against an empty string.
+      expect(source, contains('class FileTokenValidator'),
+          reason: 'the pin is reading the wrong file, and everything it '
+              'reports is noise');
+    });
+
+    test('the lookup confirms the digest through the constant-time helper', () {
+      expect(source, contains('_constantTimeEquals(entry.digest, presented)'),
+          reason: 'the map lookup is a hash lookup over digests; the actual '
+              'credential comparison is the line after it, and if that line '
+              'stops calling the helper the property is gone');
+    });
+
+    test('the helper accumulates instead of returning at the first difference',
+        () {
+      final body = _functionBody(source, 'bool _constantTimeEquals(');
+      final loop = body.indexOf('for (');
+      expect(loop, greaterThanOrEqualTo(0),
+          reason: 'the helper has no loop left in it: something replaced the '
+              'byte-wise comparison with a whole-object one, which for two '
+              'Uint8Lists is reference equality');
+
+      final afterLoop = body.substring(loop);
+      expect('return'.allMatches(afterLoop), hasLength(1),
+          reason: 'there is more than one exit from the comparison loop, so '
+              'how long the comparison takes depends on where the two digests '
+              'first differ — which is the side channel the helper exists to '
+              'close (T-06-28). Found:\n$afterLoop');
+      expect(afterLoop, contains('^'));
+      expect(afterLoop, contains('|='));
+    });
+
+    test('nothing in the file compares a token with ==', () {
+      final offenders = <String>[];
+      final lines = source.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.startsWith('//') || line.startsWith('///')) continue;
+        if (!line.contains('==')) continue;
+        // `token == null` is a presence check on the reference, not a
+        // comparison of the secret against anything.
+        if (line.contains('token ==') && !line.contains('token == null')) {
+          offenders.add('${i + 1}: $line');
+        }
+        if (line.contains('== token')) offenders.add('${i + 1}: $line');
+      }
+      expect(offenders, isEmpty,
+          reason: 'a Dart String `==` short circuits on the first differing '
+              'code unit. Found: $offenders');
+    });
+  });
+}
+
+/// The body of the top-level function whose declaration starts with
+/// [signature], braces included.
+///
+/// The `ws_malformed_test.dart` precedent for `_defuse`: a structural pin has
+/// to read the one function rather than the whole file, or a `return` anywhere
+/// else in the file satisfies it.
+String _functionBody(String source, String signature) {
+  final start = source.indexOf(signature);
+  if (start < 0) fail('$signature is not in the source any more');
+  final open = source.indexOf('{', start);
+  // Top-level function, so the closing brace is the first one at column zero.
+  final close = source.indexOf('\n}', open);
+  if (close < 0) fail('$signature has no closing brace at column zero');
+  return source.substring(open, close);
 }
