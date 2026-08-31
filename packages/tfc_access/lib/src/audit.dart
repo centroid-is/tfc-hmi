@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:clock/clock.dart';
 import 'package:meta/meta.dart';
 
+import 'access_group.dart';
 import 'access_role.dart';
 
 /// One row of the audit trail.
@@ -26,11 +27,61 @@ import 'access_role.dart';
 /// consumer has to invent column values and the Phase 5 trail viewer has
 /// something exact to filter on.
 ///
+/// ## The admin surface
+///
+/// Phase 6 adds a fifth surface, `'admin'`, for the writes the roles and users
+/// screens make. A role edit that grants somebody `force` and leaves no trace
+/// is the widest gap this product could ship with — re-scoping a role is the
+/// most consequential hand-made write in it. The itemKey vocabulary is eight
+/// strings:
+///
+///     role.create | role.update | role.delete | role.rename
+///     user.create | user.delete | user.role   | user.password
+///
+/// Three things differ from the auth four, each on purpose:
+///
+/// 1. [groupRequired] is `AccessGroup.users.name`, not empty. Signing in is not
+///    gated; editing a role is. That one field is also what puts these rows
+///    behind the trail viewer's existing `users` filter chip with no change to
+///    the viewer — a row carrying an empty [groupRequired] would fall outside
+///    every group filter instead.
+/// 2. [allowed] is a **parameter** on all eight. Each auth constructor *is* an
+///    outcome and can hardcode it; an admin action can be refused by the `users`
+///    gate, and a refused role edit is a row worth having. Allow-only
+///    constructors would leave the store hand-building denial rows, which is the
+///    vocabulary drifting on day one.
+/// 3. [oldValue] and [newValue] carry group sets encoded the one way this
+///    codebase encodes them, `AccessRole.encodeGroups()` — a JSON array in
+///    [AccessGroup.values] order — so `["operate"] -> ["operate","force"]` is
+///    legible in the viewer's generic old-to-new row.
+///
+/// **The account or role acted upon goes in [member], never in [itemKey].** The
+/// itemKey vocabulary is a closed set of eight strings the viewer filters on;
+/// folding the subject in (`user.role.jon`) would make it unbounded, and an
+/// unbounded itemKey is an unfilterable one. The viewer already renders
+/// [itemKey] with its [member] suffix, so `user.role` on member `jon` reads
+/// correctly with no change there.
+///
+/// `'admin'` is a private literal on this class, **not** a fourth
+/// `AccessSurface` value. `AccessSurface` is the type the policy answers
+/// questions about, and nothing ever gates on an admin row; adding it there
+/// would make `AccessSurface.byWireName` claim a surface the policy never
+/// consults. `'auth'` set that precedent and this follows it exactly.
+///
 /// ## What must not be in here
 ///
 /// No auth constructor takes a password, a hash or a salt, and none ever
 /// should. [toString] withholds [oldValue] and [newValue] for auth rows for the
 /// same reason — a trail that leaks credentials is worse than no trail.
+///
+/// That extends to the admin surface, where two constructors are where somebody
+/// will be tempted: [AuditRecord.userPassword] and [AuditRecord.userCreate].
+/// Neither takes a password, a hash or a salt, and [AuditRecord.userPassword]
+/// leaves both value columns null. Note the hazard: [toString]'s withholding is
+/// keyed on [isAuthEvent], i.e. `surface == 'auth'`, so an admin row's values
+/// are **not** withheld from logs. That is correct for a group set, and it is
+/// exactly why those two constructors have no parameter that could carry a
+/// credential, rather than relying on callers to pass none.
 @immutable
 class AuditRecord {
   const AuditRecord({
@@ -159,8 +210,290 @@ class AuditRecord {
         reason: reason,
       );
 
+  /// A role was created.
+  ///
+  /// [subject] is the new role's name and lands in [member]; [roleName] is the
+  /// role the editor held at the time, as on every row. [groups] is the new
+  /// role's `AccessRole.encodeGroups()` output.
+  factory AuditRecord.roleCreate({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required String groups,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'role.create',
+        member: subject,
+        newValue: groups,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// A role's group set was edited — the most consequential hand-made write in
+  /// the product, and the one this surface exists for.
+  ///
+  /// [oldGroups] and [newGroups] are both `AccessRole.encodeGroups()` output, so
+  /// the row reads as `["operate"] -> ["operate","force"]` in the trail viewer's
+  /// generic old-to-new shape.
+  factory AuditRecord.roleUpdate({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required String oldGroups,
+    required String newGroups,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'role.update',
+        member: subject,
+        oldValue: oldGroups,
+        newValue: newGroups,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// A role was deleted. [groups] is what it granted, so the row still says what
+  /// was lost after the row it described is gone.
+  factory AuditRecord.roleDelete({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required String groups,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'role.delete',
+        member: subject,
+        oldValue: groups,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// A role was renamed.
+  ///
+  /// [member] is [oldName] — the role as it was named when the action began,
+  /// which is the string the rest of the trail up to this point refers to.
+  factory AuditRecord.roleRename({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String oldName,
+    required String newName,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'role.rename',
+        member: oldName,
+        oldValue: oldName,
+        newValue: newName,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// An account was created. [subject] is the new username, [grantedRole] the
+  /// role it was given.
+  ///
+  /// **There is no password parameter, and there must never be one.** Creating
+  /// an account means typing a password, so this is one of the two places a
+  /// credential would be handed to the trail if the signature allowed it. See
+  /// the hazard note on [AuditRecord.userPassword].
+  factory AuditRecord.userCreate({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required String grantedRole,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'user.create',
+        member: subject,
+        newValue: grantedRole,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// An account was deleted. [heldRole] is the role it held.
+  ///
+  /// The account's own audit rows survive it: `audit_entry.who` is a
+  /// denormalised TEXT column with no foreign key, on purpose.
+  factory AuditRecord.userDelete({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required String heldRole,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'user.delete',
+        member: subject,
+        oldValue: heldRole,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// An account was moved to a different role.
+  ///
+  /// `user.role` with a [member] of `jon` reads correctly in the trail viewer's
+  /// generic row, which is why the username is here and not in the itemKey.
+  factory AuditRecord.userRole({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required String oldRole,
+    required String newRole,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'user.role',
+        member: subject,
+        oldValue: oldRole,
+        newValue: newRole,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
+  /// An account's password was reset by an administrator.
+  ///
+  /// This records **that** it happened, on which account, by whom — and nothing
+  /// else. [oldValue] and [newValue] are null and there is no parameter that
+  /// could fill them.
+  ///
+  /// **The hazard, written here because this is where it will be met.**
+  /// [toString]'s withholding of the value columns is keyed on [isAuthEvent],
+  /// i.e. `surface == 'auth'`. This is an admin row, so its values are **not**
+  /// withheld — they go into log files that live longer and travel further than
+  /// the database does. That is correct for a group set, and it is exactly why
+  /// this constructor leaves the value fields null by construction rather than
+  /// by discipline. Do not add a password, a hash or a salt parameter "just for
+  /// debugging": a trail that leaks credentials is worse than no trail.
+  factory AuditRecord.userPassword({
+    required String who,
+    required String station,
+    required String roleName,
+    required String actionId,
+    required String subject,
+    required bool allowed,
+    DateTime? at,
+    String? reason,
+    String origin = 'operator',
+  }) =>
+      AuditRecord(
+        at: at ?? clock.now(),
+        who: who,
+        station: station,
+        roleName: roleName,
+        surface: _adminSurface,
+        itemKey: 'user.password',
+        member: subject,
+        groupRequired: AccessGroup.users.name,
+        allowed: allowed,
+        origin: origin,
+        actionId: actionId,
+        reason: reason,
+      );
+
   /// The `surface` value shared by every auth row.
   static const String _authSurface = 'auth';
+
+  /// The `surface` value shared by every admin row.
+  ///
+  /// A private literal, deliberately, exactly as [_authSurface] is. `admin` is
+  /// **not** an `AccessSurface` value: that enum is what the policy answers
+  /// questions about, and the policy never gates on an admin row. Putting it
+  /// there would make `AccessSurface.byWireName` claim a surface nothing
+  /// consults.
+  static const String _adminSurface = 'admin';
 
   /// The cap applied to the attempted username on a failed login.
   static const int maxAttemptedUsernameLength = 64;
@@ -177,7 +510,7 @@ class AuditRecord {
   /// The role in force at the time.
   final String roleName;
 
-  /// `'tag' | 'pref' | 'route' | 'auth'`.
+  /// `'tag' | 'pref' | 'route' | 'auth' | 'admin'`.
   final String surface;
 
   /// The tag, preference key, route or auth event.
