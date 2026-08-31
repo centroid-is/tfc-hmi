@@ -8,7 +8,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
         AlarmReader,
         DriftDrawingIndex,
         DriftTechDocIndex,
-        EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
         NodeBrowser,
@@ -69,11 +68,6 @@ Map<String, String> getMcpServerEnv() {
     if (env['CENTROID_PGPASSWORD'] != null)
       'CENTROID_PGPASSWORD': env['CENTROID_PGPASSWORD']!,
   };
-}
-
-/// Returns the operator identity from TFC_USER environment variable.
-String getMcpOperatorId() {
-  return io.Platform.environment['TFC_USER'] ?? 'operator';
 }
 
 /// Whether an operator identity is present (TFC_USER environment variable).
@@ -255,7 +249,6 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     throw StateError('Database not connected');
   }
   final McpDatabase database = dbWrapper.db;
-  final identity = EnvOperatorIdentity();
 
   final config = await ref.read(mcpConfigProvider.future);
 
@@ -274,7 +267,6 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
     stateReader: stateReader,
     alarmReader: alarmReader,
     database: database,
-    identity: identity,
     toggles: config.toggles,
     nodeBrowser: nodeBrowser,
     drawingIndex: DriftDrawingIndex(database),

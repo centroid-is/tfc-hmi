@@ -8,7 +8,6 @@ import 'package:tfc_mcp_server/tfc_mcp_server.dart'
     show
         DriftDrawingIndex,
         DriftTechDocIndex,
-        EnvOperatorIdentity,
         McpConfig,
         McpDatabase,
         kMcpTogglesEnvVar;
@@ -979,9 +978,6 @@ final chatLifecycleProvider = Provider<void>((ref) {
         }
         final McpDatabase database = dbWrapper.db;
 
-        // Create operator identity
-        final identity = EnvOperatorIdentity();
-
         // Read toggle state from consolidated config
         final config = await ref.read(mcpConfigProvider.future);
 
@@ -995,7 +991,6 @@ final chatLifecycleProvider = Provider<void>((ref) {
         // Use the shared plcCodeIndexProvider so the MCP server sees the
         // same isEmpty cache that upload updates.
         await bridge.connectInProcess(
-          identity: identity,
           database: database,
           stateReader: stateReader,
           alarmReader: alarmReader,
@@ -1022,9 +1017,7 @@ final chatLifecycleProvider = Provider<void>((ref) {
           ...getMcpServerEnv(),
           kMcpTogglesEnvVar: jsonEncode(fallbackConfig.toggles.toJson()),
         };
-        final operatorId = getMcpOperatorId();
         await bridge.connect(
-          operatorId: operatorId,
           dbEnv: dbEnv,
           llmProvider: llmProvider,
         );
@@ -1165,7 +1158,6 @@ final chatLifecycleProvider = Provider<void>((ref) {
           final dbWrapper = await ref.read(databaseProvider.future);
           if (dbWrapper == null) return;
           final McpDatabase database = dbWrapper.db;
-          final identity = EnvOperatorIdentity();
 
           final selectedType =
               await ref.read(selectedLlmProviderProvider.future);
@@ -1183,7 +1175,6 @@ final chatLifecycleProvider = Provider<void>((ref) {
           if (!ref.read(chatVisibleProvider)) return;
 
           await bridge.connectInProcess(
-            identity: identity,
             database: database,
             stateReader: stateReader,
             alarmReader: alarmReader,
