@@ -231,6 +231,19 @@ void main() {
           matchesGoldenFile('goldens/stop_timeline_strip.png'));
     }, skip: !Platform.isMacOS);
 
+    // The box a freshly dropped asset gets: StopTimelineConfig.preview()'s
+    // 40% x 30% of a 1920x1080 page. The size is only worth having as a
+    // default if the chart is readable in it, so the golden is what says so.
+    testWidgets('at the size it is dropped onto a page', (tester) async {
+      await pump(
+          tester,
+          harness(StopTimelineConfig.preview(), Brightness.dark,
+              size: const Size(768, 324)),
+          const Size(860, 400));
+      await expectLater(find.byType(StopTimelineView),
+          matchesGoldenFile('goldens/stop_timeline_drop_size.png'));
+    }, skip: !Platform.isMacOS);
+
     testWidgets('a group with no alarms says so', (tester) async {
       await pump(
           tester,

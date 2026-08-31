@@ -380,5 +380,38 @@ void main() {
           find.byKey(const ValueKey('stop-timeline-header')), '');
       expect(config.headerText, isNull);
     });
+
+    testWidgets('the timeline can be sized from the form', (tester) async {
+      final config = StopTimelineConfig();
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: StopTimelineConfigForm(config: config)),
+      ));
+
+      Finder field(String label) => find.ancestor(
+          of: find.text(label), matching: find.byType(TextFormField));
+
+      await tester.enterText(field('Width %'), '55');
+      await tester.enterText(field('Height %'), '40');
+
+      expect(config.size.width, closeTo(0.55, 1e-9));
+      expect(config.size.height, closeTo(0.40, 1e-9));
+    });
+
+    testWidgets('the timeline can be positioned from the form',
+        (tester) async {
+      final config = StopTimelineConfig();
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: StopTimelineConfigForm(config: config)),
+      ));
+
+      Finder field(String label) => find.ancestor(
+          of: find.text(label), matching: find.byType(TextFormField));
+
+      await tester.enterText(field('X 0-100%'), '25');
+      await tester.enterText(field('Y 0-100%'), '60');
+
+      expect(config.coordinates.x, closeTo(0.25, 1e-9));
+      expect(config.coordinates.y, closeTo(0.60, 1e-9));
+    });
   });
 }

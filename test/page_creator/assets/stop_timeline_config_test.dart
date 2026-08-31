@@ -49,6 +49,14 @@ void main() {
       expect(back.headerText, isNull);
     });
 
+    test('drops onto the canvas at a size a chart can be read at', () {
+      // The BaseAsset default is a 3% square, which for a timeline is a
+      // sliver with no room for even the header.
+      final preview = StopTimelineConfig.preview();
+      expect(preview.size.width, greaterThan(0.2));
+      expect(preview.size.height, greaterThan(0.2));
+    });
+
     test('binds to no OPC UA keys — it reads alarms, not tags', () {
       expect(
           StopTimelineConfig(groups: [
