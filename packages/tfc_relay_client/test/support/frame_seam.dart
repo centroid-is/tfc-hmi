@@ -52,7 +52,26 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 /// which is what lets a case corrupt a frame, lose the link, and inspect what
 /// the recovered client did with it.
 final class FrameSeam {
-  FrameSeam({this.corrupt});
+  FrameSeam({this.corrupt, this.connectTimeout});
+
+  /// The bound on the dial itself, mirroring [ClientConfig.connectTimeout].
+  ///
+  /// **Without this the seam is unfaithful to the panel it stands in for, and
+  /// the unfaithfulness only shows on the one link that matters.** The real
+  /// dial applies `config.connectTimeout` (`remote_state_man.dart:1059`), but a
+  /// fixture that passes `dial:` replaces that path wholesale — so every case
+  /// driven through this seam had an *unbounded* connect while production had a
+  /// bounded one. An ordinary dial completes in milliseconds and nothing
+  /// noticed; a dial into a blackholed proxy completes never, and the OS is
+  /// what eventually ends it: **75 seconds on macOS** (`SocketException:
+  /// Operation timed out`, errno 60 — 06-RESEARCH probe case 4, 07-RESEARCH
+  /// trap 19).
+  ///
+  /// That is why F14b could not be written before this existed: the row's
+  /// second leg is "a dial that is never answered", and a leg whose bound comes
+  /// from the operating system measures the operating system. Null leaves the
+  /// dial unbounded, which is what this seam did before.
+  final Duration? connectTimeout;
 
   /// Applied to every inbound message before the peer sees it, or null to
   /// forward everything verbatim.
@@ -86,11 +105,19 @@ final class FrameSeam {
   /// in its trace.
   Future<ConnectAttempt> dial(Uri uri) async {
     final ws = WebSocketChannel.connect(uri);
+    final timeout = connectTimeout;
     try {
-      await ws.ready;
+      await (timeout == null ? ws.ready : ws.ready.timeout(timeout));
     } catch (error, stack) {
       ws.stream.listen(null, onError: (Object _) {}, cancelOnError: true);
       unawaited(ws.sink.done.catchError((Object _) => null));
+      // Closed as well as drained, which the untimed path never had to do: a
+      // dial that *failed* has no socket left to release, but a dial that
+      // merely ran out of time still has one in progress, and abandoning it
+      // leaks the descriptor for as long as the OS keeps trying — the very
+      // 75 seconds this bound exists to avoid, moved from the case's wall
+      // clock into F2b's file-descriptor count.
+      unawaited(ws.sink.close().catchError((Object _) {}));
       return ConnectFailed(ws, error, stack);
     }
     _dials++;

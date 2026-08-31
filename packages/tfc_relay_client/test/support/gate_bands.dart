@@ -120,9 +120,51 @@ final Duration freshnessDeadline = Platform.isLinux
 final Duration freshnessTransition = freshnessDeadline * 2;
 
 /// The one-way delay F13 imposes. A round trip therefore costs twice this.
-const Duration f13Latency = Duration(milliseconds: 100);
+///
+/// **The catalogue's own number**, `latency(500ms, 200ms)`. It ran at a flat
+/// 100 ms with no jitter until 07-05, which is why F13 carried a `partial`
+/// entry: a tenth of a second is inside every deadline in the client by such a
+/// margin that the row's headline — no false disconnect — was never actually
+/// put at risk.
+const Duration f13Latency = Duration(milliseconds: 500);
+
+/// The spread drawn on top of [f13Latency], per chunk and per direction.
+///
+/// The second half of `latency(500ms, 200ms)`, and it is not decoration: a flat
+/// delay is a link the client could in principle predict, and the deadline
+/// arithmetic below has to hold against the *worst* draw rather than the mean.
+/// `FaultProxy.jitter` redraws uniformly from `[0, 200 ms]` for every chunk, so
+/// the two legs of one round trip draw independently.
+const Duration f13Jitter = Duration(milliseconds: 200);
 
 /// The control deadline F13's client is given: comfortably above the round trip
 /// the case imposes, which is the whole point — a link that is merely slow must
 /// not read as a link that is gone.
-const Duration f13Deadline = Duration(milliseconds: 1500);
+///
+/// **The arithmetic, stated so that changing it is visibly a scenario change.**
+/// The injected round trip is two one-way delays plus two independent jitter
+/// draws: `2 x (500 + U[0, 200])`, so **1000 ms at best and 1400 ms at worst**,
+/// before any of the gateway's own work. Measured on macOS over ten round
+/// trips at these numbers: 1150, 1163, 1167, 1173, 1203, 1227, 1275, 1277,
+/// 1282, 1284 ms.
+///
+/// Three seconds is therefore more than twice the worst injected case. The
+/// margin is deliberate and it is **not** a widened band: this number is the
+/// client's *configured patience*, not a measurement tolerance, and the row's
+/// clause is literally "ping and freshness deadlines tolerate configured RTT".
+/// A deadline set below the RTT would not measure the client at all — it would
+/// stage a false disconnect and then assert that it happened. The old 1500 ms
+/// left 100 ms of headroom over the worst draw, which is how a green case turns
+/// into a flake on a loaded runner.
+const Duration f13Deadline = Duration(seconds: 3);
+
+/// How long F13 watches for something to go wrong after the link is slow.
+///
+/// Derived from the round trip rather than from the flat [settle], because the
+/// property is an absence and an absence is only worth as much as the window it
+/// was watched over: at 400 ms this window was **shorter than a single round
+/// trip** once the latency rose, so a client that redialled on its very next
+/// exchange would have been recorded as having done nothing. Two worst-case
+/// round trips give the false disconnect this row forbids room to actually
+/// happen.
+const Duration f13Settle = Duration(milliseconds: 2800);
