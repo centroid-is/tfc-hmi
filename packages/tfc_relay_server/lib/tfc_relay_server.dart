@@ -17,6 +17,13 @@
 /// chokepoint for every plan in the phase.
 library;
 
+// On the barrel because an embedder configures the path (`ServerConfig.auth`'s
+// type has to be nameable), reads the role off a session's identity, and — if
+// it prefers to build the validator itself rather than name a file — passes a
+// `FileTokenValidator` to `validator:`.
+export 'src/auth/auth_config.dart';
+export 'src/auth/file_token_validator.dart';
+export 'src/auth/identity.dart';
 export 'src/relay_server.dart';
 export 'src/server_config.dart';
 export 'src/tls/mint.dart';

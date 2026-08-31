@@ -32,6 +32,7 @@ library;
 
 import 'dart:io' show InternetAddress;
 
+import 'auth/auth_config.dart';
 import 'tls/tls_config.dart';
 
 /// The knobs a gateway is started with.
@@ -175,6 +176,25 @@ final class ServerConfig {
   /// path fails the start, it does not serve ws").
   final TlsConfig? tls;
 
+  /// Where the per-station token file is mounted, or `null` for a gateway
+  /// that checks no credential.
+  ///
+  /// `null` is the default for the same reason [tls]'s is: every fixture in
+  /// this package builds a `ServerConfig` with no auth argument and runs on
+  /// `PermissiveTokenValidator`, and a default that demanded a token file
+  /// would rewrite them all for no requirement. A rewritten fixture is how a
+  /// suite quietly stops testing what it used to.
+  ///
+  /// It is an **explicit choice, visible in a config diff** — and it is not a
+  /// fallback. A gateway configured with a token file whose load fails does
+  /// not admit everybody: [RelayServer.start] lets the exception out, exactly
+  /// as a misspelled PEM path does.
+  ///
+  /// Supplying this *and* an explicit `validator:` to `RelayServer` is refused
+  /// at construction: two sources of truth for the credential check is a
+  /// configuration nobody can reason about.
+  final AuthConfig? auth;
+
   /// The interface the gateway binds.
   ///
   /// Loopback by default (threat T-03-11), and the default is deliberately
@@ -213,6 +233,7 @@ final class ServerConfig {
     this.maxPendingBytes = 8 * 1024 * 1024,
     this.writeOutcomeTtl = const Duration(seconds: 60),
     this.tls,
+    this.auth,
     InternetAddress? address,
     this.port = 0,
   }) : address = address ?? InternetAddress.loopbackIPv4 {

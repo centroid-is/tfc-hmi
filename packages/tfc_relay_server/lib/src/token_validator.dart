@@ -19,11 +19,18 @@ library;
 
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'auth/identity.dart';
+
 /// Judges the credential a client presented in its `hello`.
 ///
-/// Given the whole [HelloParams] rather than a token string: a credential may
-/// arrive in `capabilities`, and an implementation that wants to bind a token
-/// to a client name or a resumed session id needs to see them together.
+/// Given the whole [HelloParams] rather than a token string, and the reason is
+/// no longer the one this doc used to give. It said "a credential may arrive
+/// in `capabilities`"; since 06-02 the credential has a typed slot,
+/// `HelloParams.token`, precisely so that it never rides in an open map the
+/// session logs and copies (`relay_session.dart:729-739`). What survives is
+/// the other argument this doc already made: an implementation that wants to
+/// bind a token to a client name or a resumed session id needs to see them
+/// together. The signature is unchanged; only the justification was wrong.
 abstract interface class TokenValidator {
   /// Asynchronous because a real validator talks to something — a key set, an
   /// introspection endpoint, a directory — and a synchronous signature would
@@ -37,12 +44,24 @@ sealed class TokenVerdict {
 }
 
 final class TokenAccepted extends TokenVerdict {
-  const TokenAccepted();
+  const TokenAccepted(this.identity);
+
+  final Identity identity;
 }
 
 /// Refused. [reason] is for the server's log and for the error message the
 /// client receives; it must not carry anything the client did not already
-/// send.
+/// send — **and never the credential itself.**
+///
+/// The second clause is not implied by the first, which is why it is written
+/// down. The client *did* send the token, so "nothing the client did not
+/// already send" permits echoing it, and a reason that echoes it publishes
+/// the credential into a `-32003` message, into this gateway's log, and into
+/// whatever the panel prints on the screen an operator is looking at
+/// (06-02-SUMMARY §3, T-06-26). Name the station, name the file, never the
+/// secret. `auth_test.dart`'s "the credential appears in no message, close
+/// reason, status frame or log" drives a distinctive literal through a
+/// refusal and asserts its absence from all four.
 final class TokenRejected extends TokenVerdict {
   final String reason;
   const TokenRejected(this.reason);
@@ -55,7 +74,25 @@ final class TokenRejected extends TokenVerdict {
 final class PermissiveTokenValidator implements TokenValidator {
   const PermissiveTokenValidator();
 
+  /// The station id every client gets from a permissive gateway.
+  ///
+  /// Names itself, because it is going to be printed: it reaches close
+  /// reasons, logs and — once the policy seam lands — whatever a refusal says
+  /// about who was refused. A neutral-looking id like `default` reads as a
+  /// station somebody configured.
+  static const String stationId = 'any-station-permissive-validator';
+
+  /// **`operate`, and that is the honest label rather than a generous one.**
+  ///
+  /// This validator's semantics today are "everyone may do everything", and
+  /// `Role.operate` is that written down. Answering `view` would be a
+  /// different, quieter lie: every existing fixture in this workspace runs on
+  /// this default and writes through it, so a `view` here would either break
+  /// them all or — worse — leave a gateway whose declared role says one thing
+  /// and whose behaviour does another. A deployment still running one stays
+  /// legible in a config diff, which is this class's whole reason for having
+  /// a name instead of being a null check.
   @override
   Future<TokenVerdict> validate(HelloParams params) async =>
-      const TokenAccepted();
+      const TokenAccepted(Identity(stationId: stationId, role: Role.operate));
 }
