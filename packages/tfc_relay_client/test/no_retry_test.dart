@@ -18,9 +18,9 @@
 ///    `checkExactlyOneUpstreamAttemptPerCmd`, which runs against every
 ///    implementation on every leg and asserts the plant's own attempt counter
 ///    is 1 for both an ordinary write and one whose outcome nobody knows.
-///  * `test/contract/fault_contract_test.dart:432` — F5, a write across a
+///  * `test/gate/half_open_gate_test.dart:148` — F5a, a write across a
 ///    total blackhole: `debugWritesSent == 1`.
-///  * `test/contract/fault_contract_test.dart:529-545` — F6/F7, the link killed
+///  * `test/gate/write_in_flight_gate_test.dart:91-104` — F7a, the link killed
 ///    with a write on the wire: `debugWritesSent == 1` before the reconnect and
 ///    again after the `writeStatus` re-query, because the recovery asks about
 ///    the command rather than repeating it.
@@ -305,7 +305,7 @@ const _remoteStateManPath = 'lib/src/remote_state_man.dart';
 const _flapKey = 'ST101.CN01.MOT01.setpoint';
 
 /// The budget for "the panel came back": a capped backoff draw, a dial, a
-/// handshake and a snapshot. `fault_contract_test.dart:200-204`'s number and
+/// handshake and a snapshot. `support/gate_bands.dart:64-68`'s number and
 /// its argument — a liveness budget, never a latency measurement.
 const Duration _recovery = Duration(seconds: 5);
 
@@ -315,7 +315,7 @@ const Duration _recovery = Duration(seconds: 5);
 /// establish — that *nothing* further occurred. Polling for a second upstream
 /// attempt would pass the instant it did not find one, which is every instant
 /// before the retry a well-meaning wrapper is about to make.
-/// `fault_contract_test.dart:206-211` is the same constant for the same
+/// `support/gate_bands.dart:70-75` is the same constant for the same
 /// reason.
 const Duration _settle = Duration(milliseconds: 400);
 

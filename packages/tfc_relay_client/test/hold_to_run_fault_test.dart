@@ -49,7 +49,7 @@ const Duration _pulse = Duration(milliseconds: 25);
 const int _pulsesBeforeTheCut = 4;
 
 /// The budget for "the panel noticed": a freshness deadline, a close and a
-/// state transition. `fault_contract_test.dart:205-209`'s number and argument
+/// state transition. `support/gate_bands.dart:64-68`'s number and argument
 /// — a liveness budget, never a latency measurement.
 const Duration _recovery = Duration(seconds: 5);
 

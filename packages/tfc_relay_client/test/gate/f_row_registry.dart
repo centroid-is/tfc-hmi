@@ -34,7 +34,7 @@
 /// manifest with this map emptied, and recorded verbatim in 07-01-SUMMARY.md;
 /// after that the same information lives here, where it is machine-checked in
 /// both directions and shrinks by deletion. This is
-/// `fault_contract_test.dart:301-311`'s "the reachable set and the named gap
+/// `fault_contract_test.dart:228-238`'s "the reachable set and the named gap
 /// account for every check" doctrine, applied to a catalogue instead of a
 /// contract suite.
 library;
@@ -371,12 +371,6 @@ const List<GateRow> gateRows = <GateRow>[
 /// clauses are not all asserted yet. A partial entry for a row with no case is
 /// a missing entry wearing the wrong label, and the manifest says so.
 const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
-  'F1': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the moved F1a/F8 case, plus the LinkState transition-order arm '
-        'through the proxy that rule 5\'s banner clause needs',
-  ),
   'F2': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-04',
@@ -390,35 +384,11 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     clause: 'the generation property driven by a real flap faster than a real '
         'handshake, at flap(200ms, 200ms)',
   ),
-  'F4': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the move of fault_contract_test.dart:361 into the gate under its '
-        'row name',
-  ),
-  'F5': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the move of both arms; 07-03 then converts F5b\'s two instant '
-        'staleness reads into until() windows with a platform-scaled deadline',
-  ),
   'F6': Outstanding(
     kind: OutstandingKind.missing,
     owner: '07-05',
     clause: 'the arm that arms proxy.cutMidFrame(n) before the write, so a '
         'genuinely partial frame reaches the gateway\'s decoder over TCP',
-  ),
-  'F7': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the move of the four write-in-flight arms under F7a-F7d, with the '
-        'lever substitution carried in the file doc',
-  ),
-  'F8': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the changed-while-down assertion, named as F8 rather than folded '
-        'anonymously into F1',
   ),
   'F9': Outstanding(
     kind: OutstandingKind.missing,
@@ -445,10 +415,12 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
         'band unchanged',
   ),
   'F13': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the move; 07-05 then raises it to the catalogue\'s 500 ms ± 200 ms '
-        'and adds the staleness-age clause',
+    kind: OutstandingKind.partial,
+    owner: '07-05',
+    clause: 'the case runs at a flat 100 ms one-way delay with no jitter '
+        'against the catalogue\'s 500 ms ± 200 ms, and the "staleness age '
+        '(rule 4) reflects real delay" clause is not asserted at all — only '
+        'that a slow answer stays good quality and costs no redial',
   ),
   'F14': Outstanding(
     kind: OutstandingKind.missing,
@@ -472,11 +444,6 @@ const Map<String, Outstanding> gateOutstanding = <String, Outstanding>{
     owner: '07-09',
     clause: 'the client half: structural memory bounds, the session reaped, '
         'and reconnect-after-works',
-  ),
-  'F18': Outstanding(
-    kind: OutstandingKind.missing,
-    owner: '07-02',
-    clause: 'the move of both old-epoch arms under F18a and F18b',
   ),
   'F19': Outstanding(
     kind: OutstandingKind.missing,
@@ -627,7 +594,7 @@ const List<Deviation> gateDeviations = <Deviation>[
     row: 'F7',
     clause: '`blackhole()` right after write frame forwarded',
     reason: 'the lever is killOnce after a stalled write, not blackhole. '
-        'Recorded at fault_contract_test.dart:235-253: a blackhole swallows '
+        'Recorded at write_in_flight_gate_test.dart:23-41: a blackhole swallows '
         'both directions, so the client\'s own close never reaches the gateway '
         'and the replacement session has to establish beside a session the '
         'gateway still believes in — one run in four wedged the reconnect past '
