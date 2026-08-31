@@ -36,6 +36,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
@@ -145,8 +146,14 @@ void main() {
     );
     await ws.ready.timeout(_dialBudget);
     final base = wsChannel(ws);
-    final peer = rpc.Client(StreamChannel<String>(base.stream, base.sink));
-    final connected = _Station._(peer);
+    // One broadcast view, shared: the RPC client consumes it for answers and
+    // `_Station.pushFor` taps the same frames for the `u` notifications.
+    // `rpc.Client` does not dispatch server-sent notifications at all — only
+    // `rpc.Peer` does — so a case that wants to see a push has to read the
+    // wire, which is also the honest thing to be asserting about a push.
+    final frames = base.stream.asBroadcastStream();
+    final peer = rpc.Client(StreamChannel<String>(frames, base.sink));
+    final connected = _Station._(peer, frames);
     unawaited(peer.listen().catchError((Object _) => null));
     addTearDown(() async {
       await peer.close().catchError((Object _) {});
@@ -255,6 +262,242 @@ void main() {
     });
   });
 
+  group('the three answers', () {
+    test('a seventeen-day certificate reads under thirty days and still '
+        'connects', () async {
+      final gateway = gatewayFor(days: 17);
+      await gateway.server.start();
+
+      // The point of the criterion, and the reason it is one case rather than
+      // two: near-expiry is a *health* signal, not a connectivity failure. An
+      // operator has to be able to see the warning while the plant is still
+      // running — a warning that arrives at the same moment as the outage
+      // buys nothing. So the panel completes a pinned handshake and a hello
+      // on this very certificate before the number is read.
+      final panel = await station(gateway.server, root: ca.certPem);
+      final answer = _asMap(
+          await panel.request(Methods.read, {'key': certDaysToExpiryKey}));
+      final wire = WireValue.fromJson(_asMap(answer['value']));
+      expect(wire.q, Quality.good);
+      final days = wire.v! as int;
+
+      // The band, not the integer. `inDays` truncates, so a 17-day leaf reads
+      // 16; asserting 16 exactly would flake on a suite that crossed a
+      // midnight boundary or on a machine a few hundred milliseconds slower.
+      expect(days, lessThan(30),
+          reason: 'thirty days is the threshold 06-CONTEXT decision 3 fixes. '
+              'A near-expiry certificate that read 30 or more would leave the '
+              'alarm silent right up to the outage it exists to prevent');
+      expect(days, greaterThan(0),
+          reason: 'this certificate has not expired. A 0 or a negative here '
+              'means the arithmetic ran off the wrong end of the validity '
+              'window, and every freshly-issued gateway in the plant would '
+              'alarm on the day it was commissioned');
+      printOnFailure('a 17-day leaf read back $days days');
+    });
+
+    test('an already-expired certificate reads a negative number', () async {
+      // Read off the gateway rather than over a socket: an expired leaf
+      // cannot complete a handshake at all (`tls_test.dart` pins that, and
+      // trap 16 says every TLS rejection looks identical), so there is no
+      // panel to ask. The **sign** is the assertion, not the magnitude.
+      final gateway = gatewayFor(days: -3);
+      await gateway.server.start();
+
+      final value = gateway.server.certHealth!.read(certDaysToExpiryKey)!;
+      expect(value.quality, Quality.good,
+          reason: 'the file parsed. "Expired" is a reading, not a fault — '
+              'clamping it to bad quality would throw away the one number '
+              'that says how far past the deadline this gateway is, which is '
+              'exactly what somebody staring at a plant full of panels that '
+              'will not connect needs to see');
+      expect(value.value! as int, lessThan(0),
+          reason: 'an expired leaf has to read negative so "renew it this '
+              'month" and "this is why nothing is connecting" are '
+              'distinguishable at a glance');
+      printOnFailure('a 3-day-expired leaf read back ${value.value}');
+    });
+
+    test('an unreadable certificate reads bad quality, not zero', () async {
+      // **The arrangement, and why it is this one.** `RelayServer.start()`
+      // refuses an unloadable chain (06-03 task 1, and deliberately: a
+      // gateway that downgraded to plaintext because a path was misspelled is
+      // discovered by a packet capture months later). So pointing a
+      // `TlsConfig` at garbage exercises the *start* path, not the overlay's.
+      // Replacing the file **after** the bind is what reaches the overlay's
+      // own parse — and it is a real deployment shape rather than a
+      // contrivance: a bind-mounted PEM swapped under a running gateway is
+      // precisely what the yearly re-issue does.
+      final gateway = gatewayFor();
+      await gateway.server.start();
+      final overlay = gateway.server.certHealth!;
+      expect(overlay.read(certDaysToExpiryKey)!.quality, Quality.good,
+          reason: 'the control this case rests on: the file has to have been '
+              'readable first, or "unreadable" is established about nothing');
+
+      File(gateway.mounted.chainPath)
+          .writeAsStringSync('this is not a certificate\n');
+      overlay.refresh();
+
+      final value = overlay.read(certDaysToExpiryKey)!;
+      expect(value.quality, Quality.errorConfig,
+          reason: 'the gateway looked and cannot say how many days are left. '
+              'Saying so is the whole of the honest answer');
+      expect(value.value, isNot(0),
+          reason: 'a 0 reads as "expires today" and fires the thirty-day '
+              'alarm for a typo in a path. Somebody is sent out to re-issue a '
+              'certificate that is perfectly fine, and the next real expiry '
+              'warning is the one they have learned to dismiss');
+      expect(value.value, isNull,
+          reason: 'no number is knowable, so no number is published — the '
+              'quality carries the entire answer');
+    });
+
+    test('a missing certificate file reads bad quality too', () async {
+      // The other half of "missing or unparseable": a mount that went away.
+      // Same answer, because it is the same statement to an operator.
+      final gateway = gatewayFor();
+      await gateway.server.start();
+      final overlay = gateway.server.certHealth!;
+
+      File(gateway.mounted.chainPath).deleteSync();
+      overlay.refresh();
+
+      final value = overlay.read(certDaysToExpiryKey)!;
+      expect(value.quality, Quality.errorConfig);
+      expect(value.value, isNull,
+          reason: 'a vanished mount is the same class of answer as an '
+              'unparseable one: unknown, and never zero');
+    });
+  });
+
+  group('the certificate key behaves like any other tag', () {
+    test('the certificate key is subscribable, and a recompute pushes',
+        () async {
+      // "Subscribable like any plant tag" is the whole ruling, so this case
+      // takes the path a mimic takes: subscribe, find the value in the
+      // snapshot, then make the number move and wait for the push.
+      var wall = DateTime.now().millisecondsSinceEpoch;
+      final gateway = gatewayFor(days: 17, now: () => wall);
+      await gateway.server.start();
+      final panel = await station(gateway.server, root: ca.certPem);
+
+      final answer = SubscribeResult.fromJson(
+          _asMap(await panel.request(Methods.subscribe, {
+        'sub': 'cert-health',
+        'keys': [certDaysToExpiryKey],
+      })));
+      expect(answer.rejected, isEmpty,
+          reason: 'the gateway serves this key; a rejection here means it is '
+              'in the key list and nowhere else');
+      final handle = answer.handles[certDaysToExpiryKey];
+      expect(handle, isNotNull,
+          reason: 'no handle means no push is even addressable — the badge '
+              'would render once and then never change again');
+      final first = answer.snapshot[handle]!.v! as int;
+      expect(answer.snapshot[handle]!.q, Quality.good,
+          reason: 'a health key absent from — or bad in — the snapshot is an '
+              'indicator that stays blank until the value happens to change, '
+              'which for a days-to-expiry key is once a day');
+
+      // Two days of wall clock, driven through the gateway's injected clock
+      // rather than slept: the recompute is what the case is about, and the
+      // wait is not.
+      final pushed = panel.pushFor(handle!);
+      wall += const Duration(days: 2).inMilliseconds;
+      gateway.server.certHealth!.refresh();
+
+      expect(
+          await within(pushed, 'the certificate key\'s push',
+              budget: const Duration(seconds: 5)),
+          first - 2,
+          reason: 'the number moved and the panel was not told. An expiry '
+              'indicator that only re-evaluates when a panel reconnects is an '
+              'indicator that updates after the outage');
+    });
+
+    test('the certificate key is excluded from its own freshness accounting',
+        () async {
+      // HLTH-02, asserted directly rather than assumed.
+      // `freshness_contract.dart:309`'s
+      // `checkHealthKeysExcludedFromOwnFreshness` is the check that would
+      // normally own this property, and it does **not** run against this
+      // overlay: the overlay is on no contract leg, deliberately, because a
+      // sixth entry in `FakeStateMan.healthKeys` would put this key on every
+      // leg including the ones with no certificate.
+      //
+      // A days-to-expiry key is the live trap that check was written for. It
+      // changes once a day, so a source that applied a freshness deadline to
+      // it would grey out the one indicator that says whether to trust the
+      // rest — permanently, and precisely while everything is fine, which is
+      // how an operator learns to ignore an indicator.
+      final plant = FakeStateMan(staleAfter: const Duration(milliseconds: 80));
+      final mounted = writeCertFixture(
+        chainPem: mintLeaf(ca: ca),
+        keyPem: leafKeyPem(),
+      );
+      final server = buildServer(
+        plant: plant,
+        tls: TlsConfig(chainPath: mounted.chainPath, keyPath: mounted.keyPath),
+      );
+      await server.start();
+      final overlay = server.certHealth!;
+
+      // The barrier, borrowed from the contract check itself: when a *plant*
+      // key has gone stale the deadline has demonstrably passed, and the
+      // certificate key has been sitting untouched at least as long. No
+      // sleep, and no guess about how long the sweep takes.
+      plant.setValue(_speedKey, 1450);
+      final speed = overlay.listen(_speedKey);
+      final stale = Completer<void>();
+      void watch() {
+        if (speed.value.quality == Quality.badStale && !stale.isCompleted) {
+          stale.complete();
+        }
+      }
+
+      speed.addListener(watch);
+      addTearDown(() => speed.removeListener(watch));
+      await within(
+          stale.future,
+          'a plant key going stale, which is this case\'s proof that the '
+          'deadline has passed',
+          budget: const Duration(seconds: 5));
+
+      expect(overlay.read(certDaysToExpiryKey)!.quality, Quality.good,
+          reason: 'the gateway accused its own certificate indicator of being '
+              'stale. It changes once a day by construction, so a freshness '
+              'deadline applied to it greys it out on a perfectly healthy '
+              'gateway — and an indicator that is grey when nothing is wrong '
+              'is one nobody reads when something is');
+    });
+
+    test('a write to the certificate key is refused the way a read-only tag '
+        'is', () async {
+      // It is a reading of the world, not a setpoint. The refusal reuses the
+      // device's own not-writable shape rather than inventing a code, so
+      // nothing on the panel side needs a special case for a health key.
+      final gateway = gatewayFor();
+      await gateway.server.start();
+      final overlay = gateway.server.certHealth!;
+      final before = overlay.read(certDaysToExpiryKey)!.value;
+
+      final result =
+          await overlay.write(certDaysToExpiryKey, 400, cmd: 'cmd-01');
+      expect(result, isA<WriteRejected>());
+      expect(result.cmd, 'cmd-01',
+          reason: 'the caller\'s id comes back on the refusal, or writeStatus '
+              'could never match it after a reconnect');
+      expect((result as WriteRejected).reason.kind, 'not_writable',
+          reason: 'the same kind a read-only device gives '
+              '(`fake_state_man.dart:835-842`), so a panel renders it with a '
+              'sentence it already has');
+      expect(overlay.read(certDaysToExpiryKey)!.value, before,
+          reason: 'a refused write that still moved the value would let '
+              'somebody silence the expiry alarm by typing a number into it');
+    });
+  });
+
   group('the contract kit did not grow a key', () {
     test('the reference implementation still declares five health keys', () {
       // Deliberately *not* a sixth entry in `FakeStateMan.healthKeys`:
@@ -284,9 +527,29 @@ void main() {
 
 /// One connected client, past the handshake.
 final class _Station {
-  _Station._(this._peer);
+  _Station._(this._peer, this._frames);
 
   final rpc.Client _peer;
+  final Stream<String> _frames;
+
+  /// The next value pushed for [handle] over a `u` notification.
+  ///
+  /// Taken **before** whatever is going to cause the push, so the wait cannot
+  /// lose a race with a tick — the same discipline every socket case in this
+  /// package uses for `sessions.opened`.
+  Future<Object?> pushFor(int handle) {
+    final next = Completer<Object?>();
+    final subscription = _frames.listen((frame) {
+      if (next.isCompleted) return;
+      final decoded = _asMap(jsonDecode(frame));
+      if (decoded['method'] != Methods.update) return;
+      final update = UpdateParams.fromJson(_asMap(decoded['params']));
+      final changed = update.changes[handle];
+      if (changed != null) next.complete(changed.v);
+    });
+    unawaited(next.future.whenComplete(subscription.cancel));
+    return next.future;
+  }
 
   Future<void> hello() => request(
       Methods.hello,
