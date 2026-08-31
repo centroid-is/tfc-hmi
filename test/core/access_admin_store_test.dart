@@ -110,6 +110,34 @@ class _RecordingRepository extends AccessRepository {
   }
 }
 
+/// A repository whose chosen write throws once, from inside the call.
+///
+/// This is how design decision 2 is pinned. The store records the allowed row
+/// **after** the repository returns, so a write that blows up inside the
+/// transaction must leave the trail empty. Move `_recordAllowed` above the
+/// repository call and the tests using this double are the ones that catch it.
+///
+/// A subclass of the real repository rather than a mock, for the same reason
+/// `_RacingStore` is: everything else in these tests still has to be the real
+/// database behaving normally.
+class _RefusingRepository extends _RecordingRepository {
+  _RefusingRepository(super.db);
+
+  /// Thrown by [upsertRole], once. Cleared after it fires.
+  Object? failUpsertWith;
+
+  @override
+  Future<void> upsertRole(AccessRole role) async {
+    final failure = failUpsertWith;
+    if (failure != null) {
+      failUpsertWith = null;
+      calls.add('upsertRole:${role.name}');
+      throw failure;
+    }
+    return super.upsertRole(role);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
@@ -427,6 +455,448 @@ void main() {
       expect(denials, hasLength(1),
           reason: 'a sink failure must not skip onDenied and leave the '
               'operator with a control that did nothing and no explanation.');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The eight writes: what a permitted one records
+  // -------------------------------------------------------------------------
+
+  group('role writes', () {
+    test('createRole records role.create with the new group set', () async {
+      final store = buildStore();
+
+      await store.createRole(_shiftLead(), reason: 'new line opened');
+
+      expect(repository.calls, ['upsertRole:Line Lead']);
+      final row = sink.rows.single;
+      expect(row.itemKey, 'role.create');
+      expect(row.member, 'Line Lead');
+      expect(row.oldValue, isNull);
+      expect(row.newValue, _shiftLead().encodeGroups());
+      expect(row.reason, 'new line opened');
+      expect((await repository.role('Line Lead'))!.groups, _shiftLead().groups);
+    });
+
+    test('createRole refuses a name that already exists, recording nothing',
+        () async {
+      await repository.upsertRole(_shiftLead());
+      repository.calls.clear();
+      final store = buildStore();
+
+      await expectLater(
+        () => store.createRole(_shiftLead()),
+        throwsA(isA<ArgumentError>()),
+        reason: 'upsertRole would quietly turn this into an update, and the '
+            'row would then say role.create for something that created '
+            'nothing.',
+      );
+      expect(sink.rows, isEmpty);
+      expect(repository.calls, isEmpty);
+    });
+
+    test('updateRole records role.update with old and new group sets',
+        () async {
+      await repository.upsertRole(_shiftLead());
+      final store = buildStore();
+
+      await store.updateRole(const AccessRole(
+        name: 'Line Lead',
+        groups: {AccessGroup.operate, AccessGroup.setpoints, AccessGroup.force},
+      ));
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'role.update');
+      expect(row.member, 'Line Lead');
+      expect(row.oldValue, _shiftLead().encodeGroups(),
+          reason: 'the old value has to be read before the write, which is '
+              'why it is read before the gate: a read is not an '
+              'authorization event.');
+      expect(
+        row.newValue,
+        const AccessRole(name: 'Line Lead', groups: {
+          AccessGroup.operate,
+          AccessGroup.setpoints,
+          AccessGroup.force,
+        }).encodeGroups(),
+      );
+    });
+
+    test('updateRole refuses a role that does not exist, recording nothing',
+        () async {
+      final store = buildStore();
+
+      await expectLater(
+        () => store.updateRole(_shiftLead()),
+        throwsA(isA<MissingRoleError>()),
+        reason: 'upsertRole would insert it, and the row would say '
+            'role.update for a create.',
+      );
+      expect(sink.rows, isEmpty);
+      expect(repository.calls, isEmpty);
+    });
+
+    test('deleteRole records role.delete carrying what the role granted',
+        () async {
+      await repository.upsertRole(_shiftLead());
+      final store = buildStore();
+
+      await store.deleteRole('Line Lead');
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'role.delete');
+      expect(row.member, 'Line Lead');
+      expect(row.oldValue, _shiftLead().encodeGroups(),
+          reason: 'the row still says what was lost after the row it '
+              'described is gone.');
+      expect(row.newValue, isNull);
+      expect(await repository.role('Line Lead'), isNull);
+    });
+
+    test('deleteRole refuses a role that does not exist, recording nothing',
+        () async {
+      final store = buildStore();
+
+      await expectLater(() => store.deleteRole('Nonesuch'),
+          throwsA(isA<MissingRoleError>()));
+      expect(sink.rows, isEmpty);
+      expect(repository.calls, isEmpty);
+    });
+
+    test('renameRole records role.rename with both names', () async {
+      await repository.upsertRole(_shiftLead());
+      final store = buildStore();
+
+      await store.renameRole('Line Lead', 'Line Leader');
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'role.rename');
+      expect(row.member, 'Line Lead',
+          reason: 'the member is the name the rest of the trail up to this '
+              'point refers to.');
+      expect(row.oldValue, 'Line Lead');
+      expect(row.newValue, 'Line Leader');
+      expect(await repository.role('Line Leader'), isNotNull);
+    });
+  });
+
+  group('user writes', () {
+    test('createUser records user.create naming the role granted', () async {
+      final store = buildStore();
+
+      await store.createUser(
+        username: 'bob',
+        password: 'correct-horse',
+        roleName: 'Shift Leader',
+      );
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'user.create');
+      expect(row.member, 'bob');
+      expect(row.oldValue, isNull);
+      expect(row.newValue, 'Shift Leader');
+      expect((await repository.listUsers()).single.username, 'bob');
+    });
+
+    test('deleteUser records user.delete naming the role held', () async {
+      await repository.createUser(
+          username: 'admin1', password: 'pw1', roleName: 'Engineering');
+      await repository.createUser(
+          username: 'bob', password: 'pw2', roleName: 'Shift Leader');
+      repository.calls.clear();
+      final store = buildStore();
+
+      await store.deleteUser('bob');
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'user.delete');
+      expect(row.member, 'bob');
+      expect(row.oldValue, 'Shift Leader');
+      expect(row.newValue, isNull);
+      expect((await repository.listUsers()).map((u) => u.username), ['admin1']);
+    });
+
+    test('setUserRole records user.role with the old and the new role',
+        () async {
+      await repository.createUser(
+          username: 'bob', password: 'pw2', roleName: 'Shift Leader');
+      repository.calls.clear();
+      final store = buildStore();
+
+      await store.setUserRole('bob', 'Maintenance');
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'user.role');
+      expect(row.member, 'bob');
+      expect(row.oldValue, 'Shift Leader');
+      expect(row.newValue, 'Maintenance');
+    });
+
+    test('setUserPassword records user.password and nothing about the password',
+        () async {
+      const secret = 'zXq7-never-in-a-row';
+      await repository.createUser(
+          username: 'bob', password: 'pw2', roleName: 'Shift Leader');
+      repository.calls.clear();
+      final store = buildStore();
+
+      await store.setUserPassword('bob', secret);
+
+      final row = sink.rows.single;
+      expect(row.itemKey, 'user.password');
+      expect(row.member, 'bob');
+      expect(row.oldValue, isNull,
+          reason: 'AuditRecord.userPassword leaves the value columns null by '
+              'construction — there is no parameter that could fill them.');
+      expect(row.newValue, isNull);
+      for (final recorded in sink.rows) {
+        expect(recorded.toString().contains(secret), isFalse);
+        expect(
+          [
+            recorded.oldValue,
+            recorded.newValue,
+            recorded.member,
+            recorded.reason,
+            recorded.itemKey,
+            recorded.who,
+          ].any((v) => v != null && v.contains(secret)),
+          isFalse,
+          reason: 'an admin row is not an auth row, so toString does not '
+              'withhold its value columns — they reach log files that live '
+              'longer and travel further than the database does.',
+        );
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // T-06-20: a configure-only session, driven into every one of the eight
+  // -------------------------------------------------------------------------
+
+  group('a configure-only session is refused by every write', () {
+    /// Runs [write] under the engineer session and asserts the whole refusal:
+    /// [AccessDenied] naming [itemKey], exactly one denied row carrying the
+    /// same key, and a repository that was never reached.
+    Future<void> expectGated(
+      String itemKey,
+      Future<void> Function(AccessAdminStore store) write,
+    ) async {
+      session = _configureOnly();
+      final store = buildStore();
+
+      await expectLater(
+        () => write(store),
+        throwsA(isA<AccessDenied>()
+            .having((d) => d.itemKey, 'itemKey', itemKey)
+            .having((d) => d.required, 'required', AccessGroup.users)),
+      );
+
+      final row = sink.rows.single;
+      expect(row.allowed, isFalse);
+      expect(row.itemKey, itemKey,
+          reason: 'the itemKey the gate throws and the itemKey the row '
+              'carries are two spellings of one string, and they are checked '
+              'against each other rather than trusted.');
+      expect(row.surface, 'admin');
+      expect(row.groupRequired, AccessGroup.users.name);
+      expect(row.who, 'engineer');
+      expect(denials.single.itemKey, itemKey);
+      expect(repository.calls, isEmpty,
+          reason: 'the gate runs before the repository is reached at all.');
+    }
+
+    test('createRole',
+        () => expectGated('role.create', (s) => s.createRole(_shiftLead())));
+
+    test('updateRole', () async {
+      await repository.upsertRole(_shiftLead());
+      repository.calls.clear();
+      await expectGated('role.update', (s) => s.updateRole(_shiftLead()));
+    });
+
+    test('deleteRole', () async {
+      await repository.upsertRole(_shiftLead());
+      repository.calls.clear();
+      await expectGated('role.delete', (s) => s.deleteRole('Line Lead'));
+    });
+
+    test('renameRole', () async {
+      await repository.upsertRole(_shiftLead());
+      repository.calls.clear();
+      await expectGated(
+          'role.rename', (s) => s.renameRole('Line Lead', 'Line Leader'));
+    });
+
+    test('createUser', () async {
+      await expectGated(
+        'user.create',
+        (s) => s.createUser(
+            username: 'bob', password: 'pw', roleName: 'Shift Leader'),
+      );
+      expect(await repository.listUsers(), isEmpty);
+    });
+
+    test('deleteUser', () async {
+      await repository.createUser(
+          username: 'bob', password: 'pw', roleName: 'Shift Leader');
+      repository.calls.clear();
+      await expectGated('user.delete', (s) => s.deleteUser('bob'));
+      expect((await repository.listUsers()).single.username, 'bob');
+    });
+
+    test('setUserRole', () async {
+      await repository.createUser(
+          username: 'bob', password: 'pw', roleName: 'Shift Leader');
+      repository.calls.clear();
+      await expectGated('user.role', (s) => s.setUserRole('bob', 'Maintenance'));
+      expect((await repository.listUsers()).single.roleName, 'Shift Leader');
+    });
+
+    test('setUserPassword', () async {
+      await repository.createUser(
+          username: 'bob', password: 'pw', roleName: 'Shift Leader');
+      final before = (await repository.listUsers()).single.passwordHash;
+      repository.calls.clear();
+      await expectGated(
+          'user.password', (s) => s.setUserPassword('bob', 'new-one'));
+      expect((await repository.listUsers()).single.passwordHash, before);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // T-06-22: a write the repository refused leaves nothing behind
+  // -------------------------------------------------------------------------
+
+  group('a refused write records no row', () {
+    test('LastUsersHolderException: deleting the last users holder', () async {
+      await repository.createUser(
+          username: 'admin1', password: 'pw', roleName: 'Engineering');
+      final store = buildStore();
+
+      await expectLater(
+        () => store.deleteUser('admin1'),
+        throwsA(isA<LastUsersHolderException>()
+            .having((e) => e.holders, 'holders', ['admin1'])),
+        reason: 'the refusal is rethrown unchanged: the holder list is what '
+            'the dialog renders, and re-wrapping it is how that list stops '
+            'reaching the dialog.',
+      );
+      expect(sink.rows, isEmpty,
+          reason: 'the invariant is evaluated inside the repository '
+              'transaction, which is precisely the condition this layer '
+              'cannot pre-check. So the allowed row is written after the call '
+              'returns, and a refusal leaves nothing claiming it happened.');
+      expect((await repository.listUsers()).single.username, 'admin1');
+    });
+
+    test('LastUsersHolderException: unticking users from the only role',
+        () async {
+      await repository.createUser(
+          username: 'admin1', password: 'pw', roleName: 'Engineering');
+      final store = buildStore();
+
+      await expectLater(
+        () => store.updateRole(const AccessRole(
+          name: 'Engineering',
+          groups: {AccessGroup.operate, AccessGroup.configure},
+        )),
+        throwsA(isA<LastUsersHolderException>()),
+      );
+      expect(sink.rows, isEmpty);
+    });
+
+    test('RoleInUseException: deleting a role accounts still hold', () async {
+      await repository.upsertRole(_shiftLead());
+      await repository.createUser(
+          username: 'carl', password: 'pw', roleName: 'Line Lead');
+      final store = buildStore();
+
+      await expectLater(
+        () => store.deleteRole('Line Lead'),
+        throwsA(isA<RoleInUseException>()
+            .having((e) => e.holders, 'holders', ['carl'])),
+      );
+      expect(sink.rows, isEmpty);
+      expect(await repository.role('Line Lead'), isNotNull);
+    });
+
+    test('UserExistsException: creating an account twice', () async {
+      await repository.createUser(
+          username: 'bob', password: 'pw', roleName: 'Shift Leader');
+      final store = buildStore();
+
+      await expectLater(
+        () => store.createUser(
+            username: 'bob', password: 'pw2', roleName: 'Maintenance'),
+        throwsA(isA<UserExistsException>()),
+      );
+      expect(sink.rows, isEmpty);
+      expect((await repository.listUsers()).single.roleName, 'Shift Leader');
+    });
+
+    test('UserNotFoundException: resetting an absent account password',
+        () async {
+      final store = buildStore();
+
+      await expectLater(
+        () => store.setUserPassword('nobody', 'pw'),
+        throwsA(isA<UserNotFoundException>()),
+      );
+      expect(sink.rows, isEmpty);
+    });
+
+    test('ProtectedRoleError: deleting Operator', () async {
+      final store = buildStore();
+
+      await expectLater(
+        () => store.deleteRole(kOperatorRoleName),
+        throwsA(isA<ProtectedRoleError>()),
+        reason: 'it is an Error because reaching it means a caller skipped a '
+            'check; a screen offering a Delete on the Operator row must fail '
+            'loudly rather than be swallowed here.',
+      );
+      expect(sink.rows, isEmpty);
+      expect(await repository.role(kOperatorRoleName), isNotNull);
+    });
+
+    test('the allowed row is written after the repository call returns',
+        () async {
+      repository = _RefusingRepository(db)
+        ..failUpsertWith = StateError('the transaction rolled back');
+      final store = buildStore();
+
+      await expectLater(
+          () => store.createRole(_shiftLead()), throwsA(isA<StateError>()));
+
+      expect(repository.calls, ['upsertRole:Line Lead'],
+          reason: 'the gate passed and the repository was reached.');
+      expect(sink.rows, isEmpty,
+          reason: 'nothing may claim a write that did not commit. If this '
+              'fails, somebody moved _recordAllowed above the repository '
+              'call.');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Reason and origin
+  // -------------------------------------------------------------------------
+
+  group('reason and origin', () {
+    test('a null reason is recorded as null, not as an invented default',
+        () async {
+      final store = buildStore();
+      await store.createRole(_shiftLead());
+      expect(sink.rows.single.reason, isNull);
+    });
+
+    test('origin is the only caller-settable field on the row', () async {
+      final store = buildStore();
+      await store.createRole(_shiftLead(), origin: 'mcp', reason: 'proposal');
+      final row = sink.rows.single;
+      expect(row.origin, 'mcp');
+      expect(row.who, 'admin',
+          reason: 'the row names the human who approved it, never the agent '
+              'that suggested it.');
     });
   });
 }
