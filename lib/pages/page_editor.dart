@@ -940,7 +940,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         } catch (_) {
           // Provider unavailable in tests -- fall through to the single path.
         }
-        if (batched == 0) _applyProposalData(widget.proposalData);
+        if (batched == 0) _applyRoutedProposal(widget.proposalData);
 
         _updateCurrentJson();
         _savedJson =
@@ -990,7 +990,7 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // A `page` proposal is not part of the asset batch; apply it directly, but
     // only when nothing is already staged -- _applyProposalData re-snapshots
     // the reject/revert baseline, which would clobber an open batch's.
-    if (batched == 0 && !_isProposal) _applyProposalData(data);
+    if (batched == 0 && !_isProposal) _applyRoutedProposal(data);
     if (batched > 0 || _isProposal) {
       _updateCurrentJson();
       _savedJson = ''; // Mark unsaved for the staged proposal.
@@ -1268,6 +1268,52 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     _updateCurrentJson();
     _savedJson = ''; // Mark unsaved for the staged proposal.
     if (mounted) setState(() {});
+  }
+
+  /// [_applyProposalData] for a proposal that came off the route, rather than
+  /// out of [proposalStateProvider].
+  ///
+  /// Beamer keeps the payload on the location, so this editor is handed the
+  /// same JSON on every later mount -- with state empty, because the proposal
+  /// was accepted and dropped, which is exactly the condition the route
+  /// fallback triggers on. Navigating back would otherwise stage a page edit
+  /// that has already been saved and mark the editor unsaved over it, with
+  /// nothing pending anywhere to accept or reject.
+  ///
+  /// The listener's path deliberately does not go through here: a proposal
+  /// still sitting in state is live however familiar its JSON looks.
+  void _applyRoutedProposal(String? proposalJson) {
+    if (proposalJson == null) return;
+    try {
+      if (ref
+          .read(proposalStateProvider.notifier)
+          .isRoutePayloadResolved(proposalJson)) {
+        return;
+      }
+    } catch (_) {
+      // Provider unavailable in tests -- nothing says it was resolved.
+    }
+    _applyProposalData(proposalJson);
+  }
+
+  /// Records the route payload as resolved once the staged proposal is saved
+  /// or reverted. See [_applyRoutedProposal].
+  ///
+  /// On the notifier, because the record has to outlive this State; through
+  /// the captured container, because both callers can run after the editor
+  /// has gone.
+  void _markRoutePayloadResolved() {
+    final json = widget.proposalData;
+    if (json == null) return;
+    final container = _container;
+    try {
+      final notifier = container != null
+          ? container.read(proposalStateProvider.notifier)
+          : ref.read(proposalStateProvider.notifier);
+      notifier.markRoutePayloadResolved(json);
+    } catch (_) {
+      // Provider or ref gone -- nothing to record on.
+    }
   }
 
   void _applyProposalData(String? proposalJson) {
@@ -1611,6 +1657,9 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         debugPrint('proposal $id could not be marked rejected: $e');
       }
     }
+    // Before the `mounted` gate: a batch rejected after the operator
+    // navigated away is still rejected, and its payload must not stage again.
+    _markRoutePayloadResolved();
     if (!mounted) return;
     setState(() {
       if (_preProposalPages != null) {
@@ -1669,6 +1718,11 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         }
       }
     }
+
+    // Whatever the route staged is now on disk, so the payload must stop
+    // being stageable with it. Guarded, because this is the ordinary Save
+    // button too, and an ordinary save resolves nothing.
+    if (_isProposal) _markRoutePayloadResolved();
 
     _updateCurrentJson();
     _savedJson = _currentJson;

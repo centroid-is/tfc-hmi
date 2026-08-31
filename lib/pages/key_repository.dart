@@ -318,8 +318,20 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
   }
 
   /// Stages the proposal the route carried, when state has none.
+  ///
+  /// Not the one already resolved. The route payload outlives the decision --
+  /// beamer keeps it on the location, so every later mount of this section is
+  /// handed the same JSON, and by then the proposal has been accepted and
+  /// dropped from state, which is the very condition this fallback triggers
+  /// on. Rebuilding the section was enough to put the amber strip back over a
+  /// mapping that was already written, and nothing was left pending that
+  /// could take it down again. The rebuild is easier to hit than it looks:
+  /// [KeyRepositoryContent] swaps LayoutBuilder branches at 320 px, so a
+  /// resize does it without leaving the page, and so does navigating away and
+  /// back to a location that still carries the data.
   void _stageRoutedProposal(String? json) {
     if (json == null) return;
+    if (_routePayloadResolved(json)) return;
     try {
       final decoded = jsonDecode(json);
       if (decoded is! Map<String, dynamic>) return;
@@ -330,6 +342,34 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
     } catch (_) {
       // Malformed JSON: nothing to stage.
     }
+  }
+
+  /// Whether the route payload has already been applied or discarded here.
+  ///
+  /// Read through `ref` rather than the captured container: this runs from
+  /// [initState], where the container has not been taken yet.
+  bool _routePayloadResolved(String json) {
+    try {
+      return ref
+          .read(proposalStateProvider.notifier)
+          .isRoutePayloadResolved(json);
+    } catch (_) {
+      // Provider unavailable (tests) -- nothing says it was resolved.
+      return false;
+    }
+  }
+
+  /// Marks the route payload resolved once this batch is accepted or
+  /// rejected, so a later mount does not stage it again.
+  ///
+  /// Recorded on the notifier because the record has to outlive this State --
+  /// resurrecting the strip takes nothing more than rebuilding the section.
+  /// Called before the `mounted` check on both paths: a batch that resolved
+  /// after the operator navigated away is still resolved.
+  void _markRoutePayloadResolved(ProposalStateNotifier notifier) {
+    final json = widget.proposalData;
+    if (json == null) return;
+    notifier.markRoutePayloadResolved(json);
   }
 
   @override
@@ -533,6 +573,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       );
       return;
     }
+    _markRoutePayloadResolved(notifier);
     if (!mounted) return;
     setState(() {
       _proposedMappings.clear();
@@ -566,6 +607,7 @@ class _KeyMappingsSectionState extends ConsumerState<_KeyMappingsSection> {
       );
       return;
     }
+    _markRoutePayloadResolved(notifier);
     if (!mounted) return;
     setState(() {
       _proposedMappings.clear();

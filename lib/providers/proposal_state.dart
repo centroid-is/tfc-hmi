@@ -73,6 +73,58 @@ class ProposalStateNotifier extends StateNotifier<ProposalState> {
   /// spam the AI with repeat notes.
   final _viewedIds = <int>{};
 
+  /// Proposal payloads an editor has already resolved -- applied or discarded.
+  ///
+  /// Every editor stages proposals two ways: out of [state], and out of the
+  /// raw JSON its route carries. The route fallback exists because the chat
+  /// batch card calls [acceptAllOfType] *before* it beams, so the JSON on the
+  /// route is the only copy left of a batch that still has to be applied; an
+  /// editor takes that path whenever [state] holds nothing for it.
+  ///
+  /// Beamer keeps that JSON on the location, so it is handed to the editor
+  /// again on every later mount -- and by then the proposal has been accepted
+  /// and dropped from [state], which is exactly the condition the fallback
+  /// triggers on. Rebuilding the editor was therefore enough to stage an
+  /// already-applied proposal a second time: the amber strip came back over a
+  /// mapping that was already written, with nothing pending anywhere that
+  /// could take it down again.
+  ///
+  /// So editors record here what they have resolved, and the route fallback
+  /// consults it. Keyed by the payload rather than by proposal id, because
+  /// the route carries no id: [addProposal] already treats the JSON as a
+  /// proposal's identity for the same reason.
+  ///
+  /// A set literal keeps insertion order, which makes the cap below a plain
+  /// FIFO trim. Nothing here is persisted -- an app restart clears pending
+  /// proposals too -- and the record only ever has to outlive an editor's
+  /// State.
+  final _resolvedRoutePayloads = <String>{};
+
+  /// How many resolved payloads to remember. Far more than the handful of
+  /// batches an operator resolves in a sitting, and small enough that the set
+  /// cannot grow without bound over a station's uptime.
+  static const _resolvedRoutePayloadLimit = 128;
+
+  /// Records that an editor has applied or discarded [json], so a later mount
+  /// handed the same route payload does not stage it again.
+  ///
+  /// See [_resolvedRoutePayloads]. Safe to call with a payload that was never
+  /// staged from a route: the record is only ever read by that fallback.
+  void markRoutePayloadResolved(String json) {
+    _resolvedRoutePayloads.add(json);
+    while (_resolvedRoutePayloads.length > _resolvedRoutePayloadLimit) {
+      _resolvedRoutePayloads.remove(_resolvedRoutePayloads.first);
+    }
+  }
+
+  /// Whether [json] has already been resolved by an editor.
+  ///
+  /// Only the route fallback asks. Staging out of [state] deliberately does
+  /// not, so a proposal the AI makes again -- identical JSON, freshly
+  /// pending -- still reaches the operator.
+  bool isRoutePayloadResolved(String json) =>
+      _resolvedRoutePayloads.contains(json);
+
   /// Add a proposal if it is not already present.
   ///
   /// Deduplicates by both id and proposal JSON content. The JSON check is the
