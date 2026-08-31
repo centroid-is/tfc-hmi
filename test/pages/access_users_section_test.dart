@@ -54,6 +54,7 @@ import 'package:tfc/widgets/access_admin_notice.dart';
 import 'package:tfc/widgets/access_denied_prompt.dart';
 import 'package:tfc_access/tfc_access.dart';
 import 'package:tfc_dart/core/access/access_repository.dart';
+import 'package:tfc_dart/core/access/local_auth_provider.dart';
 import 'package:tfc_dart/core/database.dart';
 import 'package:tfc_dart/core/database_drift.dart';
 
@@ -110,6 +111,64 @@ class _RecordingStore extends AccessAdminStore {
 
   /// What the next `setUserRole` throws instead of moving, once.
   Object? setRoleThrowsOnce;
+
+  /// What the next `createUser` throws instead of inserting, once.
+  ///
+  /// The never-render-the-exception test stages a message carrying something
+  /// that looks like a credential, which nothing real would produce — 06-02
+  /// made the repository's `ArgumentError` deliberately bare for that reason.
+  /// Defence in depth is the claim, so the threat has to be simulated.
+  Object? createThrowsOnce;
+
+  /// What the next `setUserPassword` throws instead of writing, once.
+  Object? setPasswordThrowsOnce;
+
+  /// Held open, a credential-bearing write never comes back — the only
+  /// deterministic way to observe the busy state, which at test iteration
+  /// counts is otherwise a microtask wide.
+  Completer<void>? holdWrites;
+
+  Future<void> _hold() async {
+    final hold = holdWrites;
+    if (hold != null) await hold.future;
+  }
+
+  @override
+  Future<void> createUser({
+    required String username,
+    required String password,
+    required String roleName,
+    String origin = 'operator',
+    String? reason,
+  }) async {
+    calls.add('createUser:$username:$roleName');
+    await _hold();
+    final boom = createThrowsOnce;
+    if (boom != null) {
+      createThrowsOnce = null;
+      throw boom;
+    }
+    return super.createUser(
+        username: username,
+        password: password,
+        roleName: roleName,
+        origin: origin,
+        reason: reason);
+  }
+
+  @override
+  Future<void> setUserPassword(String username, String password,
+      {String origin = 'operator', String? reason}) async {
+    calls.add('setUserPassword:$username');
+    await _hold();
+    final boom = setPasswordThrowsOnce;
+    if (boom != null) {
+      setPasswordThrowsOnce = null;
+      throw boom;
+    }
+    return super.setUserPassword(username, password,
+        origin: origin, reason: reason);
+  }
 
   @override
   Future<List<AccessRole>> roles() {
@@ -366,6 +425,46 @@ void main() {
     await tester.tap(find.byKey(kAccessUserChangeRoleKey(username)));
     await tester.pumpAndSettle();
   }
+
+  /// Opens the create dialog.
+  Future<void> openCreate(WidgetTester tester) async {
+    await tester.tap(find.byKey(kAccessUsersCreateKey));
+    await tester.pumpAndSettle();
+  }
+
+  /// Opens the set-password dialog for [username].
+  Future<void> openSetPassword(WidgetTester tester, String username) async {
+    await tester.tap(find.byKey(kAccessUserSetPasswordKey(username)));
+    await tester.pumpAndSettle();
+  }
+
+  /// Fills the create dialog's three fields.
+  Future<void> fillCreate(
+    WidgetTester tester, {
+    required String username,
+    required String password,
+    String? confirm,
+  }) async {
+    await tester.enterText(find.byKey(kAccessUserUsernameFieldKey), username);
+    await tester.enterText(find.byKey(kAccessUserPasswordFieldKey), password);
+    await tester.enterText(
+        find.byKey(kAccessUserConfirmFieldKey), confirm ?? password);
+    await tester.pump();
+  }
+
+  /// Whether [needle] appears in the text of anything rendered, obscured field
+  /// contents included.
+  ///
+  /// `find.textContaining` matches an `EditableText` by its controller's text
+  /// as well as a `Text` by its data, which is exactly the reach this claim
+  /// needs: a password must not turn up in a rendered sentence *or* be quietly
+  /// pushed back into a field.
+  bool treeMentions(WidgetTester tester, String needle) =>
+      find.textContaining(needle).evaluate().isNotEmpty;
+
+  /// The real verifier, so "the password was changed" is answered by signing in
+  /// rather than by reading a column.
+  AuthProvider realAuth() => LocalAuthProvider(repository);
 
   /// One hand-made audit row naming [who], written straight into the table.
   ///
@@ -853,6 +952,493 @@ void main() {
             'await, and nothing touches ref or context after it — otherwise '
             'this runs on a disposed element',
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The create dialog — one of the two screens where a password is in hand
+  // -------------------------------------------------------------------------
+
+  group('the create dialog', () {
+    testWidgets('there is no create control without a database',
+        (tester) async {
+      await pumpSection(tester, overrides(noDatabase: true));
+
+      expect(find.byKey(kAccessUsersCreateKey), findsNothing,
+          reason: 'there is no table to create into — and that is not a '
+              'permission decision, so nothing is greyed either');
+    });
+
+    testWidgets('a blank username is refused with its own sentence',
+        (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: '   ', password: 'correct horse');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserBlankUsernameKey), findsOneWidget);
+      expect(find.text(kAccessUserBlankUsernameNote), findsOneWidget);
+      expect(store!.calls.where((c) => c.startsWith('createUser')), isEmpty);
+      expect(find.byKey(kAccessUserCreateConfirmKey), findsOneWidget,
+          reason: 'the dialog stays open so the operator can fix one field '
+              'rather than retype three');
+    });
+
+    testWidgets('a blank password is refused with its own sentence',
+        (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: '');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserBlankPasswordKey), findsOneWidget);
+      expect(find.text(kAccessUserBlankPasswordNote), findsOneWidget);
+      expect(store!.calls.where((c) => c.startsWith('createUser')), isEmpty);
+    });
+
+    testWidgets('passwords that do not match are refused with their own '
+        'sentence', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(
+          tester,
+          username: 'newbie',
+          password: 'correct horse',
+          confirm: 'correct hose');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserMismatchKey), findsOneWidget);
+      expect(find.text(kAccessUserMismatchNote), findsOneWidget);
+      expect(store!.calls.where((c) => c.startsWith('createUser')), isEmpty);
+    });
+
+    testWidgets('the three checks run in first_user.dart\'s order',
+        (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      // Every branch is wrong at once. Three checks in a fixed order means
+      // three sentences the operator can act on, one at a time; a single
+      // "invalid input" is a support call.
+      await fillCreate(tester, username: '', password: '', confirm: 'x');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserBlankUsernameKey), findsOneWidget);
+      expect(find.byKey(kAccessUserBlankPasswordKey), findsNothing);
+      expect(find.byKey(kAccessUserMismatchKey), findsNothing);
+    });
+
+    testWidgets('a duplicate username is refused inside the dialog, before '
+        'the store is asked', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'bjorn', password: 'correct horse');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserDuplicateKey), findsOneWidget);
+      expect(find.text(kAccessUserDuplicateNote('bjorn')), findsOneWidget);
+      expect(
+        store!.calls.where((c) => c.startsWith('createUser')),
+        isEmpty,
+        reason: 'an exception surfaced as a snackbar after the dialog closed '
+            'would make the operator retype everything',
+      );
+    });
+
+    testWidgets('the duplicate check compares exactly — a capitalisation is a '
+        'different account', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'Bjorn', password: 'correct horse');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(kAccessUserDuplicateKey),
+        findsNothing,
+        reason: 'app_user.username is a case-sensitive primary key and '
+            'AccessRepository.user documents why. A dialog that refused '
+            '"Bjorn" because "bjorn" exists would refuse a name the database '
+            'would have accepted',
+      );
+      expect(await userNamed('Bjorn'), isNotNull);
+      expect(await userNamed('bjorn'), isNotNull);
+    });
+
+    testWidgets('UserExistsException re-renders the dialog rather than '
+        'closing it', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: 'correct horse');
+      // The race the pre-check cannot win: another station inserted the name
+      // between the loaded roster and this transaction.
+      store!.createThrowsOnce = const UserExistsException('newbie');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserCreateConfirmKey), findsOneWidget,
+          reason: 'the dialog stays open, holding what was typed');
+      expect(find.byKey(kAccessUserDuplicateKey), findsOneWidget);
+      expect(find.text(kAccessUserDuplicateNote('newbie')), findsOneWidget);
+      expect(
+          tester
+              .widget<TextField>(find.byKey(kAccessUserUsernameFieldKey))
+              .controller!
+              .text,
+          'newbie');
+    });
+
+    testWidgets('an account is created in the role that was picked, and its '
+        'password works', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: 'correct horse');
+      await tester.tap(find.byKey(kAccessUserRoleChoiceKey('Maintenance')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserCreateConfirmKey), findsNothing,
+          reason: 'the dialog closes on success');
+      expect(find.byKey(kAccessUserRowKey('newbie')), findsOneWidget);
+      expect((await userNamed('newbie'))!.roleName, 'Maintenance');
+      expect(cell(tester, kAccessUserLastLoginKey('newbie')), kAccessUserNever);
+
+      final who = await realAuth().authenticate('newbie', 'correct horse');
+      expect(who?.roleName, 'Maintenance',
+          reason: 'the credential reached the repository and nowhere else');
+    });
+
+    testWidgets('a failure never renders the exception', (tester) async {
+      const staged = 'sekrit-9x-never-typed';
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: 'correct horse');
+      // An ArgumentError raised on a bad credential can carry the credential
+      // in its message. `staged` was never typed into this dialog, so finding
+      // it anywhere in the tree can only mean the exception was rendered.
+      store!.createThrowsOnce = ArgumentError('rejected credential: $staged');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        treeMentions(tester, staged),
+        isFalse,
+        reason: 'T-06-70: first_user.dart refuses to render the exception on '
+            'exactly this screen — rendering it would put a credential into a '
+            'screenshot of a commissioning session',
+      );
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.byKey(kAccessUserFailedKey), findsOneWidget);
+      expect(find.text(kAccessUserCreateFailedNote), findsOneWidget);
+      expect(await userNamed('newbie'), isNull);
+    });
+
+    testWidgets('the confirming action is disabled while the write is in '
+        'flight, and enabled again if it fails', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: 'correct horse');
+      final hold = Completer<void>();
+      store!.holdWrites = hold;
+      store!.createThrowsOnce = StateError('the database went away');
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(kAccessUserCreateConfirmKey))
+            .onPressed,
+        isNull,
+        reason: 'T-06-75: PBKDF2 at production iterations is most of a '
+            'second, and this is about a second tap racing the first — not '
+            'about a permission, which is the rule that says never grey a '
+            'control',
+      );
+      expect(
+          tester
+              .widget<TextField>(find.byKey(kAccessUserUsernameFieldKey))
+              .enabled,
+          isFalse);
+
+      hold.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(kAccessUserCreateConfirmKey))
+            .onPressed,
+        isNotNull,
+        reason: 'the dialog is usable again after a failure',
+      );
+    });
+
+    testWidgets('at production iterations a second tap cannot race the first',
+        (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: 'correct horse');
+      // The busy state exercised against something that actually takes time:
+      // no iteration hook, so this is the real 200 000-round derivation.
+      Pbkdf2Kdf.iterationsForTest = null;
+
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey),
+          warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      expect(store!.calls.where((c) => c.startsWith('createUser')).length, 1,
+          reason: 'two writes would be one account and one '
+              'UserExistsException surfaced for no reason');
+      expect(await userNamed('newbie'), isNotNull);
+    });
+
+    testWidgets('every controller is disposed', (tester) async {
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+      await openCreate(tester);
+
+      final controllers = [
+        for (final key in [
+          kAccessUserUsernameFieldKey,
+          kAccessUserPasswordFieldKey,
+          kAccessUserConfirmFieldKey,
+        ])
+          tester.widget<TextField>(find.byKey(key)).controller!,
+      ];
+      expect(controllers, hasLength(3));
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      for (final controller in controllers) {
+        expect(
+          () => controller.addListener(() {}),
+          throwsA(isA<AssertionError>()),
+          reason: 'a disposed ChangeNotifier asserts on addListener — the '
+              'controller holding a password must not outlive its dialog',
+        );
+      }
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The set-password dialog — the other screen where a password is in hand
+  // -------------------------------------------------------------------------
+
+  group('the set-password dialog', () {
+    testWidgets('two fields, and neither of them is a username or a current '
+        'password', (tester) async {
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+
+      expect(find.byKey(kAccessUserPasswordFieldKey), findsOneWidget);
+      expect(find.byKey(kAccessUserConfirmFieldKey), findsOneWidget);
+      expect(find.byType(TextField), findsNWidgets(2));
+      expect(
+        find.byKey(kAccessUserUsernameFieldKey),
+        findsNothing,
+        reason: 'there is no verify-current flow and self-service is out of '
+            'scope: an admin types the new password directly',
+      );
+      expect(find.text(kAccessUserSetPasswordTitle('bjorn')), findsOneWidget);
+    });
+
+    testWidgets('a blank password is refused with its own sentence',
+        (tester) async {
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+
+      await tester.tap(find.byKey(kAccessUserPasswordConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserBlankPasswordKey), findsOneWidget);
+      expect(find.text(kAccessUserBlankPasswordNote), findsOneWidget);
+      expect(store!.calls.where((c) => c.startsWith('setUserPassword')),
+          isEmpty);
+    });
+
+    testWidgets('a mismatch is refused with its own sentence', (tester) async {
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+      await tester.enterText(
+          find.byKey(kAccessUserPasswordFieldKey), 'new leyniord');
+      await tester.enterText(
+          find.byKey(kAccessUserConfirmFieldKey), 'new leynior');
+      await tester.pump();
+
+      await tester.tap(find.byKey(kAccessUserPasswordConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserMismatchKey), findsOneWidget);
+      expect(find.text(kAccessUserMismatchNote), findsOneWidget);
+      expect(store!.calls.where((c) => c.startsWith('setUserPassword')),
+          isEmpty);
+    });
+
+    testWidgets('the new password works and the old one stops working',
+        (tester) async {
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+      await tester.enterText(
+          find.byKey(kAccessUserPasswordFieldKey), 'new leyniord');
+      await tester.enterText(
+          find.byKey(kAccessUserConfirmFieldKey), 'new leyniord');
+      await tester.pump();
+
+      await tester.tap(find.byKey(kAccessUserPasswordConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(kAccessUserPasswordConfirmKey), findsNothing);
+      final auth = realAuth();
+      expect((await auth.authenticate('bjorn', 'new leyniord'))?.roleName,
+          'Shift Leader');
+      expect(await auth.authenticate('bjorn', 'correct horse'), isNull);
+    });
+
+    testWidgets('a failure never renders the exception', (tester) async {
+      const staged = 'sekrit-7y-never-typed';
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+      await tester.enterText(
+          find.byKey(kAccessUserPasswordFieldKey), 'new leyniord');
+      await tester.enterText(
+          find.byKey(kAccessUserConfirmFieldKey), 'new leyniord');
+      await tester.pump();
+      store!.setPasswordThrowsOnce =
+          ArgumentError('rejected credential: $staged');
+
+      await tester.tap(find.byKey(kAccessUserPasswordConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(treeMentions(tester, staged), isFalse, reason: 'T-06-70');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.byKey(kAccessUserFailedKey), findsOneWidget);
+      expect(find.text(kAccessUserSetPasswordFailedNote), findsOneWidget);
+    });
+
+    testWidgets('the confirming action is disabled while the hash is in '
+        'flight', (tester) async {
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+      await tester.enterText(
+          find.byKey(kAccessUserPasswordFieldKey), 'new leyniord');
+      await tester.enterText(
+          find.byKey(kAccessUserConfirmFieldKey), 'new leyniord');
+      await tester.pump();
+      final hold = Completer<void>();
+      store!.holdWrites = hold;
+
+      await tester.tap(find.byKey(kAccessUserPasswordConfirmKey));
+      await tester.pump();
+
+      expect(
+          tester
+              .widget<FilledButton>(find.byKey(kAccessUserPasswordConfirmKey))
+              .onPressed,
+          isNull);
+      expect(
+          tester
+              .widget<TextField>(find.byKey(kAccessUserPasswordFieldKey))
+              .enabled,
+          isFalse);
+
+      hold.complete();
+      await tester.pumpAndSettle();
+      expect(find.byKey(kAccessUserPasswordConfirmKey), findsNothing);
+    });
+
+    testWidgets('every controller is disposed', (tester) async {
+      await makeUser('bjorn', 'Shift Leader');
+      await pumpSection(tester, overrides());
+      await openSetPassword(tester, 'bjorn');
+
+      final controllers = [
+        for (final key in [
+          kAccessUserPasswordFieldKey,
+          kAccessUserConfirmFieldKey,
+        ])
+          tester.widget<TextField>(find.byKey(key)).controller!,
+      ];
+      expect(controllers, hasLength(2));
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      for (final controller in controllers) {
+        expect(() => controller.addListener(() {}),
+            throwsA(isA<AssertionError>()));
+      }
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('neither dialog puts the password into an audit row',
+        (tester) async {
+      const secret = 'ny-leyniord-7q';
+      await makeUser('admin', 'Engineering');
+      await pumpSection(tester, overrides());
+
+      await openCreate(tester);
+      await fillCreate(tester, username: 'newbie', password: secret);
+      await tester.tap(find.byKey(kAccessUserCreateConfirmKey));
+      await tester.pumpAndSettle();
+
+      await openSetPassword(tester, 'newbie');
+      await tester.enterText(find.byKey(kAccessUserPasswordFieldKey), secret);
+      await tester.enterText(find.byKey(kAccessUserConfirmFieldKey), secret);
+      await tester.pump();
+      await tester.tap(find.byKey(kAccessUserPasswordConfirmKey));
+      await tester.pumpAndSettle();
+
+      expect(sink.rows.map((r) => r.itemKey),
+          containsAll(['user.create', 'user.password']));
+      for (final row in sink.rows) {
+        expect(
+          row.toString(),
+          isNot(contains(secret)),
+          reason: 'T-06-70/T-06-71: AuditRecord.userCreate and '
+              'AuditRecord.userPassword have no parameter that could carry a '
+              'credential, and an admin row is not an auth row — toString '
+              'withholds the value columns only for the auth surface, so these '
+              'do reach log files',
+        );
+        expect(row.oldValue, isNot(secret));
+        expect(row.newValue, isNot(secret));
+      }
     });
   });
 }
