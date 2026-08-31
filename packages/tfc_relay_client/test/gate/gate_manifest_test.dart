@@ -150,6 +150,50 @@ const _wallClockSurfaces = <String>[
 /// The calls that turn an instant into a window.
 const _windowCalls = <String>['until(', 'within(', 'arrived('];
 
+/// The one way a line may read a wall-clock surface at an instant and stay.
+///
+/// **The rule above does not bend; this is an exemption, and the difference is
+/// the whole design.** 07-02 moved six proven cases into this directory and
+/// four of them tripped the sweep. One was the parked F5 flake the rule was
+/// written for. The other three were a shape the rule cannot express: a surface
+/// asserted *after an event that already completed*, where the assertion is a
+/// consistency check between two surfaces at one instant rather than a bet on a
+/// timer. `expect(client.isReady, isTrue)` on the line after an `until()` that
+/// waited for the resynced value is not measuring the scheduler — it is saying
+/// the value cannot have arrived over a link that is not ready.
+///
+/// Worse, those three had **no correct rewrite**. The only window helper this
+/// package owns is `until()` (`fault_fixture.dart:281`), which polls until a
+/// predicate *becomes* true. F13's assertion is that readiness **stayed** true
+/// across a deliberate settle; expressed as `until()` it would accept a client
+/// that became ready late, which is the false disconnect the case exists to
+/// forbid. Rewriting it would have turned a real assertion into a weaker one
+/// while making the report greener.
+///
+/// So the failure mode this constant exists to prevent is the one the
+/// `_notAGateCase` doc names two screens down: a reader meets a false positive,
+/// decides the rule is wrong, and **loosens the rule** — widening
+/// `_windowCalls`, deleting a surface, or dropping the arm — which silently
+/// re-permits the F5 flake everywhere. An exemption keeps the rule strict and
+/// makes each departure from it individually visible, argued in writing, and
+/// greppable at review time.
+///
+/// Spelling: a trailing `// window-exempt: <reason>` on the offending line. The
+/// reason must name **the completed event that established the state being
+/// asserted** — not "this is fine", not "flaky otherwise". A marker whose
+/// reason is missing or shorter than [_exemptionReasonFloor] characters fails
+/// the sweep exactly as an unmarked instant read does, because an exemption
+/// nobody had to justify is a comment that switches off a test.
+final _windowExemption = RegExp(r'//\s*window-exempt:\s*(\S.*)$');
+
+/// How long an exemption's reason must be to count as one.
+///
+/// The same floor, for the same reason, as the conditional-skip valve below: a
+/// justification short enough to be typed without thinking is not one. Forty
+/// characters does not make a reason good, but it does stop `// window-exempt:
+/// ok` from being the shape that spreads.
+const _exemptionReasonFloor = 40;
+
 /// Files in the gate directory that are not gate cases, and why.
 ///
 /// One entry, and it has to be here: this file names the row grammar, the
@@ -584,6 +628,7 @@ void main() {
           final line = lines[i];
           if (!line.contains('expect(')) continue;
           if (_windowCalls.any(line.contains)) continue;
+          if (_exemptionOn(line) != null) continue;
           for (final surface in _wallClockSurfaces) {
             if (line.contains(surface)) {
               instants.add('${source.name}:${i + 1} — $surface');
@@ -599,7 +644,34 @@ void main() {
               'deadline and failed one run in three on a loaded runner. The '
               'property is "it becomes stale", which is a window; asserting it '
               'at a point measures the scheduler. Wrap the read in until() or '
-              'within(), and platform-scale the deadline');
+              'within(), and platform-scale the deadline. If the read is a '
+              'consistency check against an event that has already completed, '
+              'say so on the line with `// window-exempt: <reason naming the '
+              'completed event>` — and read _windowExemption\'s doc first, '
+              'because widening the rule instead is the failure it describes');
+    });
+
+    test('every exemption is justified in writing', () {
+      final unjustified = <String>[];
+      for (final source in _allGateSources(directory)) {
+        final lines = source.code.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          final reason = _exemptionOn(lines[i]);
+          if (reason == null) continue;
+          if (reason.length < _exemptionReasonFloor) {
+            unjustified.add('${source.name}:${i + 1} — "$reason" '
+                '(${reason.length} chars)');
+          }
+        }
+      }
+      expect(unjustified, isEmpty,
+          reason: 'these window-exempt markers carry a reason shorter than '
+              '$_exemptionReasonFloor characters: $unjustified. The marker '
+              'suppresses the one arm standing between this directory and the '
+              'F5 flake, so the reason is the entire safeguard: it has to name '
+              'the completed event that established the state being asserted, '
+              'which is a sentence nobody can write by accident about a read '
+              'that is really racing a timer');
     });
   });
 
@@ -678,6 +750,34 @@ void main() {
           reason: 'a read already inside an until() window is being reported '
               'as an instant, which is the false positive that gets a sweep '
               'switched off rather than obeyed');
+    });
+
+    test('an exemption is read only when it carries a real reason', () {
+      const justified = 'expect(c.isReady, isTrue); // window-exempt: the '
+          'resynced value arrived one line above, so this asserts consistency '
+          'with a completed event';
+      expect(_exemptionOn(justified), isNotNull,
+          reason: 'a properly spelled marker is not being recognised, so the '
+              'three permanent exemptions 07-02 argued for are being counted '
+              'as instant reads and the next reader meets the false positive '
+              'this mechanism exists to retire');
+      expect(_exemptionOn(justified)!.length,
+          greaterThanOrEqualTo(_exemptionReasonFloor));
+
+      expect(_exemptionOn('expect(c.isReady, isTrue);'), isNull,
+          reason: 'a line with no marker is being read as exempt, which would '
+              'switch the arm off for the whole directory at once');
+      expect(_exemptionOn('expect(c.isReady, isTrue); // window-exempt:'),
+          isNull,
+          reason: 'an empty marker is being accepted. `// window-exempt:` with '
+              'nothing after it is the cheapest thing to type and the exact '
+              'shape that turns an argued exemption into a mute button');
+
+      const short = 'expect(c.isReady, isTrue); // window-exempt: fine';
+      expect(_exemptionOn(short), isNotNull);
+      expect(_exemptionOn(short)!.length, lessThan(_exemptionReasonFloor),
+          reason: 'the reason floor is not biting: "fine" is being measured as '
+              'a justification, and the sweep arm above would let it through');
     });
 
     test('an unconditional skip is recognised and a probed one is not', () {
@@ -870,6 +970,14 @@ List<GateCase> _caseOf(String file, String name) {
   final tokens = _tokensIn(name);
   return tokens.isEmpty ? const [] : [GateCase(file, name, tokens)];
 }
+
+/// The reason on [line]'s window exemption, or null if it carries none.
+///
+/// Returns the reason rather than a bool so the caller can judge it: a marker
+/// and a justified marker are different things, and only the second one is
+/// allowed to suppress an arm.
+String? _exemptionOn(String line) =>
+    _windowExemption.firstMatch(line)?.group(1)?.trim();
 
 /// The `(row, arm)` pairs at the front of [name].
 List<({String row, String? arm})> _tokensIn(String name) {

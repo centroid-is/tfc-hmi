@@ -18,9 +18,9 @@
 ///    `checkExactlyOneUpstreamAttemptPerCmd`, which runs against every
 ///    implementation on every leg and asserts the plant's own attempt counter
 ///    is 1 for both an ordinary write and one whose outcome nobody knows.
-///  * `test/contract/fault_contract_test.dart:432` — F5, a write across a
+///  * `test/gate/half_open_gate_test.dart:148` — F5a, a write across a
 ///    total blackhole: `debugWritesSent == 1`.
-///  * `test/contract/fault_contract_test.dart:529-545` — F6/F7, the link killed
+///  * `test/gate/write_in_flight_gate_test.dart:91-104` — F7a, the link killed
 ///    with a write on the wire: `debugWritesSent == 1` before the reconnect and
 ///    again after the `writeStatus` re-query, because the recovery asks about
 ///    the command rather than repeating it.
