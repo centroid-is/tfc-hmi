@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tfc/models/menu_item.dart';
 import 'package:tfc/widgets/nav_dropdown.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc/route_registry.dart';
 import 'package:beamer/beamer.dart';
 
@@ -303,6 +304,70 @@ void main() {
         expect(visibleItems, findsWidgets);
       });
     });
+
+    group('side pane', () {
+      // A section is a tap on the navigation bar, and the bar closes the
+      // pane -- but NavigationBar.onDestinationSelected never fires for one,
+      // because the dropdown's own InkWell consumes the tap.
+      tearDown(() => closeSidePane(immediate: true));
+
+      testWidgets('opening the menu closes an open side pane',
+          (WidgetTester tester) async {
+        await tester.pumpWidget(buildTestNavDropdown(_testMenuItem()));
+        await tester.pumpAndSettle();
+
+        showSidePane(
+          context: tester.element(find.byType(NavDropdown)),
+          id: 'test-pane',
+          builder: (_) => const Text('pane body'),
+        );
+        await tester.pumpAndSettle();
+        expect(isSidePaneOpen(), isTrue);
+
+        await tester.tap(find.text('TestMenu'));
+        await tester.pumpAndSettle();
+
+        expect(isSidePaneOpen(), isFalse);
+        expect(find.text('pane body'), findsNothing);
+        // The menu still opened.
+        expect(find.text('Page A'), findsOneWidget);
+      });
+
+      testWidgets('pane stays closed when the menu is dismissed unchosen',
+          (WidgetTester tester) async {
+        await tester.pumpWidget(buildTestNavDropdown(_testMenuItem()));
+        await tester.pumpAndSettle();
+
+        showSidePane(
+          context: tester.element(find.byType(NavDropdown)),
+          id: 'test-pane',
+          builder: (_) => const Text('pane body'),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('TestMenu'));
+        await tester.pumpAndSettle();
+        // Dismiss without picking a page -- the old behaviour left the pane
+        // up for a device the operator had already walked away from.
+        await tester.tapAt(const Offset(5, 5));
+        await tester.pumpAndSettle();
+
+        expect(isSidePaneOpen(), isFalse);
+      });
+
+      testWidgets('tapping with no pane open is harmless',
+          (WidgetTester tester) async {
+        await tester.pumpWidget(buildTestNavDropdown(_testMenuItem()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('TestMenu'));
+        await tester.pumpAndSettle();
+
+        expect(isSidePaneOpen(), isFalse);
+        expect(find.text('Page A'), findsOneWidget);
+      });
+    });
+
   });
 }
 

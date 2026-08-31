@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:tfc/widgets/panes/side_pane.dart';
 import 'package:tfc/widgets/panes/standard_dialog.dart';
 import 'package:beamer/beamer.dart';
 import 'package:tfc_dart/core/alarm.dart';
@@ -198,6 +199,17 @@ class NavDropdownState extends State<NavDropdown> {
             if (_isMenuOpen) return;
             _isMenuOpen = true;
             NavDropdown.isAnyMenuOpen.value = true;
+
+            // A tap on the navigation bar takes the pane away, and a section
+            // is a tap on the navigation bar. The bar's own
+            // onDestinationSelected does this, but it never runs for a
+            // section: this InkWell is inside the destination and consumes
+            // the tap, so the pane used to sit there through the whole menu
+            // -- and stayed put if the operator dismissed it without
+            // choosing a page. Closing here makes every destination behave
+            // the same way. Config editors write straight into their asset,
+            // so nothing is lost by closing early.
+            closeSidePane(immediate: true);
 
             final totalItems = _countAllItems(widget.menuItem);
             final menuHeight = totalItems * NavDropdown.itemHeight;
