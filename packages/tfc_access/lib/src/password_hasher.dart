@@ -188,6 +188,19 @@ abstract final class Argon2idKdf {
   /// The lane count used when [KdfTestCost.iterationsForTest] is set.
   static const int testParallelism = 1;
 
+  /// Isolates are **off** while [KdfTestCost.iterationsForTest] is set.
+  ///
+  /// Not a performance choice. A `testWidgets` binding runs the test body in a
+  /// fake-async zone: `pumpAndSettle` advances a simulated clock, and no amount
+  /// of it advances the real one. An isolate round trip needs real time, so a
+  /// derivation that spawns isolates never completes under a widget test — the
+  /// write it was part of silently never lands, and the failure surfaces as
+  /// "the row is missing" rather than as anything about the KDF.
+  ///
+  /// The calling isolate is the right place for a test derivation anyway: it is
+  /// bounded by the hook, and [blocksPerProcessingChunk] keeps it yielding.
+  static const int testMaxIsolates = 0;
+
   /// The parameters to derive a *new* hash at.
   ///
   /// With the hook clear this is [productionParams]. With the hook set, the
@@ -230,12 +243,20 @@ abstract final class Argon2idKdf {
     // blocksPerProcessingChunk out of reach — two of the six measured constants
     // would silently vanish, including the one that keeps the screen alive if
     // the isolate path is ever unavailable.
+    //
+    // The isolate count is the one knob that does not come from [params]: it
+    // changes what the derivation costs to compute, not what it computes, so it
+    // is not part of a stored row and must not be. Under the test hook it is
+    // [testMaxIsolates] — see that constant for why a widget test cannot wait
+    // for an isolate.
     final kdf = DartArgon2id(
       parallelism: params.parallelism,
       memory: params.memoryKib,
       iterations: params.iterations,
       hashLength: params.hashLength,
-      maxIsolates: maxIsolates,
+      maxIsolates: KdfTestCost.iterationsForTest == null
+          ? maxIsolates
+          : testMaxIsolates,
       blocksPerProcessingChunk: blocksPerProcessingChunk,
     );
     final key = await kdf.deriveKey(
