@@ -43,7 +43,15 @@ import 'dart:typed_data';
 // `pointycastle`, and an unrestricted import would let this file reach the
 // certificate builders through it — which is the thing the library doc says
 // this package does not do.
-import 'package:basic_utils/basic_utils.dart' show CryptoUtils, StringUtils;
+//
+// The ASN.1 below is `package:pointycastle`'s, which is what `basic_utils`
+// itself is built on. It is NOT `package:asn1lib`: the two libraries carry the
+// same class names and incompatible APIs (`ASN1BitString(stringValues:)`
+// versus positional, a `valueBytes` setter present versus absent), so a
+// well-meant import swap costs a full compile-error round to discover
+// (06-RESEARCH trap 13).
+import 'package:basic_utils/basic_utils.dart'
+    show CryptoUtils, StringUtils, X509Utils;
 import 'package:pointycastle/asn1.dart';
 import 'package:pointycastle/export.dart'
     show PrivateKeyParameter, RSAPrivateKey, RSAPublicKey, RSASignature, Signer;
@@ -86,6 +94,25 @@ RelayKeyPair generateKeyPair() {
 /// moves.
 String privateKeyToPem(RSAPrivateKey key) =>
     CryptoUtils.encodeRSAPrivateKeyToPem(key);
+
+/// The RSA private key in [pem] — how `relay_certs --leaf` picks up the CA key
+/// an integrator points it at.
+RSAPrivateKey privateKeyFromPem(String pem) =>
+    CryptoUtils.rsaPrivateKeyFromPem(pem);
+
+/// The subject name of the certificate in [pem], keyed by dotted OID and in
+/// the order the certificate carries it.
+///
+/// This is how a leaf gets an issuer name that is *byte-identical* to its CA's
+/// subject name: a verifier matches the two on their DER bytes, so a name
+/// rebuilt from readable labels — or in a different order — reads the same in
+/// a dump and builds no chain. [mintCertificate] therefore accepts dotted-OID
+/// keys as well as labels like `CN`.
+Map<String, String> subjectNameFromPem(String pem) =>
+    X509Utils.x509CertificateFromPem(pem)
+        .tbsCertificate!
+        .subject
+        .map((oid, value) => MapEntry(oid, value ?? ''));
 
 /// A signed X.509 certificate, as a PEM string.
 ///
@@ -243,18 +270,28 @@ BigInt _randomSerial() {
 
 /// `Name ::= RDNSequence` — one single-valued RDN per entry, in the order
 /// given, because a DN is an ordered thing and re-ordering it changes it.
+///
+/// A key is either a label (`CN`, `O`) or a dotted OID (`2.5.4.3`). The second
+/// form is what [subjectNameFromPem] hands back, and taking it here is what
+/// lets `relay_certs --leaf` reproduce a CA's subject name byte for byte
+/// instead of approximately.
 ASN1Sequence _distinguishedName(Map<String, String> attributes) {
   final name = ASN1Sequence();
   attributes.forEach((key, value) {
+    final oid = _dottedOid.hasMatch(key)
+        ? ASN1ObjectIdentifier.fromIdentifierString(key)
+        : ASN1ObjectIdentifier.fromName(key);
     name.add(ASN1Set(elements: [
       ASN1Sequence(elements: [
-        ASN1ObjectIdentifier.fromName(key),
+        oid,
         ASN1PrintableString(stringValue: value),
       ])
     ]));
   });
   return name;
 }
+
+final RegExp _dottedOid = RegExp(r'^\d+(\.\d+)+$');
 
 /// `SubjectPublicKeyInfo` for an RSA key.
 ASN1Sequence _publicKeyBlock(RSAPublicKey key) {

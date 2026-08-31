@@ -52,8 +52,9 @@ dependencies:
   # The ASN.1 DER writer and the SHA-256/RSA signer the certificate is actually
   # built from. This is `basic_utils`' own and only dependency, so it is already
   # resolved in the repository's lockfile at 4.0.0 and already loaded by shipping
-  # code: a transitive edge becoming direct, not a new package. Not `asn1lib` —
-  # the two libraries share names and not APIs (06-RESEARCH trap 13).
+  # code: a transitive edge becoming direct, not a new package. It is also the
+  # only ASN.1 library that belongs here — see the import comment in
+  # `lib/src/tls/mint.dart` for the near-miss it warns about.
   pointycastle: ^4.0.0
   # The `relay_certs` CLI's option parsing, at the version `tfc_dart` and
   # `tfc_mcp_server` already pin. An integrator provisioning a plant runs a
