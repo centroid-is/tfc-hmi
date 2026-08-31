@@ -954,7 +954,10 @@ final chatLifecycleProvider = Provider<void>((ref) {
       try {
         // Try to get live StateMan and AlarmMan
         final stateMan = await ref.read(stateManProvider.future);
-        final alarmMan = await ref.read(alarmManProvider.future);
+        // Awaited only to surface an AlarmMan that cannot be built; the
+        // reader below resolves the provider on every read instead of
+        // holding this instance, which an accepted alarm edit replaces.
+        await ref.read(alarmManProvider.future);
 
         // Create live data readers
         final stateReader = StateManStateReader(stateMan);
@@ -966,7 +969,8 @@ final chatLifecycleProvider = Provider<void>((ref) {
           io.stderr.writeln('chatLifecycleProvider: state reader init failed: $e');
         }));
 
-        final alarmReader = AlarmManAlarmReader(alarmMan);
+        final alarmReader =
+            AlarmManAlarmReader.live(() => currentAlarmConfigs(ref));
 
         // Get AppDatabase as McpDatabase (single pool, no new connections)
         final dbWrapper = await ref.read(databaseProvider.future);
@@ -1147,14 +1151,17 @@ final chatLifecycleProvider = Provider<void>((ref) {
         final freshConfig = await ref.read(mcpConfigProvider.future);
 
           final stateMan = await ref.read(stateManProvider.future);
-          final alarmMan = await ref.read(alarmManProvider.future);
+          // See above: resolved live, not captured -- an accepted alarm
+          // edit invalidates alarmManProvider and replaces this instance.
+          await ref.read(alarmManProvider.future);
           final stateReader = StateManStateReader(stateMan);
           _chatLifecycle.activeStateReader = stateReader;
           unawaited(stateReader.init().catchError((Object e) {
             io.stderr
                 .writeln('chatLifecycleProvider: state reader init failed: $e');
           }));
-          final alarmReader = AlarmManAlarmReader(alarmMan);
+          final alarmReader =
+              AlarmManAlarmReader.live(() => currentAlarmConfigs(ref));
           final dbWrapper = await ref.read(databaseProvider.future);
           if (dbWrapper == null) return;
           final McpDatabase database = dbWrapper.db;
