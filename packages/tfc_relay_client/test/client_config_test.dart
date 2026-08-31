@@ -13,6 +13,13 @@
 /// **configured, default 3 s**, never derived from the transport period. Three
 /// times a 50 ms period is 150 ms, and a GC pause would grey the whole plant.
 ///
+/// Source: 06-RESEARCH §A.3 measured a panel dialling `wss://` on the system
+/// trust store failing every handshake against a private CA with the same
+/// opaque `CERTIFICATE_VERIFY_FAILED` a real impostor produces — so the
+/// combination is refused at construction rather than once per attempt, and
+/// the pinned root is a **file path** (orchestrator ruling OQ4) because
+/// installing it in the OS trust store would mean trusting that store.
+///
 /// Source: STACK rejected `web_socket_client` for an infinite backoff loop, so
 /// a cap above 30 s is refused rather than merely discouraged: a panel that
 /// backs off to ten minutes is a panel the operator reboots.
@@ -21,6 +28,7 @@ library;
 import 'dart:io';
 
 import 'package:tfc_relay_client/src/client_config.dart';
+import 'package:tfc_relay_client/src/remote_state_man.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -345,6 +353,106 @@ void main() {
               'provisioning mistake into a fault that reproduces nowhere, '
               'because the string on disk and the string on the wire would no '
               'longer be the same string');
+    });
+  });
+
+  group('the pinned root a wss panel cannot be built without', () {
+    /// A path nothing in this group reads.
+    ///
+    /// `ClientConfig` is pure data — no I/O, no clock — so a constructor that
+    /// stat'd the mount point would refuse on a station whose NFS mount comes
+    /// up a second after the panel does, which is a dark screen at shift start
+    /// for a certificate that is fine.
+    const rootPath = '/etc/relay/root.pem';
+
+    test('a panel dialling wss with no pinned root is refused at construction',
+        () {
+      expect(
+        () => RemoteStateMan(
+          uri: Uri.parse('wss://relay.svn.local:8443/'),
+          config: ClientConfig(),
+        ),
+        throwsA(isA<ArgumentError>()
+            .having((e) => '$e', 'message', contains('wss'))
+            .having((e) => '$e', 'message', contains('rootCertPath'))),
+        reason: 'a panel dialling wss on the system trust store fails every '
+            'handshake against a private CA, and the message it fails with is '
+            'byte-identical to the one a real impostor produces (06-RESEARCH '
+            '§A.3 row 6). The integrator standing at the panel is then '
+            'debugging an attack that is not happening. Refusing here says '
+            'the true thing once, at construction, naming the field that is '
+            'missing',
+      );
+    });
+
+    test('the same address is constructible once a root is pinned', () {
+      expect(
+        () => ClientConfig(tls: ClientTlsConfig(rootCertPath: rootPath))
+            .checkDialable(Uri.parse('wss://relay.svn.local:8443/')),
+        returnsNormally,
+        reason: 'the refusal is about the missing root and nothing else — a '
+            'rule that refused wss outright would take the encrypted pipe '
+            'away from the plant it was built for',
+      );
+    });
+
+    test('a plaintext panel needs no pinned root', () {
+      expect(
+        () => ClientConfig().checkDialable(Uri.parse('ws://127.0.0.1:8080/')),
+        returnsNormally,
+        reason: 'every fixture in this workspace dials ws:// with no TLS at '
+            'all; a rule that reached them would be a rewrite of the suite '
+            'wearing the clothes of a security check',
+      );
+    });
+
+    test('an empty root path is refused at construction', () {
+      expect(
+        () => ClientTlsConfig(rootCertPath: ''),
+        throwsA(isA<ArgumentError>()
+            .having((e) => '$e', 'message', contains('rootCertPath'))),
+        reason: 'an empty path reaches SecurityContext as the current '
+            'directory and fails with a message about a directory nobody '
+            'configured, one handshake at a time, forever',
+      );
+    });
+
+    test('the pinned root is named by path and never carried as bytes', () {
+      final source = File('lib/src/client_config.dart');
+      expect(source.existsSync(), isTrue,
+          reason: 'this case reads the implementation as text, so it must be '
+              'run from the package root the CI step sets as its '
+              'working-directory');
+
+      final code = source.readAsStringSync();
+      expect(code, contains('final String rootCertPath;'),
+          reason: 'paths, never bytes — the same discipline TlsConfig carries '
+              'on the gateway side, and what makes the SEC-01 sweep and this '
+              'class agree about where key material lives');
+      expect(code, isNot(contains('List<int>')),
+          reason: 'a config that can hold certificate bytes is a config that '
+              'ends up in a preferences row, a log line or a crash dump; the '
+              'root is a file the integrator mounted and this class names it');
+    });
+
+    test('a dial carries a bound by default', () {
+      expect(ClientConfig().connectTimeout, const Duration(seconds: 10),
+          reason: 'measured (06-RESEARCH §C.4): an unreachable address takes '
+              '75 s to fail on macOS. Unbounded, one attempt outlives the '
+              'whole backoff schedule the operator can see, and a panel '
+              'behind a firewall that drops SYNs looks like a panel that has '
+              'stopped trying');
+    });
+
+    test('a non-positive dial bound is refused', () {
+      expect(
+        () => ClientConfig(connectTimeout: Duration.zero),
+        throwsA(isA<ArgumentError>()
+            .having((e) => '$e', 'message', contains('connectTimeout'))),
+        reason: 'zero would abort every dial before the handshake it is '
+            'guarding could finish, which is a panel that never connects at '
+            'all rather than one that connects slowly',
+      );
     });
   });
 
