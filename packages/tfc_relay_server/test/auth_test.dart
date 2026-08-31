@@ -768,6 +768,72 @@ void main() {
               'code unit. Found: $offenders');
     });
   });
+
+  // The other property no behavioural case can see, and this one is a
+  // *timing* property of the event loop rather than of a comparison.
+  //
+  // `RelayServer.reloadTokens` awaits the reload and then sweeps the sessions
+  // that already carry an identity. A hello whose identity landed *during*
+  // that await would be visited while its identity was still null, skipped,
+  // and then handed a credential set no sweep checked — keeping its access
+  // for the life of its socket. It cannot happen here, and the reason is that
+  // `validate` contains no `await`: its future is already complete, so the
+  // assignment happens in a microtask, and microtasks drain before
+  // `readAsBytes`'s I/O completion can be delivered.
+  //
+  // That is a property of *this* implementation, not of the interface, and
+  // the interleaving is not forcible from outside — which is exactly why it
+  // needs a pin rather than a case. The constraint is written on
+  // `TokenValidator.validate` for anyone writing a second implementation.
+  group('the credential check resolves without waiting on the world', () {
+    final source =
+        File('lib/src/auth/file_token_validator.dart').readAsStringSync();
+
+    test('validate awaits nothing', () {
+      final body =
+          _methodBody(source, 'Future<TokenVerdict> validate(HelloParams');
+      expect(body, contains('_set.lookup(token)'),
+          reason: 'anti-vacuity: the pin is reading the wrong span and the '
+              'assertion below is about nothing');
+      expect(body, isNot(contains('await')),
+          reason: 'an `await` here makes the hello path event-asynchronous, '
+              'and the revocation sweep in `relay_server.dart` then has a '
+              'window a session can be authenticated in and never swept. If '
+              'this validator genuinely has to wait on something, do the '
+              'waiting in `reload` — where the sweep is already ordered '
+              'behind it — and keep this a lookup. Found:\n$body');
+    });
+
+    test('the sweep still runs with no await in its loop', () {
+      final server = File('lib/src/relay_server.dart').readAsStringSync();
+      final body = _methodBody(server, 'Future<void> reloadTokens()');
+      expect(body, contains('_sessions.sessions'),
+          reason: 'anti-vacuity');
+      // Word-bounded: `unawaited(` contains the string and is the opposite of
+      // what this is counting.
+      expect(RegExp(r'\bawait\b').allMatches(body), hasLength(1),
+          reason: 'exactly one await, the reload. A second one inside the '
+              'loop would let the next iteration observe a registry the '
+              'previous close had not finished leaving — the property '
+              '`unawaited(session.close(...))` depends on, which is only safe '
+              'because the registry removal is the synchronous half of the '
+              'teardown. Found:\n$body');
+    });
+  });
+}
+
+/// The body of the *method* whose declaration starts with [signature].
+///
+/// [_functionBody]'s sibling, and separate because the closing brace of a
+/// method is at two spaces rather than at column zero — reading to the first
+/// `\n}` would swallow the rest of the class.
+String _methodBody(String source, String signature) {
+  final start = source.indexOf(signature);
+  if (start < 0) fail('$signature is not in the source any more');
+  final open = source.indexOf('{', start);
+  final close = source.indexOf('\n  }', open);
+  if (close < 0) fail('$signature has no closing brace at two spaces');
+  return source.substring(open, close);
 }
 
 /// The body of the top-level function whose declaration starts with

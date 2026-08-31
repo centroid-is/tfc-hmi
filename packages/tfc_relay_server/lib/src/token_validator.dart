@@ -37,6 +37,29 @@ abstract interface class TokenValidator {
   /// Asynchronous because a real validator talks to something — a key set, an
   /// introspection endpoint, a directory — and a synchronous signature would
   /// have to be broken to add one.
+  ///
+  /// **Constraint on an implementation: resolve without awaiting external
+  /// I/O.** The `Future` may be asynchronous in the microtask sense; it must
+  /// not be asynchronous in the *event* sense. `RelayServer.reloadTokens`
+  /// awaits the credential set's reload and then sweeps the sessions that
+  /// already carry an identity, and it is safe today only because
+  /// `FileTokenValidator.validate` contains no `await`: a hello in flight
+  /// therefore assigns its identity in a microtask, and microtasks drain
+  /// before the reload's I/O completion can be delivered, so the interleaving
+  /// that would matter cannot occur.
+  ///
+  /// An implementation that awaits real work — a directory lookup, a cache
+  /// with a refresh-on-miss, an HMAC service — reopens the window: the hello
+  /// resolves against the *pre-reload* credential set, the sweep runs while
+  /// the session's identity is still null and skips it, and the session is
+  /// then handed a revoked identity that no sweep will visit again. It keeps
+  /// its access for the life of the socket.
+  ///
+  /// If a validator genuinely has to wait on something, do the waiting
+  /// **outside** this method — load the answer into memory on a cadence of its
+  /// own, the way `FileTokenValidator` does with `reload` — and make this call
+  /// a lookup. `auth_test.dart` pins the property for the one implementation
+  /// this repository ships.
   Future<TokenVerdict> validate(HelloParams params);
 }
 

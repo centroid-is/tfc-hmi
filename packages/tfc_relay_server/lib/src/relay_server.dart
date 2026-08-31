@@ -441,6 +441,21 @@ final class RelayServer {
   /// full sweep on a file change is free, and an index would be a second
   /// place session lifetime is tracked when `_sessions.remove` is the single
   /// synchronous chokepoint the whole close path depends on.
+  ///
+  /// **A hello in flight cannot slip past the sweep, and the reason is a
+  /// property of the validator rather than of this method.** The sweep runs
+  /// after `await live.reload()`, so a session whose identity is assigned
+  /// during that await would be skipped — visited while its identity was
+  /// still null — and would then be handed a credential set nobody checked.
+  /// It cannot happen with a validator that meets the constraint
+  /// [TokenValidator.validate] states: `FileTokenValidator.validate` contains
+  /// no `await`, so a hello in flight resolves in a microtask, and microtasks
+  /// drain before `readAsBytes`'s completion is delivered. That constraint is
+  /// written on the interface, where an implementer will read it, and pinned
+  /// for this implementation by `auth_test.dart`'s "the credential check
+  /// resolves without waiting on the world". Anything that awaits real work
+  /// inside `validate` reopens the window, and the session that slips through
+  /// keeps its access for the life of its socket.
   Future<void> reloadTokens() async {
     final live = validator;
     if (live is! RevocableTokenValidator) {
