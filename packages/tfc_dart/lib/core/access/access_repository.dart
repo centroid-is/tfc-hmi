@@ -121,6 +121,43 @@ class LastUsersHolderException implements Exception {
       'procedure in docs/access-control-deployment.md §4.';
 }
 
+/// An account with that username already exists.
+///
+/// An [Exception] rather than an [Error] because the caller is expected to
+/// catch it and render it: the create dialog refuses a duplicate before it
+/// submits, so reaching this is the race between two people adding the same
+/// name, not a defect. It carries [username] so the dialog can say which name
+/// is taken rather than stringifying an error into a snackbar.
+class UserExistsException implements Exception {
+  const UserExistsException(this.username);
+
+  /// The name that is already in `app_user`.
+  final String username;
+
+  @override
+  String toString() =>
+      'UserExistsException: an account named "$username" already exists.';
+}
+
+/// No account has that username.
+///
+/// Thrown rather than succeeding quietly, for the reason
+/// `BindingNotFoundException` gives: a silent success would let the caller
+/// write an audit row claiming a change that did not happen, and the trail's
+/// only value is that its rows are true.
+///
+/// Case-sensitive, like every other username comparison here — see [user].
+class UserNotFoundException implements Exception {
+  const UserNotFoundException(this.username);
+
+  /// The name that is not in `app_user`.
+  final String username;
+
+  @override
+  String toString() =>
+      'UserNotFoundException: there is no account named "$username".';
+}
+
 /// The stored form of a password hash, for `AppUser.passwordHash`.
 ///
 /// Thin wrappers over [PasswordHash.encode] / [PasswordHash.tryDecode], which
@@ -438,6 +475,16 @@ class AccessRepository {
       ..sort();
     if (holdersNow.isEmpty) return;
 
+    // Read before the pending change is applied below, because two of the four
+    // routes edit `roleOf` out from under it — a refusal must name the role the
+    // holders hold *now*, not the one they were about to be moved to.
+    //
+    // Every holder holds the same role whenever this method goes on to throw:
+    // the change is refused only when nobody holds `users` afterwards, and that
+    // cannot happen while a second `users`-granting role still has somebody on
+    // it.
+    final lastGrantingRole = roleOf[holdersNow.first]!;
+
     final grantingAfter = {...granting};
     switch (change.kind) {
       case _PendingChangeKind.userDeleted:
@@ -456,10 +503,7 @@ class AccessRepository {
 
     if (roleOf.values.any(grantingAfter.contains)) return;
 
-    // Every holder holds the same role whenever this fires: the change is
-    // refused only when nobody holds `users` afterwards, which cannot happen
-    // while a second `users`-granting role still has somebody on it.
-    throw LastUsersHolderException(roleOf[holdersNow.first]!, holdersNow);
+    throw LastUsersHolderException(lastGrantingRole, holdersNow);
   }
 
   /// Rename the role [from] to [to], carrying its users with it.
@@ -611,6 +655,168 @@ class AccessRepository {
 
     _logger.i('First user "$name" created as $kFirstUserRoleName — the '
         'first-user window is now closed.');
+  }
+
+  /// Every row in `app_user`, ordered by username.
+  ///
+  /// Returns the raw drift row, as [user] already does. A domain type here
+  /// would be a fifth shape of the same four columns, and the users screen
+  /// renders exactly those columns — username, role, created, last login.
+  ///
+  /// Unguarded and unaudited: it is a read, and the screen that calls it is
+  /// gated on [AccessGroup.users] before it gets here.
+  Future<List<AppUserData>> listUsers() =>
+      (db.select(db.appUser)..orderBy([(t) => OrderingTerm(expression: t.username)]))
+          .get();
+
+  /// Create an account in [roleName].
+  ///
+  /// **This is not [createFirstUser].** It neither opens nor closes the
+  /// first-user window and never consults it: it is reachable only from a
+  /// screen gated on [AccessGroup.users], so an account already exists by
+  /// construction. It takes the role as a parameter rather than forcing
+  /// [kFirstUserRoleName], because the whole point of the users screen is
+  /// choosing one. The two must not be merged.
+  ///
+  /// It does **not** call [_requireAUsersHolderRemains]: creating an account
+  /// cannot take a holder away.
+  ///
+  /// The hash is derived before the transaction opens and the checks run
+  /// inside it — one decision, in two halves, for the reasons [createFirstUser]
+  /// sets out: PBKDF2 at production iteration counts takes the better part of a
+  /// second and holding a write transaction across it would block every other
+  /// writer on the shared Postgres server, while checking beforehand would be a
+  /// check-then-act race. The loser of a race throws a hash away, which costs
+  /// nothing.
+  ///
+  /// [username] is trimmed and nothing else. It is not case-folded — the
+  /// primary key is case-sensitive TEXT, see [user].
+  Future<void> createUser({
+    required String username,
+    required String password,
+    required String roleName,
+  }) async {
+    final name = username.trim();
+    if (name.isEmpty) {
+      throw ArgumentError.value(username, 'username', 'must not be blank');
+    }
+    if (password.isEmpty) {
+      // Deliberately not `ArgumentError.value(password, ...)`: that puts the
+      // credential into the message, and from there into whatever logs it.
+      throw ArgumentError('password must not be empty');
+    }
+
+    final hash = await PasswordHasher.hash(password);
+
+    await db.transaction(() async {
+      final clash = await (db.select(db.appUser)
+            ..where((t) => t.username.equals(name)))
+          .getSingleOrNull();
+      if (clash != null) throw UserExistsException(name);
+
+      final role = await (db.select(db.appRole)
+            ..where((t) => t.name.equals(roleName)))
+          .getSingleOrNull();
+      if (role == null) throw MissingRoleError(roleName);
+
+      await db.into(db.appUser).insert(
+            AppUserCompanion.insert(
+              username: name,
+              roleName: roleName,
+              passwordHash: encodeStoredHash(hash),
+              salt: hash.saltB64,
+              createdAt: DateTime.now().toUtc(),
+            ),
+          );
+    });
+  }
+
+  /// Delete the account named [username].
+  ///
+  /// Refuses trip route (a) — the last account holding a role that grants
+  /// [AccessGroup.users] — via [_requireAUsersHolderRemains], inside the same
+  /// transaction as the delete.
+  ///
+  /// It does **not** touch `audit_entry`. `audit_entry.who` is a denormalised
+  /// TEXT column with no foreign key, precisely so the trail survives a deleted
+  /// account by construction rather than by anybody remembering. That is a
+  /// property to preserve: **no cascade may ever be added here**, and no admin
+  /// screen may offer a delete, prune or export path over the trail.
+  Future<void> deleteUser(String username) async {
+    await db.transaction(() async {
+      final existing = await (db.select(db.appUser)
+            ..where((t) => t.username.equals(username)))
+          .getSingleOrNull();
+      if (existing == null) throw UserNotFoundException(username);
+
+      await _requireAUsersHolderRemains(_PendingChange.userDeleted(username));
+
+      await (db.delete(db.appUser)..where((t) => t.username.equals(username)))
+          .go();
+    });
+  }
+
+  /// Move [username] onto [roleName].
+  ///
+  /// Refuses trip route (b) — moving the last `users` holder onto a role that
+  /// does not grant it — via [_requireAUsersHolderRemains], after checking that
+  /// the target role exists and inside the same transaction as the write.
+  Future<void> setRole(String username, String roleName) async {
+    await db.transaction(() async {
+      final existing = await (db.select(db.appUser)
+            ..where((t) => t.username.equals(username)))
+          .getSingleOrNull();
+      if (existing == null) throw UserNotFoundException(username);
+
+      final role = await (db.select(db.appRole)
+            ..where((t) => t.name.equals(roleName)))
+          .getSingleOrNull();
+      if (role == null) throw MissingRoleError(roleName);
+
+      await _requireAUsersHolderRemains(_PendingChange.userRoleChanged(
+        username: username,
+        roleName: roleName,
+      ));
+
+      await (db.update(db.appUser)..where((t) => t.username.equals(username)))
+          .write(AppUserCompanion(roleName: Value(roleName)));
+    });
+  }
+
+  /// Replace [username]'s password.
+  ///
+  /// Hashed before the transaction opens, checked inside it — the same single
+  /// decision [createUser] and [createFirstUser] document.
+  ///
+  /// Writes `password_hash` and `salt` and nothing else: it does not touch
+  /// `last_login_at` and it does not sign anybody out, because there is no
+  /// session state in this layer to invalidate. It never logs, echoes or
+  /// returns the password or the hash, and the empty-password refusal carries
+  /// no value for the same reason.
+  ///
+  /// No lockout guard: a password is not a permission, so no password can
+  /// remove the last holder.
+  Future<void> setPassword(String username, String password) async {
+    if (password.isEmpty) {
+      // Deliberately not `ArgumentError.value(password, ...)`: that puts the
+      // credential into the message, and from there into whatever logs it.
+      throw ArgumentError('password must not be empty');
+    }
+
+    final hash = await PasswordHasher.hash(password);
+
+    await db.transaction(() async {
+      final existing = await (db.select(db.appUser)
+            ..where((t) => t.username.equals(username)))
+          .getSingleOrNull();
+      if (existing == null) throw UserNotFoundException(username);
+
+      await (db.update(db.appUser)..where((t) => t.username.equals(username)))
+          .write(AppUserCompanion(
+        passwordHash: Value(encodeStoredHash(hash)),
+        salt: Value(hash.saltB64),
+      ));
+    });
   }
 
   AccessRole _toRole(AppRoleData row) => AccessRole.fromDb(
