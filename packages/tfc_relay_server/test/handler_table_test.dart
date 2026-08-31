@@ -72,9 +72,6 @@ const Map<int, String> closeCodeNames = {
 /// "an exemption is still needed" case below fails, and whoever landed it
 /// deletes the line. That failure is the point: it is how the list empties.
 const Map<int, String> exemptCodes = {
-  4001: 'authExpired — Phase 6 supplies the producer (token expiry mid-session). '
-      'The server records it today in session_hello_test via sentCloseCode, '
-      'which is an intention, not an observation.',
   // 4004 was exempt until 03-09 wired the buffer's verdicts into the session's
   // close path. `backpressure_test.dart` now watches a real client observe it
   // over a real socket, so the debt is paid and the line is gone — which is
@@ -85,7 +82,21 @@ const Map<int, String> exemptCodes = {
   // reap arrive sooner than a ping timeout could account for, which is the
   // property the code exists to carry. Same debt, same way of paying it.
   //
-  // 4001 is the last one left, and Phase 6 owes it.
+  // 4001 was the last one, standing since Phase 3, and it was the awkward one:
+  // the seam it belonged to shipped permissive, so nothing in the package
+  // could produce the code except a test asserting the server's own
+  // `sentCloseCode` — an intention. 06-06 gave the gateway a real token file
+  // and `RelayServer.reloadTokens`, which sweeps the registry and closes a
+  // station whose credential is gone. `auth_test.dart` watches a real client
+  // observe 4001 on its own socket after the file is rewritten underneath a
+  // live session, and watches a second station's socket stay up and keep
+  // receiving plant updates — because a sweep that closed everything would
+  // satisfy the first half on its own. Same debt, same way of paying it.
+  //
+  // The list is now empty, and an empty list is the point rather than an
+  // oversight: every code this server can send is watched arriving at a
+  // client. A new code added here needs an observation or a written reason,
+  // and the two cases above will say which is missing.
 };
 
 /// The marker that distinguishes a client-observed close from a server-recorded

@@ -32,6 +32,7 @@ import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 
+import 'auth/identity.dart';
 import 'error_codes.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
@@ -378,6 +379,19 @@ final class RelaySession {
 
   String? get epoch => _epoch;
   String? _epoch;
+
+  /// Which station this session is, once its credential has been accepted.
+  ///
+  /// Null before the handshake and on a session whose credential was refused,
+  /// which is what `RelayServer.reloadTokens`' sweep skips on: a pre-hello
+  /// session is already held by the gate and already reaped by the heartbeat
+  /// reaper, so it is not the revocation's business.
+  ///
+  /// Set once and never again — see [_hello]. On a `PermissiveTokenValidator`
+  /// it is that validator's self-naming station, which is the honest answer:
+  /// the gateway does know who this is, and the answer is "anybody".
+  Identity? get identity => _identity;
+  Identity? _identity;
 
   /// How many hold-to-run ticks this session dropped — malformed, naming a
   /// hold it never engaged, or arriving before the handshake.
@@ -768,8 +782,22 @@ final class RelaySession {
         throw rpc.RpcException(
             ServerErrorCodes.unauthorized, 'hello refused: $reason',
             data: _substitute(Methods.hello));
-      case TokenAccepted():
-        break;
+      case TokenAccepted(:final identity):
+        // Here rather than in the `GateAccept` arm below, which is what keeps
+        // the ordering this method already argues for true by construction:
+        // the identity is recorded the moment the credential is accepted and
+        // before the protocol is, so nothing can observe a session with a
+        // protocol and no identity.
+        //
+        // **`??=`, and that is not defensiveness.** The credential check runs
+        // *before* the gate, deliberately (see this method's doc), so a second
+        // `hello` carrying a different station's token reaches the validator
+        // and is accepted by it — the gate refuses the handshake afterwards,
+        // which is too late for a field that has already been overwritten. A
+        // view station could otherwise talk itself into an operate identity on
+        // a handshake the server then refuses, and the refusal would not
+        // matter, because the damage is the field rather than the answer.
+        _identity ??= identity;
     }
 
     final action = _gate.negotiate(hello);

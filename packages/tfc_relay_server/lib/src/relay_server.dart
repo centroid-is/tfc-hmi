@@ -37,6 +37,7 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:tfc_relay_protocol/tfc_relay_protocol.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'auth/file_token_validator.dart';
 import 'error_reporter.dart';
 import 'handle_table.dart';
 import 'relay_session.dart';
@@ -137,16 +138,39 @@ final class RelayServer {
     required this.api,
     ServerConfig? config,
     HandleTable? handles,
-    this.validator = const PermissiveTokenValidator(),
+    TokenValidator validator = permissiveDefault,
     this.serverSupported = const [protocolVersion],
     this.onError = reportToStderr,
     int Function()? now,
   })  : config = config ?? ServerConfig(),
         handles = handles ?? HandleTable(),
+        _configured = validator,
         _now = now ?? _wallClock {
+    if (this.config.auth != null && !identical(validator, permissiveDefault)) {
+      throw ArgumentError('this RelayServer was given both a '
+          'ServerConfig.auth (${this.config.auth!.tokenFilePath}) and an '
+          'explicit validator (${validator.runtimeType}). Two sources of '
+          'truth for the credential check is a configuration nobody can '
+          'reason about, and the one that wins would be an implementation '
+          'detail. Remove whichever is not the deployment: drop `validator:` '
+          'to use the token file, or drop `ServerConfig.auth` to use the '
+          'validator you built');
+    }
     writeOutcomes =
         WriteOutcomeLog(ttl: this.config.writeOutcomeTtl, now: _now);
   }
+
+  /// The permissive validator every caller gets when it configures none.
+  ///
+  /// A named constant rather than an inline `const PermissiveTokenValidator()`
+  /// because the constructor tells "you configured nothing" from "you
+  /// configured a validator" by **identity** against this object. Dart
+  /// canonicalises const instances, so a caller that writes
+  /// `validator: const PermissiveTokenValidator()` — `ws_harness.dart:212`
+  /// does, for every fixture in the package — is passing this very object and
+  /// is correctly read as having configured nothing. The permissive default
+  /// carries no truth, so it cannot be the second source of one.
+  static const TokenValidator permissiveDefault = PermissiveTokenValidator();
 
   static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
 
@@ -195,7 +219,19 @@ final class RelayServer {
   /// encode-once body stays byte-identical for every client that gets it.
   final HandleTable handles;
 
-  final TokenValidator validator;
+  /// The credential check every session on this gateway runs.
+  ///
+  /// The validator the caller configured until [start] builds one from
+  /// [ServerConfig.auth], and that one afterwards. Read through the getter
+  /// rather than captured, because `_onConnect` runs long after `start` and a
+  /// session built against the pre-start value would be permissive on a
+  /// gateway that is not.
+  TokenValidator get validator => _loaded ?? _configured;
+
+  final TokenValidator _configured;
+
+  /// The validator [start] read out of [ServerConfig.auth], if there was one.
+  TokenValidator? _loaded;
 
   /// The protocol versions this build can speak, newest last.
   final List<String> serverSupported;
@@ -268,6 +304,15 @@ final class RelayServer {
       throw StateError('a closed RelayServer cannot be restarted: its sessions '
           'are gone and its registry is disposed. Build a new one');
     }
+    // Before the bind, and deliberately before the `SecurityContext`: a
+    // gateway whose credential file is unreadable must fail with no port
+    // open, so nothing can connect to it during the window in which it looks
+    // started. Same rule as a missing PEM, one line earlier because a token
+    // file is cheaper to get wrong.
+    final auth = config.auth;
+    if (auth != null) {
+      _loaded = await FileTokenValidator.load(auth.tokenFilePath);
+    }
     final tls = config.tls;
     // `withTrustedRoots: false` on the *server* context is not the client-side
     // pinning posture repeated by mistake. A server context's trust store is
@@ -306,6 +351,71 @@ final class RelayServer {
       config: config,
       onSessionError: onError,
     )..start();
+  }
+
+  /// Re-reads the credential set and disconnects every station that is no
+  /// longer in it, with [CloseCodes.authExpired].
+  ///
+  /// **In-process, and that is what makes revocation real.** A restart-to-
+  /// apply design closes every session with [CloseCodes.serverDraining] (see
+  /// [close]) — a code that tells a panel "reconnect, do not alarm", which is
+  /// the opposite of what a revoked station should be told, and which is why
+  /// 4001 stood as the last unpaid debt in `handler_table_test.dart` from
+  /// Phase 3 until this method existed. It also takes the whole plant down to
+  /// disconnect one panel.
+  ///
+  /// **Production wiring is the embedder's, deliberately.** Whatever already
+  /// watches the deployment's configuration calls [FileTokenValidator
+  /// .reloadIfChanged] and then this — an mtime or digest poll is enough, and
+  /// is what the backend's config-watch pattern does. Three reasons this
+  /// server does not own that loop: `File.watch` on a bind-mounted path in
+  /// Docker is unreliable, the reload cadence is a deployment's business
+  /// rather than a gateway's, and a second timer inside this process would
+  /// fight the one `tick_engine.dart` argues there should only ever be one of.
+  /// Tests call this directly, which is what keeps the 4001 case hermetic —
+  /// no timer, no sleep.
+  ///
+  /// Throws a [StateError] when the live validator cannot reload, rather than
+  /// no-opping: a deployment that believes rotation works and has it silently
+  /// do nothing is worse off than one told at the first attempt.
+  ///
+  /// **The sweep is `TickEngine.reap`'s shape, safety property included.**
+  /// `registry.sessions` is read fresh rather than copied — a session closed
+  /// earlier in this same sweep is already gone, and closing it twice is a
+  /// second teardown for a session with no resources left — and the close is
+  /// `unawaited`, which is safe *precisely* because the registry removal is
+  /// the synchronous half of the teardown (`relay_session.dart:911-915` runs
+  /// `_onClosing?.call(this)` before the first `await`; the `onClosing:`
+  /// argument in [_onConnect] documents why it must stay that way). There is
+  /// deliberately no `await` inside the loop: one would let the next
+  /// iteration observe a registry the previous close had not finished leaving.
+  ///
+  /// **No station→session index**, deliberately. Panels number in the tens, a
+  /// full sweep on a file change is free, and an index would be a second
+  /// place session lifetime is tracked when `_sessions.remove` is the single
+  /// synchronous chokepoint the whole close path depends on.
+  Future<void> reloadTokens() async {
+    final live = validator;
+    if (live is! RevocableTokenValidator) {
+      throw StateError('this gateway\'s validator is a ${live.runtimeType}, '
+          'which cannot reload. Rotation here would be a no-op: the file '
+          'would be edited, nothing would happen, and nothing would say so. '
+          'Configure ServerConfig.auth, or pass a validator that implements '
+          'RevocableTokenValidator');
+    }
+    await live.reload();
+    for (final session in _sessions.sessions) {
+      final identity = session.identity;
+      // A pre-hello session has no credential to revoke. The gate already
+      // holds it to `hello` alone and the heartbeat reaper already reaps it.
+      if (identity == null) continue;
+      if (live.stillValid(identity)) continue;
+      unawaited(session.close(
+          CloseCodes.authExpired,
+          'the credential for station ${identity.stationId} is no longer the '
+          'one this gateway holds; it was removed, or its access was '
+          'narrowed'));
+    }
   }
 
   /// Builds one session for one upgraded connection.
