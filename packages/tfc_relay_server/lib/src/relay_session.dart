@@ -224,21 +224,55 @@ final class RelaySession {
   /// fan-out, which is the path Finding 2 measured — and the re-encode is paid
   /// only by a frame that actually carried a non-finite number.
   ///
-  /// **Anything that goes wrong here leaves the frame exactly as it was.** A
-  /// frame that is not JSON at all is json_rpc_2's parse error to answer (its
-  /// echo is the source *text*, a String, which encodes); one nested past
-  /// [maxValueDepth] makes `sanitize` throw, and today that is a per-request
-  /// refusal from the handler's own sanitize rather than a dead session.
-  /// Turning either into a stream error would close the session over a frame
-  /// the server currently answers.
+  /// **A frame the sanitizer cannot process is refused, not passed through**
+  /// (06-04, 06-RESEARCH §H.2). This paragraph used to argue the opposite —
+  /// "anything that goes wrong here leaves the frame exactly as it was" — on
+  /// the grounds that a value nested past [maxValueDepth] would be caught by
+  /// the handler's own `sanitize` and cost one request, where a stream error
+  /// would cost the session. That trade was right when those were the two
+  /// options. It is wrong now that the pass-through has been measured, because
+  /// what it actually buys is two things and neither is a per-request refusal:
+  ///
+  ///  * **A pre-hello amplification** (T-06-17). The frame reaches
+  ///    `json_rpc_2` intact. If it names an unknown method, `Server`'s own
+  ///    `methodNotFound` is thrown with `data == null` and `serialize` fills
+  ///    that `data` with the **raw request** — up to `maxFrameBytes` (1 MB) of
+  ///    `params` echoed back into the priority lane, held until the next tick,
+  ///    by a peer that has not authenticated. The fallback registered below
+  ///    does not stop it; see the comment there for why.
+  ///  * **The 02-05 hang, reachable pre-hello** (T-06-18). Add `1e999`
+  ///    anywhere in that request and the echo cannot be encoded, so the
+  ///    refusal is discarded *inside* the Peer and a caller with no deadline
+  ///    waits forever. Measured, over a real socket, before any handshake.
+  ///
+  /// So a `sanitize` failure becomes a [FormatException] with **no source** —
+  /// [_underCeiling]'s exact shape, and the precedent that the session
+  /// survives it: `json_rpc_2` answers `-32700` to the sender, the missing
+  /// source is what keeps the refusal from being as large as the thing it
+  /// refuses, and the stream carries on. The per-request cost is kept; the
+  /// amplification and the hang are not.
+  ///
+  /// A frame that is merely **not JSON** is still json_rpc_2's parse error to
+  /// answer — `jsonDecode`'s own `FormatException` carries the source *text*,
+  /// a String, which encodes, and there is nothing in it to defuse. It is
+  /// allowed to propagate rather than being caught and re-thrown, so the
+  /// answer is the same one this boundary has always given for garbage.
   static String _defuse(String frame) {
+    // Outside the `try` on purpose: a `FormatException` from here is the
+    // not-JSON case above and must reach json_rpc_2 with its source intact.
+    final decoded = jsonDecode(frame);
+
+    final SanitizeResult sanitized;
     try {
-      final sanitized = sanitize(jsonDecode(frame));
-      if (!sanitized.hadNonFinite) return frame;
-      return jsonEncode(sanitized.value);
-    } catch (_) {
-      return frame;
+      sanitized = sanitize(decoded);
+    } catch (error) {
+      // Sourceless, exactly as `_underCeiling` throws. The message says what
+      // was refused without quoting any of it.
+      throw FormatException('frame could not be sanitized and was refused '
+          'rather than passed on: $error');
     }
+    if (!sanitized.hadNonFinite) return frame;
+    return jsonEncode(sanitized.value);
   }
 
   /// The source being served. Untouched by this plan's two methods; 03-05's
@@ -560,17 +594,47 @@ final class RelaySession {
     // summary line per session, rather than thrown once per frame into the
     // error handler (05-REVIEW WR-03).
     _onNotification(Methods.holdTick, values.holdTick);
-    // Method-not-found, answered by us rather than by json_rpc_2.
+    // Method-not-found. **This fallback's armor is inert, and the code below
+    // is kept anyway** (06-04, 06-RESEARCH §H.2, measured).
     //
-    // Left to the library, `Server._tryFallbacks` throws
-    // `RpcException.methodNotFound(name)` — constructed with no `data`
-    // (`exception.dart:33-34`) — and the serializer then echoes the raw
-    // request into the response. A registered fallback puts that refusal back
-    // inside `_answer`'s armor, so an unknown method name is answered the same
-    // way every known one's refusal is. It does not gate: an unknown name is
-    // unknown whether or not the client has said hello, and answering
-    // "unknown method" before the handshake tells an attacker nothing it could
-    // not learn by reading this file.
+    // The comment here used to claim that "a registered fallback puts that
+    // refusal back inside `_answer`'s armor". It does not.
+    // `Server._tryFallbacks` (`json_rpc_2-4.1.0/lib/src/server.dart:301-318`)
+    // catches an `RpcException` from a fallback and, when its code is
+    // `METHOD_NOT_FOUND`, treats it as *this fallback declined* and moves to
+    // the next one:
+    //
+    //     } on RpcException catch (error) {
+    //       if (error.code != error_code.METHOD_NOT_FOUND) rethrow;
+    //       return tryNext();
+    //     }
+    //
+    // Ours throws exactly that code, so it is swallowed there. The iterator
+    // then exhausts and json_rpc_2 throws its own
+    // `RpcException.methodNotFound(name)` with `data == null`
+    // (`exception.dart:33-34`), which `serialize` fills with the raw request
+    // (`:46-57`). Nobody noticed because the two messages are byte-identical
+    // — a probe reading the message alone cannot tell which one answered; the
+    // tell is that `data` carries no `"method"` key, so `_substitute` never
+    // ran.
+    //
+    // **The property is enforced by `_defuse` instead**, at the ingress
+    // boundary, where an unencodable frame is refused before it can be echoed
+    // at all — which is the honest place for it, since "should an unknown
+    // method echo its request?" is answered no for every method rather than
+    // per handler.
+    //
+    // The registration stays, and its code stays `METHOD_NOT_FOUND`, for two
+    // reasons. The contract kit's `expectUnreachableMethod` pins `-32601`
+    // exactly — its barrel, the one this package takes as a dev dependency
+    // and which `handler_table_test` forbids naming here — and that is Phase
+    // 10's gap-proving mechanism; and a fallback that declines is the correct
+    // behaviour for a name this session does not serve — it is only the
+    // *armor* that is inert, not the answer.
+    //
+    // It does not gate: an unknown name is unknown whether or not the client
+    // has said hello, and answering "unknown method" before the handshake
+    // tells an attacker nothing it could not learn by reading this file.
     peer.registerFallback((rpc.Parameters params) async {
       throw rpc.RpcException(rpc_errors.METHOD_NOT_FOUND,
           'Unknown method "${params.method}".',
