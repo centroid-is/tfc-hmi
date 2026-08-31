@@ -1,6 +1,7 @@
 /// The app's menu shape and route fallbacks:
-///  - god mode gates Key Repository (and the editor entries) out of the
-///    Advanced menu; Server Config stays visible for commissioning,
+///  - the Advanced menu lists every entry unconditionally, and the route gate
+///    plus `AccessLockBadge` decide who may open one: a raised entry stays
+///    visible and locked, never hidden,
 ///  - History View sits at the top level, not under Advanced,
 ///  - a deleted Home leaves `/` redirecting to the first available page,
 ///  - unpublished (draft) pages refuse direct navigation by redirecting.
@@ -51,54 +52,46 @@ List<String> _allPaths(List<MenuItem> items) => [
 
 void main() {
   group('buildTopLevelMenuItems', () {
-    List<MenuItem> build({required bool god}) {
+    List<MenuItem> build() {
       return buildTopLevelMenuItems(
-        god: god,
         isLinux: false,
         pageMenuItems: [_page('Home', '/')],
       );
     }
 
     test(
-        'without god mode, Key Repository and the editors are hidden but '
-        'Server Config stays — commissioning must not need an env var', () {
-      final advanced = _byPath(build(god: false), '/advanced');
+        'every Advanced entry is listed unconditionally — a raised entry stays '
+        'visible and locked, never hidden', () {
+      // No golden test accompanies this one, and that is deliberate.
+      // `centroid-hmi/test/` has no golden infrastructure at all: no
+      // `goldens/` directory and no `@Tags(['golden'])` file. This change
+      // touches no widget, and the entries that used to be hidden take the
+      // identical RouteGate/`AccessLockBadge` path the page editor already
+      // took when locked — the assertion further down that a locked page
+      // editor's gate still carries its page title is what pins that. The
+      // deployment-visible consequence is *which entries are in the list*,
+      // and a list assertion proves exactly that. Standing up golden
+      // scaffolding to photograph an unchanged widget appearing in a list
+      // buys nothing and adds font-rasterisation flake.
+      final advanced = _byPath(build(), '/advanced');
       final paths = advanced?.children.map((c) => c.path).toList() ?? [];
+      // The reasoning that used to be recorded per-entry for the audit trail
+      // and the access screen now covers all of these. Neither surfaces a
+      // secret, both are commissioning-critical, and a hidden entry is a page
+      // nobody knows to ask for — so nothing here is hidden. `kRaisedRoutes`
+      // in `lib/access_routes.dart` plus the lock badge is the access
+      // control; the menu is not, and never was.
       expect(paths, contains('/advanced/server-config'));
-      expect(paths, isNot(contains('/advanced/key-repository')));
-      expect(paths, isNot(contains('/advanced/page-editor')));
-      expect(paths, isNot(contains('/advanced/preferences')));
-      expect(paths, isNot(contains('/advanced/alarm-editor')));
-      // The audit trail is deliberately not god-gated. It surfaces no secret,
-      // and a raised entry stays visible and locked rather than hidden — a
-      // hidden entry is a page nobody knows to ask for. The `users` route gate
-      // is the access control; god mode is menu decoration.
+      expect(paths, contains('/advanced/key-repository'));
+      expect(paths, contains('/advanced/page-editor'));
+      expect(paths, contains('/advanced/preferences'));
+      expect(paths, contains('/advanced/alarm-editor'));
       expect(paths, contains('/advanced/audit-trail'));
-      // The same decision, taken again for the admin screen and pinned here
-      // rather than left incidental. It surfaces no secret — the user list is
-      // username, role, created and last login, and passwordHash and salt never
-      // reach the widget layer — and it is the commissioning-critical screen:
-      // "create roles, then users, then the first-user window closes" cannot be
-      // followed from a station where the entry is invisible without TFC_GOD.
       expect(paths, contains('/advanced/access'));
     });
 
-    test('god mode reveals them', () {
-      final advanced = _byPath(build(god: true), '/advanced')!;
-      final paths = advanced.children.map((c) => c.path).toList();
-      expect(
-          paths,
-          containsAll([
-            '/advanced/server-config',
-            '/advanced/key-repository',
-            '/advanced/page-editor',
-            '/advanced/preferences',
-            '/advanced/alarm-editor',
-          ]));
-    });
-
     test('History View defaults under Advanced, like before', () {
-      final items = build(god: true);
+      final items = build();
       expect(_byPath(items, '/history-view'), isNull, reason: 'not top-level until the operator moves it');
       final advanced = _byPath(items, '/advanced')!;
       expect(advanced.children.map((c) => c.path), contains('/history-view'));
@@ -106,7 +99,6 @@ void main() {
 
     test('a promoted History View moves to the top level and out of Advanced', () {
       final items = buildTopLevelMenuItems(
-        god: true,
         isLinux: false,
         pageMenuItems: [_page('Home', '/')],
         historyAtTopLevel: true,
@@ -123,12 +115,11 @@ void main() {
     });
 
     test('Alarm View is a top-level entry', () {
-      expect(_byPath(build(god: false), '/alarm-view'), isNotNull);
+      expect(_byPath(build(), '/alarm-view'), isNotNull);
     });
 
     test('Home is not pinned: it appears only when the page manager has it', () {
       final items = buildTopLevelMenuItems(
-        god: false,
         isLinux: false,
         pageMenuItems: [_page('First', '/first')],
       );
@@ -141,7 +132,6 @@ void main() {
         'pinned last (the persisted order is applied later by '
         'PageManager.sortTopLevel on the registry)', () {
       final items = buildTopLevelMenuItems(
-        god: true,
         isLinux: false,
         pageMenuItems: [_page('Home', '/'), _page('Chiller', '/chiller')],
         historyAtTopLevel: true,
@@ -153,7 +143,6 @@ void main() {
 
   group('resolveStartupPath', () {
     final menu = buildTopLevelMenuItems(
-      god: false,
       isLinux: false,
       pageMenuItems: [
         _page('Home', '/'),
@@ -267,13 +256,11 @@ void main() {
       expect(lb.routes.containsKey(AppRoutes.firstUser), isTrue);
     });
 
-    test('the first-user page has no menu entry, in god mode or out', () {
+    test('the first-user page has no menu entry', () {
       // A permanent entry advertising the commissioning window would be dead
       // on every station but a fresh one, and misleading on all of them.
-      for (final god in [false, true]) {
-        final items = buildTopLevelMenuItems(god: god, isLinux: false, pageMenuItems: [_page('Home', '/')]);
-        expect(_allPaths(items), isNot(contains(AppRoutes.firstUser)), reason: 'god: $god');
-      }
+      final items = buildTopLevelMenuItems(isLinux: false, pageMenuItems: [_page('Home', '/')]);
+      expect(_allPaths(items), isNot(contains(AppRoutes.firstUser)));
     });
 
     testWidgets('no reachable pages at all leaves no bogus redirect', (tester) async {
