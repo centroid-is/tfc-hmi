@@ -19,4 +19,5 @@ library;
 
 export 'src/relay_server.dart';
 export 'src/server_config.dart';
+export 'src/tls/mint.dart';
 export 'src/token_validator.dart';
