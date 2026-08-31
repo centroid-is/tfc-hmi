@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:logger/logger.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
 import 'package:tfc_mcp_server/src/interfaces/tech_doc_index.dart';
 import 'package:tfc_mcp_server/src/services/drift_tech_doc_index.dart';
@@ -164,6 +165,43 @@ AccessSession _writerSession() => const AccessSession(
       groups: {AccessGroup.operate, kKnowledgeWriteGroup},
     );
 
+/// An **anonymous** session that nonetheless holds [kKnowledgeWriteGroup].
+///
+/// Not a hypothetical. `AccessSession.anonymous`
+/// (`packages/tfc_access/lib/src/access_session.dart:47`) builds its groups
+/// from the `Operator` role, and that row is customer data -- its own doc
+/// comment warns that ticking a group there "silently grants it to every panel
+/// on the floor with nobody signed in". Tick `configure`, which is what
+/// [kKnowledgeWriteGroup] resolves to, and this is the session every station in
+/// the plant is running.
+AccessSession _anonymousWriterSession() =>
+    AccessSession.anonymous(const {AccessGroup.operate, kKnowledgeWriteGroup});
+
+/// Drive the rename affordance the way a user does: double-tap the name cell,
+/// type over it, submit.
+Future<void> _renameViaUi(
+  WidgetTester tester, {
+  required String from,
+  required String to,
+}) async {
+  final cell = find.text(from);
+  expect(cell, findsOneWidget);
+  await tester.tap(cell);
+  // Longer than kDoubleTapMinTime (40ms) and shorter than kDoubleTapTimeout
+  // (300ms), so the name cell's double-tap recognizer wins the arena instead of
+  // the row's select tap.
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tap(cell);
+  await tester.pumpAndSettle();
+
+  final field = find.widgetWithText(TextField, from);
+  expect(field, findsOneWidget,
+      reason: 'double-tap should have opened the rename field');
+  await tester.enterText(field, to);
+  await tester.testTextInput.receiveAction(TextInputAction.done);
+  await tester.pumpAndSettle();
+}
+
 /// Suppress RenderFlex overflow errors (common in narrow test widths).
 void suppressOverflow() {
   final origHandler = FlutterError.onError;
@@ -315,6 +353,115 @@ void main() {
 
       expect(find.text('Upload PDF'), findsOneWidget);
       expect(find.text('Upload PLC Project'), findsOneWidget);
+    });
+  });
+
+  // =========================================================================
+  // 1c. Write attribution — an anonymous session that may write
+  // =========================================================================
+  //
+  // `_isWriteEnabled` gates the affordance on `kKnowledgeWriteGroup`, and an
+  // anonymous session can hold it: `AccessSession.anonymous` takes its groups
+  // from the customer-editable `Operator` role
+  // (`packages/tfc_access/lib/src/access_session.dart:47`). On a station where
+  // an admin ticked `configure` there, the rename/upload/delete/replace
+  // affordances render for a panel with nobody signed in — so the write behind
+  // them has to land, attributed to the same `'anonymous'` marker every other
+  // guard in this repo records, rather than being refused by a UI that already
+  // offered it.
+  group('GOLD 1c — Writes under an anonymous session holding configure', () {
+    testWidgets('rename lands in the DB instead of being refused',
+        (tester) async {
+      suppressOverflow();
+      final ids = await _seedDocs(index);
+
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_anonymousWriterSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await _renameViaUi(
+        tester,
+        from: 'PT100 Sensor Datasheet',
+        to: 'PT100 Rev9 Datasheet',
+      );
+
+      final docs = await index.getSummary();
+      expect(
+        docs.firstWhere((d) => d.id == ids[1]).name,
+        'PT100 Rev9 Datasheet',
+        reason: 'the configured policy permits this write',
+      );
+    });
+
+    testWidgets('the audit line is signed anonymous, not a placeholder name',
+        (tester) async {
+      suppressOverflow();
+      // `auditTechDocOperation` only logs — it writes no audit row — so the
+      // recorded name is only observable through the logger. `addLogListener`
+      // is a static hook the package already offers, so pinning it costs
+      // production code nothing.
+      final messages = <String>[];
+      void listener(LogEvent e) => messages.add(e.message.toString());
+      Logger.addLogListener(listener);
+      addTearDown(() => Logger.removeLogListener(listener));
+
+      await _seedDocs(index);
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_anonymousWriterSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await _renameViaUi(
+        tester,
+        from: 'PT100 Sensor Datasheet',
+        to: 'PT100 Rev9 Datasheet',
+      );
+
+      final audit = messages.firstWhere(
+        (m) => m.contains('TechDoc audit:') && m.contains('on doc='),
+        orElse: () => '<no audit line logged>',
+      );
+      expect(audit, contains('by anonymous'));
+    });
+
+    testWidgets('a signed-in writer is still attributed by username',
+        (tester) async {
+      suppressOverflow();
+      final messages = <String>[];
+      void listener(LogEvent e) => messages.add(e.message.toString());
+      Logger.addLogListener(listener);
+      addTearDown(() => Logger.removeLogListener(listener));
+
+      await _seedDocs(index);
+      await tester.pumpWidget(_buildLibraryWidget(
+        index: index,
+        extraOverrides: [
+          accessSessionProvider
+              .overrideWith(() => _FixedSession(_writerSession())),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      await _renameViaUi(
+        tester,
+        from: 'PT100 Sensor Datasheet',
+        to: 'PT100 Rev9 Datasheet',
+      );
+
+      final audit = messages.firstWhere(
+        (m) => m.contains('TechDoc audit:') && m.contains('on doc='),
+        orElse: () => '<no audit line logged>',
+      );
+      expect(audit, contains('by jon'));
     });
   });
 
