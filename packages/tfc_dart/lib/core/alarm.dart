@@ -5,8 +5,17 @@ import 'dart:io';
 import 'package:collection/collection.dart';
 import 'package:json_annotation/json_annotation.dart';
 import 'package:rxdart/rxdart.dart';
-import 'package:drift/drift.dart' show OrderingTerm, OrderingMode, Variable;
+import 'package:drift/drift.dart'
+    show
+        BooleanExpressionOperators,
+        ComparableExpr,
+        OrderingMode,
+        OrderingTerm,
+        Variable;
+// Prefixed: drift's `Expression` collides with this package's own.
+import 'package:drift/drift.dart' as drift show Constant, Expression;
 
+import 'database_drift.dart' show $AlarmHistoryTable;
 import 'preferences.dart';
 import 'state_man.dart';
 import 'ring_buffer.dart';
@@ -175,6 +184,26 @@ class AlarmManLocalConfig {
   factory AlarmManLocalConfig.fromJson(Map<String, dynamic> json) =>
       _$AlarmManLocalConfigFromJson(json);
   Map<String, dynamic> toJson() => _$AlarmManLocalConfigToJson(this);
+}
+
+/// Whether an `alarm_history` row overlaps the window [from]..[to].
+///
+/// Overlap, not started-inside: an alarm that went off before [from] and only
+/// cleared inside the window is part of that window's downtime, and a query
+/// that dropped it would report the stop as shorter than it was — the one
+/// number a stop analysis exists to get right. A row with no deactivation time
+/// never closed, so it overlaps every window it started before.
+drift.Expression<bool> alarmHistoryOverlaps(
+  $AlarmHistoryTable t, {
+  DateTime? from,
+  DateTime? to,
+}) {
+  final started = to == null
+      ? const drift.Constant(true)
+      : t.createdAt.isSmallerOrEqualValue(to);
+  if (from == null) return started;
+  return started &
+      (t.deactivatedAt.isNull() | t.deactivatedAt.isBiggerOrEqualValue(from));
 }
 
 class AlarmMan {
@@ -386,12 +415,27 @@ class AlarmMan {
     ]);
   }
 
-  Future<List<AlarmActive>> getRecentAlarms({int limit = 1000}) async {
+  /// Closed activations from `alarm_history`, newest first.
+  ///
+  /// [from] and [to] bound the window by **overlap**, not by start: an alarm
+  /// that went off before [from] and only cleared inside the window is part of
+  /// that window's downtime, and a query that dropped it would report a stop
+  /// as shorter than it was. One still standing has no deactivation time and
+  /// so overlaps every window it started before.
+  Future<List<AlarmActive>> getRecentAlarms({
+    int limit = 1000,
+    DateTime? from,
+    DateTime? to,
+  }) async {
     if (preferences.database == null) return [];
 
     final db = preferences.database!.db;
 
-    final result = await (db.select(db.alarmHistory)
+    final query = db.select(db.alarmHistory);
+    if (from != null || to != null) {
+      query.where((t) => alarmHistoryOverlaps(t, from: from, to: to));
+    }
+    final result = await (query
           ..orderBy([
             (t) =>
                 OrderingTerm(expression: t.createdAt, mode: OrderingMode.desc)

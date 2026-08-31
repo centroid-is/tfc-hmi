@@ -70,6 +70,10 @@ Future<void> pumpTimeline(
   StopTimelineConfig? config,
   List<AlarmConfig>? configs,
   Size size = const Size(900, 420),
+  DateTimeRange? range,
+  Duration? interval,
+  ValueChanged<DateTimeRange?>? onRangeChanged,
+  ValueChanged<Duration>? onIntervalChanged,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: Scaffold(
@@ -81,12 +85,22 @@ Future<void> pumpTimeline(
             config: config ?? StopTimelineConfig(),
             tree: AlarmTree.fromConfigs(configs ?? alarms),
             source: source(),
+            range: range,
+            interval: interval,
+            onRangeChanged: onRangeChanged,
+            onIntervalChanged: onIntervalChanged,
             clock: now,
           ),
         ),
       ),
     ),
   ));
+  await tester.pumpAndSettle();
+}
+
+/// Opens the period menu in the header.
+Future<void> openPeriodMenu(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('stop-timeline-period-menu')));
   await tester.pumpAndSettle();
 }
 
@@ -412,6 +426,130 @@ void main() {
 
       expect(config.coordinates.x, closeTo(0.25, 1e-9));
       expect(config.coordinates.y, closeTo(0.60, 1e-9));
+    });
+  });
+
+  group('the period picker', () {
+    testWidgets('the live window reads out as bare times', (tester) async {
+      await pumpTimeline(tester);
+      // Three hours back plus the ten-minute lead over the live edge.
+      expect(find.text('11:22 – 14:32'), findsOneWidget);
+    });
+
+    testWidgets('a picked range is shown whole, and dated', (tester) async {
+      await pumpTimeline(
+        tester,
+        range: DateTimeRange(
+            start: DateTime(2026, 8, 28, 6), end: DateTime(2026, 8, 28, 14)),
+      );
+      // Without the date this reads as today, which is the one thing the
+      // operator who went looking for yesterday must not be told.
+      expect(find.text('28/08 06:00 – 14:00'), findsOneWidget);
+    });
+
+    testWidgets('a range across midnight names both days', (tester) async {
+      await pumpTimeline(
+        tester,
+        range: DateTimeRange(
+            start: DateTime(2026, 8, 28, 22), end: DateTime(2026, 8, 29, 6)),
+      );
+      expect(find.text('28/08 22:00 – 29/08 06:00'), findsOneWidget);
+    });
+
+    testWidgets('the overview strip is labelled with the days it covers',
+        (tester) async {
+      await pumpTimeline(
+        tester,
+        range: DateTimeRange(
+            start: DateTime(2026, 8, 28, 22), end: DateTime(2026, 8, 29, 6)),
+      );
+      expect(find.text('28/08 – 29/08'), findsOneWidget);
+    });
+
+    testWidgets('a runtime interval overrides the configured period',
+        (tester) async {
+      await pumpTimeline(tester, interval: const Duration(hours: 1));
+      expect(find.text('13:22 – 14:32'), findsOneWidget);
+      // The strip covers the interval, so it is still today.
+      expect(find.text('29/08'), findsOneWidget);
+    });
+
+    testWidgets('picking an interval reports the span', (tester) async {
+      Duration? picked;
+      await pumpTimeline(tester, onIntervalChanged: (d) => picked = d);
+      await openPeriodMenu(tester);
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-interval-480')));
+      await tester.pumpAndSettle();
+      expect(picked, const Duration(hours: 8));
+    });
+
+    testWidgets('the interval in force is the ticked one', (tester) async {
+      await pumpTimeline(tester, config: StopTimelineConfig(periodHours: 24));
+      await openPeriodMenu(tester);
+      CheckedPopupMenuItem<Object> item(int minutes) =>
+          tester.widget<CheckedPopupMenuItem<Object>>(
+              find.byKey(ValueKey('stop-timeline-interval-$minutes')));
+      expect(item(24 * 60).checked, isTrue);
+      expect(item(12 * 60).checked, isFalse);
+    });
+
+    testWidgets('an absolute range ticks no interval', (tester) async {
+      await pumpTimeline(
+        tester,
+        range: DateTimeRange(
+            start: DateTime(2026, 8, 28, 2), end: DateTime(2026, 8, 28, 14)),
+      );
+      await openPeriodMenu(tester);
+      // Twelve hours, the configured period, but it is not what is showing.
+      expect(
+          tester
+              .widget<CheckedPopupMenuItem<Object>>(
+                  find.byKey(const ValueKey('stop-timeline-interval-720')))
+              .checked,
+          isFalse);
+    });
+
+    testWidgets('only a picked range offers the way back to live',
+        (tester) async {
+      await pumpTimeline(tester);
+      await openPeriodMenu(tester);
+      expect(find.text('Back to live'), findsNothing);
+      await tester.tapAt(const Offset(10, 10)); // dismiss
+      await tester.pumpAndSettle();
+
+      var cleared = false;
+      DateTimeRange? reported;
+      await pumpTimeline(
+        tester,
+        range: DateTimeRange(
+            start: DateTime(2026, 8, 28, 2), end: DateTime(2026, 8, 28, 14)),
+        onRangeChanged: (r) {
+          cleared = true;
+          reported = r;
+        },
+      );
+      await openPeriodMenu(tester);
+      await tester.tap(find.text('Back to live'));
+      await tester.pumpAndSettle();
+      expect(cleared, isTrue);
+      expect(reported, isNull);
+    });
+
+    testWidgets('a new period starts the view over at the top of it',
+        (tester) async {
+      await pumpTimeline(tester);
+      expect(find.text('11:22 – 14:32'), findsOneWidget);
+
+      // Same widget, new range: the old window is outside the new bounds and
+      // must not be dragged to an edge by the clamp.
+      await pumpTimeline(
+        tester,
+        range: DateTimeRange(
+            start: DateTime(2026, 8, 27, 6), end: DateTime(2026, 8, 27, 18)),
+      );
+      expect(find.text('27/08 06:00 – 18:00'), findsOneWidget);
+      expect(find.text('11:22 – 14:32'), findsNothing);
     });
   });
 }

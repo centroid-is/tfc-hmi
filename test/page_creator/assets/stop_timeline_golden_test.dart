@@ -124,6 +124,7 @@ Widget harness(
   StopTimelineConfig config,
   Brightness brightness, {
   Size size = const Size(900, 420),
+  DateTimeRange? range,
 }) {
   return MaterialApp(
     debugShowCheckedModeBanner: false,
@@ -137,6 +138,9 @@ Widget harness(
             config: config,
             tree: AlarmTree.fromConfigs(alarms),
             source: sampleSource(),
+            range: range,
+            onRangeChanged: (_) {},
+            onIntervalChanged: (_) {},
             clock: now,
           ),
         ),
@@ -268,6 +272,35 @@ void main() {
           const Size(760, 320));
       await expectLater(find.byType(StopTimelineView),
           matchesGoldenFile('goldens/stop_timeline_empty_group.png'));
+    }, skip: !Platform.isMacOS);
+
+    testWidgets('a picked range dates itself in the header and the strip',
+        (tester) async {
+      // Yesterday's night shift: the case the asset could not reach at all
+      // before, and the one where an undated read-out would be a lie.
+      await pump(
+          tester,
+          harness(
+            StopTimelineConfig(),
+            Brightness.dark,
+            range: DateTimeRange(
+                start: DateTime(2026, 8, 28, 22), end: DateTime(2026, 8, 29, 6)),
+          ),
+          const Size(960, 480));
+      await expectLater(find.byType(StopTimelineView),
+          matchesGoldenFile('goldens/stop_timeline_picked_range.png'));
+    }, skip: !Platform.isMacOS);
+
+    testWidgets('the period menu offers intervals and the date picker',
+        (tester) async {
+      // Whole-app, not the view: the menu lives in the overlay above it.
+      await pump(tester, harness(StopTimelineConfig(), Brightness.dark),
+          const Size(960, 480));
+      await tester
+          .tap(find.byKey(const ValueKey('stop-timeline-period-menu')));
+      await tester.pumpAndSettle();
+      await expectLater(find.byType(MaterialApp),
+          matchesGoldenFile('goldens/stop_timeline_period_menu.png'));
     }, skip: !Platform.isMacOS);
   });
 }
