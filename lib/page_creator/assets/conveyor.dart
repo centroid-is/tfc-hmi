@@ -2763,22 +2763,33 @@ class _ConveyorState extends ConsumerState<Conveyor>
                     : const PaneStatus.stopped('Clear'),
                 pressed ? 'pressed' : 'clear');
           }
-          return SensorFbPane(
-            config: SensorConfig(detectionKey: edgeKey, tag: title),
-            state: fb,
-            subtitleOverride: 'Safety edge · FB_Sensor',
-            // Copy-on-write like every other pane here: clone, set one
-            // member, write the whole struct back.
-            onWrite: (field, value) {
-              final messenger = ScaffoldMessenger.maybeOf(context);
-              final newValue = DynamicValue.from(dynValue);
-              newValue[field] = value;
-              stateMan.write(edgeKey, newValue).catchError((Object e) {
-                messenger?.showSnackBar(
-                  SnackBar(content: Text('Write to $edgeKey failed: $e')),
-                );
-              });
-            },
+          // `Consumer` for the `ref` that `writeTag` needs, exactly as the
+          // drive pane below does. The safety-edge pane arrived with the
+          // wagon work after this milestone's write-path sweep had already
+          // run, so its `onWrite` was the one remaining ungated `.write(` in
+          // `lib/` — `kUncaughtAccessDeniedWriteSites` caught it at 1.
+          return Consumer(
+            builder: (context, ref, _) => SensorFbPane(
+              config: SensorConfig(detectionKey: edgeKey, tag: title),
+              state: fb,
+              subtitleOverride: 'Safety edge · FB_Sensor',
+              // Copy-on-write like every other pane here: clone, set one
+              // member, write the whole struct back. The field goes on as the
+              // **member**, so a template can require a different permission
+              // for each one.
+              onWrite: (field, value) {
+                final messenger = ScaffoldMessenger.maybeOf(context);
+                final newValue = DynamicValue.from(dynValue);
+                newValue[field] = value;
+                writeTag(ref, stateMan, edgeKey, newValue, member: field)
+                    .catchError((Object e) {
+                  messenger?.showSnackBar(
+                    SnackBar(content: Text('Write to $edgeKey failed: $e')),
+                  );
+                  return false;
+                });
+              },
+            ),
           );
         },
       ),
