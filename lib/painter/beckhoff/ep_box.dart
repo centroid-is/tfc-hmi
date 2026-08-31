@@ -99,6 +99,10 @@ class EPBoxPainter extends CustomPainter {
             color: color,
             fontSize: fontSize,
             fontWeight: FontWeight.bold,
+            // Named, as ek1100.dart names it: a null family renders as the
+            // test font's boxes under `flutter test`, and a golden of boxes
+            // pins nothing about a label.
+            fontFamily: 'Roboto',
           ),
         ),
         textAlign: align,
@@ -135,16 +139,18 @@ class EPBoxPainter extends CustomPainter {
     text('OUT', const Offset(15, 16), fontSize: 2.6, width: 12);
 
     // --- Wordmark ---
-    text('BECKHOFF', const Offset(0, 21),
+    text('BECKHOFF', const Offset(0, 20),
         fontSize: 3.4, color: const Color(0xFFE30613), width: design.width);
-    text(model, const Offset(0, 25.5), fontSize: 3.0, width: design.width);
+    text(model, const Offset(0, 24.5), fontSize: 3.0, width: design.width);
     if (name.isNotEmpty) {
-      text(name, const Offset(0, 29.5), fontSize: 2.6, width: design.width);
+      text(name, const Offset(0, 28.5), fontSize: 2.6, width: design.width);
     }
 
     // --- The eight signal sockets, two columns of four ---
-    const firstTop = 36.0;
-    const rowPitch = 17.5;
+    // First row clears the tag above it: a socket at 41 with a 5 mm radius
+    // starts at 36, and the tag's baseline is 31.
+    const firstTop = 41.0;
+    const rowPitch = 17.0;
     for (int i = 0; i < epBoxChannelCount; i++) {
       final row = i ~/ 2;
       final column = i % 2;
@@ -155,8 +161,8 @@ class EPBoxPainter extends CustomPainter {
       // puts the per-channel LED.
       final lamp = Rect.fromCenter(
         center: centre.translate(column == 0 ? -6.5 : 6.5, 0),
-        width: 2.2,
-        height: 2.2,
+        width: 2.6,
+        height: 2.6,
       );
       canvas.drawRect(lamp, Paint()..color = _lampColor(channels[i]));
       canvas.drawRect(lamp, stroke);
@@ -170,10 +176,10 @@ class EPBoxPainter extends CustomPainter {
     }
 
     // --- Power in and out at the foot ---
-    socket(const Offset(9, 114), 5.5);
-    socket(const Offset(21, 114), 5.5);
-    text('IN', const Offset(3, 120.5), fontSize: 2.6, width: 12);
-    text('OUT', const Offset(15, 120.5), fontSize: 2.6, width: 12);
+    socket(const Offset(9, 113), 5.5);
+    socket(const Offset(21, 113), 5.5);
+    text('IN', const Offset(3, 119.5), fontSize: 2.6, width: 12);
+    text('OUT', const Offset(15, 119.5), fontSize: 2.6, width: 12);
 
     // --- "Nothing is arriving" ---
     if (disconnected) {
@@ -181,10 +187,10 @@ class EPBoxPainter extends CustomPainter {
         ..color = Colors.red
         ..style = PaintingStyle.fill;
       canvas.drawRect(
-        Rect.fromLTWH(design.width / 2 - 0.9, 105.0, 1.8, 4.5),
+        Rect.fromLTWH(design.width / 2 - 0.9, 102.0, 1.8, 4.5),
         mark,
       );
-      canvas.drawCircle(Offset(design.width / 2, 111.0), 0.9, mark);
+      canvas.drawCircle(Offset(design.width / 2, 108.0), 0.9, mark);
     }
 
     canvas.restore();

@@ -183,6 +183,12 @@ class IO8Painter extends CustomPainter {
             color: Colors.black,
             fontSize: fs,
             fontWeight: FontWeight.bold,
+            // Named, as ek1100.dart names it. A null family falls back to the
+            // platform default in the app — which is this same face — but
+            // renders as the test font's boxes under `flutter test`, so every
+            // golden of an EL terminal had a black smear where its type name
+            // should be and pinned nothing about the labels.
+            fontFamily: 'Roboto',
           ),
         ),
         textAlign: TextAlign.center,
@@ -328,6 +334,12 @@ class IO8Painter extends CustomPainter {
             color: Colors.black,
             fontSize: fs,
             fontWeight: FontWeight.bold,
+            // Named, as ek1100.dart names it. A null family falls back to the
+            // platform default in the app — which is this same face — but
+            // renders as the test font's boxes under `flutter test`, so every
+            // golden of an EL terminal had a black smear where its type name
+            // should be and pinned nothing about the labels.
+            fontFamily: 'Roboto',
           ),
         ),
         textAlign: TextAlign.left,

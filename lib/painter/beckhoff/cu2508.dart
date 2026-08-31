@@ -81,6 +81,10 @@ class CU2508Painter extends CustomPainter {
             color: color,
             fontSize: fontSize,
             fontWeight: weight,
+            // Named, as ek1100.dart names it: a null family renders as the
+            // test font's boxes under `flutter test`, and a golden of boxes
+            // pins nothing about a label.
+            fontFamily: 'Roboto',
           ),
         ),
         textAlign: align,
@@ -134,7 +138,10 @@ class CU2508Painter extends CustomPainter {
     }
 
     // --- Uplink: the gigabit port back to the IPC ---
-    port(const Offset(5, 26), 'X1 uplink');
+    // Set level with the two rows of segments rather than up under the
+    // wordmark: one port feeding eight is the whole of what this box does,
+    // and the drawing should read that way at a glance.
+    port(const Offset(5, 60), 'X1 uplink');
 
     // --- The eight downstream segments, two rows of four ---
     const columns = 4;

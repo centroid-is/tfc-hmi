@@ -39,18 +39,26 @@ import 'led.dart' show LEDPainter, LEDType;
 /// the asset and re-place it.
 enum EPBoxVariant {
   /// 8-channel digital combi, M12. Live off `ST_EP2338_0002`.
-  ep2338('EP2338', '8-channel digital combi'),
+  ep2338('EP2338', '8-channel digital combi', 'I/O box'),
 
   /// TwinSAFE, 8 safe digital inputs, M12. No process data.
-  ep1918('EP1918', 'TwinSAFE, 8 safe inputs');
+  ep1918('EP1918', 'TwinSAFE, 8 safe inputs', 'safe inputs');
 
-  const EPBoxVariant(this.model, this.blurb);
+  const EPBoxVariant(this.model, this.blurb, this.paneSubtitle);
 
   /// Printed on the housing and used in the palette.
   final String model;
 
-  /// The one line the pane's subtitle carries.
+  /// The line beside the model in the configure form's picker, where there
+  /// is room to say what the box actually is.
   final String blurb;
+
+  /// What the pane header calls it, after `Beckhoff · `.
+  ///
+  /// Deliberately shorter than [blurb]: the subtitle shares its row with the
+  /// status chip in a 380 px pane, and '8-channel digital combi' came out as
+  /// '8-channe…'.
+  final String paneSubtitle;
 
   /// True when the PLC publishes a struct for this box, i.e. when a state
   /// key means anything.
@@ -278,7 +286,7 @@ void showEpBoxPane({
 
         return SidePane(
           title: title,
-          subtitle: 'Beckhoff · ${variant.blurb}',
+          subtitle: 'Beckhoff · ${variant.paneSubtitle}',
           icon: Icons.developer_board,
           status: epBoxPaneStatus(variant, channels),
           child: EpBoxPaneBody(

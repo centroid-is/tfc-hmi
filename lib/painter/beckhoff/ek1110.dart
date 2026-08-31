@@ -93,6 +93,10 @@ class EK1110Painter extends CustomPainter {
             color: Colors.black,
             fontSize: height,
             fontWeight: FontWeight.bold,
+            // Named, as ek1100.dart names it: a null family renders as the
+            // test font's boxes under `flutter test`, and a golden of boxes
+            // pins nothing about a label.
+            fontFamily: 'Roboto',
           ),
         ),
         textAlign: TextAlign.left,

@@ -267,7 +267,9 @@ void showEl2912Pane({
 
         return SidePane(
           title: title,
-          subtitle: 'Beckhoff · TwinSAFE output',
+          // 'Beckhoff · TwinSAFE output' truncated to 'Beckhoff · TwinSA…'
+          // beside the status chip. The pane's own sections say the rest.
+          subtitle: 'Beckhoff · safety',
           icon: Icons.shield,
           status: el2912PaneStatus(status.fieldVoltage),
           child: El2912PaneBody(

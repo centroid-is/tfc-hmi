@@ -1029,6 +1029,141 @@ class AssetTypeCatalog {
           'terminal (24V). Shows connection status.',
       properties: [],
     ),
+    AssetTypeInfo(
+      assetName: 'BeckhoffEL2912Config',
+      displayName: 'Beckhoff EL2912',
+      category: 'Beckhoff Devices',
+      description:
+          'Beckhoff EL2912 TwinSAFE 2-channel output terminal, drawn in the '
+          'safety yellow of the real part. Its two fail-safe outputs are '
+          'driven over FSoE by TwinSAFE Logic and never reach the standard '
+          'PLC, so the asset shows only what the EtherCAT GVL links out: the '
+          'two field-voltage diagnostic bits. Those come as two loose BOOLs, '
+          'not a struct, which is why there are two keys.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Terminal name shown on the pane, e.g. ST301.A1.09'),
+        AssetPropertyInfo(
+            name: 'underrangeKey',
+            type: 'String?',
+            description:
+                "Key of the terminal's Fieldvoltage Underrange bit, off "
+                'Module 3 (DEVICEIO)'),
+        AssetPropertyInfo(
+            name: 'overrangeKey',
+            type: 'String?',
+            description:
+                "Key of the terminal's Fieldvoltage Overrange bit, likewise"),
+        AssetPropertyInfo(
+            name: 'descriptionKey',
+            type: 'String?',
+            description:
+                'Optional string naming what the safety outputs hold, shown '
+                'in the pane'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'BeckhoffPS2001Config',
+      displayName: 'Beckhoff PS2001',
+      category: 'Beckhoff Devices',
+      description:
+          'Beckhoff PS2001-2410 power supply, 24 V DC / 10 A. The only '
+          'cabinet infrastructure asset that measures anything: its pane '
+          'shows the output volts and amps and how much of the 10 A rating '
+          'is spare. Without stateKey it is only a drawing.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Unit tag shown on the face and pane, e.g. ST301.T1'),
+        AssetPropertyInfo(
+            name: 'stateKey',
+            type: 'String?',
+            description:
+                "Key of the unit's ST_PS2001_2410 struct — DC OK, warning, "
+                'error, input undervoltage, and the measured output voltage '
+                'and current. Required for any live state'),
+        AssetPropertyInfo(
+            name: 'descriptionKey',
+            type: 'String?',
+            description:
+                'Optional string naming which rail this unit feeds, shown in '
+                'the pane'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'BeckhoffEPBoxConfig',
+      displayName: 'Beckhoff EtherCAT Box (EP2338 / EP1918)',
+      category: 'Beckhoff Devices',
+      description:
+          'An IP67 EtherCAT Box out on the machines, in either variant this '
+          'plant fits. EP2338 is an 8-channel digital combi and is live off '
+          'an ST_EP2338_0002 struct; EP1918 is TwinSAFE, publishes no '
+          'process data at all, and is drawn dark in safety yellow. Set '
+          'variantModel to choose.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'variantModel',
+            type: 'String',
+            description: "Which box: 'ep2338' or 'ep1918'"),
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description: 'Box tag shown on the face and pane, e.g. ST301.RM05'),
+        AssetPropertyInfo(
+            name: 'stateKey',
+            type: 'String?',
+            description:
+                "Key of the box's ST_EP2338_0002 struct — I0..I7 and O0..O7. "
+                'Meaningless on an EP1918, which publishes nothing'),
+        AssetPropertyInfo(
+            name: 'descriptionsKey',
+            type: 'String?',
+            description:
+                'Optional array naming what each of the eight sockets is '
+                'wired to, one entry per socket'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'BeckhoffCU2508Config',
+      displayName: 'Beckhoff CU2508',
+      category: 'Beckhoff Devices',
+      description:
+          'Beckhoff CU2508 real-time Ethernet port multiplier: one gigabit '
+          'uplink fanned out to eight independent EtherCAT segments. It '
+          'publishes no process data, so this is a drawing for a topology '
+          'page — the name is what makes it useful.',
+      properties: [
+        AssetPropertyInfo(
+            name: 'nameOrId',
+            type: 'String',
+            description:
+                'Printed on the housing. A page with three of these wants to '
+                'say which network each one splits'),
+      ],
+    ),
+    AssetTypeInfo(
+      assetName: 'BeckhoffEK1110Config',
+      displayName: 'Beckhoff EK1110',
+      category: 'Beckhoff Devices',
+      description:
+          'Beckhoff EK1110 EtherCAT extension — the RJ45 that ends a '
+          'terminal block and carries the bus on to the next one. No process '
+          'data, so it is a drawing.',
+      properties: [],
+    ),
+    AssetTypeInfo(
+      assetName: 'BeckhoffEL6070Config',
+      displayName: 'Beckhoff EL6070',
+      category: 'Beckhoff Devices',
+      description:
+          'Beckhoff EL6070 TwinCAT 3 licence key terminal. No process data '
+          'and no field wiring, so it is a drawing with its terminal points '
+          'left unlabelled rather than given invented signal names.',
+      properties: [],
+    ),
 
     // ── Schneider Devices ─────────────────────────────────────────────
     AssetTypeInfo(

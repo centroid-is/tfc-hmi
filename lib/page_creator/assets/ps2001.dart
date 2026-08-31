@@ -309,12 +309,19 @@ class Ps2001PaneBody extends StatelessWidget {
     return null;
   }
 
-  /// `DC OK` set is good news and the other three are the unit complaining,
-  /// so only those three go red. A null stays unlit — see [Ps2001Status].
+  /// `DC OK` set is good news; the other three are the unit complaining, and
+  /// they are not equally serious. Only red belongs to what has stopped or is
+  /// about to — a supply merely running hot has not stopped anything, and red
+  /// on a mimic is what sends an electrician across the plant. A null stays
+  /// unlit; see [Ps2001Status].
   Color? _diodeColor(HmiStateColors colors, Ps2001Flag flag, bool? value) =>
       switch (value) {
         null => null,
-        true => flag == Ps2001Flag.dcOk ? colors.green : colors.red,
+        true => switch (flag) {
+            Ps2001Flag.dcOk => colors.green,
+            Ps2001Flag.warning => colors.yellow,
+            Ps2001Flag.error || Ps2001Flag.inputUndervoltage => colors.red,
+          },
         false => flag == Ps2001Flag.dcOk ? colors.red : Colors.white,
       };
 }
@@ -341,7 +348,10 @@ void showPs2001Pane({
 
         return SidePane(
           title: title,
-          subtitle: 'Beckhoff · 24 V supply',
+          // Kept short: the subtitle shares its row with the status chip in
+          // a 380 px pane, and 'Beckhoff · 24 V supply' came out as
+          // 'Beckhoff · 24 V supp…'.
+          subtitle: 'Beckhoff · supply',
           icon: Icons.power,
           status: ps2001PaneStatus(status.state),
           child: Ps2001PaneBody(

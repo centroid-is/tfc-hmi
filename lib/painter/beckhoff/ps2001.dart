@@ -114,6 +114,10 @@ class PS2001Painter extends CustomPainter {
             color: color,
             fontSize: fontSize,
             fontWeight: FontWeight.bold,
+            // Named, as ek1100.dart names it: a null family renders as the
+            // test font's boxes under `flutter test`, and a golden of boxes
+            // pins nothing about a label.
+            fontFamily: 'Roboto',
           ),
         ),
         textAlign: align,
@@ -233,13 +237,18 @@ class PS2001Painter extends CustomPainter {
   /// something else is worse than no lamp. What the struct does carry is why
   /// an electrician would walk over here: a supply in hiccup mode, running
   /// hot, or fed by a sagging mains.
+  /// Dark unless the unit is complaining. A lamp captioned FAULT that glows
+  /// green on a healthy supply is the kind of thing an electrician learns to
+  /// stop reading; amber for "still supplying but complaining", red for
+  /// "stopped", and nothing at all the rest of the time.
   Color get _faultColor => switch (state) {
         Ps2001FaceState.faulted => Colors.red,
         Ps2001FaceState.undervoltage ||
         Ps2001FaceState.warning =>
           const Color(0xFFE0A800),
-        Ps2001FaceState.healthy => const Color(0xFF6CA545),
-        Ps2001FaceState.down => const Color(0xFFCCCCCC),
+        Ps2001FaceState.healthy ||
+        Ps2001FaceState.down =>
+          const Color(0xFFCCCCCC),
         Ps2001FaceState.unknown => const Color(0xFFE8E8E8),
       };
 
