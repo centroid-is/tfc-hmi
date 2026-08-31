@@ -270,6 +270,54 @@ bool StdoutIsConnected() {
   return ::GetFileType(handle) != FILE_TYPE_UNKNOWN;
 }
 
+void ConfigureUnattendedOperation() {
+  // ES_CONTINUOUS makes the request stick for the life of the process rather
+  // than resetting one idle timer. ES_DISPLAY_REQUIRED is deliberately not
+  // asked for: keeping the machine awake is the point, keeping a monitor lit
+  // in an empty room is not, and on a station that runs headless overnight it
+  // would be refused anyway.
+  if (::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) == 0) {
+    std::cerr << "[startup] SetThreadExecutionState declined; the machine may "
+                 "still sleep under the app"
+              << std::endl;
+  }
+
+  // Opt out of EcoQoS. PROCESS_POWER_THROTTLING_EXECUTION_SPEED with the mask
+  // set and the state bit clear means "explicitly not throttled" — different
+  // from leaving it unmanaged, which lets Windows decide, and deciding is
+  // exactly what goes wrong when the session is disconnected.
+  //
+  // Resolved at runtime: the API is Windows 10 1809 and later, and a station
+  // on an older build should keep running rather than fail to load.
+  using SetProcessInformationFn = BOOL(WINAPI*)(HANDLE, PROCESS_INFORMATION_CLASS,
+                                                LPVOID, DWORD);
+  if (HMODULE kernel32 = ::GetModuleHandleW(L"kernel32.dll")) {
+    auto set_process_information = reinterpret_cast<SetProcessInformationFn>(
+        ::GetProcAddress(kernel32, "SetProcessInformation"));
+    if (set_process_information != nullptr) {
+      PROCESS_POWER_THROTTLING_STATE state = {};
+      state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+      state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+      state.StateMask = 0;
+      if (!set_process_information(::GetCurrentProcess(), ProcessPowerThrottling,
+                                   &state, sizeof(state))) {
+        std::cerr << "[startup] could not opt out of power throttling (error "
+                  << ::GetLastError() << ")" << std::endl;
+      }
+    }
+  }
+
+  // Restart after a crash or a hang, but NOT after a reboot or a patch: those
+  // are the two cases where coming back automatically would fight whoever is
+  // deliberately servicing the machine. The command line is inherited.
+  const HRESULT restart = ::RegisterApplicationRestart(
+      nullptr, RESTART_NO_REBOOT | RESTART_NO_PATCH);
+  if (FAILED(restart)) {
+    std::cerr << "[startup] RegisterApplicationRestart failed (hr=0x"
+              << std::hex << restart << std::dec << ")" << std::endl;
+  }
+}
+
 std::string DefaultLogPath() {
   wchar_t* local_app_data = nullptr;
   size_t len = 0;

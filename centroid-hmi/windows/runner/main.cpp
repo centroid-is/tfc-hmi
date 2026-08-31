@@ -73,7 +73,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     // `flutter run` and the VS Code debugger set up. Leave the streams where
     // they are so Dart's output keeps reaching whoever is watching. Crash
     // handlers still install; their records go to the same place.
-    tfc::InstallCrashHandlers(tfc::DirectoryOf(DefaultLogPath()));
+    tfc::InstallCrashHandlers(tfc::DirectoryOf(DefaultLogPath()), std::string());
     std::cerr << "[startup] logging to the attached console/pipe" << std::endl;
   } else if (!log_path.empty()) {
     // Rotate before opening: RedirectIOToFile truncates, and the previous
@@ -100,7 +100,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
 
     // Only now can crash records actually be written somewhere.
-    tfc::InstallCrashHandlers(tfc::DirectoryOf(log_path));
+    tfc::InstallCrashHandlers(tfc::DirectoryOf(log_path), log_path);
     std::cerr << "[startup] logging to " << log_path << " (keeping "
               << max_archives << " previous runs)" << std::endl;
   }
@@ -108,6 +108,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   free(debug_env);
   free(log_file_env);
   free(archives_env);
+
+  // Ask Windows to treat this as a station: no sleep, no background
+  // throttling, and a restart if it dies. Done after logging is up so the
+  // three results are recorded.
+  ConfigureUnattendedOperation();
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.

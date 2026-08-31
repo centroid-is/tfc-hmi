@@ -3,6 +3,7 @@
 #include <csignal>    // SIGABRT
 #include <cstdint>    // uintptr_t
 #include <cstdio>     // snprintf
+#include <cstring>    // strlen, memcpy, in CleanTypeName
 #include <exception>  // current_exception, rethrow_exception
 #include <typeinfo>   // typeid, to name the exception that killed us
 
@@ -21,6 +22,89 @@ bool Fits(int written, size_t out_len) {
 }
 
 }  // namespace
+
+const char* CleanTypeName(char* out, size_t out_len, const char* raw) {
+  if (raw == nullptr || out == nullptr || out_len == 0) {
+    return raw;
+  }
+  // ".?AV" for a class, ".?AU" for a struct. Anything else is a shape we do
+  // not claim to understand.
+  if (raw[0] != '.' || raw[1] != '?' || raw[2] != 'A' ||
+      (raw[3] != 'V' && raw[3] != 'U')) {
+    return raw;
+  }
+  const char* body = raw + 4;
+  const size_t body_len = std::strlen(body);
+  // Every name the compiler emits for a plain class ends "@@"; without it this
+  // is something else (a template's fragments, most often) and is left alone.
+  if (body_len < 2 || body[body_len - 2] != '@' || body[body_len - 1] != '@') {
+    return raw;
+  }
+
+  // Scopes are stored innermost-first: "bad_alloc@std" is std::bad_alloc. Walk
+  // them backwards, joining with "::". A '?' anywhere means a template or a
+  // special name whose grammar this does not implement -- bail to the raw form
+  // rather than emit a plausible-looking wrong answer.
+  const size_t scopes_len = body_len - 2;
+  for (size_t i = 0; i < scopes_len; ++i) {
+    if (body[i] == '?') {
+      return raw;
+    }
+  }
+
+  size_t used = 0;
+  out[0] = '\0';
+  size_t end = scopes_len;
+  while (end > 0) {
+    size_t start = end;
+    while (start > 0 && body[start - 1] != '@') {
+      --start;
+    }
+    const size_t part_len = end - start;
+    // An empty scope ("a@@b") is not a shape the compiler emits; refuse it
+    // rather than produce "a::::b".
+    if (part_len == 0) {
+      return raw;
+    }
+    const bool needs_sep = used > 0;
+    if (used + (needs_sep ? 2 : 0) + part_len + 1 > out_len) {
+      return raw;  // Would truncate: a shortened type name is a misleading one.
+    }
+    if (needs_sep) {
+      out[used++] = ':';
+      out[used++] = ':';
+    }
+    std::memcpy(out + used, body + start, part_len);
+    used += part_len;
+    out[used] = '\0';
+    end = start > 0 ? start - 1 : 0;
+  }
+  return used > 0 ? out : raw;
+}
+
+void FormatCppExceptionDetail(char* out, size_t out_len, const char* type_name,
+                              const void* address) {
+  std::snprintf(out, out_len, "code=0xE06D7363 (C++ throw) type=%s address=0x%llx",
+                type_name != nullptr ? type_name : "(not recoverable)",
+                static_cast<unsigned long long>(
+                    reinterpret_cast<uintptr_t>(address)));
+}
+
+void FormatFrameLine(char* out, size_t out_len, unsigned index,
+                     const char* module, unsigned long long offset,
+                     const void* address) {
+  const unsigned long long addr =
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address));
+  if (module == nullptr) {
+    // No module owns this address. Worth printing loudly: that is what a
+    // return into freed or corrupted memory looks like.
+    std::snprintf(out, out_len, "[crash]   #%02u <no module> (0x%llx)", index,
+                  addr);
+    return;
+  }
+  std::snprintf(out, out_len, "[crash]   #%02u %s+0x%llx (0x%llx)", index,
+                module, offset, addr);
+}
 
 void FormatTimestamp(char* out, size_t out_len, const CrashTime& time) {
   std::snprintf(out, out_len, "%04u%02u%02u-%02u%02u%02u", time.year,

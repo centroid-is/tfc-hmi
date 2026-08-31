@@ -99,6 +99,7 @@ bool FlutterWindow::CreateController() {
   // The engine posts this back to the platform thread, so it is safe to touch
   // watchdog state from it. It doubles as the stock runner template's "show the
   // window once the first frame is ready" hook.
+  probe_armed_ = true;
   flutter_controller_->engine()->SetNextFrameCallback(
       [this]() { this->OnFramePresented(); });
 
@@ -114,6 +115,10 @@ void FlutterWindow::DestroyController() {
   // Destroying the controller shuts the engine down, which takes egl::Manager
   // with it: eglTerminate() releases the lost D3D device so the next
   // eglInitialize() can create a healthy one.
+  //
+  // The armed callback belonged to that engine and dies with it; the fresh
+  // engine needs its own, so the flag must not survive the recreate.
+  probe_armed_ = false;
   flutter_controller_ = nullptr;
 }
 
@@ -328,13 +333,32 @@ void FlutterWindow::StartProbe() {
   if (!flutter_controller_ || !flutter_controller_->engine()) {
     return;
   }
-  // Re-arm: the callback is one-shot and was consumed by the previous frame.
-  flutter_controller_->engine()->SetNextFrameCallback(
-      [this]() { this->OnFramePresented(); });
+  // Re-arm only when the previous probe has actually been answered.
+  //
+  // Every SetNextFrameCallback registers a FRESH callback with the engine,
+  // while the client wrapper keeps just one std::function behind them all. Its
+  // trampoline invokes that function and then nulls it, with no null check —
+  // so the second of two pending callbacks calls an empty std::function and
+  // throws std::bad_function_call, which nothing catches and which ends the
+  // process.
+  //
+  // Arming repeatedly without a frame in between is exactly what this watchdog
+  // does when the renderer is down: probes stack up, one per interval, unseen
+  // because no frame is presented to consume them. They come due together the
+  // moment the device works again — which is why the crash landed on the
+  // morning an RDP session was reconnected, not on the evening it was dropped.
+  if (!probe_armed_) {
+    probe_armed_ = true;
+    flutter_controller_->engine()->SetNextFrameCallback(
+        [this]() { this->OnFramePresented(); });
+  }
   flutter_controller_->ForceRedraw();
 }
 
 void FlutterWindow::OnFramePresented() {
+  // The engine consumed the armed callback to get here, so the next probe is
+  // free to arm a new one.
+  probe_armed_ = false;
   last_frame_tick_ = ::GetTickCount64();
   int attempts_before = watchdog_.recovery_attempts();
   Dispatch(WatchdogEvent::kFramePresented);

@@ -96,6 +96,16 @@ class FlutterWindow : public Win32Window {
   bool watchdog_enabled_ = true;
   bool first_frame_shown_ = false;
   bool session_notifications_registered_ = false;
+  // Whether a next-frame callback is registered and still unanswered.
+  //
+  // The engine accepts a new registration every time it is asked, but the
+  // client wrapper holds a single std::function behind them: its trampoline
+  // calls that function and then nulls it, unguarded. A second pending
+  // callback therefore invokes an empty std::function and throws
+  // std::bad_function_call, ending the process. Probing while the renderer is
+  // down is precisely how several come to be pending at once, so exactly one
+  // is kept outstanding. See StartProbe.
+  bool probe_armed_ = false;
 
   // A D3D11 device of our own, never rendered with, kept alive only so that
   // GetDeviceRemovedReason() can be asked why the renderer died. ANGLE's own
