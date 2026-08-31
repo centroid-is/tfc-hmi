@@ -6,7 +6,7 @@
 /// of these. Same shape as the gateway's `ServerConfig`, for the same reason:
 /// a number that lives at five call sites is a number that drifts.
 ///
-/// Three of these numbers were measured or ruled on rather than chosen:
+/// Five of the things here were measured or ruled on rather than chosen:
 ///
 /// * **The deadline floor is one round trip, rounded up.** 04-RESEARCH
 ///   Finding 8 measured this transport at a **50.0 ms mean round trip over 50
@@ -38,6 +38,17 @@
 ///   one Wi-Fi retransmit would grey every value on the screen at once. This
 ///   class therefore exposes no field the cadence could arrive through, and
 ///   `client_config_test.dart` reads this file as text to keep it that way.
+/// * **The pinned root is a file path** (orchestrator ruling OQ4). One path
+///   per station, provisioned with the rest of that station's configuration.
+///   The alternative — installing the root into the machine's own trust store
+///   — would mean dialling with `withTrustedRoots: true`, and a store anybody
+///   with an installer can add to is a store that can vouch for a fake
+///   gateway (T-06-20).
+/// * **A dial needs a ceiling of its own.** 06-RESEARCH §C.4 probed a connect
+///   to an address that answers nothing and measured **75 s** before macOS
+///   gave up. That is longer than the whole backoff schedule, so without
+///   [connectTimeout] the reconnect loop an operator can see stops describing
+///   what the panel is actually doing.
 ///
 /// The backoff ceiling is a refusal rather than a default because STACK
 /// rejected `web_socket_client` over an infinite backoff loop. A panel that
@@ -208,6 +219,79 @@ final class ClientConfig {
   /// operator can read. The gateway decides; this class carries.
   final String? token;
 
+  /// The one certificate authority this panel trusts, or null when it dials
+  /// plaintext `ws://`.
+  ///
+  /// **Null is the shipped default and stays supported.** Every fixture in
+  /// this workspace and all ten of the gateway's bind sites are plaintext on
+  /// loopback; making TLS the default here would rewrite them for no
+  /// requirement, and a rewritten fixture is how a suite quietly stops testing
+  /// what it used to.
+  ///
+  /// **Non-null means the system trust store is never consulted.**
+  /// `RemoteStateMan` builds one `SecurityContext(withTrustedRoots: false)`
+  /// from it, so a rogue root installed on the station — by an installer, by a
+  /// corporate MDM, by somebody with a USB stick — cannot vouch for anything
+  /// claiming to be the gateway (T-06-20). That is the whole of SEC-02 on this
+  /// side, and it is why the alternative ruled out in 06-CONTEXT (install the
+  /// root into the OS store and trust that store) is not available here.
+  final ClientTlsConfig? tls;
+
+  /// How long one dial may spend before it is abandoned and the schedule
+  /// takes over.
+  ///
+  /// **Measured, and the number it guards against is 75 seconds**
+  /// (06-RESEARCH §C.4, probed on macOS against an unbound address): a TCP
+  /// connect to an address that answers nothing does not fail, it waits for
+  /// the operating system to give up. Unbounded, one attempt outlives the
+  /// entire backoff schedule an operator can see — a panel pointed at a
+  /// firewall that drops SYNs sits in `connecting` for over a minute per
+  /// attempt while the health line says the same thing it says for a link
+  /// that is one second old.
+  ///
+  /// **Validated with `_positive`, never `_atLeastFloor`.** It is not a
+  /// deadline on an answer, it is a ceiling on a socket coming up, and a case
+  /// that wants a blackholed dial to give up inside its own budget has to be
+  /// able to set it well below the floor.
+  ///
+  /// **What it does not do**, recorded because it looks like it should:
+  /// `IOWebSocketChannel.connect` applies this as a `Future.timeout`
+  /// (`io.dart:50-53`), which abandons the connect rather than cancelling it.
+  /// The socket underneath may still come up and is then dropped with nobody
+  /// holding it. That is a leak per timed-out attempt, which is why the
+  /// default is a generous hang guard rather than a tight bound: this exists
+  /// so the reconnect loop keeps running, not to make dialling fast.
+  final Duration connectTimeout;
+
+  /// Refuses the combinations of [uri] and this config that cannot work.
+  ///
+  /// Called by `RemoteStateMan`'s constructor — the first place a panel's
+  /// address and its trust decision are both in scope. It lives here rather
+  /// than there because this is the file that holds the other refusals, and a
+  /// rule about configuration that lived in the class it configures would be
+  /// the second place to look.
+  ///
+  /// **Why `wss` without a pinned root is refused rather than attempted.**
+  /// Measured (06-RESEARCH §A.3, row 6): a client on the system trust store
+  /// dialling a gateway whose leaf came from the plant's private CA fails
+  /// every handshake with `CERTIFICATE_VERIFY_FAILED` — byte-identical to what
+  /// a genuine impostor produces, and to an expired leaf, and to a wrong
+  /// hostname (trap 16). The panel would look attacked when it is
+  /// misconfigured, once per attempt, forever, and the engineer sent to look
+  /// at it starts with the wrong question.
+  void checkDialable(Uri uri) {
+    if (uri.scheme == 'wss' && tls == null) {
+      throw ArgumentError('this panel is configured to dial $uri but no '
+          'rootCertPath was given: an encrypted dial with no pinned root '
+          'falls back on the machine\'s own trust store, which does not carry '
+          'the plant\'s private CA. Every handshake would then fail with the '
+          'same message a real impostor produces, so the panel would report '
+          'an attack rather than a missing file. Mount the root the '
+          'integrator provisioned and name it in ClientTlsConfig, or dial ws '
+          'deliberately.');
+    }
+  }
+
   /// Ten measured round trips. The default [deadlineFloor].
   static const Duration defaultDeadlineFloor = Duration(milliseconds: 500);
 
@@ -230,6 +314,8 @@ final class ClientConfig {
     this.holdPulsePeriod = const Duration(milliseconds: 100),
     this.holdMissedPulsesBeforeStop = 10,
     this.token,
+    this.tls,
+    this.connectTimeout = const Duration(seconds: 10),
   }) {
     if (!(subscriptionStalenessMultiple > 1)) {
       throw ArgumentError('subscriptionStalenessMultiple '
@@ -256,6 +342,12 @@ final class ClientConfig {
           'coasting is accepted precisely so that one Wi-Fi retransmit does '
           'not drop the output under an operator who never let go');
     }
+
+    // `_positive`, and the choice is load-bearing for the same reason
+    // [holdPulsePeriod]'s is: a fault case that wants a blackholed dial to
+    // give up inside its own budget sets this to a few hundred milliseconds,
+    // which is below the deadline floor and has nothing to do with it.
+    _positive('connectTimeout', connectTimeout);
 
     _positive('backoffBase', backoffBase);
     _positive('backoffCap', backoffCap);
@@ -295,4 +387,35 @@ final class ClientConfig {
   }
 
   static String _ms(Duration d) => '${d.inMilliseconds} ms';
+}
+
+/// Where this station's copy of the plant's private CA root is mounted.
+///
+/// One field, deliberately. The gateway's `TlsConfig` carries a chain, a key
+/// and a password because a gateway proves who it is; a panel only has to
+/// recognise one signature, so a second field here would be a second thing to
+/// provision on every station for a capability nothing asks for.
+///
+/// **A path, never bytes** — orchestrator ruling OQ4, and the same discipline
+/// `TlsConfig` carries on the gateway side. Bytes on a config object end up in
+/// a preferences row, a log line or a crash dump; a path names a file the
+/// integrator mounted and the operating system's permissions still apply to
+/// it. It is also what keeps SEC-01's "no key material readable from config or
+/// preferences" sweep and this class saying the same thing.
+///
+/// The file is read exactly once, when `RemoteStateMan` builds its one
+/// `SecurityContext` — not per attempt. See that constructor for why.
+final class ClientTlsConfig {
+  ClientTlsConfig({required this.rootCertPath}) {
+    if (rootCertPath.isEmpty) {
+      throw ArgumentError('rootCertPath is empty: SecurityContext reads an '
+          'empty path as the process working directory and fails with a '
+          'message about a directory nobody configured, once per dial, with '
+          'nothing in it naming the certificate the panel was supposed to '
+          'trust');
+    }
+  }
+
+  /// The PEM the integrator provisioned to this station.
+  final String rootCertPath;
 }

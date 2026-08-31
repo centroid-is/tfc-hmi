@@ -57,11 +57,31 @@
 /// and null included — means the link went away, retry**. Nothing in this file
 /// branches on the number, and nothing in it reads `readyState` for liveness
 /// either (STACK: `readyState` lies after an OS sleep).
+///
+/// **This file is `dart:io`-only, and that is the price of pinning a
+/// certificate.** `WebSocketChannel.connect` — what [connect] used to call —
+/// takes no `HttpClient` and no `SecurityContext`
+/// (`web_socket_channel-3.0.3/lib/src/channel.dart:107-108`), so there is no
+/// way through it to say which root the panel trusts. The seam exists one
+/// layer down: `IOWebSocketChannel.connect` takes `customClient:`
+/// (`io.dart:36-56`, read from the resolved source) and forwards it to
+/// `WebSocket.connect`, whose security context is what verifies the gateway.
+/// SEC-02 is that context, so this call has to be the IO one.
+///
+/// No conditional import stands in for it. A `_connect_web.dart` twin would be
+/// scaffolding for a build that does not exist — the panels are Windows,
+/// macOS and eLinux, the Flutter web target is a later milestone, and CLAUDE.md
+/// already records that a browser cannot be handed a private CA root at all
+/// (no interstitial for `wss` on Flutter web). When that milestone arrives the
+/// browser leg needs a *publicly* trusted certificate, which is a deployment
+/// decision, not a second dial in this file.
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:stream_channel/stream_channel.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// The outcome of exactly one dial. Sealed, so the supervisor's switch over it
@@ -122,12 +142,36 @@ final class ConnectFailed extends ConnectAttempt {
 
 /// Dials [uri] once and reports what happened.
 ///
-/// No retry, no backoff and no timeout live here: one attempt, one value. The
-/// schedule is `backoff.dart`'s and the loop is the supervisor's, because a
-/// transport that retried on its own would be a second, invisible policy
-/// sitting under the one the operator can see.
-Future<ConnectAttempt> connect(Uri uri, {Iterable<String>? protocols}) async {
-  final ws = WebSocketChannel.connect(uri, protocols: protocols);
+/// No retry and no backoff live here: one attempt, one value. The schedule is
+/// `backoff.dart`'s and the loop is the supervisor's, because a transport that
+/// retried on its own would be a second, invisible policy sitting under the
+/// one the operator can see.
+///
+/// [client] is the panel's pinned `HttpClient` — one per `RemoteStateMan`,
+/// built from a `SecurityContext(withTrustedRoots: false)` over the mounted
+/// root. Null is the plaintext dial every existing fixture makes, and it is
+/// also, deliberately, the *system trust store* posture: `WebSocket.connect`
+/// then builds a default client of its own. A `wss` dial with a null [client]
+/// is therefore refused before it gets here, by
+/// `ClientConfig.checkDialable`.
+///
+/// [connectTimeout] bounds the dial itself, which is the one thing the
+/// supervisor's schedule cannot bound: a connect to an address that answers
+/// nothing takes 75 s to fail on macOS (06-RESEARCH §C.4), so an attempt can
+/// otherwise outlive the whole backoff ceiling. Null means the operating
+/// system decides, which is what every caller before this had.
+Future<ConnectAttempt> connect(
+  Uri uri, {
+  Iterable<String>? protocols,
+  HttpClient? client,
+  Duration? connectTimeout,
+}) async {
+  final ws = IOWebSocketChannel.connect(
+    uri,
+    protocols: protocols,
+    customClient: client,
+    connectTimeout: connectTimeout,
+  );
   try {
     await ws.ready;
   } catch (error, stack) {
