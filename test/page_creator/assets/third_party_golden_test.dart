@@ -20,6 +20,7 @@ import 'package:tfc/providers/database.dart';
 import 'package:tfc_dart/core/database.dart' show Database;
 import 'package:tfc/page_creator/assets/third_party.dart';
 import 'package:tfc/page_creator/assets/third_party_painter.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 
 const _key = Key('third_party_golden');
 
@@ -525,18 +526,30 @@ void main() {
       );
     });
 
-    // The box erector's Status section off the `BER0n.BER0n` struct, every row
-    // LIT. Not a state the machine is ever in -- it cannot be running, stopping
-    // the line and out of both bottoms and tops at once -- but this golden
-    // exists to be read as a COLOUR CHART: one lit diode per row, so the whole
-    // vocabulary can be checked down a single column, plus the duration column
-    // beside the two starve rows. A realistic mixed state leaves rows grey,
-    // which pins the unknown treatment (already covered by the Multivac's pane)
-    // and pins none of the colours.
+    // The box erector's Status section, every row LIT. Not a state the machine
+    // is ever in -- it cannot be running, stopping the line and out of both
+    // bottoms and tops at once -- but this golden exists to be read as a COLOUR
+    // CHART: one lit diode per row, so the whole vocabulary can be checked down
+    // a single column.
     //
-    // SIX rows. This pane briefly drew seventeen members in six collapsible
-    // groups; the golden is the cheapest place for that to grow back unnoticed,
-    // so it is deliberately short enough to count by eye.
+    // SIX rows from TWO sources, which is the point of this image. The top four
+    // are the kind's own, read one key per PLC member off the `BER01` prefix.
+    // The bottom two are per-instance [ExtraStatusBit]s, loose keys an engineer
+    // adds in the editor because only BER01's carton chutes are sensed. They
+    // must be indistinguishable from the kind's own rows -- same row shape,
+    // same diode size, no rule between them. An operator is not meant to work
+    // out which four arrived by one route and which two by another.
+    const cartonBits = [
+      ExtraStatusBit(
+          key: 'BER01.NoCartonBottoms',
+          label: 'No carton bottoms',
+          onRole: HmiColorRole.yellow),
+      ExtraStatusBit(
+          key: 'BER01.NoCartonTops',
+          label: 'No carton tops',
+          onRole: HmiColorRole.yellow),
+    ];
+
     testWidgets('boxErector — status pane diodes, every row lit',
         (tester) async {
       await loadRealFont();
@@ -544,13 +557,11 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
-          m: true,
-        // How long each starve has run, so the duration column is in the PNG.
-        'p_stat_tNoBottomsFor': 252000,
-        'p_stat_tNoLidsFor': 45000,
-      }));
+      final values = <String, bool?>{
+        for (final b
+            in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!)
+          b.suffix: true,
+      };
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -560,7 +571,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 520,
+                height: 460,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -569,11 +580,26 @@ void main() {
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: StructStatusDiodes(
-                        status: status,
-                        bits: boxErectorStatusBits,
-                        machine: equipmentShortName(
-                            ThirdPartyEquipmentKind.boxErector),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          EquipmentStatusDiodes(
+                            bits: kEquipmentStatusBits[
+                                ThirdPartyEquipmentKind.boxErector]!,
+                            values: values,
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                          ExtraStatusDiodes(
+                            bits: cartonBits,
+                            values: const {
+                              'BER01.NoCartonBottoms': true,
+                              'BER01.NoCartonTops': true,
+                            },
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -590,32 +616,19 @@ void main() {
     });
 
     // The state an operator actually meets: the machine is running, both
-    // permits are granted, and it has been out of carton bottoms for four
-    // minutes. Nothing red -- the frustration row is dark because the FB will
-    // not raise it while a starve explains the stop, which is the one piece of
-    // the design a colour chart cannot show.
+    // permits are granted, and it has run out of carton bottoms. Nothing red --
+    // the frustration row is dark because the FB will not raise it while a
+    // starve explains the stop, which is the one piece of the design a colour
+    // chart cannot show.
     //
-    // "No carton tops" is OFF and carries NO duration, even though the struct
-    // below still holds `p_stat_tNoLidsFor` from the last time the chute ran
-    // dry: the FB's TON keeps its elapsed value after the condition clears, so
-    // a duration printed on a dark row would report a starve that is over.
+    // "No carton tops" is OFF (white), not grey: its key is mapped and
+    // answering, and the chute is full. The grey `!` is reserved for a key that
+    // has told us nothing -- see the comms-down golden below.
     testWidgets('boxErector — running, starved of bottoms', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-
-      final status = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
-          m: false,
-        'p_stat_xRunning': true,
-        'q_xInfeedPermitted': true,
-        'q_xOutfeedPermitted': true,
-        'p_stat_xWaitingBottoms': true,
-        'p_stat_tNoBottomsFor': 252000,
-        // Stale: the lid chute refilled 20 minutes ago and the TON held its ET.
-        'p_stat_tNoLidsFor': 45000,
-      }));
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -625,7 +638,7 @@ void main() {
               key: _key,
               child: SizedBox(
                 width: 420,
-                height: 520,
+                height: 460,
                 child: Material(
                   child: SidePane(
                     title: 'BER-01',
@@ -634,11 +647,31 @@ void main() {
                     status: const PaneStatus.running(),
                     child: PaneSection(
                       title: 'Status',
-                      child: StructStatusDiodes(
-                        status: status,
-                        bits: boxErectorStatusBits,
-                        machine: equipmentShortName(
-                            ThirdPartyEquipmentKind.boxErector),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          EquipmentStatusDiodes(
+                            bits: kEquipmentStatusBits[
+                                ThirdPartyEquipmentKind.boxErector]!,
+                            values: const {
+                              'Running': true,
+                              'WaitingFrustration': false,
+                              'PermitInfeed': true,
+                              'PermitOutfeed': true,
+                            },
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                          ExtraStatusDiodes(
+                            bits: cartonBits,
+                            values: const {
+                              'BER01.NoCartonBottoms': true,
+                              'BER01.NoCartonTops': false,
+                            },
+                            machine: equipmentShortName(
+                                ThirdPartyEquipmentKind.boxErector),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -658,28 +691,28 @@ void main() {
     // the gate, the banner and the header badge are all the ones an operator
     // gets -- not three pieces reassembled by the test.
     //
-    // The struct fed in is the dangerous one: every bit still says the machine
-    // is fine ("Running" true, both permits granted) because FB_BER01ScadaPoll
-    // decodes the Saia's process word unconditionally and those words simply
-    // stop being written when polling fails. Without the gate this pane would
-    // show a confident green "Running" for a machine we have lost contact with,
-    // forever. With it: red banner on top, header reads "No link", every diode
-    // grey and no durations.
+    // The values fed in are the dangerous ones: every key still says the
+    // machine is fine ("Running" true, both permits granted, both chutes full)
+    // because FB_BER01ScadaPoll decodes the Saia's process word
+    // unconditionally and those words simply stop being written when polling
+    // fails. One key per PLC member does not help -- six separate
+    // subscriptions to six frozen variables are just as confidently wrong as
+    // one frozen struct. Without the gate this pane would show a green
+    // "Running" for a machine we have lost contact with, forever. With it: red
+    // banner on top, header reads "No link", every diode grey -- INCLUDING the
+    // two extra carton rows, which read the same Saia over the same link.
     testWidgets('boxErector — Modbus link down', (tester) async {
       await loadRealFont();
       tester.view.physicalSize = const Size(900, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final frozen = DynamicValue.fromMap(LinkedHashMap<String, dynamic>.from({
-        for (final m in structMembersOf(ThirdPartyEquipmentKind.boxErector))
-          m: true,
-        // How long each starve had run when the link died -- numbers that would
-        // now be counting nothing, which is why none of this is drawn.
-        'p_stat_tNoBottomsFor': 252000,
-        'p_stat_tNoLidsFor': 45000,
-        'p_stat_xModbusHealthy': false,
-      }));
+      final frozen = <String, bool?>{
+        for (final b
+            in kEquipmentStatusBits[ThirdPartyEquipmentKind.boxErector]!)
+          b.suffix: true,
+        kBoxErectorCommsSuffix: false,
+      };
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -702,13 +735,26 @@ void main() {
                         const CommsLostBanner(),
                         PaneSection(
                           title: 'Status',
-                          child: StructStatusDiodes(
-                            // null, exactly as the gate feeds it: the frozen
-                            // values above are deliberately NOT shown.
-                            status: null,
-                            bits: boxErectorStatusBits,
-                            machine: equipmentShortName(
-                                ThirdPartyEquipmentKind.boxErector),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              EquipmentStatusDiodes(
+                                bits: kEquipmentStatusBits[
+                                    ThirdPartyEquipmentKind.boxErector]!,
+                                // Empty, exactly as the gate feeds it: the
+                                // frozen values above are deliberately NOT
+                                // shown.
+                                values: const {},
+                                machine: equipmentShortName(
+                                    ThirdPartyEquipmentKind.boxErector),
+                              ),
+                              ExtraStatusDiodes(
+                                bits: cartonBits,
+                                values: const {},
+                                machine: equipmentShortName(
+                                    ThirdPartyEquipmentKind.boxErector),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -720,8 +766,8 @@ void main() {
           ),
         ),
       ));
-      // Referenced so the frozen struct is not an unused local: it documents
-      // what the gate is refusing to display.
+      // Referenced so the frozen map is not an unused local: it documents what
+      // the gate is refusing to display.
       expect(boxErectorCommsOf(frozen), isFalse);
       await expectLater(
         find.byKey(_key),
