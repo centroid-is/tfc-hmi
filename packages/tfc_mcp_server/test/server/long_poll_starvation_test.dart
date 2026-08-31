@@ -6,7 +6,6 @@ import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/audit/audit_log_service.dart';
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/services/proposal_feedback_bus.dart';
 import 'package:tfc_mcp_server/src/tools/proposal_feedback_tools.dart';
 import 'package:tfc_mcp_server/src/tools/tool_registry.dart';
@@ -42,9 +41,6 @@ void main() {
 
     registry = ToolRegistry(
       mcpServer: mcpServer,
-      identity: EnvOperatorIdentity(
-        environmentProvider: () => {'TFC_USER': 'op1'},
-      ),
       auditLogService: AuditLogService(db),
     );
 
@@ -144,33 +140,5 @@ void main() {
       g.complete();
     }
     await Future.wait(calls).timeout(const Duration(seconds: 5));
-  });
-
-  test('an unmetered tool is still identity-gated', () async {
-    // Skipping the semaphore and the audit trail must not skip auth: the
-    // identity check lives outside both, and has to stay there.
-    final unauthenticatedServer = McpServer(
-      const Implementation(name: 'test-server', version: '0.1.0'),
-      options: McpServerOptions(
-        capabilities: ServerCapabilities(tools: ServerCapabilitiesTools()),
-      ),
-    );
-    registerProposalFeedbackTools(
-      ToolRegistry(
-        mcpServer: unauthenticatedServer,
-        identity: EnvOperatorIdentity(environmentProvider: () => {}),
-        auditLogService: AuditLogService(db),
-      ),
-      bus,
-    );
-
-    client = await MockMcpClient.connect(unauthenticatedServer);
-    final result = await client
-        .callTool('get_proposal_feedback', {})
-        .timeout(const Duration(seconds: 3));
-
-    expect(result.isError, isTrue);
-    expect((result.content.first as TextContent).text,
-        contains('TFC_USER'));
   });
 }

@@ -1,11 +1,10 @@
-import 'package:mcp_dart/mcp_dart.dart';
 import 'package:test/test.dart';
 
 import 'package:tfc_mcp_server/src/database/server_database.dart';
-import 'package:tfc_mcp_server/src/identity/env_operator_identity.dart';
 import 'package:tfc_mcp_server/src/interfaces/drawing_index.dart';
 import 'package:tfc_mcp_server/src/server.dart';
 import 'package:tfc_mcp_server/src/tools/tool_toggles.dart';
+import 'package:tfc_mcp_server/tfc_mcp_server.dart' show kMcpAuditOperator;
 import '../helpers/mock_alarm_reader.dart';
 import '../helpers/mock_drawing_index.dart';
 import '../helpers/mock_mcp_client.dart';
@@ -49,15 +48,10 @@ void main() {
     });
 
     TfcMcpServer createWiredServer({
-      Map<String, String>? env,
       bool includeDrawings = true,
       McpToolToggles? toggles,
     }) {
-      final identity = EnvOperatorIdentity(
-        environmentProvider: () => env ?? {'TFC_USER': 'op1'},
-      );
       return TfcMcpServer(
-        identity: identity,
         database: db,
         stateReader: stateReader,
         alarmReader: alarmReader,
@@ -116,8 +110,7 @@ void main() {
       }
     });
 
-    test('2. Calling list_tags with valid identity creates audit record',
-        () async {
+    test('2. Calling list_tags creates an audit record', () async {
       final server = createWiredServer();
       final client = await MockMcpClient.connect(server.mcpServer);
       try {
@@ -129,7 +122,9 @@ void main() {
         // Verify audit record was created
         final records = await db.select(db.auditLog).get();
         expect(records, hasLength(1));
-        expect(records.first.operatorId, equals('op1'));
+        // This row records that the MCP server ran a tool, not that a
+        // person authorized one -- the person's name is on the approval row.
+        expect(records.first.operatorId, equals(kMcpAuditOperator));
         expect(records.first.tool, equals('list_tags'));
         expect(records.first.status, equals('success'));
       } finally {
@@ -167,25 +162,6 @@ void main() {
               reason:
                   'Missing detail tool: ${entry.value} for ${entry.key}');
         }
-      } finally {
-        await client.close();
-      }
-    });
-
-    test('4. Identity gate: no TFC_USER returns error and no audit record',
-        () async {
-      final server = createWiredServer(env: {});
-      final client = await MockMcpClient.connect(server.mcpServer);
-      try {
-        final result = await client.callTool('list_tags', {});
-
-        expect(result.isError, isTrue);
-        final text = (result.content.first as TextContent).text;
-        expect(text, contains('TFC_USER'));
-
-        // No audit record
-        final records = await db.select(db.auditLog).get();
-        expect(records, isEmpty);
       } finally {
         await client.close();
       }
