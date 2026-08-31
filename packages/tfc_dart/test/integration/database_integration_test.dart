@@ -47,6 +47,7 @@ Future<StreamSubscription<String>> subscribeWhenReady(
   String channelName,
   void Function(String) onData, {
   Duration timeout = const Duration(seconds: 5),
+  void Function()? onDone,
 }) async {
   final readyCompleter = Completer<void>();
   const pingPayload = '__ping__';
@@ -57,7 +58,7 @@ Future<StreamSubscription<String>> subscribeWhenReady(
     } else {
       onData(payload);
     }
-  });
+  }, onDone: onDone);
 
   final deadline = DateTime.now().add(timeout);
   while (!readyCompleter.isCompleted) {
@@ -1542,6 +1543,63 @@ void main() {
         await database.db.customStatement(
           'DROP TABLE IF EXISTS "$complexTable" CASCADE',
         );
+      });
+
+      test('ends every channel stream when the notification connection dies',
+          () async {
+        // The LISTEN/NOTIFY connection is not in the pool: it has no
+        // reconnect of its own, and the driver does not close the channel
+        // listeners when its socket goes. Left alone, every subscriber sat
+        // on a stream that would never emit, error, or end -- which is how
+        // the readouts on the mimic froze on their last count while the same
+        // readouts freshly mounted in a side pane showed the right one.
+        await database.db.enableNotificationChannel(notifyTestTable);
+        final channelName = 'table_${notifyTestTable}_changes';
+        final notifications = <String>[];
+        var ended = 0;
+
+        final sub1 = await subscribeWhenReady(
+            database.db, channelName, notifications.add,
+            onDone: () => ended++);
+        final sub2 = await subscribeWhenReady(
+            database.db, channelName, notifications.add,
+            onDone: () => ended++);
+
+        // Kill the backend server-side: what a Postgres restart, or a
+        // firewall dropping the idle flow, looks like from the client.
+        final killed = await database.db.customSelect(
+          "SELECT pg_terminate_backend(pid) AS ok FROM pg_stat_activity "
+          "WHERE application_name LIKE '%:notify'",
+        ).get();
+        expect(killed, isNotEmpty, reason: 'no notification backend to kill');
+
+        // Both streams end -- done, not error -- once the watchdog notices.
+        await waitUntil(() => ended == 2,
+            timeout: kNotificationWatchdogInterval * 3);
+        expect(notifications, isEmpty);
+
+        // The next subscriber rides a fresh connection, and it delivers.
+        final sub3 = await subscribeWhenReady(
+            database.db, channelName, notifications.add);
+        await database.insertTimeseriesData(
+          notifyTestTable,
+          DateTime.now(),
+          909,
+        );
+        await database.flush();
+        await waitUntil(() => notifications.isNotEmpty);
+        expect(jsonDecode(notifications.single)['data']['value'], 909);
+
+        // One notify backend, not two: the dead one was let go of.
+        final backends = await database.db.customSelect(
+          "SELECT count(*) AS n FROM pg_stat_activity "
+          "WHERE application_name LIKE '%:notify'",
+        ).get();
+        expect(backends.single.read<int>('n'), 1);
+
+        await sub1.cancel();
+        await sub2.cancel();
+        await sub3.cancel();
       });
 
       test('should handle multiple listeners on same channel', () async {

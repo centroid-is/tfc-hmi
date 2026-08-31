@@ -170,6 +170,19 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   /// one connection is all this ever needed.
   Future<pg.Connection?>? _notificationConnection;
 
+  /// Every open [listenToChannel] stream riding on [_notificationConnection],
+  /// so that a connection found dead can end them all.
+  final Set<StreamController<String>> _notificationSubscribers = {};
+
+  /// Polls the LISTEN/NOTIFY connection for having died; see
+  /// [_ensureNotificationWatchdog].
+  Timer? _notificationWatchdog;
+
+  /// The connection future [_notificationWatchdog] was started for, so a
+  /// watchdog left over from a replaced connection is not mistaken for the
+  /// current one's.
+  Future<pg.Connection?>? _notificationWatchdogFor;
+
   @override
   DriftDatabaseOptions get options =>
       const DriftDatabaseOptions(storeDateTimeAsText: true);
@@ -344,16 +357,104 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
   /// the database being briefly unreachable is the normal case rather than the
   /// exceptional one. Dropping it costs nothing: the next subscriber opens a
   /// new one, which is what happened before the future was cached at all.
-  Future<pg.Connection?> _sharedNotificationConnection() {
-    final pending =
-        _notificationConnection ??= _createNotificationConnection();
-    return pending.catchError((Object error) {
-      // Only evict what we put there; a teardown may already have replaced it.
-      if (identical(_notificationConnection, pending)) {
-        _notificationConnection = null;
+  ///
+  /// A connection that has *died* since it was opened is evicted too, and a
+  /// fresh one opened in its place. The socket dying does not clear the cache
+  /// by itself -- nothing in the driver reports it -- so without this check a
+  /// dead connection would be handed to every later subscriber for the life
+  /// of the process, and each would wait on it forever.
+  Future<(Future<pg.Connection?>, pg.Connection?)>
+      _sharedNotificationConnection() async {
+    // Two passes at most: the first may find the cached connection dead and
+    // evict it, the second opens its replacement.
+    for (var pass = 0;; pass++) {
+      final pending =
+          _notificationConnection ??= _createNotificationConnection();
+      final pg.Connection? connection;
+      try {
+        connection = await pending;
+      } catch (error) {
+        // Only evict what we put there; a teardown may already have replaced
+        // it.
+        if (identical(_notificationConnection, pending)) {
+          _notificationConnection = null;
+        }
+        rethrow;
       }
-      throw error;
+      if (connection == null || connection.isOpen || pass > 0) {
+        return (pending, connection);
+      }
+      logger.w('LISTEN/NOTIFY connection is dead; opening a replacement');
+      _notificationConnectionDied(pending, connection);
+    }
+  }
+
+  /// Forgets a LISTEN/NOTIFY connection that has died, and ends every channel
+  /// stream that was riding on it.
+  ///
+  /// The driver does not do this for us. When the socket under the
+  /// connection breaks -- Postgres restarted, a firewall dropped the idle
+  /// flow, the keepalive gave up -- `_close` tears the session down but never
+  /// closes the `channels` listeners, and its `closed` future never completes
+  /// for a socket it destroyed. So every subscriber sits on a stream that will
+  /// never emit, error, or end, and each readout driven by it freezes on its
+  /// last count while looking perfectly healthy. Ending the streams here is
+  /// what tells subscribers to fetch again and re-subscribe.
+  ///
+  /// Only the current connection is evicted: a death reported late for one
+  /// already replaced must not take its replacement down with it. Its
+  /// subscribers were ended when it was replaced, so there is nothing left to
+  /// do for it either.
+  void _notificationConnectionDied(
+      Future<pg.Connection?> pending, pg.Connection? connection) {
+    if (!identical(_notificationConnection, pending)) return;
+    _notificationConnection = null;
+    _stopNotificationWatchdog();
+    final orphaned = _notificationSubscribers.toList();
+    _notificationSubscribers.clear();
+    if (orphaned.isNotEmpty) {
+      logger.w('LISTEN/NOTIFY connection died; ending ${orphaned.length} '
+          'channel stream(s) so their subscribers re-subscribe');
+    }
+    for (final controller in orphaned) {
+      if (!controller.isClosed) controller.close();
+    }
+    // Best effort. A broken socket has already been destroyed by the driver;
+    // this is for the connection that is merely unusable.
+    unawaited(connection?.close(force: true).catchError((_) {}));
+  }
+
+  /// Watches [connection] for having died, on behalf of its subscribers.
+  ///
+  /// `isOpen` is the one signal the driver does give: it flips the moment the
+  /// socket is found broken. Polled rather than awaited because the
+  /// alternative, `closed`, is the sink's `done` future, and that never
+  /// completes for a destroyed socket. One timer per connection, not per
+  /// subscriber; it stops with the last subscriber or the connection's death.
+  void _ensureNotificationWatchdog(
+      Future<pg.Connection?> pending, pg.Connection connection) {
+    if (_notificationWatchdog != null &&
+        identical(_notificationWatchdogFor, pending)) {
+      return;
+    }
+    _stopNotificationWatchdog();
+    _notificationWatchdogFor = pending;
+    _notificationWatchdog =
+        Timer.periodic(kNotificationWatchdogInterval, (timer) {
+      if (!identical(_notificationConnection, pending)) {
+        // Replaced under us; the replacement gets its own watchdog.
+        timer.cancel();
+        return;
+      }
+      if (connection.isOpen) return;
+      _notificationConnectionDied(pending, connection);
     });
+  }
+
+  void _stopNotificationWatchdog() {
+    _notificationWatchdog?.cancel();
+    _notificationWatchdog = null;
+    _notificationWatchdogFor = null;
   }
 
   /// Get or create the dedicated channel connection
@@ -367,6 +468,13 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       settings: pg.ConnectionSettings(
         sslMode: config.sslMode,
         applicationName: '${config.applicationName}:notify',
+        // Same keepalive as the pool. This connection only ever receives, so
+        // it is the one a stateful firewall sees as idle and drops, and the
+        // driver's 30 s x 5 default left that undetected for minutes. With
+        // this the OS notices in ~15 s, `isOpen` flips, and the watchdog ends
+        // the channel streams.
+        keepAliveInterval: const Duration(seconds: 5),
+        keepAliveCount: 3,
       ),
     ).timeout(
       const Duration(seconds: 10),
@@ -953,26 +1061,39 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
     );
   }
 
-  /// Listen to table changes via PostgreSQL NOTIFY
+  /// Listen to table changes via PostgreSQL NOTIFY.
+  ///
+  /// The stream ends -- `onDone`, no error -- when the connection carrying it
+  /// dies. Subscribers that need the notifications to keep coming must treat
+  /// that as "fetch what you missed and subscribe again"; the next call opens
+  /// a fresh connection.
   Stream<String> listenToChannel(String channelName) {
     late StreamController<String> controller;
     StreamSubscription? channelSubscription;
+    Future<pg.Connection?>? pending;
+    pg.Connection? connection;
 
     controller = StreamController<String>(
       onListen: () async {
         try {
-          // Shared, and not latched shut by an open that failed: see
-          // [_sharedNotificationConnection].
-          final connection = await _sharedNotificationConnection();
+          // Shared, and not latched shut by an open that failed or a
+          // connection that died: see [_sharedNotificationConnection].
+          final (lease, conn) = await _sharedNotificationConnection();
 
-          if (connection == null) {
+          if (conn == null) {
             logger.w('Cannot listen to channel: not using PostgreSQL');
             await controller.close();
             return;
           }
+          if (!controller.hasListener) {
+            // Cancelled while the connection was opening.
+            return;
+          }
+          pending = lease;
+          connection = conn;
 
           logger.i('Starting to listen on channel: $channelName');
-          final channel = connection.channels[channelName];
+          final channel = conn.channels[channelName];
 
           channelSubscription = channel.listen(
             (payload) {
@@ -987,6 +1108,8 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
               controller.close();
             },
           );
+          _notificationSubscribers.add(controller);
+          _ensureNotificationWatchdog(lease, conn);
         } catch (e) {
           logger.w('Error setting up notification listener: $e');
           controller.addError(e);
@@ -995,19 +1118,24 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
       },
       onCancel: () async {
         logger.i('Cancelling notification listener for: $channelName');
+        _notificationSubscribers.remove(controller);
+        if (_notificationSubscribers.isEmpty) _stopNotificationWatchdog();
+        final conn = connection;
+        if (conn == null) return;
+        if (!conn.isOpen) {
+          // Nothing to UNLISTEN on. Whoever next asks for the connection
+          // finds it dead and replaces it.
+          return;
+        }
         try {
           await channelSubscription?.cancel();
         } catch (e) {
-          // If we get an error lets just close the connection. Cleared first
-          // so a subscriber arriving mid-teardown opens a fresh one rather
-          // than joining the future being torn down.
-          final pending = _notificationConnection;
-          _notificationConnection = null;
-          try {
-            (await pending)?.close(force: true);
-          } catch (_) {
-            // The connection never opened; nothing to close.
-          }
+          // The UNLISTEN failed, so the connection is not usable. Drop it for
+          // everyone: its other subscribers get their onDone and re-subscribe
+          // on a fresh one, rather than staying parked on a connection that
+          // only this subscriber knew was broken.
+          logger.w('UNLISTEN failed; dropping the notify connection: $e');
+          _notificationConnectionDied(pending!, conn);
         }
       },
     );
@@ -1186,6 +1314,11 @@ class AppDatabase extends _$AppDatabase implements McpDatabase {
 
   Future<void> _close() async {
     _healthPort?.close();
+    _stopNotificationWatchdog();
+    for (final controller in _notificationSubscribers.toList()) {
+      if (!controller.isClosed) controller.close();
+    }
+    _notificationSubscribers.clear();
     try {
       await (await _notificationConnection)?.close();
     } catch (_) {
@@ -1537,6 +1670,11 @@ _HealthMonitor _startPoolHealthMonitor(pg.Pool pool, SendPort port) {
 
   return _HealthMonitor(stop, done.future);
 }
+
+/// How often the LISTEN/NOTIFY connection is checked for having died, on
+/// behalf of the channel streams riding on it. See
+/// [AppDatabase._ensureNotificationWatchdog].
+const kNotificationWatchdogInterval = Duration(seconds: 5);
 
 enum NotificationAction {
   insert,

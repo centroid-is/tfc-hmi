@@ -3,6 +3,14 @@
 /// Manages `Map<String, Set<DateTime>>` with add/prune/count operations.
 /// Optionally stores `Map<String, Map<DateTime, dynamic>>` for value caching.
 /// No Flutter dependencies — fully unit-testable.
+///
+/// Every timestamp is stored in UTC. The cache is filled from two sources
+/// that describe the same rows — the historical query, whose `DateTime`s come
+/// from the driver, and the NOTIFY payloads, whose come from `DateTime.parse`
+/// on the JSON the trigger built — and `DateTime.==` is false for the same
+/// instant in different zones. Left un-normalised, a row that arrived both
+/// ways was counted twice, and the reconciling sweep would have re-added every
+/// row it was checking.
 class TimeseriesCache {
   final Map<String, Set<DateTime>> _caches = {};
   final Map<String, Map<DateTime, dynamic>> _values = {};
@@ -15,31 +23,52 @@ class TimeseriesCache {
   }
 
   /// Add a single timestamp to [key]. Auto-creates key if missing.
-  void addTimestamp(String key, DateTime time) {
-    (_caches[key] ??= {}).add(time);
-  }
+  ///
+  /// Returns whether the timestamp was new.
+  bool addTimestamp(String key, DateTime time) =>
+      (_caches[key] ??= {}).add(time.toUtc());
 
   /// Bulk-load timestamps for [key]. Auto-creates key if missing.
-  void addAll(String key, Iterable<DateTime> times) {
-    (_caches[key] ??= {}).addAll(times);
+  ///
+  /// Returns how many of [times] were new.
+  int addAll(String key, Iterable<DateTime> times) {
+    final set = _caches[key] ??= {};
+    var added = 0;
+    for (final t in times) {
+      if (set.add(t.toUtc())) added++;
+    }
+    return added;
   }
 
   /// Add a single timestamped value to [key]. Auto-creates key if missing.
-  void addEntry(String key, DateTime time, dynamic value) {
-    (_caches[key] ??= {}).add(time);
-    (_values[key] ??= {})[time] = value;
+  ///
+  /// Returns whether the timestamp was new.
+  bool addEntry(String key, DateTime time, dynamic value) {
+    final utc = time.toUtc();
+    final fresh = (_caches[key] ??= {}).add(utc);
+    (_values[key] ??= {})[utc] = value;
+    return fresh;
   }
 
   /// Bulk-load timestamped values for [key]. Auto-creates key if missing.
   /// [entries] is a list of `(DateTime, dynamic)` records.
-  void addEntries(String key, List<(DateTime, dynamic)> entries) {
+  ///
+  /// Returns how many of [entries] were new.
+  int addEntries(String key, List<(DateTime, dynamic)> entries) {
     final timestamps = (_caches[key] ??= {});
     final values = (_values[key] ??= {});
+    var added = 0;
     for (final (time, value) in entries) {
-      timestamps.add(time);
-      values[time] = value;
+      final utc = time.toUtc();
+      if (timestamps.add(utc)) added++;
+      values[utc] = value;
     }
+    return added;
   }
+
+  /// Whether [key] already holds a row at [time], in any zone.
+  bool contains(String key, DateTime time) =>
+      _caches[key]?.contains(time.toUtc()) ?? false;
 
   /// Returns the most recent `(DateTime, value)` for [key], or null.
   (DateTime, dynamic)? latestValue(String key) {
@@ -95,8 +124,7 @@ class TimeseriesCache {
 
   /// Remove timestamps older than [maxWindowMinutes] from all keys.
   void prune(int maxWindowMinutes) {
-    final cutoff =
-        DateTime.now().subtract(Duration(minutes: maxWindowMinutes));
+    final cutoff = DateTime.now().subtract(Duration(minutes: maxWindowMinutes));
     for (final set in _caches.values) {
       set.removeWhere((t) => t.isBefore(cutoff));
     }
@@ -136,6 +164,5 @@ class TimeseriesCache {
   }
 
   /// Direct read access (unmodifiable view).
-  Set<DateTime> timestamps(String key) =>
-      _caches[key] ?? const {};
+  Set<DateTime> timestamps(String key) => _caches[key] ?? const {};
 }
