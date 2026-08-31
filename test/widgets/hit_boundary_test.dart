@@ -16,6 +16,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tfc/theme.dart' show HmiColorRole;
 import 'package:tfc/widgets/hit_boundary.dart';
 
 /// Distance from [centre] to the furthest and nearest point of an outline.
@@ -196,6 +197,29 @@ void main() {
             contours: contours, style: HitBoundaryStyle.pulsing)),
         isTrue,
         reason: 'a ring that breathes instead of crawling is a different ring',
+      );
+    });
+
+    test('the blue option is the fading one, recoloured and nothing else', () {
+      // It is billed as "E in blue", and the two are separate consts, so this
+      // is what stops them drifting into two different animations.
+      const blue = HitBoundaryStyle.blueFade;
+      const fade = HitBoundaryStyle.pulsing;
+      expect(blue.inkRole, HmiColorRole.blue);
+      expect(fade.inkRole, isNull);
+      expect(blue.copyWith(), isNot(fade));
+      expect(
+        HitBoundaryStyle(
+          dash: blue.dash,
+          gap: blue.gap,
+          strokeWidth: blue.strokeWidth,
+          period: blue.period,
+          pulse: blue.pulse,
+          crawl: blue.crawl,
+          twoTone: blue.twoTone,
+        ),
+        fade,
+        reason: 'same geometry, same breath — only the ink differs',
       );
     });
 

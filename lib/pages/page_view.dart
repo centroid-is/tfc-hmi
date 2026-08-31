@@ -1036,6 +1036,19 @@ class _OpenPaneMarkState extends State<_OpenPaneMark>
     return face.transform(turned.storage);
   }
 
+  /// The dashes' colour, resolved here because a painter has no context.
+  ///
+  /// A scheme role comes back fully opaque; it is knocked down to the ink's
+  /// own alpha so a coloured ring sits on the page with the same weight the
+  /// neutral one does.
+  Color _ink(BuildContext context) {
+    final role = HitBoundaryStyle.selection.inkRole;
+    if (role == null) return HitBoundaryPainter.defaultInk;
+    return role
+        .resolve(context)
+        .withValues(alpha: HitBoundaryPainter.inkOpacity);
+  }
+
   @override
   Widget build(BuildContext context) {
     final frame = _frame;
@@ -1067,6 +1080,7 @@ class _OpenPaneMarkState extends State<_OpenPaneMark>
               painter: HitBoundaryPainter(
                 contours: outline ?? const [],
                 phase: _march.value,
+                ink: _ink(context),
               ),
             ),
           ),

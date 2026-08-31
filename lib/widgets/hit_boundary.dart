@@ -28,6 +28,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
+import '../theme.dart' show HmiColorRole;
+
 /// Moves every point of [ring] [distance] away from the region it encloses.
 ///
 /// Along each point's own normal, so the clearance is the same the whole way
@@ -231,6 +233,22 @@ class HitBoundaryStyle {
   /// back.
   final double pulse;
 
+  /// The scheme colour to draw the dashes in, or null for
+  /// [HitBoundaryPainter.defaultInk].
+  ///
+  /// A role rather than a `Color` so the ring follows a scheme switch the way
+  /// every asset does, and so no raw `Colors.*` gets into the mimic. Resolved
+  /// by the widget that owns the ring — a painter has no `BuildContext`.
+  ///
+  /// Spending a hue on this cuts against the reasoning on
+  /// [HitBoundaryPainter]: on a plant page green is running, yellow manual,
+  /// blue cleaning, grey stopped, red faulted, violet unreadable and orange
+  /// forced, so a ring in any of them is a colour the operator has already
+  /// been taught to read as an equipment state. Blue in particular is what a
+  /// belt in cleaning looks like. That is the trade being made, not an
+  /// oversight.
+  final HmiColorRole? inkRole;
+
   /// Whether the dashes travel round the ring.
   ///
   /// Off with a [pulse] on, the ring is a fixed dashed outline that fades in
@@ -255,6 +273,7 @@ class HitBoundaryStyle {
     this.pulse = 0,
     this.crawl = true,
     this.twoTone = false,
+    this.inkRole,
   });
 
   /// Dashes crawling at a walk. Calm enough to sit on a mimic all shift.
@@ -286,6 +305,16 @@ class HitBoundaryStyle {
     period: Duration(milliseconds: 1800),
   );
 
+  /// [pulsing] in the scheme's blue — the colour selection wears nearly
+  /// everywhere else. Same geometry and same breath; only the ink differs.
+  /// See [inkRole] for what that costs on a plant page.
+  static const blueFade = HitBoundaryStyle(
+    pulse: 0.85,
+    crawl: false,
+    period: Duration(milliseconds: 1800),
+    inkRole: HmiColorRole.blue,
+  );
+
   /// The style the plant view actually marks with.
   static const selection = march;
 
@@ -297,6 +326,7 @@ class HitBoundaryStyle {
     double? pulse,
     bool? crawl,
     bool? twoTone,
+    HmiColorRole? inkRole,
   }) =>
       HitBoundaryStyle(
         dash: dash ?? this.dash,
@@ -306,6 +336,7 @@ class HitBoundaryStyle {
         pulse: pulse ?? this.pulse,
         crawl: crawl ?? this.crawl,
         twoTone: twoTone ?? this.twoTone,
+        inkRole: inkRole ?? this.inkRole,
       );
 
   @override
@@ -317,11 +348,12 @@ class HitBoundaryStyle {
       other.period == period &&
       other.pulse == pulse &&
       other.crawl == crawl &&
-      other.twoTone == twoTone;
+      other.twoTone == twoTone &&
+      other.inkRole == inkRole;
 
   @override
-  int get hashCode =>
-      Object.hash(dash, gap, strokeWidth, period, pulse, crawl, twoTone);
+  int get hashCode => Object.hash(
+      dash, gap, strokeWidth, period, pulse, crawl, twoTone, inkRole);
 }
 
 /// Draws [contours] as a ring of dashes that crawl around the shape.
@@ -357,6 +389,11 @@ class HitBoundaryStyle {
 class HitBoundaryPainter extends CustomPainter {
   /// The dashes.
   static const Color defaultInk = Color(0xD11A1D1F);
+
+  /// How solid the dashes are, whatever colour they are drawn in. A role
+  /// colour resolves fully opaque, and at full opacity the ring stops being a
+  /// mark laid over the page and starts being part of the machine.
+  static const double inkOpacity = 0xD1 / 0xFF;
 
   /// The tone the gaps carry under [HitBoundaryStyle.twoTone].
   static const Color defaultHalo = Color(0xD1F2F4F5);
