@@ -4,7 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'proposal.dart';
 
-export 'proposal.dart' show PendingProposal, ProposalOp, nextLocalProposalId;
+export 'proposal.dart'
+    show PendingProposal, ProposalOp, nextLocalProposalId, proposalRoutes;
 
 /// Prefix marking operator-decision notes in the chat conversation.
 ///
@@ -208,3 +209,38 @@ final proposalCommitProvider =
 /// the editor's pre-proposal snapshot, which only the editor holds.
 final proposalDiscardProvider =
     StateProvider<Future<void> Function()?>((ref) => null);
+
+/// How the banner hands a proposal to an editor that is already on screen.
+///
+/// The banner's View and "Review all" beam to the proposal's editor route.
+/// That works from anywhere else in the app, but not from the editor itself:
+/// beaming to the route you are already on rebuilds the route's *builder*
+/// and not the page it built. Flutter's page-based routes only re-run
+/// `buildPage` on `changedExternalState`, and a settings change routes
+/// through `changedInternalState` instead -- so the freshly built
+/// `PageEditor(proposalData: ...)` is thrown away, the mounted one never sees
+/// the new proposal, and `didUpdateWidget` never runs.
+///
+/// So the mounted editor publishes a way in. While it is up, the banner calls
+/// this instead of beaming; with nothing published, the beam is still the
+/// right answer because the editor has to be built in the first place.
+class ProposalReviewEntry {
+  const ProposalReviewEntry({required this.route, required this.enter});
+
+  /// The editor route this entry serves, e.g. `/advanced/page-editor`.
+  ///
+  /// Checked against [PendingProposal.editorRoute] before use: an alarm
+  /// proposal must not be handed to the page editor just because the page
+  /// editor happens to be the screen in front of the operator.
+  final String route;
+
+  /// Routes the open editor to the proposal and stages it, the same thing a
+  /// cold open does through `initState`.
+  final void Function(String proposalJson) enter;
+}
+
+/// The editor currently on screen, if it is one that can take a proposal.
+///
+/// Null whenever no such editor is mounted. See [ProposalReviewEntry].
+final proposalReviewProvider =
+    StateProvider<ProposalReviewEntry?>((ref) => null);

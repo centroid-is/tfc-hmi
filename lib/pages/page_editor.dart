@@ -826,6 +826,18 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   StateController<Future<void> Function()?>? _commitSlot;
   StateController<Future<void> Function()?>? _discardSlot;
 
+  /// The slot advertising this editor to the banner's View / "Review all",
+  /// held for the same reason as the two above.
+  StateController<ProposalReviewEntry?>? _reviewSlot;
+
+  /// The proposal this editor was last asked to review, when it was handed one
+  /// while already on screen.
+  ///
+  /// Stands in for [widget]`.proposalData`, which only ever carries the
+  /// proposal the editor was *built* with: re-entering an open editor cannot
+  /// change it (see [ProposalReviewEntry]).
+  String? _reviewData;
+
   /// The provider container the banner's accept and reject work through,
   /// captured while this editor is still alive.
   ///
@@ -946,26 +958,50 @@ class _PageEditorState extends ConsumerState<PageEditor> {
         _savedJson =
             _isProposal ? '' : _currentJson; // Mark unsaved if proposal
       });
+      // Only now: the banner's entry point routes by page_key, and until the
+      // pages are loaded there is no page to route to.
+      _publishReviewEntry();
     });
   }
 
-  /// Re-entered while already open: a "Review all" or "Open in Editor" tap on
-  /// a banner beams `/advanced/page-editor` again with fresh proposalData.
+  /// Tells the banner this editor is on screen and can take a proposal
+  /// directly, so View and "Review all" do not have to beam at a route the
+  /// operator is already on. See [ProposalReviewEntry] for why that beam
+  /// cannot reach a mounted editor.
+  void _publishReviewEntry() {
+    // After this frame, for the same reason as [_publishProposalCallbacks]:
+    // writing a provider while the tree is building trips riverpod's "tried
+    // to modify a provider while the widget tree was building".
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final slot = ref.read(proposalReviewProvider.notifier);
+      slot.state = ProposalReviewEntry(
+        route: proposalRoutes['asset']!,
+        enter: _reviewProposal,
+      );
+      _reviewSlot = slot;
+    });
+  }
+
+  /// Re-entered while already open: a View, "Review all" or "Open in Editor"
+  /// tap on a banner hands this editor [data] while it is on screen.
   ///
-  /// The BeamPage key is a constant, so beamer reuses this mounted element
-  /// rather than building a new one -- [initState] does NOT run a second time,
-  /// only [widget]`.proposalData` changes. Without reacting here, a proposal
-  /// that targets a page other than the open one never loads: the operator is
-  /// sent to review it and lands on the page they were already on, with
-  /// nothing staged. Route to the proposal's own page and stage its batch, the
-  /// same thing a cold open does through initState.
-  @override
-  void didUpdateWidget(PageEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final data = widget.proposalData;
-    // Only a genuine change of proposal is a re-entry to act on; an unrelated
-    // rebuild carries the same proposalData and must do nothing.
-    if (data == null || data == oldWidget.proposalData) return;
+  /// [initState] does NOT run a second time, and neither -- despite what it
+  /// looks like -- does [didUpdateWidget]: the beam rebuilds the route's
+  /// builder, but a page-based route keeps the page it already built (see
+  /// [ProposalReviewEntry]). Without reacting here, a proposal that targets a
+  /// page other than the open one never loads: the operator is sent to review
+  /// it and lands on the page they were already on, with nothing staged.
+  /// Route to the proposal's own page and stage its batch, the same thing a
+  /// cold open does through initState.
+  ///
+  /// No leave guard in front of the switch. Every page lives in
+  /// [_temporaryPages] and a save writes all of them, so moving [_currentPage]
+  /// discards nothing -- which is why the Pages dialog's own page switching
+  /// has never asked either. The guard is for leaving the editor, where the
+  /// whole map is dropped.
+  void _reviewProposal(String data) {
+    _reviewData = data;
     List<PendingProposal> pending = const [];
     try {
       pending = ref.read(proposalStateProvider).proposals.toList();
@@ -1001,6 +1037,23 @@ class _PageEditorState extends ConsumerState<PageEditor> {
       return;
     }
     if (mounted) setState(() {});
+  }
+
+  /// The other way a fresh proposal could reach an already-built editor: the
+  /// route rebuilding this widget with new [PageEditor.proposalData].
+  ///
+  /// Kept as a second door rather than the only one. It does not fire for the
+  /// banner's beam today -- that is the whole of the bug [_reviewProposal]
+  /// exists for -- but it is what would fire if the page were ever rebuilt
+  /// rather than reused, and handing it the same body costs nothing.
+  @override
+  void didUpdateWidget(PageEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final data = widget.proposalData;
+    // Only a genuine change of proposal is a re-entry to act on; an unrelated
+    // rebuild carries the same proposalData and must do nothing.
+    if (data == null || data == oldWidget.proposalData) return;
+    _reviewProposal(data);
   }
 
   /// Asked by the back arrow and the navigation bar before they leave.
@@ -1059,8 +1112,10 @@ class _PageEditorState extends ConsumerState<PageEditor> {
     // banner's buttons away from a live batch.
     final commitSlot = _commitSlot;
     final discardSlot = _discardSlot;
+    final reviewSlot = _reviewSlot;
     final commit = _saveToPrefs;
     final discard = _discardProposal;
+    final review = _reviewProposal;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // `mounted` on the controllers, not on us: a frame later the whole
       // ProviderScope may be gone too -- the app shutting down, or a test
@@ -1074,6 +1129,16 @@ class _PageEditorState extends ConsumerState<PageEditor> {
           discardSlot.mounted &&
           discardSlot.state == discard) {
         discardSlot.state = null;
+      }
+      // Left set, the banner would hand a proposal to a disposed State: the
+      // switch would land on nothing and the operator would be told the
+      // editor had moved when it is not even on screen. Same "only if it is
+      // still ours" test as the two above -- a replacement editor has already
+      // published its own entry.
+      if (reviewSlot != null &&
+          reviewSlot.mounted &&
+          reviewSlot.state?.enter == review) {
+        reviewSlot.state = null;
       }
     });
     _stopAutoScroll();
@@ -1209,12 +1274,13 @@ class _PageEditorState extends ConsumerState<PageEditor> {
   /// The page the editor should open on when launched with proposals pending:
   /// the one the operator is being asked to review.
   ///
-  /// The banner passes the proposal it was raised for as [widget.proposalData];
-  /// its `page_key` wins, so opening from a `/boxes` banner lands on `/boxes`
-  /// even when another page sorts ahead of it. Failing that, the first pending
+  /// The banner passes the proposal it was raised for as [widget.proposalData]
+  /// on a cold open, and as [_reviewData] when this editor was already up; its
+  /// `page_key` wins, so opening from a `/boxes` banner lands on `/boxes` even
+  /// when another page sorts ahead of it. Failing that, the first pending
   /// asset proposal's page. Null leaves the caller's default (the first page).
   String? _focusPageForProposals(List<PendingProposal> pending) {
-    final data = widget.proposalData;
+    final data = _reviewData ?? widget.proposalData;
     if (data != null) {
       try {
         final decoded = jsonDecode(data);
