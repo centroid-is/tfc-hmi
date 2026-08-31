@@ -8,15 +8,22 @@ import 'package:rxdart/rxdart.dart';
 import 'package:open62541/open62541.dart' show DynamicValue;
 
 import 'common.dart';
+import '../../painter/beckhoff/cu2508.dart';
 import '../../painter/beckhoff/cx5010.dart';
 import '../../painter/beckhoff/ek1100.dart';
+import '../../painter/beckhoff/ek1110.dart';
+import '../../painter/beckhoff/ep_box.dart';
 import '../../painter/beckhoff/io8.dart';
+import '../../painter/beckhoff/ps2001.dart';
 import 'package:tfc_dart/core/state_man.dart';
 import '../../providers/state_man.dart';
 import '../../widgets/panes/pane_chrome.dart';
 import '../../widgets/panes/side_pane.dart';
+import 'el2912.dart';
 import 'el9222.dart';
+import 'ep_box.dart';
 import 'io_pane.dart';
+import 'ps2001.dart';
 import '../page.dart';
 import '../../page_creator/assets/graph.dart';
 import '../../widgets/graph.dart';
@@ -31,6 +38,9 @@ const Map<String, Asset Function()> _availableSubdevices = {
   "EL9222": BeckhoffEL9222Config.preview,
   "EL9187": BeckhoffEL9187Config.preview,
   "EL9186": BeckhoffEL9186Config.preview,
+  "EL2912": BeckhoffEL2912Config.preview,
+  "EL6070": BeckhoffEL6070Config.preview,
+  "EK1110": BeckhoffEK1110Config.preview,
 };
 
 /// A Beckhoff CX embedded PC carrying a rack of subdevices.
@@ -598,31 +608,7 @@ class BeckhoffEL1008Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9; // Use 90% of screen width
-    final maxHeight = media.height * 0.8; // Use 80% of screen height
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _EL1008ConfigContent(config: this),
-            ),
-          ),
-        ),
-      ),
-    );
+    return _beckhoffConfigureShell(context, _EL1008ConfigContent(config: this));
   }
 
   BeckhoffEL1008Config.preview()
@@ -746,31 +732,7 @@ class BeckhoffEL2008Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9; // Use 90% of screen width
-    final maxHeight = media.height * 0.8; // Use 80% of screen height
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _EL2008ConfigContent(config: this),
-            ),
-          ),
-        ),
-      ),
-    );
+    return _beckhoffConfigureShell(context, _EL2008ConfigContent(config: this));
   }
 
   BeckhoffEL2008Config.preview()
@@ -1024,31 +986,7 @@ class BeckhoffEL9222Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _EL9222ConfigContent(config: this),
-            ),
-          ),
-        ),
-      ),
-    );
+    return _beckhoffConfigureShell(context, _EL9222ConfigContent(config: this));
   }
 
   BeckhoffEL9222Config.preview()
@@ -1319,31 +1257,7 @@ class BeckhoffEL9187Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _EL9187ConfigContent(config: this),
-            ),
-          ),
-        ),
-      ),
-    );
+    return _beckhoffConfigureShell(context, _EL9187ConfigContent(config: this));
   }
 
   BeckhoffEL9187Config.preview() : super();
@@ -1433,31 +1347,7 @@ class BeckhoffEL9186Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _EL9186ConfigContent(config: this),
-            ),
-          ),
-        ),
-      ),
-    );
+    return _beckhoffConfigureShell(context, _EL9186ConfigContent(config: this));
   }
 
   BeckhoffEL9186Config.preview() : super();
@@ -2087,31 +1977,7 @@ class BeckhoffEL3054Config extends BaseAsset {
 
   @override
   Widget configure(BuildContext context) {
-    final media = MediaQuery.of(context).size;
-    final maxWidth = media.width * 0.9;
-    final maxHeight = media.height * 0.8;
-
-    return Center(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: maxWidth,
-          maxHeight: maxHeight,
-          minWidth: 320,
-          minHeight: 200,
-        ),
-        child: Material(
-          borderRadius: BorderRadius.circular(24),
-          color: DialogTheme.of(context).backgroundColor ??
-              Theme.of(context).colorScheme.surface,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: _EL3054ConfigContent(config: this),
-            ),
-          ),
-        ),
-      ),
-    );
+    return _beckhoffConfigureShell(context, _EL3054ConfigContent(config: this));
   }
 
   BeckhoffEL3054Config.preview()
@@ -2369,4 +2235,930 @@ class _BeckhoffEL3054 extends ConsumerWidget {
         ),
         compact: compact,
       );
+}
+
+// ===========================================================================
+// EL2912 — TwinSAFE 2-channel output terminal
+// ===========================================================================
+
+/// The TwinSAFE output terminal, as far as the standard PLC can see it.
+///
+/// Takes two keys rather than one, because that is what the EtherCAT GVL
+/// gives: the field-voltage diagnostics come off `Module 3 (DEVICEIO)` as two
+/// loose BOOLs, not a struct. See `el2912.dart` for what the face and the
+/// pane make of them, and why the terminal's own output lamps stay dark.
+@JsonSerializable(explicitToJson: true)
+class BeckhoffEL2912Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL2912';
+  @override
+  String get category => 'Beckhoff Devices';
+
+  @override
+  List<String> get searchKeywords => const ['twinsafe', 'safety', 'output'];
+
+  String nameOrId;
+
+  /// `Fieldvoltage Underrange` off the terminal's DEVICEIO module.
+  String? underrangeKey;
+
+  /// `Fieldvoltage Overrange`, likewise.
+  String? overrangeKey;
+
+  /// Optional: what this terminal's safety outputs hold, in words. The pane
+  /// names the circuit instead of leaving the operator to work out which
+  /// guard `ST301.A1.09` is.
+  String? descriptionKey;
+
+  BeckhoffEL2912Config({
+    required this.nameOrId,
+    this.underrangeKey,
+    this.overrangeKey,
+    this.descriptionKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEL2912(config: this),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) =>
+      _beckhoffConfigureShell(context, _EL2912ConfigContent(config: this));
+
+  BeckhoffEL2912Config.preview()
+      : nameOrId = "1",
+        underrangeKey = null,
+        overrangeKey = null,
+        descriptionKey = null,
+        super();
+
+  factory BeckhoffEL2912Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL2912ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL2912ConfigToJson(this);
+}
+
+class _EL2912ConfigContent extends StatefulWidget {
+  final BeckhoffEL2912Config config;
+
+  const _EL2912ConfigContent({required this.config});
+
+  @override
+  State<_EL2912ConfigContent> createState() => _EL2912ConfigContentState();
+}
+
+class _EL2912ConfigContentState extends State<_EL2912ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.underrangeKey,
+          onChanged: (value) => widget.config.underrangeKey = value,
+          label: 'Field voltage underrange',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.overrangeKey,
+          onChanged: (value) => widget.config.overrangeKey = value,
+          label: 'Field voltage overrange',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.descriptionKey,
+          onChanged: (value) => widget.config.descriptionKey = value,
+          label: 'Description Key',
+        ),
+      ],
+    );
+  }
+}
+
+class _BeckhoffEL2912 extends ConsumerWidget {
+  static const String name = 'EL2912';
+  final BeckhoffEL2912Config config;
+
+  const _BeckhoffEL2912({required this.config});
+
+  /// Identity of this module's docked pane — tapping it again toggles it.
+  String get _paneId => 'el2912:${identityHashCode(config)}';
+
+  LinkedHashMap<String, String?> get _keys => LinkedHashMap.fromEntries([
+        MapEntry("under", config.underrangeKey),
+        MapEntry("over", config.overrangeKey),
+        MapEntry("description", config.descriptionKey),
+      ]);
+
+  bool get _hasKeys =>
+      config.underrangeKey != null || config.overrangeKey != null;
+
+  static ({El2912Status status, String? description}) _decode(
+      Map<String, DynamicValue> data) {
+    final description = data["description"]?.asString.trim();
+    return (
+      status: El2912Status(
+        underrange: data["under"]?.asBool,
+        overrange: data["over"]?.asBool,
+      ),
+      description: (description == null || description.isEmpty)
+          ? null
+          : description,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snap) {
+        final stateMan = snap.data;
+        final stream = (stateMan == null || !_hasKeys)
+            ? null
+            : _combinedStream(_keys, ref).map(_decode);
+
+        return MemoStreamBuilder<({El2912Status status, String? description})>(
+          keys: [stateMan, config],
+          stream: stream ?? const Stream.empty(),
+          builder: (context, s) {
+            final data = (s.hasData && !s.hasError) ? s.data : null;
+            final status = data?.status ?? const El2912Status.unknown();
+
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null || !_hasKeys) return;
+                  showEl2912Pane(
+                    context: context,
+                    id: _paneId,
+                    title: config.nameOrId,
+                    stream: _combinedStreamVia(_keys, stateMan).map(_decode),
+                  );
+                },
+                child: IO8Widget(
+                  ledStates: el2912FaceLeds(status),
+                  name: name,
+                  // Beckhoff paints its safety hardware yellow, and on a rack
+                  // that colour is how an electrician picks the TwinSAFE
+                  // terminal out from across the room.
+                  housingColor: twinSafeBodyColor,
+                  disconnected: data == null,
+                  animation: const AlwaysStoppedAnimation(0),
+                  ioLabels: el2912IoLabels,
+                  ioLabelColors: const [
+                    ioLabelColor,
+                    ioLabelColor,
+                    Colors.red,
+                    Colors.red,
+                    Colors.blue,
+                    Colors.blue,
+                    Colors.blue,
+                    Colors.blue,
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+// ===========================================================================
+// PS2001 — 24 V DC power supply
+// ===========================================================================
+
+/// The station power supply, live off its `ST_PS2001_2410`.
+///
+/// See `ps2001.dart` for the decode and the operator surface.
+@JsonSerializable(explicitToJson: true)
+class BeckhoffPS2001Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff PS2001';
+  @override
+  String get category => 'Beckhoff Devices';
+
+  @override
+  List<String> get searchKeywords =>
+      const ['power supply', 'psu', '24v', 'ps2000'];
+
+  String nameOrId;
+
+  /// Key of the unit's `ST_PS2001_2410` struct. Without it the supply is a
+  /// picture: the lamps have nothing to light and the pane has no figures.
+  String? stateKey;
+
+  /// Optional: which rail this unit feeds, in words.
+  String? descriptionKey;
+
+  /// Show the voltage and current over time in the pane.
+  ///
+  /// Off by default, and deliberately a choice rather than something the
+  /// asset assumes. The two figures are struct members, so a trend only has
+  /// anything to draw where the collector picks them out with
+  /// `sample_members`; on a unit collected whole the chart would come back
+  /// empty and read as "the supply stopped reporting".
+  @JsonKey(defaultValue: false)
+  bool trend;
+
+  BeckhoffPS2001Config({
+    required this.nameOrId,
+    this.stateKey,
+    this.descriptionKey,
+    this.trend = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffPS2001(config: this),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) =>
+      _beckhoffConfigureShell(context, _PS2001ConfigContent(config: this));
+
+  BeckhoffPS2001Config.preview()
+      : nameOrId = "T1",
+        stateKey = null,
+        descriptionKey = null,
+        trend = false,
+        super();
+
+  factory BeckhoffPS2001Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffPS2001ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffPS2001ConfigToJson(this);
+}
+
+class _PS2001ConfigContent extends StatefulWidget {
+  final BeckhoffPS2001Config config;
+
+  const _PS2001ConfigContent({required this.config});
+
+  @override
+  State<_PS2001ConfigContent> createState() => _PS2001ConfigContentState();
+}
+
+class _PS2001ConfigContentState extends State<_PS2001ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.stateKey,
+          onChanged: (value) => widget.config.stateKey = value,
+          label: 'State Key',
+        ),
+        const SizedBox(height: 16),
+        KeyField(
+          initialValue: widget.config.descriptionKey,
+          onChanged: (value) => widget.config.descriptionKey = value,
+          label: 'Description Key',
+        ),
+        const SizedBox(height: 8),
+        CheckboxListTile(
+          key: const ValueKey('ps2001-trend'),
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: widget.config.trend,
+          onChanged: (value) =>
+              setState(() => widget.config.trend = value ?? false),
+          title: const Text('Trend the voltage and current'),
+          subtitle: const Text(
+            'Needs the collector to sample this struct\'s members — a unit '
+            'collected whole has nothing to plot.',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BeckhoffPS2001 extends ConsumerWidget {
+  final BeckhoffPS2001Config config;
+
+  const _BeckhoffPS2001({required this.config});
+
+  /// Identity of this unit's docked pane — tapping it again toggles it.
+  String get _paneId => 'ps2001:${identityHashCode(config)}';
+
+  LinkedHashMap<String, String?> get _keys => LinkedHashMap.fromEntries([
+        MapEntry("state", config.stateKey),
+        MapEntry("description", config.descriptionKey),
+      ]);
+
+  static ({Ps2001Status status, String? description}) _decode(
+      Map<String, DynamicValue> data) {
+    final description = data["description"]?.asString.trim();
+    return (
+      status: Ps2001Status.read(data["state"]),
+      description:
+          (description == null || description.isEmpty) ? null : description,
+    );
+  }
+
+  /// The pane's trend block: a sparkline of each measurement, either of
+  /// which opens the same two-axis chart. Built here rather than in the pane
+  /// because the pane outlives this build — see [showPs2001Pane].
+  Widget? _trendTile() {
+    final key = config.stateKey;
+    if (!config.trend || key == null) return null;
+
+    final chart = ps2001TrendConfig(
+      stateKey: key,
+      headerText: config.nameOrId,
+    );
+
+    Widget tile(String label, String member, String unit) => PaneGraphTile(
+          label: label,
+          height: 90,
+          preview: GraphAsset(
+            ps2001SeriesConfig(
+              stateKey: key,
+              member: member,
+              label: label,
+              unit: unit,
+            ),
+            compact: true,
+          ),
+          // Both tiles open the one chart. Volts and amps are read together
+          // — "it sagged when the draw jumped" is the whole diagnosis — and
+          // splitting them into two dialogs would hide exactly that.
+          expandedTitle: '${config.nameOrId} — output',
+          expandedSize: const Size(820, 520),
+          expandedBuilder: (_) => GraphAsset(chart),
+        );
+
+    return PaneTileRow(
+      children: [
+        tile('Output V', ps2001VoltageMember, 'V'),
+        tile('Draw A', ps2001CurrentMember, 'A'),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snap) {
+        final stateMan = snap.data;
+        final stream = (stateMan == null || config.stateKey == null)
+            ? null
+            : _combinedStream(_keys, ref).map(_decode);
+
+        return MemoStreamBuilder<({Ps2001Status status, String? description})>(
+          keys: [stateMan, config],
+          stream: stream ?? const Stream.empty(),
+          builder: (context, s) {
+            final data = (s.hasData && !s.hasError) ? s.data : null;
+            final status = data?.status ?? Ps2001Status.read(null);
+
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null || config.stateKey == null) return;
+                  showPs2001Pane(
+                    context: context,
+                    id: _paneId,
+                    title: config.nameOrId,
+                    stream: _combinedStreamVia(_keys, stateMan).map(_decode),
+                    trendTile: _trendTile(),
+                  );
+                },
+                child: PS2001Widget(
+                  name: config.nameOrId,
+                  state: status.state,
+                  dcOk: status[Ps2001Flag.dcOk],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+// ===========================================================================
+// EL6070, EK1110, CU2508 — the parts with nothing to say
+// ===========================================================================
+
+/// The TwinCAT 3 licence key terminal.
+///
+/// A drawing, and honestly so: an EL6070 has no process data at all — no
+/// station's EtherCAT GVL names one — and no field wiring either. Its eight
+/// terminal points are unused, so they are drawn unlabelled rather than
+/// given invented signal names.
+@JsonSerializable(explicitToJson: true)
+class BeckhoffEL6070Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EL6070';
+  @override
+  String get category => 'Beckhoff Devices';
+
+  @override
+  List<String> get searchKeywords => const ['licence', 'license', 'twincat'];
+
+  BeckhoffEL6070Config();
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: IO8Widget(
+        ledStates: List.filled(8, IOState.low),
+        name: 'EL6070',
+        animation: const AlwaysStoppedAnimation(0),
+        ioLabels: const ['', '', '', '', '', '', '', ''],
+        ioLabelColors: List.filled(8, const Color(0xFFE0E0E0)),
+      ),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) =>
+      _beckhoffConfigureShell(context, _PlacementOnlyConfig(config: this));
+
+  BeckhoffEL6070Config.preview() : super();
+
+  factory BeckhoffEL6070Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEL6070ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEL6070ConfigToJson(this);
+}
+
+/// The EtherCAT extension that ends a block and carries the bus onward.
+///
+/// Also a drawing — an EK1110 publishes nothing. Its RJ45 is the point: on a
+/// topology page it is where one rack's terminal block hands over to the
+/// next.
+@JsonSerializable(explicitToJson: true)
+class BeckhoffEK1110Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff EK1110';
+  @override
+  String get category => 'Beckhoff Devices';
+
+  @override
+  List<String> get searchKeywords => const ['ethercat', 'extension'];
+
+  BeckhoffEK1110Config();
+
+  @override
+  Widget build(BuildContext context) {
+    return const FittedBox(
+      fit: BoxFit.contain,
+      child: EK1110Widget(name: 'EK1110'),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) =>
+      _beckhoffConfigureShell(context, _PlacementOnlyConfig(config: this));
+
+  BeckhoffEK1110Config.preview() : super();
+
+  factory BeckhoffEK1110Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEK1110ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEK1110ConfigToJson(this);
+}
+
+/// The real-time Ethernet port multiplier.
+///
+/// Three of these split this plant's networks apart — the cabinet drive
+/// master, the Baader network, the roe line — and none of them publishes
+/// anything. The name is what makes the drawing useful, so it is
+/// configurable: a page with three CU2508s wants to say which is which.
+@JsonSerializable(explicitToJson: true)
+class BeckhoffCU2508Config extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff CU2508';
+  @override
+  String get category => 'Beckhoff Devices';
+
+  @override
+  List<String> get searchKeywords =>
+      const ['port multiplier', 'switch', 'ethercat', 'network'];
+
+  String nameOrId;
+
+  BeckhoffCU2508Config({required this.nameOrId});
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: CU2508Widget(name: nameOrId),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) =>
+      _beckhoffConfigureShell(context, _CU2508ConfigContent(config: this));
+
+  BeckhoffCU2508Config.preview() : nameOrId = 'CU2508', super();
+
+  factory BeckhoffCU2508Config.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffCU2508ConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffCU2508ConfigToJson(this);
+}
+
+class _CU2508ConfigContent extends StatefulWidget {
+  final BeckhoffCU2508Config config;
+
+  const _CU2508ConfigContent({required this.config});
+
+  @override
+  State<_CU2508ConfigContent> createState() => _CU2508ConfigContentState();
+}
+
+class _CU2508ConfigContentState extends State<_CU2508ConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: widget.config.nameOrId,
+          onChanged: (value) => widget.config.nameOrId = value,
+        ),
+      ],
+    );
+  }
+}
+
+// ===========================================================================
+// EP2338 / EP1918 — EtherCAT Box
+// ===========================================================================
+
+/// An EtherCAT Box out on the machines, in either of the two variants this
+/// plant fits.
+///
+/// One asset with a picker rather than a class per model: the two are the
+/// same housing in different colours, and the difference that matters — the
+/// EP2338 has a struct to subscribe to and the EP1918 has nothing — is
+/// carried by [EPBoxVariant.isLive] rather than by two near-identical
+/// classes. See `assets/ep_box.dart`.
+@JsonSerializable(explicitToJson: true)
+class BeckhoffEPBoxConfig extends BaseAsset {
+  @override
+  String get displayName => 'Beckhoff ${variantModel.model}';
+  @override
+  String get category => 'Beckhoff Devices';
+
+  @override
+  List<String> get searchKeywords =>
+      const ['ethercat box', 'ep2338', 'ep1918', 'm12', 'field', 'twinsafe'];
+
+  /// Which box. Serialized under `variant_model` because [BaseAsset.variant]
+  /// already owns `asset_name`'s companion and the two would read as the same
+  /// thing at a glance.
+  @JsonKey(name: 'variant_model')
+  EPBoxVariant variantModel;
+
+  String nameOrId;
+
+  /// Key of the box's `ST_EP2338_0002`. Meaningless on an EP1918, which
+  /// publishes nothing — the configure form hides it there rather than
+  /// offering a field that cannot work.
+  String? stateKey;
+
+  /// Optional array naming what each of the eight sockets is wired to.
+  String? descriptionsKey;
+
+  BeckhoffEPBoxConfig({
+    required this.variantModel,
+    required this.nameOrId,
+    this.stateKey,
+    this.descriptionsKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: _BeckhoffEPBox(config: this),
+    );
+  }
+
+  @override
+  Widget configure(BuildContext context) =>
+      _beckhoffConfigureShell(context, _EPBoxConfigContent(config: this));
+
+  BeckhoffEPBoxConfig.preview()
+      : variantModel = EPBoxVariant.ep2338,
+        nameOrId = "RM01",
+        stateKey = null,
+        descriptionsKey = null,
+        super();
+
+  factory BeckhoffEPBoxConfig.fromJson(Map<String, dynamic> json) =>
+      _$BeckhoffEPBoxConfigFromJson(json);
+  @override
+  Map<String, dynamic> toJson() => _$BeckhoffEPBoxConfigToJson(this);
+}
+
+class _EPBoxConfigContent extends StatefulWidget {
+  final BeckhoffEPBoxConfig config;
+
+  const _EPBoxConfigContent({required this.config});
+
+  @override
+  State<_EPBoxConfigContent> createState() => _EPBoxConfigContentState();
+}
+
+class _EPBoxConfigContentState extends State<_EPBoxConfigContent> {
+  @override
+  Widget build(BuildContext context) {
+    final config = widget.config;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<EPBoxVariant>(
+          key: const ValueKey('ep-box-variant'),
+          initialValue: config.variantModel,
+          decoration: const InputDecoration(
+            labelText: 'Model',
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            for (final variant in EPBoxVariant.values)
+              DropdownMenuItem(
+                value: variant,
+                child: Text('${variant.model} — ${variant.blurb}'),
+              ),
+          ],
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => config.variantModel = value);
+          },
+        ),
+        const SizedBox(height: 16),
+        SizeField(
+          initialValue: config.size,
+          onChanged: (size) => config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: config.coordinates,
+          onChanged: (coordinates) => config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Name or ID',
+            border: OutlineInputBorder(),
+          ),
+          initialValue: config.nameOrId,
+          onChanged: (value) => config.nameOrId = value,
+        ),
+        // An EP1918's inputs never reach the standard PLC, so there is no key
+        // to give it. Saying so beats a field that silently does nothing.
+        if (config.variantModel.isLive) ...[
+          const SizedBox(height: 16),
+          KeyField(
+            initialValue: config.stateKey,
+            onChanged: (value) => config.stateKey = value,
+            label: 'State Key',
+          ),
+          const SizedBox(height: 16),
+          KeyField(
+            initialValue: config.descriptionsKey,
+            onChanged: (value) => config.descriptionsKey = value,
+            label: 'Descriptions Key',
+          ),
+        ] else ...[
+          const SizedBox(height: 16),
+          Text(
+            'A TwinSAFE box has no process data on the standard PLC — its '
+            'safe inputs are read by the TwinSAFE logic — so there is '
+            'nothing to subscribe to.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _BeckhoffEPBox extends ConsumerWidget {
+  final BeckhoffEPBoxConfig config;
+
+  const _BeckhoffEPBox({required this.config});
+
+  /// Identity of this box's docked pane — tapping it again toggles it.
+  String get _paneId => 'epbox:${identityHashCode(config)}';
+
+  LinkedHashMap<String, String?> get _keys => LinkedHashMap.fromEntries([
+        MapEntry("state", config.stateKey),
+        MapEntry("descriptions", config.descriptionsKey),
+      ]);
+
+  bool get _isLive => config.variantModel.isLive && config.stateKey != null;
+
+  static ({List<EpBoxChannel> channels, List<String> descriptions}) _decode(
+      Map<String, DynamicValue> data) {
+    final descriptions = data["descriptions"];
+    return (
+      channels: epBoxChannelsOf(data["state"]),
+      descriptions: (descriptions != null && descriptions.isArray)
+          ? descriptions.asArray.map((d) => d.asString).toList()
+          : const <String>[],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<StateMan>(
+      future: ref.watch(stateManProvider.future),
+      builder: (context, snap) {
+        final stateMan = snap.data;
+        final stream = (stateMan == null || !_isLive)
+            ? null
+            : _combinedStream(_keys, ref).map(_decode);
+
+        return MemoStreamBuilder<
+            ({List<EpBoxChannel> channels, List<String> descriptions})>(
+          keys: [stateMan, config],
+          stream: stream ?? const Stream.empty(),
+          builder: (context, s) {
+            final data = (s.hasData && !s.hasError) ? s.data : null;
+            final channels = data?.channels ?? epBoxUnknownChannels();
+
+            return SidePaneOwner(
+              paneId: _paneId,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (stateMan == null) return;
+                  showEpBoxPane(
+                    context: context,
+                    id: _paneId,
+                    title: config.nameOrId,
+                    variant: config.variantModel,
+                    stream: _isLive
+                        ? _combinedStreamVia(_keys, stateMan).map(_decode)
+                        : const Stream.empty(),
+                  );
+                },
+                child: EPBoxWidget(
+                  model: config.variantModel.model,
+                  name: config.nameOrId,
+                  channels: epBoxFaceLeds(channels),
+                  // The "!" is for a box that should be talking and is not.
+                  // An EP1918 never talks, so it is not disconnected — it is
+                  // just passive, and marking it broken would send somebody
+                  // to look at a healthy box.
+                  disconnected: _isLive && data == null,
+                  housingColor: config.variantModel.housingColor,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+// ===========================================================================
+// Shared configure-dialog chrome
+// ===========================================================================
+
+/// The dialog every Beckhoff device's `configure()` is poured into.
+///
+/// Each of these forms had its own copy of this shell, identical down to the
+/// radius. Factored out so a new device gets the same dialog for free rather
+/// than a paraphrase of it.
+Widget _beckhoffConfigureShell(BuildContext context, Widget content) {
+  final media = MediaQuery.of(context).size;
+
+  return Center(
+    child: ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: media.width * 0.9,
+        maxHeight: media.height * 0.8,
+        minWidth: 320,
+        minHeight: 200,
+      ),
+      child: Material(
+        borderRadius: BorderRadius.circular(24),
+        color: DialogTheme.of(context).backgroundColor ??
+            Theme.of(context).colorScheme.surface,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(child: content),
+        ),
+      ),
+    ),
+  );
+}
+
+/// The configure form for a device with nothing to configure but where it
+/// sits — the passive parts that publish no data and take no name.
+class _PlacementOnlyConfig extends StatefulWidget {
+  final BaseAsset config;
+
+  const _PlacementOnlyConfig({required this.config});
+
+  @override
+  State<_PlacementOnlyConfig> createState() => _PlacementOnlyConfigState();
+}
+
+class _PlacementOnlyConfigState extends State<_PlacementOnlyConfig> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizeField(
+          initialValue: widget.config.size,
+          onChanged: (size) => widget.config.size = size,
+        ),
+        const SizedBox(height: 16),
+        CoordinatesField(
+          initialValue: widget.config.coordinates,
+          onChanged: (coordinates) => widget.config.coordinates = coordinates,
+          enableAngle: false,
+        ),
+      ],
+    );
+  }
 }
