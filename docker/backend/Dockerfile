@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Mirror the packages/ layout so path deps resolve (tfc_dart → ../jbtm)
+# Mirror the packages/ layout so path deps resolve (tfc_dart → ../jbtm,
+# ../tfc_access)
 WORKDIR /app/packages/tfc_dart
 
 # Copy all pubspecs so path dependencies resolve during pub get
@@ -18,6 +19,7 @@ COPY packages/tfc_dart/pubspec.yaml ./
 COPY packages/jbtm/pubspec.yaml ../jbtm/
 COPY packages/modbus_client_tcp/pubspec.yaml ../modbus_client_tcp/
 COPY packages/modbus_client/pubspec.yaml ../modbus_client/
+COPY packages/tfc_access/pubspec.yaml ../tfc_access/
 
 # Get dependencies fresh
 RUN dart pub get
@@ -27,6 +29,7 @@ COPY packages/tfc_dart/ .
 COPY packages/jbtm/ ../jbtm/
 COPY packages/modbus_client_tcp/ ../modbus_client_tcp/
 COPY packages/modbus_client/ ../modbus_client/
+COPY packages/tfc_access/ ../tfc_access/
 
 # Build executables (dart build cli triggers build hooks for native assets)
 RUN dart build cli -t bin/main.dart -o build/main && \
