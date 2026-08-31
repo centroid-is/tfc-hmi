@@ -21,8 +21,39 @@ class ProposalBanner extends ConsumerStatefulWidget {
 class _ProposalBannerState extends ConsumerState<ProposalBanner> {
   bool _expanded = false;
 
+  /// The proposal a press of Accept is still waiting to save, if any.
+  ///
+  /// Accept cannot write anything by itself -- applying a proposal belongs to
+  /// the editor that owns the data -- so when no editor has staged it yet,
+  /// Accept beams to that editor and remembers the id here. The listener in
+  /// [build] fires the commit the moment the editor publishes one, which is
+  /// what makes a single press finish the job the button's label promises.
+  int? _autoCommitId;
+
   @override
   Widget build(BuildContext context) {
+    // Completes an Accept that had to open an editor first. See
+    // [_autoCommitId]; registered before the early returns below so it stays
+    // armed across the rebuild that empties the banner.
+    ref.listen<Future<void> Function()?>(proposalCommitProvider,
+        (previous, commit) {
+      final armed = _autoCommitId;
+      if (armed == null || commit == null) return;
+      _autoCommitId = null;
+      // Only while the queue is still exactly the proposal that was accepted.
+      // An editor stages every pending proposal of its type and commits them
+      // as one save, so a proposal that arrived in the meantime would be
+      // written by an Accept the operator never pressed on it.
+      final pending = ref.read(proposalStateProvider).proposals;
+      if (pending.length != 1 || pending.first.id != armed) return;
+      // A microtask later, not now: an editor publishes its commit and
+      // captures the ProviderContainer that commit reads from in one
+      // post-frame callback, and publishing is what woke this listener --
+      // so calling straight back into it lands before the container is set
+      // and _commitProposals returns having written nothing.
+      Future.microtask(commit);
+    });
+
     final state = ref.watch(proposalStateProvider);
     if (!state.hasPending) return const SizedBox.shrink();
 
@@ -74,7 +105,8 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
         const SizedBox(width: 8),
         _buildViewButton(proposal),
         const SizedBox(width: 4),
-        _buildAcceptButton(proposal.id),
+        // The whole queue is this one proposal, so Accept can commit it.
+        _buildAcceptButton(proposal, isWholeQueue: true),
         const SizedBox(width: 4),
         _buildRejectButton(proposal.id),
       ],
@@ -173,7 +205,10 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
                   ),
                   _buildViewButton(p),
                   const SizedBox(width: 4),
-                  _buildAcceptButton(p.id),
+                  // One row out of a batch: the editors stage and commit a
+                  // whole batch, so there is no seam that saves just this
+                  // one. Opening its editor is as far as this row can go.
+                  _buildAcceptButton(p, isWholeQueue: false),
                   const SizedBox(width: 4),
                   _buildRejectButton(p.id),
                 ],
@@ -208,16 +243,7 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
         }
         // Otherwise open the editor, which stages the whole pending queue
         // and publishes its commit -- then this button accepts.
-        final route = proposals.first.editorRoute;
-        if (route == null) return;
-        if (_openEditorTakes(route, proposals.first)) return;
-        try {
-          final navKey = ref.read(navigatorKeyProvider);
-          final ctx = navKey?.currentContext ?? context;
-          Beamer.of(ctx).beamToNamed(route, data: proposals.first.proposalJson);
-        } catch (_) {
-          // Beamer not available -- ignore
-        }
+        _openEditorTakes(proposals.first);
       },
       icon: const Icon(Icons.done_all, size: 16),
       label: Text(ref.watch(proposalCommitProvider) != null
@@ -263,10 +289,41 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
     );
   }
 
-  Widget _buildAcceptButton(int id) {
+  /// Accept for one proposal: apply it, then mark it accepted -- in that
+  /// order, and both.
+  ///
+  /// Never a bare `acceptProposal()`. That marks the proposal decided and
+  /// drops it from state without applying anything, which is the trap
+  /// [_buildAcceptAllButton] has documented since the batch buttons were
+  /// written; the single-proposal row and the drawer rows kept calling it
+  /// anyway. Reported on 2026-08-31 against a `delete_alarm` proposal:
+  /// pressing Accept on the single-proposal banner took the banner away and
+  /// deleted nothing, and the operator had to scroll down in the alarm editor
+  /// and press "Remove Alarm" -- the editor's own per-proposal control, and
+  /// the only thing on screen that was actually removing the alarm.
+  ///
+  /// The work belongs to the editor that owns the data, so Accept either
+  /// fires the commit that editor published, or opens it and fires the commit
+  /// as soon as it appears (see [_autoCommitId]). [isWholeQueue] says whether
+  /// committing would save this proposal and nothing else: true for the
+  /// single-proposal banner, false for a row of a batch, where the editors'
+  /// batch-at-a-time commit would save the operator's other rows too.
+  Widget _buildAcceptButton(PendingProposal proposal,
+      {required bool isWholeQueue}) {
     return TextButton(
       onPressed: () {
-        ref.read(proposalStateProvider.notifier).acceptProposal(id);
+        if (isWholeQueue) {
+          final commit = ref.read(proposalCommitProvider);
+          if (commit != null) {
+            commit();
+            return;
+          }
+          // Nothing staged: the editor has to see the proposal before it can
+          // save it. Arm the commit so the operator's one press still
+          // finishes, rather than leaving them to press again.
+          _autoCommitId = proposal.id;
+        }
+        if (!_openEditorTakes(proposal)) _autoCommitId = null;
       },
       style: TextButton.styleFrom(
         foregroundColor: Colors.green,
@@ -298,16 +355,7 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
       onPressed: () {
         // Looking is not deciding, but the AI is told the proposal was opened.
         ref.read(proposalStateProvider.notifier).viewProposal(proposal.id);
-        final route = proposal.editorRoute;
-        if (route == null) return;
-        if (_openEditorTakes(route, proposal)) return;
-        try {
-          final navKey = ref.read(navigatorKeyProvider);
-          final ctx = navKey?.currentContext ?? context;
-          Beamer.of(ctx).beamToNamed(route, data: proposal.proposalJson);
-        } catch (_) {
-          // Beamer not available -- ignore
-        }
+        _openEditorTakes(proposal);
       },
       style: TextButton.styleFrom(
         foregroundColor: Colors.blue,
@@ -319,25 +367,42 @@ class _ProposalBannerState extends ConsumerState<ProposalBanner> {
     );
   }
 
-  /// Hands [proposal] to the editor for [route] if that editor is already on
-  /// screen, and says whether it took it.
+  /// Gets [proposal] in front of the editor that owns it, and says whether it
+  /// got there.
   ///
-  /// Beaming is how every one of these buttons opens an editor, and it is the
-  /// wrong tool for the one case where the editor is the screen the operator
-  /// is standing on: beaming to the route you are already on rebuilds the
-  /// route builder but not the page it built, so the mounted editor never
+  /// Two ways in, because there are two situations. When that editor is
+  /// already the screen the operator is standing on, it is handed the
+  /// proposal directly: beaming to the route you are already on rebuilds the
+  /// route's *builder* and not the page it built, so the mounted editor never
   /// hears about the proposal. That is exactly the case the operator hit --
   /// page editor open on one page, View on a proposal for another, and the
   /// editor stayed where it was. The mounted editor publishes
-  /// [proposalReviewProvider] for this; see [ProposalReviewEntry].
+  /// [proposalReviewProvider] for this; see [ProposalReviewEntry]. From
+  /// anywhere else in the app, beaming is what opens the editor.
   ///
   /// The route check matters: a page editor being on screen must not make it
   /// the destination for an alarm proposal.
-  bool _openEditorTakes(String route, PendingProposal proposal) {
+  ///
+  /// Returns false when there is nowhere to go -- an unknown proposal type
+  /// has no route, and Beamer is absent in tests -- so a caller waiting on
+  /// the editor to publish its commit knows the editor is never coming.
+  bool _openEditorTakes(PendingProposal proposal) {
+    final route = proposal.editorRoute;
+    if (route == null) return false;
     final entry = ref.read(proposalReviewProvider);
-    if (entry == null || entry.route != route) return false;
-    entry.enter(proposal.proposalJson);
-    return true;
+    if (entry != null && entry.route == route) {
+      entry.enter(proposal.proposalJson);
+      return true;
+    }
+    try {
+      final navKey = ref.read(navigatorKeyProvider);
+      final ctx = navKey?.currentContext ?? context;
+      Beamer.of(ctx).beamToNamed(route, data: proposal.proposalJson);
+      return true;
+    } catch (_) {
+      // Beamer not available -- ignore
+      return false;
+    }
   }
 
   /// "2 create · 1 edit · 1 delete", listing only the actions present.
