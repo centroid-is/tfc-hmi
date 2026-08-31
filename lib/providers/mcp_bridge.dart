@@ -195,8 +195,14 @@ Future<void> _startServer(McpBridgeNotifier bridge, int port,
   }
 
   try {
-    final alarmMan = await ref.read(alarmManProvider.future);
-    alarmReader = AlarmManAlarmReader(alarmMan);
+    // Awaited so an AlarmMan that cannot be built at all still falls back to
+    // the empty reader below -- but the reader itself resolves the provider
+    // on every read rather than closing over this instance. Accepting an
+    // alarm edit invalidates alarmManProvider, and a reader holding the
+    // AlarmMan from before would serve the pre-edit config for the rest of
+    // the session.
+    await ref.read(alarmManProvider.future);
+    alarmReader = AlarmManAlarmReader.live(() => currentAlarmConfigs(ref));
   } catch (e) {
     io.stderr
         .writeln('_startServer: AlarmMan unavailable, using empty reader: $e');

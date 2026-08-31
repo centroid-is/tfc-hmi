@@ -148,6 +148,18 @@ void main() {
           );
     }
 
+    /// Rewrites the stored alarm config, the way accepting an edit does.
+    ///
+    /// The whole `alarm_man_config` row is replaced on every save, so this is
+    /// an UPDATE where [seedAlarms] is an INSERT.
+    Future<void> reseedAlarms(List<Map<String, dynamic>> alarms) async {
+      await (db.update(db.serverFlutterPreferences)
+            ..where((t) => t.key.equals('alarm_man_config')))
+          .write(ServerFlutterPreferencesCompanion(
+        value: Value(jsonEncode({'alarms': alarms})),
+      ));
+    }
+
     /// Seeds page config so an alarm can have a beacon pointing at it.
     Future<void> seedPages(Map<String, dynamic> pages) async {
       await db.into(db.serverFlutterPreferences).insert(
@@ -470,6 +482,58 @@ void main() {
                 as Map<String, dynamic>;
         expect(boundJson['group'], equals(['Line 3', 'Multivac']));
         expect(boundJson['bindToGroup'], isTrue);
+      });
+
+      test('merges over the stored config, not a cached copy of it', () async {
+        // The merge is the dangerous half of update_alarm: every field the
+        // caller omits is taken from the stored alarm and written back
+        // verbatim when the operator accepts. ConfigService caches that
+        // lookup for five minutes and nothing ever calls invalidateCache(),
+        // so without a forced re-read a title-only update proposes the group
+        // the alarm had up to five minutes ago -- moving it back to the root
+        // and dropping bindToGroup with it, silently, on accept.
+        await setupWithAutoConfirm();
+
+        await seedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Film reel empty',
+            description: 'The upper film reel ran out',
+            group: ['Line 3'],
+          ),
+        ]);
+
+        // A first call warms whatever cache the service keeps.
+        await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-1',
+          'title': 'Film reel ran out',
+        });
+
+        // The operator regroups it in the editor and accepts; the row is
+        // rewritten under the running server.
+        await reseedAlarms([
+          alarmJson(
+            uid: 'alarm-1',
+            title: 'Film reel ran out',
+            description: 'The upper film reel ran out',
+            group: ['Line 3', 'Multivac'],
+            bindToGroup: true,
+          ),
+        ]);
+
+        final result = await client.callTool('update_alarm', {
+          'alarm_uid': 'alarm-1',
+          'description': 'The upper film reel is empty',
+        });
+        final proposal =
+            jsonDecode((result.content.first as TextContent).text)
+                as Map<String, dynamic>;
+
+        expect(proposal['group'], equals(['Line 3', 'Multivac']),
+            reason: 'a partial update must merge over the stored alarm, not '
+                'over a snapshot from before the last accepted edit');
+        expect(proposal['bindToGroup'], isTrue);
+        expect(proposal['title'], equals('Film reel ran out'));
       });
 
       test('update_alarm can move an alarm into a group', () async {

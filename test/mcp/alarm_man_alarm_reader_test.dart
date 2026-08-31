@@ -135,4 +135,85 @@ void main() {
       expect(reader.alarmConfigs, hasLength(3));
     });
   });
+
+  group('AlarmManAlarmReader.live', () {
+    /// One alarm, in [group].
+    AlarmConfig alarmIn(List<String> group, {String uid = 'alarm-1'}) =>
+        AlarmConfig(
+          uid: uid,
+          key: 'multivac.film',
+          title: 'Film reel empty',
+          description: 'The upper film reel ran out',
+          rules: const [],
+          group: group,
+          bindToGroup: false,
+        );
+
+    test('picks up a regroup that replaced the whole alarm list', () {
+      // What an accepted alarm edit does: AlarmMan.updateAlarm mutates
+      // config.alarms, then the editor calls invalidate(alarmManProvider),
+      // which builds a NEW AlarmMan around a NEW list read back from
+      // preferences. A reader that captured the list -- or the AlarmMan --
+      // at construction is pinned to the orphan and answers every later MCP
+      // read from it. In the field that showed up as get_alarm_tree
+      // reporting 6 alarms under "Line 1" where the saved config had 31.
+      var live = <AlarmConfig>[alarmIn(const [])];
+      final reader = AlarmManAlarmReader.live(() => live);
+
+      expect(reader.alarmConfigs.single['group'], isEmpty);
+
+      // The invalidate: a different list object, holding the edit.
+      live = <AlarmConfig>[
+        alarmIn(const ['Line 1', 'Multivac'])
+      ];
+
+      expect(reader.alarmConfigs.single['group'], ['Line 1', 'Multivac'],
+          reason: 'the reader must resolve the alarm list on every read, '
+              'not capture it at construction');
+    });
+
+    test('sees an alarm added to the replacement list', () {
+      var live = <AlarmConfig>[
+        alarmIn(const ['Line 1'])
+      ];
+      final reader = AlarmManAlarmReader.live(() => live);
+      expect(reader.alarmConfigs, hasLength(1));
+
+      live = <AlarmConfig>[
+        alarmIn(const ['Line 1']),
+        alarmIn(const ['Line 1'], uid: 'alarm-2'),
+      ];
+      expect(reader.alarmConfigs, hasLength(2));
+    });
+
+    test('keeps answering from the last list while the source is null', () {
+      // alarmManProvider is briefly unreadable after an invalidate, and a
+      // rebuild window must not be reported as "no alarms are configured".
+      List<AlarmConfig>? live = <AlarmConfig>[
+        alarmIn(const ['Line 1'])
+      ];
+      final reader = AlarmManAlarmReader.live(() => live);
+      expect(reader.alarmConfigs, hasLength(1));
+
+      live = null;
+      expect(reader.alarmConfigs.single['group'], ['Line 1']);
+
+      live = <AlarmConfig>[
+        alarmIn(const ['Line 2'])
+      ];
+      expect(reader.alarmConfigs.single['group'], ['Line 2']);
+    });
+
+    test('an empty live list is an empty answer, not a stale one', () {
+      // Distinct from the null above: the operator deleted their last alarm.
+      List<AlarmConfig>? live = <AlarmConfig>[
+        alarmIn(const ['Line 1'])
+      ];
+      final reader = AlarmManAlarmReader.live(() => live);
+      expect(reader.alarmConfigs, hasLength(1));
+
+      live = <AlarmConfig>[];
+      expect(reader.alarmConfigs, isEmpty);
+    });
+  });
 }

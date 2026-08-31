@@ -14,3 +14,25 @@ Future<AlarmMan> alarmMan(Ref ref) async {
   final stateMan = await ref.read(stateManProvider.future);
   return await AlarmMan.create(prefs, stateMan);
 }
+
+/// The alarm list of whichever [AlarmMan] is current, or `null` when there is
+/// none to read right now.
+///
+/// [AlarmMan.config.alarms] is mutated in place, but every accepted alarm edit
+/// follows the mutation with `invalidate(alarmManProvider)` -- which builds a
+/// new [AlarmMan] around a new list loaded back from preferences. Anything
+/// that captured the [AlarmMan], or its list, is pinned to an orphan from that
+/// moment on. Long-lived consumers (the MCP alarm reader) call this on every
+/// read instead, so an invalidate is picked up without restarting the app.
+///
+/// Returns `null` rather than an empty list while the provider is rebuilding,
+/// so a consumer can tell "not readable yet" from "no alarms configured".
+List<AlarmConfig>? currentAlarmConfigs(Ref ref) {
+  try {
+    return ref.read(alarmManProvider).valueOrNull?.config.alarms;
+  } catch (_) {
+    // The container is gone (shutdown mid-tool-call). Nothing to report --
+    // the caller falls back to what it last saw rather than throwing.
+    return null;
+  }
+}

@@ -304,7 +304,24 @@ class ConfigService implements KeyMappingLookup {
   /// Returns a map with `uid`, `key`, `title`, `description`, and `rules`
   /// (a List in AlarmRule.toJson() shape). Returns `null` if no alarm with
   /// the given UID exists.
-  Future<Map<String, dynamic>?> getAlarmConfig(String uid) {
+  ///
+  /// Pass [refresh] to bypass the 5-minute TTL and re-read the row from the
+  /// database. `update_alarm` merges the fields it was *not* given over this
+  /// map, so whatever it reads here is written back verbatim -- a cached copy
+  /// from before the last accepted edit silently reverts every field the
+  /// caller omitted. The cache is worth keeping for the read-only tools that
+  /// only display an alarm; it is not worth one round trip on the path that
+  /// decides what survives a write. [invalidateCache] exists but nothing
+  /// calls it, so without this the window is the full five minutes.
+  Future<Map<String, dynamic>?> getAlarmConfig(String uid,
+      {bool refresh = false}) {
+    if (refresh) {
+      // Both layers: the per-uid projection is computed from the shared
+      // `alarm_man_config` blob, so dropping only the projection would
+      // recompute it from the same stale blob.
+      _alarmConfigCache.invalidate(uid);
+      _prefCache.invalidate('alarm_man_config');
+    }
     return _alarmConfigCache.getOrCompute(uid, () async {
       final data = await _getPreferenceJson('alarm_man_config');
       final alarm =

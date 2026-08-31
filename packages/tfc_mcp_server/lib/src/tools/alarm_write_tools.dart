@@ -273,8 +273,15 @@ void _registerUpdateAlarm({
     handler: (arguments, extra) async {
       final alarmUid = arguments['alarm_uid'] as String;
 
-      // Look up existing alarm
-      final existing = await configService.getAlarmConfig(alarmUid);
+      // Look up existing alarm.
+      //
+      // Read fresh, never from the TTL cache: every field the caller
+      // omitted is merged from this map and written back by the accept,
+      // so a copy taken before the last accepted edit reverts whatever
+      // changed since. That is how a title-only update moved an alarm
+      // back to the root and dropped its bindToGroup with it.
+      final existing =
+          await configService.getAlarmConfig(alarmUid, refresh: true);
       if (existing == null) {
         return CallToolResult(
           content: [
@@ -420,7 +427,11 @@ void _registerDeleteAlarm({
     handler: (arguments, extra) async {
       final alarmUid = arguments['alarm_uid'] as String;
 
-      final existing = await configService.getAlarmConfig(alarmUid);
+      // Fresh, like update: the confirmation names the alarm's title, and
+      // a stale one asks the operator to agree to deleting something
+      // that is no longer called that.
+      final existing =
+          await configService.getAlarmConfig(alarmUid, refresh: true);
       if (existing == null) {
         return CallToolResult(
           content: [TextContent(text: 'No alarm found with UID: $alarmUid')],
